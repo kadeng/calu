@@ -1,0 +1,25 @@
+# Local PostgreSQL for simple setups, managed by `calu db up` / `calu db down`.
+# The owner password is set only when the data volume is initialized (first start); calu passes
+# it in CALU_DB_OWNER_PASSWORD and keeps it encrypted as the `admin` credential.
+name: calu-db
+
+services:
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: calu_owner
+      POSTGRES_DB: calu
+      POSTGRES_PASSWORD: ${CALU_DB_OWNER_PASSWORD:-}
+    ports:
+      - "127.0.0.1:${CALU_DB_PORT:-5433}:5432"
+    volumes:
+      - data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calu_owner -d calu"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  data:

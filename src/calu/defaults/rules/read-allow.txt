@@ -1,0 +1,12 @@
+# Paths that may be read without a checker call (by Read, Grep, Glob, LS and by allow-listed
+# Bash commands), unless a read-deny.txt rule matches.
+#
+# One Python regular expression per line, matched with re.search. Paths inside the workspace
+# are matched relative to it (src/app.py, .claude/settings.json, "." for the workspace itself);
+# paths outside it are absolute, with ~ expanded (/home/me/.bashrc). Every argument of a Bash
+# command that is not an option counts as a path it reads.
+
+# Everything inside the workspace.
+^[^/]
+^/tmp(/|$)
+^/dev/null$

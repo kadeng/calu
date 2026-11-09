@@ -1,6 +1,6 @@
 # calu: implementation plan
 
-Status: planning (2026-11-09). This file holds the decisions, the architecture and the order of
+Status: implementation started (2026-11-09), phase 1. This file holds the decisions, the architecture and the order of
 work, derived from the owner's requirements in [REQUIREMENTS.md](REQUIREMENTS.md). Decisions carry
 a date; open questions are listed in §11.
 
@@ -37,6 +37,11 @@ alongside calu is decided later (§11).
 | D7 | **Linux only** (2026-11-09): the machine where Claude Code and calu run. Clients may run anywhere. |
 | D8 | **Password-protected start, credentials dropped before Claude starts** (2026-11-09, details in §5). |
 | D9 | Claude Code authenticates as it is set up on the machine (claude.ai login, AWS Bedrock, Vertex, ...); calu does no billing check (taken over from sitl). |
+| D10 | **sitl code is ported into calu** (2026-11-09) and published under calu's GPL-2.0, with its unit tests. sitl's condensed third-party documentation (`.claude/skills/`) is not copied; calu's documents link to the original sources instead. |
+| D11 | **sitl's coding rules apply to calu** (2026-11-09): Python first, contract docstrings in Google style enforced by ruff (`D`, `DOC`), plain technical language. They are the owner's rules from sitl's `CLAUDE.md` and are listed in `AGENTS.md`. |
+| D12 | **Credential store** (2026-11-09, answers the first half of Q3): the database credentials (connection URLs) are kept encrypted in `~/.config/calu/credentials.json` (mode 0600). Each entry is encrypted with AES-256-GCM under a key derived from a password with Argon2id. Entries: `admin` (database owner, for `db init/migrate`, `setup`, configuration changes) and `session` (role `calu_session`, for `calu run`). The sandbox (D4) hides `~/.config/calu`. A per-session database role stays open (Q3). |
+| D13 | **Database access with psycopg 3 and plain SQL migrations** (2026-11-09): no ORM. Migrations are numbered SQL files in the package (`calu/db/migrations/`), applied in order and recorded in `schema_migrations`. psycopg's async connections support `LISTEN/NOTIFY` directly. |
+| D14 | **`calu db up` creates the local database owner** (2026-11-09): on the first start it generates the PostgreSQL owner password, stores it as the `admin` credential under an admin password the user chooses, and starts the container with it. The password is never written in plain text. |
 
 ## 3. Architecture
 
@@ -134,6 +139,9 @@ The agent (Claude, every command it runs, and anything a prompt injection makes 
 
 - The agent can write project files that checkers read as context (AGENTS.md, CLAUDE.md, ...).
   Mitigation: those files go to the edit checker; their changes are recorded per step.
+- Access to the Docker socket gives root-equivalent control (including the local database
+  container and its environment). The sandbox must hide `/var/run/docker.sock` and
+  `~/.config/calu` (D12, D14).
 - Network access from the sandbox (exfiltration, downloads). Optional network policy per project
   (none, allow list through a proxy, full).
 - The checkers and the auto mode classifier can be wrong; long unsupervised runs rely on both,
@@ -163,7 +171,7 @@ all leftover processes at the end of a tool call or session.
 ```
 calu run  ──► asks for the password ──► Argon2id(password, salt) ──► key
                                                      │
-          encrypted DB credential (see Q3) ──decrypt─┘──► connect to PostgreSQL
+          encrypted DB credential (D12) ─────decrypt─┘──► connect to PostgreSQL
           verify role, load configuration, create the session row
           overwrite password, key and credential in memory (bytearray)
           start Claude Code (its environment never contains calu secrets)
@@ -218,8 +226,9 @@ Narrator instructions may stay built into calu (not in the database). Notificati
 | Command | Purpose |
 |---|---|
 | `calu db up` / `db down` | start or stop a local PostgreSQL with Docker Compose (simple setups) |
-| `calu db init` / `db migrate` | create roles and schema; apply migrations |
-| `calu setup` | first-time setup: admin password, encrypted credential, default checkers and rules |
+| `calu db migrate` | create or update roles and schema (migrations) |
+| `calu setup` | first-time setup: migrations, default checkers and rules, login and encrypted credential of `calu_session` |
+| `calu credential list/set/remove` | manage the encrypted credential store (D12), e.g. `set admin` for an existing PostgreSQL server |
 | `calu project add <dir>` | register a project (git remote, settings) in the database; writes nothing into the project by default and leaves existing Claude Code configuration untouched |
 | `calu config get/set`, `calu checker list/show/edit`, `calu rules ...` | configuration in the database |
 | `calu run [<dir>]` | start a session in the foreground (for tmux); prints the WebSocket address and a client token |
@@ -252,7 +261,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 |---|---|
 | Q1 | Isolation mechanism for tool calls (§4.4); first spikes: Claude Code's sandbox (PID namespace?), `CLAUDE_CODE_SHELL_PREFIX` wrapping. |
 | Q2 | Relationship to sitl: does calu replace it (VSCode extension as a calu client) or do both continue? |
-| Q3 | Where the encrypted database credential is kept (local file readable only by the calu user, or typed in directly), and whether calu uses a per-session database role. |
+| Q3 | Whether calu uses a per-session database role (the credential location is decided in D12). |
 | Q4 | How clients authenticate remotely (tokens per session, operator accounts in the database, TLS). |
 | Q5 | Network policy for the sandbox (none, proxy allow list, full) and its default. |
 | Q6 | What happens to a session when no human answers an escalation for a long time (keep waiting, give Claude other work, stop after a timeout). |

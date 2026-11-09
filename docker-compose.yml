@@ -1,0 +1,46 @@
+# Development and test environment (PLAN.md §10).
+#
+#   docker compose up -d caludb                       # test database only
+#   docker compose run --rm dev uv run pytest -m 'not live'
+#   docker compose run --rm dev bash                  # shell in the dev system
+#
+# The test database is reachable from the host at 127.0.0.1:55432 (user calu_owner, password
+# calu-dev, database calu). These credentials are for development only.
+name: calu-dev
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: docker/dev.Dockerfile
+    working_dir: /work
+    volumes:
+      - .:/work
+      - dev-venv:/venv
+    environment:
+      UV_PROJECT_ENVIRONMENT: /venv
+      CALU_TEST_DSN: postgresql://calu_owner:calu-dev@caludb:5432/calu
+    depends_on:
+      caludb:
+        condition: service_healthy
+    command: ["uv", "run", "pytest", "-m", "not live"]
+
+  caludb:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: calu_owner
+      POSTGRES_PASSWORD: calu-dev
+      POSTGRES_DB: calu
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - caludb-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calu_owner -d calu"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  dev-venv:
+  caludb-data:

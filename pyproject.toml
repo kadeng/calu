@@ -1,0 +1,76 @@
+[project]
+name = "calu"
+version = "0.1.0"
+description = "Runs Claude Code sessions unsupervised for long stretches, checked by LLM checker agents and humans."
+readme = "README.md"
+license = "GPL-2.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "claude-agent-sdk>=0.2.164",
+    "cryptography>=50.0.2",
+    "psycopg[binary]>=3.3.8",
+    "pydantic>=2.14.3",
+    "pydantic-ai-slim[anthropic,bedrock,mistral,openai]>=2.66.0",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-bash>=0.25.1",
+]
+
+[project.scripts]
+calu = "calu.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9,<0.13"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "anyio>=4.16.0",
+    "dirty-equals>=0.11",
+    "inline-snapshot>=0.36.2",
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+    "types-pyyaml>=6.0.12.20261103",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+# Python files only: ruff would otherwise also reformat code blocks in Markdown docs.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "RUF", "D", "DOC"]
+# DOC (pydoclint: documented args/returns/raises match the signature) is a preview rule set.
+preview = true
+explicit-preview-rules = false
+# RUF029 (async without await) flags callbacks that an API requires to be async.
+# DOC502 (documented exception not raised in the body) contradicts the contract rule of AGENTS.md:
+# `Raises:` also lists exceptions that propagate from callees and that callers must handle.
+ignore = ["unused-async", "docstring-extraneous-exception"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and spikes may block briefly on file system access and poll with sleep.
+# Test functions document themselves by name; helpers in tests still need contracts by convention.
+"tests/**" = ["async-function-with-timeout", "async-busy-wait", "blocking-path-method-in-async-function", "run-process-in-async-function", "D", "DOC"]
+"spikes/**" = ["async-busy-wait", "blocking-open-call-in-async-function", "blocking-path-method-in-async-function", "D", "DOC", "module-import-not-at-top-of-file", "line-too-long"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not live and not db'"
+markers = [
+    "live: needs a real `claude` CLI and/or real model API keys (run with `-m live`)",
+    "db: needs the PostgreSQL test database (`docker compose up -d caludb`, run with `-m db`)",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"

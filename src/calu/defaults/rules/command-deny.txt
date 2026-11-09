@@ -1,0 +1,14 @@
+# Commands that always ask you, whatever the checker would say. Same format as
+# command-allow.txt: one Python regular expression per line, matched with re.search against
+# each simple command (chains, pipes and $(...) are split). Deny rules win over allow rules.
+
+^(sudo|su|doas)( |$)
+^git( -[Cc] \S+)* push(?= )(?=.* (--force(-with-lease)?(=\S*)?|-[a-zA-Z]*[fd][a-zA-Z]*|--mirror|--delete|--prune|[+:]\S+)( |$))
+^git reset --hard( |$)
+^git clean( |$)
+^rm(?=.* -[a-zA-Z]*[rR])(?=.* (/|~|\$HOME)/?( |$))
+# A shell that reads its commands from a pipe (curl ... | sh), and commands hidden in strings.
+^(sh|bash|zsh|dash)$
+^(sh|bash|zsh|dash) -[a-zA-Z]*c( |$)
+^eval( |$)
+^(mkfs|mkfs\.\S+|fdisk|parted|shutdown|reboot|poweroff)( |$)

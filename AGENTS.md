@@ -6,7 +6,8 @@ stay-in-the-loop (sitl).
 
 ## Status
 
-Planning. There is no code yet.
+Implementation in progress; see `HANDOFF.md` for the current state and `PLAN.md` §12 for the
+phases.
 
 ## Files
 
@@ -17,3 +18,42 @@ Planning. There is no code yet.
 | `PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
 | `HANDOFF.md` | State of the work and next steps, for the next session |
 | `LICENSE` | GPL-2.0 |
+| `pyproject.toml` | Package, dependencies, ruff, pyright and pytest settings |
+| `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
+| `scripts/wsl-test.sh` | Format check, lint, type check and tests in WSL |
+| `spikes/` | Experiments on Claude Code behaviour; results in `spikes/RESULTS.md` |
+
+## Code layout
+
+| Path | Content |
+|---|---|
+| `src/calu/cli.py` | The `calu` command |
+| `src/calu/credentials.py` | Encrypted credential store (Argon2id, AES-GCM) |
+| `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
+| `src/calu/db/` | Connections and migrations (`migrations/NNNN_*.sql`), local Docker database (`local.py`, `local-compose.yml`) |
+| `src/calu/defaults/` | Built-in checker instructions and rule lists, loaded into the database |
+| `tests/unit/` | Tests without database, `claude` or API keys |
+| `tests/db/` | Tests against the test database (marker `db`) |
+
+## Commands
+
+Run from the repository root on Linux (on a Windows host: in WSL, with the virtual environment
+outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
+
+- `uv run pytest` (unit tests), `uv run pytest -m 'not live'` (also database tests; start the
+  database first with `docker compose up -d caludb --wait`), `uv run pytest -m live`
+- `uv run ruff format .`, `uv run ruff check .`, `uv run pyright`
+- `scripts/wsl-test.sh [pytest args]`: all of the above
+
+## Coding rules (from sitl, PLAN.md D11)
+
+- Python first. Other languages only where an integration requires it; keep that layer thin.
+- Design by contract: every function and method has a Google-style docstring with its full
+  contract before it is implemented: what it does including side effects, `Args:` for every
+  parameter, `Returns:`/`Yields:`, `Raises:` for exceptions callers must handle. Ruff's `D` and
+  `DOC` rules enforce this for `src/`.
+- Plain technical language in code and documents: subject before object, no mannered phrasing;
+  prefer diagrams or math notation over long prose about multi-step interactions.
+- Tests that need a real `claude` or model API keys are marked `live`; tests that need the
+  database are marked `db`. Live checker tests use Nemotron Lightning on Fireworks; if Mistral
+  is used, small models only, never Mistral Medium or Large.

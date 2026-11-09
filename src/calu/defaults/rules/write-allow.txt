@@ -1,0 +1,12 @@
+# Paths that may be written without asking you about the path, unless a write-deny.txt rule
+# matches. Edits are still reviewed by the edit checker; Bash commands that write here can run
+# without a checker call if the command is allow-listed.
+#
+# Same path format as read-allow.txt. Written paths are the files of Edit/Write/MultiEdit/
+# NotebookEdit, the targets of > and >>, and the arguments of writing commands (rm, mv, cp,
+# tee, touch, mkdir, chmod, sed -i, ...). Paths outside this list go to the checker with a note.
+
+# Everything inside the workspace.
+^[^/]
+^/tmp(/|$)
+^/dev/(null|stdout|stderr)$

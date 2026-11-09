@@ -1,0 +1,21 @@
+# Commands that run without a checker call, if every path they read or write is also
+# allow-listed (read-allow.txt, write-allow.txt) and nothing matches a deny list.
+#
+# One Python regular expression per line, matched with re.search against each simple command
+# of a Bash call. Chains (&&, ||, ;), pipes, subshells and $(...) are split into simple
+# commands, and every one of them must match. A command is matched as its words joined by
+# single spaces, quotes removed: git commit -m "a b"  ->  git commit -m a b
+# Anchor patterns with ^ and $. Lines starting with # are comments. Changes apply at once.
+#
+# Only add commands that can neither write files nor start other programs: options such as
+# `sort -o`, `rg --pre`, `tree -o` or `pytest --basetemp` would bypass the write rules. A
+# command that runs project code (tests, builds, scripts) belongs with the checker.
+
+^(ls|pwd|cat|head|tail|wc|file|stat|du|df|which|type|whoami|date|uname|basename|dirname|realpath|readlink|true|false)( |$)
+^(echo|printf)( |$)
+^(grep|egrep|fgrep|diff|cmp|cut|tr|column|nl)( |$)
+^find(?!.* -(exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)( |$))( |$)
+^cd( |$)
+^git (status|log|diff|show|blame|rev-parse|ls-files|describe|shortlog)(?!.* --(output|ext-diff|textconv))( |$)
+^git branch( (--list|-a|-r|-v|-vv|--show-current))*$
+^git remote( -v)?$

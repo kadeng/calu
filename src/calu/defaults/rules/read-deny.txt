@@ -1,0 +1,19 @@
+# Paths that may only be read with your approval: reading them always asks you. Same format as
+# read-allow.txt. Deny rules win over allow rules. Reading .stay-in-the-loop/channel.token and
+# .stay-in-the-loop/.env always asks (built in).
+
+# Environment files with secrets (.env.template, .env.example, .env.sample stay readable).
+(^|/)\.env(\.(?!(template|example|sample)$)[^/]*)?$
+# SSH keys and other key or token files.
+(^|/)\.ssh(/|$)
+\.(pem|key|p12|pfx|secret|token)$
+(^|/)\.(netrc|pgpass|npmrc|pypirc|git-credentials)$
+(^|/)\.aws/credentials$
+(^|/)\.docker/config\.json$
+(^|/)\.kube/config$
+(^|/)\.config/gh/hosts\.yml$
+(^|/)\.claude/\.credentials\.json$
+# Shell start-up files.
+(^|/)\.(bashrc|zshrc)$
+# System directories.
+^/(etc|proc|sys|boot|bin)(/|$)

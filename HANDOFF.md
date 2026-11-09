@@ -1,19 +1,23 @@
 # Handoff
 
-State at the end of the planning session (2026-11-09). Read this, then `AGENTS.md`,
+State on 2026-11-09 (implementation started). Read this, then `AGENTS.md`,
 `REQUIREMENTS.md` and `PLAN.md`.
 
 ## Where things stand
 
-- calu is in planning. The repository holds only documents: `README.md`, `REQUIREMENTS.md`,
-  `PLAN.md`, `AGENTS.md`, this file, `LICENSE` (GPL-2.0). No code, no `docker-compose.yml` yet.
+- 2026-11-09: the owner gave the go to implement ("start implementing, commit and push at
+  reasonable checkpoints, stop only if you must ask; reversible decisions are yours").
+- Phase 1 (skeleton) is done: package `calu`, CLI (`db up/down/migrate`, `setup`,
+  `credential`), credential store, schema migration 0001, default checkers and rules loaded by
+  `calu setup`, `docker-compose.yml` with `dev` and `caludb`. Decisions D10-D14 in `PLAN.md`.
+- Next: phase 2 (port of sitl's core), see "Next steps".
 - Decided (details and dates in `PLAN.md` §2): Python 3.14 with uv, first as a uv-installable
   package with a `calu` command (single binary later); clients over WebSocket with JSON-RPC;
   PostgreSQL as the central store, holding all configuration and security settings; the sandbox
   encloses the tool calls, not Claude Code; checkers combined with Claude Code's auto mode;
   Linux only; password-protected start with credentials dropped before Claude starts.
 - Open (`PLAN.md` §11): isolation mechanism (Q1), relationship to stay-in-the-loop (Q2), where
-  the encrypted DB credential lives (Q3), remote client authentication (Q4), sandbox network
+  a per-session database role (Q3), remote client authentication (Q4), sandbox network
   policy (Q5), long-unanswered escalations (Q6), checkers on the Anthropic subscription through
   headless Claude Code (Q7).
 
@@ -42,9 +46,8 @@ State at the end of the planning session (2026-11-09). Read this, then `AGENTS.m
 
 ## Working rules the owner set
 
-- Until the owner says otherwise, only these files in calu may be changed: `PLAN.md`,
-  `README.md`, `AGENTS.md`, `REQUIREMENTS.md`, `HANDOFF.md`. Start implementing (phase 1 in
-  `PLAN.md` §12) only when the owner asks for it.
+- Implementation is allowed since 2026-11-09 (see above). `REQUIREMENTS.md` stays the owner's:
+  change it only on the owner's words.
 - `REQUIREMENTS.md` contains only requirements the owner stated (reworded, not broken down, not
   extended). Derived requirements and design go into `PLAN.md`.
 - `AGENTS.md` stays minimal: onboarding into the project and the code layout; no invented

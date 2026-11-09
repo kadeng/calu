@@ -1,6 +1,6 @@
 # calu
 
-**Status: in planning. Nothing is usable yet.** The plan is in [PLAN.md](PLAN.md).
+**Status: early implementation. Nothing is usable yet.** The plan is in [PLAN.md](PLAN.md).
 
 calu lets Claude Code work unsupervised for long stretches, for example overnight, while other
 LLM agents ("checkers") and humans keep control over what it does.
@@ -37,8 +37,8 @@ LLM agents ("checkers") and humans keep control over what it does.
 
 ```bash
 uv tool install calu      # not published yet
-calu db up                # local PostgreSQL in Docker
-calu setup                # admin password, default checkers and rules
+calu db up                # local PostgreSQL in Docker; asks for a new admin password
+calu setup                # default checkers and rules; asks for a new session password
 calu project add .        # register the current project
 calu run                  # start a session; attach with: calu attach <session>
 ```
