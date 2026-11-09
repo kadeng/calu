@@ -9,6 +9,11 @@ detaching leaves the session running.
 Commands typed instead of a message:
 
     /quit                 detach (the session keeps running)
+    /comment PATH FROM TO TEXT
+                          comment on lines FROM..TO of a project file (ported from sitl's
+                          `sitl chat`); the client must run on the session's machine, because
+                          it reads the file itself
+    /to AGENT TEXT        message for a running background subagent
     /stop                 stop the Claude session (`session.stop`)
     /start [resume id]    start a Claude session (`session.start`)
     /interrupt            end Claude's current turn
@@ -26,13 +31,14 @@ lines as the terminal that started the session.
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import anyio
 
 from calu.protocol.client import ProtocolClient, RequestFailed, connect
 from calu.protocol.messages import EVENTS, Event
-from calu.run import format_event, read_lines
+from calu.run import format_event, one_line, read_lines
 
 log = logging.getLogger(__name__)
 
@@ -41,8 +47,10 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 
 HELP = (
     "/quit  /stop  /start [resume id]  /interrupt  /allow <id> [note]  /deny <id> [note]  "
-    "/inject <text>  /state  /context  /sessions  /shutdown"
+    "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
+    "/sessions  /shutdown"
 )
+"""One line listing the commands, printed on connect and for an unknown command."""
 
 
 def render(method: str, params: dict[str, Any]) -> str | None:
@@ -105,13 +113,16 @@ def describe_state(snapshot: dict[str, Any]) -> str:
 class Console:
     """Turns the lines a user types into requests to the session."""
 
-    def __init__(self, client: ProtocolClient) -> None:
+    def __init__(self, client: ProtocolClient, workspace: Path | None = None) -> None:
         """Create the console for a connected client.
 
         Args:
             client: The connected protocol client.
+            workspace: The session's project directory, which `/comment` reads files from;
+                None refuses `/comment`.
         """
         self.client = client
+        self.workspace = workspace
         self.quit = anyio.Event()
 
     async def line(self, text: str) -> None:
@@ -124,9 +135,11 @@ class Console:
             await self._line(text)
         except RequestFailed as exc:
             print(f"[error] {exc}", flush=True)
-        except ConnectionError as exc:
+        except ConnectionError as exc:  # before OSError, of which it is a subclass
             print(f"[error] {exc}", flush=True)
             self.quit.set()
+        except OSError as exc:  # /comment could not read the file
+            print(f"[error] {exc}", flush=True)
 
     async def _line(self, text: str) -> None:
         """Handle one typed line (see `line`).
@@ -137,6 +150,7 @@ class Console:
         Raises:
             RequestFailed: If the session refused the request.
             ConnectionError: If the connection is gone.
+            OSError: If `/comment` cannot read the file.
         """
         if not text.startswith("/"):
             await self.client.request("chat.send", {"text": text})
@@ -162,6 +176,17 @@ class Console:
                     print("[error] /inject needs a text", flush=True)
                     return
                 await self.client.request("chat.send", {"text": rest, "delivery": "inject"})
+            case "/to":
+                target, _, message = rest.partition(" ")
+                if not target or not message.strip():
+                    print("[error] /to needs a subagent id and a text", flush=True)
+                    return
+                await self.client.request(
+                    "chat.send",
+                    {"text": message.strip(), "to": target, "delivery": "inject"},
+                )
+            case "/comment":
+                await self._comment(rest)
             case "/allow" | "/deny":
                 await self._decide(command.removeprefix("/"), rest)
             case "/state":
@@ -183,6 +208,48 @@ class Console:
                 self.quit.set()
             case _:
                 print(f"[error] unknown command {command}. {HELP}", flush=True)
+
+    async def _comment(self, rest: str) -> None:
+        """Send a comment on a range of lines of a project file.
+
+        The client reads the file itself, because the protocol carries the text of the
+        document, not a path the session would open (`comment.add`).
+
+        Args:
+            rest: "PATH FROM TO TEXT".
+
+        Raises:
+            RequestFailed: If the session refused the comment (no session runs, or the
+                selection lies outside the file).
+            OSError: If the file cannot be read.
+        """
+        parts = rest.split(maxsplit=3)
+        if len(parts) < 4:
+            print("[error] /comment needs a path, a first and last line and a text", flush=True)
+            return
+        path, first, last, text = parts
+        if self.workspace is None:
+            print("[error] the session did not say where its project is", flush=True)
+            return
+        try:
+            start, end = int(first), int(last)
+        except ValueError:
+            print(f"[error] not line numbers: {first!r} {last!r}", flush=True)
+            return
+        content = (self.workspace / path).read_text(encoding="utf-8")
+        result = await self.client.request(
+            "comment.add",
+            {
+                "kind": "file",
+                "path": path,
+                "start_line": start,
+                "end_line": end,
+                "after_text": content,
+                "text": text,
+            },
+        )
+        excerpt = (result.get("comment") or {}).get("after", {}).get("text", "")
+        print(f"[comment] on {path}:{start}-{end}: {one_line(excerpt)}", flush=True)
 
     async def _decide(self, decision: str, rest: str) -> None:
         """Resolve an escalation from an `/allow` or `/deny` line.
@@ -237,7 +304,8 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                 flush=True,
             )
         print(f"[attached] {HELP}", flush=True)
-        console = Console(client)
+        directory = snapshot.get("workspace")
+        console = Console(client, Path(directory) if isinstance(directory, str) else None)
         async with anyio.create_task_group() as tg:
 
             async def input_lines() -> None:

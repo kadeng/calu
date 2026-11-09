@@ -63,8 +63,11 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
 - **Bus and protocol** (phase 4): `calu.bus` numbers every event of the process and keeps the
   last 5000 for replay; `calu.protocol.server` serves JSON-RPC over WebSocket to several clients
   (one token per session, `calu.tokens`, migration 0004), `calu.protocol.client` is the client
-  side, and `calu attach ADDRESS --token T` is a terminal client. `calu run` prints the address
-  and the token; with `--batch` it ends when Claude is done **and** no client is attached.
+  side, and `calu attach ADDRESS --token T` is a terminal client (`/start`, `/stop`,
+  `/interrupt`, `/allow`, `/deny`, `/inject`, `/to`, `/comment`, `/state`, `/context`,
+  `/sessions`, `/shutdown`). `calu run` prints the address and the token; with `--batch` it ends
+  when Claude is done **and** no client is attached. `calu protocol [--out FILE]` writes the
+  JSON Schema of the protocol, from which a client in another language generates its types.
 - **Configuration commands** (`src/calu/admin.py`): `calu project add|list`, `calu config
   get|set|unset KEY` (dotted keys, values parsed as JSON, validated against `Config` before
   the write), `calu checker list|show|set` (instructions from a file or stdin, model, limits,
@@ -147,9 +150,9 @@ Results:
 3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
 4. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
    extension against the new protocol) and the single binary.
-5. Smaller gaps: the JSON Schema export (`calu/protocol/schema.py`) is not written to a file by
-   any command; `calu attach` has no `/comment`; a client cannot read the step history of an
-   earlier session (the bus buffer is per process, and `session.history` was dropped).
+5. Smaller gaps: a client cannot read the step history of an earlier session (the bus buffer is
+   per process, and `session.history` was dropped; the database holds the steps and turns, so a
+   `session.history` on those rows is the natural replacement).
 
 ## Working rules the owner set
 

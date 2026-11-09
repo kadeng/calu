@@ -11,6 +11,7 @@
     calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
                                    session password; see `calu.run`)
     calu attach ADDRESS --token T  terminal client for a running session
+    calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
     calu sessions [--all]          list the sessions of all hosts
     calu escalations [SESSION]     list the open escalations
     calu resolve ID allow|deny [--note TEXT]
@@ -44,6 +45,7 @@ from calu.db import Db, connect, migrate
 from calu.db import local as local_db
 from calu.evals.cli import run_evals
 from calu.protocol.client import RequestFailed
+from calu.protocol.schema import protocol_schema
 from calu.run import RunOptions, run_session
 from calu.setup import DEFAULT_CHECKER_MODEL, setup
 
@@ -380,6 +382,30 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError(f"cannot attach to {args.address}: {exc}") from exc
     if code:
         raise CliError("the client ended with an error")
+
+
+def cmd_protocol(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Write the JSON Schema of the client protocol.
+
+    Needs no database and no credential: the schema is generated from the Pydantic models, so a
+    client in another language can generate its types from it.
+
+    Args:
+        args: Parsed arguments (`out`).
+        store: The credential store (unused).
+
+    Raises:
+        CliError: If the file cannot be written.
+    """
+    document = json.dumps(protocol_schema(), indent=2, sort_keys=True)
+    if not args.out:
+        print(document)
+        return
+    try:
+        Path(args.out).write_text(document + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise CliError(f"cannot write {args.out}: {exc}") from exc
+    print(f"wrote the protocol schema to {args.out}")
 
 
 def cmd_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -779,6 +805,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_attach)
+
+    p = sub.add_parser("protocol", help="JSON Schema of the client protocol")
+    p.add_argument("--out", help="write it to this file instead of stdout")
+    p.set_defaults(handler=cmd_protocol)
 
     p = sub.add_parser("sessions", help="list the sessions of all hosts")
     p.add_argument("--all", action="store_true", help="also show sessions that have ended")

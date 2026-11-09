@@ -127,3 +127,47 @@ async def test_the_printer_hides_thinking_unless_asked(capsys):
     assert capsys.readouterr().out == ""
     await Printer(show_thinking=True)("assistant.thinking", {"text": "hmm"})
     assert "(thinking) hmm" in capsys.readouterr().out
+
+
+async def test_a_comment_reads_the_file_and_sends_the_selection(tmp_path, capsys):
+    (tmp_path / "a.py").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    client = FakeClient(
+        {"comment.add": {"comment": {"after": {"start_line": 2, "end_line": 2, "text": "two"}}}}
+    )
+    con = Console(client, tmp_path)  # type: ignore[arg-type]
+    await con.line("/comment a.py 2 2 why is this here?")
+    (method, params) = client.sent[0]
+    assert method == "comment.add"
+    assert params == {
+        "kind": "file",
+        "path": "a.py",
+        "start_line": 2,
+        "end_line": 2,
+        "after_text": "one\ntwo\nthree\n",
+        "text": "why is this here?",
+    }
+    assert "[comment] on a.py:2-2: two" in capsys.readouterr().out
+
+
+async def test_a_comment_reports_bad_arguments_and_missing_files(tmp_path, capsys):
+    con, client = console()
+    await con.line("/comment a.py 2 2 text")  # no workspace known
+    assert "did not say where its project is" in capsys.readouterr().out
+    con = Console(client, tmp_path)  # type: ignore[arg-type]
+    await con.line("/comment a.py 2")
+    assert "needs a path, a first and last line" in capsys.readouterr().out
+    await con.line("/comment a.py two three text")
+    assert "not line numbers" in capsys.readouterr().out
+    await con.line("/comment missing.py 1 1 text")
+    assert "No such file" in capsys.readouterr().out
+    assert client.sent == []
+
+
+async def test_a_message_can_be_relayed_to_a_subagent():
+    con, client = console()
+    await con.line("/to fake-tool-1 look at this")
+    assert client.sent == [
+        ("chat.send", {"text": "look at this", "to": "fake-tool-1", "delivery": "inject"})
+    ]
+    await con.line("/to fake-tool-1")
+    assert len(client.sent) == 1

@@ -32,6 +32,7 @@ phases.
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
 | `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
 | `src/calu/attach.py` | `calu attach`: terminal client of a running session |
+| `src/calu/protocol/schema.py` | `calu protocol`: JSON Schema of the protocol, for clients in other languages |
 | `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
 | `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |

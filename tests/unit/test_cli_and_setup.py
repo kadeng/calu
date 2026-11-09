@@ -1,4 +1,6 @@
 import io
+import json
+from pathlib import Path
 
 import pytest
 
@@ -132,3 +134,21 @@ def test_rules_arguments_are_interpreted_per_action(
     # A well-formed call gets as far as the credential.
     assert run_cli(monkeypatch, store, ["rules", "add", "command-deny", "^x$"], "") == 1
     assert "no credential 'admin'" in capsys.readouterr().err
+
+
+def test_the_protocol_schema_is_written_without_a_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert run_cli(monkeypatch, store, ["protocol"], "") == 0
+    document = json.loads(capsys.readouterr().out)
+    assert "state.get" in document["requests"]
+    assert "check.result" in document["events"]
+    assert document["results"]["state.get"]
+    out = tmp_path / "protocol.json"
+    assert run_cli(monkeypatch, store, ["protocol", "--out", str(out)], "") == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["version"] == 1
+    assert run_cli(monkeypatch, store, ["protocol", "--out", "/no/such/dir/x.json"], "") == 1
+    assert "cannot write" in capsys.readouterr().err

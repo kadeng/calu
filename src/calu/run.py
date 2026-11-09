@@ -113,16 +113,16 @@ def format_event(event: Event) -> str | None:
         case SessionState():
             return f"[{event.state}]"
         case UserInput():
-            return f"> {_one_line(event.text)}"
+            return f"> {one_line(event.text)}"
         case AssistantThinking():
-            return f"  (thinking) {_one_line(event.text)}"
+            return f"  (thinking) {one_line(event.text)}"
         case AssistantText():
             return f"{_agent(event.agent_id)}{event.text}"
         case ToolUse():
-            return f"  {_agent(event.agent_id)}· {event.name} {_one_line(str(event.input))}"
+            return f"  {_agent(event.agent_id)}· {event.name} {one_line(str(event.input))}"
         case ToolResult():
             mark = "!" if event.is_error else "="
-            return f"  {mark} {_one_line(event.content)}"
+            return f"  {mark} {one_line(event.content)}"
         case CheckResult():
             comment = f" comment: {event.comment}" if event.comment else ""
             return (
@@ -157,7 +157,7 @@ def _agent(agent_id: str | None) -> str:
     return "" if agent_id is None else f"{agent_id}: "
 
 
-def _one_line(text: str, limit: int = 300) -> str:
+def one_line(text: str, limit: int = 300) -> str:
     """Return `text` on one line, cut to `limit` characters.
 
     Args:
