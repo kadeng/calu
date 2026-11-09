@@ -41,6 +41,7 @@ phases.
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys |
+| `src/calu/clock.py` | Watches calu's own clock: a backward jump breaks the attribution of file changes to steps (D32) |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
 | `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |

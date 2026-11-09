@@ -34,6 +34,7 @@ from calu import preflight
 from calu.bus import Bus
 from calu.claude.runner import ClaudeRunner
 from calu.claude.sdk_runner import SdkRunner
+from calu.clock import ClockWatch
 from calu.config import ClaudeConfig, load_secrets
 from calu.credentials import wipe
 from calu.db import CONFIG_CHANGED, ESCALATION_RESOLVED, Db, Dirty, Notifier, connect
@@ -372,9 +373,20 @@ async def _run(
     dirty = Dirty()
     notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
     failed = False
+    clock = settings.config.clock
+    watch = ClockWatch(
+        session.clock_jumped,
+        interval_s=clock.check_interval_s,
+        max_backward_s=clock.max_backward_s,
+        max_forward_s=clock.max_forward_s,
+    )
     async with anyio.create_task_group() as tg:
         tg.start_soon(notifier.run)
         tg.start_soon(config_store.reload_loop, dirty, on_settings)
+        if clock.check_interval_s > 0:
+            # Watches calu's own clock: a backward jump breaks the attribution of file changes
+            # to steps, so the session escalates its next tool call (D32).
+            tg.start_soon(watch.run)
         server: SessionServer | None = None
         try:
             await session.start(tg, options.resume_id, options.model, options.effort)

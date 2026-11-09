@@ -8,6 +8,15 @@ escalating. The tools are:
     read_file(path, start_line, end_line)     one file, or a range of its lines
     find_files(pattern, limit)                paths matching a glob, e.g. "src/**/*.py"
     grep_files(pattern, path_glob, limit)     lines matching a regular expression
+    step_times(limit)                         when the recent tool calls ran
+    changed_files(since_step, path_glob)      which step last changed which file (by ctime)
+
+The last two answer "who did this?" instead of "what does this say?" (PLAN.md D32). A file's
+ctime cannot be set by an unprivileged process, so comparing it with the times of the steps
+attributes a change to a step. What that does **not** give: the content of the change (D31's
+snapshot is the option for that), and more than the *last* change of a file, because a later
+write overwrites the evidence of an earlier one — the later write is attributed in its place.
+calu watches its own clock for exactly this reason (`calu.clock`).
 
 Pydantic AI supplies the ground they stand on (`LocalWorkspace`, `pydantic_ai.workspaces`): the
 run gets a workspace pinned to one directory, wrapped read-only, so no tool can write, run a
@@ -25,12 +34,15 @@ more about the code — a language server, for example — belong here as well (
 """
 
 import logging
+import os
 import re
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import anyio.to_thread
 from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.workspaces import WorkspaceError
@@ -49,6 +61,10 @@ MAX_PATHS = 200
 """Paths `find_files` returns at most."""
 MAX_SCAN = 2_000
 """Files one `find_files` or `grep_files` call looks at at most."""
+MAX_CHANGED = 200
+"""Changed paths one `changed_files` call reports at most."""
+MAX_STEPS = 100
+"""Steps one `step_times` call reports at most."""
 
 SKIP_DIRS = frozenset(
     {
@@ -79,6 +95,35 @@ DATA_NOTE = (
 """Framing of file content, so a checker does not read a file as if the user had said it."""
 
 
+@dataclass(frozen=True)
+class StepTime:
+    """When one tool call of the session ran, for attributing file changes to it.
+
+    `started_at` is when the call was announced to the checkers (before it was decided), and
+    `finished_at` when its result arrived, or None while it still runs. Both are timezone-aware.
+    """
+
+    seq: int
+    tool_name: str
+    summary: str = ""
+    started_at: datetime = field(default_factory=lambda: datetime.fromtimestamp(0, UTC))
+    finished_at: datetime | None = None
+    agent_id: str | None = None
+
+    def label(self) -> str:
+        """Describe the step in one short phrase.
+
+        Returns:
+            Its sequence number and tool name, with the subagent if it was one.
+        """
+        agent = f", subagent {self.agent_id}" if self.agent_id else ""
+        return f"step {self.seq} ({self.tool_name}{agent})"
+
+
+StepTimes = Callable[[], Sequence[StepTime]]
+"""Returns the steps of the session so far, oldest first (the session passes a bound method)."""
+
+
 class ReadRefused(Exception):
     """The file may not be read; the message is returned to the checker model."""
 
@@ -94,6 +139,8 @@ class CodeTools:
 
     workspace: Path
     rules: Rules | None = None
+    times: StepTimes | None = field(default=None, repr=False)
+    """Where the step times come from; without it the two time tools are not offered."""
 
     def toolset(self) -> FunctionToolset[Any]:
         """Build the toolset to give a checker agent.
@@ -107,6 +154,9 @@ class CodeTools:
         toolset.add_function(self.read_file, name="read_file", takes_ctx=True)
         toolset.add_function(self.find_files, name="find_files", takes_ctx=True)
         toolset.add_function(self.grep_files, name="grep_files", takes_ctx=True)
+        if self.times is not None:
+            toolset.add_function(self.step_times, name="step_times", takes_ctx=False)
+            toolset.add_function(self.changed_files, name="changed_files", takes_ctx=False)
         return toolset
 
     # ------------------------------------------------------------------ the tools
@@ -209,6 +259,84 @@ class CodeTools:
             return f"no line matches {pattern!r} in files matching {path_glob!r}"
         return f"{DATA_NOTE}\n\n" + _cut("\n".join(matches))
 
+    async def step_times(self, limit: int = 20) -> str:
+        """Report when the recent tool calls of this session ran.
+
+        Use it together with `changed_files` to tell which step changed a file, and to see how
+        long ago something happened.
+
+        Args:
+            limit: How many of the most recent steps to report.
+
+        Returns:
+            One line per step: its number, tool, local and UTC time, how long it took and what
+            the checker of that step said it does.
+        """
+        steps = list(self.times() if self.times else ())
+        if not steps:
+            return "no steps have run in this session yet"
+        shown = steps[-min(limit, MAX_STEPS) :]
+        lines = [f"{len(steps)} steps so far; the last {len(shown)}, oldest first:"]
+        for step in shown:
+            took = (
+                f"{(step.finished_at - step.started_at).total_seconds():.1f} s"
+                if step.finished_at
+                else "still running"
+            )
+            lines.append(
+                f"{step.label()}  {_local(step.started_at)}  ({took})"
+                + (f"  {_cut_line(step.summary)}" if step.summary else "")
+            )
+        return "\n".join(lines)
+
+    async def changed_files(
+        self, since_step: int = 0, path_glob: str = "**/*", limit: int = 50
+    ) -> str:
+        """Report which project files changed, and in which step, using their ctime.
+
+        A file's ctime is set by the kernel on every change of the file or its metadata, and an
+        unprivileged process cannot set it to another value (unlike the modification time, which
+        `touch` can backdate). Comparing it with the times of the steps therefore says which
+        step last touched a path — which is how you tell whether a command changed more than it
+        said it would.
+
+        Two limits to keep in mind: only the **last** change of a file is visible, because a
+        later write replaces its ctime, and a change is not the same as different content (a
+        file rewritten with the same text still shows up). Directories are reported too, since a
+        deleted file leaves nothing but its parent's timestamp.
+
+        Args:
+            since_step: Report changes from the start of that step on; 0 means the whole session.
+            path_glob: Only paths matching this glob, e.g. "src/**/*.py".
+            limit: Maximum number of paths to report, oldest change first.
+
+        Returns:
+            One line per path: its change time, the step that window belongs to, and the path.
+        """
+        steps = list(self.times() if self.times else ())
+        since = _since(steps, since_step)
+        if since is None:
+            return "no steps have run in this session yet, so there is nothing to attribute"
+        found = await anyio.to_thread.run_sync(
+            lambda: _scan_changed(
+                self.workspace, since.timestamp(), path_glob, self.rules, min(limit, MAX_CHANGED)
+            )
+        )
+        if not found:
+            return (
+                f"no project file matching {path_glob!r} changed since {_local(since)} "
+                f"(the start of {_step_label(steps, since_step)})"
+            )
+        lines = [
+            f"changed since {_local(since)} (the start of {_step_label(steps, since_step)}), "
+            "oldest change first; the step is the one whose run contains the change time:"
+        ]
+        for path, changed, is_dir in found:
+            moment = datetime.fromtimestamp(changed, UTC)
+            where = _attribute(steps, moment)
+            lines.append(f"{_local(moment)}  {where}  {path}{'/' if is_dir else ''}")
+        return _cut("\n".join(lines))
+
     # ------------------------------------------------------------------ helpers
 
     async def _lines(self, ctx: RunContext[None], path: str) -> list[str]:
@@ -306,3 +434,139 @@ def _cut(text: str, limit: int = MAX_CHARS) -> str:
         The text, with a marker if it was cut.
     """
     return text if len(text) <= limit else text[:limit] + "\n[... cut]"
+
+
+def _local(moment: datetime) -> str:
+    """Render a time in the host's local zone, with the UTC time next to it.
+
+    Args:
+        moment: A timezone-aware time.
+
+    Returns:
+        "YYYY-MM-DD HH:MM:SS.mmm local (HH:MM:SSZ)".
+    """
+    here = moment.astimezone()
+    return f"{here:%Y-%m-%d %H:%M:%S}.{here.microsecond // 1000:03d} local ({moment:%H:%M:%S}Z)"
+
+
+def _cut_line(text: str, limit: int = 120) -> str:
+    """Put text on one line and cut it.
+
+    Args:
+        text: The text.
+        limit: Maximum number of characters.
+
+    Returns:
+        The single-line text, with a marker if it was cut.
+    """
+    joined = " ".join(text.split())
+    return joined if len(joined) <= limit else joined[: limit - 4] + " ..."
+
+
+def _since(steps: Sequence[StepTime], since_step: int) -> datetime | None:
+    """Return the time from which `changed_files` reports changes.
+
+    Args:
+        steps: The session's steps, oldest first.
+        since_step: Sequence number of a step, or 0 for the whole session.
+
+    Returns:
+        The start of that step, the start of the session for 0, or None if no step ran. An
+        unknown sequence number falls back to the start of the session.
+    """
+    if not steps:
+        return None
+    if since_step > 0:
+        for step in steps:
+            if step.seq == since_step:
+                return step.started_at
+    return steps[0].started_at
+
+
+def _step_label(steps: Sequence[StepTime], since_step: int) -> str:
+    """Describe what `since_step` referred to, for the answer's header.
+
+    Args:
+        steps: The session's steps, oldest first.
+        since_step: The requested sequence number, or 0.
+
+    Returns:
+        The step's label, or "the session" if the whole session was meant or the number is
+        unknown.
+    """
+    for step in steps:
+        if since_step > 0 and step.seq == since_step:
+            return step.label()
+    return "the session"
+
+
+def _attribute(steps: Sequence[StepTime], moment: datetime) -> str:
+    """Say which step was running at `moment`.
+
+    Args:
+        steps: The session's steps, oldest first.
+        moment: When the change happened (from the file's ctime).
+
+    Returns:
+        "in step N (Tool)" if the change falls inside one step's run, "after step N (Tool)" if it
+        falls between steps, and "before the first step" if it is older than every step. Several
+        steps can overlap (background commands, subagents), and then the first match is named.
+    """
+    after: StepTime | None = None
+    for step in steps:
+        end = step.finished_at
+        if step.started_at <= moment and (end is None or moment <= end):
+            return f"in {step.label()}"
+        if step.started_at <= moment:
+            after = step
+    return f"after {after.label()}" if after else "before the first step"
+
+
+def _scan_changed(
+    root: Path, since: float, pattern: str, rules: Rules | None, limit: int
+) -> list[tuple[str, float, bool]]:
+    """Walk the project directory and collect the paths whose ctime is newer than `since`.
+
+    This tool reads file **metadata**, which the workspace API of Pydantic AI does not expose,
+    so it walks the directory itself instead of going through `ctx.workspace`. It therefore
+    keeps the same bounds by hand: it stays inside `root`, does not follow symbolic links, skips
+    `SKIP_DIRS` and everything the read deny lists cover, looks at no more than `MAX_SCAN`
+    entries, and never opens a file.
+
+    Runs synchronously in a worker thread (one `os.stat` per entry would otherwise block the
+    event loop).
+
+    Args:
+        root: The project directory.
+        since: Only entries whose ctime is at least this many seconds since the epoch.
+        pattern: Glob the project-relative path must match.
+        rules: The workspace's rules, whose read deny lists are applied (None applies none).
+        limit: Maximum number of entries returned.
+
+    Returns:
+        Up to `limit` tuples (project-relative path, ctime, is a directory), oldest change
+        first.
+    """
+    found: list[tuple[str, float, bool]] = []
+    seen = 0
+    for directory, subdirectories, files in os.walk(root, followlinks=False):
+        subdirectories[:] = [name for name in subdirectories if name not in SKIP_DIRS]
+        for name, is_dir in [(name, True) for name in subdirectories] + [
+            (name, False) for name in files
+        ]:
+            seen += 1
+            if seen > MAX_SCAN:
+                return sorted(found, key=lambda entry: entry[1])[:limit]
+            absolute = Path(directory) / name
+            relative = absolute.relative_to(root).as_posix()
+            if rules is not None and rules.read_denied(absolute):
+                continue
+            if not _matches(relative, pattern):
+                continue
+            try:
+                changed = absolute.lstat().st_ctime
+            except OSError:
+                continue
+            if changed >= since:
+                found.append((relative, changed, is_dir))
+    return sorted(found, key=lambda entry: entry[1])[:limit]

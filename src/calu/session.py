@@ -42,8 +42,10 @@ import logging
 import os
 import platform
 import socket
+from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -71,8 +73,10 @@ from calu.checkers.changeset import changeset, is_commit
 from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
+from calu.checkers.tools import StepTime
 from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
 from calu.claude.sdk_runner import AGENT_TOOLS
+from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
 from calu.config import CHECKER_FIELDS, EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
@@ -117,6 +121,9 @@ from calu.store import StepRow as StoredStep
 from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
+
+STEP_TIMES_KEPT = 500
+"""How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
 
 CHECKER_DEADLINE_S = 840
 """Upper bound for one checker model call; on timeout the step is escalated."""
@@ -310,6 +317,9 @@ class Session:
         self._local_ids = itertools.count(1)
         self._step_seq = itertools.count(1)
         self._step_ids: dict[str, int] = {}  # tool_use_id -> `steps` row id
+        self._times: deque[StepTime] = deque(maxlen=STEP_TIMES_KEPT)
+        self._time_index: dict[str, int] = {}  # tool_use_id -> position in `_times`
+        self._clock_alarm: str | None = None  # a backward clock jump nobody has seen yet (D32)
         self._changesets: dict[str, str] = {}  # tool_use_id -> the diff a commit would record
         self._running_tools: set[str] = set()  # tool_use_ids of approved, unfinished calls
         self._checking = 0  # checker and narrator calls in flight
@@ -365,6 +375,7 @@ class Session:
             model=resolve_model(self._models.get(name) or cfg.model),
             workspace=self.workspace,
             rules=self.rules,
+            times=self.step_times,
             usage_limits=UsageLimits(
                 request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
             ),
@@ -433,6 +444,80 @@ class Session:
             self.narrator = None
 
     # ------------------------------------------------------------------ client requests
+
+    def step_times(self) -> Sequence[StepTime]:
+        """Return when the recent steps of this session ran, oldest first (PLAN.md D32).
+
+        The checkers get this as a tool (`calu.checkers.tools.step_times`) and use it to
+        attribute a file's change time to a step. Only the last `STEP_TIMES_KEPT` steps are
+        kept, because the list exists for attributing recent changes, not as a history: the
+        database holds the history.
+
+        Returns:
+            The steps, oldest first; empty before the first tool call.
+        """
+        return tuple(self._times)
+
+    def _finish_time(self, tool_use_id: str) -> None:
+        """Note that a tool call ended, so its time window is closed.
+
+        Args:
+            tool_use_id: Claude's id of the call; an unknown id is ignored (its step may have
+                fallen out of the kept window).
+        """
+        seq = self._time_index.pop(tool_use_id, None)
+        if seq is None:
+            return
+        for index, step in enumerate(self._times):
+            if step.seq == seq:
+                self._times[index] = replace(step, finished_at=datetime.now(UTC))
+                return
+
+    def _summarize_time(self, seq: int, summary: str) -> None:
+        """Attach the checker's summary to a recorded step time, for `step_times`.
+
+        Args:
+            seq: Sequence number of the step.
+            summary: What the checker said the step does.
+        """
+        if not summary:
+            return
+        for index, step in enumerate(self._times):
+            if step.seq == seq:
+                self._times[index] = replace(step, summary=summary)
+                return
+
+    async def clock_jumped(self, jump: ClockJump) -> None:
+        """React to a move of the wall clock that `calu.clock.ClockWatch` detected (D32).
+
+        A forward jump is only reported, because a first time-server sync legitimately jumps
+        forward. A **backward** jump breaks the attribution of file changes to steps, so the
+        session escalates its next tool call with the jump as the reason: nothing runs
+        unsupervised until a human has seen it. The human's answer to that escalation clears the
+        alarm either way — allowing means "the clock change was legitimate, carry on".
+
+        Limitation: an idle session has no next tool call, so the jump reaches the clients as a
+        log event at once and escalates only when Claude acts again.
+
+        Side effects: emits a `log` event; for a backward jump, arms the alarm that `_decide`
+        reads.
+
+        Args:
+            jump: The detected jump.
+        """
+        if not jump.backward:
+            await self._emit_safely(
+                Log(level="warning", message=f"clock: {jump.describe()} (not an escalation)")
+            )
+            return
+        self._clock_alarm = (
+            f"The clock of the calu host was moved: {jump.describe()}. Until a human has seen "
+            "this, calu cannot tell which step changed which file, because that attribution "
+            "compares a file's change time with the times of the steps. Check what moved the "
+            "clock before you let this session continue."
+        )
+        await self._emit_safely(Log(level="error", message=f"clock: {jump.describe()}"))
+        await self._refresh_state()
 
     async def accepts_token(self, token: str) -> bool:
         """Tell whether a client may attach to this session with `token` (PLAN.md D30).
@@ -631,6 +716,8 @@ class Session:
         self._busy = False
         self._running_tools.clear()
         self._step_ids.clear()
+        self._times.clear()
+        self._time_index.clear()
         self._changesets.clear()
         self._pending_reasons.clear()
         self._step_seq = itertools.count(1)
@@ -966,6 +1053,8 @@ class Session:
             narration=pending.text or "",
         )
         self.context.step(record)
+        if step.tool_use_id:
+            self._summarize_time(self._time_index.get(step.tool_use_id, 0), result.step_summary)
         if pending.outputs and pending.text is None and self.narrator and self._tg is not None:
             # No checker ran (rules, policy): narrate for the context without delaying the call.
             self._spawn(self._narrate_record, record, pending.outputs)
@@ -1335,6 +1424,19 @@ class Session:
         outcome = self.rules.evaluate(step)
         rules = _rules_outcome(step, outcome)
         label = label_for_unchecked(step.tool_name, step.tool_input)
+        if self._clock_alarm is not None:
+            # A backward clock jump makes the attribution of file changes unreliable (D32), so a
+            # human decides before anything else runs. The alarm is cleared either way: the
+            # answer to this escalation is the answer to the jump.
+            alarm, self._clock_alarm = self._clock_alarm, None
+            return _Decided(
+                route=route,
+                decision=CheckDecision(
+                    decision=Decision.ESCALATE, reason=alarm, step_summary=label
+                ),
+                source="clock",
+                rules=rules,
+            )
         if outcome.ask:
             return _Decided(
                 route=route,
@@ -1557,6 +1659,7 @@ class Session:
                     "recording the subagents", self.store.update_agents(event.agents)
                 )
             case ToolResult():
+                self._finish_time(event.tool_use_id)
                 self._pending_reasons.pop(event.tool_use_id, None)
                 self._running_tools.discard(event.tool_use_id)
                 self._changesets.pop(event.tool_use_id, None)
@@ -1853,7 +1956,16 @@ class Session:
                 Log(level="error", message=f"recording a step in the database failed: {exc}")
             )
             return None
+        self._times.append(
+            StepTime(
+                seq=row.seq,
+                tool_name=step.tool_name,
+                started_at=datetime.now(UTC),
+                agent_id=step.agent_id,
+            )
+        )
         if step.tool_use_id:
+            self._time_index[step.tool_use_id] = row.seq
             self._step_ids[step.tool_use_id] = step_id
         return step_id
 

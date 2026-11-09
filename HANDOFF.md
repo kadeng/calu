@@ -40,8 +40,8 @@ in `calu/` only.
 | 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**294 tests pass** (unit + database). The database tests need `docker compose up -d caludb
---wait`. 46 commits, ~16k lines of source, ~5.5k of tests, 8 migrations, 14 CLI commands,
+**327 tests pass** (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 50 commits, ~18k lines of source, ~6k of tests, 9 migrations, 16 CLI commands,
 16 protocol requests.
 
 ### What exists
@@ -68,6 +68,20 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   `find_files(pattern)`, `grep_files(pattern, path_glob)`, on Pydantic AI's workspace API
   (`LocalWorkspace(read_only=True, authority="none")`), bounded by the read deny lists and by
   size. Pydantic AI ships no file tools itself; a language server would be the next tool here.
+- **Times and the clock** (D32, `src/calu/clock.py`): a session keeps the start and end time of
+  its recent steps (`Session.step_times`, the last 500) and gives the checkers two more
+  read-only tools: `step_times` (when the recent calls ran, local and UTC) and `changed_files`
+  (which paths changed since a step, and which step's run contains the change). The attribution
+  uses the file's **ctime**, which an unprivileged process cannot set — `touch -d` moves only
+  the modification time — and it scans directories too, because a deleted file leaves nothing
+  but its parent's timestamp. It gives attribution, not content, and only the *last* change of a
+  path. `ClockWatch` samples `CLOCK_REALTIME` against `CLOCK_BOOTTIME` (boottime, so a suspended
+  host is not mistaken for tampering) every `clock.check_interval_s`; a backward move beyond
+  `clock.max_backward_s` arms an alarm that escalates the session's next tool call with the jump
+  as its reason, and the human's answer to that escalation clears it. A large forward move is
+  only logged, because a first time-server sync jumps forward. An idle session has no next step,
+  so the jump reaches the clients as a log event at once and escalates when Claude acts again.
+  No live checker model has used the two tools yet.
 - **Changeset checker** (D26, `checkers/changeset.py`): a Bash call that creates a `git commit`
   goes to `Route.CHANGESET`; calu collects the diff (`--cached`, against HEAD for `-a`, against
   `HEAD~1` for `--amend`) and gives it to that checker with the command and its message. A DENY
@@ -178,13 +192,7 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
    `AutoEscalate`, and the single-binary packaging.
-2. **Times, ctime attribution and the clock watch** (D32, decided 2026-11-09, nothing implemented
-   yet, and cheap): `steps` already records created, decided and finished times, so what is missing
-   is the host's timezone, two read-only checker tools — `step_times` and `changed_files` (ctime in
-   a window, directories included, because a delete leaves no inode) — and a task that samples
-   `CLOCK_REALTIME` against `CLOCK_BOOTTIME` and escalates when the wall clock moves backwards by
-   more than `clock.max_backward_s`. It gives attribution without content.
-3. **The write set of a Bash step** (D31, decided 2026-11-09, nothing implemented yet, **optional
+2. **The write set of a Bash step** (D31, decided 2026-11-09, nothing implemented yet, **optional
    and off by default**): snapshot the project directory before and after every Bash step with git
    plumbing in a git directory of calu's own (`$XDG_STATE_HOME/calu/snapshots/<session>`, outside
    the project, on the sandbox's `denyRead` list, used with `--work-tree`). It closes the gap that
@@ -194,10 +202,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    the call; then `git apply -R` as the revert on a post-hoc DENY. Needs only the `git` binary.
    Include the size and type policy from the start. The overlay alternative was measured and
    dropped (see D31).
-4. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
+3. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
    side each feature talks to).
-5. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-6. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
+4. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
    read, not edited, through a client; the protocol server binds TCP only (a Unix socket is
    mentioned in §6 and `sessions.address` already allows for one).
 

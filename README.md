@@ -47,8 +47,12 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   condensed form, your project's AGENTS.md and the step itself, and read-only tools to look
   further when they need to: read a file or a range of its lines, find files by glob, grep for a
   pattern — so a checker can see who calls the function being changed instead of guessing. They
-  judge the step, not the whole program: overall correctness is the changeset checker's job,
-  below.
+  can also ask **when** things happened: the times of the session's steps, and which step last
+  changed a file. That last question is answered from the file's change time, which an
+  unprivileged process cannot forge, so a command that edits more than it said it would leaves a
+  trace. calu watches its own clock for the same reason: if the wall clock is moved backwards,
+  the next step waits for a human, because the attribution would no longer hold. Checkers judge
+  the step, not the whole program: overall correctness is the changeset checker's job, below.
 - **A readable trail instead of a transcript.** Every step is summarized by the checker that
   judged it — one line saying what the step was meant to do — and the summaries go to the
   database. Supervising a fleet of agents then means reading summaries, not transcripts, and

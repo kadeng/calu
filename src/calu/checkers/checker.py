@@ -35,7 +35,7 @@ from pydantic_ai.models import Model
 from calu.checkers.model import CheckDecision, Decision, Step
 from calu.checkers.render import render_step
 from calu.checkers.rules import Rules
-from calu.checkers.tools import CodeTools
+from calu.checkers.tools import CodeTools, StepTimes
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
 log = logging.getLogger(__name__)
@@ -137,8 +137,10 @@ class Checker:
     decision whose reason names the error, so a human decides instead.
 
     The agent has the read-only tools of `calu.checkers.tools` — reading a file or a range of
-    its lines, finding files by glob, grepping — with which it can find out what the code
-    actually does when the step alone does not say enough (PLAN.md D22, D25). The run's
+    its lines, finding files by glob, grepping, and, if `times` is given, the times of the
+    session's steps and which step last changed a file — with which it can find out what the
+    code actually does, and who did it, when the step alone does not say enough (PLAN.md D22,
+    D25, D32). The run's
     workspace is pinned to `workspace` and wrapped read-only by Pydantic AI, and the read deny
     lists of `rules` bound it further. It has no other tool: no writes, no commands, no network.
     """
@@ -149,6 +151,9 @@ class Checker:
     workspace: Path
     rules: Rules | None = None
     """The workspace's rules; they bound what `read_file` may read (None allows every file)."""
+    times: StepTimes | None = None
+    """Where `step_times` and `changed_files` get the session's step times (D32); without it
+    those two tools are not offered to the model."""
     usage_limits: UsageLimits = field(
         default_factory=lambda: UsageLimits(request_limit=3, output_tokens_limit=8_000)
     )
@@ -168,7 +173,7 @@ class Checker:
         """
         instructions = self.instructions
         if self._agent is None or instructions != self._built_for:
-            tools = CodeTools(workspace=self.workspace, rules=self.rules)
+            tools = CodeTools(workspace=self.workspace, rules=self.rules, times=self.times)
             agent: Agent[None, CheckDecision] = Agent(
                 output_type=CheckDecision,
                 instructions=instructions,

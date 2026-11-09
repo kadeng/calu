@@ -209,6 +209,16 @@ async def test_a_client_that_reconnects_gets_the_events_it_missed(tmp_path: Path
             await protocol.request("session.start", {})
             await protocol.request("chat.send", {"text": "hello"})
             await first.wait_for("turn.result")
+            # The session settles into `idle` after the turn result, so waiting for the turn
+            # alone can leave that last event outside `last_seq`, and the reconnecting client
+            # would then receive it. Wait until the session is idle and this client has seen
+            # every event the bus has.
+            with anyio.fail_after(10):
+                while True:
+                    state = await protocol.request("state.get")
+                    if state["state"] == "idle" and state["last_seq"] == protocol.last_seq:
+                        break
+                    await anyio.sleep(0.01)
             seen = protocol.last_seq
         second = Events()
         async with client(run, second, after_seq=seen) as protocol:

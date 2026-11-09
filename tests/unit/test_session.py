@@ -5,7 +5,8 @@ from pathlib import Path
 import anyio
 import pytest
 
-from calu.checkers import Route
+from calu.checkers import Decision, Route, Step
+from calu.clock import ClockJump
 from calu.config import ClaudeConfig, Config, ContextConfig
 from calu.protocol.messages import (
     AgentsUpdate,
@@ -465,3 +466,63 @@ async def test_the_agent_tree_of_a_session_is_recorded(tmp_path: Path):
     assert store.agents[agent_id].description == "reviewer"
     assert store.agents[agent_id].background
     assert store.agents[agent_id].status == "completed"
+
+
+async def test_a_backward_clock_jump_escalates_the_next_step_and_then_clears(tmp_path: Path):
+    """D32: attribution rests on the clock, so a human sees a backward jump before work goes on."""
+    session, rec, _store = make_session(tmp_path, [])
+    await session.clock_jumped(ClockJump(backward=True, seconds=42.0, at=1_700_000_000.0))
+    logs = [event for event in rec.of(Log) if "clock" in event.message]
+    assert logs and logs[-1].level == "error"
+    assert "backwards by 42.0 s" in logs[-1].message
+
+    step = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
+    first = await session._decide(step, None)
+    assert first.decision.decision is Decision.ESCALATE
+    assert first.source == "clock"
+    assert "moved" in first.decision.reason and "which step changed which file" in (
+        first.decision.reason
+    )
+    # The answer to that escalation is the answer to the jump, so the next step is normal again.
+    second = await session._decide(step, None)
+    assert second.decision.decision is not Decision.ESCALATE or second.source != "clock"
+
+
+async def test_a_forward_clock_jump_is_only_reported(tmp_path: Path):
+    session, rec, _store = make_session(tmp_path, [])
+    await session.clock_jumped(ClockJump(backward=False, seconds=400.0, at=1_700_000_000.0))
+    logs = [event for event in rec.of(Log) if "clock" in event.message]
+    assert logs and logs[-1].level == "warning" and "not an escalation" in logs[-1].message
+    step = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
+    decided = await session._decide(step, None)
+    assert decided.source != "clock"
+
+
+async def test_the_step_times_of_a_session_are_recorded_for_the_checkers(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("old\n", encoding="utf-8")
+    session, _rec, _store = make_session(
+        tmp_path,
+        [
+            [
+                {"tool": "Bash", "input": {"command": "ls"}, "result": "a.txt"},
+                {"tool": "Read", "input": {"file_path": "a.txt"}, "result": "old"},
+            ]
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="look around"))
+        with anyio.fail_after(10):
+            while len(session.step_times()) < 2:
+                await anyio.sleep(0.01)
+        times = session.step_times()
+        assert [step.seq for step in times] == [1, 2]
+        assert [step.tool_name for step in times] == ["Bash", "Read"]
+        # Every window is closed once the result arrived, and the checker's summary is attached.
+        with anyio.fail_after(10):
+            while not all(step.finished_at for step in session.step_times()):
+                await anyio.sleep(0.01)
+        assert all(step.finished_at >= step.started_at for step in session.step_times())  # type: ignore[operator]
+        assert any(step.summary for step in session.step_times())
+        await session.stop()
+        tg.cancel_scope.cancel()

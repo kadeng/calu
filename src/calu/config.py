@@ -221,6 +221,25 @@ class AutoEscalate(BaseModel):
     subagents: bool = False
 
 
+class ClockConfig(BaseModel):
+    """How closely calu watches its own clock (PLAN.md D32, `calu.clock`).
+
+    A checker attributes a file change to a step by comparing the file's change time with the
+    times of the steps, which only holds while the wall clock moves forward. calu therefore
+    compares `CLOCK_REALTIME` with `CLOCK_BOOTTIME`, which cannot be set.
+    """
+
+    check_interval_s: float = Field(default=10.0, ge=0)
+    """Seconds between samples; 0 switches the watch off. The interval only decides how soon a
+    jump is noticed, not whether it is: each sample is compared with the previous one."""
+    max_backward_s: float = Field(default=1.0, ge=0)
+    """A backward move up to this size counts as a time-server correction. Above it, the session
+    escalates its next tool call, because the attribution of file changes is no longer sound."""
+    max_forward_s: float = Field(default=300.0, ge=0)
+    """A forward move above this size is logged (a first time-server sync after a boot jumps
+    forward legitimately, so it is not an escalation)."""
+
+
 class Config(BaseModel):
     """The complete configuration with defaults for every field."""
 
@@ -247,6 +266,7 @@ class Config(BaseModel):
     default_route: Route = Route.COMMAND
     context: ContextConfig = Field(default_factory=ContextConfig)
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
+    clock: ClockConfig = Field(default_factory=ClockConfig)
 
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.

@@ -453,8 +453,9 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    open: the write-set detection of D31 (snapshot per Bash step, the comparison of declared against
    written paths, the post-call review of the real diff, the revert), the network policy per project
    (Q5), the nested-sandbox case in Docker (Q1) and `calu project add`. The time and ctime
-   attribution of D32 (step times, the two checker tools, the clock watch) is cheap and comes
-   first; the snapshot of D31 is optional and off by default. The evaluation of the checkers
+   attribution of D32 is **done** (`calu.clock`, the `step_times` and `changed_files` tools of
+   `calu.checkers.tools`, `Session.clock_jumped`); the snapshot of D31 is not built and stays
+   optional and off by default. The evaluation of the checkers
    (`calu evals`, ported from sitl) is done.
 6. **Herd management:** a web UI on top of the commands of phase 3.
 7. **Third-party user interfaces and packaging:** `calu acp`, the ACP adapter of §6.1 (D24),
