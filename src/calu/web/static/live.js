@@ -54,6 +54,43 @@
       why.textContent = `${request.tool_name}: ${request.reason}`;
       const rendered = document.createElement("pre");
       rendered.textContent = request.rendered || "";
+      card.append(why, rendered);
+      // A question of the agent is answered, not allowed or denied: its options become buttons
+      // and the answer travels back as the result of the call (PLAN.md D35).
+      if ((request.questions || []).length) {
+        for (const question of request.questions) {
+          const asked = document.createElement("p");
+          asked.textContent = question.question || question.header || "a question";
+          card.appendChild(asked);
+          const choices = document.createElement("p");
+          choices.className = "row";
+          for (const option of question.options || []) {
+            const button = document.createElement("button");
+            button.className = "primary";
+            button.textContent = option.label;
+            button.title = option.description || "";
+            button.onclick = () => {
+              send("escalation.decide", { escalation_id: id, answer: option.label });
+              escalations.delete(id);
+              renderEscalations();
+            };
+            choices.appendChild(button);
+          }
+          const free = document.createElement("input");
+          free.type = "text";
+          free.placeholder = "or answer in your own words, then Enter";
+          free.onkeydown = (event) => {
+            if (event.key !== "Enter" || !free.value.trim()) return;
+            send("escalation.decide", { escalation_id: id, answer: free.value.trim() });
+            escalations.delete(id);
+            renderEscalations();
+          };
+          choices.appendChild(free);
+          card.appendChild(choices);
+        }
+        box.appendChild(card);
+        continue;
+      }
       const row = document.createElement("p");
       row.className = "row";
       const note = document.createElement("input");
@@ -73,7 +110,7 @@
       allow.onclick = decide("allow");
       deny.onclick = decide("deny");
       row.append(note, allow, deny);
-      card.append(why, rendered, row);
+      card.appendChild(row);
       box.appendChild(card);
     }
     document.title = escalations.size ? `(${escalations.size}) waiting · calu` : "Live · calu";

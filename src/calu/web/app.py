@@ -662,14 +662,19 @@ async def waiting_json(request: Request, state: _State) -> Response:
             "created_at": row.created_at.isoformat(),
             "rendered": row.rendered if index == 0 else "",
             "command": "",
+            "questions": [],
             "session_url": str(request.url_for("session", session_id=row.session_id)),
         }
         if index == 0:
             context = await herd.escalation_context(state.db, row.id)
             entry["rendered"] = str(context.get("rendered") or row.rendered)
             tool_input = context.get("tool_input")
-            if str(context.get("tool_name")) == "Bash" and isinstance(tool_input, dict):
+            tool_name = str(context.get("tool_name"))
+            if tool_name == "Bash" and isinstance(tool_input, dict):
                 entry["command"] = str(tool_input.get("command") or "")
+            if tool_name == "AskUserQuestion" and isinstance(tool_input, dict):
+                asked = tool_input.get("questions")
+                entry["questions"] = asked if isinstance(asked, list) else []
         found.append(entry)
     return JSONResponse({"escalations": found})
 
@@ -683,19 +688,21 @@ async def resolve_json(request: Request, state: _State) -> Response:
     act and belongs in `calu rules add`.
 
     Args:
-        request: The request; its JSON body holds `decision`, `note` and `remember`.
+        request: The request; its JSON body holds `decision`, `note` and `remember`, or an
+            `answer` for a question of the agent (D35), which is recorded as "answered".
         state: The shared state.
 
     Returns:
-        `{"ok": true}`, or `{"ok": false, "message": ...}` with status 400 if the decision is not
-        "allow" or "deny" or the escalation is not open any more.
+        `{"ok": true}`, or `{"ok": false, "message": ...}` with status 400 if the decision is
+        none of them or the escalation is not open any more.
     """
     escalation_id = int(request.path_params["escalation_id"])
     body = await request.json()
-    decision = str(body.get("decision") or "")
-    if decision not in ("allow", "deny"):
+    answer = body.get("answer")
+    decision = "answer" if answer else str(body.get("decision") or "")
+    if decision not in ("allow", "deny", "answer"):
         return JSONResponse({"ok": False, "message": "neither allow nor deny"}, status_code=400)
-    note = str(body.get("note") or "")
+    note = str(answer or body.get("note") or "")
     if not await herd.resolve(state.db, escalation_id, decision, note):
         return JSONResponse({"ok": False, "message": "it is not open any more"}, status_code=400)
     remembered = ""

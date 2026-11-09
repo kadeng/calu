@@ -131,10 +131,17 @@ def format_event(event: Event) -> str | None:
                 f"{f' ({event.reason})' if event.reason else ''}{comment}"
             )
         case EscalationRequest():
+            # A question of the agent is answered, not allowed or denied (PLAN.md D35), so the
+            # line says how to answer it instead.
+            how = (
+                f"answer it with: calu resolve {event.escalation_id} answer 'your answer'"
+                if event.questions
+                else f"resolve it with: calu resolve {event.escalation_id} allow|deny"
+            )
             return (
                 f"\n*** escalation {event.escalation_id}: {event.tool_name}\n"
                 f"    {event.reason}\n"
-                f"    resolve it with: calu resolve {event.escalation_id} allow|deny\n"
+                f"    {how}\n"
             )
         case EscalationResolved():
             return f"*** escalation {event.escalation_id}: {event.decision}"

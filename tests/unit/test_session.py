@@ -714,3 +714,45 @@ async def test_without_the_review_a_write_set_is_only_recorded(tmp_path: Path):
         assert not [event for event in rec.of(UserInput) if "undone" in event.text]
         await session.stop()
         tg.cancel_scope.cancel()
+
+
+async def test_a_question_of_the_agent_is_answered_by_the_human(tmp_path: Path):
+    """D35: AskUserQuestion is escalated without a checker, and the answer is the result."""
+    questions = [
+        {
+            "question": "Should this project indent with tabs or with spaces?",
+            "header": "Indentation",
+            "options": [
+                {"label": "Tabs", "description": "tab characters"},
+                {"label": "Spaces", "description": "space characters"},
+            ],
+            "multiSelect": False,
+        }
+    ]
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "AskUserQuestion", "input": {"questions": questions}, "result": "unused"}]],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="set up the project"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        # The question and its options reach the client, so it can show the real choices.
+        assert request.questions == questions
+        assert "tabs or with spaces" in request.reason
+        assert "Tabs, Spaces" in request.reason
+        # No checker was asked: only the human knows the answer.
+        assert [c.route for c in rec.of(CheckResult)] == [Route.QUESTION]
+        assert [c.decision for c in rec.of(CheckResult)] == [Decision.ESCALATE]
+
+        await session.decide_escalation(request.escalation_id, "deny", None, answer="Spaces")
+        await rec.wait_for(TurnResult)
+        # Claude receives the answer as the result of the call, which did not run.
+        results = rec.of(ToolResult)
+        assert results and "The user answered your question: Spaces" in results[0].content
+        assert "was not run" in results[0].content
+        # The row says what happened: answered, not allowed and not denied.
+        row = store.escalations[int(request.escalation_id)]
+        assert row.state == "answered" and row.note == "Spaces"
+        await session.stop()
+        tg.cancel_scope.cancel()

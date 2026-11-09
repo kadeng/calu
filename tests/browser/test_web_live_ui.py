@@ -71,3 +71,42 @@ async def test_a_session_that_serves_no_clients_says_so_in_the_browser(
             assert await page.inner_text("#state") == "not attached"
     finally:
         await conn.close()
+
+
+async def test_a_question_of_the_agent_is_answered_by_clicking_an_option(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """D35: the options Claude offered become buttons, and the answer is the result."""
+    questions = [
+        {
+            "question": "Should this project indent with tabs or with spaces?",
+            "header": "Indentation",
+            "options": [
+                {"label": "Tabs", "description": "tab characters"},
+                {"label": "Spaces", "description": "space characters"},
+            ],
+            "multiSelect": False,
+        }
+    ]
+    turns = [[{"tool": "AskUserQuestion", "input": {"questions": questions}, "result": "unused"}]]
+    async with running(db_url, tmp_path, turns) as (base, session_id, _session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await page.fill("#text", "set up the project")
+        await page.get_by_role("button", name="Send (queued)").click()
+
+        await page.wait_for_selector(".escalation")
+        card = await page.inner_text(".escalation")
+        assert "tabs or with spaces" in card
+        # The options are buttons, and there is no allow or deny: a question needs an answer.
+        assert await page.get_by_role("button", name="Spaces").count() == 1
+        assert await page.get_by_role("button", name="Allow").count() == 0
+
+        await page.get_by_role("button", name="Spaces").click()
+        await page.wait_for_function("!document.querySelector('.escalation')")
+        await page.wait_for_function(
+            "document.getElementById('stream').textContent.includes('turn ended')"
+        )
+        # Claude received the answer as the result of the call, which never ran.
+        stream = await page.inner_text("#stream")
+        assert "The user answered your question: Spaces" in stream

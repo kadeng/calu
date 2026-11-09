@@ -21,6 +21,7 @@ Commands typed instead of a message:
     /checkers             the checker definitions this session uses (name, model, version)
     /allow <id> [note]    resolve an escalation (`escalation.decide`)
     /deny <id> [note]     resolve an escalation
+    /answer <id> TEXT     answer a question Claude asked (its options are in the event)
     /inject <text>        send the text so Claude reads it after its running tool calls
     /state                print the state again
     /context              print the conversation as the checkers see it
@@ -50,6 +51,7 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 
 HELP = (
     "/quit  /stop  /start [resume id]  /interrupt  /allow <id> [note]  /deny <id> [note]  "
+    "/answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
     "/sessions  /history [id]  /shutdown"
 )
@@ -190,6 +192,8 @@ class Console:
                 )
             case "/comment":
                 await self._comment(rest)
+            case "/answer":
+                await self._answer(rest)
             case "/allow" | "/deny":
                 await self._decide(command.removeprefix("/"), rest)
             case "/why":
@@ -303,6 +307,27 @@ class Console:
         )
         excerpt = (result.get("comment") or {}).get("after", {}).get("text", "")
         print(f"[comment] on {path}:{start}-{end}: {one_line(excerpt)}", flush=True)
+
+    async def _answer(self, rest: str) -> None:
+        """Answer a question of the agent from an `/answer` line (PLAN.md D35).
+
+        The answer reaches Claude as the result of its `AskUserQuestion` call, which does not
+        run; the escalation is recorded as "answered".
+
+        Args:
+            rest: The escalation id and the answer.
+
+        Raises:
+            RequestFailed: If the session refused it (e.g. unknown escalation).
+        """
+        escalation_id, _, answer = rest.partition(" ")
+        if not escalation_id or not answer.strip():
+            print("[error] /answer needs an escalation id and an answer", flush=True)
+            return
+        await self.client.request(
+            "escalation.decide",
+            {"escalation_id": escalation_id, "answer": answer.strip()},
+        )
 
     async def _decide(self, decision: str, rest: str) -> None:
         """Resolve an escalation from an `/allow` or `/deny` line.

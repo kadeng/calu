@@ -394,15 +394,21 @@ class MemorySessionStore:
         )
 
     async def decide_escalation(
-        self, escalation_id: int, allow: bool, note: str = "", actor: str = ""
+        self,
+        escalation_id: int,
+        allow: bool,
+        note: str = "",
+        actor: str = "",
+        answered: bool = False,
     ) -> bool:
         """Record a client's decision on an open escalation.
 
         Args:
             escalation_id: Id from `open_escalation`.
             allow: Whether the step may run.
-            note: The human's note.
+            note: The human's note, or the answer to a question.
             actor: Name of the client that decided.
+            answered: True for the answer to a question of the agent (D35).
 
         Returns:
             True if the escalation was open; False otherwise.
@@ -412,7 +418,7 @@ class MemorySessionStore:
             return False
         self.escalations[escalation_id] = Escalation(
             id=escalation_id,
-            state="allowed" if allow else "denied",
+            state="answered" if answered else ("allowed" if allow else "denied"),
             note=note,
             resolved_by=f"client:{actor or 'unknown'}",
         )

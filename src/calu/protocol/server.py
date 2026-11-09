@@ -364,7 +364,13 @@ class Client:
                 return CommentAddResult(comment=await session.add_comment(params))
             case "escalation.decide":
                 assert isinstance(params, EscalationDecideParams)
-                await session.decide_escalation(params.escalation_id, params.decision, params.note)
+                await session.decide_escalation(
+                    params.escalation_id,
+                    params.decision,
+                    params.note,
+                    client=self.name,
+                    answer=params.answer,
+                )
                 return {}
             case "escalation.context":
                 assert isinstance(params, EscalationContextParams)

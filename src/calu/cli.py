@@ -557,7 +557,10 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Allow or deny an open escalation; the waiting session continues.
+    """Allow, deny or answer an open escalation; the waiting session continues.
+
+    "answer" belongs to a question Claude asked (`AskUserQuestion`, PLAN.md D35): the note is
+    the answer it receives, and the call itself does not run.
 
     Args:
         args: Parsed arguments (`id`, `decision`, `note`).
@@ -1173,9 +1176,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rendered", action="store_true", help="also print the rendered step")
     p.set_defaults(handler=cmd_escalations)
 
-    p = sub.add_parser("resolve", help="allow or deny an open escalation")
+    p = sub.add_parser("resolve", help="allow, deny or answer an open escalation")
     p.add_argument("id", type=int, help="escalation id")
-    p.add_argument("decision", choices=["allow", "deny"])
+    p.add_argument("decision", choices=["allow", "deny", "answer"])
     p.add_argument("--note", help="text for Claude and for the record")
     p.set_defaults(handler=cmd_resolve)
 

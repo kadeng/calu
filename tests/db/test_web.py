@@ -342,3 +342,48 @@ async def test_triage_serves_the_queue_and_answers_it(db_url: str) -> None:
             assert [entry["id"] for entry in left] == [second]
     finally:
         await conn.close()
+
+
+async def test_a_question_of_the_agent_is_answered_from_the_triage_queue(db_url: str) -> None:
+    """D35: the options reach the page, and the answer is recorded as an answer."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        questions = [
+            {
+                "question": "Tabs or spaces?",
+                "header": "Indentation",
+                "options": [{"label": "Tabs", "description": "tabs"}, {"label": "Spaces"}],
+                "multiSelect": False,
+            }
+        ]
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="AskUserQuestion", tool_input={"questions": questions})
+        )
+        asked = await store.open_escalation(
+            "Claude asks: Tabs or spaces? (Tabs, Spaces)",
+            {
+                "rendered": "## Question",
+                "tool_name": "AskUserQuestion",
+                "tool_input": {"questions": questions},
+            },
+            step,
+        )
+        async with await client_for(db) as client:
+            entry = (await client.get("/api/escalations")).json()["escalations"][0]
+            assert entry["questions"] == questions
+            assert entry["command"] == ""  # it is not a command to allow or deny
+
+            answered = await client.post(
+                f"/api/escalations/{asked}/resolve", json={"answer": "Spaces"}
+            )
+            assert answered.json()["ok"] is True
+            row = await herd.escalation(db, asked)
+            assert row is not None
+            # Neither allowed nor denied: answered, with the answer as the note (migration 0011).
+            assert row.state == "answered" and row.note == "Spaces"
+    finally:
+        await conn.close()

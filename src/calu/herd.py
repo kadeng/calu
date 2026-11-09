@@ -165,26 +165,30 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
 
 
 async def resolve(db: Db, escalation_id: int, decision: str, note: str = "") -> bool:
-    """Allow or deny an open escalation and notify the waiting session.
+    """Allow, deny or answer an open escalation and notify the waiting session.
+
+    "answer" belongs to a question of the agent (PLAN.md D35): `note` is then the answer Claude
+    receives as the result of its `AskUserQuestion` call, and the call itself does not run.
 
     Args:
         db: A connection whose role may call `calu_resolve_escalation` (the database owner or
             `calu_operator`).
         escalation_id: Id of the `escalations` row.
-        decision: "allow" or "deny".
-        note: Text for Claude and for the record.
+        decision: "allow", "deny" or "answer".
+        note: Text for Claude and for the record; the answer itself for "answer".
 
     Returns:
         True if the escalation was open and is now resolved; False if it was already resolved,
         cancelled or does not exist.
 
     Raises:
-        ValueError: If `decision` is neither "allow" nor "deny".
+        ValueError: If `decision` is none of "allow", "deny" and "answer".
         psycopg.Error: On database errors, including a role that may not resolve.
     """
-    if decision not in ("allow", "deny"):
-        raise ValueError(f"decision must be allow or deny, not {decision!r}")
-    state = "allowed" if decision == "allow" else "denied"
+    states = {"allow": "allowed", "deny": "denied", "answer": "answered"}
+    if decision not in states:
+        raise ValueError(f"decision must be allow, deny or answer, not {decision!r}")
+    state = states[decision]
     return bool(
         await db.scalar(
             "SELECT calu_resolve_escalation(%s, %s, %s)", (escalation_id, state, note or None)

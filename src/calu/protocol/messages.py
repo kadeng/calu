@@ -121,11 +121,19 @@ class CommentAddResult(BaseModel):
 
 
 class EscalationDecideParams(BaseModel):
-    """The human's answer to an `escalation.request`. Result: `{}`."""
+    """The human's answer to an `escalation.request`. Result: `{}`.
+
+    `answer` belongs to a question of the agent (`escalation.request` with `questions`, PLAN.md
+    D35): it is the text Claude receives as the result of its `AskUserQuestion` call, and the
+    call itself never runs. With an answer the `decision` is ignored, and the escalation is
+    recorded as "answered" rather than allowed or denied.
+    """
 
     escalation_id: str
-    decision: Literal["allow", "deny"]
+    decision: Literal["allow", "deny"] = "deny"
     note: str | None = None
+    answer: str | None = None
+    """The answer to a question of the agent; None for an ordinary allow or deny."""
 
 
 class AutoEscalateSetParams(AutoEscalate):
@@ -593,6 +601,11 @@ class EscalationRequest(Event):
     reason: str
     rendered: str
     """Markdown rendering of the step, as the checker saw it."""
+    questions: list[dict[str, Any]] = Field(default_factory=list)
+    """For a question of the agent (`AskUserQuestion`, PLAN.md D35): the questions as Claude
+    asked them, each with `question`, `header`, `options` (`label` and `description`) and
+    `multiSelect`. A client shows the options and answers with `escalation.decide {answer}`.
+    Empty for every other escalation."""
 
 
 class EscalationResolved(Event):

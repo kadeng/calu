@@ -80,6 +80,11 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   the change is complete (a renamed function with callers left behind), whether it contains work
   nobody asked for, whether a test was weakened to make it pass, whether the message describes
   the change. A denial undoes nothing; it stops the commit and tells Claude what to fix first.
+- **Claude's own questions reach you.** When Claude uses its question tool, calu holds the call
+  and shows you the question with the options it offered — in the browser as buttons, in the
+  terminal as a line. Your answer comes back to Claude as the result of that call, so the
+  conversation goes on where it stopped. An unattended session that asks something simply waits,
+  like any other escalation.
 - **A check on what subagents hand back.** A subagent's final result is reviewed against the
   conversation, so an adversarial reviewer subagent cannot silently widen a task that you
   deliberately kept small.
@@ -314,7 +319,7 @@ without an editor, and `calu rules add|list|remove|enable|disable` work on singl
 
 A running session picks up such a change within a moment, at its next step.
 
-Not built yet: forking or rewinding a conversation (it needs support from Claude Code that may not exist), answering the agent's own questions, and the single-binary packaging. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
+Not built yet: forking or rewinding a conversation (it needs support from Claude Code that may not exist) and the single-binary packaging. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
 
 ## License
 

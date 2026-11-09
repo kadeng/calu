@@ -8,6 +8,7 @@
   let shown = null;      // the id currently on screen
   let skipped = new Set();
   let busy = false;
+  let asking = false;    // the one on screen is a question of the agent, not a step to judge
 
   async function poll() {
     if (busy) return;
@@ -62,6 +63,37 @@
     why.textContent = entry.reason;
     const rendered = document.createElement("pre");
     rendered.textContent = entry.rendered || "";
+    if ((entry.questions || []).length) {
+      // A question of the agent: the options are the answer (PLAN.md D35).
+      card.append(where, why);
+      for (const question of entry.questions) {
+        const asked = document.createElement("p");
+        asked.textContent = question.question || question.header || "a question";
+        const choices = document.createElement("p");
+        choices.className = "row";
+        for (const option of question.options || []) {
+          const button = document.createElement("button");
+          button.className = "primary";
+          button.textContent = option.label;
+          button.title = option.description || "";
+          button.onclick = () => answer("answer", option.label);
+          choices.appendChild(button);
+        }
+        const free = document.createElement("input");
+        free.type = "text";
+        free.id = "note";
+        free.placeholder = "or answer in your own words, then Enter";
+        choices.appendChild(free);
+        card.append(asked, choices);
+      }
+      el("current").innerHTML = "";
+      el("current").appendChild(card);
+      const free = el("note");
+      if (free) free.focus();
+      asking = true;
+      return;
+    }
+    asking = false;
     const row = document.createElement("p");
     row.className = "row";
     const note = document.createElement("input");
@@ -97,19 +129,21 @@
     note.focus();
   }
 
-  async function answer(decision) {
+  async function answer(decision, text) {
     const entry = next();
     if (!entry || busy) return;
     busy = true;
     const note = el("note");
     const remember = el("remember");
+    const given = text !== undefined ? text : (note ? note.value : "");
     try {
       const answered = await fetch(`${api}/${entry.id}/resolve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           decision,
-          note: note ? note.value : "",
+          note: decision === "answer" ? "" : given,
+          answer: decision === "answer" ? given : "",
           remember: remember && remember.checked ? entry.command : "",
         }),
       });
@@ -138,7 +172,11 @@
   addEventListener("keydown", (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const typing = document.activeElement && document.activeElement.id === "note";
-    if (event.key === "Enter" && typing) { answer("allow"); return; }
+    if (event.key === "Enter" && typing) {
+      answer(asking ? "answer" : "allow");
+      return;
+    }
+    if (asking) return;  // a, d and s mean nothing for a question: an answer is needed
     if (typing && event.key !== "Escape") return;
     if (event.key === "a") { event.preventDefault(); answer("allow"); }
     if (event.key === "d") { event.preventDefault(); answer("deny"); }

@@ -36,11 +36,11 @@ in `calu/` only.
 | 3 Session runner | Done (`calu run`, steps/turns/escalations in the database, operator resolution, sandbox settings, herd commands) |
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
 | 5 Sandboxing | Settings done (D15); open: network policy per project (Q5), nested sandbox in Docker (Q1). `calu evals` done. |
-| 6 Herd management | Commands done; **web UI not started** |
+| 6 Herd management | Done: the commands and the web interface (`calu web`) |
 | 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**343 tests pass** (unit + database). The database tests need `docker compose up -d caludb
+**364 tests pass** (plus 6 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 56 commits, ~20k lines of source, ~7k of tests, 10 migrations, 16 CLI commands,
 16 protocol requests.
 
@@ -113,6 +113,25 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   per session, `calu.tokens`); `calu.protocol.client`; `calu attach ADDRESS --token T` with
   `/start /stop /interrupt /allow /deny /inject /to /comment /why /checkers /state /context
   /sessions /history /shutdown`. `calu protocol [--out FILE]` writes the JSON Schema.
+- **The web interface** (phase 6, `src/calu/web/`, the optional `web` extra): `calu web` serves
+  the loopback interface only (no login yet, Q4). The fleet page groups sessions as every such
+  tool does and leads with the ones that need a human (Needs you / Working / Idle / Ended), with
+  a filter. A session page shows its history at four levels of detail (the narrated summary a
+  checker reads, compact, detailed, full), its subagents, and ready-to-run connect commands with
+  a token minted on the spot. `/sessions/{id}/live` relays the session's own WebSocket to the
+  browser (D34): the stream, stop, interrupt, start with model and effort dropdowns, the message
+  queue, Send and Steer, a recipient selector for background subagents, and escalation cards.
+  `/triage` is the mode to sit in: one escalation at a time across every session, answered from
+  the keyboard, with "remember exactly this command" turning the decision into an anchored rule.
+  `/settings` is generated from `calu.config.Config`, so every value — Claude's model and effort,
+  `use_bedrock`, each checker's model and thinking effort, the sandbox, the clock, the write sets
+  — is editable with the right control, and `/checkers/{name}` edits the instructions with
+  Ctrl+S. Git links point into the project's own browser (`calu.web.git`); calu browses no git.
+- **Questions of the agent** (D35): `AskUserQuestion` is routed to `Route.QUESTION`, escalates
+  without a checker, carries its options in the `escalation.request` event, and the answer goes
+  back as the message of the refusal that keeps the call from running. The row is recorded as
+  `answered` (migration 0011). Answer it from the browser (buttons), `calu attach` (`/answer`)
+  or `calu resolve <id> answer "..."`.
 - **ACP adapter** (phase 7, D24, `src/calu/acp/`): `calu acp ADDRESS --token T` speaks the Agent
   Client Protocol on stdin and stdout (newline-delimited JSON, protocol version 1) and attaches
   to a running session as an ordinary client, so the session outlives the editor and several
@@ -166,7 +185,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   database. Verified in the tests and by hand against a real PostgreSQL.
 - **Migrations**: 0001 initial · 0002 turn records · 0003 comments · 0004 client tokens ·
   0005 the PASS decision · 0006 the changeset route · 0007 `calu_client_decision` ·
-  0008 `sessions.address` and the `agents` table · 0009 minted client tokens · 0010 write sets.
+  0008 `sessions.address` and the `agents` table · 0009 minted client tokens · 0010 write sets · 0011 the `answered` state.
 
 ### Verified by hand with the real CLI
 
@@ -210,15 +229,20 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
+1. **Fork a conversation and rewind to a step** (Q13): every other agent UI has it, and the
+   web interface is the natural place for it, but calu can only resume a session by its id
+   today. Spike whether the Agent SDK can resume at a chosen message, or copy a session, before
+   promising either button.
+2. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
    `AutoEscalate`, and the single-binary packaging.
-2. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
-   side each feature talks to).
-3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-4. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
+3. **Phase 6 polish**: a web UI feature the research turned up and this version lacks — an
+   inbox with unread counts across sessions, sounds, and a jump palette (Orca has ⌘J). The
+   escalation queue covers the important half of it.
+4. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
    read, not edited, through a client; the protocol server binds TCP only (a Unix socket is
    mentioned in §6 and `sessions.address` already allows for one).
 

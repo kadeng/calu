@@ -158,6 +158,13 @@ WRITE_SET_NOT_REVERTED = (
 )
 """Note for Claude when a refused change could not be reverted."""
 
+ANSWER_TEMPLATE = (
+    "The user answered your question: {answer}\nThe AskUserQuestion call itself was not run; "
+    "this is the answer. Carry on with it."
+)
+"""What Claude receives when a human answers its question (PLAN.md D35). It travels as the
+message of the refusal that keeps the call from running, which the spike showed Claude acts on."""
+
 STEP_TIMES_KEPT = 500
 """How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
 
@@ -251,6 +258,8 @@ class _Escalation:
     wake: anyio.Event = field(default_factory=anyio.Event)
     """Set by `note_resolution` so the waiting session reads the row at once."""
     answer: HumanAnswer | None = None
+    answered: bool = False
+    """True if this was a question of the agent and `answer` carries the human's answer (D35)."""
 
 
 @dataclass
@@ -1256,7 +1265,12 @@ class Session:
         return comment
 
     async def decide_escalation(
-        self, escalation_id: str, decision: str, note: str | None, client: str = ""
+        self,
+        escalation_id: str,
+        decision: str,
+        note: str | None,
+        client: str = "",
+        answer: str | None = None,
     ) -> None:
         """Resolve an open escalation from a client. Only the first decision counts.
 
@@ -1268,9 +1282,12 @@ class Session:
 
         Args:
             escalation_id: Id from the `escalation.request` event.
-            decision: "allow" or "deny".
+            decision: "allow" or "deny"; ignored when `answer` is given.
             note: Optional text from the user; Claude receives it with a denial.
             client: Name of the client that decided, for the record.
+            answer: The answer to a question of the agent (`escalation.request` with
+                `questions`, PLAN.md D35). The call does not run; Claude receives this text as
+                its result, and the row is recorded as "answered".
 
         Raises:
             SessionError: If no escalation with this id is open (unknown, or already decided).
@@ -1278,17 +1295,25 @@ class Session:
         esc = self._escalations.pop(escalation_id, None)
         if esc is None:
             raise SessionError(f"no open escalation {escalation_id!r}")
-        allow = decision == "allow"
-        message = "The user denied this step."
-        if note:
-            message += f" Note from the user: {note}"
-        esc.answer = HumanAnswer(allow=allow, message=message, note=note or "")
-        esc.done.set()
+        if answer is not None:
+            esc.answer = HumanAnswer(allow=False, message=ANSWER_TEMPLATE.format(answer=answer))
+            esc.answered = True
+            esc.done.set()
+        else:
+            allow = decision == "allow"
+            message = "The user denied this step."
+            if note:
+                message += f" Note from the user: {note}"
+            esc.answer = HumanAnswer(allow=allow, message=message, note=note or "")
+            esc.done.set()
         if esc.db_id is not None:
-            await self._record_decision(esc.db_id, allow, note or "", client)
+            if answer is not None:
+                await self._record_decision(esc.db_id, False, answer, client, answered=True)
+            else:
+                await self._record_decision(esc.db_id, decision == "allow", note or "", client)
 
     async def _record_decision(
-        self, escalation_id: int, allow: bool, note: str, client: str
+        self, escalation_id: int, allow: bool, note: str, client: str, answered: bool = False
     ) -> None:
         """Write a client's decision to the `escalations` row; never raises.
 
@@ -1299,11 +1324,15 @@ class Session:
         Args:
             escalation_id: Id of the `escalations` row.
             allow: Whether the step may run.
-            note: The human's note.
+            note: The human's note, or the answer to a question.
             client: Name of the client that decided.
+            answered: True for the answer to a question of the agent, which is recorded as
+                "answered" rather than allowed or denied (D35).
         """
         try:
-            recorded = await self.store.decide_escalation(escalation_id, allow, note, client)
+            recorded = await self.store.decide_escalation(
+                escalation_id, allow, note, client, answered=answered
+            )
         except Exception as exc:
             log.exception("recording a client decision failed")
             await self._emit_safely(
@@ -1312,7 +1341,7 @@ class Session:
             return
         if recorded:
             return
-        decided = "allowed" if allow else "denied"
+        decided = "answered" if answered else ("allowed" if allow else "denied")
         await self._store_call(
             "cancelling an escalation",
             self.store.close_escalation(
@@ -1466,6 +1495,7 @@ class Session:
         esc = _Escalation(step=step, reason=reason, source=source, db_id=db_id)
         esc.request = EscalationRequest(
             escalation_id=escalation_id,
+            questions=_questions(step),
             tool_use_id=step.tool_use_id,
             agent_id=step.agent_id,
             tool_name=step.tool_name,
@@ -1536,6 +1566,14 @@ class Session:
                     continue
                 if row.open:
                     continue
+                if row.answered:
+                    # A question of the agent that an operator answered in the database (D35).
+                    esc.answered = True
+                    esc.answer = HumanAnswer(
+                        allow=False, message=ANSWER_TEMPLATE.format(answer=row.note)
+                    )
+                    esc.done.set()
+                    return
                 message = (
                     "The user denied this step."
                     if not row.allowed
@@ -1767,6 +1805,19 @@ class Session:
                     decision=Decision.ESCALATE, reason=alarm, step_summary=label
                 ),
                 source="clock",
+                rules=rules,
+            )
+        if route is Route.QUESTION:
+            # Only the human knows the answer, so no checker runs: the step is held and the
+            # answer travels back as the message of the refusal (PLAN.md D35).
+            return _Decided(
+                route=route,
+                decision=CheckDecision(
+                    decision=Decision.ESCALATE,
+                    reason=_question_reason(step.tool_input),
+                    step_summary=label,
+                ),
+                source="question",
                 rules=rules,
             )
         if outcome.ask:
@@ -2689,3 +2740,48 @@ def _render_safely(step: Step, workspace: Path) -> str:
     except Exception:
         log.exception("rendering a step failed")
         return f"`{step.tool_name}` {step.tool_input!r}"
+
+
+def _questions(step: Step) -> list[dict[str, Any]]:
+    """Return the questions of an `AskUserQuestion` call, for the client that shows them.
+
+    Args:
+        step: The tool call.
+
+    Returns:
+        The `questions` list as Claude sent it (each with its text, header, options and whether
+        several may be chosen), or an empty list for any other tool.
+    """
+    if step.tool_name != "AskUserQuestion":
+        return []
+    questions = step.tool_input.get("questions")
+    return (
+        [question for question in questions if isinstance(question, dict)]
+        if (isinstance(questions, list))
+        else []
+    )
+
+
+def _question_reason(tool_input: dict[str, Any]) -> str:
+    """Render the reason of a question escalation: what Claude wants to know.
+
+    Args:
+        tool_input: The input of the `AskUserQuestion` call.
+
+    Returns:
+        One line per question with its options, or a fallback sentence if the input holds none.
+    """
+    questions = tool_input.get("questions")
+    lines: list[str] = []
+    for question in questions if isinstance(questions, list) else []:
+        if not isinstance(question, dict):
+            continue
+        options = question.get("options")
+        labels = [
+            str(option.get("label", ""))
+            for option in (options if isinstance(options, list) else [])
+            if isinstance(option, dict)
+        ]
+        text = str(question.get("question") or question.get("header") or "a question")
+        lines.append(f"{text} ({', '.join(labels)})" if labels else text)
+    return "Claude asks: " + "; ".join(lines) if lines else "Claude asks a question."

@@ -47,8 +47,9 @@ from calu.protocol.messages import (
     StoredStep,
 )
 
-EscalationState = Literal["open", "allowed", "denied", "cancelled"]
-"""States of an `escalations` row."""
+EscalationState = Literal["open", "allowed", "denied", "answered", "cancelled"]
+"""States of an `escalations` row. "answered" belongs to a question of the agent: the step
+neither ran nor was refused, and the note holds the answer (PLAN.md D35, migration 0011)."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,15 @@ class Escalation:
             True while the state is "open".
         """
         return self.state == "open"
+
+    @property
+    def answered(self) -> bool:
+        """Tell whether this was a question of the agent that a human answered.
+
+        Returns:
+            True if the state is "answered"; `note` then holds the answer (D35).
+        """
+        return self.state == "answered"
 
     @property
     def allowed(self) -> bool:
@@ -427,15 +437,24 @@ class SessionStore(Protocol):
         ...
 
     async def decide_escalation(
-        self, escalation_id: int, allow: bool, note: str = "", actor: str = ""
+        self,
+        escalation_id: int,
+        allow: bool,
+        note: str = "",
+        actor: str = "",
+        answered: bool = False,
     ) -> bool:
         """Record the decision of a client of this session (PLAN.md D28).
 
         Args:
             escalation_id: Id from `open_escalation`.
             allow: Whether the step may run.
-            note: The human's note, which Claude receives with a denial.
+            note: The human's note, which Claude receives with a denial, or the answer to a
+                question of the agent.
             actor: Name of the client that decided, for the record.
+            answered: True if this was a question of the agent and `note` holds its answer
+                (PLAN.md D35); the row is then recorded as "answered", because the step neither
+                ran nor was refused.
 
         Returns:
             True if the escalation was open and is now resolved; False if it was already
@@ -1053,15 +1072,21 @@ class DatabaseSessionStore:
         return ok
 
     async def decide_escalation(
-        self, escalation_id: int, allow: bool, note: str = "", actor: str = ""
+        self,
+        escalation_id: int,
+        allow: bool,
+        note: str = "",
+        actor: str = "",
+        answered: bool = False,
     ) -> bool:
         """Record a client's decision (see `SessionStore.decide_escalation`).
 
         Args:
             escalation_id: Id from `open_escalation`.
             allow: Whether the step may run.
-            note: The human's note.
+            note: The human's note, or the answer to a question.
             actor: Name of the client that decided.
+            answered: True for the answer to a question of the agent (D35).
 
         Returns:
             True if the escalation is now resolved; False if it was already resolved, if this
@@ -1073,6 +1098,7 @@ class DatabaseSessionStore:
         """
         if self._token_hash is None:
             return False
+        state = "answered" if answered else ("allowed" if allow else "denied")
         return bool(
             await self._db.scalar(
                 "SELECT calu_client_decision(%s, %s::uuid, %s, %s, %s, %s)",
@@ -1080,7 +1106,7 @@ class DatabaseSessionStore:
                     escalation_id,
                     self._require_session(),
                     self._token_hash,
-                    "allowed" if allow else "denied",
+                    state,
                     note or None,
                     actor or "unknown",
                 ),
