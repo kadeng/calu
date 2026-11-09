@@ -224,3 +224,43 @@ so the review refuses it.
 **Conclusion.** A post-call review with a revert works against the real CLI. The hook keeps
 `REVIEW_HOOK_TIMEOUT_S` (24 h), because the review may ask a human; the wait itself is in
 `Session.ask`, as for an escalation before a call.
+
+## The agent's own question: can calu answer `AskUserQuestion`? (2026-11-09)
+
+**Why it matters.** The owner's reading is that a question from the agent is an escalation of a
+kind. Other harnesses answer it (Orca renders it as a card with choices, opencode has a
+`question` permission), but calu had no route for it: `AskUserQuestion` was on the read-only
+list and ran unchecked.
+
+**Setup** (`spikes/spike_question_tool.py`, CLI 2.1.319, haiku). Claude is asked to use the tool
+and then report the answer. Three runs: the hook allows the call, the hook denies it with the
+answer as its reason, and the hook answers "ask" so that `can_use_tool` decides (which is what
+calu's ESCALATE does). `can_use_tool` always denies with "The user answered: ...".
+
+**Observations.**
+
+- The hook **does** see the call, with the whole question in `tool_input`:
+
+      {"questions": [{"question": "Should this project indent with tabs or with spaces?",
+                      "header": "Indentation",
+                      "options": [{"label": "Tabs", "description": "..."},
+                                  {"label": "Spaces", "description": "..."}],
+                      "multiSelect": false}]}
+
+  so a client can render the real choices rather than a free-text box. The hook input also
+  carries `permission_mode` and `effort`.
+- **A denial message is the answer channel.** In all three runs Claude's final sentence named
+  the answer that `can_use_tool` had put in its denial message ("You answered that the project
+  should indent with spaces, four per level"). The tool call does not run; Claude reads the
+  message as the result and acts on it.
+- **Deny from the hook makes Claude ask twice**: in that run the hook saw `AskUserQuestion`
+  twice. Answering through `can_use_tool` was seen once. So the right channel is the one calu
+  already uses for a human decision (`Session.ask`), not a hook denial.
+- Letting the call run (hook "allow") did not fail in headless mode, but it did not reach a
+  human either — the answer came from `can_use_tool` in that run too.
+
+**Conclusion.** A question is an escalation whose answer travels back as the message of a
+refusal, which is exactly the shape of `Session.ask`. calu therefore routes `AskUserQuestion` to
+a human (`Route.QUESTION`), stores the questions and their options in the escalation, and
+returns the chosen answer as the message. The state of such an escalation is neither "allowed"
+nor "denied", so the database gets a third one, `answered` (migration 0011).
