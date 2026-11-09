@@ -97,9 +97,9 @@ def key_warnings(config: Config, environ: Mapping[str, str] | None = None) -> li
         if any(env.get(key) for key in keys):
             continue
         warnings.append(
-            f"{' or '.join(keys)} is not set, but the {', '.join(sorted(roles))} use "
-            f"{prefix!r} models. Put the key in {user_env_file()} or in calu's environment; "
-            "every check will escalate until then."
+            f"{' or '.join(keys)} is not set, but {prefix!r} models are configured for: "
+            f"{', '.join(sorted(roles))}. Put the key in {user_env_file()} or in calu's "
+            "environment; until then every check of these roles fails and escalates."
         )
     return warnings
 

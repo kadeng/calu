@@ -240,3 +240,20 @@ async def test_auto_escalation_also_covers_allow_listed_commands(tmp_path: Path)
     config = Config(auto_escalate=AutoEscalate(commands=True))
     rec = await run_one(tmp_path, "Bash", {"command": "ls"}, config)
     assert "The rules decided ALLOW" in rec.of(EscalationRequest)[0].reason
+
+
+async def test_a_deny_match_is_recorded_as_the_rules_outcome(tmp_path: Path):
+    session, rec, store = make_session(
+        tmp_path, [[{"tool": "Bash", "input": {"command": "sudo rm -rf /"}}]]
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        esc = (await rec.wait_for(EscalationRequest))[0]
+        await session.decide_escalation(esc.escalation_id, "deny", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (step,) = store.steps.values()
+    assert step.decision is not None
+    assert step.decision.rules_outcome == "deny" and step.decision.decision == "escalate"
+    assert not step.checker_runs  # a deny match asks the human without a model call

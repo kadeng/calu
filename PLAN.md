@@ -1,8 +1,8 @@
 # calu: implementation plan
 
-Status: implementation started (2026-11-09), phase 1. This file holds the decisions, the architecture and the order of
-work, derived from the owner's requirements in [REQUIREMENTS.md](REQUIREMENTS.md). Decisions carry
-a date; open questions are listed in §11.
+Status: phases 1-3 done (2026-11-09; see §12 and `HANDOFF.md`). This file holds the decisions,
+the architecture and the order of work, derived from the owner's requirements in
+[REQUIREMENTS.md](REQUIREMENTS.md). Decisions carry a date; open questions are listed in §11.
 
 ## 1. Goal
 
@@ -45,6 +45,8 @@ alongside calu is decided later (§11).
 | D15 | **Isolation of tool calls: Claude Code's own sandbox, configured by calu** (2026-11-09, answers Q1 on the evidence of `spikes/RESULTS.md`, CLI 2.1.319): calu passes the sandbox settings through `--settings` (`enabled`, `failIfUnavailable: true`, `allowUnsandboxedCommands: false`, `filesystem.denyRead` for secrets including `~/.config/calu`, Claude's credentials, `~/.ssh`, cloud credentials and the Docker socket, `allowedDomains` per project) and loads only the setting sources it chooses. Sandboxed commands get their own PID namespace (no access to the Claude Code process), cannot write `~/.claude`, `.claude/settings*.json` or `.git` hooks/config, and leftover processes die. Requires `bwrap` and `socat`. Fallback: `CLAUDE_CODE_SHELL_PREFIX` with a bubblewrap wrapper (verified to route every Bash command, including background ones). Edit/Write/Read still run in the Claude Code process and stay covered by the hook and the deny lists. |
 | D16 | **Checkers on the Anthropic subscription through `claude -p --output-format json --json-schema`** (2026-11-09, answers Q7): schema-valid `structured_output` in 6 of 6 runs, 2.5-4.4 s per check with haiku; run with `--tools ""`, `--no-session-persistence` and stdin closed. |
 | D17 | **Checker API keys stay out of the database** (2026-11-09): calu reads them from its environment and `~/.config/calu/.env` and hides them from Claude Code (as in sitl). |
+| D18 | **A decision that reaches the session from a client is recorded as a cancellation with a note** (2026-11-09). Only `calu_operator` may call `calu_resolve_escalation`; the session role may not, so that a session which somehow lost its credential cannot approve its own steps (§4.1 point 5). A client attached to the session process therefore decides in the session, which then cancels the row with a note that holds the decision and the client. The audit trail of such a decision is weaker than that of an operator's resolution; whether clients should instead resolve escalations with their own operator credentials is Q8. |
+| D19 | **One database connection per session, serialized and shielded** (2026-11-09): `calu run` opens two connections before it wipes the credentials (one for queries, one for notifications) and cannot open more later, because reconnecting would need the password again (§5). psycopg allows one statement at a time per connection, and a session writes from several tasks at once, so every statement goes through `calu.db.Db`: a lock serializes them, and each statement is shielded from cancellation (bounded by a timeout), because a task cancelled in the middle of a statement leaves the connection unusable for every other task. |
 
 ## 3. Architecture
 
@@ -221,8 +223,15 @@ calu run  ──► asks for the password ──► Argon2id(password, salt) ─
 | `chat_summaries` | session, folded summary text, covered turns |
 | `audit_log` | who changed which configuration, rule or checker definition, when |
 
-Narrator instructions may stay built into calu (not in the database). Notifications:
-`escalation_resolved`, `config_changed` (sessions reload rules and instructions).
+Narrator instructions may stay built into calu (not in the database); `calu setup` loads the
+built-in ones, and a session falls back to them if the database has no row for a checker type.
+Notifications: `escalation_resolved`, `config_changed` (sessions reload rules and instructions).
+
+Migrations: `0001_initial.sql` creates the tables, roles, triggers and the two escalation
+functions; `0002_turn_records.sql` adds the remaining columns of a `TurnRecord` (`steps`,
+`answer`, `narrated`, `started_at`, `ended_at`), an index on `sessions.claude_session_id` for
+resuming, and replaces `calu_cancel_escalation(bigint)` with a version that records why the
+session cancelled.
 
 ## 8. Command-line tool
 
@@ -269,17 +278,24 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 | Q5 | Network policy for the sandbox (none, proxy allow list, full) and its default. |
 | Q6 | What happens to a session when no human answers an escalation for a long time (keep waiting, give Claude other work, stop after a timeout). |
 | Q7 | Answered by D16. |
+| Q8 | How a client attached to the session process decides an escalation: as now (the session cancels the row with a note, D18), with the client's own `calu_operator` credentials, or with a database function that lets `calu_session` record a client decision for its own session. |
+| Q9 | Where the user comments of sitl (diff and file comments) and its training mode (human review of checker decisions, for evaluation data) belong in calu: both were left out of the session port and need tables of their own. |
 
 ## 12. Phases
 
-1. **Skeleton:** package layout, `calu` CLI, `docker-compose.yml` (`dev`, `caludb`), schema and
-   migrations, `calu db up/init`, `calu setup`, configuration in the database.
-2. **Core port:** rules engine, checkers, narrator, context builder, with configuration and
-   checker definitions read from the database.
-3. **Session runner:** `calu run`, Agent SDK with auto mode (D5), steps and escalations written
-   to the database, escalation resolved from the database (`LISTEN/NOTIFY`), credentials dropped
-   before Claude starts.
+1. **Skeleton** (done): package layout, `calu` CLI, `docker-compose.yml` (`dev`, `caludb`),
+   schema and migrations, `calu db up/init`, `calu setup`, configuration in the database.
+2. **Core port** (done): rules engine, checkers, narrator, context builder, with configuration
+   and checker definitions read from the database (`calu.store.ConfigStore`).
+3. **Session runner** (done): `calu run`, Agent SDK with auto mode (D5), steps and escalations
+   written to the database, escalation resolved from the database (`LISTEN/NOTIFY` and a poll),
+   credentials dropped before Claude starts, sandbox settings passed with `--settings` (D15).
+   `calu sessions/escalations/resolve` were pulled forward from phase 6, because without them
+   nobody could unblock a session.
 4. **Bus and terminal client:** WebSocket JSON-RPC, snapshot and event stream, `calu attach`.
-5. **Sandboxing of tool calls** after the spikes (Q1).
-6. **Herd management:** `calu sessions/escalations/resolve`, then a web UI.
+   The protocol models still carry sitl's file-based parts (`files`, the training requests) and
+   need a pass here.
+5. **Sandboxing of tool calls**: the settings exist (D15); still open are the network policy
+   per project (Q5), the nested-sandbox case in Docker (Q1) and `calu project add`.
+6. **Herd management:** a web UI on top of the commands of phase 3.
 7. **IDE client** (from sitl's VSCode extension), packaging as a single binary.

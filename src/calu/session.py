@@ -66,7 +66,7 @@ from calu.checkers import (
     ToolPolicy,
 )
 from calu.checkers.render import changed_lines, edited_file, render_step
-from calu.checkers.rules import READ_PATH_TOOLS
+from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
 from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
 from calu.config import EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
 from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
@@ -189,6 +189,22 @@ class _Escalation:
     wake: anyio.Event = field(default_factory=anyio.Event)
     """Set by `note_resolution` so the waiting session reads the row at once."""
     answer: HumanAnswer | None = None
+
+
+@dataclass
+class _Decided:
+    """The outcome of checking one tool call, as `Session._decide` reports it.
+
+    `source` is who decided: "rules", "policy", "checker", "auto" or "internal". `rules` is
+    what the allow and deny lists found ("deny", "allow", "unlisted") or None for a tool the
+    lists do not cover. `run` is the checker's model call, or None if no checker ran.
+    """
+
+    route: Route
+    decision: CheckDecision
+    source: str
+    rules: str | None = None
+    run: CheckOutcome | None = None
 
 
 class Session:
@@ -661,15 +677,21 @@ class Session:
         pending = _PendingNarration(self._claude_outputs.pop(step.agent_id, []))
         step_id = await self._add_step(step)
         try:
-            route, result, source, outcome = await self._decide(step, pending)
+            decided = await self._decide(step, pending)
         except Exception as exc:
             log.exception("pre_tool_use failed")
-            route, source, outcome = self.policy.route(step.tool_name), "internal", None
-            result = CheckDecision(
-                decision=Decision.ESCALATE,
-                reason=f"Checking failed with an internal error ({type(exc).__name__}: {exc}).",
-                step_summary=label_for_unchecked(step.tool_name, step.tool_input),
+            decided = _Decided(
+                route=self.policy.route(step.tool_name),
+                decision=CheckDecision(
+                    decision=Decision.ESCALATE,
+                    reason=(
+                        f"Checking failed with an internal error ({type(exc).__name__}: {exc})."
+                    ),
+                    step_summary=label_for_unchecked(step.tool_name, step.tool_input),
+                ),
+                source="internal",
             )
+        route, result, source = decided.route, decided.decision, decided.source
         comment = result.comment.strip() if result.decision is Decision.ALLOW else ""
         if comment and self._comment_already_sent(comment, step.agent_id):
             comment = ""  # the same remark was already sent in this turn
@@ -686,11 +708,11 @@ class Session:
             # No checker ran (rules, policy): narrate for the context without delaying the call.
             self._spawn(self._narrate_record, record, pending.outputs)
         if step_id is not None:
-            if outcome is not None:
+            if decided.run is not None:
                 await self._store_call(
                     "recording a checker run",
                     self.store.add_checker_run(
-                        step_id, self._checker_run(self.checkers[route], route.value, outcome)
+                        step_id, self._checker_run(self.checkers[route], route.value, decided.run)
                     ),
                 )
             await self._store_call(
@@ -702,7 +724,7 @@ class Session:
                         reason=result.reason,
                         summary=result.step_summary,
                         narration=pending.text or "",
-                        rules_outcome=source if source == "rules" else None,
+                        rules_outcome=decided.rules,
                     ),
                 ),
             )
@@ -978,10 +1000,8 @@ class Session:
 
     # ------------------------------------------------------------------ deciding
 
-    async def _decide(
-        self, step: Step, pending: _PendingNarration | None
-    ) -> tuple[Route, CheckDecision, str, CheckOutcome | None]:
-        """Return the route, the decision, its source and the checker run for `step`.
+    async def _decide(self, step: Step, pending: _PendingNarration | None) -> _Decided:
+        """Decide about `step`: rules, tool policy, then the checker of its route.
 
         Side effect: if a checker runs, narrates `pending` first (sets `pending.text`) and
         passes the narration to the checker.
@@ -991,18 +1011,22 @@ class Session:
             pending: Claude's thinking and text before the call, or None.
 
         Returns:
-            The route, the decision, who decided ("rules", "policy", "checker" or "auto") and
-            the checker run (None if no checker ran). Checker failures already yield ESCALATE
-            decisions.
+            The route, the decision, who decided, what the rules found and the checker's model
+            call. Checker failures already yield ESCALATE decisions.
         """
         route = self.policy.route(step.tool_name)
         outcome = self.rules.evaluate(step)
+        rules = _rules_outcome(step, outcome)
         label = label_for_unchecked(step.tool_name, step.tool_input)
         if outcome.ask:
-            decided = CheckDecision(
-                decision=Decision.ESCALATE, reason=outcome.reason, step_summary=label
+            return _Decided(
+                route=route,
+                decision=CheckDecision(
+                    decision=Decision.ESCALATE, reason=outcome.reason, step_summary=label
+                ),
+                source="rules",
+                rules=rules,
             )
-            return route, decided, "rules", None
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
             route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
         if outcome.notes:
@@ -1013,7 +1037,9 @@ class Session:
                 reason="Every command and path is on the user's allowlists.",
                 step_summary=label,
             )
-            return (*self._auto_escalate(route, allowed, "rules"), None)
+            return self._auto_escalate(
+                _Decided(route=route, decision=allowed, source="rules", rules=rules)
+            )
         if route in (Route.ALLOW, Route.DENY, Route.ESCALATE):
             decision = Decision(route.value.upper())
             reason = (
@@ -1021,8 +1047,12 @@ class Session:
                 if route is Route.ALLOW
                 else f"The tool policy routes {step.tool_name} to {route}."
             )
-            decided = CheckDecision(decision=decision, reason=reason, step_summary=label)
-            return route, decided, "policy", None
+            return _Decided(
+                route=route,
+                decision=CheckDecision(decision=decision, reason=reason, step_summary=label),
+                source="policy",
+                rules=rules,
+            )
         if route is Route.EDIT:
             await self._emit_edit_diff(step)
         if pending is not None:
@@ -1051,40 +1081,39 @@ class Session:
         finally:
             self._checking -= 1
             await self._refresh_state()
-        return (*self._auto_escalate(route, run.decision, "checker"), run)
+        return self._auto_escalate(
+            _Decided(route=route, decision=run.decision, source="checker", rules=rules, run=run)
+        )
 
-    def _auto_escalate(
-        self, route: Route, decided: CheckDecision, source: str
-    ) -> tuple[Route, CheckDecision, str]:
+    def _auto_escalate(self, decided: _Decided) -> _Decided:
         """Turn an approval into an escalation if auto-escalation is on for its route.
 
         Args:
-            route: COMMAND or EDIT (other routes are returned unchanged).
             decided: The decision of the checker or of the rules.
-            source: Who decided ("checker" or "rules").
 
         Returns:
-            `(route, decided, source)` unchanged, or an ESCALATE decision with source "auto".
+            `decided` unchanged, or a copy with an ESCALATE decision and source "auto".
         """
         auto = self.config.auto_escalate
+        route, source = decided.route, decided.source
         # A checker DENY stays a DENY: auto-escalation only turns approvals into questions, so
         # a hasty "allow" can never run a step that the checker blocked.
-        if decided.decision is Decision.ALLOW and (
+        if decided.decision.decision is Decision.ALLOW and (
             (route is Route.EDIT and auto.edits) or (route is Route.COMMAND and auto.commands)
         ):
             kind = "edits" if route is Route.EDIT else "commands"
-            decided = CheckDecision(
+            decided.decision = CheckDecision(
                 decision=Decision.ESCALATE,
                 reason=(
                     f"Auto-escalation for {kind} is on. "
                     + (f"The {route.value} checker" if source == "checker" else "The rules")
-                    + f" decided {decided.decision.value}"
-                    + (f": {decided.reason}" if decided.reason else ".")
+                    + f" decided {decided.decision.decision.value}"
+                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
                 ),
-                step_summary=decided.step_summary,
+                step_summary=decided.decision.step_summary,
             )
-            return route, decided, "auto"
-        return route, decided, source
+            decided.source = "auto"
+        return decided
 
     async def _emit_edit_diff(self, step: Step) -> None:
         """Emit `edit.diff` with the file content before and after an edit; never raises.
@@ -1692,6 +1721,26 @@ class Session:
                 "a foreground subagent blocks the main agent until it finishes"
             )
         return agent
+
+
+def _rules_outcome(step: Step, outcome: RuleOutcome) -> str | None:
+    """Return what the allow and deny lists found, for the `steps` row.
+
+    Args:
+        step: The tool call.
+        outcome: The result of `Rules.evaluate`.
+
+    Returns:
+        "deny" if a part matches a deny list, "allow" if every part is allow-listed,
+        "unlisted" otherwise, or None for a tool whose calls the lists do not cover (the rules
+        then say nothing about it).
+    """
+    tool = step.tool_name
+    if tool != "Bash" and tool not in READ_PATH_TOOLS and tool not in WRITE_PATH_TOOLS:
+        return None
+    if outcome.ask:
+        return "deny"
+    return "allow" if outcome.allowed else "unlisted"
 
 
 def _result_summary(event: ToolResult, limit: int = 2_000) -> str:

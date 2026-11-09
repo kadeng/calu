@@ -61,7 +61,7 @@ def test_missing_api_keys_name_the_roles_and_the_env_file():
     warnings = preflight.key_warnings(config, environ={})
     assert len(warnings) == 2
     mistral = next(w for w in warnings if "MISTRAL_API_KEY" in w)
-    assert "command checker" in mistral and "summarizer" in mistral
+    assert "configured for: command checker, summarizer" in mistral
     assert ".env" in mistral
     assert any("FIREWORKS_API_KEY" in w for w in warnings)
     assert (

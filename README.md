@@ -1,6 +1,8 @@
 # calu
 
-**Status: early implementation. Nothing is usable yet.** The plan is in [PLAN.md](PLAN.md).
+**Status: early implementation.** `calu run` already starts a checked session and records it in
+the database; the WebSocket clients, the sandbox defaults and the web interface are not finished.
+The plan is in [PLAN.md](PLAN.md), the current state in [HANDOFF.md](HANDOFF.md).
 
 calu lets Claude Code work unsupervised for long stretches, for example overnight, while other
 LLM agents ("checkers") and humans keep control over what it does.
@@ -33,15 +35,32 @@ LLM agents ("checkers") and humans keep control over what it does.
 - PostgreSQL; for a simple local setup, Docker with Docker Compose (`calu db up`)
 - An API key for the checker models (for example Mistral, Fireworks or AWS Bedrock)
 
-## Getting started (planned)
+## Getting started
+
+Not published yet; from a clone of this repository, `uv run calu ...` runs the commands below.
 
 ```bash
 uv tool install calu      # not published yet
 calu db up                # local PostgreSQL in Docker; asks for a new admin password
 calu setup                # default checkers and rules; asks for a new session password
-calu project add .        # register the current project
-calu run                  # start a session; attach with: calu attach <session>
+calu run -p "fix the failing test"   # start a session in the current directory
 ```
+
+While a session runs, another terminal can watch and unblock it:
+
+```bash
+calu sessions             # every session of every host, with its state
+calu escalations          # steps that wait for a decision
+calu resolve 12 allow --note "go ahead"
+```
+
+Checker API keys belong in `~/.config/calu/.env` (Claude Code never sees them). The sandbox for
+Claude's commands needs `bubblewrap` and `socat` on the machine; without them a session refuses
+to start. Setting `claude.sandbox.enabled` to false in the configuration (the `config` table)
+turns the sandbox off, at the cost of its protection.
+
+Still missing from this list: `calu project add`, `calu config set`, `calu attach` and the other
+clients.
 
 ## License
 

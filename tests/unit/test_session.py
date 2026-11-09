@@ -77,6 +77,14 @@ async def test_chat_turn_with_checked_tool_calls(tmp_path: Path):
         "allow",
         "deny",
     ]
+    # What the allow and deny lists found. The read and the edit of a workspace file are
+    # allow-listed; the edit is checked anyway, because the fast path is only for Bash.
+    assert [s.decision.rules_outcome for s in steps if s.decision] == [
+        "allow",
+        "unlisted",
+        "allow",
+        "unlisted",
+    ]
     assert steps[0].result_summary == "old"
     assert steps[3].result_summary is not None and steps[3].result_summary.startswith("error:")
     assert store.turns[1].answer == "Done."
