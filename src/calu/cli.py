@@ -11,6 +11,7 @@
     calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
                                    session password; see `calu.run`)
     calu attach ADDRESS --token T  terminal client for a running session
+    calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
     calu sessions [--all]          list the sessions of all hosts
     calu escalations [SESSION]     list the open escalations
@@ -46,6 +47,7 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from calu import __version__, admin, herd
+from calu.acp import serve_acp
 from calu.attach import attach
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
@@ -389,6 +391,28 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError(f"cannot attach to {args.address}: {exc}") from exc
     if code:
         raise CliError("the client ended with an error")
+
+
+def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Serve a running session to an editor that speaks the Agent Client Protocol.
+
+    The editor spawns this command and talks ACP on its stdin and stdout; stdout therefore
+    carries protocol lines only and every message goes to stderr. Needs no database credential,
+    like `calu attach`: the session authenticates the client with the token it printed.
+
+    Args:
+        args: Parsed arguments (`address`, `token`).
+        store: The credential store (unused).
+
+    Raises:
+        CliError: If the address cannot be reached or the token is refused.
+    """
+    try:
+        code = asyncio.run(serve_acp(args.address, args.token))
+    except (OSError, RequestFailed) as exc:
+        raise CliError(f"cannot attach to {args.address}: {exc}") from exc
+    if code:
+        raise CliError("the adapter ended with an error")
 
 
 def cmd_protocol(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1008,6 +1032,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_attach)
+
+    p = sub.add_parser("acp", help="serve a running session to an ACP editor (stdin/stdout)")
+    p.add_argument("address", help="WebSocket address of the session, e.g. ws://127.0.0.1:8765")
+    p.add_argument("--token", required=True, help="client token that `calu run` printed")
+    p.set_defaults(handler=cmd_acp)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")
     p.add_argument("--out", help="write it to this file instead of stdout")

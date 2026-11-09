@@ -46,6 +46,7 @@ phases.
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
+| `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |
 | `src/calu/comments/` | User comments on selections in diffs and files |
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |

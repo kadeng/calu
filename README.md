@@ -167,10 +167,11 @@ use calu, because a step then needs the harness **and** your checkers — a PASS
 leaves the harness's decision exactly where it was. In any other mode the checkers simply decide
 alone; nothing has to be configured either way.
 
-And it goes the other way too: because calu will speak the agent side of ACP (phase 7, §6.1 of
-the plan), the same checked Claude Code session becomes usable from every ACP client — JetBrains
-Air, Zed, Neovim, Goose, web interfaces — each of which otherwise needs an adapter written for
-Claude Code specifically.
+And it goes the other way too: calu speaks the agent side of the Agent Client Protocol
+(`calu acp`), so the same checked Claude Code session is usable from every ACP client —
+JetBrains Air, Zed, Neovim, Goose — each of which otherwise needs an adapter written for Claude
+Code specifically. Escalations arrive there as the editor's own permission dialog, and the
+checker's summary becomes the title of the tool call in the editor's view.
 
 What calu costs you is one checker model call per step that the allow lists do not already
 cover, and the latency of that call. What it buys is a second reader who never gets tired of the
@@ -247,6 +248,14 @@ calu resolve 12 allow --note "go ahead"
 calu attach ws://127.0.0.1:8765 --token ...   # the full event stream, and a prompt
 ```
 
+An editor that speaks ACP talks to the same session. Register `calu acp` as the agent's command
+in the editor (JetBrains Air, Zed, Neovim, Goose); the editor spawns it and it attaches to the
+running session:
+
+```bash
+calu acp ws://127.0.0.1:8765 --token ...
+```
+
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the
 checkers follow them:
 
@@ -262,7 +271,7 @@ without an editor, and `calu rules add|list|remove|enable|disable` work on singl
 
 A running session picks up such a change within a moment, at its next step.
 
-Not built yet: the IDE and web clients, and the single-binary packaging.
+Not built yet: the web interface and the single-binary packaging. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
 
 ## License
 

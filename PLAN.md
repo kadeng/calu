@@ -1,6 +1,6 @@
 # calu: implementation plan
 
-Status: phases 1-3 done (2026-11-09; see §12 and `HANDOFF.md`). This file holds the decisions,
+Status: phases 1-4 and 7 done (2026-11-09; see §12 and `HANDOFF.md`). This file holds the decisions,
 the architecture and the order of work, derived from the owner's requirements in
 [REQUIREMENTS.md](REQUIREMENTS.md). Decisions carry a date; open questions are listed in §11.
 
@@ -458,6 +458,15 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    (`calu evals`, ported from sitl) is done.
 6. **Herd management:** a web UI on top of the commands of phase 3.
 7. **Third-party user interfaces and packaging:** `calu acp`, the ACP adapter of §6.1 (D24),
-   which reaches JetBrains Air, Zed, Neovim and Goose at once, and can be listed in the ACP
-   agent registry; then the single binary. A port of sitl's VSCode extension is only worth it
-   for what ACP cannot carry (the checker verdicts as structure, the herd overview).
+   is **done** (`src/calu/acp/`): `initialize`, `session/new`, `session/load` with the required
+   replay from `session.history`, `session/prompt`, `session/cancel`, `session/close`, the
+   `session/update` stream (message and thought chunks, tool calls with their checker verdict,
+   diffs and results) and `session/request_permission` for escalations, over newline-delimited
+   JSON on stdio. It is a client of a running session, so the session outlives every editor and
+   several editors may attach at once. The editor's `fs/*` and `terminal/*` capabilities stay
+   unused and its `mcpServers` are not forwarded (§6.1). Tested end to end against a real
+   session over a real WebSocket with a scripted Claude (`tests/unit/test_acp.py`); **not yet
+   driven by a real editor**. Still open in this phase: the single binary, and the session modes
+   of ACP (`availableModes`, `session/set_mode`), which would carry `AutoEscalate`. A port of
+   sitl's VSCode extension is only worth it for what ACP cannot carry (the checker verdicts as
+   structure, the herd overview).

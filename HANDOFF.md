@@ -37,7 +37,7 @@ in `calu/` only.
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
 | 5 Sandboxing | Settings done (D15); open: network policy per project (Q5), nested sandbox in Docker (Q1). `calu evals` done. |
 | 6 Herd management | Commands done; **web UI not started** |
-| 7 Third-party UIs, packaging | **Not started**: `calu acp` (D24), single binary |
+| 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **294 tests pass** (unit + database). The database tests need `docker compose up -d caludb
@@ -81,6 +81,20 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   per session, `calu.tokens`); `calu.protocol.client`; `calu attach ADDRESS --token T` with
   `/start /stop /interrupt /allow /deny /inject /to /comment /why /checkers /state /context
   /sessions /history /shutdown`. `calu protocol [--out FILE]` writes the JSON Schema.
+- **ACP adapter** (phase 7, D24, `src/calu/acp/`): `calu acp ADDRESS --token T` speaks the Agent
+  Client Protocol on stdin and stdout (newline-delimited JSON, protocol version 1) and attaches
+  to a running session as an ordinary client, so the session outlives the editor and several
+  editors can attach at once. Implemented: `initialize`, `session/new` (checks the editor's `cwd`
+  against the session's directory), `session/load` with the replay the protocol requires,
+  `session/prompt` (waits for `turn.result`), `session/cancel`, `session/close`, the
+  `session/update` stream and `session/request_permission` for escalations, whose answer becomes
+  an `escalation.decide`. "Always" is answered like "once" and recorded in the note, because a
+  rule row needs the admin credential. The editor's `fs/*` and `terminal/*` capabilities stay
+  unused and its `mcpServers` are not forwarded, or tool calls would route around the checkers
+  and the sandbox. Two details worth keeping in mind when changing it: a `tool_call_update`
+  **replaces** the content collection, so every update carries everything the call has shown
+  (`_add_content`), and the echo of the adapter's own prompt is dropped so the editor does not
+  show the user's message twice.
 - **Inspecting a decision**: `escalation.context` returns what the checker saw and said (rendered
   step, the file before the change, the conversation and chat summary of that moment, the checker
   runs with model and version); `checkers.get` returns the definitions, read-only;
@@ -152,14 +166,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **`calu acp`** (phase 7, D24, design in §6.1): the ACP adapter. Highest value left — one
-   implementation reaches JetBrains Air, Zed, Neovim and Goose, and ACP's baseline
-   `session/request_permission` maps onto escalations almost exactly. Everything it needs on
-   calu's side exists (`session.history` for the mandatory replay of `session/load`,
-   `events.subscribe` for `session/resume`, `escalation.context`, the bus). Constraints recorded
-   in §6.1: the client's `fs/*` and `terminal/*` capabilities must stay unused and `mcpServers`
-   from the editor must not be forwarded, or tool calls route around the checkers and the
-   sandbox.
+1. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
+   end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
+   editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
+   phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
+   `AutoEscalate`, and the single-binary packaging.
 2. **A mintable client token** (D30, part of Q4): the session accepts only the token it printed.
    Accepting any non-revoked hash in `client_tokens` for its session would let an operator with a
    database login mint a token for a local command or a remote interface, and revoke it — which
