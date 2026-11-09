@@ -40,8 +40,8 @@ in `calu/` only.
 | 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**342 tests pass** (unit + database). The database tests need `docker compose up -d caludb
---wait`. 50 commits, ~18k lines of source, ~6k of tests, 10 migrations, 16 CLI commands,
+**343 tests pass** (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 56 commits, ~20k lines of source, ~7k of tests, 10 migrations, 16 CLI commands,
 16 protocol requests.
 
 ### What exists
