@@ -16,6 +16,11 @@
     calu resolve ID allow|deny [--note TEXT]
                                    resolve an escalation; the waiting session continues
     calu evals [FILE ...]          measure how well the configured checkers decide
+    calu project add DIR|list      register a project in the database
+    calu config get|set|unset KEY  configuration values (`claude.model`, `context.narrate`, ...)
+    calu checker list|show|set     checker definitions: instructions, model, limits
+    calu rules list|add|remove|enable|disable
+                                   the allow and deny lists
 
 Passwords are read from the terminal without echo. If stdin is not a terminal, each password
 is read as one line from stdin (for scripts and tests).
@@ -24,6 +29,7 @@ is read as one line from stdin (for scripts and tests).
 import argparse
 import asyncio
 import getpass
+import json
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -31,7 +37,7 @@ from pathlib import Path
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from calu import __version__, herd
+from calu import __version__, admin, herd
 from calu.attach import attach
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
@@ -517,6 +523,195 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError(f"{critical} critical miss(es): a checker let a step through")
 
 
+def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Register a project or list the registered ones.
+
+    Args:
+        args: Parsed arguments (`action`, `directory`, `name`, `git_remote`, `network`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, the directory does not exist, or the
+            project exists already.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    name = args.name
+    if args.action == "add" and not name:
+        directory = Path(args.directory or ".").resolve()
+        if not directory.is_dir():
+            raise CliError(f"{directory} is not a directory")
+        name = directory.name
+
+    async def work(db: Db) -> str:
+        """Add or list projects.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+        """
+        if args.action == "list":
+            rows = await admin.projects(db)
+            return "\n".join(row.line() for row in rows) or "no projects"
+        row = await admin.add_project(db, name or "", args.git_remote, args.network)
+        return f"added project {row.name!r}; use it with `calu run --project {row.name}`"
+
+    _admin_command(store, work)
+
+
+def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Read or change configuration values of the global or a project scope.
+
+    Args:
+        args: Parsed arguments (`action`, `key`, `value`, `project`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, or the key or value is refused.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """Read or change one value.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+
+        Raises:
+            CliError: If `set` was called without a value.
+        """
+        if args.action == "get":
+            values = await admin.settings(db, args.project)
+            if args.key:
+                for part in args.key.split("."):
+                    values = values.get(part, {}) if isinstance(values, dict) else {}
+            return json.dumps(values, indent=2, sort_keys=True)
+        if args.action == "set":
+            if args.value is None:
+                raise CliError("config set needs a KEY and a VALUE")
+            await admin.set_setting(db, args.key, admin.parse_value(args.value), args.project)
+            return f"set {args.key} in the {args.project or 'global'} scope"
+        await admin.unset_setting(db, args.key, args.project)
+        return f"unset {args.key} in the {args.project or 'global'} scope"
+
+    _admin_command(store, work)
+
+
+def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
+    """List, show or change the checker definitions.
+
+    `set --instructions-file` reads the new instructions from a file, or from stdin for "-".
+
+    Args:
+        args: Parsed arguments (`action`, `name`, `instructions_file`, `model`, `enable`,
+            `disable`, `route`, `request_limit`, `output_tokens_limit`, `max_tokens`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, the checker is unknown, or the change is
+            refused.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    if args.action != "list" and not args.name:
+        raise CliError(f"checker {args.action} needs a NAME")
+    text: str | None = None
+    if args.instructions_file:
+        try:
+            text = (
+                sys.stdin.read()
+                if args.instructions_file == "-"
+                else Path(args.instructions_file).read_text(encoding="utf-8")
+            )
+        except OSError as exc:
+            raise CliError(f"cannot read {args.instructions_file}: {exc}") from exc
+
+    async def work(db: Db) -> str:
+        """List, show or change a checker.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+        """
+        if args.action == "list":
+            rows = await admin.checkers(db)
+            return "\n".join(row.line() for row in rows) or "no checkers"
+        if args.action == "show":
+            return await admin.instructions(db, args.name)
+        enabled = True if args.enable else (False if args.disable else None)
+        row = await admin.set_checker(
+            db,
+            args.name,
+            instructions_text=text,
+            model=args.model,
+            enabled=enabled,
+            request_limit=args.request_limit,
+            output_tokens_limit=args.output_tokens_limit,
+            max_tokens=args.max_tokens,
+            route=args.route,
+        )
+        return row.line()
+
+    _admin_command(store, work)
+
+
+def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
+    """List the allow and deny lists, or add, remove, enable or disable one rule.
+
+    Args:
+        args: Parsed arguments (`action`, `list`, `pattern`, `comment`, `project`, `position`,
+            `id`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, or the rule or list is refused.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """Run the requested rules action.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+
+        Raises:
+            CliError: If an argument is missing or the rule does not exist.
+        """
+        if args.action == "list":
+            rows = await admin.rules(db, args.project, args.list)
+            return "\n".join(row.line() for row in rows) or "no rules"
+        if args.action == "add":
+            if not args.list or not args.pattern:
+                raise CliError("rules add needs a LIST and a PATTERN")
+            row = await admin.add_rule(
+                db, args.list, args.pattern, args.comment or "", args.project, args.position
+            )
+            return f"added rule {row.id}: {row.line()}"
+        if args.id is None:
+            raise CliError(f"rules {args.action} needs an ID")
+        if args.action == "remove":
+            if not await admin.remove_rule(db, args.id):
+                raise CliError(f"no rule {args.id}")
+            return f"removed rule {args.id}"
+        if not await admin.set_rule(db, args.id, args.action == "enable"):
+            raise CliError(f"no rule {args.id}")
+        return f"{args.action}d rule {args.id}"
+
+    _admin_command(store, work)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser of `calu`.
 
@@ -599,6 +794,51 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", help="one model for every checker, instead of the configured ones")
     p.add_argument("--repeat", type=int, default=1, help="how often each case runs")
     p.set_defaults(handler=cmd_evals)
+
+    project = sub.add_parser("project", help="register a project in the database")
+    project.add_argument("action", choices=["add", "list"])
+    project.add_argument("directory", nargs="?", help="project directory (for add)")
+    project.add_argument("--name", help="project name (default: the directory's name)")
+    project.add_argument("--git-remote", help="git remote of the project")
+    project.add_argument(
+        "--network",
+        choices=list(admin.NETWORK_POLICIES),
+        default="full",
+        help="network policy of the sandbox (default: full)",
+    )
+    project.set_defaults(handler=cmd_project)
+
+    config = sub.add_parser("config", help="configuration values in the database")
+    config.add_argument("action", choices=["get", "set", "unset"])
+    config.add_argument("key", nargs="?", default="", help="dotted key, e.g. claude.model")
+    config.add_argument("value", nargs="?", help="value (JSON, or plain text)")
+    config.add_argument("--project", help="the project's scope instead of the global one")
+    config.set_defaults(handler=cmd_config)
+
+    checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
+    checker.add_argument("action", choices=["list", "show", "set"])
+    checker.add_argument("name", nargs="?", help="checker name, e.g. command")
+    checker.add_argument(
+        "--instructions-file", help="read new instructions from this file ('-' for stdin)"
+    )
+    checker.add_argument("--model", help="Pydantic AI model string")
+    checker.add_argument("--route", choices=list(admin.ROUTES), help="route (for a new checker)")
+    checker.add_argument("--enable", action="store_true", help="use this checker")
+    checker.add_argument("--disable", action="store_true", help="stop using this checker")
+    checker.add_argument("--request-limit", type=int)
+    checker.add_argument("--output-tokens-limit", type=int)
+    checker.add_argument("--max-tokens", type=int)
+    checker.set_defaults(handler=cmd_checker)
+
+    rules = sub.add_parser("rules", help="the allow and deny lists")
+    rules.add_argument("action", choices=["list", "add", "remove", "enable", "disable"])
+    rules.add_argument("list", nargs="?", help="list name, e.g. command-deny")
+    rules.add_argument("pattern", nargs="?", help="regular expression (for add)")
+    rules.add_argument("--id", type=int, help="rule id (for remove, enable, disable)")
+    rules.add_argument("--comment", help="why the rule exists")
+    rules.add_argument("--project", help="the project's rules instead of the global ones")
+    rules.add_argument("--position", type=int, help="position in the list (default: append)")
+    rules.set_defaults(handler=cmd_rules)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove"])

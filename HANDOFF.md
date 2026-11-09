@@ -65,6 +65,12 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   (one token per session, `calu.tokens`, migration 0004), `calu.protocol.client` is the client
   side, and `calu attach ADDRESS --token T` is a terminal client. `calu run` prints the address
   and the token; with `--batch` it ends when Claude is done **and** no client is attached.
+- **Configuration commands** (`src/calu/admin.py`): `calu project add|list`, `calu config
+  get|set|unset KEY` (dotted keys, values parsed as JSON, validated against `Config` before
+  the write), `calu checker list|show|set` (instructions from a file or stdin, model, limits,
+  enable/disable, a new checker with `--route`) and `calu rules list|add|remove|enable|disable`
+  (patterns compiled before they are stored). They need the `admin` credential; every change
+  announces itself on `config_changed`, so a running session applies it at its next step.
 - **Evaluation** (`src/calu/evals/`, ported from sitl): `calu evals [FILE ...]` runs the
   checkers of the database on the built-in cases, on YAML files and, with `--from-db`, on the
   escalations a checker raised and a human resolved. It reports accuracy, preferred decision,
@@ -128,21 +134,15 @@ Results:
 
 ## Next steps
 
-1. **The configuration commands** (PLAN.md §8): `calu project add <dir>`, `calu config
-   get/set`, `calu checker list/show/edit`, `calu rules list/add/remove`. Today the only way to
-   change the configuration, the rules or the checker instructions is SQL — which is awkward,
-   because those instructions are the product: they hold the rules a user wants enforced. They
-   need the `admin` credential (the session role may only read), and every change is announced
-   by `config_changed`, so a running session picks it up.
-2. **Q8 (ask the owner):** a client attached to the session decides an escalation in the
+1. **Q8 (ask the owner):** a client attached to the session decides an escalation in the
    session, which cancels the row with a note, because `calu_session` may not allow or deny
    (D18, §4.1 point 5). Alternatives: the client resolves with its own `calu_operator`
    credentials, or a database function lets `calu_session` record a client decision for its own
    session.
-3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-4. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
+2. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+3. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
    extension against the new protocol) and the single binary.
-5. Smaller gaps: the JSON Schema export (`calu/protocol/schema.py`) is not written to a file by
+4. Smaller gaps: the JSON Schema export (`calu/protocol/schema.py`) is not written to a file by
    any command; `calu attach` has no `/comment`; a client cannot read the step history of an
    earlier session (the bus buffer is per process, and `session.history` was dropped).
 

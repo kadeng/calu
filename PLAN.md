@@ -250,8 +250,8 @@ session cancelled.
 | `calu db migrate` | create or update roles and schema (migrations) |
 | `calu setup` | first-time setup: migrations, default checkers and rules, login and encrypted credential of `calu_session` |
 | `calu credential list/set/remove` | manage the encrypted credential store (D12), e.g. `set admin` for an existing PostgreSQL server |
-| `calu project add <dir>` | register a project (git remote, settings) in the database; writes nothing into the project by default and leaves existing Claude Code configuration untouched |
-| `calu config get/set`, `calu checker list/show/edit`, `calu rules ...` | configuration in the database |
+| `calu project add <dir>`, `calu project list` | register a project (git remote, network policy) in the database; writes nothing into the project and leaves existing Claude Code configuration untouched |
+| `calu config get/set/unset`, `calu checker list/show/set`, `calu rules list/add/remove/enable/disable` | configuration in the database (`calu.admin`; needs the `admin` credential, because a session may only read it) |
 | `calu evals [FILE ...]` | run the checkers on evaluation cases (built-in, files, resolved escalations) and report accuracy, critical misses and over-escalations |
 | `calu run [<dir>]` | start a session in the foreground (for tmux); prints the WebSocket address and a client token |
 | `calu attach <session>` | terminal client for a running session |

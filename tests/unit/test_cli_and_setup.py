@@ -90,3 +90,31 @@ def test_evals_needs_the_admin_credential(
 ) -> None:
     assert run_cli(monkeypatch, store, ["evals"], "") == 1
     assert "no credential 'admin'" in capsys.readouterr().err
+
+
+def test_the_configuration_commands_need_the_admin_credential(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for argv in (
+        ["project", "list"],
+        ["config", "get"],
+        ["config", "set", "claude.model", "opus"],
+        ["checker", "list"],
+        ["rules", "list"],
+    ):
+        assert run_cli(monkeypatch, store, argv, "") == 1
+        assert "no credential 'admin'" in capsys.readouterr().err
+
+
+def test_arguments_are_checked_before_the_password_is_asked(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli(monkeypatch, store, ["project", "add", "/no/such/dir"], "") == 1
+    assert "is not a directory" in capsys.readouterr().err
+    assert run_cli(monkeypatch, store, ["checker", "show"], "") == 1
+    assert "needs a NAME" in capsys.readouterr().err
+    assert (
+        run_cli(monkeypatch, store, ["checker", "set", "edit", "--instructions-file", "/x"], "")
+        == 1
+    )
+    assert "cannot read /x" in capsys.readouterr().err

@@ -205,9 +205,23 @@ watch and unblock it:
 calu sessions             # every session of every host, with its state
 calu escalations          # steps that wait for a decision
 calu resolve 12 allow --note "go ahead"
+calu attach ws://127.0.0.1:8765 --token ...   # the full event stream, and a prompt
 ```
 
-Not built yet: `calu attach` and the other clients, `calu project add`, `calu config set`.
+Your rules live in the database. Write them as Markdown, put them in, and measure whether the
+checkers follow them:
+
+```bash
+calu checker show edit > edit.md              # the edit checker's instructions
+calu checker set edit --instructions-file edit.md
+calu rules add command-deny '^ship-it( |$)' --comment "only from CI"
+calu config set claude.model opus
+calu evals --from-db                          # accuracy, critical misses, over-escalations
+```
+
+A running session picks up such a change within a moment, at its next step.
+
+Not built yet: the IDE and web clients, and the single-binary packaging.
 
 ## License
 
