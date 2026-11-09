@@ -274,14 +274,27 @@ class ProjectFiles(Event):
     write_deny: str = ""
 
 
-class SessionState(Event):
-    """The Claude session changed state.
+State = Literal[
+    "starting", "idle", "running", "checking", "tool_call", "escalated", "stopped", "failed"
+]
+"""States of a session (PLAN.md §3.1):
 
-    `starting` -> `idle` <-> `busy`; `waiting` while an escalation is open; `stopped` at the end.
-    """
+    starting ─► idle ◄──► running ─► checking ─► tool_call ─► running
+                            │           │
+                            │           └─► escalated ─(resolved)─► tool_call | running
+                            └─► stopped | failed
+
+`running`: Claude works on a turn. `checking`: a checker or the narrator runs. `tool_call`: an
+approved tool call runs. `escalated`: at least one escalation waits for a human. `failed`: the
+Claude session ended with an error. Steps of the main agent and of subagents overlap, so the
+state is the most important of them, in the order escalated > checking > tool_call > running."""
+
+
+class SessionState(Event):
+    """The Claude session changed state (see `State`)."""
 
     method: ClassVar[str] = "session.state"
-    state: Literal["starting", "idle", "busy", "waiting", "stopped"]
+    state: State
     session_id: str | None = None
 
 

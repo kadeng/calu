@@ -104,7 +104,7 @@ async def test_session_role_cannot_change_config_or_resolve(db_url: str) -> None
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 await session.execute(statement.encode())
-        cur = await session.execute("SELECT calu_cancel_escalation(%s)", (escalation,))
+        cur = await session.execute("SELECT calu_cancel_escalation(%s, 'stopped')", (escalation,))
         assert await cur.fetchone() == (True,)
     finally:
         await session.close()
