@@ -1,133 +1,118 @@
 # Handoff
 
-State on 2026-11-09, end of the first implementation session. Read this, then `AGENTS.md`,
-`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D17, open questions §11, phases §12).
+State on 2026-11-09, end of the second implementation session. Read this, then `AGENTS.md`,
+`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D19, open questions §11, phases §12).
 
-## Instructions from the owner (2026-11-09)
+## Instructions from the owner
 
-- "Start implementing. Commit and push at reasonable checkpoints. Stop only if you must ask
-  something. You can make tradeoff decisions. You are authorized to make reversible decisions
-  (everything that's just in git is reversible)."
-- The next session runs **inside Linux** (WSL2), in `~/projects/stay-in-the-loop/calu`
-  (`/home/klondenberg/projects/stay-in-the-loop/calu`). On 2026-11-09 the owner had the whole
-  sitl tree (with calu inside) copied there from the Windows drive
-  (`/mnt/c/Users/KaiLo/projects/stay-in-the-loop`). The copy on the Windows drive is outdated
-  from then on; do not work there. The previous session ran on the Windows host and called
-  WSL through `wsl.exe`, which caused quoting and path-conversion problems.
+- 2026-11-09: "You may implement, make reversible decisions and commit and push at reasonable
+  checkpoints. Stop only when you must ask me something." Everything that is only in git counts
+  as reversible.
+- Work in the Linux copy under `~/projects/stay-in-the-loop/calu`, never in the old Windows copy
+  under `/mnt/c`. The `CLAUDE.md` in the parent directory belongs to sitl; for calu, follow
+  `AGENTS.md` (which repeats sitl's coding rules, D11).
+- Run the checks with `scripts/wsl-test.sh -m 'not live'` after
+  `docker compose up -d caludb --wait`.
 
 ## Why calu sits inside the stay-in-the-loop directory
 
 calu is the successor of stay-in-the-loop (sitl) and is built by porting sitl's code. On the
-owner's machine, calu is cloned as `calu/` inside sitl's working tree
-(`~/projects/stay-in-the-loop/calu`) so that a session can read sitl's source,
-tests and spike results next to calu. It is still its own git repository
-(github.com/kadeng/calu, public, GPL-2.0) and is listed in sitl's `.gitignore`. Commit calu work
-in `calu/` only; sitl is a separate, private repository.
+owner's machine, calu is cloned as `calu/` inside sitl's working tree, so that a session can
+read sitl's source, tests and spike results in the parent directory `..`. calu is still its own
+git repository (github.com/kadeng/calu, public, GPL-2.0) and is listed in sitl's `.gitignore`.
+Commit calu work in `calu/` only; sitl is a separate, private repository.
 
 ## Where things stand
 
 | Phase (`PLAN.md` §12) | State |
 |---|---|
-| 1 Skeleton | Done (commit a68f8ac) |
-| Spikes Q1, Q7 | Done (8d46c0f), results in `spikes/RESULTS.md`, decisions D15, D16 |
-| 2 Core port | Done for the modules (6628733); the database loader for configuration is still missing (see next steps) |
-| 3 Session runner | Not started; analysis below |
-| 4-7 | Not started |
+| 1 Skeleton | Done |
+| Spikes Q1, Q7 | Done, results in `spikes/RESULTS.md`, decisions D15, D16 |
+| 2 Core port | Done, including the database store (`calu.store`) |
+| 3 Session runner | Done: `calu run`, steps/turns/escalations in the database, operator resolution, sandbox settings, `calu sessions/escalations/resolve` |
+| 4 Bus and terminal client | Not started |
+| 5-7 | Not started (the sandbox settings of phase 5 exist, D15) |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyright 0 errors,
-144 tests passed (unit + database tests). The database tests need
-`docker compose up -d caludb --wait`.
+211 tests passed (unit + database). The database tests need `docker compose up -d caludb --wait`.
 
 ### What exists
 
-- **CLI** (`src/calu/cli.py`): `calu db up [--port]`, `db down`, `db migrate`, `setup
-  [--checker-model]`, `credential list|set|remove`. Passwords via getpass, or one line each
-  from stdin when stdin is not a terminal (used by tests). Verified end to end against a real
-  Docker PostgreSQL (`db up` → `setup` → `migrate` → `down`, wrong password → exit 1).
-- **Credential store** (`credentials.py`, D12): `~/.config/calu/credentials.json`, entries
-  `admin` (owner `calu_owner`) and `session` (role `calu_session`), Argon2id + AES-256-GCM,
-  name as associated data.
-- **Schema** (`db/migrations/0001_initial.sql`): tables of `PLAN.md` §7, roles `calu_session`
-  and `calu_operator` (cluster-wide, NOLOGIN until `setup`), audit trigger + `config_changed`
-  notify on `config`, `rules`, `checker_types`; checker version bump trigger; escalations are
-  resolved only via `calu_resolve_escalation(id, 'allowed'|'denied', note)` (operator, notifies
-  `escalation_resolved`) and cancelled via `calu_cancel_escalation(id)` (session). Tests prove
-  the session role cannot change configuration, resolve escalations or read the audit log.
-  Row-level security per session is not done yet.
-- **Local DB** (`db/local.py`, `db/local-compose.yml`, D14): compose project `calu-db`, volume
-  `calu-db_data`, 127.0.0.1:5433.
-- **Setup** (`setup.py`): migrations, default checker types (`command`, `edit`,
-  `subagent-result`, `narrator`; model `mistral:mistral-small-2603`) and default rules parsed from
-  `defaults/rules/*.txt` (a comment block directly above a pattern becomes its comment), new
-  random password for `calu_session`.
-- **Ported core** (from sitl `src/stay_in_the_loop/`, package renamed to `calu`):
-  `checkers/` (rules, shell, policy, render, checker, result_checker, model),
-  `context/` (builder, narrator, turns, foreign), `claude/` (runner, sdk_runner, fake_runner),
-  `protocol/` (messages, schema; not client/server), `comments/` (model, format, mapping; not
-  store), `models.py`, `markdown.py`, `files.py`, `testing.py` (fake checkers; markers renamed
-  `sitl:*` → `calu:*`), `config.py`.
-- **Adaptations made in the port:**
-  - `Rules` holds lists in memory: `Rules(workspace, lists)`, `Rules.from_rows(workspace,
-    [(list, pattern, id)])`, `Rules.from_texts(...)`, `replace(lists)`. List names have no
-    `.txt`. Built-in read+write deny: `(^|/)\.config/calu(/|$)`.
-  - `Checker`, `ResultChecker`, `Narrator` take `instructions: str` (agent rebuilt when the
-    attribute changes) instead of an instructions file path.
-  - `ContextBuilder(workspace, config, ..., summary="", on_summary=async callback)`: the chat
-    summary lives in memory (`builder.summary`) and is handed to `on_summary` after each fold
-    (to be stored in `chat_summaries`).
-  - `config.py`: Pydantic models kept; file layout (`ProjectPaths`, `config.toml`,
-    `ensure_project_files`) removed; `build_config(layers, checker_rows)` merges global and
-    project `config` rows (key `settings`) and checker rows; `load_secrets()` reads
-    `~/.config/calu/.env` (D17). `ClaudeConfig.auto_mode` defaults to True (D5).
-- **Tests dropped in the port** (they used sitl's `make_session`; bring them back with the new
-  session in phase 3): in `test_rules.py` the three session tests at the end; in
-  `test_narrator.py` `run_turn`, `test_session_narrates_before_checked_and_unchecked_steps`,
-  `test_checker_context_shows_summary_and_narrated_turns`, `test_narration_can_be_turned_off`;
-  in `test_result_checker.py` the four session tests; `test_streaming.py`
-  `test_fake_runner_streams_words_before_final_text`; `test_files.py`
-  `test_session_sends_tool_files_for_bash`. sitl's `test_session.py`, `test_auto_escalate.py`,
-  `test_chat_queue.py`, `test_login_hint.py`, `test_review*_fixes.py`, `test_protocol.py`,
-  `test_history.py`, `test_comments.py`, `test_training.py`, `test_evals.py` were not ported.
-- `tests/conftest.py` lacks sitl's `checker_test_model` fixture and the
-  `models.ALLOW_MODEL_REQUESTS` guard; the one `live` test in `test_checkers.py` needs both.
-  Port them from sitl's `tests/conftest.py` (it imports `PROVIDER_KEYS_BY_PREFIX` from sitl's
-  `preflight.py`, which was not ported; inline the mapping or port `preflight.py`).
+- **CLI** (`src/calu/cli.py`): `db up|down|migrate`, `setup`, `credential list|set|remove`,
+  `run`, `sessions`, `escalations`, `resolve`. Passwords via getpass, or one line each from
+  stdin when stdin is not a terminal (used by tests).
+- **`calu run [DIR]`** (`src/calu/run.py`): asks for the session password, decrypts the
+  `session` credential, opens two connections (queries, notifications), wipes the credential,
+  loads the settings, creates the `sessions` row and starts Claude Code. Events are printed to
+  the terminal (the stand-in client until phase 4). `-p/--prompt` sends the first message,
+  `--batch` ends the run when Claude is idle again, otherwise further messages are read from
+  stdin (`/quit` ends it). `--resume`, `--model`, `--effort`, `--project`, `--thinking`.
+- **Session** (`src/calu/session.py`, ported from sitl's `session.py`): tool gate (rules, tool
+  policy, checkers, auto-escalation), escalations, narration, chat queue, subagent result
+  review, login hint, states of `PLAN.md` §3.1 derived from what runs (escalated > checking >
+  tool_call > running > idle). `apply_settings` applies a reloaded configuration from the next
+  step on.
+- **Store** (`src/calu/store/`): `ConfigStore` loads `Config`, the checker definitions and the
+  rules and reloads them on `config_changed`; `DatabaseSessionStore` writes the session, its
+  steps with decisions and results, the checker runs, the turns, the chat summary and the
+  escalations; `MemorySessionStore` is the in-memory twin for unit tests.
+- **Herd** (`src/calu/herd.py`): `sessions`, `escalations`, `resolve` on the database alone,
+  with the `admin` credential (an own login for `calu_operator` is Q4).
+- **Sandbox** (D15): `SandboxConfig` in `calu/config.py`, passed to Claude Code as a
+  `--settings` JSON document (`SdkRunner._options`); `calu.preflight` warns about missing
+  `bwrap`/`socat`, a disabled sandbox and missing checker API keys at every start.
+- **Schema**: `0001_initial.sql` (tables, roles, audit and version triggers, the escalation
+  functions) and `0002_turn_records.sql` (the remaining `TurnRecord` columns, the
+  `claude_session_id` index, `calu_cancel_escalation(bigint, text)`).
+- **`Db`** (`calu/db/connection.py`): one connection for several tasks, statements serialized
+  with a lock and shielded from cancellation (D19). `calu/db/notify.py` holds the channel names,
+  `listen`, `Dirty` and `Notifier`.
+
+### Verified by hand (2026-11-09, real Claude Code 2.1.319, haiku, fake checker models)
+
+`spikes/` has no script for this; the runs used throwaway scripts in the scratchpad. Two runs
+against the test database, sandbox off (no `socat` on this machine), narration off:
+
+1. "run `ls`, then say what you found": allow-listed command, no model call, one `steps` row
+   with `rules_outcome = allow`, turn and answer stored, states starting → idle → running →
+   tool_call → running → idle → stopped, `sessions.claude_session_id` set.
+2. "create NOTES.md with the Write tool, then run `git push --dry-run`": the edit went to the
+   edit checker (ALLOW, one `checker_runs` row), the command to the command checker. Note that
+   the default deny list only denies **force** pushes and deletions, not a plain `git push`
+   (sitl commit 433aaa4), so this did not escalate.
+
+The escalation path (`ask`, the wait, an operator's `calu_resolve_escalation`, the notification)
+is covered by `tests/db/test_run.py` with the fake runner against the real database; it has not
+been run with the real CLI yet (`can_use_tool`). A third throwaway run with `sudo -n ls /root`
+(a deny-list match) was prepared but not finished.
+
+### Left out of the port, on purpose
+
+- sitl's **comment store** (diff and file comments) and **training mode** (human review of
+  checker decisions for evaluation data): both were file-based and need tables of their own
+  (Q9). The protocol models for them are still in `calu/protocol/messages.py`.
+- sitl's **event log** (`history.py`): the bus of phase 4 takes over the event buffer and the
+  sequence numbers that a reconnecting client needs.
+- `ProjectFiles`/`files()`: the editable project files are database rows now; a client edits
+  them through the bus.
 
 ## Next steps
 
-1. **Finish phase 2:** a store module (e.g. `src/calu/store.py`) that loads, for a project,
-   `Config` (`build_config` from `config` rows + `checker_types`), the checker instructions by
-   name, and `Rules.from_rows` from `rules` (global + project, ordered by `position`); and that
-   reloads them on `config_changed`. Database tests for it. Port the conftest pieces above.
-2. **Phase 3, session runner.** Recommended approach: port sitl's `session.py` (1,600 lines;
-   the orchestrator: ToolGate `pre_tool_use`/`_decide`/`ask`, escalations, narration, queue,
-   subagent result review, login hint, state events) and replace its file-based parts with an
-   injected store interface (database implementation + in-memory implementation for unit
-   tests), so sitl's `test_session.py` and the dropped tests can be ported with few changes.
-   File-based parts to replace: `ProjectPaths`/`ensure_project_files`, `CommentStore`,
-   `EventLog` (`history.py`), `TrainingDesk` (`training.py`, decisions log), summary switching
-   between Claude sessions (`_switch_summary`, `_claim_summary`, `_restore_context`),
-   `files()`/`checker_context()` (file paths for the editor; replace by database content).
-   Then: steps, checker runs, turns, escalations and session state written to the database;
-   escalation waits for `escalation_resolved` (LISTEN) as well as local decisions; `calu run`
-   with the password prompt, credential decrypt, connect, wipe, then start Claude Code (D8);
-   SdkRunner passes the sandbox settings of D15 via `--settings` and checks for `bwrap`/`socat`.
-   States in the DB are those of `PLAN.md` §3.1 (sitl uses starting/idle/busy/waiting/stopped;
-   map or migrate).
-3. Phase 4 (WebSocket JSON-RPC bus, `calu attach`), then 5-7 as in `PLAN.md` §12. D16 (checker
-   model type through `claude -p`) can be added to `models.py` at any point.
-
-## Background from the planning discussion
-
-- **Why Python (2026-11-09):** the owner first wanted a single executable and asked about Go or
-  Rust. No Go port of Pydantic AI exists; Rust has Rig (pre-1.0); the Claude Agent SDK is
-  official only for Python and TypeScript. The owner chose Python now (reusing sitl's core), uv
-  package first, PyApp or PyInstaller later, a port to Go or Rust possible once calu works.
-- **Anthropic subscription for checkers:** only Claude Code can use the claude.ai subscription;
-  hence D16.
-- **Why the sandbox encloses the tool calls (D4):** a Bash command running as the same user as
-  Claude Code can open `/proc/<claude-pid>/fd/0` and forge messages into Claude Code's stdin;
-  confirmed by the control run in `spikes/RESULTS.md`.
+1. **Phase 4, bus and terminal client.** A WebSocket JSON-RPC endpoint per session process
+   (PLAN.md §6, D2): `state.get`, `events.subscribe` with sequence numbers, the requests of
+   sitl's protocol, token issuing, then `calu attach` as a terminal client. The protocol models
+   need a pass: remove or rework `files`, the training requests and `session.list/history`
+   (which were file-based), add `escalation.decide` over the bus (see Q8), and regenerate the
+   JSON Schema (`calu/protocol/schema.py`).
+2. **Q8 (ask the owner):** a client attached to the session currently decides an escalation in
+   the session, which cancels the row with a note, because `calu_session` may not allow or deny
+   (D18, §4.1 point 5). Alternatives: the client resolves with its own `calu_operator`
+   credentials, or a database function lets `calu_session` record a client decision for its own
+   session. The answer shapes phase 4.
+3. **`calu project add`, `calu config set`, `calu checker edit`** (PLAN.md §8): the only way to
+   change configuration, rules or checker instructions today is SQL.
+4. Phase 5 (network policy per project, Q1 nested sandbox, `socat` on the machine), phase 6
+   (web UI), phase 7 (IDE client, single binary).
 
 ## Working rules the owner set
 
@@ -143,27 +128,27 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
 ## Where to find things
 
 - **sitl** (predecessor, private, github.com/kadeng/stay-in-the-loop): the parent directory
-  `..` of this repository, `~/projects/stay-in-the-loop`. sitl's spike results:
-  `.claude/skills/claude-code-integration/references/spike-results.md`; scripts in `spikes/`;
-  its condensed Claude Code / Pydantic AI reference skills in `.claude/skills/` (read, do not
-  copy into calu, D10).
+  `..`. Its spike results: `.claude/skills/claude-code-integration/references/spike-results.md`;
+  scripts in `spikes/`; its condensed Claude Code / Pydantic AI reference skills in
+  `.claude/skills/` (read, do not copy into calu, D10).
 - **calu spikes:** `spikes/RESULTS.md` and scripts (CLI 2.1.319). The spike extracted `socat`
   without root under `/tmp/calu-spike-tools` (`spikes/get-socat.sh`); install `socat` properly
   for real use.
 
 ## Environment notes (owner's machine)
 
-- WSL2 Ubuntu has uv, Docker, bwrap, Node 22 (nvm, interactive shells only), a logged-in
-  `claude` (2.1.319). No `socat` installed system-wide.
-- `scripts/wsl-test.sh` uses the virtual environment `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`
-  (a leftover of the Windows checkout; inside Linux a project-local `.venv` would work as well).
-  sitl's own `.venv` was not copied (a virtual environment stores its absolute path);
-  recreate it with `uv sync` in `~/projects/stay-in-the-loop` when needed.
+- WSL2 Ubuntu has uv, Docker, bwrap, Node 24 (nvm) and a logged-in `claude` (2.1.319).
+  **`socat` is still not installed**, so the sandbox cannot start and every session with the
+  default `claude.sandbox` settings refuses to run (`apt install socat`).
+- `~/.config/calu/.env` **does not exist yet**. Live checker tests and real checker models need
+  it; the keys are in sitl's git-ignored `.env` (CRLF line endings). Copying them was refused in
+  the last session (a sandbox rule), so the owner should create the file:
+  `tr -d '\r' < ~/projects/stay-in-the-loop/.env > ~/.config/calu/.env && chmod 600 ...`.
+  Live checker model: Nemotron Lightning on Fireworks (`CALU_TEST_CHECKER_MODEL` overrides it).
+- `scripts/wsl-test.sh` uses `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`.
 - Test database: `docker compose up -d caludb --wait` (127.0.0.1:55432, `calu_owner` /
   `calu-dev`, development only). Tests create and drop a database per test.
-- The working tree is on the Linux file system now; `.gitattributes` forces LF line endings.
-- Checker API keys for live tests are in sitl's git-ignored `.env` (CRLF line endings); calu
-  reads keys from `~/.config/calu/.env`. Live checker model: Nemotron Lightning on Fireworks.
+- The working tree is on the Linux file system; `.gitattributes` forces LF line endings.
 
 ## Left open in sitl (not calu work)
 
