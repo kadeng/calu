@@ -94,7 +94,7 @@ Checkers are useful for everything that is obvious to a human reader but invisib
   escalates when the two drift apart. The same check runs on what subagents hand back, so a
   reviewer subagent cannot quietly widen a task you deliberately kept narrow.
 
-### Code honesty, and why it is a security measure
+### Code honesty enforcement
 
 The rule that pays off most is the one that is hardest to enforce by hand: a codebase should be
 **honest**. Every function, class, module and command-line tool says what it does — in its name
@@ -141,11 +141,13 @@ restate every day.
 - **The database is the centre.** Every session on every machine writes to one PostgreSQL
   database: the configuration, the checker definitions, the full history of every step (with
   host, user, directory and git commit) and the open escalations. One person can therefore watch
-  and unblock any number of sessions from one place, and nothing that steers the checkers is
-  read from a file that the agent could edit.
-- **The agent is kept away from the controls.** Commands that Claude runs are executed in a
-  sandbox: their own process namespace, no access to the calu process, to its database
-  credentials or to your keys, and no way to change how Claude Code reports back.
+  and unblock any number of sessions from one place.
+- **The configuration is out of the agent's reach.** The checker instructions, the rules and
+  the settings are database rows, and the credential that reads them is wiped before Claude
+  Code starts, so an edit or a command cannot change the rules it is judged by. For the
+  commands themselves calu configures Claude Code's own sandbox — own process namespace, no
+  write access to Claude Code's configuration, read denials for credentials — which is as far
+  as the isolation goes today.
 
 **Status: early implementation.** `calu run` starts a checked session, records it in the
 database and waits for human decisions; the network clients, the web interface and the sandbox
