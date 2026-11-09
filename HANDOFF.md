@@ -61,8 +61,12 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   ESCALATE, ALLOW (run it whatever auto mode says) and DENY. PASS is the normal answer; the
   allow lists and the read-only tool routes produce PASS as well. The PreToolUse hook answers
   PASS without a decision while auto mode is in effect.
-- **Checkers may read files** (D22): the checker agent has one tool, `read_file`, bounded by the
-  workspace and by the read deny lists (`checkers/read_tool.py`).
+- **The checkers' tools** (D22, D25, `checkers/tools.py`): `read_file(path, start_line,
+  end_line)`, `find_files(pattern)` and `grep_files(pattern, path_glob)`. They stand on Pydantic
+  AI's workspace API (`LocalWorkspace(read_only=True, authority="none")`), which pins the run to
+  the project directory and refuses writes and commands; calu adds the read deny lists, the
+  bounds and the framing that file content is data. Pydantic AI ships no file tools itself, so
+  there is nothing else to reuse; a language server would be the next tool here.
 - **Bus and protocol** (phase 4): `calu.bus` numbers every event of the process and keeps the
   last 5000 for replay; `calu.protocol.server` serves JSON-RPC over WebSocket to several clients
   (one token per session, `calu.tokens`, migration 0004), `calu.protocol.client` is the client

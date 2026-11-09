@@ -23,9 +23,9 @@ overrule the harness in the handful of cases where you know better.
 
 What a checker can do besides deciding is **comment**. It can let an edit through and still tell
 Claude to keep the names and the API documentation honest, or to stop widening the task. Claude
-receives the remark together with the approval. A checker can also **read files** in the project
-when the step alone does not tell it enough. That is all it can do: it cannot write, run
-commands or talk to the outside.
+receives the remark together with the approval. A checker can also **look at the code**: read a
+file, list files by glob, grep for a pattern, so that it judges on evidence rather than on the
+diff alone. That is all it can do: it cannot write, run commands or talk to the outside.
 
 The pause matters. Claude cannot retry, rephrase or probe the system while it waits, so a
 denial cannot be worked around. Decide from any client that is attached to the session, or
@@ -44,9 +44,11 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
   rules you would otherwise have to repeat to Claude every day (see
   [what you can enforce](#what-you-can-enforce-with-a-checker)). They get the conversation in
-  condensed form, your project's AGENTS.md and the step itself, and they can read a file when
-  they need more. They judge the step, not the whole program: overall correctness stays with a
-  review of the finished changeset.
+  condensed form, your project's AGENTS.md and the step itself, and read-only tools to look
+  further when they need to: read a file or a range of its lines, find files by glob, grep for a
+  pattern — so a checker can see who calls the function being changed instead of guessing. They
+  judge the step, not the whole program: overall correctness stays with a review of the finished
+  changeset.
 - **A readable trail instead of a transcript.** Every step is summarized by the checker that
   judged it — one line saying what the step was meant to do — and the summaries go to the
   database. Supervising a fleet of agents then means reading summaries, not transcripts, and
