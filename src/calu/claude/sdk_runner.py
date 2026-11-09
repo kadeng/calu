@@ -69,12 +69,18 @@ log = logging.getLogger(__name__)
 
 AGENT_TOOLS = ("Agent", "Task")
 HOOK_TIMEOUT_S = 900
-"""Upper bound for one checker run inside the PreToolUse hook (the human wait is not bounded)."""
+"""Timeout of the PreToolUse hook. The session bounds the checker call inside it
+(`CHECKER_DEADLINE_S`, 840 s) and escalates when that is exceeded, so the hook answers well
+before this; the wait for a human is not in this hook but in `can_use_tool`. A hook that hangs
+anyway stops the step: the in-process hook of the SDK fails closed, and Claude retries the call
+once per timeout (verified in `spikes/RESULTS.md`, "Hook timeouts"), which is why this is 15
+minutes and not hours."""
 MAX_RESULT_CHARS = 4_000
 SUBAGENT_RESULT_CHARS = 60_000
 """Upper bound for a subagent result passed to the result checker."""
 REVIEW_HOOK_TIMEOUT_S = 24 * 3600
-"""Timeout of the result review hooks; they may wait for the human (escalation)."""
+"""Timeout of the two hooks that review a subagent's result: they may wait for a human, because
+an escalated result is decided inside the hook."""
 
 
 def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
@@ -385,9 +391,7 @@ class SdkRunner:
                     HookMatcher(
                         matcher=None,
                         hooks=[pre_tool_use],  # type: ignore[list-item]
-                        # Training mode can wait for the human inside this hook; the checker
-                        # call itself is limited to HOOK_TIMEOUT_S by the session.
-                        timeout=REVIEW_HOOK_TIMEOUT_S,
+                        timeout=HOOK_TIMEOUT_S,
                     )
                 ],
                 "PostToolUse": [

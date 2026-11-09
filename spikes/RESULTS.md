@@ -1,7 +1,8 @@
 # Spike results
 
 Spikes for the open questions Q1 (isolation of tool calls) and Q7 (checkers through headless
-Claude Code) of [PLAN.md](../PLAN.md) §11. Date: 2026-11-09. Claude Code CLI 2.1.319 (native
+Claude Code) of [PLAN.md](../PLAN.md) §11, and for the question whether a hook that does not
+answer in time lets the tool call run (Q11). Date: 2026-11-09. Claude Code CLI 2.1.319 (native
 build), WSL2 Ubuntu 24.04 (kernel 6.18.54.1-microsoft-standard-WSL2), bubblewrap from Ubuntu,
 model haiku. All runs used scratch projects in `/tmp/calu-spike-*`, `--setting-sources` limited as
 stated, `--strict-mcp-config` and `--no-session-persistence`.
@@ -16,6 +17,8 @@ Files:
 | `spike_q1a_precedence.sh` | Q1a: can project/local settings switch that sandbox off? |
 | `shell-prefix.sh`, `spike_q1b_shell_prefix.sh` | Q1b: `CLAUDE_CODE_SHELL_PREFIX` with a logging wrapper and with a bubblewrap wrapper. |
 | `spike_q7_structured_check.sh` | Q7: `claude -p --json-schema` as a checker. |
+| `spike_hook_timeout.py` | Does a PreToolUse hook that misses its timeout let the call run? |
+| `smoke_session.py` | A whole calu session against the real CLI (not a spike; a manual check). |
 
 Run the Q1 spikes from a plain Linux environment. Started from Git Bash through `wsl.exe` with the
 inherited Windows environment, Claude Code reported "the Windows sandbox is not active on this
@@ -154,3 +157,41 @@ Open points not tested here: sandbox inside Docker containers (bwrap needs user 
 `enableWeakerNestedSandbox` exists for that), the network proxy's domain allow list, and
 whether a newer CLI changes the precedence of `--settings` over project settings (re-run
 `spike_q1a_precedence.sh` after CLI updates).
+
+## Hook timeouts: does a hook that does not answer let the call run?
+
+**Why it matters.** calu's guarantee is that no tool call runs unchecked. If the hook that asks
+the checkers could time out and the call then continued, every guarantee would be a race.
+
+**Setup** (`spike_hook_timeout.py`, Agent SDK, CLI 2.1.319, haiku). A throwaway directory,
+`tools=["Bash"]`, `permission_mode="bypassPermissions"` (so that **every** fallback path would
+run the command) and an in-process PreToolUse hook with `timeout=2` that sleeps 20 seconds and
+would then answer "allow". Claude is asked to run `echo spike > marker.txt`. The control is the
+same hook without the sleep.
+
+**Observations.**
+
+- The command did **not** run: no `marker.txt`, although the permission mode was
+  `bypassPermissions`. The in-process SDK hook therefore fails **closed**, as the SDK reference
+  says for v2.1.210+.
+- The CLI enforced the hook's own timeout: the whole run took 13.7 s, not 2 × 20 s.
+- Claude's tool result named the cause ("a PreToolUse hook didn't respond before its timeout …
+  the call was not executed, the host client may be unreachable").
+- Claude **retried the call once** (the hook was called twice) and then gave up and reported it.
+  So a hook that hangs costs its timeout per attempt, which is the reason to keep the PreToolUse
+  timeout close to the checker deadline instead of giving it hours.
+- The control wrote the marker, so the setup does prove the point.
+
+**Conclusion.** In calu's own wrap the hook is an in-process callback of the Agent SDK, so a
+hook that hangs stops the step. calu additionally bounds the checker call inside the hook
+(`CHECKER_DEADLINE_S`, 840 s) and escalates when it is exceeded, so the hook answers with a
+decision long before its own timeout; the wait for a human is not in the hook at all but in
+`can_use_tool`, which may wait without a limit. The PreToolUse matcher therefore gets
+`HOOK_TIMEOUT_S` (900 s), not the 24 hours that the two hooks which do wait for a human
+(PostToolUse for Agent/Task, SubagentStop) need.
+
+A **shell hook of a plugin** is the opposite case: the reference says its timeout discards the
+output and lets the call continue through the normal permission flow (fail-open). That is one of
+the reasons why PLAN.md §4.5 does not move calu's hooks into a plugin, and if that mode is ever
+built (Q10), the shell hook must answer "deny" itself when it cannot reach the calu process,
+instead of leaving the decision to its timeout.

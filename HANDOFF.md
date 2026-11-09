@@ -113,6 +113,9 @@ Results:
    edit checker (ALLOW, one `checker_runs` row), the command to the command checker. Note that
    the default deny list only denies **force** pushes and deletions, not a plain `git push`
    (sitl commit 433aaa4), so this did not escalate.
+- `spikes/spike_hook_timeout.py` answers whether a hook that misses its timeout lets the call
+  run: it does not (D23). Re-run it after a CLI update, because the whole gate rests on it.
+
 3. "run `ls`, then create NOTES.md with Write": both steps were recorded as `pass`, so the
    hook's "no decision" answer reaches auto mode and the edit checker ran (D21).
 4. "run `sudo -n ls /root`" (the default prompt of the script): the deny rule

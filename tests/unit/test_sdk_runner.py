@@ -179,3 +179,18 @@ async def test_without_effective_auto_mode_pass_becomes_allow(tmp_path: Path):
     assert out["permissionDecision"] == "allow"
     out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), False, "auto")
     assert out["permissionDecision"] == "allow"
+
+
+def test_the_hook_timeouts_match_what_each_hook_waits_for(tmp_path: Path):
+    """PreToolUse never waits for a human; the result review hooks do (see RESULTS.md)."""
+    from calu.claude.sdk_runner import HOOK_TIMEOUT_S, REVIEW_HOOK_TIMEOUT_S
+    from calu.session import CHECKER_DEADLINE_S
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    hooks = runner._options(None, None).hooks  # type: ignore[arg-type]
+    assert hooks is not None
+    assert hooks["PreToolUse"][0].timeout == HOOK_TIMEOUT_S
+    # The checker answers (or is escalated) before the hook's own timeout can strike.
+    assert HOOK_TIMEOUT_S > CHECKER_DEADLINE_S
+    for event in ("PostToolUse", "SubagentStop"):
+        assert hooks[event][0].timeout == REVIEW_HOOK_TIMEOUT_S
