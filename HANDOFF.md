@@ -233,16 +233,20 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    reason and did not retry, and the change stayed staged.
 5. `spikes/spike_hook_timeout.py`: a PreToolUse hook that misses its timeout does **not** let the
    call run (D23). Re-run it after a CLI update; the whole gate rests on it.
-6. `spikes/spike_question_tool.py`: `AskUserQuestion` reaches the hook with its options, and
+6. `--sandbox` (with socat from `spikes/get-socat.sh`): a sandboxed session really is isolated —
+   the probe inside it saw its own PID namespace, no `claude` process, unreadable credentials,
+   unwritable Claude Code settings, a blocked network, and its detached process did not survive
+   (D15, `spikes/RESULTS.md`).
+7. `spikes/spike_question_tool.py`: `AskUserQuestion` reaches the hook with its options, and
    Claude acts on the answer returned as the message of a refusal (D35).
-7. `spikes/spike_fork_session.py`: a fork at an earlier turn works — the fork remembered the kept
+8. `spikes/spike_fork_session.py`: a fork at an earlier turn works — the fork remembered the kept
    turn, not the dropped one, and ran under a new session id (D36). It also showed that a
    user-role transcript entry is not always a prompt, which is what the `resume_drops_turn` guard
    refuses.
-8. Checker keys and the subscription: with `ANTHROPIC_API_KEY=""` Claude Code answers normally,
+9. Checker keys and the subscription: with `ANTHROPIC_API_KEY=""` Claude Code answers normally,
    so blanking the checker keys (what calu does) keeps the subscription while the checkers use
    the Anthropic API (D37).
-9. `--changes`: a command wrote a file whose content carried the deny marker (the command line
+10. `--changes`: a command wrote a file whose content carried the deny marker (the command line
    did not, so the pre-call check passed). The `PostToolUse` matcher for Bash fired, the
    changeset checker refused the patch, calu reverted the file (the directory was clean
    afterwards), Claude reported the refusal and did not retry, and the database held the write
@@ -297,8 +301,12 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 ## Environment notes (owner's machine)
 
 - WSL2 Ubuntu has uv, Docker, bwrap, Node 24 (nvm) and a logged-in `claude` (2.1.319).
-  **`socat` is still missing**, so a session with the default `claude.sandbox` settings refuses
-  to start (`apt install socat`).
+  **`socat` is missing**, so a session with the default `claude.sandbox` settings refuses to
+  start: `apt install socat` fixes it permanently, and `bash spikes/get-socat.sh` extracts it
+  into `/tmp/calu-spike-tools/bin` without root, which is enough to run with the sandbox on.
+  With that done, the sandbox was verified end to end through calu (`spikes/RESULTS.md`, "calu's
+  own sandbox, end to end"): own PID namespace, no `claude` process visible, the credentials
+  unreadable, Claude Code's settings unwritable, the network blocked and no leftover process.
 - **`~/.config/calu/.env` does not exist.** Live checker tests skip and a real run has no checker
   model key. The keys are in sitl's git-ignored `.env` (CRLF). Creating the file was refused in an
   earlier session by a sandbox rule, so the owner should do it:

@@ -369,3 +369,37 @@ PreToolUse hook that returns an empty output (no decision, exactly as calu does 
 auto mode asking at all in headless mode. Re-run this spike after a CLI update — if the
 classifier starts asking, nothing in calu has to change, and if it asks a lot, that is a reason
 to look at `auto_escalate` instead.
+
+## calu's own sandbox, end to end (2026-11-10, D15 through a real session)
+
+**Why it matters.** Everything in §4.1 that is not the checkers rests on the sandbox: a command
+must not read the credentials, write Claude Code's configuration, reach the Claude Code process,
+or leave something running. Until now that had been measured with `claude -p` directly (Q1a),
+never through calu, because this machine has no `socat` and a session with the default settings
+refuses to start without it.
+
+**Setup.** `bash spikes/get-socat.sh` puts socat into `/tmp/calu-spike-tools/bin` without root,
+then `PATH=/tmp/calu-spike-tools/bin:$PATH uv run python spikes/smoke_session.py <dir> --sandbox`
+with a prompt that runs `bash probe.sh > probe.out` (CLI 2.1.319, haiku, fake checkers).
+
+**Observations** (from `probe.out`, written by the sandboxed command itself).
+
+- The session **started** with `sandbox.enabled` and `failIfUnavailable: true`, so the sandbox
+  really came up; the command was checked (`command` checker, PASS) and ran.
+- Own PID and mount namespace (`pid:[4026532560]`), six visible processes, and **no `claude`
+  process among them**: the agent cannot read its environment or write its pipes (4.1 points 3
+  and 4).
+- `~/.claude/settings.json`, `~/.claude.json`, the project's `.claude/settings.json` and
+  `.claude/settings.local.json`: **not writable**; `~/.claude`: cannot create files. So a command
+  cannot switch the hooks or the sandbox off.
+- `~/.claude/.credentials.json`: **not readable**, and `~/.ssh/id_rsa`, `~/.ssh/id_ed25519` and
+  `/tmp/calu-spike-secret` are hidden — calu's `deny_read` defaults do their job (4.1 points 1
+  and 2).
+- The project directory is writable, so work is still possible.
+- Network: TCP to 1.1.1.1:443 blocked (no `allowed_domains` configured).
+- The detached `sleep 177` the probe started did **not** survive the session (4.1 point 6).
+
+**Conclusion.** calu's sandbox settings work as D15 claims, through calu. The only missing piece
+on this machine is socat, which `apt install socat` solves permanently and `get-socat.sh` solves
+without root; re-run this check after a CLI update, and prefer `--sandbox` when running the smoke
+session.
