@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-09, end of the second implementation session. Read this, then `AGENTS.md`,
-`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D19, open questions §11, phases §12).
+`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D22, open questions §11, phases §12).
 
 ## Instructions from the owner
 
@@ -30,17 +30,19 @@ Commit calu work in `calu/` only; sitl is a separate, private repository.
 | Spikes Q1, Q7 | Done, results in `spikes/RESULTS.md`, decisions D15, D16 |
 | 2 Core port | Done, including the database store (`calu.store`) |
 | 3 Session runner | Done: `calu run`, steps/turns/escalations in the database, operator resolution, sandbox settings, `calu sessions/escalations/resolve` |
-| 4 Bus and terminal client | Not started |
-| 5-7 | Not started (the sandbox settings of phase 5 exist, D15) |
+| 4 Bus and terminal client | Done: event bus with sequence numbers, JSON-RPC over WebSocket for several clients, `calu attach`, comments (migration 0003) |
+| 5 Sandboxing | Settings done (D15); network policy per project, the nested-sandbox case and `calu project add` are open. `calu evals` is done. |
+| 6 Herd management | The commands are done (phase 3); the web UI is not started |
+| 7 IDE client, single binary | Not started |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyright 0 errors,
-211 tests passed (unit + database). The database tests need `docker compose up -d caludb --wait`.
+253 tests passed (unit + database). The database tests need `docker compose up -d caludb --wait`.
 
 ### What exists
 
 - **CLI** (`src/calu/cli.py`): `db up|down|migrate`, `setup`, `credential list|set|remove`,
-  `run`, `sessions`, `escalations`, `resolve`. Passwords via getpass, or one line each from
-  stdin when stdin is not a terminal (used by tests).
+  `run`, `attach`, `sessions`, `escalations`, `resolve`, `evals`. Passwords via getpass, or one
+  line each from stdin when stdin is not a terminal (used by tests).
 - **`calu run [DIR]`** (`src/calu/run.py`): asks for the session password, decrypts the
   `session` credential, opens two connections (queries, notifications), wipes the credential,
   loads the settings, creates the `sessions` row and starts Claude Code. Events are printed to
@@ -48,10 +50,26 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   `--batch` ends the run when Claude is idle again, otherwise further messages are read from
   stdin (`/quit` ends it). `--resume`, `--model`, `--effort`, `--project`, `--thinking`.
 - **Session** (`src/calu/session.py`, ported from sitl's `session.py`): tool gate (rules, tool
-  policy, checkers, auto-escalation), escalations, narration, chat queue, subagent result
-  review, login hint, states of `PLAN.md` §3.1 derived from what runs (escalated > checking >
-  tool_call > running > idle). `apply_settings` applies a reloaded configuration from the next
-  step on.
+  policy, checkers, auto-escalation), escalations, narration, chat queue, comments, subagent
+  result review, login hint, states of `PLAN.md` §3.1 derived from what runs (escalated >
+  checking > tool_call > running > idle). `apply_settings` applies a reloaded configuration from
+  the next step on. `snapshot` is what a client gets from `state.get`.
+- **Four decisions** (D21): PASS (no objection; Claude Code's auto mode decides as before),
+  ESCALATE, ALLOW (run it whatever auto mode says) and DENY. PASS is the normal answer; the
+  allow lists and the read-only tool routes produce PASS as well. The PreToolUse hook answers
+  PASS without a decision while auto mode is in effect.
+- **Checkers may read files** (D22): the checker agent has one tool, `read_file`, bounded by the
+  workspace and by the read deny lists (`checkers/read_tool.py`).
+- **Bus and protocol** (phase 4): `calu.bus` numbers every event of the process and keeps the
+  last 5000 for replay; `calu.protocol.server` serves JSON-RPC over WebSocket to several clients
+  (one token per session, `calu.tokens`, migration 0004), `calu.protocol.client` is the client
+  side, and `calu attach ADDRESS --token T` is a terminal client. `calu run` prints the address
+  and the token; with `--batch` it ends when Claude is done **and** no client is attached.
+- **Evaluation** (`src/calu/evals/`, ported from sitl): `calu evals [FILE ...]` runs the
+  checkers of the database on the built-in cases, on YAML files and, with `--from-db`, on the
+  escalations a checker raised and a human resolved. It reports accuracy, preferred decision,
+  critical misses, over-escalations, escalation share and unwanted comments, and exits 1 on a
+  critical miss.
 - **Store** (`src/calu/store/`): `ConfigStore` loads `Config`, the checker definitions and the
   rules and reloads them on `config_changed`; `DatabaseSessionStore` writes the session, its
   steps with decisions and results, the checker runs, the turns, the chat summary and the
@@ -86,7 +104,9 @@ Results:
    edit checker (ALLOW, one `checker_runs` row), the command to the command checker. Note that
    the default deny list only denies **force** pushes and deletions, not a plain `git push`
    (sitl commit 433aaa4), so this did not escalate.
-3. "run `sudo -n ls /root`" (the default prompt of the script): the deny rule
+3. "run `ls`, then create NOTES.md with Write": both steps were recorded as `pass`, so the
+   hook's "no decision" answer reaches auto mode and the edit checker ran (D21).
+4. "run `sudo -n ls /root`" (the default prompt of the script): the deny rule
    `^(sudo|su|doas)( |$)` matched, so no model call; the session opened escalation 1, went to
    state `escalated` and waited; `calu_resolve_escalation(1, 'denied', ...)` let it continue
    within a second, and Claude reported the denial with the note. This is REQUIREMENTS 12 end to
@@ -94,31 +114,37 @@ Results:
 
 ### Left out of the port, on purpose
 
-- sitl's **comment store** (diff and file comments) and **training mode** (human review of
-  checker decisions for evaluation data): both were file-based and need tables of their own
-  (Q9). The protocol models for them are still in `calu/protocol/messages.py`.
-- sitl's **event log** (`history.py`): the bus of phase 4 takes over the event buffer and the
-  sequence numbers that a reconnecting client needs.
-- `ProjectFiles`/`files()`: the editable project files are database rows now; a client edits
-  them through the bus.
+- sitl's **training mode** (`training.py`: the human labels every checker decision while the
+  mode is on): not ported, and probably not needed in this form, because `calu evals --from-db`
+  gets its labels from the escalations a human resolved anyway (Q9). Its protocol models were
+  removed.
+- sitl's **event log** (`history.py`): the bus takes over the event buffer and the sequence
+  numbers that a reconnecting client needs; nothing of the stream goes into the database (D3).
+- sitl's **`tui/`** (a Claude Code channel plugin for interactive users): channels are not used
+  (PLAN.md §9, the architecture notes); `calu attach` covers the terminal client.
+- `ProjectFiles`/`files()` and `session.history`: the editable project files are database rows
+  now, and a client cannot change them through the session protocol, because the session role
+  may only read them. They are changed with calu's own commands (still missing, see below).
 
 ## Next steps
 
-1. **Phase 4, bus and terminal client.** A WebSocket JSON-RPC endpoint per session process
-   (PLAN.md §6, D2): `state.get`, `events.subscribe` with sequence numbers, the requests of
-   sitl's protocol, token issuing, then `calu attach` as a terminal client. The protocol models
-   need a pass: remove or rework `files`, the training requests and `session.list/history`
-   (which were file-based), add `escalation.decide` over the bus (see Q8), and regenerate the
-   JSON Schema (`calu/protocol/schema.py`).
-2. **Q8 (ask the owner):** a client attached to the session currently decides an escalation in
-   the session, which cancels the row with a note, because `calu_session` may not allow or deny
+1. **The configuration commands** (PLAN.md §8): `calu project add <dir>`, `calu config
+   get/set`, `calu checker list/show/edit`, `calu rules list/add/remove`. Today the only way to
+   change the configuration, the rules or the checker instructions is SQL — which is awkward,
+   because those instructions are the product: they hold the rules a user wants enforced. They
+   need the `admin` credential (the session role may only read), and every change is announced
+   by `config_changed`, so a running session picks it up.
+2. **Q8 (ask the owner):** a client attached to the session decides an escalation in the
+   session, which cancels the row with a note, because `calu_session` may not allow or deny
    (D18, §4.1 point 5). Alternatives: the client resolves with its own `calu_operator`
    credentials, or a database function lets `calu_session` record a client decision for its own
-   session. The answer shapes phase 4.
-3. **`calu project add`, `calu config set`, `calu checker edit`** (PLAN.md §8): the only way to
-   change configuration, rules or checker instructions today is SQL.
-4. Phase 5 (network policy per project, Q1 nested sandbox, `socat` on the machine), phase 6
-   (web UI), phase 7 (IDE client, single binary).
+   session.
+3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+4. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
+   extension against the new protocol) and the single binary.
+5. Smaller gaps: the JSON Schema export (`calu/protocol/schema.py`) is not written to a file by
+   any command; `calu attach` has no `/comment`; a client cannot read the step history of an
+   earlier session (the bus buffer is per process, and `session.history` was dropped).
 
 ## Working rules the owner set
 
