@@ -94,10 +94,10 @@ def test_a_checker_passes_its_effort_to_the_provider() -> None:
     assert "thinking" not in plain.settings()  # None leaves the provider's default alone
 
     thinking = Checker("command", "x", "mistral:mistral-small-2603", Path("/w"), effort="high")
-    assert thinking.settings()["thinking"] == "high"
+    assert thinking.settings().get("thinking") == "high"
 
     off = Checker("command", "x", "anthropic:claude-haiku-4-5", Path("/w"), effort="off")
-    assert off.settings()["thinking"] is False
+    assert off.settings().get("thinking") is False
 
     # The cache routing key of the model family is still there (one per checker and run).
     assert thinking.settings().get("mistral_prompt_cache_key", "").endswith("-command")
