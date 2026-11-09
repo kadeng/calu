@@ -277,3 +277,63 @@ async def test_comments_and_recent_sessions(db_url: str) -> None:
         assert await store.recent_sessions("/elsewhere") == []
     finally:
         await conn.close()
+
+
+async def test_the_history_of_a_session_comes_back_from_the_database(db_url: str) -> None:
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-h")
+        first = await store.add_step(
+            StepRow(seq=1, tool_name="Bash", tool_input={"command": "ls"}, turn=1)
+        )
+        await store.decide_step(
+            first, StepDecision(decision="pass", summary="Lists the directory.")
+        )
+        await store.finish_step(first, "a.py")
+        second = await store.add_step(
+            StepRow(seq=2, tool_name="Bash", tool_input={"command": "deploy"}, turn=1)
+        )
+        await store.decide_step(
+            second, StepDecision(decision="escalate", reason="needs a human", summary="Deploys.")
+        )
+        await store.save_turn(
+            TurnRecord(
+                index=1,
+                user_inputs=["have a look"],
+                steps=[StepRecord(tool_name="Bash", decision="pass", summary="Lists.")],
+                answer="done",
+            )
+        )
+        await store.save_summary("# Chat summary\n\nEarlier work.\n", 1)
+
+        history = await store.load_history()
+        assert history.calu_session_id == store.session_id
+        assert history.claude_session_id == "claude-h"
+        assert history.chat_summary == "# Chat summary\n\nEarlier work.\n"
+        assert [t.index for t in history.turns] == [1]
+        assert history.turns[0].user_inputs == ["have a look"]
+        assert [(s.seq, s.tool_name, s.decision) for s in history.steps] == [
+            (1, "Bash", "pass"),
+            (2, "Bash", "escalate"),
+        ]
+        assert history.steps[0].tool_input == {"command": "ls"}
+        assert history.steps[0].result_summary == "a.py"
+        assert history.steps[1].reason == "needs a human"
+        assert history.steps[0].created_at is not None
+
+        # The newest steps win when the limit cuts, and they stay oldest first.
+        cut = await store.load_history(limit=1)
+        assert [s.seq for s in cut.steps] == [2]
+
+        # Another session reads it by Claude's session id; an unknown id gives empty fields.
+        other = DatabaseSessionStore(Db(conn))
+        await other.start(IDENTITY)
+        by_id = await other.load_history("claude-h")
+        assert by_id.calu_session_id == store.session_id
+        assert [s.seq for s in by_id.steps] == [1, 2]
+        empty = await other.load_history("claude-unknown")
+        assert empty.turns == [] and empty.steps == [] and empty.chat_summary == ""
+        assert empty.claude_session_id == "claude-unknown"
+    finally:
+        await conn.close()

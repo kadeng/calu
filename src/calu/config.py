@@ -25,7 +25,6 @@ from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 
 from calu.checkers.policy import Route
-from calu.protocol.messages import AutoEscalate
 
 EMPTY_CHAT_SUMMARY = "# Chat summary\n\nNo turns have been folded into this summary yet.\n"
 """Chat summary of a session without folded turns."""
@@ -198,6 +197,22 @@ class ClaudeConfig(BaseModel):
     setting_sources: list[str] = Field(default_factory=lambda: ["project"])
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     """Isolation of Bash commands (PLAN.md D15, D4)."""
+
+
+class AutoEscalate(BaseModel):
+    """Categories whose steps always wait for the human, whatever the checker decided.
+
+    `commands`: Bash and other tool calls reviewed by the command checker. `edits`: file edits.
+    `subagents`: final results of subagents. The checker still runs; where it would have
+    approved (ALLOW / ACCEPT / ANNOTATE), the step is escalated instead, with the checker's
+    decision and reason in the escalation. A checker DENY stays a DENY. Read-only tools that the
+    policy allows without a check are not affected. With training mode on as well, the training
+    review (labelling the checker's decision) comes first, then the escalation (running the step).
+    """
+
+    commands: bool = False
+    edits: bool = False
+    subagents: bool = False
 
 
 class Config(BaseModel):

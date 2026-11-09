@@ -23,6 +23,7 @@ Commands typed instead of a message:
     /state                print the state again
     /context              print the conversation as the checkers see it
     /sessions             list the stored sessions of this project
+    /history [CLAUDE ID]  the recorded conversation of a session, from the database
     /shutdown             stop the session and end the calu process
 
 The events are rendered by `calu.run.format_event`, so an attached terminal shows the same
@@ -48,7 +49,7 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 HELP = (
     "/quit  /stop  /start [resume id]  /interrupt  /allow <id> [note]  /deny <id> [note]  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
-    "/sessions  /shutdown"
+    "/sessions  /history [id]  /shutdown"
 )
 """One line listing the commands, printed on connect and for an unknown command."""
 
@@ -195,6 +196,28 @@ class Console:
                 context = await self.client.request("context.get")
                 print(context.get("chat_summary", ""), flush=True)
                 print(context.get("recent", ""), flush=True)
+            case "/history":
+                history = await self.client.request(
+                    "session.history", {"claude_session_id": rest} if rest else {}
+                )
+                for turn in history.get("turns", []):
+                    for text in turn.get("user_inputs", []):
+                        print(f"> {one_line(text)}", flush=True)
+                    for step in turn.get("steps", []):
+                        decision = step.get("decision") or "?"
+                        print(
+                            f"  [{step.get('tool_name')}, {decision}] {step.get('summary')}",
+                            flush=True,
+                        )
+                    answer = turn.get("answer_narration") or turn.get("answer") or ""
+                    if answer:
+                        print(one_line(answer), flush=True)
+                print(
+                    f"[history] {len(history.get('turns', []))} turn(s), "
+                    f"{len(history.get('steps', []))} step(s) of "
+                    f"{history.get('claude_session_id') or 'this session'}",
+                    flush=True,
+                )
             case "/sessions":
                 result = await self.client.request("session.list", {})
                 for session in result.get("sessions", []):

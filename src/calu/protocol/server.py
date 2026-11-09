@@ -44,6 +44,7 @@ from calu.protocol.messages import (
     EventsSubscribeParams,
     EventsSubscribeResult,
     InitializeParams,
+    SessionHistoryParams,
     SessionListParams,
     SessionListResult,
     SessionStartParams,
@@ -350,6 +351,9 @@ class Client:
             case "session.list":
                 assert isinstance(params, SessionListParams)
                 return SessionListResult(sessions=await session.recent_sessions(params.limit))
+            case "session.history":
+                assert isinstance(params, SessionHistoryParams)
+                return await session.history(params.claude_session_id, params.limit)
             case "chat.send":
                 assert isinstance(params, ChatSendParams)
                 await session.send_chat(params)

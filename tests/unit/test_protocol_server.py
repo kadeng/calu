@@ -266,3 +266,53 @@ async def test_the_session_list_comes_from_the_store(tmp_path: Path):
             result = await protocol.request("session.list", {"limit": 5})
             assert [s["claude_session_id"] for s in result["sessions"]] == ["claude-1"]
             assert result["sessions"][0]["first_input"] == "the earlier request"
+
+
+async def test_a_client_reads_the_recorded_conversation(tmp_path: Path):
+    from calu.context.turns import StepRecord, TurnRecord
+    from calu.protocol.messages import SessionHistoryResult, StoredStep
+
+    async with served(tmp_path) as run:
+        run.store.history = SessionHistoryResult(
+            calu_session_id="memory-session",
+            claude_session_id="claude-old",
+            chat_summary="# Chat summary\n\nEarlier work.\n",
+            turns=[
+                TurnRecord(
+                    index=1,
+                    user_inputs=["the earlier request"],
+                    steps=[StepRecord(tool_name="Bash", decision="pass", summary="Listed.")],
+                    answer="done",
+                )
+            ],
+            steps=[
+                StoredStep(
+                    seq=1,
+                    tool_name="Bash",
+                    tool_input={"command": "ls"},
+                    decision="pass",
+                    summary="Listed.",
+                    result_summary="a.py",
+                )
+            ],
+        )
+        events = Events()
+        async with client(run, events) as protocol:
+            history = await protocol.request("session.history", {"claude_session_id": "claude-old"})
+            assert history["claude_session_id"] == "claude-old"
+            assert "Earlier work." in history["chat_summary"]
+            assert history["turns"][0]["user_inputs"] == ["the earlier request"]
+            assert history["steps"][0]["tool_input"] == {"command": "ls"}
+            assert history["steps"][0]["result_summary"] == "a.py"
+
+
+async def test_the_history_of_the_running_session_needs_no_id(tmp_path: Path):
+    async with served(tmp_path, [[{"text": "hello"}]]) as run:
+        events = Events()
+        async with client(run, events) as protocol:
+            await protocol.request("session.start", {})
+            await protocol.request("chat.send", {"text": "say hello"})
+            await events.wait_for("turn.result")
+            history = await protocol.request("session.history", {})
+            # The in-memory store builds it from the turns it stored.
+            assert [t["user_inputs"] for t in history["turns"]] == [["say hello"]]

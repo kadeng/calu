@@ -171,3 +171,33 @@ async def test_a_message_can_be_relayed_to_a_subagent():
     ]
     await con.line("/to fake-tool-1")
     assert len(client.sent) == 1
+
+
+async def test_history_prints_the_recorded_conversation(capsys):
+    con, client = console(
+        {
+            "session.history": {
+                "claude_session_id": "claude-old",
+                "turns": [
+                    {
+                        "index": 1,
+                        "user_inputs": ["fix the typo"],
+                        "steps": [
+                            {"tool_name": "Edit", "decision": "pass", "summary": "Fixes a typo."}
+                        ],
+                        "answer": "done",
+                    }
+                ],
+                "steps": [{"seq": 1, "tool_name": "Edit"}],
+            }
+        }
+    )
+    await con.line("/history claude-old")
+    assert client.sent == [("session.history", {"claude_session_id": "claude-old"})]
+    out = capsys.readouterr().out
+    assert "> fix the typo" in out
+    assert "[Edit, pass] Fixes a typo." in out
+    assert "done" in out
+    assert "[history] 1 turn(s), 1 step(s) of claude-old" in out
+    await con.line("/history")
+    assert client.sent[-1] == ("session.history", {})

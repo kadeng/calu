@@ -92,6 +92,7 @@ from calu.protocol.messages import (
     InitializeResult,
     Log,
     QueuedMessage,
+    SessionHistoryResult,
     SessionSnapshot,
     SessionState,
     SessionSummary,
@@ -473,6 +474,29 @@ class Session:
         except Exception:
             log.exception("listing the stored sessions failed")
             return []
+
+    async def history(
+        self, claude_session_id: str | None = None, limit: int = 500
+    ) -> SessionHistoryResult:
+        """Return the recorded conversation of a session (`session.history`).
+
+        A client that joins a session which started before it rebuilds its view from this: the
+        event buffer of the bus only covers the running process. The rows come from the
+        database, so the history of an earlier session survives a restart of calu.
+
+        Args:
+            claude_session_id: Which session; None is the one that runs now.
+            limit: Maximum number of steps returned (the newest ones).
+
+        Returns:
+            The turns, the steps and the chat summary; empty fields if the database cannot be
+            read (the error is logged).
+        """
+        try:
+            return await self.store.load_history(claude_session_id, limit)
+        except Exception:
+            log.exception("reading the history of %s failed", claude_session_id or "this session")
+            return SessionHistoryResult(claude_session_id=claude_session_id)
 
     def checker_context(self) -> CheckerContextResult:
         """Return the conversation context as the checkers currently see it.

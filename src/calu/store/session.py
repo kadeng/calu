@@ -27,7 +27,7 @@ from typing import Any, Literal, Protocol
 from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
-from calu.protocol.messages import SessionSummary, State
+from calu.protocol.messages import SessionHistoryResult, SessionSummary, State, StoredStep
 
 EscalationState = Literal["open", "allowed", "denied", "cancelled"]
 """States of an `escalations` row."""
@@ -282,6 +282,21 @@ class SessionStore(Protocol):
 
         Returns:
             The id of the new `client_tokens` row.
+        """
+        ...
+
+    async def load_history(
+        self, claude_session_id: str | None = None, limit: int = 500
+    ) -> SessionHistoryResult:
+        """Read the recorded conversation of a session, for a client that joins late.
+
+        Args:
+            claude_session_id: Which session; None is this one.
+            limit: Maximum number of steps returned (the newest ones).
+
+        Returns:
+            Its turns, steps and chat summary, oldest first; empty fields for a session that
+            the database does not know.
         """
         ...
 
@@ -620,21 +635,7 @@ class DatabaseSessionStore:
                 b" ORDER BY number",
                 (previous,),
             )
-            turns: list[TurnRecord] = []
-            for row in await cur.fetchall():
-                number, user_inputs, steps, answer, narration, narrated, started, ended = row
-                turns.append(
-                    TurnRecord(
-                        index=number,
-                        user_inputs=list(user_inputs),
-                        steps=[StepRecord.model_validate(s) for s in steps],
-                        answer=answer,
-                        answer_narration=narration or "",
-                        narrated=narrated,
-                        **({"started_at": started} if started else {}),
-                        ended_at=ended,
-                    )
-                )
+            turns = [_turn_record(row) for row in await cur.fetchall()]
             cur = await conn.execute(
                 b"SELECT summary FROM chat_summaries WHERE session_id = %s", (previous,)
             )
@@ -702,6 +703,79 @@ class DatabaseSessionStore:
                 comment.text,
                 comment.model_dump_json(),
             ),
+        )
+
+    async def load_history(
+        self, claude_session_id: str | None = None, limit: int = 500
+    ) -> SessionHistoryResult:
+        """Read the recorded conversation of a session (see `SessionStore.load_history`).
+
+        Args:
+            claude_session_id: Which session; None is this one.
+            limit: Maximum number of steps returned.
+
+        Returns:
+            The turns, the steps and the chat summary, oldest first.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        async with self._db.exclusive() as conn:
+            if claude_session_id is None:
+                session_id = self.session_id
+            else:
+                cur = await conn.execute(
+                    b"SELECT id FROM sessions WHERE claude_session_id = %s"
+                    b" ORDER BY started_at DESC LIMIT 1",
+                    (claude_session_id,),
+                )
+                row = await cur.fetchone()
+                session_id = str(row[0]) if row else None
+            if session_id is None:
+                return SessionHistoryResult(claude_session_id=claude_session_id)
+            cur = await conn.execute(
+                b"SELECT claude_session_id FROM sessions WHERE id = %s::uuid", (session_id,)
+            )
+            row = await cur.fetchone()
+            claude_id = row[0] if row else None
+            cur = await conn.execute(
+                b"SELECT number, user_inputs, steps, answer, narrated_answer, narrated,"
+                b" started_at, ended_at FROM turns WHERE session_id = %s::uuid ORDER BY number",
+                (session_id,),
+            )
+            turns = [_turn_record(row) for row in await cur.fetchall()]
+            cur = await conn.execute(
+                b"SELECT seq, turn, agent_id, tool_use_id, tool_name, tool_input, decision,"
+                b" reason, summary, result_summary, created_at FROM steps"
+                b" WHERE session_id = %s::uuid ORDER BY seq DESC LIMIT %s",
+                (session_id, limit),
+            )
+            steps = [
+                StoredStep(
+                    seq=row[0],
+                    turn=row[1],
+                    agent_id=row[2],
+                    tool_use_id=row[3],
+                    tool_name=row[4],
+                    tool_input=dict(row[5] or {}),
+                    decision=row[6],
+                    reason=row[7] or "",
+                    summary=row[8] or "",
+                    result_summary=row[9] or "",
+                    created_at=row[10],
+                )
+                for row in reversed(await cur.fetchall())
+            ]
+            cur = await conn.execute(
+                b"SELECT summary FROM chat_summaries WHERE session_id = %s::uuid", (session_id,)
+            )
+            row = await cur.fetchone()
+        return SessionHistoryResult(
+            calu_session_id=session_id,
+            claude_session_id=claude_id,
+            chat_summary=row[0] if row else "",
+            turns=turns,
+            steps=steps,
         )
 
     async def add_client_token(self, token_sha256: str, address: str) -> int:
@@ -795,3 +869,29 @@ class DatabaseSessionStore:
         if self.session_id is None:
             raise RuntimeError("the session store was used before start()")
         return self.session_id
+
+
+def _turn_record(row: tuple[Any, ...]) -> TurnRecord:
+    """Build a `TurnRecord` from a row of `turns`.
+
+    Args:
+        row: (number, user_inputs, steps, answer, narrated_answer, narrated, started_at,
+            ended_at), in the order the queries above select them.
+
+    Returns:
+        The turn record.
+
+    Raises:
+        pydantic.ValidationError: If a stored step record does not match `StepRecord`.
+    """
+    number, user_inputs, steps, answer, narration, narrated, started, ended = row
+    return TurnRecord(
+        index=number,
+        user_inputs=list(user_inputs),
+        steps=[StepRecord.model_validate(s) for s in steps],
+        answer=answer,
+        answer_narration=narration or "",
+        narrated=narrated,
+        **({"started_at": started} if started else {}),
+        ended_at=ended,
+    )

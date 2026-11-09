@@ -27,6 +27,11 @@ from pydantic import BaseModel, Field
 from calu.checkers.model import Decision
 from calu.checkers.policy import Route
 from calu.comments.model import Comment
+from calu.config import AutoEscalate
+from calu.context.turns import TurnRecord
+
+__all__ = ["AutoEscalate"]  # defined in `calu.config`, which Config embeds it in; re-exported
+"""Names this module re-exports, so that a client imports the whole protocol from here."""
 
 PROTOCOL_VERSION = 1
 
@@ -123,22 +128,6 @@ class EscalationDecideParams(BaseModel):
     note: str | None = None
 
 
-class AutoEscalate(BaseModel):
-    """Categories whose steps always wait for the human, whatever the checker decided.
-
-    `commands`: Bash and other tool calls reviewed by the command checker. `edits`: file edits.
-    `subagents`: final results of subagents. The checker still runs; where it would have
-    approved (ALLOW / ACCEPT / ANNOTATE), the step is escalated instead, with the checker's
-    decision and reason in the escalation. A checker DENY stays a DENY. Read-only tools that the
-    policy allows without a check are not affected. With training mode on as well, the training
-    review (labelling the checker's decision) comes first, then the escalation (running the step).
-    """
-
-    commands: bool = False
-    edits: bool = False
-    subagents: bool = False
-
-
 class AutoEscalateSetParams(AutoEscalate):
     """`auto_escalate.set`: replace the auto-escalation settings of the session. Result: `{}`."""
 
@@ -165,6 +154,55 @@ class EventsSubscribeResult(BaseModel):
     events: list[RecordedEvent] = Field(default_factory=list)
     complete: bool = True
     last_seq: int = 0
+
+
+class StoredStep(BaseModel):
+    """One recorded tool call of a stored session (a row of `steps`).
+
+    `decision` is "pass", "allow", "deny" or "escalate"; `summary` is what the checker said the
+    step does, `result_summary` the beginning of what the tool returned.
+    """
+
+    seq: int
+    turn: int | None = None
+    agent_id: str | None = None
+    tool_use_id: str | None = None
+    tool_name: str
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    decision: str | None = None
+    reason: str = ""
+    summary: str = ""
+    result_summary: str = ""
+    created_at: datetime | None = None
+
+
+class SessionHistoryParams(BaseModel):
+    """`session.history`: the recorded conversation of a session, from the database.
+
+    A client that connects to a session which started before it (or before calu was restarted)
+    rebuilds its view from this; the event buffer of the bus only holds the running process
+    (`events.subscribe`). The result is a `SessionHistoryResult`.
+    """
+
+    claude_session_id: str | None = None
+    """Which session; None is the one that runs now."""
+    limit: int = Field(default=500, ge=1, le=5_000)
+    """Maximum number of steps returned (the newest ones)."""
+
+
+class SessionHistoryResult(BaseModel):
+    """Result of `session.history`: the turns, the steps and the chat summary of a session.
+
+    `turns` is the condensed conversation as the checkers see it (user inputs verbatim, one
+    record per step, the narrated answer); `steps` adds the tool input and the result of each
+    call. Both are oldest first. `turns` is empty for a session that has not finished a turn.
+    """
+
+    calu_session_id: str | None = None
+    claude_session_id: str | None = None
+    chat_summary: str = ""
+    turns: list[TurnRecord] = Field(default_factory=list)
+    steps: list[StoredStep] = Field(default_factory=list)
 
 
 class SessionSummary(BaseModel):
@@ -247,6 +285,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "session.start": SessionStartParams,
     "session.stop": EmptyParams,
     "session.list": SessionListParams,
+    "session.history": SessionHistoryParams,
     "chat.send": ChatSendParams,
     "comment.add": CommentAddParams,
     "escalation.decide": EscalationDecideParams,

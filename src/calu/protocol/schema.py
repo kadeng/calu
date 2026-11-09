@@ -18,6 +18,7 @@ from calu.protocol.messages import (
     CommentAddResult,
     EventsSubscribeResult,
     InitializeResult,
+    SessionHistoryResult,
     SessionListResult,
     SessionSnapshot,
 )
@@ -36,6 +37,7 @@ def protocol_schema() -> dict[str, Any]:
         InitializeResult,
         CommentAddResult,
         SessionListResult,
+        SessionHistoryResult,
         SessionSnapshot,
         EventsSubscribeResult,
         CheckerContextResult,
@@ -54,6 +56,7 @@ def protocol_schema() -> dict[str, Any]:
             "state.get": refs[SessionSnapshot, "validation"],
             "events.subscribe": refs[EventsSubscribeResult, "validation"],
             "session.list": refs[SessionListResult, "validation"],
+            "session.history": refs[SessionHistoryResult, "validation"],
             "context.get": refs[CheckerContextResult, "validation"],
             "comment.add": refs[CommentAddResult, "validation"],
         },

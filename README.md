@@ -3,8 +3,12 @@
 ## A coding agent that wraps Claude Code and checks every step while it runs
 
 calu starts Claude Code for you and puts a second opinion in front of every command it runs and
-every file it edits. That second opinion comes from **checker agents**: LLMs that you steer with
-your own instructions. Each checker answers one of four things:
+every file it edits. It is a layer on top of Claude Code, not a replacement: everything Claude
+Code does — its tools, its permission rules, its plugins, its MCP servers — keeps working
+([details below](#calu-does-not-replace-claude-code)).
+
+That second opinion comes from **checker agents**: LLMs that you steer with your own
+instructions. Each checker answers one of four things:
 
 | Answer | What happens | How often |
 |---|---|---|
@@ -64,9 +68,9 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
 ## Where calu fits in
 
 Claude Code already asks you before it does something risky, and its auto mode can make that
-decision on its own. Other harnesses work the same way. calu does not replace any of this: it
-keeps that judgment and puts a second, independent one that **you** own in front of it. A PASS
-leaves the decision where it was; the other three answers are where your rules take over.
+decision on its own. Other harnesses work the same way. calu replaces none of it: it keeps that
+judgment and puts a second, independent one that **you** own in front of it. A PASS leaves the
+decision where it was; the other three answers are where your rules take over.
 
 The two opinions are good at different things. The vendor's classifier knows what is generally
 dangerous, and it knows nothing about your project. A checker you write yourself knows your
@@ -131,13 +135,34 @@ Honesty is hard to keep up by hand, because it costs attention on every single e
 decays silently. That is precisely the kind of rule an agent applies well: calu's edit checker
 sees the function and its documentation together, in the same step, and can refuse the edit.
 
-### When plain Claude Code is the better tool
+### calu does not replace Claude Code
 
-If you sit in front of the session and read every diff as it appears, you are already the
-checker, and calu mostly adds latency and the cost of the checker models. calu earns its place
-when the session is long, when it runs while you are not watching, when several sessions run at
-once, or when the rules you care about are too specific for a linter and too repetitive to
-restate every day.
+This is the part worth being explicit about: calu is a layer **on top of** Claude Code, not an
+alternative to it. Claude Code stays the agent and keeps everything that makes it work:
+
+- its models, its tools, its own permission rules and settings files;
+- its skills, its subagents, its slash commands;
+- its **plugins and MCP servers** — calu runs the real Claude Code and loads the project's
+  settings, so what works in your `claude` session works in a calu session
+  (`claude.setting_sources` decides which setting sources are loaded);
+- its sandbox for Bash commands, which calu switches on and tightens rather than replaces.
+
+calu never loosens any of those rules; it only adds a layer in front of each tool call and a
+layer around the process. The one behaviour it changes on purpose is that it turns Claude Code's
+auto mode on, so that the harness **and** your checkers both have to approve a step — a PASS
+from a checker leaves that decision exactly where it was. Turn it off with
+`claude.auto_mode = false` and the checkers decide alone.
+
+And it goes the other way too: because calu will speak the agent side of ACP (phase 7, §6.1 of
+the plan), the same checked Claude Code session becomes usable from every ACP client — JetBrains
+Air, Zed, Neovim, Goose, web interfaces — each of which otherwise needs an adapter written for
+Claude Code specifically.
+
+What calu costs you is one checker model call per step that the allow lists do not already
+cover, and the latency of that call. What it buys is a second reader who never gets tired of the
+remarks you would otherwise repeat every day — which is worth having whether or not you are
+sitting in front of the session, and worth more the longer the session runs, the less you watch
+it, and the more sessions run at once.
 
 ## How it is put together
 

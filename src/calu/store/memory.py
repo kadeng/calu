@@ -11,7 +11,7 @@ from typing import Any
 
 from calu.comments import Comment
 from calu.context.turns import TurnRecord
-from calu.protocol.messages import SessionSummary, State
+from calu.protocol.messages import SessionHistoryResult, SessionSummary, State
 from calu.store.session import (
     CheckerRun,
     Escalation,
@@ -60,6 +60,8 @@ class MemorySessionStore:
     """What `recent_sessions` returns (a test sets it)."""
     comments: list[tuple[int, Comment, int | None]] = field(default_factory=list)
     client_tokens: list[tuple[str, str]] = field(default_factory=list)
+    history: SessionHistoryResult | None = None
+    """What `load_history` returns; None builds it from the stored turns."""
     _ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     async def start(self, identity: SessionIdentity) -> str:
@@ -192,6 +194,27 @@ class MemorySessionStore:
         comment_id = next(self._ids)
         self.comments.append((comment_id, comment, turn))
         return comment_id
+
+    async def load_history(
+        self, claude_session_id: str | None = None, limit: int = 500
+    ) -> SessionHistoryResult:
+        """Return the prepared history.
+
+        Args:
+            claude_session_id: Which session; None is this one.
+            limit: Maximum number of steps returned.
+
+        Returns:
+            `history` with its steps cut to `limit`, or the stored turns of this session.
+        """
+        if self.history is not None:
+            return self.history.model_copy(update={"steps": self.history.steps[-limit:]})
+        return SessionHistoryResult(
+            calu_session_id=self.session_id,
+            claude_session_id=claude_session_id or self.claude_session_id,
+            turns=[self.turns[number] for number in sorted(self.turns)],
+            chat_summary=self.summaries[-1][0] if self.summaries else "",
+        )
 
     async def add_client_token(self, token_sha256: str, address: str) -> int:
         """Record a client token's hash.

@@ -74,6 +74,10 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   enable/disable, a new checker with `--route`) and `calu rules list|add|remove|enable|disable`
   (patterns compiled before they are stored). They need the `admin` credential; every change
   announces itself on `config_changed`, so a running session applies it at its next step.
+- **`session.history`**: a client that joins a session which started before it (or before calu
+  was restarted) rebuilds its view from the database — the turns, the steps with their input,
+  decision and result, and the chat summary. The bus buffer only covers the running process.
+  ACP's `session/load` must replay a whole conversation, so this is its source (§6.1).
 - **Evaluation** (`src/calu/evals/`, ported from sitl): `calu evals [FILE ...]` runs the
   checkers of the database on the built-in cases, on YAML files and, with `--from-db`, on the
   escalations a checker raised and a human resolved. It reports accuracy, preferred decision,
@@ -153,9 +157,8 @@ Results:
 3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
 4. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
    extension against the new protocol) and the single binary.
-5. Smaller gaps: a client cannot read the step history of an earlier session (the bus buffer is
-   per process, and `session.history` was dropped; the database holds the steps and turns, so a
-   `session.history` on those rows is the natural replacement).
+5. Smaller gaps: `calu config set` cannot set a value inside a list (e.g. one rule of
+   `context.files`); the chat summary can only be read, not edited, through a client.
 
 ## Working rules the owner set
 
