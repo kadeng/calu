@@ -16,6 +16,7 @@ Pages:
     /escalations/{id}     what the checker saw when it escalated the step
     /checkers             the checker definitions and their instructions, editable
     /rules                the allow and deny lists
+    /settings             every configuration value, generated from the model
 
 **There is no login** (PLAN.md Q4 is open), so the server refuses to bind anything but the
 loopback interface: reach it from another machine through an SSH tunnel
@@ -42,6 +43,7 @@ from starlette.templating import Jinja2Templates
 from calu import __version__, admin, herd
 from calu.db import Db
 from calu.web import git
+from calu.web import settings as web_settings
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +144,7 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
             name="checker",
         ),
         Route("/rules", _page(rules, state), name="rules"),
+        Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     return Starlette(routes=routes)
@@ -455,6 +458,55 @@ async def rules(request: Request, state: _State) -> Response:
     for row in rows:
         grouped.setdefault(row.list, []).append(row)
     return _render(request, "rules.html", {"grouped": grouped})
+
+
+async def settings_page(request: Request, state: _State) -> Response:
+    """Show and change the configuration of the global scope or of one project.
+
+    The form is generated from `calu.config.Config` (`calu.web.settings`), so every value calu
+    knows is editable here with the right control: Claude's model and effort, whether
+    `CLAUDE_CODE_USE_BEDROCK=1` is passed, the model and the thinking effort of each checker,
+    the sandbox, the context budget, the clock watch and the write sets. Only the values that
+    changed are written, each through `calu.admin.set_setting`, which validates the whole
+    configuration first and writes the audit log.
+
+    Args:
+        request: The request; `?project=NAME` edits that project's scope. A POST holds the form.
+        state: The shared state.
+
+    Returns:
+        The settings page, a redirect after a save, or a 400 page if a value is refused.
+    """
+    project = request.query_params.get("project") or None
+    values = await admin.settings(state.db, project)
+    if request.method == "POST":
+        form = await request.form()
+        posted = {key: str(value) for key, value in form.multi_items() if key != "project"}
+        try:
+            changed = web_settings.changes(values, posted)
+        except ValueError as exc:
+            return HTMLResponse(_bad(f"a value was not valid JSON: {exc}"), status_code=400)
+        for key, value in changed.items():
+            try:
+                await admin.set_setting(state.db, key, value, project)
+            except (admin.AdminError, ValueError) as exc:
+                # Everything before this key is stored; the page says which one was refused, so
+                # the human sees what still has to be fixed.
+                return HTMLResponse(_bad(f"{key} was refused: {exc}"), status_code=400)
+        url = request.url_for("settings").include_query_params(saved=str(len(changed)))
+        if project:
+            url = url.include_query_params(project=project)
+        return RedirectResponse(url, 303)
+    return _render(
+        request,
+        "settings.html",
+        {
+            "sections": web_settings.sections(values),
+            "projects": await admin.projects(state.db),
+            "project": project or "",
+            "saved": request.query_params.get("saved"),
+        },
+    )
 
 
 # ------------------------------------------------------------------ helpers

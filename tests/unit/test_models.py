@@ -1,4 +1,6 @@
-"""Model string resolution: Mistral EU endpoint, Bedrock Claude without thinking."""
+"""Model string resolution and model settings: EU endpoint, Bedrock, checker effort."""
+
+from pathlib import Path
 
 import pytest
 from pydantic_ai import Agent, ModelMessage, ModelResponse, TextPart, UsageLimits
@@ -8,6 +10,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.mistral import MistralModel
 from pydantic_ai.settings import ModelSettings
 
+from calu.checkers import Checker
 from calu.models import MISTRAL_EU_BASE_URL, resolve_model, run_bounded
 
 
@@ -83,3 +86,18 @@ async def test_run_bounded_gives_up_after_the_second_runaway():
             usage_limits=UsageLimits(output_tokens_limit=1_000),
             model_settings=ModelSettings(),
         )
+
+
+def test_a_checker_passes_its_effort_to_the_provider() -> None:
+    """The owner's ask: the effort level of a checker model is configurable (CheckerEffort)."""
+    plain = Checker("command", "x", "mistral:mistral-small-2603", Path("/w"))
+    assert "thinking" not in plain.settings()  # None leaves the provider's default alone
+
+    thinking = Checker("command", "x", "mistral:mistral-small-2603", Path("/w"), effort="high")
+    assert thinking.settings()["thinking"] == "high"
+
+    off = Checker("command", "x", "anthropic:claude-haiku-4-5", Path("/w"), effort="off")
+    assert off.settings()["thinking"] is False
+
+    # The cache routing key of the model family is still there (one per checker and run).
+    assert thinking.settings().get("mistral_prompt_cache_key", "").endswith("-command")

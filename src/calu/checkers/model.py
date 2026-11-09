@@ -1,9 +1,14 @@
-"""Data types shared by the checkers: the step under review and the checker's decision."""
+"""Data types shared by the checkers: the step under review, the decision, the thinking effort."""
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+CheckerEffort = Literal["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+"""How much a checker model may think, passed to the provider as Pydantic AI's `thinking`
+setting: "off" asks for no thinking at all, the rest name a level. None (the default) leaves the
+provider's own default alone, and a model without a thinking mode ignores it."""
 
 
 class Decision(StrEnum):

@@ -432,6 +432,7 @@ class Session:
             workspace=self.workspace,
             rules=self.rules,
             times=self.step_times,
+            effort=cfg.effort,
             usage_limits=UsageLimits(
                 request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
             ),

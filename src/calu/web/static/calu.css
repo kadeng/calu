@@ -58,3 +58,9 @@ form.inline { display: inline-flex; gap: .4rem; align-items: center; }
 .row { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; }
 .token { background: var(--card); border: 1px dashed var(--good); border-radius: 6px; padding: .6rem .8rem; }
 .empty { color: var(--muted); padding: 1rem 0; }
+.setting { display: grid; grid-template-columns: minmax(18rem, 26rem) auto 1fr; gap: .6rem; align-items: baseline; padding: .3rem 0; border-bottom: 1px solid var(--line); }
+.setting:last-child { border-bottom: none; }
+.setting label { display: grid; grid-template-columns: 11rem 1fr; gap: .5rem; align-items: baseline; }
+.setting label input[type=checkbox] { justify-self: start; }
+.setting textarea { min-height: 4.5rem; }
+.setting select, .setting input[type=text], .setting input[type=number] { font: inherit; padding: .25rem .4rem; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg); }

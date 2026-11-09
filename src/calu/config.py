@@ -24,6 +24,7 @@ from typing import Any, Literal
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 
+from calu.checkers.model import CheckerEffort
 from calu.checkers.policy import Route
 
 EMPTY_CHAT_SUMMARY = "# Chat summary\n\nNo turns have been folded into this summary yet.\n"
@@ -34,13 +35,16 @@ SETTINGS_KEY = "settings"
 
 
 class CheckerConfig(BaseModel):
-    """Model and limits of one checker. `model` is a Pydantic AI model string.
+    """Model, thinking effort and limits of one checker. `model` is a Pydantic AI model string.
 
     `max_tokens` caps one answer, `output_tokens_limit` all answers of one check (thinking
     included on most providers). A check that hits either is retried once, then escalated.
+    `effort` buys accuracy with latency and tokens, so a cheap checker on a simple route can run
+    with "off" while the changeset checker thinks.
     """
 
     model: str = "mistral:mistral-small-2603"  # Mistral Small 4
+    effort: CheckerEffort | None = None
     request_limit: int = 3
     output_tokens_limit: int = 8_000
     max_tokens: int = 4_000

@@ -239,3 +239,51 @@ async def test_the_rules_page_groups_the_lists(db_url: str) -> None:
             assert "sudo" in page
     finally:
         await conn.close()
+
+
+async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None:
+    """The owner's ask: model and effort dropdowns, the checker models, use_bedrock."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        async with await client_for(db) as client:
+            page = (await client.get("/settings")).text
+            # The controls the owner named, each generated from the configuration model.
+            assert 'name="claude.model"' in page and 'list="claude-models"' in page
+            assert 'name="claude.effort"' in page and ">xhigh<" in page
+            assert 'name="claude.use_bedrock"' in page and 'type="checkbox"' in page
+            assert 'name="command_checker.model"' in page
+            assert 'name="command_checker.effort"' in page
+            assert 'name="changeset_checker.effort"' in page
+            assert 'name="claude.sandbox.deny_read"' in page  # a list, one per line
+            assert 'name="clock.max_backward_s"' in page
+
+            saved = await client.post(
+                "/settings",
+                data={
+                    "claude.model": "sonnet",
+                    "claude.effort": "high",
+                    "claude.use_bedrock": "on",
+                    "command_checker.effort": "off",
+                    "command_checker.model": "mistral:mistral-small-2603",
+                    "escalation_timeout_s": "3600",
+                },
+            )
+            assert saved.status_code == 200
+            values = await admin.settings(db)
+            assert values["claude"]["model"] == "sonnet"
+            assert values["claude"]["effort"] == "high"
+            assert values["claude"]["use_bedrock"] is True
+            assert values["command_checker"]["effort"] == "off"
+            assert values["escalation_timeout_s"] == pytest.approx(3600.0)
+            # An unchanged value is not written, so the audit log stays meaningful.
+            assert "model" not in values.get("command_checker", {})
+
+            # The configuration is validated before anything is stored.
+            refused = await client.post("/settings", data={"claude.effort": "enormous"})
+            assert refused.status_code == 400
+            assert "refused" in refused.text
+            assert (await admin.settings(db))["claude"]["effort"] == "high"
+    finally:
+        await conn.close()

@@ -31,8 +31,9 @@ from pathlib import Path
 from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
 from pydantic_ai.capabilities import Caching, LocalWorkspace, Toolset
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 
-from calu.checkers.model import CheckDecision, Decision, Step
+from calu.checkers.model import CheckDecision, CheckerEffort, Decision, Step
 from calu.checkers.render import render_step
 from calu.checkers.rules import Rules
 from calu.checkers.tools import CodeTools, StepTimes
@@ -159,6 +160,9 @@ class Checker:
     )
     max_tokens: int = MAX_ANSWER_TOKENS
     """Cap on the output tokens of one answer; a cut-off answer is retried once (`run_bounded`)."""
+    effort: CheckerEffort | None = None
+    """How much the model may think (`calu.config.CheckerEffort`); None leaves the provider's
+    default. It reaches the provider as Pydantic AI's `thinking` model setting."""
     _agent: Agent[None, CheckDecision] | None = field(default=None, init=False, repr=False)
     _built_for: str | None = field(default=None, init=False, repr=False)
     cache_key: str = field(default_factory=lambda: f"calu-{secrets.token_hex(6)}")
@@ -242,6 +246,19 @@ class Checker:
         """
         return (await self.run(step, context, raise_errors, extra)).decision
 
+    def settings(self) -> ModelSettings:
+        """Build the model settings of one check: the cache routing key and the effort.
+
+        Returns:
+            `cache_settings` for this checker, with `thinking` added when `effort` is set:
+            "off" asks for no thinking, any other level names it. A provider whose model has no
+            thinking mode ignores the setting.
+        """
+        settings = cache_settings(self.model, f"{self.cache_key}-{self.name}")
+        if self.effort is not None:
+            settings["thinking"] = False if self.effort == "off" else self.effort
+        return settings
+
     async def run(
         self,
         step: Step,
@@ -277,7 +294,7 @@ class Checker:
                 self.build_prompt(step, context, extra),
                 model=self.model,
                 usage_limits=self.usage_limits,
-                model_settings=cache_settings(self.model, f"{self.cache_key}-{self.name}"),
+                model_settings=self.settings(),
                 max_tokens=self.max_tokens,
             )
             usage = result.usage

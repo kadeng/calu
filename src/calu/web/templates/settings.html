@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Settings · calu{% endblock %}
+{% block body %}
+<h1>Settings{% if project %} of project {{ project }}{% endif %}</h1>
+<p class="muted">
+  Every value calu knows, generated from its configuration model, so this form and
+  <code>calu config set</code> take the same names. A session that runs now applies a change at
+  its next step. Writing validates the whole configuration first.
+</p>
+<p class="row">
+  Scope:
+  {% if project %}<a href="{{ url_for('settings') }}">global</a>{% else %}<strong>global</strong>{% endif %}
+  {% for p in projects %}
+    {% if p.name == project %}<strong>{{ p.name }}</strong>
+    {% else %}<a href="{{ url_for('settings') }}?project={{ p.name }}">{{ p.name }}</a>{% endif %}
+  {% endfor %}
+</p>
+{% if saved %}<p class="token">{{ saved }} setting(s) saved.</p>{% endif %}
+
+<datalist id="claude-models">
+  <option value="fable"></option><option value="opus"></option>
+  <option value="sonnet"></option><option value="haiku"></option>
+</datalist>
+
+<form method="post" action="{{ url_for('settings') }}{% if project %}?project={{ project }}{% endif %}" id="settings">
+{% for section in sections %}
+  <h2>{{ section.title }}</h2>
+  <div class="card">
+  {% for s in section.settings %}
+    <div class="setting">
+      {% if s.kind == 'bool' %}
+        <label><input type="checkbox" name="{{ s.path }}" {{ 'checked' if s.value }}> {{ s.label }}</label>
+      {% elif s.kind == 'choice' %}
+        <label>{{ s.label }}
+          <select name="{{ s.path }}">
+            <option value="" {{ 'selected' if s.value is none }}>(the default)</option>
+            {% for choice in s.choices %}
+              <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      {% elif s.kind == 'lines' or s.kind == 'json' %}
+        <label>{{ s.label }}
+          <textarea name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
+        </label>
+      {% else %}
+        <label>{{ s.label }}
+          <input type="{{ 'number' if s.kind in ('int', 'number') else 'text' }}"
+                 {% if s.kind == 'number' %}step="any"{% endif %}
+                 name="{{ s.path }}" value="{{ s.text }}"
+                 {% if s.suggestions %}list="claude-models"{% endif %}>
+        </label>
+      {% endif %}
+      <span class="muted mono">{{ s.path }}</span>
+      {% if s.help %}<span class="muted">{{ s.help }}</span>{% endif %}
+    </div>
+  {% endfor %}
+  </div>
+{% endfor %}
+  <p class="row"><button class="primary" type="submit">Save the changed values</button>
+  <span class="muted">or Ctrl+S / Cmd+S</span></p>
+</form>
+<script>
+addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+    event.preventDefault();
+    document.getElementById('settings').submit();
+  }
+});
+</script>
+{% endblock %}
