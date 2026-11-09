@@ -363,9 +363,9 @@ async def test_comments_are_injected_and_stored(tmp_path: Path):
         )
         await rec.wait_for(TurnResult)
         await session.stop()
-    assert comment.before is not None and comment.before.text == "b"
-    (_, stored, turn) = store.comments[0]
-    assert stored == comment and turn == 1
+        assert comment.before is not None and comment.before.text == "b"
+        (_, stored, turn) = store.comments[0]
+        assert stored == comment and turn == 1
     injected = rec.of(UserInput)[0].text
     assert injected.startswith("[User comment on a diff against HEAD of `a.py`]")
 
