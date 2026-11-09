@@ -71,3 +71,46 @@ def test_the_checker_exposes_the_tool_and_reports_refusals(tmp_path: Path):
     assert "two" in checker._read_file("src/app.py")
     assert "cannot read .env" in checker._read_file(".env")
     assert "cannot read ../x" in checker._read_file("../x")
+
+
+@pytest.mark.anyio
+async def test_a_checker_model_can_call_the_tool_and_then_decide(tmp_path: Path):
+    """Proves the wiring: the tool is offered to the model, runs, and its text comes back."""
+    from pydantic_ai import ModelResponse, ToolCallPart
+    from pydantic_ai.messages import ModelMessage
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from calu.checkers import CheckContext, Step
+
+    seen: dict[str, object] = {}
+
+    def model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Read a file on the first call, then decide with what it returned."""
+        seen["tools"] = sorted(t.name for t in info.function_tools)
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart("read_file", {"path": "src/app.py"})])
+        seen["result"] = str(messages[-1].parts[0].content)  # type: ignore[union-attr]
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "decision": "PASS",
+                        "reason": "",
+                        "step_summary": "Read the file first.",
+                        "comment": "",
+                    },
+                )
+            ]
+        )
+
+    root = workspace(tmp_path)
+    checker = Checker("edit", "instructions", FunctionModel(model), root, default_rules(root))
+    decision = await checker.check(
+        Step(tool_name="Write", tool_input={"file_path": "src/app.py"}, cwd=str(root)),
+        CheckContext(),
+        raise_errors=True,
+    )
+    assert decision.decision == "PASS"
+    assert seen["tools"] == ["read_file"]  # the only tool a checker has
+    assert "two" in str(seen["result"])

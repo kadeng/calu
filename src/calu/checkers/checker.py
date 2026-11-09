@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
+from pydantic_ai import Agent, CachePoint, ModelRetry, Tool, UsageLimits
 from pydantic_ai.capabilities import Caching
 from pydantic_ai.models import Model
 
@@ -171,9 +171,10 @@ class Checker:
                 instructions=instructions,
                 name=f"{self.name}-checker",
                 capabilities=[Caching(messages=False)],
+                # Named explicitly: the model sees "read_file", not the method's name.
+                tools=[Tool(self._read_file, name="read_file", takes_ctx=False)],
             )
             agent.output_validator(_require_reason)
-            agent.tool_plain(self._read_file)
             self._agent, self._built_for = agent, instructions
         return self._agent
 
