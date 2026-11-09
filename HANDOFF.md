@@ -173,6 +173,10 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   database on the built-in cases, on YAML files and, with `--from-db`, on the escalations a
   checker raised and a human resolved. Reports accuracy, preferred decision, critical misses,
   over-escalations, escalation share, unwanted comments; exits 1 on a critical miss.
+- **Checker keys** (D17, D37): read from `~/.config/calu/.env` and calu's environment, blanked
+  for Claude Code, so the checkers can run on an Anthropic API key (an Ultra subscription
+  includes API credits) while the main chat keeps the subscription — measured, not assumed.
+  Bedrock needs no key here, and `claude.use_bedrock` is the separate switch for Claude itself.
 - **Sandbox** (D15): `SandboxConfig` passed to Claude Code as a `--settings` document;
   `calu.preflight` warns about missing `bwrap`/`socat`, a disabled sandbox and missing checker
   API keys at every start.
@@ -204,7 +208,16 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    reason and did not retry, and the change stayed staged.
 5. `spikes/spike_hook_timeout.py`: a PreToolUse hook that misses its timeout does **not** let the
    call run (D23). Re-run it after a CLI update; the whole gate rests on it.
-6. `--changes`: a command wrote a file whose content carried the deny marker (the command line
+6. `spikes/spike_question_tool.py`: `AskUserQuestion` reaches the hook with its options, and
+   Claude acts on the answer returned as the message of a refusal (D35).
+7. `spikes/spike_fork_session.py`: a fork at an earlier turn works — the fork remembered the kept
+   turn, not the dropped one, and ran under a new session id (D36). It also showed that a
+   user-role transcript entry is not always a prompt, which is what the `resume_drops_turn` guard
+   refuses.
+8. Checker keys and the subscription: with `ANTHROPIC_API_KEY=""` Claude Code answers normally,
+   so blanking the checker keys (what calu does) keeps the subscription while the checkers use
+   the Anthropic API (D37).
+9. `--changes`: a command wrote a file whose content carried the deny marker (the command line
    did not, so the pre-call check passed). The `PostToolUse` matcher for Bash fired, the
    changeset checker refused the patch, calu reverted the file (the directory was clean
    afterwards), Claude reported the refusal and did not retry, and the database held the write
@@ -229,10 +242,12 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **Fork a conversation and rewind to a step** (Q13): every other agent UI has it, and the
-   web interface is the natural place for it, but calu can only resume a session by its id
-   today. Spike whether the Agent SDK can resume at a chosen message, or copy a session, before
-   promising either button.
+1. **Fork a session before a turn** (D36, measured and specified, not built): record the prompt
+   uuid and the last assistant uuid of each turn (the runner already sees both, because
+   `replay-user-messages` is on), store them on `turns` (migration 0012), add
+   `calu run --resume <id> --fork-before-turn <n>`, and offer the command per turn on the session
+   page. Mind the two findings of the spike: a user-role entry is not always a prompt, and the
+   fork point is the entry before the next prompt. Whether to rewind the **files** too is Q14.
 2. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the

@@ -264,3 +264,58 @@ refusal, which is exactly the shape of `Session.ask`. calu therefore routes `Ask
 a human (`Route.QUESTION`), stores the questions and their options in the escalation, and
 returns the chosen answer as the message. The state of such an escalation is neither "allowed"
 nor "denied", so the database gets a third one, `answered` (migration 0011).
+
+## Forking a session at an earlier step (2026-11-10, answers Q13)
+
+**Why it matters.** Every other agent UI offers "rewind to here" and "fork from this response";
+calu could only resume a session by its id, so the web interface had no honest button to offer.
+
+**Setup** (`spikes/spike_fork_session.py`, CLI 2.1.319, haiku). A throwaway directory, two turns
+("create alpha.txt", then "create beta.txt"), then a fork that keeps turn 1 and drops turn 2,
+and finally the same fork with a deliberately wrong `resume_drops_turn`.
+
+**Observations.**
+
+- The Agent SDK has the pieces: `resume` with `fork_session=True` forks at the end;
+  `resume_session_at=<transcript entry uuid>` forks at an earlier point; `resume_drops_turn=<uuid
+  of the prompt whose turn is discarded>` makes the CLI validate the point;
+  `get_session_messages(session_id, directory=...)` reads the uuids; `enable_file_checkpointing`
+  plus `ClaudeSDKClient.rewind_files(uuid)` puts the files back; and a module-level
+  `fork_session()` makes an offline truncated copy without resuming.
+- **It works.** The fork answered "alpha.txt" to "which files have you created in this
+  conversation?" — it remembered the kept turn and did not know about the dropped one — and it
+  ran under a **new session id**, so the original is untouched.
+- **A user-role entry is not always a prompt.** The transcript of two turns had eight entries,
+  four of them `type == "user"`: two prompts and two tool results. The first attempt picked the
+  second *user entry* as the dropped turn, which is a tool result, and the CLI refused. A prompt
+  is a user-role entry whose content holds no `tool_result` block.
+- **The fork point is the last entry of the kept turn**, which is the entry just before the next
+  prompt, not necessarily its last assistant message (they coincided here, because the turn ended
+  with Claude's text).
+- **The guard fires** on a mismatched point, with exactly the documented text
+  (`Resume rejected by --resume-drops-turn:`), raised as a `ResultError`. Treat it as
+  deterministic and resume plainly instead of retrying.
+
+**Conclusion.** calu can offer "fork before this turn" (D36). What it needs is the uuids: the
+runner already passes `replay-user-messages` and sees `UserMessage`, so it can record the prompt
+uuid of each turn and the uuid of the turn's last assistant entry, instead of parsing the
+transcript later.
+
+## Checker models on an Anthropic API key, with the main chat on the subscription (2026-11-10)
+
+**Why it matters.** An Anthropic Ultra subscription includes API credits, so the obvious setup
+is Claude Code on the subscription and the checkers on an Anthropic API key. That only works if
+Claude Code does **not** see the key, or it would bill the API for the main conversation.
+
+**Observations** (CLI 2.1.319, `claude -p --setting-sources "" --no-session-persistence`).
+
+- With `ANTHROPIC_API_KEY=""` in the environment the CLI answered normally, so a **blanked** key
+  leaves the subscription in place. That is exactly what calu does: `SdkRunner._claude_env`
+  blanks every name in `hidden_env`, and `anthropic` is already in `PROVIDER_KEYS_BY_PREFIX`.
+- With a non-empty but invalid key the CLI also answered, so in print mode it did not switch to
+  the API on the strength of the environment alone. calu does not rely on that: blanking is the
+  measured behaviour and stays the mechanism.
+
+**Conclusion.** The setup works today (D37): put `ANTHROPIC_API_KEY` in `~/.config/calu/.env`,
+point the checkers at `anthropic:...` models, and Claude Code keeps the subscription because
+calu blanks the key for it. Re-run this check after a CLI update.
