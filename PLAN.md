@@ -174,6 +174,44 @@ be combined:
 cgroups (a systemd scope per session) are used in every option for resource limits and to kill
 all leftover processes at the end of a tool call or session.
 
+## 4.5 Would a Claude Code plugin carry calu's configuration? (2026-11-09)
+
+A plugin may contain `hooks/hooks.json`, an MCP server (`.mcp.json`), skills, commands, agents,
+a `bin/` directory that is added to the Bash tool's PATH, and a `settings.json` of which **only**
+`agent` and `subagentStatusLine` take effect. It is loaded with `--plugin-dir`, `--plugin-url`,
+a marketplace install, or, in the SDK, `plugins=[{"type": "local", "path": ...}]`.
+
+What calu configures on Claude Code today, and whether a plugin could carry it:
+
+| calu needs | As a plugin? |
+|---|---|
+| PreToolUse hook for every tool | Yes, as a `command` hook. But a shell hook **fails open**: on its timeout the call continues through the normal permission flow, while the in-process SDK hook fails closed (the call does not run). It also starts a process per tool call and has to reach the calu process over IPC. |
+| PostToolUse (Agent/Task) and SubagentStop for the subagent result review | Yes, with the same caveats. |
+| The wait for a human (`can_use_tool`, no time limit) | Not as a hook. A plugin MCP server plus `--permission-prompt-tool mcp__plugin_calu_calu__ask` is the equivalent for the CLI (tool timeout about 28 h). In the SDK, `can_use_tool` stays the better path. |
+| `permission_mode: "auto"` (D5) | No: a CLI flag or an SDK option; a plugin's `settings.json` cannot set it. |
+| The sandbox settings (D15: `--settings` with `sandbox.enabled`, `failIfUnavailable`, `filesystem.denyRead`, ...) | **No.** A plugin's `settings.json` carries only `agent` and `subagentStatusLine`. These settings have to stay on `--settings`. |
+| Hiding the checker API keys from Claude Code | No: the parent process sets the environment. |
+| `replay-user-messages`, `forward-subagent-text`, `thinking-display` | No: CLI flags. |
+| Slash commands for the operator (`/calu-escalations`, `/calu-context`) | Yes, and only a plugin can do it. Interactive sessions only. |
+| A `calu` shim on the Bash tool's PATH | Yes (`bin/`), of minor value. |
+
+**Conclusion.** A plugin does not make `calu run` simpler: in headless mode calu passes the
+hooks as in-process callbacks, which cannot fail open, needs no file on disk and no IPC, and the
+two settings that a user would most want to shorten (auto mode and the sandbox) cannot live in a
+plugin at all. "Use this plugin" can therefore not replace what `calu run` does.
+
+A plugin is the right vehicle for a **different mode**, which calu does not have yet: a user who
+runs `claude` interactively and wants calu's checks in that session. There, a plugin plus
+`--permission-prompt-tool` is close to the whole configuration, except the sandbox settings. That
+mode needs a hook entry point (`calu hook ...`) that talks to a running calu process, and an MCP
+server for the escalation wait; the session process would then serve a second kind of client.
+Q10 asks whether that mode is wanted.
+
+Security note: a plugin is a directory of files. The agent must not be able to edit it, or it
+could switch the checks off (§4.1 point 4). Claude Code's sandbox already denies writes to
+`~/.claude`, and a plugin inside the project would need a write deny rule. In-process callbacks
+have no such surface.
+
 ## 5. Credentials and start
 
 ```
@@ -289,6 +327,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 | Q6 | What happens to a session when no human answers an escalation for a long time (keep waiting, give Claude other work, stop after a timeout). |
 | Q7 | Answered by D16. |
 | Q8 | How a client attached to the session process decides an escalation: as now (the session cancels the row with a note, D18), with the client's own `calu_operator` credentials, or with a database function that lets `calu_session` record a client decision for its own session. |
+| Q10 | Should calu support interactive `claude` sessions through a plugin (§4.5)? It would need a `calu hook` entry point, an MCP server for the human wait and a second client kind in the session process; the sandbox settings and auto mode would still have to be passed on the command line, and the shell hook fails open where the in-process hook fails closed. |
 | Q9 | Where sitl's training mode belongs in calu (human review of checker decisions, to collect evaluation data): it was left out of the session port and needs tables of its own. The user comments it was grouped with are ported (migration 0003). |
 
 ## 12. Phases

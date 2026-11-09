@@ -139,10 +139,15 @@ Results:
    (D18, §4.1 point 5). Alternatives: the client resolves with its own `calu_operator`
    credentials, or a database function lets `calu_session` record a client decision for its own
    session.
-2. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-3. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
+2. **Q10 (ask the owner):** whether calu should also check *interactive* `claude` sessions
+   through a Claude Code plugin. `PLAN.md` §4.5 has the assessment: a plugin cannot carry the
+   sandbox settings or auto mode, and a shell hook fails open, so it does not simplify `calu
+   run`; it is the only way to reach an interactive session, and it would need a `calu hook`
+   entry point and an MCP server for the human wait.
+3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+4. **Phase 6**: a web UI on the herd commands. **Phase 7**: the IDE client (sitl's VSCode
    extension against the new protocol) and the single binary.
-4. Smaller gaps: the JSON Schema export (`calu/protocol/schema.py`) is not written to a file by
+5. Smaller gaps: the JSON Schema export (`calu/protocol/schema.py`) is not written to a file by
    any command; `calu attach` has no `/comment`; a client cannot read the step history of an
    earlier session (the bus buffer is per process, and `session.history` was dropped).
 
