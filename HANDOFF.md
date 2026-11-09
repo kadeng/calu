@@ -164,10 +164,20 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    Accepting any non-revoked hash in `client_tokens` for its session would let an operator with a
    database login mint a token for a local command or a remote interface, and revoke it — which
    is what makes "local commands work through the WebSocket" practical.
-3. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
+3. **The write set of a Bash step** (D31, decided 2026-11-09, nothing implemented yet): snapshot
+   the project directory before and after every Bash step with git plumbing in a git directory of
+   calu's own (`$XDG_STATE_HOME/calu/snapshots/<session>`, outside the project, on the sandbox's
+   `denyRead` list, used with `--work-tree`). It closes the gap that `Edit`/`Write` reach the hook
+   with their content while a command that edits files is only *described* by the command checker.
+   First use: compare the declared paths with the written ones (no model call, and a mismatch is a
+   dishonesty signal); then the real diff to a checker after the call; then `git apply -R` as the
+   revert on a post-hoc DENY. Needs only the `git` binary. Include the size and type policy from
+   the start (byte cap per step, big or binary files recorded as path, size and "binary"), because
+   hashing is the cost. The overlay alternative is Q12, recorded and not planned.
+4. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
    side each feature talks to).
-4. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
+5. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+6. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
    read, not edited, through a client; the protocol server binds TCP only (a Unix socket is
    mentioned in §6 and `sessions.address` already allows for one).
 
@@ -178,6 +188,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 - **Q4** How clients authenticate remotely (tokens, operator accounts, TLS) — see next step 2.
 - **Q5** The sandbox's network policy and its default.
 - **Q9** Where a training mode would belong, if one is wanted at all.
+- **Q12** Whether the overlay quarantine replaces or joins D31's snapshot (recorded, not planned;
+  the measurements and the price — leaving D15 — are in PLAN.md §11).
 - Answered this session: Q6 (D27), Q8 (D28), Q10 (no plugin mode), Q11 (D23).
 
 ## Environment notes (owner's machine)
