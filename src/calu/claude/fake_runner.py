@@ -1,0 +1,305 @@
+"""A scripted stand-in for Claude Code, for tests and front-end development.
+
+Each user message starts the next scripted turn; when the script is exhausted, the turn answers
+"Echo: <message>". A turn is a list of actions, executed in order:
+
+    {"text": "..."}                                   Claude writes text
+    {"thinking": "..."}                               Claude's thinking (assistant.thinking)
+    {"text": "...", "stream": true}                   ... preceded by word-wise assistant.delta
+    {"tool": "Bash", "input": {...}, "result": "..."} a tool call; it passes the ToolGate first
+    {"sleep": 0.5}                                    pause (lets tests inject messages)
+    {"agent": {"description": "...", "background": false, "actions": [...]}}
+                                                      a subagent runs the nested actions
+
+Example script (JSON): {"turns": [[{"text": "Hi"}, {"tool": "Bash", "input": {"command": "ls"},
+"result": "a.py"}]]}
+
+Messages sent with priority "next" during a turn are taken in after the current action (a
+`UserInput` event); "later" messages start their own turn after the current one.
+"""
+
+import itertools
+from pathlib import Path
+from typing import Any
+
+import anyio
+import anyio.lowlevel
+from pydantic import BaseModel, Field
+
+from calu.checkers.model import Step
+from calu.checkers.result_checker import SubagentResult
+from calu.claude.runner import EventSink, Priority, ToolGate, Verdict
+from calu.context.foreign import user_message_source
+from calu.protocol.messages import (
+    AgentInfo,
+    AgentsUpdate,
+    AssistantDelta,
+    AssistantText,
+    AssistantThinking,
+    ToolResult,
+    ToolUse,
+    TurnResult,
+    UserInput,
+)
+
+
+class FakeScript(BaseModel):
+    """The script: a list of turns, each a list of action dicts (see module docstring)."""
+
+    turns: list[list[dict[str, Any]]] = Field(default_factory=list)
+
+    @classmethod
+    def load(cls, path: Path) -> FakeScript:
+        """Read a script from a JSON file.
+
+        Args:
+            path: The JSON file, e.g. `{"turns": [[{"text": "Hi"}]]}`.
+
+        Returns:
+            The script. Actions are not validated until they run.
+
+        Raises:
+            OSError: If the file cannot be read.
+            pydantic.ValidationError: If the file is not valid JSON or does not match the model.
+        """
+        return cls.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+class FakeRunner:
+    """`ClaudeRunner` that replays a `FakeScript`. See the module docstring."""
+
+    def __init__(self, script: FakeScript, workspace: Path) -> None:
+        """Create a runner that replays `script` from its first turn.
+
+        Args:
+            script: The scripted turns.
+            workspace: Reported as the working directory (`Step.cwd`) of tool calls.
+        """
+        self.script = script
+        self.workspace = workspace
+        self.session_id: str | None = "fake-session"
+        self._turns = iter(script.turns)
+        self._ids = itertools.count(1)
+        self._ready = anyio.Event()
+        self._send, self._receive = anyio.create_memory_object_stream[str](100)
+        self._next_queue: list[str] = []
+        self._cancel: anyio.CancelScope | None = None
+        self._interrupted = False
+        self.agents: dict[str, AgentInfo] = {}
+
+    async def run(self, gate: ToolGate, sink: EventSink, resume_id: str | None = None) -> None:
+        """Run one scripted turn per received message until `stop` is called.
+
+        Each message is first reported as a `UserInput` event.
+
+        Args:
+            gate: Asked before every scripted tool call.
+            sink: Receives the events of the turns.
+            resume_id: If given, becomes `session_id` (no history is restored).
+
+        Raises:
+            ValueError: If the script contains an unknown action.
+        """
+        if resume_id:
+            self.session_id = resume_id
+        with anyio.CancelScope() as scope:
+            self._cancel = scope
+            self._ready.set()
+            async for text in self._receive:
+                await sink(UserInput(text=text, source=user_message_source(text)))
+                await self._turn(text, gate, sink)
+
+    async def wait_ready(self) -> None:
+        """Return once `run` has started."""
+        await self._ready.wait()
+
+    async def send(self, text: str, priority: Priority) -> None:
+        """Queue a user message.
+
+        A "next" message during a turn is reported after the current action of the main agent;
+        otherwise the message starts its own turn after the current one.
+
+        Args:
+            text: The message text.
+            priority: "next" or "later".
+        """
+        if priority == "next" and self._in_turn:
+            self._next_queue.append(text)
+        else:
+            await self._send.send(text)
+
+    async def interrupt(self) -> None:
+        """Skip the remaining actions of the current turn; its result becomes "interrupted"."""
+        self._interrupted = True
+
+    async def stop(self) -> None:
+        """Cancel `run`; does nothing if `run` has not started."""
+        if self._cancel is not None:
+            self._cancel.cancel()
+
+    # ------------------------------------------------------------------ script execution
+
+    _in_turn = False
+
+    async def _turn(self, text: str, gate: ToolGate, sink: EventSink) -> None:
+        """Run the next scripted turn (or an echo turn) and report a `TurnResult`.
+
+        The result text is the last "text" action of the turn.
+
+        Args:
+            text: The user message that started the turn.
+            gate: Asked before every tool call.
+            sink: Receives the events.
+
+        Raises:
+            ValueError: If the turn contains an unknown action.
+        """
+        actions = next(self._turns, None)
+        if actions is None:
+            actions = [{"text": f"Echo: {text}"}]
+        self._in_turn, self._interrupted = True, False
+        try:
+            await self._actions(actions, None, gate, sink)
+        finally:
+            self._in_turn = False
+        await sink(
+            TurnResult(
+                session_id=self.session_id,
+                subtype="interrupted" if self._interrupted else "success",
+                result=next((a["text"] for a in reversed(actions) if "text" in a), ""),
+                num_turns=1,
+            )
+        )
+
+    async def _actions(
+        self, actions: list[dict[str, Any]], agent: str | None, gate: ToolGate, sink: EventSink
+    ) -> None:
+        """Run `actions` in order until the turn is interrupted.
+
+        After each main-agent action, queued "next" messages are reported as `UserInput`.
+
+        Args:
+            actions: The action dicts.
+            agent: Protocol id of the subagent that runs them, or None for the main agent.
+            gate: Asked before every tool call.
+            sink: Receives the events.
+
+        Raises:
+            ValueError: If an action is unknown.
+        """
+        for action in actions:
+            if self._interrupted:
+                return
+            await self._action(action, agent, gate, sink)
+            while self._next_queue and agent is None:
+                await sink(UserInput(text=self._next_queue.pop(0)))
+
+    async def _action(
+        self, action: dict[str, Any], agent: str | None, gate: ToolGate, sink: EventSink
+    ) -> None:
+        """Run one action: text, sleep, tool call or subagent (see module docstring).
+
+        A subagent action reports the Agent tool call, `AgentsUpdate` events before and after
+        the nested actions, and the Agent tool result.
+
+        Args:
+            action: The action dict.
+            agent: Protocol id of the subagent that runs it, or None for the main agent.
+            gate: Asked before every tool call.
+            sink: Receives the events.
+
+        Raises:
+            ValueError: If the action has none of the known keys.
+        """
+        if "thinking" in action:
+            await sink(AssistantThinking(agent_id=agent, text=str(action["thinking"])))
+        elif "text" in action:
+            message_id = f"fake-msg-{next(self._ids)}"
+            if action.get("stream"):
+                for word in str(action["text"]).split(" "):
+                    await sink(
+                        AssistantDelta(agent_id=agent, message_id=message_id, text=word + " ")
+                    )
+                    await anyio.lowlevel.checkpoint()
+            await sink(AssistantText(agent_id=agent, text=action["text"], message_id=message_id))
+        elif "sleep" in action:
+            await anyio.sleep(float(action["sleep"]))
+        elif "tool" in action:
+            await self._tool(action, agent, gate, sink)
+        elif "agent" in action:
+            spec = action["agent"]
+            tool_use_id = f"fake-tool-{next(self._ids)}"
+            tool_input = {
+                "description": spec.get("description", ""),
+                "prompt": spec.get("prompt", ""),
+                "subagent_type": spec.get("subagent_type", "general-purpose"),
+                "run_in_background": bool(spec.get("background", False)),
+            }
+            await sink(
+                ToolUse(agent_id=agent, tool_use_id=tool_use_id, name="Agent", input=tool_input)
+            )
+            info = AgentInfo(
+                agent_id=tool_use_id,
+                sdk_agent_id=f"fake-agent-{tool_use_id}",
+                description=tool_input["description"],
+                subagent_type=tool_input["subagent_type"],
+                background=tool_input["run_in_background"],
+            )
+            self.agents[tool_use_id] = info
+            await sink(AgentsUpdate(agents=list(self.agents.values())))
+            await self._actions(list(spec.get("actions", [])), tool_use_id, gate, sink)
+            info.status = "completed"
+            await sink(AgentsUpdate(agents=list(self.agents.values())))
+            result_text = str(spec.get("result", "Subagent finished."))
+            note = await gate.review_subagent_result(
+                SubagentResult(
+                    agent_id=tool_use_id,
+                    description=tool_input["description"],
+                    prompt=tool_input["prompt"],
+                    result=result_text,
+                    background=tool_input["run_in_background"],
+                )
+            )
+            await sink(ToolResult(agent_id=agent, tool_use_id=tool_use_id, content=result_text))
+            if note:
+                await sink(UserInput(text=note))  # stands for the injected priority-"next" note
+        else:
+            raise ValueError(f"unknown fake action: {action!r}")
+
+    async def _tool(
+        self, action: dict[str, Any], agent: str | None, gate: ToolGate, sink: EventSink
+    ) -> None:
+        """Run one scripted tool call through the gate and report `ToolUse` and `ToolResult`.
+
+        An allowed call reports the scripted "result"; a denied call reports the denial
+        message as an error result.
+
+        Args:
+            action: The action dict with "tool", optional "input" and "result".
+            agent: Protocol id of the calling subagent, or None for the main agent.
+            gate: Decides about the call; `ask` is awaited for an ASK verdict.
+            sink: Receives the events.
+        """
+        tool_use_id = f"fake-tool-{next(self._ids)}"
+        name, tool_input = str(action["tool"]), dict(action.get("input", {}))
+        await sink(ToolUse(agent_id=agent, tool_use_id=tool_use_id, name=name, input=tool_input))
+        step = Step(
+            tool_name=name,
+            tool_input=tool_input,
+            tool_use_id=tool_use_id,
+            agent_id=agent,
+            cwd=str(self.workspace),
+        )
+        gate_result = await gate.pre_tool_use(step)
+        if gate_result.verdict is Verdict.ASK:
+            answer = await gate.ask(step)
+            allowed, message = answer.allow, answer.message or "The user denied this step."
+        else:
+            allowed, message = gate_result.verdict is Verdict.ALLOW, gate_result.reason
+        if allowed:
+            content, is_error = str(action.get("result", "")), False
+        else:
+            content, is_error = message, True
+        await sink(
+            ToolResult(agent_id=agent, tool_use_id=tool_use_id, is_error=is_error, content=content)
+        )

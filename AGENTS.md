@@ -30,6 +30,15 @@ phases.
 | `src/calu/cli.py` | The `calu` command |
 | `src/calu/credentials.py` | Encrypted credential store (Argon2id, AES-GCM) |
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
+| `src/calu/config.py` | Session configuration models, built from database values; checker API keys |
+| `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker and result checker agents |
+| `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
+| `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
+| `src/calu/protocol/` | Client protocol messages (Pydantic) and JSON Schema export |
+| `src/calu/comments/` | User comments on selections in diffs and files |
+| `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
+| `src/calu/files.py` | Files that tool calls refer to (links for clients) |
+| `src/calu/testing.py` | Rule-based fake checkers for tests without model calls |
 | `src/calu/db/` | Connections and migrations (`migrations/NNNN_*.sql`), local Docker database (`local.py`, `local-compose.yml`) |
 | `src/calu/defaults/` | Built-in checker instructions and rule lists, loaded into the database |
 | `tests/unit/` | Tests without database, `claude` or API keys |

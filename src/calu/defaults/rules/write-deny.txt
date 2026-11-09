@@ -1,6 +1,5 @@
-# Paths that may only be written with your approval: writing them always asks you. Same format
-# as write-allow.txt. Deny rules win over allow rules. Writing anything below
-# .stay-in-the-loop/ (these rules, the checker instructions, config.toml) always asks (built in).
+# Paths that may only be written with your approval: writing them always asks you. Deny rules
+# win over allow rules. Writing ~/.config/calu always asks (built in).
 
 # Claude Code's own configuration and instructions.
 (^|/)\.claude(/|$)
