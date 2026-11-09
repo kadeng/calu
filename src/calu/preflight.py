@@ -106,14 +106,33 @@ def key_warnings(config: Config, environ: Mapping[str, str] | None = None) -> li
     return warnings
 
 
+def change_warnings(config: Config) -> list[str]:
+    """Return warnings about a write-set configuration that cannot work (PLAN.md D31).
+
+    Args:
+        config: The session configuration.
+
+    Returns:
+        One warning if the review of a command's writes is on while the snapshot it needs is
+        off, because the review would then silently never run; otherwise nothing.
+    """
+    if config.changes.review and not config.changes.snapshot:
+        return [
+            "changes.review is on but changes.snapshot is off, so no command's writes are "
+            "reviewed: the review needs the snapshot that measures them. Set changes.snapshot "
+            "to true, or changes.review to false."
+        ]
+    return []
+
+
 def warnings(config: Config, environ: Mapping[str, str] | None = None) -> list[str]:
-    """Return all start-up warnings (sandbox and API keys).
+    """Return all start-up warnings (sandbox, API keys and write sets).
 
     Args:
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
 
     Returns:
-        The warnings of `sandbox_warnings` followed by those of `key_warnings`.
+        The warnings of `sandbox_warnings`, `key_warnings` and `change_warnings`.
     """
-    return sandbox_warnings(config) + key_warnings(config, environ)
+    return sandbox_warnings(config) + key_warnings(config, environ) + change_warnings(config)

@@ -1,10 +1,17 @@
-"""Start-up warnings: sandbox tools and checker API keys; the sandbox settings document."""
+"""Start-up warnings: sandbox tools, checker API keys, write sets; the sandbox settings."""
 
 from pathlib import Path
 
 from calu import preflight
 from calu.claude.sdk_runner import SdkRunner
-from calu.config import CheckerConfig, ClaudeConfig, Config, ContextConfig, SandboxConfig
+from calu.config import (
+    ChangesConfig,
+    CheckerConfig,
+    ClaudeConfig,
+    Config,
+    ContextConfig,
+    SandboxConfig,
+)
 
 
 def test_sandbox_settings_document_matches_the_spike():
@@ -74,3 +81,14 @@ def test_models_without_a_key_variable_are_not_checked():
     config = Config().with_model("bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0")
     assert preflight.key_warnings(config, environ={}) == []
     assert "narrator" in preflight.configured_models(config)
+
+
+def test_a_review_without_a_snapshot_is_reported() -> None:
+    """D31: the review needs the snapshot that measures what a command wrote."""
+    assert preflight.change_warnings(Config()) == []
+    on = Config(changes=ChangesConfig(snapshot=True, review=True))
+    assert preflight.change_warnings(on) == []
+    broken = Config(changes=ChangesConfig(snapshot=False, review=True))
+    assert len(preflight.change_warnings(broken)) == 1
+    assert "needs the snapshot" in preflight.change_warnings(broken)[0]
+    assert preflight.change_warnings(broken)[0] in preflight.warnings(broken, {})
