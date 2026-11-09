@@ -8,16 +8,18 @@ State on 2026-11-09, end of the first implementation session. Read this, then `A
 - "Start implementing. Commit and push at reasonable checkpoints. Stop only if you must ask
   something. You can make tradeoff decisions. You are authorized to make reversible decisions
   (everything that's just in git is reversible)."
-- The next session should run **inside Linux** (e.g. Claude Code started in WSL in the calu
-  directory), not on the Windows host. The previous session ran on Windows and called WSL through
-  `wsl.exe`, which caused quoting and path-conversion problems (Git Bash rewrote paths; use
-  `MSYS_NO_PATHCONV=1` if you ever have to do that again).
+- The next session runs **inside Linux** (WSL2), in `~/projects/stay-in-the-loop/calu`
+  (`/home/klondenberg/projects/stay-in-the-loop/calu`). On 2026-11-09 the owner had the whole
+  sitl tree (with calu inside) copied there from the Windows drive
+  (`/mnt/c/Users/KaiLo/projects/stay-in-the-loop`). The copy on the Windows drive is outdated
+  from then on; do not work there. The previous session ran on the Windows host and called
+  WSL through `wsl.exe`, which caused quoting and path-conversion problems.
 
 ## Why calu sits inside the stay-in-the-loop directory
 
 calu is the successor of stay-in-the-loop (sitl) and is built by porting sitl's code. On the
 owner's machine, calu is cloned as `calu/` inside sitl's working tree
-(`/mnt/c/Users/KaiLo/projects/stay-in-the-loop/calu`) so that a session can read sitl's source,
+(`~/projects/stay-in-the-loop/calu`) so that a session can read sitl's source,
 tests and spike results next to calu. It is still its own git repository
 (github.com/kadeng/calu, public, GPL-2.0) and is listed in sitl's `.gitignore`. Commit calu work
 in `calu/` only; sitl is a separate, private repository.
@@ -141,7 +143,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
 ## Where to find things
 
 - **sitl** (predecessor, private, github.com/kadeng/stay-in-the-loop): the parent directory
-  `..` of this repository on the owner's machine. sitl's spike results:
+  `..` of this repository, `~/projects/stay-in-the-loop`. sitl's spike results:
   `.claude/skills/claude-code-integration/references/spike-results.md`; scripts in `spikes/`;
   its condensed Claude Code / Pydantic AI reference skills in `.claude/skills/` (read, do not
   copy into calu, D10).
@@ -153,11 +155,13 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
 
 - WSL2 Ubuntu has uv, Docker, bwrap, Node 22 (nvm, interactive shells only), a logged-in
   `claude` (2.1.319). No `socat` installed system-wide.
-- Virtual environment outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`
-  (set by `scripts/wsl-test.sh`).
+- `scripts/wsl-test.sh` uses the virtual environment `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`
+  (a leftover of the Windows checkout; inside Linux a project-local `.venv` would work as well).
+  sitl's own `.venv` was not copied (a virtual environment stores its absolute path);
+  recreate it with `uv sync` in `~/projects/stay-in-the-loop` when needed.
 - Test database: `docker compose up -d caludb --wait` (127.0.0.1:55432, `calu_owner` /
   `calu-dev`, development only). Tests create and drop a database per test.
-- The working tree is on a Windows drive with `core.autocrlf=true`; `.gitattributes` forces LF.
+- The working tree is on the Linux file system now; `.gitattributes` forces LF line endings.
 - Checker API keys for live tests are in sitl's git-ignored `.env` (CRLF line endings); calu
   reads keys from `~/.config/calu/.env`. Live checker model: Nemotron Lightning on Fireworks.
 
