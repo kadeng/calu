@@ -46,6 +46,7 @@ alongside calu is decided later (§11).
 | D16 | **Checkers on the Anthropic subscription through `claude -p --output-format json --json-schema`** (2026-11-09, answers Q7): schema-valid `structured_output` in 6 of 6 runs, 2.5-4.4 s per check with haiku; run with `--tools ""`, `--no-session-persistence` and stdin closed. |
 | D17 | **Checker API keys stay out of the database** (2026-11-09): calu reads them from its environment and `~/.config/calu/.env` and hides them from Claude Code (as in sitl). |
 | D18 | **A decision that reaches the session from a client is recorded as a cancellation with a note** (2026-11-09). Only `calu_operator` may call `calu_resolve_escalation`; the session role may not, so that a session which somehow lost its credential cannot approve its own steps (§4.1 point 5). A client attached to the session process therefore decides in the session, which then cancels the row with a note that holds the decision and the client. The audit trail of such a decision is weaker than that of an operator's resolution; whether clients should instead resolve escalations with their own operator credentials is Q8. |
+| D24 | **Third-party user interfaces are served through ACP, not through a plugin per editor** (2026-11-09, §6.1): a `calu acp` adapter speaks the Agent Client Protocol on stdio, is spawned by the editor and attaches to a running calu session over calu's own protocol. One adapter reaches JetBrains Air, Zed, Neovim, Goose and every other ACP client, and ACP's baseline `session/request_permission` is exactly calu's escalation. ACP is the floor: calu's own WebSocket protocol stays for what ACP cannot carry (the checker verdicts as structure, the herd overview, editing the rules). The interactive-plugin mode of §4.5 is **not** built (Q10 answered: no). |
 | D23 | **The tool gate stays an in-process hook of the Agent SDK** (2026-11-09, verified in `spikes/RESULTS.md`, "Hook timeouts"): a hook that does not answer within its timeout stops the step there — the call is not run even with `permission_mode: "bypassPermissions"`, and Claude retries it once and then reports it. A shell hook of a plugin does the opposite (its timeout discards the output and the call continues through the normal permission flow), which is why the gate does not move into a plugin (§4.5). The PreToolUse timeout is 900 s, just above the checker deadline of 840 s, because no human wait happens in that hook; the two hooks that review a subagent's result may wait for a human and keep 24 hours. |
 | D21 | **Four decisions: PASS, ALLOW, DENY, ESCALATE** (2026-11-09, the owner's wording). PASS is the normal answer: the checker has no objection and Claude Code's auto mode decides as before (the hook returns no decision). ESCALATE asks a human. ALLOW and DENY are deliberate exceptions: ALLOW lets the step run whatever auto mode would say (the hook answers "allow"), DENY stops it. Without auto mode (a model that has none, or `claude.auto_mode = false`), PASS has the same effect as ALLOW, because then the checkers decide alone. The allow lists of the rules produce PASS, not ALLOW: they say "no check needed", not "run this whatever the harness thinks". This replaces the three-valued decision of sitl, where ALLOW already meant "no decision" under auto mode (D5). |
 | D22 | **Checkers may read files** (2026-11-09): a checker agent gets one read-only tool for files of the workspace, bounded by the read deny lists, so it can look at the file a step changes when the step alone is not enough. It gets no other tool: no writes, no commands, no network. |
@@ -251,6 +252,69 @@ calu run  ──► asks for the password ──► Argon2id(password, salt) ─
   gap and takes a fresh snapshot.
 - The protocol is defined by Pydantic models; a JSON Schema is generated for non-Python clients.
 
+### 6.1 ACP for third-party user interfaces (2026-11-09)
+
+The **Agent Client Protocol** (ACP, agentclientprotocol.com, draft v1 as read on 2026-11-09)
+standardizes how an editor talks to a coding agent: JSON-RPC 2.0, the editor is the *client*,
+the agent is the *server*. It is developed by Zed and JetBrains, which is the reason to bet on
+it rather than on one editor's plugin API:
+
+- **JetBrains Air** (and the Air plugin for the IntelliJ IDEs) runs agents locally and talks to
+  them over ACP, so that an agent needs no integration written for JetBrains; it discovers
+  agents through an **ACP agent registry** that a user installs from, and already lists Codex,
+  Claude Agent, Gemini CLI, Junie, Copilot, OpenCode, Pi and Cline.
+- **Zed** created ACP and runs Claude Code through an ACP adapter today.
+- **Neovim** reaches it through agentic.nvim, avante.nvim and CodeCompanion; **Goose** speaks it
+  in both directions (`goose acp`).
+
+So one ACP implementation gives calu all of these at once, and a place in the registry, without
+writing a plugin for any single editor (D24). ACP is the floor, not the ceiling: what it has no
+slot for — the checker verdicts as structure, the herd overview, editing the rules — stays with
+calu's own protocol (§6), which calu-aware clients use.
+
+**Where ACP and calu fit together well.**
+
+| ACP | calu |
+|---|---|
+| `session/request_permission` (a **baseline** agent → client request: tool call, `options` with `allow_once` / `allow_always` / `reject_once` / `reject_always`, answer `selected`/`cancelled`) | ESCALATE: exactly calu's "freeze time and ask a human". `allow_always` and `reject_always` can be stored as a rule row (`calu rules add`), because the spec leaves the scope of "always" to the agent. |
+| `session/update` with `tool_call` / `tool_call_update` (`toolCallId`, `title`, `kind`, `status` pending → in_progress → completed/failed, `content` incl. a `diff` variant with `oldText`/`newText`, `locations`) | `tool.use`, `tool.result`, `edit.diff`; the checker's step summary is the `title`, its verdict and comment go into a `tool_call_update` |
+| `agent_message_chunk`, `agent_thought_chunk`, `user_message_chunk` | `assistant.text`, `assistant.thinking`, `assistant.delta`, `user.input` |
+| `authenticate` with `authMethods` | the client token of D20 |
+| `session/new {cwd, mcpServers}` | the workspace of the session |
+| `session/load` (MUST replay the whole conversation as `session/update`, then answer) and `session/resume` (reconnect **without** replay) | `events.subscribe {after_seq: 0}` and `events.subscribe {after_seq: N}` — calu's bus already has both modes |
+| session modes (`availableModes`, `currentModeId`, `session/set_mode`) | the auto-escalation categories of `AutoEscalate` |
+
+**Where they do not fit, and what follows.**
+
+1. **Transport.** ACP defines only stdio, and "the client launches the agent as a subprocess"
+   (an HTTP/WebSocket transport is an open RFD). calu is the opposite: a background process that
+   outlives every client, with several clients attached at once (REQUIREMENTS 7, 9). So calu
+   does **not** become an ACP agent; it gets a thin adapter, `calu acp`, which the editor spawns
+   and which attaches to a running session over calu's own WebSocket protocol and translates in
+   both directions. Each editor spawns its own adapter; the session keeps running in tmux. This
+   is how Zed runs Claude Code, so the shape is established. If the HTTP transport lands, the
+   session process can serve ACP directly and the adapter becomes optional.
+2. **Several clients are not specified in ACP.** It says `session/load` allows "sharing sessions
+   between different Client instances" and nothing about two clients on one live session. With
+   the adapter it works anyway, because calu's bus does the fan-out — with one rough edge: a
+   permission request cannot be retracted by the agent, so if one client decides first, the
+   other's dialog stays open and its late answer is discarded (calu's `decide_escalation`
+   already refuses a decided escalation).
+3. **The client's `fs/*` and `terminal/*` capabilities must not be used.** Claude Code does its
+   own file and command work inside the sandbox; letting the editor read, write or run things on
+   the agent's behalf would route tool calls around both the checkers and the sandbox.
+4. **`mcpServers` from `session/new` must not be forwarded unchecked** to Claude Code: an editor
+   could otherwise add tools to the trusted zone (§4.2). The adapter ignores them, or forwards
+   only what the project's configuration allows.
+5. **ACP has no notion of a checker.** A verdict, a reason and a comment have to travel as tool
+   call content, which a calu-aware client would rather receive as structure. ACP is therefore
+   the common denominator for third-party user interfaces, not a replacement for calu's own
+   protocol (§6), which the web UI and the herd overview keep using.
+6. **The draft is moving.** `session/resume`, `session/list` and the other session management
+   methods — the ones calu would want most — are marked UNSTABLE, and `session/load` requires
+   replaying the whole conversation, which needs the step and turn history from the database
+   (the `session.history` request that §6 dropped with sitl's file-based event log).
+
 ## 7. Database (first sketch)
 
 | Table | Content |
@@ -329,7 +393,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 | Q7 | Answered by D16. |
 | Q8 | How a client attached to the session process decides an escalation: as now (the session cancels the row with a note, D18), with the client's own `calu_operator` credentials, or with a database function that lets `calu_session` record a client decision for its own session. |
 | Q11 | Answered by D23. |
-| Q10 | Should calu support interactive `claude` sessions through a plugin (§4.5)? It would need a `calu hook` entry point, an MCP server for the human wait and a second client kind in the session process; the sandbox settings and auto mode would still have to be passed on the command line, and the shell hook fails open where the in-process hook fails closed. |
+| Q10 | Answered 2026-11-09: **no**. calu does not get the interactive-plugin mode of §4.5; third-party user interfaces are served through ACP instead (D24). |
 | Q9 | Where sitl's training mode belongs in calu (human review of checker decisions, to collect evaluation data): it was left out of the session port and needs tables of its own. The user comments it was grouped with are ported (migration 0003). |
 
 ## 12. Phases
@@ -354,4 +418,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    per project (Q5), the nested-sandbox case in Docker (Q1) and `calu project add`.
    The evaluation of the checkers (`calu evals`, ported from sitl) is done.
 6. **Herd management:** a web UI on top of the commands of phase 3.
-7. **IDE client** (from sitl's VSCode extension), packaging as a single binary.
+7. **Third-party user interfaces and packaging:** `calu acp`, the ACP adapter of §6.1 (D24),
+   which reaches JetBrains Air, Zed, Neovim and Goose at once, and can be listed in the ACP
+   agent registry; then the single binary. A port of sitl's VSCode extension is only worth it
+   for what ACP cannot carry (the checker verdicts as structure, the herd overview).
