@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 
 from calu.checkers.model import Step
 from calu.checkers.result_checker import SubagentResult
-from calu.claude.runner import EventSink, Priority, ToolGate, Verdict
+from calu.claude.runner import EventSink, Fork, Priority, ToolGate, Verdict
 from calu.context.foreign import user_message_source
 from calu.protocol.messages import (
     AgentInfo,
@@ -93,8 +93,16 @@ class FakeRunner:
         self._cancel: anyio.CancelScope | None = None
         self._interrupted = False
         self.agents: dict[str, AgentInfo] = {}
+        self.fork: Fork | None = None
+        """The fork point `run` was called with, for tests (PLAN.md D36)."""
 
-    async def run(self, gate: ToolGate, sink: EventSink, resume_id: str | None = None) -> None:
+    async def run(
+        self,
+        gate: ToolGate,
+        sink: EventSink,
+        resume_id: str | None = None,
+        fork: Fork | None = None,
+    ) -> None:
         """Run one scripted turn per received message until `stop` is called.
 
         Each message is first reported as a `UserInput` event.
@@ -103,10 +111,13 @@ class FakeRunner:
             gate: Asked before every scripted tool call.
             sink: Receives the events of the turns.
             resume_id: If given, becomes `session_id` (no history is restored).
+            fork: Where a real runner would branch off (PLAN.md D36). The fake runner has no
+                transcript, so it only records it as `self.fork` for tests to assert on.
 
         Raises:
             ValueError: If the script contains an unknown action.
         """
+        self.fork = fork
         if resume_id:
             self.session_id = resume_id
         with anyio.CancelScope() as scope:

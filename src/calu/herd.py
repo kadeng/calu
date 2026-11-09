@@ -240,6 +240,97 @@ async def steps(db: Db, session_id: str, limit: int = 200) -> list[StepRow]:
     return [StepRow(*row) for row in reversed(found)]
 
 
+@dataclass(frozen=True)
+class ForkPoint:
+    """Where a fork of a session starts (PLAN.md D36).
+
+    `resume_at` is the last transcript entry of the turn that is kept, `drops_turn` the prompt of
+    the first turn that is discarded. The CLI validates the pair and refuses a mismatch, so both
+    are needed.
+    """
+
+    turn: int
+    """The first turn that the fork discards."""
+    resume_at: str
+    drops_turn: str
+    claude_session_id: str
+
+    def command(self) -> str:
+        """Return the command that starts the fork.
+
+        Returns:
+            The `calu run` line, which an operator copies into a terminal on the session's host.
+        """
+        return f"calu run --resume {self.claude_session_id} --fork-before-turn {self.turn}"
+
+
+async def fork_point(db: Db, session_id: str, turn: int) -> ForkPoint | None:
+    """Read where a session has to be resumed to fork before one of its turns.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+        turn: Number of the first turn the fork discards (so turn 1 cannot be forked before:
+            there would be nothing to keep).
+
+    Returns:
+        The fork point, or None if the session has no Claude session id, the turn or the one
+        before it is unknown, or Claude Code reported no uuids for them (a session recorded by
+        an older calu).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    row = await db.one(
+        "SELECT s.claude_session_id, previous.last_entry_uuid, dropped.prompt_uuid"
+        " FROM sessions s"
+        " JOIN turns previous ON previous.session_id = s.id AND previous.number = %s - 1"
+        " JOIN turns dropped ON dropped.session_id = s.id AND dropped.number = %s"
+        " WHERE s.id = %s::uuid",
+        (turn, turn, session_id),
+    )
+    if row is None or not row[0] or not row[1] or not row[2]:
+        return None
+    return ForkPoint(
+        turn=turn, resume_at=str(row[1]), drops_turn=str(row[2]), claude_session_id=str(row[0])
+    )
+
+
+async def fork_points(db: Db, session_id: str) -> list[ForkPoint]:
+    """Read every turn of a session that can be forked before.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+
+    Returns:
+        One entry per turn that has both uuids and a predecessor that has them, oldest first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT dropped.number, previous.last_entry_uuid, dropped.prompt_uuid,"
+        " s.claude_session_id FROM sessions s"
+        " JOIN turns dropped ON dropped.session_id = s.id"
+        " JOIN turns previous ON previous.session_id = s.id"
+        "  AND previous.number = dropped.number - 1"
+        " WHERE s.id = %s::uuid AND s.claude_session_id IS NOT NULL"
+        "  AND previous.last_entry_uuid IS NOT NULL AND dropped.prompt_uuid IS NOT NULL"
+        " ORDER BY dropped.number",
+        (session_id,),
+    )
+    return [
+        ForkPoint(
+            turn=int(row[0]),
+            resume_at=str(row[1]),
+            drops_turn=str(row[2]),
+            claude_session_id=str(row[3]),
+        )
+        for row in rows
+    ]
+
+
 async def turns(db: Db, session_id: str, limit: int = 50) -> list[TurnRecord]:
     """Read the recorded turns of one session, oldest first.
 

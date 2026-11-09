@@ -67,6 +67,20 @@ class HumanAnswer:
     """True if no human decided (interrupt, stop); callers must not present it as a decision."""
 
 
+@dataclass(frozen=True)
+class Fork:
+    """Where a resumed session branches off (PLAN.md D36).
+
+    `resume_at` is the transcript uuid of the last entry of the turn that is kept; `drops_turn`
+    the uuid of the prompt that starts the first discarded turn. Claude Code validates the pair
+    and refuses a mismatch, so both are required. A forked session gets a new session id, which
+    leaves the original conversation untouched.
+    """
+
+    resume_at: str
+    drops_turn: str
+
+
 class ToolGate(Protocol):
     """Decides whether Claude's tool calls may run."""
 
@@ -139,13 +153,21 @@ class ClaudeRunner(Protocol):
     session_id: str | None
     agents: dict[str, AgentInfo]
 
-    async def run(self, gate: ToolGate, sink: EventSink, resume_id: str | None = None) -> None:
+    async def run(
+        self,
+        gate: ToolGate,
+        sink: EventSink,
+        resume_id: str | None = None,
+        fork: Fork | None = None,
+    ) -> None:
         """Start the session and forward its events to `sink` until stopped.
 
         Args:
             gate: Asked before every tool call of the main agent and of subagents.
             sink: Receives the session's events in order.
             resume_id: Claude session id to resume, or None for a new session.
+            fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
+                whole. Needs `resume_id`, and gives the new session its own id.
         """
         ...
 

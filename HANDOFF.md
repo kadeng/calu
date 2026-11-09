@@ -173,9 +173,12 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   database on the built-in cases, on YAML files and, with `--from-db`, on the escalations a
   checker raised and a human resolved. Reports accuracy, preferred decision, critical misses,
   over-escalations, escalation share, unwanted comments; exits 1 on a critical miss.
-- **Checker keys** (D17, D37): read from `~/.config/calu/.env` and calu's environment, blanked
-  for Claude Code, so the checkers can run on an Anthropic API key (an Ultra subscription
-  includes API credits) while the main chat keeps the subscription — measured, not assumed.
+- **Checker keys** (D17, D37): read from `~/.config/calu/.env` and calu's environment, and
+  **every** provider key calu knows is blanked for Claude Code (not only the ones that are set),
+  so the checkers can run on an Anthropic API key (an Ultra subscription includes API credits)
+  while the main chat keeps the subscription. Measured with the real CLI, and
+  `tests/unit/test_credentials.py` holds the two tests for it. The one link not verified here is
+  a checker actually billing the Anthropic API, which needs the owner's key.
   Bedrock needs no key here, and `claude.use_bedrock` is the separate switch for Claude itself.
 - **Sandbox** (D15): `SandboxConfig` passed to Claude Code as a `--settings` document;
   `calu.preflight` warns about missing `bwrap`/`socat`, a disabled sandbox and missing checker

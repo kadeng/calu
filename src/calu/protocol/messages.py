@@ -430,6 +430,9 @@ class AssistantText(Event):
     agent_id: str | None = None
     text: str
     message_id: str | None = None
+    uuid: str = ""
+    """The transcript entry's uuid, if the SDK reported one. The last one of a turn is where a
+    fork of that turn resumes from (D36)."""
 
 
 class AssistantDelta(Event):
@@ -540,6 +543,9 @@ class UserInput(Event):
     method: ClassVar[str] = "user.input"
     text: str
     source: Literal["user", "cross_session"] = "user"
+    uuid: str = ""
+    """The transcript entry's uuid, when Claude Code replays it (`replay-user-messages`). calu
+    records it with the turn so that a later session can be forked before this prompt (D36)."""
 
 
 class TurnResult(Event):

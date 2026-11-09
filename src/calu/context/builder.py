@@ -124,13 +124,31 @@ class ContextBuilder:
 
     # ------------------------------------------------------------------ recording
 
-    def user_input(self, text: str) -> None:
+    def user_input(self, text: str, uuid: str = "") -> None:
         """Record a user input; starts a turn if none is running.
 
         Args:
             text: The user input, kept verbatim.
+            uuid: Transcript uuid of the prompt, if Claude Code reported one. The first one of a
+                turn is kept as the turn's `prompt_uuid`, which is where a fork that drops this
+                turn points (PLAN.md D36).
         """
-        self._ensure_turn().user_inputs.append(text)
+        turn = self._ensure_turn()
+        turn.user_inputs.append(text)
+        if uuid and not turn.prompt_uuid:
+            turn.prompt_uuid = uuid
+
+    def assistant_entry(self, uuid: str) -> None:
+        """Note the transcript uuid of an assistant entry of the running turn.
+
+        The last one is where a fork that keeps this turn resumes from (PLAN.md D36). Nothing is
+        recorded when no turn runs or the SDK reported no uuid.
+
+        Args:
+            uuid: The transcript entry's uuid.
+        """
+        if uuid and self.current is not None:
+            self.current.last_entry_uuid = uuid
 
     def step(self, record: StepRecord) -> None:
         """Record a tool call of the running turn (a turn is started if needed).

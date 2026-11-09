@@ -252,7 +252,20 @@ calu setup                # default checkers and rules; asks for a new session p
 calu run -p "fix the failing test"   # start a session in the current directory
 ```
 
-Checker API keys belong in `~/.config/calu/.env`; Claude Code never sees them. Without
+Checker API keys belong in `~/.config/calu/.env`; Claude Code never sees them — calu blanks
+every provider key in the environment it hands to Claude Code, so the checkers can bill an API
+while the main conversation keeps whatever the machine is signed in with. The combination worth
+knowing about: Claude Code on a Claude subscription (an Ultra subscription includes API credits)
+and the checkers on an **Anthropic API key** from the Console:
+
+```bash
+echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
+calu config set command_checker.model anthropic:claude-haiku-4-5
+calu config set command_checker.effort low      # or "off" for no thinking at all
+```
+
+AWS Bedrock works the same way for the checkers (`bedrock:...`, credentials from the usual AWS
+chain), and `claude.use_bedrock` is the separate switch that puts *Claude Code* on Bedrock. Without
 `bubblewrap` and `socat` a session refuses to start, because the sandbox cannot be built; setting
 `claude.sandbox.enabled` to false in the configuration turns the sandbox off, at the cost of its
 protection.

@@ -43,7 +43,7 @@ from claude_agent_sdk.types import (
 
 from calu.checkers.model import Step
 from calu.checkers.result_checker import SubagentResult
-from calu.claude.runner import EventSink, Priority, ToolGate, Verdict
+from calu.claude.runner import EventSink, Fork, Priority, ToolGate, Verdict
 from calu.config import ClaudeConfig
 from calu.context.foreign import (
     SkillContentFilter,
@@ -150,18 +150,26 @@ class SdkRunner:
 
     # ------------------------------------------------------------------ ClaudeRunner interface
 
-    async def run(self, gate: ToolGate, sink: EventSink, resume_id: str | None = None) -> None:
+    async def run(
+        self,
+        gate: ToolGate,
+        sink: EventSink,
+        resume_id: str | None = None,
+        fork: Fork | None = None,
+    ) -> None:
         """Connect, then translate messages to events until `stop` is called.
 
         Args:
             gate: Decides about every tool call (PreToolUse hook and `can_use_tool`).
             sink: Receives the translated events.
             resume_id: Claude session id to resume, or None for a new session.
+            fork: Where to branch off the resumed conversation (PLAN.md D36).
 
         Raises:
-            claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails.
+            claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails, including a
+                fork point the CLI refuses ("Resume rejected by --resume-drops-turn:").
         """
-        options = self._options(gate, resume_id)
+        options = self._options(gate, resume_id, fork)
         with anyio.CancelScope() as scope:
             self._cancel = scope
             if self._stop_requested:
@@ -224,7 +232,9 @@ class SdkRunner:
 
     # ------------------------------------------------------------------ options and callbacks
 
-    def _options(self, gate: ToolGate, resume_id: str | None) -> ClaudeAgentOptions:
+    def _options(
+        self, gate: ToolGate, resume_id: str | None, fork: Fork | None = None
+    ) -> ClaudeAgentOptions:
         """Build the SDK options: working directory, model, hooks, callbacks and environment.
 
         Claude Code authenticates as configured on this machine; only checker keys are hidden
@@ -235,6 +245,8 @@ class SdkRunner:
         Args:
             gate: Used by the PreToolUse hook and by `can_use_tool`.
             resume_id: Claude session id to resume, or None.
+            fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes
+                it whole.
 
         Returns:
             The options for `ClaudeSDKClient`.
@@ -457,6 +469,12 @@ class SdkRunner:
             },
             include_partial_messages=self.config.stream_partial,
             resume=resume_id,
+            # A fork keeps the conversation up to `resume_at` and discards the turn that
+            # starts at `drops_turn`, under a new session id, so the original stays intact
+            # (PLAN.md D36). The CLI validates the pair and refuses a mismatch.
+            fork_session=fork is not None,
+            resume_session_at=fork.resume_at if fork else None,
+            resume_drops_turn=fork.drops_turn if fork else None,
             env=self._claude_env(),
             stderr=lambda line: log.debug("claude stderr: %s", line),
         )
@@ -554,7 +572,12 @@ class SdkRunner:
                     if isinstance(block, TextBlock) and block.text.strip():
                         message_id = getattr(msg, "message_id", None)
                         events.append(
-                            AssistantText(agent_id=agent, text=block.text, message_id=message_id)
+                            AssistantText(
+                                agent_id=agent,
+                                text=block.text,
+                                message_id=message_id,
+                                uuid=str(getattr(msg, "uuid", "") or ""),
+                            )
                         )
                     elif isinstance(block, ThinkingBlock) and block.thinking.strip():
                         events.append(
@@ -588,7 +611,14 @@ class SdkRunner:
                 if isinstance(msg.content, str):
                     if agent is None and not self._skill_text(msg.content, events):
                         events.append(
-                            UserInput(text=msg.content, source=user_message_source(msg.content))
+                            UserInput(
+                                text=msg.content,
+                                source=user_message_source(msg.content),
+                                # Claude Code replays the prompt with its transcript uuid
+                                # (`replay-user-messages`), which is the fork point of the turn
+                                # that starts here (D36).
+                                uuid=str(getattr(msg, "uuid", "") or ""),
+                            )
                         )
                 else:
                     for block in msg.content:

@@ -797,11 +797,13 @@ class DatabaseSessionStore:
         """
         await self._db.execute(
             "INSERT INTO turns (session_id, number, user_inputs, steps, answer, narrated_answer,"
-            " narrated, started_at, ended_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " narrated, started_at, ended_at, prompt_uuid, last_entry_uuid)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (session_id, number) DO UPDATE SET"
             " user_inputs = excluded.user_inputs, steps = excluded.steps,"
             " answer = excluded.answer, narrated_answer = excluded.narrated_answer,"
-            " narrated = excluded.narrated, ended_at = excluded.ended_at",
+            " narrated = excluded.narrated, ended_at = excluded.ended_at,"
+            " prompt_uuid = excluded.prompt_uuid, last_entry_uuid = excluded.last_entry_uuid",
             (
                 self._require_session(),
                 turn.index,
@@ -812,6 +814,8 @@ class DatabaseSessionStore:
                 turn.narrated,
                 turn.started_at,
                 turn.ended_at,
+                turn.prompt_uuid or None,
+                turn.last_entry_uuid or None,
             ),
         )
 
@@ -1253,7 +1257,8 @@ def turn_record(row: tuple[Any, ...]) -> TurnRecord:
 
     Args:
         row: (number, user_inputs, steps, answer, narrated_answer, narrated, started_at,
-            ended_at), in the order the queries above select them.
+            ended_at) and optionally (prompt_uuid, last_entry_uuid), in the order the queries
+            above select them.
 
     Returns:
         The turn record.
@@ -1261,7 +1266,8 @@ def turn_record(row: tuple[Any, ...]) -> TurnRecord:
     Raises:
         pydantic.ValidationError: If a stored step record does not match `StepRecord`.
     """
-    number, user_inputs, steps, answer, narration, narrated, started, ended = row
+    number, user_inputs, steps, answer, narration, narrated, started, ended = row[:8]
+    prompt_uuid, last_entry_uuid = (row[8], row[9]) if len(row) > 9 else ("", "")
     return TurnRecord(
         index=number,
         user_inputs=list(user_inputs),
@@ -1269,6 +1275,8 @@ def turn_record(row: tuple[Any, ...]) -> TurnRecord:
         answer=answer,
         answer_narration=narration or "",
         narrated=narrated,
+        prompt_uuid=prompt_uuid or "",
+        last_entry_uuid=last_entry_uuid or "",
         **({"started_at": started} if started else {}),
         ended_at=ended,
     )

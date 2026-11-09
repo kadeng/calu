@@ -1,8 +1,13 @@
 import json
+import os
 import stat
+from pathlib import Path
 
 import pytest
 
+from calu import preflight
+from calu.claude.sdk_runner import SdkRunner
+from calu.config import CheckerConfig, ClaudeConfig, Config, load_secrets
 from calu.credentials import (
     CorruptStore,
     CredentialStore,
@@ -82,3 +87,44 @@ def test_wipe_zeroes_in_place() -> None:
 def test_default_path_uses_xdg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", "/tmp/xdg")
     assert str(default_path()) == "/tmp/xdg/calu/credentials.json"
+
+
+def test_an_anthropic_key_serves_the_checkers_and_is_hidden_from_claude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D37: the checkers may use the Anthropic API while the main chat keeps the subscription."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("ANTHROPIC_API_KEY=sk-ant-for-the-checkers\n", encoding="utf-8")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    loaded = load_secrets(env_file)
+    # The key is in calu's own environment, so a checker model can use it ...
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-for-the-checkers"
+    assert "ANTHROPIC_API_KEY" in loaded
+
+    # ... and blanked for Claude Code, which therefore stays on whatever it is set up with.
+    config = ClaudeConfig(model="opus")
+    runner = SdkRunner(tmp_path, config, loaded)
+    assert runner._claude_env()["ANTHROPIC_API_KEY"] == ""
+    assert "CLAUDE_CODE_USE_BEDROCK" not in runner._claude_env()
+
+    # Every provider key calu knows is blanked, not only the ones that are set.
+    assert runner._claude_env()["MISTRAL_API_KEY"] == ""
+
+    # Bedrock for Claude itself is the separate switch, and does not touch the checker key.
+    bedrock = SdkRunner(tmp_path, ClaudeConfig(use_bedrock=True), loaded)._claude_env()
+    assert bedrock["CLAUDE_CODE_USE_BEDROCK"] == "1"
+    assert bedrock["ANTHROPIC_API_KEY"] == ""
+
+
+def test_a_missing_anthropic_key_for_a_checker_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checker on the Anthropic API without the key must not fail silently at the first step."""
+    config = Config(command_checker=CheckerConfig(model="anthropic:claude-haiku-4-5"))
+    about_anthropic = [w for w in preflight.key_warnings(config, {}) if "ANTHROPIC" in w]
+    assert len(about_anthropic) == 1
+    assert "command checker" in about_anthropic[0]
+    # With the key in the environment there is nothing left to say about this provider.
+    with_key = preflight.key_warnings(config, {"ANTHROPIC_API_KEY": "sk-ant-x"})
+    assert [w for w in with_key if "ANTHROPIC" in w] == []

@@ -2024,8 +2024,16 @@ class Session:
             case UserInput() if event.source == "cross_session":
                 self._record_cross_session(event.text)
             case UserInput():
-                self.context.user_input(event.text)
+                self.context.user_input(event.text, event.uuid)
                 await self._take_from_queue(event.text)
+            case AssistantText() if event.agent_id is None and event.uuid:
+                # Where a fork that keeps this turn resumes from (D36); the narrator case below
+                # also wants this event, so this branch records and falls through to it.
+                self.context.assistant_entry(event.uuid)
+                if self.narrator is not None:
+                    outputs = self._claude_outputs.setdefault(event.agent_id, [])
+                    outputs.append(ClaudeOutput("text", event.text))
+                    del outputs[:-MAX_PENDING_OUTPUTS]
             case AssistantText() | AssistantThinking() if self.narrator is not None:
                 kind = "thinking" if isinstance(event, AssistantThinking) else "text"
                 outputs = self._claude_outputs.setdefault(event.agent_id, [])
