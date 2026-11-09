@@ -195,3 +195,32 @@ output and lets the call continue through the normal permission flow (fail-open)
 the reasons why PLAN.md §4.5 does not move calu's hooks into a plugin, and if that mode is ever
 built (Q10), the shell hook must answer "deny" itself when it cannot reach the calu process,
 instead of leaving the decision to its timeout.
+
+## PostToolUse for Bash: reviewing what a command wrote (2026-11-09)
+
+**Why it matters.** The step checker judges a command before it runs and cannot know what it
+will write. D31 reviews the change afterwards, which only works if Claude Code lets calu run a
+hook *after* a Bash call, waits for it, and passes the answer on.
+
+**Setup.** `spikes/smoke_session.py <dir> --changes` with the real CLI (2.1.319, haiku), the
+rule-based fake checkers, `changes.snapshot` and `changes.review` on, and the prompt "run exactly
+this: `printf 'hello # calu:%s\n' deny > note.txt`". The marker is assembled by `printf`, so the
+*command line* does not hold `calu:deny` and the pre-call check passes; the *written file* does,
+so the review refuses it.
+
+**Observations.**
+
+- The command was allow-listed, so it passed without a model call, ran, and wrote `note.txt`.
+- The `PostToolUse` matcher for `Bash` fired with the call's `tool_use_id`. calu measured the
+  write set (1 path, 18 bytes), the changeset checker read the patch and answered DENY.
+- calu reverted the file with `git apply --reverse` from its own snapshot; the project directory
+  was clean afterwards (`git status` empty, no `note.txt`).
+- The note reached Claude as a priority message: it reported the refusal, named the reason and
+  did **not** retry the command.
+- The database held the write set on the `steps` row and a `checker_runs` row for the review
+  (`changeset`, decision `deny`, with its duration), so the review has the same audit trail as
+  every other check.
+
+**Conclusion.** A post-call review with a revert works against the real CLI. The hook keeps
+`REVIEW_HOOK_TIMEOUT_S` (24 h), because the review may ask a human; the wait itself is in
+`Session.ask`, as for an escalation before a call.

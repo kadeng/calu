@@ -11,7 +11,9 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"tool": "Bash", "writes": {"a.txt": "text"}}     ... and the call really writes those files
                                                       (relative to the workspace; "" deletes),
                                                       so that features which watch the file
-                                                      system have something to see
+                                                      system have something to see; the call is
+                                                      then reviewed like a command of the real
+                                                      runner (`review_write_set`)
     {"sleep": 0.5}                                    pause (lets tests inject messages)
     {"agent": {"description": "...", "background": false, "actions": [...]}}
                                                       a subagent runs the nested actions
@@ -307,14 +309,18 @@ class FakeRunner:
             # The fake runner has no auto mode of its own, so PASS runs the step (PLAN.md D21).
             allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
             message = gate_result.reason
+        note = ""
         if allowed:
             _write_files(self.workspace, action.get("writes") or {})
             content, is_error = str(action.get("result", "")), False
+            note = await gate.review_write_set(step)  # as the PostToolUse hook does for Bash
         else:
             content, is_error = message, True
         await sink(
             ToolResult(agent_id=agent, tool_use_id=tool_use_id, is_error=is_error, content=content)
         )
+        if note:
+            await sink(UserInput(text=note))  # stands for the injected priority-"next" note
 
 
 def _write_files(workspace: Path, writes: dict[str, str]) -> None:

@@ -70,7 +70,10 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   it does. Switch on `changes.snapshot` and calu snapshots the project directory around every
   command (git plumbing, in a directory of its own outside your repository), records which paths
   changed, and tells you when a command wrote files its own summary never mentioned. That is the
-  honesty rule below, applied to commands instead of to code.
+  honesty rule below, applied to commands instead of to code. Switch on `changes.review` as well
+  and a checker reads the actual patch after the command has run, while Claude waits: if it
+  refuses, calu puts the files back as they were and tells Claude what was undone and why. A
+  refusal is then not a comment on something that already stands.
 - **A review of the whole change before it is committed.** When Claude runs `git commit`, calu
   holds the commit and gives the complete diff to a checker of its own — the one checker that
   sees the result rather than one step of it. It judges what the step checkers cannot: whether

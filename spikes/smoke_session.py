@@ -1,7 +1,8 @@
 """Manual end-to-end check of a session with the real Claude Code CLI and fake checker models.
 
-What it covers that the automated tests do not: the Claude Agent SDK, the PreToolUse hook,
-`can_use_tool` (the wait for a human) and the sandbox settings, all against a real `claude`.
+What it covers that the automated tests do not: the Claude Agent SDK, the PreToolUse hook, the
+PostToolUse hook for Bash (`--changes`), `can_use_tool` (the wait for a human) and the sandbox
+settings, all against a real `claude`.
 The checkers are the rule-based fakes (`calu.testing`), so no checker API key is needed.
 
     uv run python spikes/smoke_session.py <project dir> [-p PROMPT] [--resolve allow|deny]
@@ -48,6 +49,8 @@ REPORT = (
     "SELECT checker_name, checker_version, decision, duration_ms IS NOT NULL FROM checker_runs"
     " ORDER BY id",
     "SELECT state, resolved_by, note FROM escalations ORDER BY id",
+    "SELECT seq, tool_name, snapshot_before IS NOT NULL AS snapshotted, wrote FROM steps"
+    " WHERE wrote IS NOT NULL ORDER BY seq",
     "SELECT number, user_inputs, left(answer, 60) FROM turns ORDER BY number",
 )
 
@@ -97,6 +100,7 @@ async def main(args: argparse.Namespace) -> int:
             "stream_partial": False,
         },
         "context": {"narrate": False},
+        "changes": {"snapshot": args.changes, "review": args.changes},
     }
     try:
         owner = await connect(url)
@@ -148,6 +152,11 @@ parser.add_argument(
 )
 parser.add_argument("--resolve", choices=["allow", "deny"], help="play the operator")
 parser.add_argument("--sandbox", action="store_true", help="switch the sandbox on (needs socat)")
+parser.add_argument(
+    "--changes",
+    action="store_true",
+    help="measure and review what a command writes (PLAN.md D31): snapshot and review on",
+)
 parser.add_argument("--model", default="haiku")
 parser.add_argument("--timeout", type=float, default=240, help="how long the operator waits")
 sys.exit(anyio.run(main, parser.parse_args()))

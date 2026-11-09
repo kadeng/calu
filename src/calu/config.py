@@ -232,6 +232,10 @@ class ChangesConfig(BaseModel):
 
     snapshot: bool = False
     """Take a git snapshot of the project directory before and after every Bash step."""
+    review: bool = False
+    """Let a checker judge what a command wrote, once it has run, and undo the change if it
+    refuses (needs `snapshot`). The agent waits for that review, so a refusal is not a comment
+    on something that already stands: the files go back to the state from before the command."""
     max_file_bytes: int = Field(default=1_000_000, ge=0)
     """Files above this size are reported by path and size, but their content is not shown."""
     max_patch_bytes: int = Field(default=200_000, ge=0)

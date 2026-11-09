@@ -310,6 +310,35 @@ class SdkRunner:
             await self._send_note(note)
             return {}
 
+        async def post_command(
+            input_data: Any, tool_use_id: str | None, context: Any
+        ) -> dict[str, Any]:
+            """PostToolUse hook for Bash: review what the command wrote (PLAN.md D31).
+
+            Claude waits while this runs, so the review may measure the write set, ask a checker
+            and even wait for a human; the matcher therefore gets `REVIEW_HOOK_TIMEOUT_S`. A
+            note is sent as a priority "next" message, as for the subagent review. The call is a
+            no-op when the snapshot is off, so no configuration is needed here.
+
+            Args:
+                input_data: Hook input (`tool_name`, `tool_input`, `cwd`).
+                tool_use_id: Id of the Bash call.
+                context: SDK hook context (unused).
+
+            Returns:
+                An empty hook output.
+            """
+            step = Step(
+                tool_name=str(input_data.get("tool_name", "Bash")),
+                tool_input=input_data.get("tool_input") or {},
+                tool_use_id=tool_use_id,
+                agent_id=input_data.get("agent_id"),
+                cwd=str(input_data.get("cwd") or self.workspace),
+            )
+            note = await gate.review_write_set(step)
+            await self._send_note(note)
+            return {}
+
         async def subagent_stop(
             input_data: Any, tool_use_id: str | None, context: Any
         ) -> dict[str, Any]:
@@ -401,7 +430,12 @@ class SdkRunner:
                         matcher="Agent|Task",
                         hooks=[post_tool_use],  # type: ignore[list-item]
                         timeout=REVIEW_HOOK_TIMEOUT_S,
-                    )
+                    ),
+                    HookMatcher(
+                        matcher="Bash",
+                        hooks=[post_command],  # type: ignore[list-item]
+                        timeout=REVIEW_HOOK_TIMEOUT_S,
+                    ),
                 ],
                 "SubagentStop": [
                     HookMatcher(

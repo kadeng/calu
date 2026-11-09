@@ -586,3 +586,131 @@ async def test_without_snapshots_nothing_is_measured(tmp_path: Path):
         assert (tmp_path / "a.txt").read_text() == "two\n"  # the step did run
         await session.stop()
         tg.cancel_scope.cancel()
+
+
+async def test_a_refused_write_set_is_reverted_and_claude_is_told(tmp_path: Path):
+    """D31: the step checker judged the command, this judges what it actually wrote."""
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    config = Config(changes=ChangesConfig(snapshot=True, review=True))
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "tool": "Bash",
+                    "input": {"command": "generate"},
+                    # The written content carries the fake checker's deny marker, not the command
+                    # line, so the step passes the gate and the review refuses the change.
+                    "writes": {"a.txt": "two # calu:deny\n", "b.txt": "also mine\n"},
+                    "result": "generated",
+                }
+            ]
+        ],
+        config=config,
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="generate it"))
+        await rec.wait_for(TurnResult)
+        notes = [event.text for event in rec.of(UserInput) if "undone" in event.text]
+        assert notes, [event.text for event in rec.of(UserInput)]
+        assert "a.txt" in notes[0] and "calu:deny" in notes[0]
+        assert "Do not simply repeat the command" in notes[0]
+        # The files are back as they were, and the log says so.
+        assert (tmp_path / "a.txt").read_text() == "one\n"
+        assert not (tmp_path / "b.txt").exists()
+        assert [e for e in rec.of(Log) if "reverted" in e.message and "NOT" not in e.message]
+        # The review leaves the same audit trail as the check before the command.
+        runs = [run for row in store.steps.values() for run in row.checker_runs]
+        assert [run.checker_name for run in runs] == ["command", "changeset"]
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_accepted_write_set_keeps_the_change_and_passes_a_remark_on(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    config = Config(changes=ChangesConfig(snapshot=True, review=True))
+    session, rec, _store = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "tool": "Bash",
+                    "input": {"command": "generate"},
+                    "writes": {"a.txt": "two # calu:comment\n"},
+                    "result": "generated",
+                }
+            ]
+        ],
+        config=config,
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="generate it"))
+        await rec.wait_for(TurnResult)
+        assert (tmp_path / "a.txt").read_text() == "two # calu:comment\n"
+        remarks = [event.text for event in rec.of(UserInput) if "remarked" in event.text]
+        assert remarks and "Fake checker remark" in remarks[0]
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_escalated_write_set_waits_for_the_human_and_reverts_on_a_denial(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    config = Config(changes=ChangesConfig(snapshot=True, review=True))
+    session, rec, _store = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "tool": "Bash",
+                    "input": {"command": "generate"},
+                    "writes": {"a.txt": "two # calu:escalate\n"},
+                    "result": "generated",
+                }
+            ]
+        ],
+        config=config,
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="generate it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "Escalated by the rule-based fake checker" in request.reason
+        # The change is still in place while the human thinks: the command has run.
+        assert (tmp_path / "a.txt").read_text() == "two # calu:escalate\n"
+        await session.decide_escalation(request.escalation_id, "deny", "put that back")
+        await rec.wait_for(TurnResult)
+        assert (tmp_path / "a.txt").read_text() == "one\n"
+        notes = [event.text for event in rec.of(UserInput) if "undone" in event.text]
+        assert notes and "put that back" in notes[0]
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_without_the_review_a_write_set_is_only_recorded(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    config = Config(changes=ChangesConfig(snapshot=True))  # measuring on, reviewing off
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "tool": "Bash",
+                    "input": {"command": "generate"},
+                    "writes": {"a.txt": "two # calu:deny\n"},
+                    "result": "generated",
+                }
+            ]
+        ],
+        config=config,
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="generate it"))
+        await rec.wait_for(TurnResult)
+        assert (tmp_path / "a.txt").read_text() == "two # calu:deny\n"  # nothing was undone
+        assert store.write_sets  # but it was measured
+        assert not [event for event in rec.of(UserInput) if "undone" in event.text]
+        await session.stop()
+        tg.cancel_scope.cancel()

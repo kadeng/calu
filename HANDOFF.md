@@ -40,7 +40,7 @@ in `calu/` only.
 | 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**338 tests pass** (unit + database). The database tests need `docker compose up -d caludb
+**342 tests pass** (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 50 commits, ~18k lines of source, ~6k of tests, 10 migrations, 16 CLI commands,
 16 protocol requests.
 
@@ -79,9 +79,13 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   `changes.max_patch_bytes`; `changes.always_capture` (`.env` by default) catches what a
   `.gitignore` would hide. `SnapshotStore.revert` exists and is tested. Overlapping windows
   (background commands, subagents) are marked `overlapping` and then not compared with the
-  summary, because the paths cannot be attributed to one step. Nothing acts on a write set
-  automatically yet: the post-call review by a checker needs a PostToolUse hook for Bash and a
-  new gate method, and the revert then hangs off its DENY.
+  summary, because the paths cannot be attributed to one step. With `changes.review` on as well
+  (also off by default), a `PostToolUse` matcher for Bash calls `ToolGate.review_write_set`
+  while Claude waits: the changeset checker reads the patch, a DENY reverts the change and tells
+  Claude what was undone and why — or, when the revert does not apply because the files moved
+  on, that it was **not** undone and Claude has to fix it itself. An ESCALATE asks a human, and
+  the review records a `checker_runs` row like every other check. Verified against the real CLI
+  (`spikes/RESULTS.md`, "PostToolUse for Bash").
 - **Times and the clock** (D32, `src/calu/clock.py`): a session keeps the start and end time of
   its recent steps (`Session.step_times`, the last 500) and gives the checkers two more
   read-only tools: `step_times` (when the recent calls ran, local and UTC) and `changed_files`
@@ -181,6 +185,11 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    reason and did not retry, and the change stayed staged.
 5. `spikes/spike_hook_timeout.py`: a PreToolUse hook that misses its timeout does **not** let the
    call run (D23). Re-run it after a CLI update; the whole gate rests on it.
+6. `--changes`: a command wrote a file whose content carried the deny marker (the command line
+   did not, so the pre-call check passed). The `PostToolUse` matcher for Bash fired, the
+   changeset checker refused the patch, calu reverted the file (the directory was clean
+   afterwards), Claude reported the refusal and did not retry, and the database held the write
+   set and a `checker_runs` row for the review.
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
@@ -206,17 +215,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
    `AutoEscalate`, and the single-binary packaging.
-2. **Review a command's write set after the call** (the rest of D31): the measurement and the
-   revert exist (`calu.changes`, `changes.snapshot`); what is missing is giving the patch to a
-   checker once the command has run and reverting on its DENY. That needs a PostToolUse hook for
-   Bash in `SdkRunner`, a `post_tool_use` method on `ToolGate`, and a decision about which
-   checker judges it (the changeset checker's instructions already fit a diff). Claude learns of
-   the revert through the hook's answer, which is also how the subagent-result review reports
-   (`REVIEW_HOOK_TIMEOUT_S`, 24 h, so it may wait for a human).
-3. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
+2. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
    side each feature talks to).
-4. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
+3. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+4. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
    read, not edited, through a client; the protocol server binds TCP only (a Unix socket is
    mentioned in §6 and `sessions.address` already allows for one).
 

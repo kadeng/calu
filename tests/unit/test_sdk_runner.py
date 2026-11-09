@@ -35,6 +35,9 @@ class AllowAll:
     async def review_subagent_result(self, result):
         return ""
 
+    async def review_write_set(self, step):
+        return ""
+
 
 def test_claude_code_authenticates_as_configured(tmp_path: Path):
     """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""

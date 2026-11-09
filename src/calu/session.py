@@ -58,7 +58,7 @@ from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
 from calu import __version__
-from calu.changes import SnapshotError, SnapshotStore, default_root
+from calu.changes import ChangeSet, SnapshotError, SnapshotStore, default_root
 from calu.checkers import (
     CheckDecision,
     Checker,
@@ -125,6 +125,38 @@ from calu.store import StepRow as StoredStep
 from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
+
+WRITE_SET_PROMPT = """## What the command wrote
+
+{summary}
+
+The change itself, as a patch:
+
+```diff
+{patch}
+```
+
+Judge this change, not the command line: is it what the step was supposed to do, is it complete,
+and does it hold anything nobody asked for? DENY means the change is undone; say what to do
+instead."""
+"""Prompt block for the review of a command's write set (PLAN.md D31)."""
+
+WRITE_SET_NOTE = "A reviewer looked at what your command changed and remarked: {note}"
+"""A remark on a change that stands."""
+
+WRITE_SET_REVERTED = (
+    "The change your command made to the files was reviewed and refused, and calu has **undone "
+    "it** ({paths}). Reason: {reason}\nThe files are back in the state from before your command. "
+    "Do not simply repeat the command; address the reason first."
+)
+"""Note for Claude when a refused change was reverted."""
+
+WRITE_SET_NOT_REVERTED = (
+    "The change your command made to the files was reviewed and refused ({paths}), but calu "
+    "could **not** undo it, because the files have moved on since. Reason: {reason}\nUndo or fix "
+    "the change yourself before you go on."
+)
+"""Note for Claude when a refused change could not be reverted."""
 
 STEP_TIMES_KEPT = 500
 """How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
@@ -235,6 +267,18 @@ class _Decided:
     source: str
     rules: str | None = None
     run: CheckOutcome | None = None
+
+
+@dataclass(frozen=True)
+class _Measured:
+    """What a command wrote, with the snapshots it was measured against (PLAN.md D31)."""
+
+    change: ChangeSet
+    before: str
+    after: str
+    step_id: int | None
+    summary: str
+    """What the checker said the step does, for the comparison with the written paths."""
 
 
 class Session:
@@ -568,30 +612,52 @@ class Session:
         self._before[step.tool_use_id] = (tree, step_id, summary)
 
     async def _snapshot_after(self, tool_use_id: str) -> None:
-        """Measure what a command wrote and record it (D31).
+        """Measure a finished command's write set if the review has not done it already (D31).
 
-        Side effects: records the write set on the `steps` row and emits a `log` event — a
-        warning if the command wrote paths that the checker's summary did not mention, which is
-        the dishonesty signal of D31, and otherwise an informational line.
+        The PostToolUse hook for Bash measures and reviews while Claude waits, which is the
+        better moment; this is the fallback for a call that never reaches that hook (a denied
+        call, a runner without hooks) and does nothing when the measurement already ran.
 
         Args:
-            tool_use_id: Claude's id of the finished call; an id without a "before" is ignored.
+            tool_use_id: Claude's id of the finished call.
+        """
+        await self._measure_write_set(tool_use_id)
+
+    async def _measure_write_set(self, tool_use_id: str) -> _Measured | None:
+        """Snapshot the project directory after a command and record what changed (D31).
+
+        Takes the "after" snapshot, compares it with the "before" one, records the write set on
+        the `steps` row and reports it as a `log` event — a warning if the command wrote paths
+        that the checker's summary did not mention, which is the dishonesty signal of D31.
+
+        Idempotent: the "before" entry is consumed, so a second call for the same id returns
+        None and records nothing.
+
+        Args:
+            tool_use_id: Claude's id of the finished call.
+
+        Returns:
+            What was measured, or None if this call had no snapshot (snapshots off, the call was
+            not one the command checker judges, or it was measured already).
         """
         opened = self._before.pop(tool_use_id, None)
         overlapping = tool_use_id in self._overlapped
         self._overlapped.discard(tool_use_id)
         if opened is None or self._snapshots is None:
-            return
+            return None
         before, step_id, summary = opened
         try:
             after = await self._snapshots.take()
             change = await self._snapshots.changes(before, after)
         except SnapshotError as exc:
             log.warning("no write set for %s: %s", tool_use_id, exc)
-            return
+            return None
         change = replace(change, overlapping=overlapping)
+        measured = _Measured(
+            change=change, before=before, after=after, step_id=step_id, summary=summary
+        )
         if not change.changes:
-            return
+            return measured
         undeclared = () if overlapping else change.undeclared(summary)
         if step_id is not None:
             await self._store_call(
@@ -612,6 +678,137 @@ class Session:
             )
         else:
             await self._emit_safely(Log(level="info", message=f"wrote {change.summary()}"))
+        return measured
+
+    async def review_write_set(self, step: Step) -> str:
+        """Review what a finished command wrote, and undo it if the review refuses (D31).
+
+        This is the second half of the write-set snapshot: the step checker judged the command
+        before it ran, with no way of knowing what it would write; this judges the change
+        itself, with the patch in front of it. Only reached when `changes.review` is on, which
+        needs `changes.snapshot`.
+
+        A DENY reverts the change (`git apply --reverse` from calu's own snapshot) and tells
+        Claude what was undone and why; a revert that does not apply is reported as such, so
+        Claude is never told that something was undone when it was not. An ESCALATE asks the
+        human, and a denial from the human reverts in the same way. A comment on an accepted
+        change is passed on.
+
+        Side effects: measures and records the write set (see `_measure_write_set`), may change
+        files in the workspace, and may open an escalation.
+
+        Args:
+            step: The tool call that has just run.
+
+        Returns:
+            A note for Claude, or "" if there is nothing to say.
+        """
+        measured = await self._measure_write_set(step.tool_use_id or "")
+        if measured is None or not self.config.changes.review:
+            return ""
+        change = measured.change
+        if not change.changes or change.overlapping or self._snapshots is None:
+            # Overlapping windows hold the writes of more than one call, so a review of them
+            # could blame or revert the wrong command.
+            return ""
+        outcome = await self._review_change(step, change, measured.step_id)
+        decision = outcome.decision
+        if decision is Decision.ESCALATE:
+            self._pending_reasons[step.tool_use_id or ""] = (outcome.reason, "write_set")
+            answer = await self.ask(step)
+            if answer.cancelled:
+                return ""
+            if answer.allow:
+                return WRITE_SET_NOTE.format(note=answer.note) if answer.note else ""
+            return await self._undo(measured, answer.message or outcome.reason)
+        if decision is Decision.DENY:
+            return await self._undo(measured, outcome.reason)
+        return WRITE_SET_NOTE.format(note=outcome.comment) if outcome.comment.strip() else ""
+
+    async def _review_change(
+        self, step: Step, change: ChangeSet, step_id: int | None
+    ) -> CheckDecision:
+        """Let the changeset checker judge what a command wrote.
+
+        Side effect: records the model call in `checker_runs`, so that the review has the same
+        audit trail as every other check (who judged, with which model and version, how long it
+        took).
+
+        Args:
+            step: The command that wrote it.
+            change: Its write set, with the patch.
+            step_id: The `steps` row the checker run belongs to, or None if it was not stored.
+
+        Returns:
+            The checker's decision; a failure of the checker yields ESCALATE, so a human
+            decides instead of the change standing unreviewed.
+        """
+        checker = self.checkers[Route.CHANGESET]
+        extra = WRITE_SET_PROMPT.format(summary=change.summary(), patch=change.patch)
+        self._checking += 1
+        await self._refresh_state()
+        try:
+            with anyio.fail_after(CHECKER_DEADLINE_S):
+                run = await checker.run(step, self.context.check_context(), extra=extra)
+            if step_id is not None:
+                await self._store_call(
+                    "recording the review of a write set",
+                    self.store.add_checker_run(
+                        step_id, self._checker_run(checker, Route.CHANGESET.value, run)
+                    ),
+                )
+            return run.decision
+        except TimeoutError:
+            return CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=f"The review of the write set did not answer within {CHECKER_DEADLINE_S} s.",
+                step_summary=change.summary(),
+            )
+        except Exception as exc:
+            log.exception("reviewing a write set failed")
+            return CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=f"The review of the write set failed ({type(exc).__name__}: {exc}).",
+                step_summary=change.summary(),
+            )
+        finally:
+            self._checking -= 1
+            await self._refresh_state()
+
+    async def _undo(self, measured: _Measured, reason: str) -> str:
+        """Undo a command's writes and describe the outcome for Claude.
+
+        Side effect: changes files in the workspace. Nothing is lost: both snapshots stay in
+        calu's snapshot repository until the session ends.
+
+        Args:
+            measured: The write set and the two snapshots.
+            reason: Why the change was refused; Claude reads it.
+
+        Returns:
+            A note saying what was undone, or that the revert did not apply and Claude has to
+            undo the change itself.
+        """
+        change = measured.change
+        reverted = False
+        if self._snapshots is not None:
+            try:
+                reverted = await self._snapshots.revert(
+                    measured.before, measured.after, change.paths
+                )
+            except SnapshotError as exc:
+                log.warning("the revert failed: %s", exc)
+        await self._emit_safely(
+            Log(
+                level="warning",
+                message=(
+                    f"the write set of a command was refused and "
+                    f"{'reverted' if reverted else 'could NOT be reverted'}: {change.summary()}"
+                ),
+            )
+        )
+        template = WRITE_SET_REVERTED if reverted else WRITE_SET_NOT_REVERTED
+        return template.format(reason=reason, paths=", ".join(change.paths[:20]))
 
     async def clock_jumped(self, jump: ClockJump) -> None:
         """React to a move of the wall clock that `calu.clock.ClockWatch` detected (D32).

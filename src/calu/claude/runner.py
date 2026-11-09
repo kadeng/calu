@@ -94,6 +94,23 @@ class ToolGate(Protocol):
         """
         ...
 
+    async def review_write_set(self, step: Step) -> str:
+        """Review what a finished command wrote, before the agent goes on (PLAN.md D31).
+
+        The runner calls this after a command has run, while the agent waits, so the review may
+        take its time and may even ask a human. It is a no-op unless the write-set snapshot is
+        configured (`changes.snapshot`) and something was written, so a runner may call it for
+        every command.
+
+        Args:
+            step: The tool call that has just run.
+
+        Returns:
+            A note for the agent, or "" if there is nothing to say. A note says what the review
+            found and, if the change was undone, that it was undone.
+        """
+        ...
+
     async def review_subagent_result(self, result: SubagentResult) -> str:
         """Review a subagent's final result before the main agent acts on it.
 
