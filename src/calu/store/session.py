@@ -248,6 +248,29 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def record_changes(
+        self,
+        step_id: int,
+        before: str,
+        after: str,
+        paths: Sequence[str],
+        undeclared: Sequence[str] = (),
+        overlapping: bool = False,
+    ) -> None:
+        """Record what a step wrote, as the optional snapshot measured it (PLAN.md D31).
+
+        Args:
+            step_id: Id from `add_step`.
+            before: Git tree of the project directory before the step.
+            after: Git tree after it.
+            paths: The paths that changed, project-relative.
+            undeclared: Those of them that the checker's summary did not mention — the honesty
+                signal, which is a hint for a human, not a verdict.
+            overlapping: True if another tool call ran inside the same window, so the paths
+                cannot be attributed to this step alone.
+        """
+        ...
+
     async def add_checker_run(self, step_id: int, run: CheckerRun) -> None:
         """Record one checker model call.
 
@@ -676,6 +699,44 @@ class DatabaseSessionStore:
         await self._db.execute(
             "UPDATE steps SET result_summary = %s, finished_at = now() WHERE id = %s",
             (result_summary, step_id),
+        )
+
+    async def record_changes(
+        self,
+        step_id: int,
+        before: str,
+        after: str,
+        paths: Sequence[str],
+        undeclared: Sequence[str] = (),
+        overlapping: bool = False,
+    ) -> None:
+        """Record a step's write set (see `SessionStore.record_changes`).
+
+        Args:
+            step_id: Id from `add_step`.
+            before: Git tree before the step.
+            after: Git tree after it.
+            paths: The paths that changed.
+            undeclared: The paths the checker's summary did not mention.
+            overlapping: Whether another call ran in the same window.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        await self._db.execute(
+            "UPDATE steps SET snapshot_before = %s, snapshot_after = %s, wrote = %s WHERE id = %s",
+            (
+                before,
+                after,
+                json.dumps(
+                    {
+                        "paths": list(paths),
+                        "undeclared": list(undeclared),
+                        "overlapping": overlapping,
+                    }
+                ),
+                step_id,
+            ),
         )
 
     async def add_checker_run(self, step_id: int, run: CheckerRun) -> None:

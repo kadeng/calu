@@ -64,6 +64,13 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   change, the condensed conversation and the chat summary of that moment, and which checker
   version and model answered. You decide on the same material the checker had, not on a
   one-line reason.
+- **What a command really wrote** (optional). Claude's `Edit` and `Write` arrive with their
+  exact content, so a checker sees them before they happen. A command does not: `sed -i`, a
+  formatter or a script can write anything, and the checker only reads what the command *says*
+  it does. Switch on `changes.snapshot` and calu snapshots the project directory around every
+  command (git plumbing, in a directory of its own outside your repository), records which paths
+  changed, and tells you when a command wrote files its own summary never mentioned. That is the
+  honesty rule below, applied to commands instead of to code.
 - **A review of the whole change before it is committed.** When Claude runs `git commit`, calu
   holds the commit and gives the complete diff to a checker of its own — the one checker that
   sees the result rather than one step of it. It judges what the step checkers cannot: whether

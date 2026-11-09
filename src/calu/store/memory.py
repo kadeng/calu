@@ -68,6 +68,8 @@ class MemorySessionStore:
     """What `recent_sessions` returns (a test sets it)."""
     comments: list[tuple[int, Comment, int | None]] = field(default_factory=list)
     client_tokens: list[tuple[str, str]] = field(default_factory=list)
+    write_sets: dict[int, dict[str, Any]] = field(default_factory=dict)
+    """What each step wrote, as `record_changes` recorded it (PLAN.md D31)."""
     address: str = ""
     agents: dict[str, AgentInfo] = field(default_factory=dict)
     """The subagents as `update_agents` recorded them, by agent id."""
@@ -269,6 +271,33 @@ class MemorySessionStore:
         token_id = next(self._ids)
         self.client_tokens.append((token_sha256, address))
         return token_id
+
+    async def record_changes(
+        self,
+        step_id: int,
+        before: str,
+        after: str,
+        paths: Sequence[str],
+        undeclared: Sequence[str] = (),
+        overlapping: bool = False,
+    ) -> None:
+        """Keep a step's write set in `write_sets` (see `SessionStore.record_changes`).
+
+        Args:
+            step_id: Id from `add_step`.
+            before: Git tree before the step.
+            after: Git tree after it.
+            paths: The paths that changed.
+            undeclared: The paths the checker's summary did not mention.
+            overlapping: Whether another call ran in the same window.
+        """
+        self.write_sets[step_id] = {
+            "before": before,
+            "after": after,
+            "paths": list(paths),
+            "undeclared": list(undeclared),
+            "overlapping": overlapping,
+        }
 
     async def client_token_ok(self, token_sha256: str) -> bool:
         """Tell whether a recorded token has this hash (see `SessionStore.client_token_ok`).

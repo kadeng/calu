@@ -126,6 +126,8 @@ def make_session(
         turns: The fake runner's script (see `calu.claude.fake_runner`).
         config: The configuration; None uses the defaults.
         settings: Complete settings; None builds them from `config` and the built-in defaults.
+            The write-set snapshots (D31) are kept next to the workspace, not in the user's
+            state directory, so a test never writes outside its temporary directory.
 
     Returns:
         The session, the event recorder and the store.
@@ -140,5 +142,6 @@ def make_session(
         lambda: FakeRunner(script, workspace),
         rec,
         checker_models=fake_models(),
+        snapshot_root=workspace.parent / f"{workspace.name}-snapshots",
     )
     return session, rec, store

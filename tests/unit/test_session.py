@@ -7,7 +7,7 @@ import pytest
 
 from calu.checkers import Decision, Route, Step
 from calu.clock import ClockJump
-from calu.config import ClaudeConfig, Config, ContextConfig
+from calu.config import ChangesConfig, ClaudeConfig, Config, ContextConfig
 from calu.protocol.messages import (
     AgentsUpdate,
     ChatSendParams,
@@ -524,5 +524,65 @@ async def test_the_step_times_of_a_session_are_recorded_for_the_checkers(tmp_pat
                 await anyio.sleep(0.01)
         assert all(step.finished_at >= step.started_at for step in session.step_times())  # type: ignore[operator]
         assert any(step.summary for step in session.step_times())
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_the_write_set_of_a_command_is_measured_when_snapshots_are_on(tmp_path: Path):
+    """D31: a command that writes more than it said leaves a trace in the record and the log."""
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    config = Config(changes=ChangesConfig(snapshot=True))
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "tool": "Bash",
+                    "input": {"command": "format a.txt"},
+                    "writes": {"a.txt": "two\n", "sneaky.txt": "oops\n"},
+                    "result": "formatted",
+                }
+            ]
+        ],
+        config=config,
+    )
+    snapshots = tmp_path.parent / f"{tmp_path.name}-snapshots"
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="format it"))
+        with anyio.fail_after(20):
+            while not store.write_sets:
+                await anyio.sleep(0.01)
+        recorded = next(iter(store.write_sets.values()))
+        assert set(recorded["paths"]) == {"a.txt", "sneaky.txt"}
+        assert recorded["before"] and recorded["after"] != recorded["before"]
+        assert not recorded["overlapping"]
+        # The fake checker's summary names neither file, so both are undeclared.
+        assert set(recorded["undeclared"]) == {"a.txt", "sneaky.txt"}
+        warnings = [
+            event for event in rec.of(Log) if "its summary did not mention" in event.message
+        ]
+        assert warnings and warnings[0].level == "warning"
+        assert list(snapshots.iterdir())  # the repository of this session exists while it runs
+        await session.stop()
+        tg.cancel_scope.cancel()
+    # The trees are only the source of a revert of a recent step, so they go with the session.
+    assert not list(snapshots.iterdir())
+
+
+async def test_without_snapshots_nothing_is_measured(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    session, _rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "x"}, "writes": {"a.txt": "two\n"}}]],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        with anyio.fail_after(20):
+            while session.state != "idle":
+                await anyio.sleep(0.01)
+        assert store.write_sets == {}
+        assert (tmp_path / "a.txt").read_text() == "two\n"  # the step did run
         await session.stop()
         tg.cancel_scope.cancel()

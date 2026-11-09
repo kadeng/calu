@@ -69,6 +69,7 @@ class ContextConfig(BaseModel):
 
 DEFAULT_DENY_READ = (
     "~/.config/calu",
+    "~/.local/state/calu",
     "~/.claude/.credentials.json",
     "~/.claude.json",
     "~/.ssh",
@@ -221,6 +222,25 @@ class AutoEscalate(BaseModel):
     subagents: bool = False
 
 
+class ChangesConfig(BaseModel):
+    """Whether calu measures what a command wrote, and how much of it (PLAN.md D31).
+
+    Off by default: it costs disk and hashing time in every session, while the attribution of
+    `ClockConfig`/D32 needs nothing. A project turns it on when it wants the content of a
+    command's writes and the ability to undo them.
+    """
+
+    snapshot: bool = False
+    """Take a git snapshot of the project directory before and after every Bash step."""
+    max_file_bytes: int = Field(default=1_000_000, ge=0)
+    """Files above this size are reported by path and size, but their content is not shown."""
+    max_patch_bytes: int = Field(default=200_000, ge=0)
+    """Upper bound on the patch a checker or a client ever sees."""
+    always_capture: list[str] = Field(default_factory=lambda: [".env"])
+    """Paths to snapshot even though a `.gitignore` covers them, so that a write to them is
+    noticed; they are the ones that matter most and the ones git would otherwise hide."""
+
+
 class ClockConfig(BaseModel):
     """How closely calu watches its own clock (PLAN.md D32, `calu.clock`).
 
@@ -267,6 +287,7 @@ class Config(BaseModel):
     context: ContextConfig = Field(default_factory=ContextConfig)
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
     clock: ClockConfig = Field(default_factory=ClockConfig)
+    changes: ChangesConfig = Field(default_factory=ChangesConfig)
 
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.

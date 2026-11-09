@@ -41,7 +41,9 @@ import itertools
 import logging
 import os
 import platform
+import shutil
 import socket
+import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -50,11 +52,13 @@ from pathlib import Path
 from typing import Any, Literal
 
 import anyio
+import anyio.to_thread
 from anyio.abc import TaskGroup
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
 from calu import __version__
+from calu.changes import SnapshotError, SnapshotStore, default_root
 from calu.checkers import (
     CheckDecision,
     Checker,
@@ -250,6 +254,7 @@ class Session:
         project: str | None = None,
         checker_models: dict[str, str | Model] | None = None,
         startup_warnings: Sequence[str] = (),
+        snapshot_root: Path | None = None,
     ) -> None:
         """Set up the checkers, the context builder and the rules from `settings`.
 
@@ -269,6 +274,8 @@ class Session:
                 "subagent", "narrator" and "summarizer" (tests pass fake models here).
             startup_warnings: Warnings about missing prerequisites, emitted as `log` warnings
                 at every `start`, before the runner starts.
+            snapshot_root: Where the optional write-set snapshots live (PLAN.md D31); None
+                uses `calu.changes.default_root()`.
         """
         self.workspace = workspace
         self.settings = settings
@@ -280,6 +287,8 @@ class Session:
         self._sink = emit
         self._models = dict(checker_models or {})
         self.startup_warnings = tuple(startup_warnings)
+        self.snapshot_root = snapshot_root or default_root()
+        """Where the write-set snapshots of this process live (PLAN.md D31)."""
         self.policy = ToolPolicy(
             overrides=self.config.tool_routes, default=self.config.default_route
         )
@@ -320,6 +329,9 @@ class Session:
         self._times: deque[StepTime] = deque(maxlen=STEP_TIMES_KEPT)
         self._time_index: dict[str, int] = {}  # tool_use_id -> position in `_times`
         self._clock_alarm: str | None = None  # a backward clock jump nobody has seen yet (D32)
+        self._snapshots: SnapshotStore | None = None  # the optional write-set snapshot (D31)
+        self._before: dict[str, tuple[str, int | None, str]] = {}
+        self._overlapped: set[str] = set()
         self._changesets: dict[str, str] = {}  # tool_use_id -> the diff a commit would record
         self._running_tools: set[str] = set()  # tool_use_ids of approved, unfinished calls
         self._checking = 0  # checker and narrator calls in flight
@@ -486,6 +498,120 @@ class Session:
             if step.seq == seq:
                 self._times[index] = replace(step, summary=summary)
                 return
+
+    async def _prepare_snapshots(self) -> None:
+        """Create this session's snapshot repository if the write-set snapshot is on (D31).
+
+        Side effects: sets `_snapshots`, creates a git directory under `snapshot_root` named
+        after the process, and takes no snapshot yet. A failure is reported as a warning and
+        leaves the session without snapshots, because a missing write set must not stop a run.
+        """
+        self._snapshots = None
+        if not self.config.changes.snapshot:
+            return
+        changes = self.config.changes
+        store = SnapshotStore(
+            workspace=self.workspace,
+            root=self.snapshot_root / f"{os.getpid()}-{int(time.time())}",
+            max_file_bytes=changes.max_file_bytes,
+            max_patch_bytes=changes.max_patch_bytes,
+            always_capture=tuple(changes.always_capture),
+        )
+        try:
+            await store.prepare()
+        except SnapshotError as exc:
+            await self._emit_safely(
+                Log(level="warning", message=f"no write sets in this session: {exc}")
+            )
+            return
+        self._snapshots = store
+
+    async def _discard_snapshots(self) -> None:
+        """Delete this session's snapshot repository when the session ends (D31).
+
+        The trees are the source of a revert of a *recent* step, so they are of no use once the
+        session is over, and keeping them would let `snapshot_root` grow without bound. The
+        write sets themselves stay in the database.
+
+        Side effects: removes the directory and clears `_snapshots`. A failure is logged only.
+        """
+        store, self._snapshots = self._snapshots, None
+        if store is None:
+            return
+        try:
+            await anyio.to_thread.run_sync(lambda: shutil.rmtree(store.root, ignore_errors=True))
+        except OSError as exc:
+            log.warning("could not remove the snapshots in %s: %s", store.root, exc)
+
+    async def _snapshot_before(self, step: Step, step_id: int | None, summary: str) -> None:
+        """Snapshot the project directory before an approved command runs (D31).
+
+        Side effect: remembers the tree for `_snapshot_after`, and marks every open window as
+        overlapping if more than one command runs at a time, because the write set can then not
+        be attributed to one of them.
+
+        Args:
+            step: The tool call that is about to run.
+            step_id: Its `steps` row, or None if it could not be stored.
+            summary: What the checker said the step does, for the honesty comparison.
+        """
+        if self._snapshots is None or not step.tool_use_id:
+            return
+        try:
+            tree = await self._snapshots.take()
+        except SnapshotError as exc:
+            log.warning("no snapshot before %s: %s", step.tool_name, exc)
+            return
+        if self._before:
+            self._overlapped.update(self._before)
+            self._overlapped.add(step.tool_use_id)
+        self._before[step.tool_use_id] = (tree, step_id, summary)
+
+    async def _snapshot_after(self, tool_use_id: str) -> None:
+        """Measure what a command wrote and record it (D31).
+
+        Side effects: records the write set on the `steps` row and emits a `log` event — a
+        warning if the command wrote paths that the checker's summary did not mention, which is
+        the dishonesty signal of D31, and otherwise an informational line.
+
+        Args:
+            tool_use_id: Claude's id of the finished call; an id without a "before" is ignored.
+        """
+        opened = self._before.pop(tool_use_id, None)
+        overlapping = tool_use_id in self._overlapped
+        self._overlapped.discard(tool_use_id)
+        if opened is None or self._snapshots is None:
+            return
+        before, step_id, summary = opened
+        try:
+            after = await self._snapshots.take()
+            change = await self._snapshots.changes(before, after)
+        except SnapshotError as exc:
+            log.warning("no write set for %s: %s", tool_use_id, exc)
+            return
+        change = replace(change, overlapping=overlapping)
+        if not change.changes:
+            return
+        undeclared = () if overlapping else change.undeclared(summary)
+        if step_id is not None:
+            await self._store_call(
+                "recording a write set",
+                self.store.record_changes(
+                    step_id, before, after, change.paths, undeclared, overlapping
+                ),
+            )
+        if undeclared:
+            await self._emit_safely(
+                Log(
+                    level="warning",
+                    message=(
+                        f"the command wrote {len(undeclared)} path(s) its summary did not "
+                        f"mention: {', '.join(undeclared[:10])}"
+                    ),
+                )
+            )
+        else:
+            await self._emit_safely(Log(level="info", message=f"wrote {change.summary()}"))
 
     async def clock_jumped(self, jump: ClockJump) -> None:
         """React to a move of the wall clock that `calu.clock.ClockWatch` detected (D32).
@@ -718,7 +844,10 @@ class Session:
         self._step_ids.clear()
         self._times.clear()
         self._time_index.clear()
+        self._before.clear()
+        self._overlapped.clear()
         self._changesets.clear()
+        await self._prepare_snapshots()
         self._pending_reasons.clear()
         self._step_seq = itertools.count(1)
         self._checking = 0
@@ -785,6 +914,7 @@ class Session:
                 final: State = "failed" if self._run_error else "stopped"
                 await self._set_state_safely(final)
                 await self._store_call("recording the end of the session", self.store.end(final))
+                await self._discard_snapshots()
 
     async def stop(self) -> None:
         """Stop the Claude session and wait until its runner has ended.
@@ -1103,6 +1233,10 @@ class Session:
             Decision.DENY: Verdict.DENY,
             Decision.ESCALATE: Verdict.ASK,
         }[result.decision]
+        if result.decision.approves and route in (Route.COMMAND, Route.CHANGESET):
+            # The command runs as soon as this returns, so this is the "before" of its write set
+            # (D31). Edits need no snapshot: their content came through the gate.
+            await self._snapshot_before(step, step_id, result.step_summary)
         context = ""
         if comment:
             context = CHECKER_COMMENT_TEMPLATE.format(route=route.value, comment=comment)
@@ -1659,6 +1793,7 @@ class Session:
                     "recording the subagents", self.store.update_agents(event.agents)
                 )
             case ToolResult():
+                await self._snapshot_after(event.tool_use_id)
                 self._finish_time(event.tool_use_id)
                 self._pending_reasons.pop(event.tool_use_id, None)
                 self._running_tools.discard(event.tool_use_id)

@@ -92,6 +92,7 @@ async def served(
         lambda: FakeRunner(script, workspace),
         bus.publish,
         checker_models=fake_models(),
+        snapshot_root=workspace.parent / f"{workspace.name}-snapshots",
     )
     token = new_token()
     async with anyio.create_task_group() as tg:

@@ -8,6 +8,10 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"text": "...", "stream": true}                   ... preceded by word-wise assistant.delta
     {"tool": "Bash", "input": {...}, "result": "..."} a tool call; it passes the ToolGate first
                                                       (PASS runs it: there is no auto mode here)
+    {"tool": "Bash", "writes": {"a.txt": "text"}}     ... and the call really writes those files
+                                                      (relative to the workspace; "" deletes),
+                                                      so that features which watch the file
+                                                      system have something to see
     {"sleep": 0.5}                                    pause (lets tests inject messages)
     {"agent": {"description": "...", "background": false, "actions": [...]}}
                                                       a subagent runs the nested actions
@@ -275,8 +279,12 @@ class FakeRunner:
         An allowed call reports the scripted "result"; a denied call reports the denial
         message as an error result.
 
+        Side effect: an action with "writes" writes (or deletes) those files in the workspace
+        after the gate approved the call, which is how a scripted command stands in for one that
+        edits files (`sed -i`, a formatter, a script).
+
         Args:
-            action: The action dict with "tool", optional "input" and "result".
+            action: The action dict with "tool", optional "input", "writes" and "result".
             agent: Protocol id of the calling subagent, or None for the main agent.
             gate: Decides about the call; `ask` is awaited for an ASK verdict.
             sink: Receives the events.
@@ -300,9 +308,26 @@ class FakeRunner:
             allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
             message = gate_result.reason
         if allowed:
+            _write_files(self.workspace, action.get("writes") or {})
             content, is_error = str(action.get("result", "")), False
         else:
             content, is_error = message, True
         await sink(
             ToolResult(agent_id=agent, tool_use_id=tool_use_id, is_error=is_error, content=content)
         )
+
+
+def _write_files(workspace: Path, writes: dict[str, str]) -> None:
+    """Write or delete the files of a scripted call's "writes" mapping.
+
+    Args:
+        workspace: The workspace root; every path is relative to it.
+        writes: Path -> content; an empty content deletes the file.
+    """
+    for relative, content in writes.items():
+        path = workspace / relative
+        if content == "":
+            path.unlink(missing_ok=True)
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")

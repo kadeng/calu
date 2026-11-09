@@ -475,3 +475,36 @@ async def test_the_address_and_the_agent_tree_are_recorded(db_url: str) -> None:
         ]
     finally:
         await conn.close()
+
+
+async def test_the_write_set_of_a_step_is_recorded(db_url: str) -> None:
+    """D31: the two snapshot trees and the paths a command wrote, with the undeclared ones."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        store = DatabaseSessionStore(Db(conn))
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Bash", tool_input={"command": "format"})
+        )
+        await store.record_changes(
+            step, "tree-before", "tree-after", ["a.py", "sneaky.txt"], ["sneaky.txt"]
+        )
+        cur = await conn.execute(
+            "SELECT snapshot_before, snapshot_after, wrote FROM steps WHERE id = %s", (step,)
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[0] == "tree-before" and row[1] == "tree-after"
+        assert row[2] == {
+            "paths": ["a.py", "sneaky.txt"],
+            "undeclared": ["sneaky.txt"],
+            "overlapping": False,
+        }
+        # A second call replaces the record, and overlapping windows are marked as such.
+        await store.record_changes(step, "t1", "t2", ["a.py"], [], overlapping=True)
+        cur = await conn.execute("SELECT wrote FROM steps WHERE id = %s", (step,))
+        again = await cur.fetchone()
+        assert again is not None and again[0]["overlapping"] is True
+    finally:
+        await conn.close()
