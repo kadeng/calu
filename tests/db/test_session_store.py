@@ -1,6 +1,7 @@
 import psycopg
 import pytest
 
+from calu.comments import Comment, Excerpt
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db, connect
 from calu.setup import setup
@@ -240,3 +241,39 @@ async def test_the_session_waits_for_an_operator_and_may_only_cancel(db_url: str
     finally:
         await conn.close()
         await owner.close()
+
+
+async def test_comments_and_recent_sessions(db_url: str) -> None:
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-9")
+        await store.save_turn(TurnRecord(index=1, user_inputs=["the first request", "more"]))
+        comment = Comment(
+            kind="diff",
+            path="src/a.py",
+            before=Excerpt(start_line=2, end_line=2, text="old"),
+            after=Excerpt(start_line=2, end_line=2, text="new"),
+            text="Why upper case?",
+            ref="HEAD",
+        )
+        comment_id = await store.add_comment(comment, turn=1)
+        cur = await conn.execute(
+            "SELECT kind, path, start_line, end_line, ref, comment, content FROM comments"
+            " WHERE id = %s",
+            (comment_id,),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row[:6] == ("diff", "src/a.py", 2, 2, "HEAD", "Why upper case?")
+        assert Comment.model_validate(row[6]) == comment
+
+        sessions = await store.recent_sessions("/w")
+        assert len(sessions) == 1
+        assert sessions[0].calu_session_id == store.session_id
+        assert sessions[0].claude_session_id == "claude-9"
+        assert sessions[0].first_input == "the first request"
+        assert sessions[0].state == "starting" and sessions[0].ended_at is None
+        assert await store.recent_sessions("/elsewhere") == []
+    finally:
+        await conn.close()

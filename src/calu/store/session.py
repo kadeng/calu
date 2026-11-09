@@ -5,6 +5,7 @@
                  add_step  ─► decide_step ─► finish_step        one row per tool call
                  add_checker_run             one row per checker model call
                  open_escalation ─► escalation ─► close_escalation
+                 add_comment                 a user's comment on a selection
                  save_turn, save_summary     condensed conversation for the checkers
                  end                         state "stopped" or "failed", ended_at
 
@@ -23,9 +24,10 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
-from calu.protocol.messages import State
+from calu.protocol.messages import SessionSummary, State
 
 EscalationState = Literal["open", "allowed", "denied", "cancelled"]
 """States of an `escalations` row."""
@@ -241,6 +243,31 @@ class SessionStore(Protocol):
         Returns:
             Its turns (oldest first, unfolded ones only) and its chat summary; `([], "")` if no
             other session ran that Claude session.
+        """
+        ...
+
+    async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
+        """List the stored sessions of one project directory, newest first.
+
+        Args:
+            directory: The project directory (`SessionIdentity.directory`).
+            limit: Maximum number of sessions returned.
+
+        Returns:
+            The sessions, newest first, each with its first user input (for a client's "resume"
+            list).
+        """
+        ...
+
+    async def add_comment(self, comment: Comment, turn: int | None = None) -> int:
+        """Record a comment that a user made on a selection and that Claude received.
+
+        Args:
+            comment: The comment as it was relayed to Claude.
+            turn: Number of the turn it was sent in, or None.
+
+        Returns:
+            The id of the new `comments` row.
         """
         ...
 
@@ -599,6 +626,69 @@ class DatabaseSessionStore:
             )
             row = await cur.fetchone()
         return turns, row[0] if row else ""
+
+    async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
+        """List the stored sessions of one directory (see `SessionStore.recent_sessions`).
+
+        Args:
+            directory: The project directory.
+            limit: Maximum number of sessions returned.
+
+        Returns:
+            The sessions, newest first.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        rows = await self._db.all(
+            "SELECT s.id::text, s.claude_session_id, s.state, s.directory, s.started_at,"
+            " s.ended_at, coalesce((SELECT t.user_inputs->>0 FROM turns t"
+            "   WHERE t.session_id = s.id ORDER BY t.number LIMIT 1), '')"
+            " FROM sessions s WHERE s.directory = %s ORDER BY s.started_at DESC LIMIT %s",
+            (directory, limit),
+        )
+        return [
+            SessionSummary(
+                calu_session_id=row[0],
+                claude_session_id=row[1],
+                state=row[2],
+                directory=row[3],
+                started_at=row[4],
+                ended_at=row[5],
+                first_input=(row[6] or "")[:200],
+            )
+            for row in rows
+        ]
+
+    async def add_comment(self, comment: Comment, turn: int | None = None) -> int:
+        """Record a user comment (see `SessionStore.add_comment`).
+
+        Args:
+            comment: The comment as it was relayed to Claude.
+            turn: Number of the turn it was sent in, or None.
+
+        Returns:
+            The id of the new row.
+
+        Raises:
+            psycopg.Error: On database errors.
+            RuntimeError: If the server returns no row for the insert.
+        """
+        return await self._db.scalar(
+            "INSERT INTO comments (session_id, turn, kind, path, start_line, end_line, ref,"
+            " comment, content) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (
+                self._require_session(),
+                turn,
+                comment.kind,
+                comment.path,
+                comment.after.start_line,
+                comment.after.end_line,
+                comment.ref,
+                comment.text,
+                comment.model_dump_json(),
+            ),
+        )
 
     async def open_escalation(
         self, reason: str, context: dict[str, Any], step_id: int | None = None

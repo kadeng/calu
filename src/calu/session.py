@@ -5,7 +5,7 @@
                             │
                             ├─ Rules + ToolPolicy + Checkers   (decide about each tool call)
                             ├─ ContextBuilder                  (turn records, chat summary)
-                            └─ SessionStore                    (PostgreSQL: history, escalations)
+                            └─ SessionStore          (PostgreSQL: history, escalations, comments)
 
 Tool call flow (ToolGate):
 
@@ -68,6 +68,8 @@ from calu.checkers import (
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
 from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
+from calu.comments import Comment, format_comment, map_selection
+from calu.comments.mapping import excerpt, split_lines
 from calu.config import EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
 from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
 from calu.context.narrator import ClaudeOutput, Narrator
@@ -81,13 +83,17 @@ from calu.protocol.messages import (
     ChatQueue,
     ChatSendParams,
     CheckerContextResult,
+    CommentAddParams,
     EditDiff,
     EscalationRequest,
     EscalationResolved,
     Event,
+    InitializeResult,
     Log,
     QueuedMessage,
+    SessionSnapshot,
     SessionState,
+    SessionSummary,
     State,
     ToolFiles,
     ToolResult,
@@ -185,6 +191,8 @@ class _Escalation:
     """Who escalated: "checker", "policy", "rules", "auto", "internal" or "subagent_result"."""
     db_id: int | None = None
     """Id of the `escalations` row, or None if it could not be stored."""
+    request: EscalationRequest | None = None
+    """The event that asked the human, kept so that a client which connects later sees it."""
     done: anyio.Event = field(default_factory=anyio.Event)
     wake: anyio.Event = field(default_factory=anyio.Event)
     """Set by `note_resolution` so the waiting session reads the row at once."""
@@ -407,6 +415,62 @@ class Session:
 
     # ------------------------------------------------------------------ client requests
 
+    def initialize_result(self) -> InitializeResult:
+        """Return the answer to the `initialize` request of a client.
+
+        Returns:
+            Protocol and calu version, the workspace, the project and the id of the `sessions`
+            row; the caller fills `last_seq` from the bus.
+        """
+        return InitializeResult(
+            core_version=__version__,
+            workspace=str(self.workspace),
+            project=self.project,
+            calu_session_id=self.store.session_id,
+        )
+
+    def snapshot(self) -> SessionSnapshot:
+        """Return everything a client needs to show the session as it is now (`state.get`).
+
+        The open escalations are included with the request events that asked for them, so a
+        client that connects while the session waits can answer them. The caller fills
+        `last_seq` from the bus.
+
+        Returns:
+            The snapshot.
+        """
+        return SessionSnapshot(
+            state=self.state,
+            claude_session_id=self.session_id,
+            calu_session_id=self.store.session_id,
+            workspace=str(self.workspace),
+            project=self.project,
+            model=self.config.claude.model,
+            effort=self.config.claude.effort,
+            agents=list(self.runner.agents.values()) if self.runner else [],
+            escalations=[
+                esc.request for esc in self._escalations.values() if esc.request is not None
+            ],
+            queue=[message for message, _ in self._queue],
+            auto_escalate=self.config.auto_escalate,
+        )
+
+    async def recent_sessions(self, limit: int = 20) -> list[SessionSummary]:
+        """List the stored sessions of this workspace, newest first (`session.list`).
+
+        Args:
+            limit: Maximum number of sessions returned.
+
+        Returns:
+            The sessions from the database; an empty list if the database cannot be read (the
+            error is logged).
+        """
+        try:
+            return await self.store.recent_sessions(str(self.workspace), limit)
+        except Exception:
+            log.exception("listing the stored sessions failed")
+            return []
+
     def checker_context(self) -> CheckerContextResult:
         """Return the conversation context as the checkers currently see it.
 
@@ -616,6 +680,53 @@ class Session:
                 await self._emit_queue()
                 return
 
+    async def add_comment(self, params: CommentAddParams) -> Comment:
+        """Build a `Comment` from a selection, inject it into Claude's session and store it.
+
+        A comment reaches Claude as a user message with priority "next", so it is read as soon
+        as the running tool calls finish. The comment is also recorded in the database, where it
+        can serve as training or evaluation data for the checkers.
+
+        Args:
+            params: Selection, document text(s) and comment text from the client.
+
+        Returns:
+            The comment as sent to Claude.
+
+        Raises:
+            SessionError: If no session runs (the comment is then neither sent nor stored).
+            ValueError: If the selection lies outside the document, or a diff comment lacks
+                `before_text`.
+        """
+        runner = self._require_running()
+        if params.kind == "diff":
+            if params.before_text is None:
+                raise ValueError("a diff comment needs before_text")
+            before, after = map_selection(
+                params.before_text,
+                params.after_text,
+                params.side,
+                params.start_line,
+                params.end_line,
+            )
+            comment = Comment(
+                kind="diff",
+                path=params.path,
+                before=before,
+                after=after,
+                text=params.text,
+                ref=params.ref,
+            )
+        else:
+            after = excerpt(split_lines(params.after_text), params.start_line, params.end_line)
+            comment = Comment(kind="file", path=params.path, after=after, text=params.text)
+        await runner.send(format_comment(comment), "next")
+        await self._mark_busy()
+        await self._store_call(
+            "storing a comment", self.store.add_comment(comment, self.context.turn_number)
+        )
+        return comment
+
     async def decide_escalation(self, escalation_id: str, decision: str, note: str | None) -> None:
         """Resolve an open escalation from a client. Only the first decision counts.
 
@@ -783,19 +894,18 @@ class Session:
             return HumanAnswer(allow=False, message=DB_UNREACHABLE)
         escalation_id = str(db_id)
         esc = _Escalation(step=step, reason=reason, source=source, db_id=db_id)
+        esc.request = EscalationRequest(
+            escalation_id=escalation_id,
+            tool_use_id=step.tool_use_id,
+            agent_id=step.agent_id,
+            tool_name=step.tool_name,
+            tool_input=step.tool_input,
+            reason=reason,
+            rendered=rendered,
+        )
         self._escalations[escalation_id] = esc
         try:
-            await self._emit_safely(
-                EscalationRequest(
-                    escalation_id=escalation_id,
-                    tool_use_id=step.tool_use_id,
-                    agent_id=step.agent_id,
-                    tool_name=step.tool_name,
-                    tool_input=step.tool_input,
-                    reason=reason,
-                    rendered=rendered,
-                )
-            )
+            await self._emit_safely(esc.request)
             await self._refresh_state()
             await self._wait_for_decision(esc)
         finally:

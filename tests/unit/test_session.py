@@ -11,6 +11,7 @@ from calu.protocol.messages import (
     AgentsUpdate,
     ChatSendParams,
     CheckResult,
+    CommentAddParams,
     EditDiff,
     EscalationRequest,
     EscalationResolved,
@@ -335,3 +336,58 @@ async def test_the_session_can_be_started_again_after_stopping(tmp_path: Path):
     assert isinstance(session, Session)
     assert store.states.count("starting") == 2
     assert store.ended == "stopped"
+
+
+async def test_comments_are_injected_and_stored(tmp_path: Path):
+    session, rec, store = make_session(tmp_path, [])
+    async with anyio.create_task_group() as tg:
+        with pytest.raises(SessionError):
+            await session.add_comment(
+                CommentAddParams(
+                    kind="file", path="a.py", start_line=1, end_line=1, after_text="x", text="t"
+                )
+            )
+        await session.start(tg)
+        comment = await session.add_comment(
+            CommentAddParams(
+                kind="diff",
+                path="a.py",
+                side="after",
+                start_line=2,
+                end_line=2,
+                before_text="a\nb\n",
+                after_text="a\nB\n",
+                ref="HEAD",
+                text="Why upper case?",
+            )
+        )
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert comment.before is not None and comment.before.text == "b"
+    (_, stored, turn) = store.comments[0]
+    assert stored == comment and turn == 1
+    injected = rec.of(UserInput)[0].text
+    assert injected.startswith("[User comment on a diff against HEAD of `a.py`]")
+
+
+async def test_the_snapshot_shows_the_open_escalation_and_the_queue(tmp_path: Path):
+    session, rec, _ = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"}]],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="ship it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        await session.send_chat(ChatSendParams(text="and this too"))
+        snapshot = session.snapshot()
+        assert snapshot.state == "escalated"
+        assert snapshot.workspace == str(tmp_path)
+        assert snapshot.calu_session_id == "memory-session"
+        assert [e.escalation_id for e in snapshot.escalations] == [request.escalation_id]
+        assert [m.text for m in snapshot.queue] == ["and this too"]
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert session.initialize_result().workspace == str(tmp_path)
+    assert session.snapshot().escalations == []

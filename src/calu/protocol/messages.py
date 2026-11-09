@@ -1,15 +1,22 @@
-"""Messages of the calu client protocol between a session and its clients.
+"""Messages of the calu client protocol between a session and its clients (PLAN.md §6, D2).
 
-Transport: one JSON object per line (NDJSON) on the core's stdin (front end -> core) and stdout
-(core -> front end), following JSON-RPC 2.0:
+Transport: one JSON object per WebSocket message, following JSON-RPC 2.0:
 
-    FE -> core   {"jsonrpc": "2.0", "id": 1, "method": "chat.send", "params": {...}}
-    core -> FE   {"jsonrpc": "2.0", "id": 1, "result": {...}}            (or "error")
-    core -> FE   {"jsonrpc": "2.0", "method": "tool.use", "params": {...}} (event, no id)
+    client -> calu   {"jsonrpc": "2.0", "id": 1, "method": "chat.send", "params": {...}}
+    calu -> client   {"jsonrpc": "2.0", "id": 1, "result": {...}}            (or "error")
+    calu -> client   {"jsonrpc": "2.0", "method": "tool.use", "params": {...}} (event, no id)
 
 Requests are the `*Params` models in `REQUESTS`; events are the models in `EVENTS`, each with a
-`method` class variable. `agent_id` is `None` for the main agent; for a subagent it is the id of
-the Agent tool call that started it.
+`method` class variable. Several clients watch the same session, so every event carries a
+sequence number (`Event.seq`, counted from 1 per calu process): a client that reconnects asks
+for the events after the last number it saw (`events.subscribe`) and gets the current state with
+`state.get`. `agent_id` is `None` for the main agent; for a subagent it is the id of the Agent
+tool call that started it.
+
+A client proves with `initialize` that it may talk to the session (the token that `calu run`
+prints). The configuration, the rules and the checker instructions are not part of this
+protocol: they live in the database and are changed with calu's own commands, which need other
+credentials than a session (PLAN.md D6, §5).
 """
 
 from datetime import UTC, datetime
@@ -27,25 +34,29 @@ PROTOCOL_VERSION = 1
 
 
 class InitializeParams(BaseModel):
-    """First request of a front end. The result is an `InitializeResult`."""
+    """First request of a client; every other request is refused before it.
 
-    client: str
+    The result is an `InitializeResult`. `token` is the client token that `calu run` printed
+    (and stored hashed in the database). `client` and `client_version` name the client in the
+    log.
+    """
+
+    client: str = Field(min_length=1, max_length=100)
     client_version: str = ""
-    training: bool = False
-    """Start with the human-in-the-loop training mode on (see `training.set`)."""
-    training_timeout_s: float = Field(default=120, gt=0)
-    """Review timeout of the training mode (see `training.set`)."""
-    auto_escalate: AutoEscalate | None = None
-    """Auto-escalation settings of the front end; None keeps those of config.toml."""
+    token: str = ""
 
 
 class InitializeResult(BaseModel):
-    """Result of `initialize`: protocol and core versions, workspace and project file paths."""
+    """Result of `initialize`: versions, what the session works on, and where to subscribe."""
 
     protocol_version: int = PROTOCOL_VERSION
     core_version: str
     workspace: str
-    files: ProjectFiles
+    project: str | None = None
+    calu_session_id: str | None = None
+    """Id of the `sessions` row of the running Claude session (None before the first start)."""
+    last_seq: int = 0
+    """Sequence number of the newest event; `events.subscribe` continues after it."""
 
 
 class SessionStartParams(BaseModel):
@@ -132,87 +143,87 @@ class AutoEscalateSetParams(AutoEscalate):
     """`auto_escalate.set`: replace the auto-escalation settings of the session. Result: `{}`."""
 
 
-TrainingChecker = Literal["command", "edit", "subagent"]
+class EventsSubscribeParams(BaseModel):
+    """`events.subscribe`: receive events from now on, with the ones since `after_seq`.
 
-
-class TrainingResponse(BaseModel):
-    """A checker answer in training mode: the model's, or the human's corrected version.
-
-    `decision` is one of the request's `options` (ALLOW/DENY/ESCALATE for the command and edit
-    checkers; ACCEPT/ANNOTATE/ESCALATE for the subagent result checker). For the subagent result
-    checker, `reason` holds the triage note and `comment` is unused.
+    A client that connects for the first time sends `after_seq = 0` and takes the state from
+    `state.get`; a client that reconnects sends the last sequence number it saw. Result:
+    `EventsSubscribeResult`.
     """
 
-    decision: str
-    reason: str = ""
-    summary: str = ""
-    comment: str = ""
+    after_seq: int = Field(default=0, ge=0)
 
 
-class TrainingSetParams(BaseModel):
-    """`training.set`: switch the human-in-the-loop training mode on or off. Result: `{}`.
+class EventsSubscribeResult(BaseModel):
+    """Result of `events.subscribe`: the events the client missed, oldest first.
 
-    While it is on, every checker decision is sent as a `training.request` and waits for
-    `training.decide`, at most `timeout_s` seconds; after that the checker's own decision is
-    used and nothing is recorded.
+    `complete` is False if the requested events are no longer in the buffer (the client should
+    then take a fresh `state.get` instead of rebuilding from the events). Events that happen
+    after this result are sent as notifications.
     """
 
-    enabled: bool
-    timeout_s: float = Field(default=120, gt=0)
+    events: list[RecordedEvent] = Field(default_factory=list)
+    complete: bool = True
+    last_seq: int = 0
 
 
-class TrainingDecideParams(BaseModel):
-    """The human's answer to a `training.request`. Result: `{}`.
+class SessionSummary(BaseModel):
+    """A stored session of this project, for a "resume session" list in a client."""
 
-    `response` replaces the checker's decision (send the model response unchanged to accept
-    it). `insufficient_information` marks that the checker input did not allow a sound decision.
+    calu_session_id: str
+    claude_session_id: str | None = None
+    state: str
+    directory: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    first_input: str = ""
+    """The first user input of the session, shortened to 200 characters ("" if none)."""
+
+
+class SessionListParams(BaseModel):
+    """`session.list`: the stored sessions of this project directory, newest first.
+
+    Result: `SessionListResult`. The ids come from the database, so a client can offer
+    `session.start {resume_id: <claude_session_id>}` after a restart of calu.
     """
 
-    training_id: str
-    response: TrainingResponse
-    insufficient_information: bool = False
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class SessionListResult(BaseModel):
+    """Result of `session.list`: stored sessions, newest first."""
+
+    sessions: list[SessionSummary]
 
 
 class RecordedEvent(BaseModel):
-    """An event as stored: the JSON-RPC method, its params and the time it was emitted."""
+    """An event as the bus keeps it for replay: its method, its params and its time."""
 
     method: str
     params: dict[str, Any]
     time: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
-class SessionSummary(BaseModel):
-    """A stored session, for a "resume session" list in a front end."""
+class SessionSnapshot(BaseModel):
+    """Result of `state.get`: everything a client needs to show the session right now.
 
-    session_id: str
-    started_at: datetime
-    last_event_at: datetime
-    first_message: str
-    """The first user input of the session, shortened to 100 characters ("" if none)."""
-    events: int
-
-
-class SessionListResult(BaseModel):
-    """Result of `session.list`: stored sessions, most recently active first."""
-
-    sessions: list[SessionSummary]
-
-
-class SessionHistoryParams(BaseModel):
-    """Parameters of `session.history`: which stored session, and how many events at most.
-
-    The result is a `SessionHistoryResult`. A front end uses it to rebuild its view, e.g.
-    before or after resuming the session with `session.start {resume_id}`.
+    A client that connects takes this snapshot and then applies the events after `last_seq`
+    (`events.subscribe`). The open escalations are in it, so a client that joins while the
+    session waits can answer them.
     """
 
-    session_id: str
-    limit: int = Field(default=2_000, ge=1, le=20_000)
-
-
-class SessionHistoryResult(BaseModel):
-    """Result of `session.history`: events oldest first, as `(method, params)` with a time."""
-
-    events: list[RecordedEvent]
+    state: State
+    claude_session_id: str | None = None
+    calu_session_id: str | None = None
+    workspace: str
+    project: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    last_seq: int = 0
+    agents: list[AgentInfo] = Field(default_factory=list)
+    escalations: list[EscalationRequest] = Field(default_factory=list)
+    queue: list[QueuedMessage] = Field(default_factory=list)
+    auto_escalate: AutoEscalate = Field(default_factory=lambda: AutoEscalate())
 
 
 class CheckerContextResult(BaseModel):
@@ -231,47 +242,35 @@ class CheckerContextResult(BaseModel):
 
 REQUESTS: dict[str, type[BaseModel]] = {
     "initialize": InitializeParams,
+    "state.get": EmptyParams,
+    "events.subscribe": EventsSubscribeParams,
     "session.start": SessionStartParams,
     "session.stop": EmptyParams,
-    "session.list": EmptyParams,
-    "session.history": SessionHistoryParams,
+    "session.list": SessionListParams,
     "chat.send": ChatSendParams,
     "comment.add": CommentAddParams,
     "escalation.decide": EscalationDecideParams,
-    "training.set": TrainingSetParams,
     "auto_escalate.set": AutoEscalateSetParams,
-    "training.decide": TrainingDecideParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,
     "shutdown": EmptyParams,
 }
+"""Request method -> model of its params. `shutdown` ends the calu process, so only a client
+that may steer the session may send it (every client with a token may)."""
 
 # ---------------------------------------------------------------------------- events (core -> FE)
 
 
 class Event(BaseModel):
-    """Base class of all events. `method` is the JSON-RPC method name of the notification."""
+    """Base class of all events. `method` is the JSON-RPC method name of the notification.
+
+    `seq` numbers the events of one calu process from 1; the bus sets it when it publishes the
+    event (`calu.bus.Bus.publish`), and a client uses it to ask for what it missed
+    (`events.subscribe`). An event that was never published keeps 0.
+    """
 
     method: ClassVar[str]
-
-
-class ProjectFiles(Event):
-    """Absolute paths of the editable project files, for links in the front end."""
-
-    method: ClassVar[str] = "files"
-    command_instructions: str
-    edit_instructions: str
-    chat_summary: str
-    comments: str
-    subagent_instructions: str = ""
-    narrator_instructions: str = ""
-    command_allow: str = ""
-    """The rules files (`calu.checkers.rules`); "" from cores without rules."""
-    command_deny: str = ""
-    read_allow: str = ""
-    read_deny: str = ""
-    write_allow: str = ""
-    write_deny: str = ""
+    seq: int = 0
 
 
 State = Literal[
@@ -520,39 +519,7 @@ class Log(Event):
     message: str
 
 
-class TrainingRequest(Event):
-    """Training mode: a checker decided; the human reviews the decision (`training.decide`).
-
-    `input` holds the complete checker input without the checker's instructions: the project
-    context, the recent steps and the step or result to check, as separate texts.
-    """
-
-    method: ClassVar[str] = "training.request"
-    training_id: str
-    checker: TrainingChecker
-    agent_id: str | None = None
-    tool_name: str
-    tool_input: dict[str, Any]
-    input: list[str]
-    options: list[str]
-    response: TrainingResponse
-
-
-class TrainingResolved(Event):
-    """A training request ended.
-
-    "recorded": the human answered. "cancelled" (stop, interrupt, mode switched off) and
-    "timeout" (no answer within the timeout): the checker's own decision was used and nothing
-    was recorded.
-    """
-
-    method: ClassVar[str] = "training.resolved"
-    training_id: str
-    outcome: Literal["recorded", "cancelled", "timeout"]
-
-
 EVENTS: list[type[Event]] = [
-    ProjectFiles,
     SessionState,
     AssistantText,
     AssistantDelta,
@@ -568,9 +535,6 @@ EVENTS: list[type[Event]] = [
     EscalationRequest,
     EscalationResolved,
     EditDiff,
-    TrainingRequest,
-    TrainingResolved,
     Log,
 ]
-
-InitializeResult.model_rebuild()
+"""Every event class, for the JSON Schema export (`calu.protocol.schema`)."""

@@ -9,8 +9,9 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Any
 
+from calu.comments import Comment
 from calu.context.turns import TurnRecord
-from calu.protocol.messages import State
+from calu.protocol.messages import SessionSummary, State
 from calu.store.session import (
     CheckerRun,
     Escalation,
@@ -55,6 +56,9 @@ class MemorySessionStore:
     escalations: dict[int, Escalation] = field(default_factory=dict)
     escalation_context: dict[int, dict[str, Any]] = field(default_factory=dict)
     previous: dict[str, tuple[list[TurnRecord], str]] = field(default_factory=dict)
+    stored_sessions: list[SessionSummary] = field(default_factory=list)
+    """What `recent_sessions` returns (a test sets it)."""
+    comments: list[tuple[int, Comment, int | None]] = field(default_factory=list)
     _ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     async def start(self, identity: SessionIdentity) -> str:
@@ -173,6 +177,32 @@ class MemorySessionStore:
             The entry of `previous` for that id, or `([], "")`.
         """
         return self.previous.get(claude_session_id, ([], ""))
+
+    async def add_comment(self, comment: Comment, turn: int | None = None) -> int:
+        """Record a user comment.
+
+        Args:
+            comment: The comment as it was relayed to Claude.
+            turn: Number of the turn it was sent in, or None.
+
+        Returns:
+            A new id, counted from 1 (shared with the step ids).
+        """
+        comment_id = next(self._ids)
+        self.comments.append((comment_id, comment, turn))
+        return comment_id
+
+    async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
+        """Return the prepared session list.
+
+        Args:
+            directory: The project directory (ignored; `stored_sessions` is returned as is).
+            limit: Maximum number of sessions returned.
+
+        Returns:
+            The first `limit` entries of `stored_sessions`.
+        """
+        return self.stored_sessions[:limit]
 
     async def open_escalation(
         self, reason: str, context: dict[str, Any], step_id: int | None = None

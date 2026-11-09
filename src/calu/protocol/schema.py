@@ -16,9 +16,10 @@ from calu.protocol.messages import (
     REQUESTS,
     CheckerContextResult,
     CommentAddResult,
+    EventsSubscribeResult,
     InitializeResult,
-    SessionHistoryResult,
     SessionListResult,
+    SessionSnapshot,
 )
 
 
@@ -35,7 +36,8 @@ def protocol_schema() -> dict[str, Any]:
         InitializeResult,
         CommentAddResult,
         SessionListResult,
-        SessionHistoryResult,
+        SessionSnapshot,
+        EventsSubscribeResult,
         CheckerContextResult,
     ]
     refs, defs = models_json_schema(
@@ -48,10 +50,11 @@ def protocol_schema() -> dict[str, Any]:
         "requests": {name: refs[model, "validation"] for name, model in REQUESTS.items()},
         "events": {e.method: refs[e, "validation"] for e in EVENTS},
         "results": {
+            "initialize": refs[InitializeResult, "validation"],
+            "state.get": refs[SessionSnapshot, "validation"],
+            "events.subscribe": refs[EventsSubscribeResult, "validation"],
             "session.list": refs[SessionListResult, "validation"],
             "context.get": refs[CheckerContextResult, "validation"],
-            "session.history": refs[SessionHistoryResult, "validation"],
-            "initialize": refs[InitializeResult, "validation"],
             "comment.add": refs[CommentAddResult, "validation"],
         },
         "$defs": defs.get("$defs", {}),
