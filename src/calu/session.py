@@ -114,6 +114,7 @@ from calu.protocol.messages import (
 from calu.protocol.messages import CheckResult as CheckResultEvent
 from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
 from calu.store import StepRow as StoredStep
+from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
 
@@ -432,6 +433,26 @@ class Session:
             self.narrator = None
 
     # ------------------------------------------------------------------ client requests
+
+    async def accepts_token(self, token: str) -> bool:
+        """Tell whether a client may attach to this session with `token` (PLAN.md D30).
+
+        The protocol server checks the token it printed itself and asks this only for a token it
+        does not know, so that attaching with the printed token keeps working even if the
+        database is unreachable. Every token an operator minted for this session counts
+        (`calu token mint`), until it is revoked.
+
+        Args:
+            token: The token the client sent in `initialize`.
+
+        Returns:
+            True if the session has a non-revoked token with this hash.
+
+        Raises:
+            psycopg.Error: If the database cannot be asked; the caller must not report that as a
+                wrong token.
+        """
+        return await self.store.client_token_ok(token_hash(token))
 
     def initialize_result(self) -> InitializeResult:
         """Return the answer to the `initialize` request of a client.

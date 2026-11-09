@@ -12,6 +12,7 @@
                                    session password; see `calu.run`)
     calu attach ADDRESS --token T  terminal client for a running session
     calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
+    calu token mint SESSION        client token for an editor or a remote interface
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
     calu sessions [--all]          list the sessions of all hosts
     calu escalations [SESSION]     list the open escalations
@@ -526,6 +527,65 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
         if not await herd.resolve(db, args.id, args.decision, args.note or ""):
             raise CliError(f"escalation {args.id} is not open (resolved, cancelled or unknown)")
         return f"escalation {args.id}: {args.decision}"
+
+    _admin_command(store, work)
+
+
+def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Mint, list or revoke the client tokens of a session (PLAN.md D30).
+
+    A minted token lets a client attach to that session without the terminal that started it:
+    an editor's ACP adapter, a local command or a remote interface keeps its token in its own
+    configuration, and revoking it ends that access. The session accepts a new token at the
+    next `initialize`, without being restarted.
+
+    Args:
+        args: Parsed arguments (`action`, `session`, `label`, `id`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, the arguments do not fit the action, or the
+            token or session does not exist.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """Run the chosen action.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report; for `mint` it holds the token, which is printed only this once.
+
+        Raises:
+            CliError: If an argument is missing or the token or session is unknown.
+        """
+        if args.action == "mint":
+            if not args.session:
+                raise CliError("calu token mint needs the id of a session (`calu sessions`)")
+            try:
+                token_id, token = await herd.mint_token(db, args.session, args.label or "")
+            except ValueError as exc:
+                raise CliError(str(exc)) from exc
+            return (
+                f"token {token_id} for session {args.session}:\n\n    {token}\n\n"
+                "This is the only copy; calu stores just its hash. Give it to one client and "
+                f"end its access with `calu token revoke {token_id}`."
+            )
+        if args.action == "revoke":
+            if args.session is None:
+                raise CliError("calu token revoke needs the id of a token (`calu token list`)")
+            try:
+                token_id = int(args.session)
+            except ValueError as exc:
+                raise CliError(f"{args.session!r} is not a token id") from exc
+            if not await herd.revoke_token(db, token_id):
+                raise CliError(f"token {token_id} is unknown or already revoked")
+            return f"token {token_id} revoked; a client that is still connected keeps its session"
+        rows = await herd.list_tokens(db, args.session)
+        return "\n".join(row.line() for row in rows) if rows else "no client tokens"
 
     _admin_command(store, work)
 
@@ -1056,6 +1116,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("decision", choices=["allow", "deny"])
     p.add_argument("--note", help="text for Claude and for the record")
     p.set_defaults(handler=cmd_resolve)
+
+    token = sub.add_parser("token", help="client tokens of a session: mint, list, revoke")
+    token.add_argument("action", choices=["mint", "list", "revoke"])
+    token.add_argument(
+        "session",
+        nargs="?",
+        help="session id for mint and list (`calu sessions`), token id for revoke",
+    )
+    token.add_argument("--label", default="", help='what the token is for, e.g. "zed on laptop"')
+    token.set_defaults(handler=cmd_token)
 
     p = sub.add_parser("evals", help="measure how well the configured checkers decide")
     p.add_argument("files", nargs="*", help="further YAML case files")

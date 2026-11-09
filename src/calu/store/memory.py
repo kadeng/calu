@@ -270,6 +270,17 @@ class MemorySessionStore:
         self.client_tokens.append((token_sha256, address))
         return token_id
 
+    async def client_token_ok(self, token_sha256: str) -> bool:
+        """Tell whether a recorded token has this hash (see `SessionStore.client_token_ok`).
+
+        Args:
+            token_sha256: SHA-256 of the token a client sent.
+
+        Returns:
+            True if `client_tokens` holds that hash.
+        """
+        return any(stored == token_sha256 for stored, _ in self.client_tokens)
+
     async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
         """Return the prepared session list.
 

@@ -333,6 +333,21 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def client_token_ok(self, token_sha256: str) -> bool:
+        """Tell whether a hash belongs to a non-revoked client token of this session (D30).
+
+        A session accepts every token an operator minted for it, not only the one it printed,
+        so that a stored token (an editor's ACP adapter, a local command, a remote interface)
+        survives a restart of the session and can be revoked on its own.
+
+        Args:
+            token_sha256: SHA-256 of the token a client sent (`calu.tokens.token_hash`).
+
+        Returns:
+            True if this session has a non-revoked token with that hash.
+        """
+        ...
+
     async def load_history(
         self, claude_session_id: str | None = None, limit: int = 500
     ) -> SessionHistoryResult:
@@ -948,6 +963,33 @@ class DatabaseSessionStore:
         )
         self._token_hash = token_sha256
         return row_id
+
+    async def client_token_ok(self, token_sha256: str) -> bool:
+        """Ask the database whether a hash is one of this session's tokens (see the protocol).
+
+        Side effect: `calu_client_token_ok` stamps `last_used_at` on the matching row, and the
+        hash is kept in memory if none was kept yet, so that a client which authenticated with a
+        minted token can still have its decisions recorded (`decide_escalation` needs a hash of
+        this session, and the role cannot read one back).
+
+        Args:
+            token_sha256: SHA-256 of the token a client sent.
+
+        Returns:
+            True if the token belongs to this session and is not revoked.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        ok = bool(
+            await self._db.scalar(
+                "SELECT calu_client_token_ok(%s::uuid, %s)",
+                (self._require_session(), token_sha256),
+            )
+        )
+        if ok and self._token_hash is None:
+            self._token_hash = token_sha256
+        return ok
 
     async def decide_escalation(
         self, escalation_id: int, allow: bool, note: str = "", actor: str = ""

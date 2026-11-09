@@ -4,8 +4,11 @@ import json
 import psycopg
 import pytest
 
-from calu.db import connect, migrate, migrations
+from calu import herd
+from calu.db import Db, connect, migrate, migrations
 from calu.setup import setup
+from calu.store import DatabaseSessionStore, SessionIdentity
+from calu.tokens import token_hash
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -105,6 +108,9 @@ async def test_session_role_cannot_change_config_or_resolve(db_url: str) -> None
             # The token hashes are a capability of the session process, not readable data:
             # the database credential alone cannot forge a client decision (D28).
             "SELECT token_sha256 FROM client_tokens",
+            # Since migration 0009 the session cannot un-revoke a token either: only the
+            # function stamps `last_used_at`, so the role needs no UPDATE at all (D30).
+            "UPDATE client_tokens SET revoked = false",
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 await session.execute(statement.encode())
@@ -136,3 +142,39 @@ async def test_resolution_notifies_listeners(db_url: str) -> None:
     finally:
         await conn.close()
         await listener.close()
+
+
+async def test_the_session_role_checks_a_client_token_without_reading_any(db_url: str) -> None:
+    """D30: the session confirms a hash it was given; it cannot read or enumerate the hashes."""
+    conn = await connect(db_url)
+    try:
+        _, session_url = await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        mine = await store.start(
+            SessionIdentity(hostname="box", os_user="u", directory="/w", pid=1, os="Linux")
+        )
+        other_store = DatabaseSessionStore(db)
+        other = await other_store.start(
+            SessionIdentity(hostname="box", os_user="u", directory="/w", pid=2, os="Linux")
+        )
+        _, token = await herd.mint_token(db, mine, "an editor")
+        revoked_id, revoked = await herd.mint_token(db, mine, "an old editor")
+        assert await herd.revoke_token(db, revoked_id)
+        _, foreign = await herd.mint_token(db, other, "another session")
+    finally:
+        await conn.close()
+    session = await connect(session_url)
+    try:
+        for token_value, expected in (
+            (token, True),
+            (revoked, False),
+            (foreign, False),
+            ("guessed", False),
+        ):
+            cur = await session.execute(
+                "SELECT calu_client_token_ok(%s::uuid, %s)", (mine, token_hash(token_value))
+            )
+            assert await cur.fetchone() == (expected,), token_value
+    finally:
+        await session.close()

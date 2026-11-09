@@ -397,9 +397,13 @@ class Client:
             The `InitializeResult` with the current sequence number.
 
         Raises:
-            RpcError: -32001 if the token is wrong.
+            RpcError: -32001 if the token is neither the one this process printed nor a token an
+                operator minted for this session.
+            psycopg.Error: If the database cannot be asked about a minted token. A database
+                outage is not reported as a wrong token, and the printed token still works,
+                because it is checked first and without the database.
         """
-        if not matches(params.token, self.server.token_hash):
+        if not await self._token_ok(params.token):
             log.warning("client %r sent an invalid token", params.client)
             raise RpcError(UNAUTHENTICATED, "invalid client token")
         self.authenticated = True
@@ -408,6 +412,23 @@ class Client:
         return self.server.session.initialize_result().model_copy(
             update={"last_seq": self.server.bus.last_seq}
         )
+
+    async def _token_ok(self, token: str) -> bool:
+        """Check a client's token against this process and then against the database.
+
+        Args:
+            token: The token from `initialize`.
+
+        Returns:
+            True if it is the token this process printed, or a non-revoked token an operator
+            minted for this session (D30).
+
+        Raises:
+            psycopg.Error: If the database cannot be asked.
+        """
+        if matches(token, self.server.token_hash):
+            return True
+        return await self.server.session.accepts_token(token)
 
     async def _subscribe(self, params: EventsSubscribeParams) -> EventsSubscribeResult:
         """Start pushing events to this client and return the ones it missed.

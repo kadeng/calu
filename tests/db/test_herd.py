@@ -8,6 +8,7 @@ from calu.db import Db, connect
 from calu.evals import cases_from_escalations
 from calu.setup import setup
 from calu.store import CheckerRun, DatabaseSessionStore, SessionIdentity, StepRow
+from calu.tokens import token_hash
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -94,5 +95,53 @@ async def test_resolved_escalations_become_evaluation_cases(db_url: str) -> None
         assert cases[0].checker == "command"
         assert cases[0].expected == [Decision.ALLOW, Decision.ESCALATE]
         assert cases[0].source == "escalations"
+    finally:
+        await owner.close()
+
+
+async def test_client_tokens_are_minted_checked_and_revoked(db_url: str) -> None:
+    """D30: a session accepts every non-revoked token of its own session, and only those."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        await store.set_address("ws://127.0.0.1:8765")
+        printed = token_hash("printed-by-calu-run")
+        await store.add_client_token(printed, "ws://127.0.0.1:8765")
+
+        token_id, token = await herd.mint_token(db, session_id, "zed on the laptop")
+        assert await store.client_token_ok(token_hash(token)) is True
+        assert await store.client_token_ok(printed) is True
+        assert await store.client_token_ok(token_hash("guessed")) is False
+
+        rows = await herd.list_tokens(db, session_id)
+        assert [row.id for row in rows] == [token_id, token_id - 1]
+        minted = rows[0]
+        assert minted.label == "zed on the laptop"
+        assert minted.address == "ws://127.0.0.1:8765"
+        assert minted.last_used_at is not None  # the check above stamped it
+        assert not minted.revoked
+        assert "valid" in minted.line() and "zed on the laptop" in minted.line()
+        # The token itself is nowhere in what an operator can read.
+        assert token not in minted.line()
+
+        assert await herd.revoke_token(db, token_id) is True
+        assert await herd.revoke_token(db, token_id) is False  # already revoked
+        assert await store.client_token_ok(token_hash(token)) is False
+        assert await store.client_token_ok(printed) is True  # the others keep working
+        assert (await herd.list_tokens(db, session_id))[0].revoked is True
+
+        # A token of another session does not open this one.
+        other = DatabaseSessionStore(db)
+        other_session = await other.start(IDENTITY)
+        _, foreign = await herd.mint_token(db, other_session, "elsewhere")
+        assert await store.client_token_ok(token_hash(foreign)) is False
+        assert await other.client_token_ok(token_hash(foreign)) is True
+        assert len(await herd.list_tokens(db)) == 3
+
+        with pytest.raises(ValueError):
+            await herd.mint_token(db, "00000000-0000-0000-0000-000000000000")
     finally:
         await owner.close()

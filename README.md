@@ -256,6 +256,16 @@ running session:
 calu acp ws://127.0.0.1:8765 --token ...
 ```
 
+For a client that keeps its token in its own configuration, mint one instead of passing on the
+token `calu run` printed: a minted token outlives the session you made it for, and you can take
+it back.
+
+```bash
+calu token mint <session id> --label "zed on the laptop"   # prints the token once
+calu token list                                            # labels and last use, never a token
+calu token revoke 3
+```
+
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the
 checkers follow them:
 

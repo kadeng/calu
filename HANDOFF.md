@@ -125,9 +125,16 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 - **Sandbox** (D15): `SandboxConfig` passed to Claude Code as a `--settings` document;
   `calu.preflight` warns about missing `bwrap`/`socat`, a disabled sandbox and missing checker
   API keys at every start.
+- **Client tokens** (D30, migration 0009): a session accepts every non-revoked token of its own
+  session, not only the one it printed. `calu token mint SESSION [--label]` prints a token once,
+  `calu token list [SESSION]` shows labels, address and last use but never a token, and
+  `calu token revoke ID` ends one client's access. The session presents a hash and
+  `calu_client_token_ok` confirms it; the role cannot read the hashes and no longer has UPDATE on
+  the table, so it cannot un-revoke one. The printed token is still checked first and without the
+  database. Verified in the tests and by hand against a real PostgreSQL.
 - **Migrations**: 0001 initial · 0002 turn records · 0003 comments · 0004 client tokens ·
   0005 the PASS decision · 0006 the changeset route · 0007 `calu_client_decision` ·
-  0008 `sessions.address` and the `agents` table.
+  0008 `sessions.address` and the `agents` table · 0009 minted client tokens.
 
 ### Verified by hand with the real CLI
 
@@ -171,17 +178,13 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
    `AutoEscalate`, and the single-binary packaging.
-2. **A mintable client token** (D30, part of Q4): the session accepts only the token it printed.
-   Accepting any non-revoked hash in `client_tokens` for its session would let an operator with a
-   database login mint a token for a local command or a remote interface, and revoke it — which
-   is what makes "local commands work through the WebSocket" practical.
-3. **Times, ctime attribution and the clock watch** (D32, decided 2026-11-09, nothing implemented
+2. **Times, ctime attribution and the clock watch** (D32, decided 2026-11-09, nothing implemented
    yet, and cheap): `steps` already records created, decided and finished times, so what is missing
    is the host's timezone, two read-only checker tools — `step_times` and `changed_files` (ctime in
    a window, directories included, because a delete leaves no inode) — and a task that samples
    `CLOCK_REALTIME` against `CLOCK_BOOTTIME` and escalates when the wall clock moves backwards by
    more than `clock.max_backward_s`. It gives attribution without content.
-4. **The write set of a Bash step** (D31, decided 2026-11-09, nothing implemented yet, **optional
+3. **The write set of a Bash step** (D31, decided 2026-11-09, nothing implemented yet, **optional
    and off by default**): snapshot the project directory before and after every Bash step with git
    plumbing in a git directory of calu's own (`$XDG_STATE_HOME/calu/snapshots/<session>`, outside
    the project, on the sandbox's `denyRead` list, used with `--work-tree`). It closes the gap that
@@ -191,10 +194,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    the call; then `git apply -R` as the revert on a post-hoc DENY. Needs only the `git` binary.
    Include the size and type policy from the start. The overlay alternative was measured and
    dropped (see D31).
-5. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
+4. **Phase 6**: the web UI on the herd commands plus the configuration writes (§6.2 says which
    side each feature talks to).
-6. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
-7. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
+5. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+6. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
    read, not edited, through a client; the protocol server binds TCP only (a Unix socket is
    mentioned in §6 and `sessions.address` already allows for one).
 

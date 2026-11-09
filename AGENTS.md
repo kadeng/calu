@@ -37,7 +37,7 @@ phases.
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
 | `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |
-| `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve` (database only) |
+| `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve`, `calu token` (database only) |
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys |

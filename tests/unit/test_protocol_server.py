@@ -371,3 +371,19 @@ async def test_a_client_reads_the_checker_definitions(tmp_path: Path):
             command = next(c for c in result["checkers"] if c["name"] == "command")
             assert command["route"] == "command" and command["version"] == 1
             assert command["instructions"].startswith("#")
+
+
+async def test_a_minted_token_of_the_session_is_accepted_too(tmp_path: Path):
+    """D30: any non-revoked token of the session is accepted, not only the printed one."""
+    async with served(tmp_path) as run:
+        events = Events()
+        # An operator minted this one into `client_tokens` (here: the in-memory store).
+        await run.store.add_client_token(token_hash("minted-for-zed"), run.address)
+        async with connect(run.address, "minted-for-zed", "zed", events) as protocol:
+            snapshot = await protocol.request("state.get")
+            assert snapshot["workspace"] == str(tmp_path)
+        # A token that belongs to no row is still refused.
+        with pytest.raises(RequestFailed) as refused:
+            async with connect(run.address, "guessed", "intruder", events):
+                pass
+        assert refused.value.code == -32001
