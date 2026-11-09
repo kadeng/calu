@@ -61,3 +61,25 @@ def test_migrate_without_admin_credential_is_an_error(
 ) -> None:
     assert run_cli(monkeypatch, store, ["db", "migrate"], "") == 1
     assert "no credential 'admin'" in capsys.readouterr().err
+
+
+def test_run_without_session_credential_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli(monkeypatch, store, ["run", "--batch"], "") == 1
+    assert "no credential 'session'" in capsys.readouterr().err
+
+
+def test_run_rejects_a_directory_that_does_not_exist(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli(monkeypatch, store, ["run", "/no/such/place"], "") == 1
+    assert "is not a directory" in capsys.readouterr().err
+
+
+def test_herd_commands_need_the_admin_credential(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for argv in (["sessions"], ["escalations"], ["resolve", "1", "allow"]):
+        assert run_cli(monkeypatch, store, argv, "") == 1
+        assert "no credential 'admin'" in capsys.readouterr().err

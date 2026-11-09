@@ -10,6 +10,10 @@
                                    manage the encrypted credential store
     calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
                                    session password; see `calu.run`)
+    calu sessions [--all]          list the sessions of all hosts
+    calu escalations [SESSION]     list the open escalations
+    calu resolve ID allow|deny [--note TEXT]
+                                   resolve an escalation; the waiting session continues
 
 Passwords are read from the terminal without echo. If stdin is not a terminal, each password
 is read as one line from stdin (for scripts and tests).
@@ -19,15 +23,15 @@ import argparse
 import asyncio
 import getpass
 import sys
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from calu import __version__
+from calu import __version__, herd
 from calu.credentials import CredentialError, CredentialStore, wipe
-from calu.db import connect, migrate
+from calu.db import Db, connect, migrate
 from calu.db import local as local_db
 from calu.run import RunOptions, run_session
 from calu.setup import DEFAULT_CHECKER_MODEL, setup
@@ -307,6 +311,136 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError("the session ended with an error (see the messages above)")
 
 
+async def _with_admin(url: str, work: Callable[[Db], Awaitable[str]]) -> str:
+    """Connect as the database owner, run `work` and close the connection.
+
+    Args:
+        url: The owner connection string.
+        work: Called with the wrapped connection; its return value is printed.
+
+    Returns:
+        What `work` returned.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    conn = await connect(url)
+    try:
+        return await work(Db(conn))
+    finally:
+        await conn.close()
+
+
+def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) -> None:
+    """Run a herd command with the `admin` credential and print its report.
+
+    Args:
+        store: The credential store.
+        work: Called with the connection; its return value is printed.
+
+    Raises:
+        CliError: If there is no `admin` credential.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    url = load_credential(store, "admin", "Admin password: ")
+    try:
+        print(asyncio.run(_with_admin(url.decode(), work)))
+    finally:
+        wipe(url)
+
+
+def cmd_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
+    """List the sessions of all hosts.
+
+    Args:
+        args: Parsed arguments (`all`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """List the sessions.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            One line per session.
+        """
+        rows = await herd.sessions(db, active_only=not args.all)
+        return "\n".join(row.line() for row in rows) or "no sessions"
+
+    _admin_command(store, work)
+
+
+def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
+    """List the open escalations.
+
+    Args:
+        args: Parsed arguments (`session`, `rendered`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """List the open escalations.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            One entry per escalation.
+        """
+        rows = await herd.escalations(db, args.session)
+        if not rows:
+            return "no open escalations"
+        parts = [row.line() + (f"\n{row.rendered}" if args.rendered else "") for row in rows]
+        return "\n".join(parts)
+
+    _admin_command(store, work)
+
+
+def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Allow or deny an open escalation; the waiting session continues.
+
+    Args:
+        args: Parsed arguments (`id`, `decision`, `note`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential or the escalation is not open.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """Resolve the escalation.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report.
+
+        Raises:
+            CliError: If the escalation is not open any more.
+        """
+        if not await herd.resolve(db, args.id, args.decision, args.note or ""):
+            raise CliError(f"escalation {args.id} is not open (resolved, cancelled or unknown)")
+        return f"escalation {args.id}: {args.decision}"
+
+    _admin_command(store, work)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser of `calu`.
 
@@ -353,6 +487,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_run)
+
+    p = sub.add_parser("sessions", help="list the sessions of all hosts")
+    p.add_argument("--all", action="store_true", help="also show sessions that have ended")
+    p.set_defaults(handler=cmd_sessions)
+
+    p = sub.add_parser("escalations", help="list the open escalations")
+    p.add_argument("session", nargs="?", help="only escalations of this session id")
+    p.add_argument("--rendered", action="store_true", help="also print the rendered step")
+    p.set_defaults(handler=cmd_escalations)
+
+    p = sub.add_parser("resolve", help="allow or deny an open escalation")
+    p.add_argument("id", type=int, help="escalation id")
+    p.add_argument("decision", choices=["allow", "deny"])
+    p.add_argument("--note", help="text for Claude and for the record")
+    p.set_defaults(handler=cmd_resolve)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove"])
