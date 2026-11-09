@@ -418,7 +418,7 @@ async def _listen(
         server: The protocol server.
         options: Host and port to bind.
         token: The client token to print.
-        store: The session store, for the token's hash.
+        store: The session store, for the address and the token's hash.
         on_serving: Awaited with the address and the token as well, or None.
     """
     try:
@@ -435,9 +435,10 @@ async def _listen(
             )
             if store.session_id is not None:
                 try:
+                    await store.set_address(server.address)
                     await store.add_client_token(token_hash(token), server.address)
                 except Exception:
-                    log.exception("recording the client token failed")
+                    log.exception("recording the address and the client token failed")
             if on_serving is not None:
                 await on_serving(server.address, token)
     except OSError as exc:

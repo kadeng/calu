@@ -438,3 +438,30 @@ async def test_waiting_without_a_limit_is_possible(tmp_path: Path):
         await session.stop()
     (result,) = rec.of(ToolResult)
     assert not result.is_error
+
+
+async def test_the_agent_tree_of_a_session_is_recorded(tmp_path: Path):
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "agent": {
+                        "description": "reviewer",
+                        "background": True,
+                        "actions": [{"text": "reviewing"}],
+                    }
+                }
+            ]
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="review it"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (agent_id,) = store.agent_parents
+    assert store.agent_parents[agent_id] is None  # started by the main agent
+    assert store.agents[agent_id].description == "reviewer"
+    assert store.agents[agent_id].background
+    assert store.agents[agent_id].status == "completed"

@@ -7,6 +7,8 @@
                  open_escalation ─► escalation ─► close_escalation
                  add_comment                 a user's comment on a selection
                  save_turn, save_summary     condensed conversation for the checkers
+                 set_address, add_agent, update_agents
+                                             how to reach the process, and its agent tree
                  end                         state "stopped" or "failed", ended_at
 
 `SessionStore` is the interface the session orchestrator uses. `DatabaseSessionStore` implements
@@ -28,6 +30,7 @@ interrupted, or nobody answered in time.
 """
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -35,6 +38,7 @@ from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
 from calu.protocol.messages import (
+    AgentInfo,
     CheckerRunInfo,
     EscalationContextResult,
     SessionHistoryResult,
@@ -174,6 +178,36 @@ class SessionStore(Protocol):
         Args:
             claude_session_id: The id Claude Code reports.
             model: The Claude model of the session, or None to leave it unchanged.
+        """
+        ...
+
+    async def set_address(self, address: str) -> None:
+        """Record where this session process listens for clients (PLAN.md D29).
+
+        Args:
+            address: "ws://host:port" or a Unix socket path.
+        """
+        ...
+
+    async def add_agent(self, agent_id: str, parent_agent_id: str | None = None) -> None:
+        """Record a subagent of this session and which agent started it.
+
+        Called when the Agent tool call that starts the subagent is seen, so the hierarchy is
+        known before the subagent's own steps arrive. Calling it again for the same agent keeps
+        the first parent.
+
+        Args:
+            agent_id: Id of the Agent tool call that starts the subagent.
+            parent_agent_id: The agent that made that call; None means the main agent.
+        """
+        ...
+
+    async def update_agents(self, agents: Sequence[AgentInfo]) -> None:
+        """Record what is known about the subagents of this session.
+
+        Args:
+            agents: The session's subagents as the runner reports them; a status other than
+                "running" also sets `ended_at`.
         """
         ...
 
@@ -482,6 +516,71 @@ class DatabaseSessionStore:
             "UPDATE sessions SET claude_session_id = %s, model = coalesce(%s, model) WHERE id = %s",
             (claude_session_id, model, self._require_session()),
         )
+
+    async def set_address(self, address: str) -> None:
+        """Record where the session listens (see `SessionStore.set_address`).
+
+        Args:
+            address: "ws://host:port" or a Unix socket path.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        await self._db.execute(
+            "UPDATE sessions SET address = %s WHERE id = %s", (address, self._require_session())
+        )
+
+    async def add_agent(self, agent_id: str, parent_agent_id: str | None = None) -> None:
+        """Record a subagent and its parent (see `SessionStore.add_agent`).
+
+        Args:
+            agent_id: Id of the Agent tool call that starts the subagent.
+            parent_agent_id: The agent that made that call; None means the main agent.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        await self._db.execute(
+            "INSERT INTO agents (session_id, agent_id, parent_agent_id) VALUES (%s, %s, %s)"
+            " ON CONFLICT (session_id, agent_id) DO NOTHING",
+            (self._require_session(), agent_id, parent_agent_id),
+        )
+
+    async def update_agents(self, agents: Sequence[AgentInfo]) -> None:
+        """Record what is known about the subagents (see `SessionStore.update_agents`).
+
+        Args:
+            agents: The session's subagents as the runner reports them.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        session_id = self._require_session()
+        async with self._db.exclusive() as conn:
+            for agent in agents:
+                await conn.execute(
+                    b"INSERT INTO agents (session_id, agent_id, sdk_agent_id, description,"
+                    b" subagent_type, background, status, ended_at)"
+                    b" VALUES (%s, %s, %s, %s, %s, %s, %s,"
+                    b"         CASE WHEN %s = 'running' THEN NULL ELSE now() END)"
+                    b" ON CONFLICT (session_id, agent_id) DO UPDATE SET"
+                    b" sdk_agent_id = excluded.sdk_agent_id,"
+                    b" description = excluded.description,"
+                    b" subagent_type = excluded.subagent_type,"
+                    b" background = excluded.background,"
+                    b" status = excluded.status,"
+                    b" ended_at = coalesce(agents.ended_at, excluded.ended_at)",
+                    (
+                        session_id,
+                        agent.agent_id,
+                        agent.sdk_agent_id,
+                        agent.description,
+                        agent.subagent_type,
+                        agent.background,
+                        agent.status,
+                        agent.status,
+                    ),
+                )
 
     async def end(self, state: State) -> None:
         """Record the end of the session (see `SessionStore.end`).

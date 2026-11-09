@@ -72,6 +72,7 @@ from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
 from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
+from calu.claude.sdk_runner import AGENT_TOOLS
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
 from calu.config import CHECKER_FIELDS, EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
@@ -82,6 +83,7 @@ from calu.files import command_files
 from calu.models import resolve_model
 from calu.protocol.messages import (
     AgentInfo,
+    AgentsUpdate,
     AssistantText,
     AssistantThinking,
     ChatQueue,
@@ -1523,6 +1525,16 @@ class Session:
                 outputs = self._claude_outputs.setdefault(event.agent_id, [])
                 outputs.append(ClaudeOutput(kind, event.text))
                 del outputs[:-MAX_PENDING_OUTPUTS]
+            case ToolUse() if event.name in AGENT_TOOLS:
+                # The subagent's own id is this call's id; the caller is its parent (D29).
+                await self._store_call(
+                    "recording a subagent",
+                    self.store.add_agent(event.tool_use_id, event.agent_id),
+                )
+            case AgentsUpdate():
+                await self._store_call(
+                    "recording the subagents", self.store.update_agents(event.agents)
+                )
             case ToolResult():
                 self._pending_reasons.pop(event.tool_use_id, None)
                 self._running_tools.discard(event.tool_use_id)

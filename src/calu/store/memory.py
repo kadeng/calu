@@ -6,12 +6,14 @@ which stands for the operator's `calu_resolve_escalation`.
 """
 
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from calu.comments import Comment
 from calu.context.turns import TurnRecord
 from calu.protocol.messages import (
+    AgentInfo,
     EscalationContextResult,
     SessionHistoryResult,
     SessionSummary,
@@ -66,6 +68,11 @@ class MemorySessionStore:
     """What `recent_sessions` returns (a test sets it)."""
     comments: list[tuple[int, Comment, int | None]] = field(default_factory=list)
     client_tokens: list[tuple[str, str]] = field(default_factory=list)
+    address: str = ""
+    agents: dict[str, AgentInfo] = field(default_factory=dict)
+    """The subagents as `update_agents` recorded them, by agent id."""
+    agent_parents: dict[str, str | None] = field(default_factory=dict)
+    """Which agent started which; None means the main agent."""
     history: SessionHistoryResult | None = None
     """What `load_history` returns; None builds it from the stored turns."""
     _ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
@@ -101,6 +108,33 @@ class MemorySessionStore:
         """
         self.claude_session_id = claude_session_id
         self.model = model or self.model
+
+    async def set_address(self, address: str) -> None:
+        """Record where the session listens.
+
+        Args:
+            address: "ws://host:port" or a Unix socket path.
+        """
+        self.address = address
+
+    async def add_agent(self, agent_id: str, parent_agent_id: str | None = None) -> None:
+        """Record a subagent and its parent, keeping the first parent seen.
+
+        Args:
+            agent_id: Id of the Agent tool call that starts the subagent.
+            parent_agent_id: The agent that made that call; None means the main agent.
+        """
+        self.agent_parents.setdefault(agent_id, parent_agent_id)
+
+    async def update_agents(self, agents: Sequence[AgentInfo]) -> None:
+        """Record what is known about the subagents.
+
+        Args:
+            agents: The session's subagents as the runner reports them.
+        """
+        for agent in agents:
+            self.agents[agent.agent_id] = agent
+            self.agent_parents.setdefault(agent.agent_id, None)
 
     async def end(self, state: State) -> None:
         """Record the final state.

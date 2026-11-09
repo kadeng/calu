@@ -4,6 +4,7 @@ import pytest
 from calu.comments import Comment, Excerpt
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db, connect
+from calu.protocol.messages import AgentInfo
 from calu.setup import setup
 from calu.store import (
     CheckerRun,
@@ -432,5 +433,45 @@ async def test_the_stored_context_of_an_escalation_comes_back_with_its_checker_r
         assert closed.note == "the session was stopped"
         assert closed.resolved_by == "calu_session"
         assert await store.escalation_context(999_999) is None
+    finally:
+        await conn.close()
+
+
+async def test_the_address_and_the_agent_tree_are_recorded(db_url: str) -> None:
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_address("ws://127.0.0.1:8765")
+        cur = await conn.execute(
+            "SELECT address, pid, os_user FROM sessions WHERE id = %s", (store.session_id,)
+        )
+        assert await cur.fetchone() == ("ws://127.0.0.1:8765", 4321, "u")
+
+        # The main agent starts "reviewer", which starts "helper".
+        await store.add_agent("tool-1", None)
+        await store.add_agent("tool-2", "tool-1")
+        await store.update_agents(
+            [
+                AgentInfo(
+                    agent_id="tool-1",
+                    sdk_agent_id="sdk-1",
+                    description="reviewer",
+                    subagent_type="general-purpose",
+                    background=True,
+                ),
+                AgentInfo(agent_id="tool-2", description="helper", status="completed"),
+            ]
+        )
+        await store.add_agent("tool-2", None)  # a later call keeps the first parent
+        cur = await conn.execute(
+            "SELECT agent_id, parent_agent_id, sdk_agent_id, description, subagent_type,"
+            " background, status, ended_at IS NULL FROM agents WHERE session_id = %s"
+            " ORDER BY agent_id",
+            (store.session_id,),
+        )
+        assert await cur.fetchall() == [
+            ("tool-1", None, "sdk-1", "reviewer", "general-purpose", True, "running", True),
+            ("tool-2", "tool-1", None, "helper", None, False, "completed", False),
+        ]
     finally:
         await conn.close()
