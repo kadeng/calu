@@ -113,6 +113,12 @@ def resolve_model(model: str | Model) -> str | Model:
     Args:
         model: A Pydantic AI model string (e.g. "mistral:mistral-small-2603") or a `Model`.
 
+    A provider that refuses to be built — Mistral's, for example, raises when no API key is set
+    — leaves the string unchanged and logs a warning, so that resolving a model never stops a
+    session from starting. The failure then happens at the first check of that checker, where it
+    becomes an ESCALATE whose reason names the error and a human decides. `calu.preflight` warns
+    about the missing key at every start.
+
     Returns:
         A `Model` for the cases in the module docstring; otherwise `model` unchanged.
 
@@ -123,9 +129,17 @@ def resolve_model(model: str | Model) -> str | Model:
     if not isinstance(model, str):
         return model
     provider, _, name = model.partition(":")
-    if provider == "mistral" and name:
-        base_url = os.environ.get("MISTRAL_BASE_URL") or MISTRAL_EU_BASE_URL
-        return MistralModel(name, provider=MistralProvider(base_url=base_url))
-    if provider == "bedrock" and "anthropic.claude" in name:
-        return BedrockConverseModel(name, settings=ModelSettings(thinking=False))
+    try:
+        if provider == "mistral" and name:
+            base_url = os.environ.get("MISTRAL_BASE_URL") or MISTRAL_EU_BASE_URL
+            return MistralModel(name, provider=MistralProvider(base_url=base_url))
+        if provider == "bedrock" and "anthropic.claude" in name:
+            return BedrockConverseModel(name, settings=ModelSettings(thinking=False))
+    except Exception as exc:
+        log.warning(
+            "%s cannot be built yet (%s: %s); it is used as a string",
+            model,
+            type(exc).__name__,
+            exc,
+        )
     return model

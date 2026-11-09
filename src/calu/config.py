@@ -227,6 +227,8 @@ class Config(BaseModel):
     command_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     edit_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     subagent_checker: CheckerConfig = Field(default_factory=CheckerConfig)
+    changeset_checker: CheckerConfig = Field(default_factory=CheckerConfig)
+    """The checker that reviews a whole change before a commit (PLAN.md D26)."""
     check_subagent_results: bool = True
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)
     """Categories that always wait for the human (see `AutoEscalate`); all off by default."""
@@ -256,6 +258,7 @@ class Config(BaseModel):
                 "command_checker": self.command_checker.model_copy(update={"model": model}),
                 "edit_checker": self.edit_checker.model_copy(update={"model": model}),
                 "subagent_checker": self.subagent_checker.model_copy(update={"model": model}),
+                "changeset_checker": self.changeset_checker.model_copy(update={"model": model}),
                 "context": self.context.model_copy(
                     update={"narrator_model": model, "summarizer_model": model}
                 ),
@@ -292,6 +295,7 @@ CHECKER_FIELDS = {
     "command": "command_checker",
     "edit": "edit_checker",
     "subagent-result": "subagent_checker",
+    "changeset": "changeset_checker",
 }
 """Checker type names of the database mapped to the `Config` fields they configure."""
 

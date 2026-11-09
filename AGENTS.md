@@ -42,7 +42,7 @@ phases.
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
-| `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker and result checker agents, the checkers' read-only code tools (`tools.py`) |
+| `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |

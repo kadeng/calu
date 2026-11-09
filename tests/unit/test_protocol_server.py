@@ -365,7 +365,7 @@ async def test_a_client_reads_the_checker_definitions(tmp_path: Path):
         async with client(run, events) as protocol:
             result = await protocol.request("checkers.get")
             names = [c["name"] for c in result["checkers"]]
-            assert names == ["command", "edit", "narrator", "subagent-result"]
-            command = result["checkers"][0]
+            assert names == ["changeset", "command", "edit", "narrator", "subagent-result"]
+            command = next(c for c in result["checkers"] if c["name"] == "command")
             assert command["route"] == "command" and command["version"] == 1
             assert command["instructions"].startswith("#")

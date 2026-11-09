@@ -54,12 +54,14 @@ def configured_models(config: Config) -> dict[str, str]:
         config: The session configuration.
 
     Returns:
-        Role name ("command checker", "edit checker", "subagent result checker", "narrator",
-        "summarizer") -> Pydantic AI model string. Roles that are switched off are left out.
+        Role name ("command checker", "edit checker", "changeset checker", "subagent result
+        checker", "narrator", "summarizer") -> Pydantic AI model string. Roles that are switched
+        off are left out.
     """
     models = {
         "command checker": config.command_checker.model,
         "edit checker": config.edit_checker.model,
+        "changeset checker": config.changeset_checker.model,
         "summarizer": config.context.summarizer_model,
     }
     if config.check_subagent_results:

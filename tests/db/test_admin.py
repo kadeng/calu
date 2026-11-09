@@ -82,7 +82,7 @@ async def test_checker_definitions_are_changed_and_versioned(db_url: str) -> Non
     db, conn = await prepared(db_url)
     try:
         names = [c.name for c in await admin.checkers(db)]
-        assert names == ["command", "edit", "narrator", "subagent-result"]
+        assert names == ["changeset", "command", "edit", "narrator", "subagent-result"]
         assert (await admin.instructions(db, "command")).startswith("#")
         with pytest.raises(admin.AdminError, match="no checker named"):
             await admin.instructions(db, "nope")

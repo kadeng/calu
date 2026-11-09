@@ -26,6 +26,7 @@ async def test_setup_seeds_defaults_once_and_creates_session_login(db_url: str) 
         _, session_url = await setup(conn, db_url, "test:model")
         cur = await conn.execute("SELECT name, model, version FROM checker_types ORDER BY name")
         assert await cur.fetchall() == [
+            ("changeset", "test:model", 1),
             ("command", "test:model", 1),
             ("edit", "test:model", 1),
             ("narrator", "test:model", 1),

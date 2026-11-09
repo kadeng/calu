@@ -65,13 +65,14 @@ from calu.checkers import (
     SubagentResult,
     ToolPolicy,
 )
+from calu.checkers.changeset import changeset, is_commit
 from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
 from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
-from calu.config import EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
+from calu.config import CHECKER_FIELDS, EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
 from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
@@ -274,6 +275,7 @@ class Session:
         self.checkers = {
             Route.COMMAND: self._checker("command", self.config.command_checker),
             Route.EDIT: self._checker("edit", self.config.edit_checker),
+            Route.CHANGESET: self._checker("changeset", self.config.changeset_checker),
         }
         self.result_checker = ResultChecker(
             instructions=self._instructions("subagent-result"),
@@ -303,6 +305,7 @@ class Session:
         self._local_ids = itertools.count(1)
         self._step_seq = itertools.count(1)
         self._step_ids: dict[str, int] = {}  # tool_use_id -> `steps` row id
+        self._changesets: dict[str, str] = {}  # tool_use_id -> the diff a commit would record
         self._running_tools: set[str] = set()  # tool_use_ids of approved, unfinished calls
         self._checking = 0  # checker and narrator calls in flight
         self._busy = False  # Claude works on a turn
@@ -396,11 +399,15 @@ class Session:
             overrides=self.config.tool_routes, default=self.config.default_route
         )
         self.context.config = self.config.context
-        for route, name in ((Route.COMMAND, "command"), (Route.EDIT, "edit")):
+        for route, name in (
+            (Route.COMMAND, "command"),
+            (Route.EDIT, "edit"),
+            (Route.CHANGESET, "changeset"),
+        ):
             checker = self.checkers[route]
-            cfg = self.config.command_checker if name == "command" else self.config.edit_checker
+            cfg = getattr(self.config, CHECKER_FIELDS[name])
             checker.instructions = self._instructions(name)
-            checker.rules = self.rules  # the read_file tool follows the new read deny lists
+            checker.rules = self.rules  # the code tools follow the new read deny lists
             if name not in self._models:
                 checker.model = resolve_model(cfg.model)
             checker.usage_limits = UsageLimits(
@@ -599,6 +606,7 @@ class Session:
         self._busy = False
         self._running_tools.clear()
         self._step_ids.clear()
+        self._changesets.clear()
         self._pending_reasons.clear()
         self._step_seq = itertools.count(1)
         self._checking = 0
@@ -1259,6 +1267,14 @@ class Session:
                 source="policy",
                 rules=rules,
             )
+        diff = ""
+        if route is Route.COMMAND and step.tool_name == "Bash" and self._checks_changesets():
+            command = str(step.tool_input.get("command", ""))
+            if is_commit(command, Path(step.cwd or self.workspace)):
+                route = Route.CHANGESET
+                diff = await self._changeset(command)
+                if step.tool_use_id:
+                    self._changesets[step.tool_use_id] = diff
         if route is Route.EDIT:
             await self._emit_edit_diff(step)
         if pending is not None:
@@ -1272,7 +1288,7 @@ class Session:
         await self._refresh_state()
         try:
             with anyio.fail_after(CHECKER_DEADLINE_S):
-                run = await checker.run(step, context)
+                run = await checker.run(step, context, extra=diff)
         except TimeoutError:
             run = CheckOutcome(
                 decision=CheckDecision(
@@ -1320,6 +1336,34 @@ class Session:
             )
             decided.source = "auto"
         return decided
+
+    def _checks_changesets(self) -> bool:
+        """Tell whether the changeset checker is in use.
+
+        Returns:
+            True if the database holds an enabled checker type "changeset"; a database that has
+            none (or an administrator who disabled it) leaves commits to the command checker.
+        """
+        return "changeset" in self.settings.checkers
+
+    async def _changeset(self, command: str) -> str:
+        """Return the change a commit command would record, as a prompt block; never raises.
+
+        Args:
+            command: The commit command line.
+
+        Returns:
+            A "# Changeset of this commit" block, or a block saying that there is nothing to
+            commit or that git could not be asked.
+        """
+        try:
+            diff = await changeset(self.workspace, command)
+        except Exception as exc:
+            log.exception("collecting the changeset failed")
+            diff = f"(the changeset could not be read: {type(exc).__name__}: {exc})"
+        if not diff.strip():
+            diff = "(nothing would be committed: the diff is empty)"
+        return f"# Changeset of this commit\n\n{diff}"
 
     async def _emit_edit_diff(self, step: Step) -> None:
         """Emit `edit.diff` with the file content before and after an edit; never raises.
@@ -1399,6 +1443,7 @@ class Session:
             case ToolResult():
                 self._pending_reasons.pop(event.tool_use_id, None)
                 self._running_tools.discard(event.tool_use_id)
+                self._changesets.pop(event.tool_use_id, None)
                 step_id = self._step_ids.pop(event.tool_use_id, None)
                 if step_id is not None:
                     await self._store_call(
@@ -1704,6 +1749,7 @@ class Session:
             "tool_input": workspace_relative_input(step.tool_input, self.workspace),
             "agent_id": step.agent_id,
             "files": files_before(step, self.workspace),
+            "changeset": self._changesets.get(step.tool_use_id or "", ""),
             "recent": self.context.recent(),
             "chat_summary": self.context.summary,
             "calu_version": __version__,

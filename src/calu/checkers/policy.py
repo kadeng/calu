@@ -10,7 +10,9 @@ Each tool name maps to a `Route`:
 The table can be overridden per tool name, for example to escalate all calls of one MCP tool.
 The user's allow and deny lists (`calu.checkers.rules`) are applied before the
 route: they can escalate a call, let a Bash call run without a check, or send a read of an
-unlisted path to the command checker.
+unlisted path to the command checker. A Bash call that creates a git commit goes to CHANGESET
+instead of COMMAND, because the interesting part of a commit is the change, not the command
+(`calu.checkers.changeset`, PLAN.md D26).
 """
 
 from enum import StrEnum
@@ -23,6 +25,7 @@ class Route(StrEnum):
 
     COMMAND = "command"  # reviewed by the command checker
     EDIT = "edit"  # reviewed by the edit checker
+    CHANGESET = "changeset"  # a commit: the changeset checker reviews the whole change
     ALLOW = "allow"  # runs without a check
     ESCALATE = "escalate"  # always asks the human
     SUBAGENT = "subagent"  # a subagent's final result, reviewed by the result checker

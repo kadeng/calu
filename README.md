@@ -47,8 +47,8 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   condensed form, your project's AGENTS.md and the step itself, and read-only tools to look
   further when they need to: read a file or a range of its lines, find files by glob, grep for a
   pattern — so a checker can see who calls the function being changed instead of guessing. They
-  judge the step, not the whole program: overall correctness stays with a review of the finished
-  changeset.
+  judge the step, not the whole program: overall correctness is the changeset checker's job,
+  below.
 - **A readable trail instead of a transcript.** Every step is summarized by the checker that
   judged it — one line saying what the step was meant to do — and the summaries go to the
   database. Supervising a fleet of agents then means reading summaries, not transcripts, and
@@ -60,6 +60,12 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   change, the condensed conversation and the chat summary of that moment, and which checker
   version and model answered. You decide on the same material the checker had, not on a
   one-line reason.
+- **A review of the whole change before it is committed.** When Claude runs `git commit`, calu
+  holds the commit and gives the complete diff to a checker of its own — the one checker that
+  sees the result rather than one step of it. It judges what the step checkers cannot: whether
+  the change is complete (a renamed function with callers left behind), whether it contains work
+  nobody asked for, whether a test was weakened to make it pass, whether the message describes
+  the change. A denial undoes nothing; it stops the commit and tells Claude what to fix first.
 - **A check on what subagents hand back.** A subagent's final result is reviewed against the
   conversation, so an adversarial reviewer subagent cannot silently widen a task that you
   deliberately kept small.

@@ -174,11 +174,13 @@ def fake_models() -> dict[str, str | Model]:
     """Create checker, summarizer and narrator models for `Session(checker_models=...)`.
 
     Returns:
-        New models under the keys "command", "edit", "subagent", "summarizer" and "narrator".
+        New models under the keys "command", "edit", "changeset", "subagent", "summarizer" and
+        "narrator".
     """
     return {
         "command": rule_based_checker(),
         "edit": rule_based_checker(),
+        "changeset": rule_based_checker(),
         "subagent": fake_result_checker(),
         "summarizer": fake_summarizer(),
         "narrator": fake_narrator(),

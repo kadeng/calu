@@ -47,7 +47,13 @@ async def test_load_returns_defaults_of_a_fresh_database(db_url: str) -> None:
         settings = await ConfigStore(Db(conn), WORKSPACE).load()
     finally:
         await conn.close()
-    assert sorted(settings.checkers) == ["command", "edit", "narrator", "subagent-result"]
+    assert sorted(settings.checkers) == [
+        "changeset",
+        "command",
+        "edit",
+        "narrator",
+        "subagent-result",
+    ]
     assert settings.config.command_checker.model == "test:model"
     assert settings.config.edit_checker.model == "test:model"
     assert settings.config.subagent_checker.model == "test:model"

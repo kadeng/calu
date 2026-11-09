@@ -187,7 +187,9 @@ class Checker:
             self._agent, self._built_for = agent, instructions
         return self._agent
 
-    def build_prompt(self, step: Step, context: CheckContext) -> list[str | CachePoint]:
+    def build_prompt(
+        self, step: Step, context: CheckContext, extra: str = ""
+    ) -> list[str | CachePoint]:
         """Return the user prompt parts for checking `step` with `context`.
 
         Empty context parts and their cache points are left out (layout: module docstring).
@@ -195,6 +197,9 @@ class Checker:
         Args:
             step: The tool call to check.
             context: Context prefix and recent summaries.
+            extra: A further block after the step, for a checker that judges more than the call
+                itself — the changeset checker gets the diff of the commit here (D26). Empty
+                for the step checkers.
 
         Returns:
             Prompt texts with `CachePoint`s (layout: module docstring).
@@ -206,10 +211,12 @@ class Checker:
         """
         parts = context_parts(context, "# Project context")
         parts.append("# Step to check\n\n" + render_step(step, self.workspace))
+        if extra:
+            parts.append(extra)
         return parts
 
     async def check(
-        self, step: Step, context: CheckContext, raise_errors: bool = False
+        self, step: Step, context: CheckContext, raise_errors: bool = False, extra: str = ""
     ) -> CheckDecision:
         """Review `step` with the checker model and return its decision.
 
@@ -220,6 +227,7 @@ class Checker:
             context: Context prefix and recent summaries.
             raise_errors: If True, failures are raised instead (evaluation counts them as
                 errors, not as escalations).
+            extra: A further prompt block after the step (see `build_prompt`).
 
         Returns:
             The model's decision, or the ESCALATE decision described in `run`.
@@ -227,10 +235,14 @@ class Checker:
         Raises:
             Exception: Only with `raise_errors`: whatever the model call or rendering raised.
         """
-        return (await self.run(step, context, raise_errors)).decision
+        return (await self.run(step, context, raise_errors, extra)).decision
 
     async def run(
-        self, step: Step, context: CheckContext, raise_errors: bool = False
+        self,
+        step: Step,
+        context: CheckContext,
+        raise_errors: bool = False,
+        extra: str = "",
     ) -> CheckOutcome:
         """Review `step` and return the decision with the cost of the model call.
 
@@ -244,6 +256,7 @@ class Checker:
             context: Context prefix and recent summaries.
             raise_errors: If True, failures are raised instead (evaluation counts them as
                 errors, not as escalations).
+            extra: A further prompt block after the step (see `build_prompt`).
 
         Returns:
             The decision, the token counts (None after a failure) and the duration in
@@ -256,7 +269,7 @@ class Checker:
         try:
             result = await run_bounded(
                 self.agent,
-                self.build_prompt(step, context),
+                self.build_prompt(step, context, extra),
                 model=self.model,
                 usage_limits=self.usage_limits,
                 model_settings=cache_settings(self.model, f"{self.cache_key}-{self.name}"),

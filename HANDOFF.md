@@ -61,6 +61,12 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   ESCALATE, ALLOW (run it whatever auto mode says) and DENY. PASS is the normal answer; the
   allow lists and the read-only tool routes produce PASS as well. The PreToolUse hook answers
   PASS without a decision while auto mode is in effect.
+- **The changeset checker** (D26, `checkers/changeset.py`): a Bash call that creates a `git
+  commit` goes to `Route.CHANGESET`, and calu gives that checker the diff the commit would
+  record (`git diff --cached`, against HEAD for `-a`, against `HEAD~1` for `--amend`) next to
+  the command and its message. A DENY stops the commit and tells Claude what to fix; the
+  escalation context carries the changeset for the operator. Migration 0006 adds the route; a
+  database without an enabled `changeset` checker type leaves commits to the command checker.
 - **The checkers' tools** (D22, D25, `checkers/tools.py`): `read_file(path, start_line,
   end_line)`, `find_files(pattern)` and `grep_files(pattern, path_glob)`. They stand on Pydantic
   AI's workspace API (`LocalWorkspace(read_only=True, authority="none")`), which pins the run to

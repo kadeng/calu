@@ -26,6 +26,7 @@ CHECKER_DEFAULTS = (
     ("command", "command", "checkers/command.md"),
     ("edit", "edit", "checkers/edit.md"),
     ("subagent-result", "subagent", "checkers/subagent-result.md"),
+    ("changeset", "changeset", "checkers/changeset.md"),
     ("narrator", "narrator", "checkers/narrator.md"),
 )
 """(checker name, route, default instructions file) of the built-in checker types."""
