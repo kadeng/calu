@@ -352,6 +352,7 @@ class Session:
             instructions=self._instructions(name),
             model=resolve_model(self._models.get(name) or cfg.model),
             workspace=self.workspace,
+            rules=self.rules,
             usage_limits=UsageLimits(
                 request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
             ),
@@ -395,6 +396,7 @@ class Session:
             checker = self.checkers[route]
             cfg = self.config.command_checker if name == "command" else self.config.edit_checker
             checker.instructions = self._instructions(name)
+            checker.rules = self.rules  # the read_file tool follows the new read deny lists
             if name not in self._models:
                 checker.model = resolve_model(cfg.model)
             checker.usage_limits = UsageLimits(

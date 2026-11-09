@@ -81,7 +81,8 @@ before it takes effect, so it can stop a direction instead of having to unwind i
 
 ### What you can enforce with a checker
 
-Checkers are useful for everything that is obvious to a human reader but invisible to a linter:
+Checkers are useful wherever a rule is obvious to a human reader but invisible to a linter —
+because it is about intent, about prose, or about something outside the code such as a law:
 
 - **Writing that sounds like a language model.** The mannered summaries, the rhythmic triads, the
   confident filler. A checker holds every docstring, comment and commit message to your house
@@ -93,6 +94,22 @@ Checkers are useful for everything that is obvious to a human reader but invisib
   the step against what you actually asked for — it reads your messages in condensed form — and
   escalates when the two drift apart. The same check runs on what subagents hand back, so a
   reviewer subagent cannot quietly widen a task you deliberately kept narrow.
+- **Rules that come from law or from a contract.** Where personal data may be processed, for
+  example: if your answer is "inside the EU region of this provider", then a call that sends it
+  somewhere else is a compliance incident, not a style question — and it usually enters the code
+  as one plausible line in an otherwise reasonable edit. A checker that knows the rule sees that
+  line while it is being written. Data residency, retention periods, which fields may be logged
+  and which third party may be called are all rules of this kind.
+- **Functionality that needs a human decision before it exists.** Some features are regulated
+  whatever their intent: under the EU AI Act, inferring emotions, categorising people by
+  biometric data or scoring them can oblige you to do things you have not planned for. Such a
+  feature is easy to add as a side effect of something useful, and hard to notice afterwards. A
+  checker can escalate exactly those steps, so that a person decides to build it rather than
+  discovering later that it was built.
+- **Scientific standards in prose.** Claims that match the evidence, hedging where the evidence
+  is thin, the citation style you use, and no citation that quietly disappears in an edit.
+  Documentation and papers drift this way one small rewrite at a time; the checker reads each
+  rewrite.
 
 ### Code honesty enforcement
 
@@ -131,7 +148,7 @@ restate every day.
         │ (checkers, rules, escalations)    configuration, checker instructions,
    Claude Code                              every step, open escalations
         │
-   sandbox: the commands Claude runs
+   Claude Code's own sandbox, configured by calu: the commands Claude runs
 ```
 
 - **The core is headless.** One `calu run` process drives one Claude Code session and keeps

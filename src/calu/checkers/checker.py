@@ -2,7 +2,7 @@
 
 A checker request has this layout; each text is its own content block:
 
-    tool definitions (output tool)                                     <- breakpoint (Caching)
+    tool definitions (the output tool and `read_file`)                 <- breakpoint (Caching)
     instructions: the checker's Markdown file                          <- breakpoint (Caching)
     context prefix: project files, CHAT_SUMMARY.md
     completed turns of the session
@@ -33,7 +33,9 @@ from pydantic_ai.capabilities import Caching
 from pydantic_ai.models import Model
 
 from calu.checkers.model import CheckDecision, Decision, Step
+from calu.checkers.read_tool import ReadRefused, read_file
 from calu.checkers.render import render_step
+from calu.checkers.rules import Rules
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
 log = logging.getLogger(__name__)
@@ -133,12 +135,18 @@ class Checker:
 
     `check` does not raise for model, network or file errors: such failures yield an ESCALATE
     decision whose reason names the error, so a human decides instead.
+
+    The agent has exactly one tool, `read_file`, with which it can read a file of the workspace
+    when the step alone does not say enough (PLAN.md D22); the read deny lists of `rules` bound
+    it. It has no other tool: no writes, no commands, no network.
     """
 
     name: str
     instructions: str
     model: str | Model
     workspace: Path
+    rules: Rules | None = None
+    """The workspace's rules; they bound what `read_file` may read (None allows every file)."""
     usage_limits: UsageLimits = field(
         default_factory=lambda: UsageLimits(request_limit=3, output_tokens_limit=8_000)
     )
@@ -165,8 +173,29 @@ class Checker:
                 capabilities=[Caching(messages=False)],
             )
             agent.output_validator(_require_reason)
+            agent.tool_plain(self._read_file)
             self._agent, self._built_for = agent, instructions
         return self._agent
+
+    def _read_file(self, path: str, start_line: int = 1) -> str:
+        """Read a text file of the project, to judge a step that the diff alone does not explain.
+
+        Use this only when the answer depends on it, for example to see the rest of a function
+        that is being changed or the module it lives in. The file must belong to the project,
+        and files that the user's read deny list covers are refused.
+
+        Args:
+            path: Path of the file relative to the project root, e.g. "src/app.py".
+            start_line: First line to return (1-based); use it to read on after a cut.
+
+        Returns:
+            The numbered lines of the file (at most 400 lines per call), or a message saying
+            why the file cannot be read.
+        """
+        try:
+            return read_file(self.workspace, self.rules, path, start_line)
+        except ReadRefused as exc:
+            return f"cannot read {path}: {exc}"
 
     def build_prompt(self, step: Step, context: CheckContext) -> list[str | CachePoint]:
         """Return the user prompt parts for checking `step` with `context`.
