@@ -247,9 +247,9 @@ class SdkRunner:
 
             For an ASK verdict the step is stored, so that `can_use_tool` reuses it. A PASS
             verdict is answered without a decision where Claude Code's auto mode is in effect
-            (`claude.auto_mode` and the permission mode of the hook input), so that the auto
-            mode classifier decides as well (PLAN.md D5, D21); where there is no auto mode to
-            defer to, PASS becomes "allow". ALLOW always answers "allow".
+            (the permission mode of the hook input, whatever set it), so that the auto mode
+            classifier decides as well (PLAN.md D5, D21); where there is no auto mode to defer
+            to, PASS becomes "allow". ALLOW always answers "allow".
 
             Args:
                 input_data: The hook input (dict with tool_name, tool_input, agent_id, cwd...).
@@ -267,7 +267,7 @@ class SdkRunner:
             output: dict[str, Any] = {"hookEventName": "PreToolUse"}
             if result.context:
                 output["additionalContext"] = result.context  # verified: Claude reads it
-            auto = self.config.auto_mode and input_data.get("permission_mode") == "auto"
+            auto = input_data.get("permission_mode") == "auto"
             if result.verdict is Verdict.PASS and auto:
                 # No decision: Claude Code's auto mode classifier decides as well (checkers AND
                 # auto mode). "allow" would skip the classifier (verified, spike_auto_mode.py).
@@ -384,7 +384,9 @@ class SdkRunner:
             model=self.config.model,
             effort=self.config.effort,
             cli_path=self.config.cli_path,
-            permission_mode="auto" if self.config.auto_mode else "default",
+            # None: Claude Code decides, and its default is the auto mode (D5). calu does not
+            # take that choice away from the user.
+            permission_mode=self.config.permission_mode,
             can_use_tool=can_use_tool,
             hooks={
                 "PreToolUse": [

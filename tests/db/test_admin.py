@@ -168,3 +168,53 @@ async def test_a_change_announces_itself_to_running_sessions(db_url: str, tmp_pa
     finally:
         await conn.close()  # type: ignore[attr-defined]
         await listener.close()
+
+
+async def test_a_whole_rule_list_is_replaced_from_its_file_form(db_url: str, tmp_path) -> None:
+    db, conn = await prepared(db_url)
+    try:
+        await admin.add_project(db, "demo")
+        first = await admin.add_rule(db, "command-deny", "^old-one$", "keep me", "demo")
+        disabled = await admin.add_rule(db, "command-deny", "^switched-off$", project="demo")
+        await admin.set_rule(db, disabled.id, False)
+
+        rows = [r for r in await admin.rules(db, "demo", "command-deny") if r.scope == "demo"]
+        text = admin.render_rule_list([r for r in rows if r.enabled], "command-deny", "demo")
+        assert "^old-one$" in text and "^switched-off$" not in text
+
+        edited = text.replace("^old-one$", "^new-one$") + "\n# also this\n^second$\n"
+        removed, stored = await admin.replace_rule_list(db, "command-deny", edited, "demo")
+        assert (removed, stored) == (1, 2)
+
+        after = [r for r in await admin.rules(db, "demo", "command-deny") if r.scope == "demo"]
+        assert [(r.pattern, r.comment) for r in after if r.enabled] == [
+            ("^new-one$", "keep me"),
+            ("^second$", "also this"),
+        ]
+        # A disabled rule is left untouched (its position may now interleave; it is inactive).
+        assert [r.pattern for r in after if not r.enabled] == ["^switched-off$"]
+        assert first.id not in [r.id for r in after]
+
+        # A bad pattern changes nothing.
+        with pytest.raises(admin.AdminError, match="not a valid regular expression"):
+            await admin.replace_rule_list(db, "command-deny", "^(\n", "demo")
+        assert len([r for r in await admin.rules(db, "demo", "command-deny") if r.enabled]) >= 2
+        with pytest.raises(admin.AdminError, match="rule list must be one of"):
+            await admin.replace_rule_list(db, "command-perhaps", "^x$")
+        with pytest.raises(admin.AdminError, match="no project named"):
+            await admin.replace_rule_list(db, "command-deny", "^x$", "nope")
+
+        # An empty file removes the enabled rules of that scope and leaves the global ones.
+        removed, stored = await admin.replace_rule_list(db, "command-deny", "", "demo")
+        assert (removed, stored) == (2, 0)
+        left = await admin.rules(db, "demo", "command-deny")
+        assert [r.scope for r in left if r.enabled] == ["global"] * len(
+            [r for r in left if r.enabled]
+        )
+
+        # The session sees the replacement.
+        settings = await ConfigStore(db, tmp_path, "demo").load()
+        patterns = [r.pattern.pattern for r in settings.rules.lists("command-deny")[0]]
+        assert "^new-one$" not in patterns and "^old-one$" not in patterns
+    finally:
+        await conn.close()  # type: ignore[attr-defined]

@@ -173,10 +173,13 @@ class ClaudeConfig(BaseModel):
     with the AWS credentials of the environment (e.g. an EC2 instance role or `AWS_PROFILE`);
     false (default) leaves the variable as it is.
 
-    `auto_mode`: if true (default, PLAN.md D5), Claude Code runs in its "auto" permission mode
-    and its classifier decides as well: a step runs only if the checkers (or the allow lists)
-    and auto mode approve it. Checker DENY and ESCALATE work as without it. Models without auto
-    mode (haiku) fall back to the default mode, where the checkers decide alone.
+    `permission_mode`: None (default) leaves the permission mode to Claude Code, whose own
+    default is the auto mode — the intended way to run calu, because then a step runs only if
+    the checkers (or the allow lists) **and** auto mode's classifier approve it (PLAN.md D5).
+    calu does not set the mode: changing it away from auto is a deliberate act of the user, in
+    Claude Code's own settings or here. Whatever the mode ends up being, the checkers work: the
+    hook reads the effective mode from its input, defers a PASS to the classifier where the mode
+    is "auto", and otherwise answers "allow" itself, so that the checkers decide alone (D21).
 
     `stream_partial`: if true (default), text and thinking are also streamed token by token
     (`assistant.delta` events); otherwise they arrive per completed block only.
@@ -186,7 +189,10 @@ class ClaudeConfig(BaseModel):
     """
 
     use_bedrock: bool = False
-    auto_mode: bool = True
+    permission_mode: (
+        Literal["default", "auto", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] | None
+    ) = None
+    """Permission mode for Claude Code; None leaves it to Claude Code (its default is "auto")."""
     stream_partial: bool = True
     thinking_display: Literal["summarized", "omitted"] = "summarized"
     """How Claude Code returns thinking: "summarized" (readable summaries, shown by front ends

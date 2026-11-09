@@ -54,6 +54,9 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   result review, login hint, states of `PLAN.md` §3.1 derived from what runs (escalated >
   checking > tool_call > running > idle). `apply_settings` applies a reloaded configuration from
   the next step on. `snapshot` is what a client gets from `state.get`.
+- **The permission mode stays Claude Code's** (D5, revised): calu does not pass
+  `permission_mode` unless `claude.permission_mode` is set; Claude Code's default is the auto
+  mode. The hook adapts to the mode it is given, so the checkers work in every mode.
 - **Four decisions** (D21): PASS (no objection; Claude Code's auto mode decides as before),
   ESCALATE, ALLOW (run it whatever auto mode says) and DENY. PASS is the normal answer; the
   allow lists and the read-only tool routes produce PASS as well. The PreToolUse hook answers
@@ -72,7 +75,12 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   get|set|unset KEY` (dotted keys, values parsed as JSON, validated against `Config` before
   the write), `calu checker list|show|set` (instructions from a file or stdin, model, limits,
   enable/disable, a new checker with `--route`) and `calu rules list|add|remove|enable|disable`
-  (patterns compiled before they are stored). They need the `admin` credential; every change
+  (patterns compiled before they are stored). `calu checker edit NAME` and `calu rules edit
+  LIST` open the text in `$EDITOR` (`$VISUAL` first, then nano/vim/vi), store it when the editor
+  closes, say "unchanged" when it did not change, and keep the temporary file and print its path
+  if storing fails, so no editing work is lost. A rule list is edited in the line format that
+  `calu setup` loads the built-in lists from; disabled rules are left untouched. They need the
+  `admin` credential; every change
   announces itself on `config_changed`, so a running session applies it at its next step.
 - **Inspecting a decision**: `escalation.context` returns what the checker saw and said for an
   escalated step (rendered step, the file before the change, the conversation and the chat

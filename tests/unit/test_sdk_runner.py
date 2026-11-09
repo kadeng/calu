@@ -40,9 +40,10 @@ def test_claude_code_authenticates_as_configured(tmp_path: Path):
     """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""
     options = SdkRunner(tmp_path, ClaudeConfig(), {"MISTRAL_API_KEY"})._options(AllowAll(), None)
     assert options.env == {"MISTRAL_API_KEY": ""}
-    assert options.permission_mode == "auto"  # calu default (PLAN.md D5)
-    off = SdkRunner(tmp_path, ClaudeConfig(auto_mode=False))._options(AllowAll(), None)
-    assert off.permission_mode == "default"
+    # calu does not set the permission mode: Claude Code's own default (auto) applies (D5).
+    assert options.permission_mode is None
+    chosen = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))._options(AllowAll(), None)
+    assert chosen.permission_mode == "default"
 
 
 def test_init_message_records_the_session_for_any_auth_source(tmp_path: Path):
@@ -144,10 +145,11 @@ class FixedVerdict(AllowAll):
         return GateResult(self.verdict, reason="checker says so", context=self.context)
 
 
-async def run_hook(tmp_path: Path, gate, auto_mode: bool, effective_mode: str) -> dict:
-    runner = SdkRunner(tmp_path, ClaudeConfig(auto_mode=auto_mode))
+async def run_hook(tmp_path: Path, gate, effective_mode: str, configured: Any = None) -> dict:
+    runner = SdkRunner(tmp_path, ClaudeConfig(permission_mode=configured))
     options = runner._options(gate, None)
-    assert options.permission_mode == ("auto" if auto_mode else "default")
+    # calu does not set the mode unless the configuration does (Claude Code's default is auto).
+    assert options.permission_mode == configured
     hook: Any = options.hooks["PreToolUse"][0].hooks[0]  # type: ignore[index]
     data = {"tool_name": "Bash", "tool_input": {"command": "make"}}
     data["permission_mode"] = effective_mode
@@ -157,28 +159,32 @@ async def run_hook(tmp_path: Path, gate, auto_mode: bool, effective_mode: str) -
 @pytest.mark.anyio
 async def test_auto_mode_decides_after_a_checker_pass(tmp_path: Path):
     """Checkers AND auto mode: PASS returns no decision (spike_auto_mode.py, D21)."""
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS, "nit"), True, "auto")
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS, "nit"), "auto")
     assert out == {"hookEventName": "PreToolUse", "additionalContext": "nit"}
     for verdict in (Verdict.DENY, Verdict.ASK):
-        out = await run_hook(tmp_path, FixedVerdict(verdict), True, "auto")
+        out = await run_hook(tmp_path, FixedVerdict(verdict), "auto")
         assert out["permissionDecision"] == verdict.value
 
 
 @pytest.mark.anyio
 async def test_an_explicit_allow_overrules_the_classifier(tmp_path: Path):
     """ALLOW is the deliberate exception: the step runs whatever auto mode would say (D21)."""
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.ALLOW), True, "auto")
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.ALLOW), "auto")
     assert out["permissionDecision"] == "allow"
     assert out["permissionDecisionReason"] == "checker says so"
 
 
 @pytest.mark.anyio
 async def test_without_effective_auto_mode_pass_becomes_allow(tmp_path: Path):
-    """E.g. haiku: auto mode unavailable, the effective mode is "default"."""
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), True, "default")
-    assert out["permissionDecision"] == "allow"
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), False, "auto")
-    assert out["permissionDecision"] == "allow"
+    """A model without auto mode, or a user who chose another mode: the checkers decide alone."""
+    for mode in ("default", "acceptEdits", "plan"):
+        out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), mode)
+        assert out["permissionDecision"] == "allow"
+    # Only the mode the hook reports counts, not what the configuration asked for: a session
+    # that runs in auto mode must not have its PASS turned into an "allow" that skips the
+    # classifier.
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), "auto", configured="default")
+    assert "permissionDecision" not in out
 
 
 def test_the_hook_timeouts_match_what_each_hook_waits_for(tmp_path: Path):

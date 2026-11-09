@@ -27,8 +27,8 @@ def test_layers_and_checker_rows_build_the_config() -> None:
     assert config.context.narrator_model == "mistral:small"
 
 
-def test_defaults_use_auto_mode() -> None:
-    assert build_config([]).claude.auto_mode
+def test_the_permission_mode_is_left_to_claude_code() -> None:
+    assert build_config([]).claude.permission_mode is None
 
 
 def test_invalid_values_are_rejected() -> None:

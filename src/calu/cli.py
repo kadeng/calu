@@ -19,9 +19,11 @@
     calu evals [FILE ...]          measure how well the configured checkers decide
     calu project add DIR|list      register a project in the database
     calu config get|set|unset KEY  configuration values (`claude.model`, `context.narrate`, ...)
-    calu checker list|show|set     checker definitions: instructions, model, limits
-    calu rules list [LIST] | add LIST PATTERN | remove|enable|disable ID
-                                   the allow and deny lists
+    calu checker list|show|set|edit
+                                   checker definitions; `edit NAME` opens the instructions in
+                                   $EDITOR and stores them on save
+    calu rules list [LIST] | add LIST PATTERN | edit LIST | remove|enable|disable ID
+                                   the allow and deny lists (`edit` opens one in $EDITOR)
 
 Passwords are read from the terminal without echo. If stdin is not a terminal, each password
 is read as one line from stdin (for scripts and tests).
@@ -31,7 +33,12 @@ import argparse
 import asyncio
 import getpass
 import json
+import os
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -549,6 +556,67 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError(f"{critical} critical miss(es): a checker let a step through")
 
 
+EDITOR_FALLBACKS = ("nano", "vim", "vi")
+"""Editors `calu ... edit` tries when neither VISUAL nor EDITOR is set."""
+
+
+def editor_command() -> list[str]:
+    """Return the command that opens a file in the user's editor.
+
+    Args:
+        None.
+
+    Returns:
+        The command and its arguments, e.g. `["nano"]` or `["code", "-w"]`; the file name is
+        appended by the caller. `$VISUAL` wins over `$EDITOR`, and both may carry arguments.
+
+    Raises:
+        CliError: If neither variable is set and none of `EDITOR_FALLBACKS` is installed.
+    """
+    for variable in ("VISUAL", "EDITOR"):
+        value = os.environ.get(variable, "").strip()
+        if value:
+            return shlex.split(value)
+    for candidate in EDITOR_FALLBACKS:
+        if shutil.which(candidate):
+            return [candidate]
+    raise CliError(
+        "no editor found: set EDITOR (or VISUAL), or pass the text with --instructions-file"
+    )
+
+
+def edit_in_editor(text: str, name: str) -> tuple[str, Path]:
+    """Write `text` to a temporary file, open it in the editor and read it back.
+
+    The file is kept, so that nothing is lost if storing the result fails; the caller tells the
+    user where it is in that case.
+
+    Args:
+        text: The text to edit.
+        name: File name inside the temporary directory, e.g. "command-instructions.md"; the
+            suffix decides the editor's syntax highlighting.
+
+    Returns:
+        The text after the edit and the path of the file.
+
+    Raises:
+        CliError: If no editor is available, the editor cannot be started, or it exits with an
+            error.
+        OSError: If the temporary file cannot be written or read.
+    """
+    command = editor_command()
+    path = Path(tempfile.mkdtemp(prefix="calu-edit-")) / name
+    path.write_text(text, encoding="utf-8")
+    print(f"editing {path} with {' '.join(command)}")
+    try:
+        completed = subprocess.run([*command, str(path)], check=False)
+    except OSError as exc:
+        raise CliError(f"cannot start the editor {command[0]!r}: {exc}") from exc
+    if completed.returncode != 0:
+        raise CliError(f"the editor exited with {completed.returncode}; nothing was stored")
+    return path.read_text(encoding="utf-8"), path
+
+
 def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
     """Register a project or list the registered ones.
 
@@ -632,7 +700,8 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
     """List, show or change the checker definitions.
 
-    `set --instructions-file` reads the new instructions from a file, or from stdin for "-".
+    `set --instructions-file` reads the new instructions from a file, or from stdin for "-";
+    `edit` opens them in `$EDITOR` and stores them when the editor closes.
 
     Args:
         args: Parsed arguments (`action`, `name`, `instructions_file`, `model`, `enable`,
@@ -647,6 +716,9 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
     """
     if args.action != "list" and not args.name:
         raise CliError(f"checker {args.action} needs a NAME")
+    if args.action == "edit":
+        _edit_checker(args, store)
+        return
     text: str | None = None
     if args.instructions_file:
         try:
@@ -689,6 +761,134 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
     _admin_command(store, work)
 
 
+def _edit_checker(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Open a checker's instructions in the editor and store what comes back.
+
+    The password is asked once: the instructions are read, the editor runs outside the database
+    connection, and the result is stored with a second connection. If storing fails, the
+    temporary file stays and its path is printed, so no editing work is lost.
+
+    Args:
+        args: Parsed arguments (`name`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, the checker is unknown, or no editor is
+            available.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the edited instructions are refused (e.g. empty).
+        psycopg.Error: On database errors.
+    """
+    url = load_credential(store, "admin", "Admin password: ")
+    try:
+        admin_url = url.decode()
+
+        async def read(db: Db) -> str:
+            """Read the instructions of the checker.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The stored instructions.
+            """
+            return await admin.instructions(db, args.name)
+
+        before = asyncio.run(_with_admin(admin_url, read))
+        after, path = edit_in_editor(before, f"{args.name}-instructions.md")
+        if after == before:
+            print("unchanged; nothing was stored")
+            return
+
+        async def write(db: Db) -> str:
+            """Store the edited instructions.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The definition after the change.
+            """
+            row = await admin.set_checker(db, args.name, instructions_text=after)
+            return row.line()
+
+        try:
+            print(asyncio.run(_with_admin(admin_url, write)))
+        except admin.AdminError, psycopg.Error:
+            print(f"the edited instructions are kept in {path}", file=sys.stderr)
+            raise
+    finally:
+        wipe(url)
+
+
+def _edit_rule_list(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Open one allow or deny list in the editor and store what comes back.
+
+    The file has one regular expression per line, with a comment block above a pattern becoming
+    that pattern's comment — the format `calu setup` loads the built-in lists from. Disabled
+    rules are left untouched and are not in the file.
+
+    Args:
+        args: Parsed arguments (`target` as the list name, `project`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, the list name is missing, or no editor is
+            available.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the list name is unknown or a pattern does not compile.
+        psycopg.Error: On database errors.
+    """
+    if not args.target:
+        raise CliError(f"rules edit needs a list name ({', '.join(admin.RULE_LISTS)})")
+    scope = args.project or "global"
+    url = load_credential(store, "admin", "Admin password: ")
+    try:
+        admin_url = url.decode()
+
+        async def read(db: Db) -> str:
+            """Render the list as the text to edit.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The rules of the list in file form.
+            """
+            rows = [
+                row
+                for row in await admin.rules(db, args.project, args.target)
+                if row.scope == scope and row.enabled
+            ]
+            return admin.render_rule_list(rows, args.target, scope)
+
+        before = asyncio.run(_with_admin(admin_url, read))
+        after, path = edit_in_editor(before, f"{args.target}.txt")
+        if after == before:
+            print("unchanged; nothing was stored")
+            return
+
+        async def write(db: Db) -> str:
+            """Replace the list with the edited rules.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The report.
+            """
+            removed, stored = await admin.replace_rule_list(db, args.target, after, args.project)
+            return f"{args.target} ({scope}): {removed} rule(s) replaced by {stored}"
+
+        try:
+            print(asyncio.run(_with_admin(admin_url, write)))
+        except admin.AdminError, psycopg.Error:
+            print(f"the edited list is kept in {path}", file=sys.stderr)
+            raise
+    finally:
+        wipe(url)
+
+
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
     """List the allow and deny lists, or add, remove, enable or disable one rule.
 
@@ -707,6 +907,9 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
         admin.AdminError: If the list name or the pattern is refused.
         psycopg.Error: On database errors.
     """
+    if args.action == "edit":
+        _edit_rule_list(args, store)
+        return
     rule_id: int | None = None
     if args.action in ("remove", "enable", "disable"):
         if not args.target:
@@ -858,7 +1061,7 @@ def build_parser() -> argparse.ArgumentParser:
     config.set_defaults(handler=cmd_config)
 
     checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
-    checker.add_argument("action", choices=["list", "show", "set"])
+    checker.add_argument("action", choices=["list", "show", "set", "edit"])
     checker.add_argument("name", nargs="?", help="checker name, e.g. command")
     checker.add_argument(
         "--instructions-file", help="read new instructions from this file ('-' for stdin)"
@@ -875,9 +1078,11 @@ def build_parser() -> argparse.ArgumentParser:
     rules = sub.add_parser(
         "rules",
         help="the allow and deny lists",
-        description="calu rules list [LIST] | add LIST PATTERN | remove|enable|disable ID",
+        description=(
+            "calu rules list [LIST] | add LIST PATTERN | edit LIST | remove|enable|disable ID"
+        ),
     )
-    rules.add_argument("action", choices=["list", "add", "remove", "enable", "disable"])
+    rules.add_argument("action", choices=["list", "add", "edit", "remove", "enable", "disable"])
     rules.add_argument(
         "target", nargs="?", help="list name (list, add) or rule id (remove, enable, disable)"
     )

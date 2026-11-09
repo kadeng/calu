@@ -15,6 +15,7 @@ session — an invalid rule list makes every checked step ask the human.
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,7 @@ from pydantic import ValidationError
 from calu.checkers.rules import RULE_LISTS
 from calu.config import SETTINGS_KEY, Config, merge_settings
 from calu.db import Db
+from calu.setup import parse_rule_file
 
 NETWORK_POLICIES = ("none", "proxy", "full")
 """Values of `projects.network_policy` (PLAN.md §7)."""
@@ -506,6 +508,83 @@ async def rules(db: Db, project: str | None = None, rule_list: str | None = None
         (pid, rule_list, rule_list),
     )
     return [RuleRow(*row) for row in rows]
+
+
+RULE_FILE_HEADER = """\
+# Rules of the list {list} ({scope} scope), one regular expression per line.
+#
+# A comment block directly above a pattern (no blank line between them) becomes that pattern's
+# comment; this header is dropped, because a blank line follows it. Patterns are matched with
+# `re.search`, so anchor them with ^ and $. The order of the lines is the order of the rules.
+# Saving an empty file removes every rule of this list in this scope.
+"""
+"""Header of the file that `calu rules edit` opens; `parse_rule_file` drops it."""
+
+
+def render_rule_list(rows: Sequence[RuleRow], rule_list: str, scope: str) -> str:
+    """Render the rules of one list as the text that an editor opens.
+
+    Args:
+        rows: The rules of that list, in order.
+        rule_list: The list's name, for the header.
+        scope: "global" or the project's name, for the header.
+
+    Returns:
+        The header, then one block per rule: its comment lines, then the pattern.
+    """
+    blocks = [RULE_FILE_HEADER.format(list=rule_list, scope=scope)]
+    for row in rows:
+        comment = f"# {row.comment}\n" if row.comment else ""
+        blocks.append(f"{comment}{row.pattern}\n")
+    return "\n".join(blocks)
+
+
+async def replace_rule_list(
+    db: Db, rule_list: str, text: str, project: str | None = None
+) -> tuple[int, int]:
+    """Replace the enabled rules of one list in one scope with the rules of `text`.
+
+    Every pattern is compiled before anything is deleted, so a typo leaves the list as it was.
+    Disabled rules of that list are not touched and are not part of `text`.
+
+    Args:
+        db: A connection of the database owner.
+        rule_list: One of `RULE_LISTS`.
+        text: The list in the line format of `calu.setup.parse_rule_file`.
+        project: The project the rules belong to, or None for every project.
+
+    Returns:
+        (number of rules removed, number of rules stored).
+
+    Raises:
+        AdminError: If the list name is unknown, a pattern does not compile, or the project is
+            unknown.
+        psycopg.Error: On database errors.
+    """
+    if rule_list not in RULE_LISTS:
+        raise AdminError(f"rule list must be one of {', '.join(RULE_LISTS)}")
+    parsed = parse_rule_file(rule_list, text)
+    for rule in parsed:
+        try:
+            re.compile(rule.pattern)
+        except re.error as exc:
+            raise AdminError(f"not a valid regular expression `{rule.pattern}`: {exc}") from exc
+    pid = await project_id(db, project)
+    async with db.exclusive() as conn:
+        async with conn.transaction():
+            cur = await conn.execute(
+                b"DELETE FROM rules WHERE list = %s AND enabled"
+                b" AND project_id IS NOT DISTINCT FROM %s",
+                (rule_list, pid),
+            )
+            removed = cur.rowcount
+            for rule in parsed:
+                await conn.execute(
+                    b"INSERT INTO rules (project_id, list, pattern, comment, position)"
+                    b" VALUES (%s, %s, %s, %s, %s)",
+                    (pid, rule_list, rule.pattern, rule.comment, rule.position),
+                )
+    return removed, len(parsed)
 
 
 async def add_rule(

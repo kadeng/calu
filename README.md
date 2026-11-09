@@ -12,7 +12,7 @@ instructions. Each checker answers one of four things:
 
 | Answer | What happens | How often |
 |---|---|---|
-| PASS | the checker has no objection; Claude Code's own auto-approval decides as usual | almost everything |
+| PASS | the checker has no objection; Claude Code's own approval decides as usual | almost everything |
 | ESCALATE | time freezes: Claude is paused until a human allows or denies the step | the interesting cases |
 | ALLOW | the step runs, whatever the auto-approval would have said | a deliberate exception |
 | DENY | the step does not run; Claude is told why and carries on | a deliberate exception |
@@ -66,9 +66,9 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   this"), so a checker cannot mistake Claude's text for an instruction from you.
 - **Comments on a selection.** Mark lines in a diff or in any project file and write a comment.
   It reaches Claude at once and is kept as potential training data for the checkers.
-- **Unsupervised runs.** Claude Code works in its auto mode with the checkers on top of it, so a
-  session can run for hours — overnight, for example — and stops only when something genuinely
-  needs you.
+- **Unsupervised runs.** Claude Code works in its auto mode (its default) with the checkers on
+  top of it, so a session can run for hours — overnight, for example — and stops only when
+  something genuinely needs you.
 
 ## Where calu fits in
 
@@ -152,11 +152,12 @@ alternative to it. Claude Code stays the agent and keeps everything that makes i
   (`claude.setting_sources` decides which setting sources are loaded);
 - its sandbox for Bash commands, which calu switches on and tightens rather than replaces.
 
-calu never loosens any of those rules; it only adds a layer in front of each tool call and a
-layer around the process. The one behaviour it changes on purpose is that it turns Claude Code's
-auto mode on, so that the harness **and** your checkers both have to approve a step — a PASS
-from a checker leaves that decision exactly where it was. Turn it off with
-`claude.auto_mode = false` and the checkers decide alone.
+calu changes none of those rules and does not even set the permission mode: Claude Code's own
+default is the auto mode, and calu leaves that choice with you. It only adds a layer in front of
+each tool call and a layer around the process. Running in the auto mode is the intended way to
+use calu, because a step then needs the harness **and** your checkers — a PASS from a checker
+leaves the harness's decision exactly where it was. In any other mode the checkers simply decide
+alone; nothing has to be configured either way.
 
 And it goes the other way too: because calu will speak the agent side of ACP (phase 7, §6.1 of
 the plan), the same checked Claude Code session becomes usable from every ACP client — JetBrains
@@ -242,13 +243,14 @@ Your rules live in the database. Write them as Markdown, put them in, and measur
 checkers follow them:
 
 ```bash
-calu checker show edit > edit.md              # the edit checker's instructions
-calu checker set edit --instructions-file edit.md
-calu rules add command-deny '^ship-it( |$)' --comment "only from CI"
-calu rules list command-deny                   # with their ids, to remove or disable one
+calu checker edit edit                        # opens the edit checker's instructions in $EDITOR
+calu rules edit command-deny                  # opens the whole deny list, one regex per line
 calu config set claude.model opus
 calu evals --from-db                          # accuracy, critical misses, over-escalations
 ```
+
+`calu checker show NAME` and `calu checker set NAME --instructions-file FILE` do the same
+without an editor, and `calu rules add|list|remove|enable|disable` work on single rules.
 
 A running session picks up such a change within a moment, at its next step.
 
