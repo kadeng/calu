@@ -20,13 +20,11 @@ the row and keeps the decision in its note.
 """
 
 import json
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-import psycopg
-
 from calu.context.turns import StepRecord, TurnRecord
+from calu.db import Db
 from calu.protocol.messages import State
 
 EscalationState = Literal["open", "allowed", "denied", "cancelled"]
@@ -289,17 +287,19 @@ class DatabaseSessionStore:
     """`SessionStore` on a PostgreSQL connection with the rights of `calu_session`.
 
     The connection is opened by `calu run` before the credentials are wiped and stays open for
-    the whole session; the store does not close it. All methods need `start` to have run, except
-    `start` itself.
+    the whole session; the store does not close it. Steps of the main agent and of subagents are
+    checked at the same time, so every statement goes through `Db`, which serializes them. All
+    methods need `start` to have run, except `start` itself.
     """
 
-    def __init__(self, conn: psycopg.AsyncConnection) -> None:
-        """Create a store on an open connection.
+    def __init__(self, db: Db) -> None:
+        """Create a store on a shared connection.
 
         Args:
-            conn: An open connection in autocommit mode (`calu.db.connect`).
+            db: The session's connection (`calu.db.Db`); several tasks may use it, and the
+                store does not close it.
         """
-        self._conn = conn
+        self._db = db
         self.session_id: str | None = None
 
     async def start(self, identity: SessionIdentity) -> str:
@@ -313,36 +313,43 @@ class DatabaseSessionStore:
 
         Raises:
             psycopg.Error: On database errors.
-            RuntimeError: If the server returns no row for the insert.
+            RuntimeError: If the server returns no row for an insert.
         """
-        host_id = await self._scalar(
-            "INSERT INTO hosts (hostname, os) VALUES (%s, %s)"
-            " ON CONFLICT (hostname) DO UPDATE SET os = excluded.os, last_seen = now()"
-            " RETURNING id",
-            (identity.hostname, identity.os),
-        )
-        project_id = None
-        if identity.project is not None:
-            cur = await self._conn.execute(
-                "SELECT id FROM projects WHERE name = %s", (identity.project,)
+        async with self._db.exclusive() as conn:
+            cur = await conn.execute(
+                b"INSERT INTO hosts (hostname, os) VALUES (%s, %s)"
+                b" ON CONFLICT (hostname) DO UPDATE SET os = excluded.os, last_seen = now()"
+                b" RETURNING id",
+                (identity.hostname, identity.os),
+            )
+            host = await cur.fetchone()
+            if host is None:
+                raise RuntimeError("the hosts row was not created")
+            project_id = None
+            if identity.project is not None:
+                cur = await conn.execute(
+                    b"SELECT id FROM projects WHERE name = %s", (identity.project,)
+                )
+                row = await cur.fetchone()
+                project_id = row[0] if row else None
+            cur = await conn.execute(
+                b"INSERT INTO sessions"
+                b" (project_id, host_id, os_user, directory, git_commit, pid, model)"
+                b" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (
+                    project_id,
+                    host[0],
+                    identity.os_user,
+                    identity.directory,
+                    identity.git_commit,
+                    identity.pid,
+                    identity.model,
+                ),
             )
             row = await cur.fetchone()
-            project_id = row[0] if row else None
-        session_id = await self._scalar(
-            "INSERT INTO sessions"
-            " (project_id, host_id, os_user, directory, git_commit, pid, model)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (
-                project_id,
-                host_id,
-                identity.os_user,
-                identity.directory,
-                identity.git_commit,
-                identity.pid,
-                identity.model,
-            ),
-        )
-        self.session_id = str(session_id)
+            if row is None:
+                raise RuntimeError("the sessions row was not created")
+        self.session_id = str(row[0])
         return self.session_id
 
     async def set_state(self, state: State) -> None:
@@ -354,7 +361,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "UPDATE sessions SET state = %s, state_since = now() WHERE id = %s",
             (state, self._require_session()),
         )
@@ -369,7 +376,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "UPDATE sessions SET claude_session_id = %s, model = coalesce(%s, model) WHERE id = %s",
             (claude_session_id, model, self._require_session()),
         )
@@ -383,7 +390,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "UPDATE sessions SET state = %s, state_since = now(), ended_at = now() WHERE id = %s",
             (state, self._require_session()),
         )
@@ -401,7 +408,7 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
             RuntimeError: If the server returns no row for the insert.
         """
-        return await self._scalar(
+        return await self._db.scalar(
             "INSERT INTO steps"
             " (session_id, turn, seq, agent_id, tool_use_id, tool_name, tool_input, git_commit)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
@@ -427,7 +434,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "UPDATE steps SET rules_outcome = %s, decision = %s, reason = %s, summary = %s,"
             " narration = %s, decided_at = now() WHERE id = %s",
             (
@@ -450,7 +457,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "UPDATE steps SET result_summary = %s, finished_at = now() WHERE id = %s",
             (result_summary, step_id),
         )
@@ -465,7 +472,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "INSERT INTO checker_runs (step_id, checker_name, checker_version, model, decision,"
             " reason, input_tokens, output_tokens, cache_read_tokens, duration_ms)"
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
@@ -492,7 +499,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "INSERT INTO turns (session_id, number, user_inputs, steps, answer, narrated_answer,"
             " narrated, started_at, ended_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (session_id, number) DO UPDATE SET"
@@ -521,7 +528,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "UPDATE turns SET folded = true WHERE session_id = %s AND number <= %s",
             (self._require_session(), up_to_index),
         )
@@ -536,7 +543,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "INSERT INTO chat_summaries (session_id, summary, covered_turns)"
             " VALUES (%s, %s, %s) ON CONFLICT (session_id) DO UPDATE SET"
             " summary = excluded.summary, covered_turns = excluded.covered_turns,"
@@ -556,39 +563,41 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        cur = await self._conn.execute(
-            "SELECT id FROM sessions WHERE claude_session_id = %s AND id IS DISTINCT FROM %s::uuid"
-            " ORDER BY started_at DESC LIMIT 1",
-            (claude_session_id, self.session_id),
-        )
-        row = await cur.fetchone()
-        if row is None:
-            return [], ""
-        previous = row[0]
-        cur = await self._conn.execute(
-            "SELECT number, user_inputs, steps, answer, narrated_answer, narrated, started_at,"
-            " ended_at FROM turns WHERE session_id = %s AND NOT folded ORDER BY number",
-            (previous,),
-        )
-        turns: list[TurnRecord] = []
-        for row in await cur.fetchall():
-            number, user_inputs, steps, answer, narration, narrated, started, ended = row
-            turns.append(
-                TurnRecord(
-                    index=number,
-                    user_inputs=list(user_inputs),
-                    steps=[StepRecord.model_validate(s) for s in steps],
-                    answer=answer,
-                    answer_narration=narration or "",
-                    narrated=narrated,
-                    **({"started_at": started} if started else {}),
-                    ended_at=ended,
-                )
+        async with self._db.exclusive() as conn:
+            cur = await conn.execute(
+                b"SELECT id FROM sessions WHERE claude_session_id = %s"
+                b" AND id IS DISTINCT FROM %s::uuid ORDER BY started_at DESC LIMIT 1",
+                (claude_session_id, self.session_id),
             )
-        cur = await self._conn.execute(
-            "SELECT summary FROM chat_summaries WHERE session_id = %s", (previous,)
-        )
-        row = await cur.fetchone()
+            row = await cur.fetchone()
+            if row is None:
+                return [], ""
+            previous = row[0]
+            cur = await conn.execute(
+                b"SELECT number, user_inputs, steps, answer, narrated_answer, narrated,"
+                b" started_at, ended_at FROM turns WHERE session_id = %s AND NOT folded"
+                b" ORDER BY number",
+                (previous,),
+            )
+            turns: list[TurnRecord] = []
+            for row in await cur.fetchall():
+                number, user_inputs, steps, answer, narration, narrated, started, ended = row
+                turns.append(
+                    TurnRecord(
+                        index=number,
+                        user_inputs=list(user_inputs),
+                        steps=[StepRecord.model_validate(s) for s in steps],
+                        answer=answer,
+                        answer_narration=narration or "",
+                        narrated=narrated,
+                        **({"started_at": started} if started else {}),
+                        ended_at=ended,
+                    )
+                )
+            cur = await conn.execute(
+                b"SELECT summary FROM chat_summaries WHERE session_id = %s", (previous,)
+            )
+            row = await cur.fetchone()
         return turns, row[0] if row else ""
 
     async def open_escalation(
@@ -608,7 +617,7 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
             RuntimeError: If the server returns no row for the insert.
         """
-        return await self._scalar(
+        return await self._db.scalar(
             "INSERT INTO escalations (session_id, step_id, reason, context)"
             " VALUES (%s, %s, %s, %s) RETURNING id",
             (self._require_session(), step_id, reason, json.dumps(context, default=str)),
@@ -626,10 +635,9 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        cur = await self._conn.execute(
+        row = await self._db.one(
             "SELECT state, note, resolved_by FROM escalations WHERE id = %s", (escalation_id,)
         )
-        row = await cur.fetchone()
         if row is None:
             return Escalation(id=escalation_id, state="cancelled")
         state, note, resolved_by = row
@@ -645,7 +653,7 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        await self._conn.execute(
+        await self._db.execute(
             "SELECT calu_cancel_escalation(%s, %s)", (escalation_id, note or None)
         )
 
@@ -663,23 +671,3 @@ class DatabaseSessionStore:
         if self.session_id is None:
             raise RuntimeError("the session store was used before start()")
         return self.session_id
-
-    async def _scalar(self, statement: str, params: Sequence[Any]) -> Any:
-        """Run a statement with one RETURNING column and return that value.
-
-        Args:
-            statement: The SQL statement.
-            params: Its parameters.
-
-        Returns:
-            The single value of the single returned row.
-
-        Raises:
-            psycopg.Error: On database errors.
-            RuntimeError: If the statement returned no row.
-        """
-        cur = await self._conn.execute(statement.encode(), params)
-        row = await cur.fetchone()
-        if row is None:
-            raise RuntimeError(f"no row returned by {statement.split(' ', 3)[:3]}")
-        return row[0]

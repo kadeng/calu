@@ -8,6 +8,8 @@
                                    `session` credential (asks for both passwords)
     calu credential list|set NAME|remove NAME
                                    manage the encrypted credential store
+    calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
+                                   session password; see `calu.run`)
 
 Passwords are read from the terminal without echo. If stdin is not a terminal, each password
 is read as one line from stdin (for scripts and tests).
@@ -18,6 +20,7 @@ import asyncio
 import getpass
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
@@ -26,6 +29,7 @@ from calu import __version__
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import connect, migrate
 from calu.db import local as local_db
+from calu.run import RunOptions, run_session
 from calu.setup import DEFAULT_CHECKER_MODEL, setup
 
 
@@ -256,6 +260,53 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     print(f"stored credential {args.name!r}")
 
 
+def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Start a checked Claude Code session in the foreground.
+
+    Asks for the session password, decrypts the `session` credential, and hands it to
+    `calu.run.run_session`, which wipes it before Claude Code starts.
+
+    Args:
+        args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `model`, `effort`,
+            `batch`, `thinking`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `session` credential, the directory does not exist, or the
+            session could not be started.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    workspace = Path(args.directory).resolve()
+    if not workspace.is_dir():
+        raise CliError(f"{workspace} is not a directory")
+    prompt = args.prompt
+    if args.prompt_file:
+        try:
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise CliError(f"cannot read {args.prompt_file}: {exc}") from exc
+    options = RunOptions(
+        workspace=workspace,
+        project=args.project,
+        prompt=prompt,
+        resume_id=args.resume,
+        model=args.model,
+        effort=args.effort,
+        interactive=not args.batch,
+        show_thinking=args.thinking,
+    )
+    if options.interactive and not options.prompt and sys.stdin.isatty():
+        print("Type a message for Claude; /quit ends the session.")
+    url = load_credential(store, "session", "Session password: ")
+    try:
+        code = asyncio.run(run_session(url, options))
+    finally:
+        wipe(url)
+    if code:
+        raise CliError("the session ended with an error (see the messages above)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser of `calu`.
 
@@ -282,6 +333,26 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Pydantic AI model of new checker types (default: {DEFAULT_CHECKER_MODEL})",
     )
     p.set_defaults(handler=cmd_setup)
+
+    p = sub.add_parser("run", help="start a checked Claude Code session")
+    p.add_argument("directory", nargs="?", default=".", help="project directory (default: .)")
+    p.add_argument("--project", help="name of the project row whose settings and rules apply")
+    p.add_argument("-p", "--prompt", help="first message for Claude")
+    p.add_argument("--prompt-file", help="read the first message from this file")
+    p.add_argument("--resume", help="Claude session id to resume")
+    p.add_argument("--model", help="Claude model alias or id (overrides the configuration)")
+    p.add_argument(
+        "--effort",
+        choices=["low", "medium", "high", "xhigh", "max", "default"],
+        help="reasoning effort (overrides the configuration)",
+    )
+    p.add_argument(
+        "--batch",
+        action="store_true",
+        help="end the session when Claude is done, instead of reading messages from stdin",
+    )
+    p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
+    p.set_defaults(handler=cmd_run)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove"])

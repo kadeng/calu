@@ -12,6 +12,7 @@ Verified behaviour of these mechanisms: `.claude/skills/claude-code-integration/
 spike-results.md`.
 """
 
+import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -221,7 +222,9 @@ class SdkRunner:
         """Build the SDK options: working directory, model, hooks, callbacks and environment.
 
         Claude Code authenticates as configured on this machine; only checker keys are hidden
-        from it (`_claude_env`).
+        from it (`_claude_env`). The sandbox settings of `config.sandbox` are passed as a
+        `--settings` JSON document, which overrides the settings files of the project and of the
+        user (PLAN.md D15).
 
         Args:
             gate: Used by the PreToolUse hook and by `can_use_tool`.
@@ -404,6 +407,9 @@ class SdkRunner:
                 ],
             },
             setting_sources=self.config.setting_sources,  # type: ignore[arg-type]
+            # `--settings` as a JSON document: it overrides the project's and the user's
+            # settings files, so the agent cannot switch the sandbox off (PLAN.md D15).
+            settings=json.dumps(self.config.sandbox.settings()),
             extra_args={
                 "replay-user-messages": None,
                 "forward-subagent-text": None,

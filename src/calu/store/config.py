@@ -26,7 +26,8 @@ from pydantic import ValidationError
 
 from calu.checkers.rules import Rules
 from calu.config import SETTINGS_KEY, CheckerConfig, Config, build_config
-from calu.db.notify import CONFIG_CHANGED, listen
+from calu.db import Db
+from calu.db.notify import CONFIG_CHANGED, Dirty, Notifier
 
 log = logging.getLogger(__name__)
 
@@ -105,21 +106,21 @@ class ConfigStore:
 
     def __init__(
         self,
-        conn: psycopg.AsyncConnection,
+        db: Db,
         workspace: Path,
         project: str | None = None,
     ) -> None:
-        """Create a store on an open connection.
+        """Create a store on a shared connection.
 
         Args:
-            conn: An open connection (autocommit, see `calu.db.connect`) with read access to
-                `config`, `checker_types`, `rules` and `projects`. The store does not close it.
+            db: The session's connection (`calu.db.Db`) with read access to `config`,
+                `checker_types`, `rules` and `projects`. The store does not close it.
             workspace: The project root; `Rules` matches paths inside it in relative form.
             project: Name of the project row whose `project`-scope configuration and rules
                 apply, or None for the global settings alone. A name that no row matches is
                 treated like None.
         """
-        self._conn = conn
+        self._db = db
         self.workspace = workspace
         self.project = project
 
@@ -135,10 +136,12 @@ class ConfigStore:
             psycopg.Error: On database errors (connection lost, missing privileges, ...).
             pydantic.ValidationError: If the stored `settings` values do not match `Config`.
         """
-        project_id = await self._project_id()
-        layers = await self._settings_layers()
-        checkers = await self._checker_definitions()
-        rules = await self._rules(project_id)
+        async with self._db.exclusive() as conn:
+            # One lock for all four queries, so the settings cannot be read half-changed.
+            project_id = await self._project_id(conn)
+            layers = await self._settings_layers(conn)
+            checkers = await self._checker_definitions(conn)
+            rules = await self._rules(conn, project_id)
         config = build_config(
             layers,
             [
@@ -156,11 +159,9 @@ class ConfigStore:
     ) -> None:
         """Reload the settings whenever the database announces a change, until cancelled.
 
-        Listens on `config_changed` (see `calu.db.notify`) on `conn`, waits `debounce` seconds
-        so that one change of many rows causes one reload, then calls `load` and awaits
-        `on_change` with the result. A failed reload (database error, invalid stored settings)
-        is logged as a warning and otherwise ignored: the caller keeps the settings it has. An
-        exception from `on_change` propagates.
+        Listens on `config_changed` on `conn` and runs `reload_loop`. A session that also waits
+        for `escalation_resolved` builds its own `Notifier` and runs `reload_loop` itself, so
+        that one connection serves both channels.
 
         Side effects: runs `LISTEN config_changed` on `conn` and consumes its notifications, so
         `conn` must not be used for anything else while `watch` runs.
@@ -174,36 +175,49 @@ class ConfigStore:
         Raises:
             psycopg.Error: If `LISTEN` fails or the listening connection breaks.
         """
-        await listen(conn, [CONFIG_CHANGED])
-        changed = anyio.Event()
-
-        async def receive() -> None:
-            """Set `changed` for every notification on the listening connection."""
-            async for _ in conn.notifies():
-                changed.set()
-
-        async def reload() -> None:
-            """Reload and report the settings after each burst of notifications."""
-            nonlocal changed
-            while True:
-                await changed.wait()
-                changed = anyio.Event()
-                await anyio.sleep(debounce)
-                try:
-                    settings = await self.load()
-                except (psycopg.Error, ValidationError) as exc:
-                    log.warning("reloading the configuration failed: %s", exc)
-                    continue
-                await on_change(settings)
-
+        dirty = Dirty()
+        notifier = Notifier(conn)
+        notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
         async with anyio.create_task_group() as tg:
-            tg.start_soon(receive)
-            tg.start_soon(reload)
+            tg.start_soon(notifier.run)
+            tg.start_soon(self.reload_loop, dirty, on_change, debounce)
+
+    async def reload_loop(
+        self,
+        dirty: Dirty,
+        on_change: Callable[[ProjectSettings], Awaitable[None]],
+        debounce: float = RELOAD_DEBOUNCE_S,
+    ) -> None:
+        """Reload the settings each time `dirty` is set, until cancelled.
+
+        Waits `debounce` seconds after the first notification of a burst, so that one change of
+        many rows causes one reload, then calls `load` and awaits `on_change` with the result. A
+        failed reload (database error, invalid stored settings) is logged as a warning and
+        otherwise ignored: the caller keeps the settings it has. An exception from `on_change`
+        propagates.
+
+        Args:
+            dirty: Set by the notification handler of `config_changed`.
+            on_change: Awaited with the newly loaded settings after every change.
+            debounce: Quiet time in seconds before the reload.
+        """
+        while True:
+            await dirty.wait()
+            await anyio.sleep(debounce)
+            try:
+                settings = await self.load()
+            except (psycopg.Error, ValidationError) as exc:
+                log.warning("reloading the configuration failed: %s", exc)
+                continue
+            await on_change(settings)
 
     # ------------------------------------------------------------------ single queries
 
-    async def _project_id(self) -> int | None:
+    async def _project_id(self, conn: psycopg.AsyncConnection) -> int | None:
         """Look up the id of the configured project.
+
+        Args:
+            conn: The locked connection.
 
         Returns:
             The `projects.id` of `self.project`, or None if no project is configured or no row
@@ -214,12 +228,15 @@ class ConfigStore:
         """
         if self.project is None:
             return None
-        cur = await self._conn.execute("SELECT id FROM projects WHERE name = %s", (self.project,))
+        cur = await conn.execute(b"SELECT id FROM projects WHERE name = %s", (self.project,))
         row = await cur.fetchone()
         return row[0] if row else None
 
-    async def _settings_layers(self) -> list[Mapping[str, Any]]:
+    async def _settings_layers(self, conn: psycopg.AsyncConnection) -> list[Mapping[str, Any]]:
         """Read the partial configurations of the `config` table.
+
+        Args:
+            conn: The locked connection.
 
         Returns:
             The `settings` values, global first, then the project's; each a JSON object.
@@ -228,11 +245,11 @@ class ConfigStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        cur = await self._conn.execute(
-            "SELECT scope, value FROM config"
-            " WHERE key = %s AND ((scope = 'global' AND scope_id = '')"
-            "                     OR (scope = 'project' AND scope_id = %s))"
-            " ORDER BY scope = 'project'",
+        cur = await conn.execute(
+            b"SELECT scope, value FROM config"
+            b" WHERE key = %s AND ((scope = 'global' AND scope_id = '')"
+            b"                     OR (scope = 'project' AND scope_id = %s))"
+            b" ORDER BY scope = 'project'",
             (SETTINGS_KEY, self.project),
         )
         layers: list[Mapping[str, Any]] = []
@@ -243,8 +260,13 @@ class ConfigStore:
                 log.warning("config row (%s, %s) is not an object; ignored", scope, SETTINGS_KEY)
         return layers
 
-    async def _checker_definitions(self) -> dict[str, CheckerDefinition]:
+    async def _checker_definitions(
+        self, conn: psycopg.AsyncConnection
+    ) -> dict[str, CheckerDefinition]:
         """Read the enabled checker types.
+
+        Args:
+            conn: The locked connection.
 
         Returns:
             The definitions by name, in name order.
@@ -252,17 +274,18 @@ class ConfigStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        cur = await self._conn.execute(
-            "SELECT name, route, instructions, model, request_limit, output_tokens_limit,"
-            " max_tokens, version FROM checker_types WHERE enabled ORDER BY name"
+        cur = await conn.execute(
+            b"SELECT name, route, instructions, model, request_limit, output_tokens_limit,"
+            b" max_tokens, version FROM checker_types WHERE enabled ORDER BY name"
         )
         rows: Iterable[tuple[str, str, str, str, int, int, int, int]] = await cur.fetchall()
         return {row[0]: CheckerDefinition(*row) for row in rows}
 
-    async def _rules(self, project_id: int | None) -> Rules:
+    async def _rules(self, conn: psycopg.AsyncConnection, project_id: int | None) -> Rules:
         """Read the enabled rules of the global scope and of one project.
 
         Args:
+            conn: The locked connection.
             project_id: The project's row id, or None for the global rules alone.
 
         Returns:
@@ -271,10 +294,10 @@ class ConfigStore:
         Raises:
             psycopg.Error: On database errors.
         """
-        cur = await self._conn.execute(
-            "SELECT list, pattern, id FROM rules"
-            " WHERE enabled AND (project_id IS NULL OR project_id = %s)"
-            " ORDER BY (project_id IS NOT NULL), position, id",
+        cur = await conn.execute(
+            b"SELECT list, pattern, id FROM rules"
+            b" WHERE enabled AND (project_id IS NULL OR project_id = %s)"
+            b" ORDER BY (project_id IS NOT NULL), position, id",
             (project_id,),
         )
         return Rules.from_rows(self.workspace, await cur.fetchall())

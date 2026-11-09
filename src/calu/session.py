@@ -40,7 +40,7 @@ import logging
 import os
 import platform
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -111,6 +111,9 @@ START_TIMEOUT_S = 120
 """Upper bound for a Claude session to become ready in `Session.start`."""
 GIT_HEAD_TTL_S = 2.0
 """How long the git HEAD lookup is reused (steps come in bursts)."""
+BACKGROUND_TIMEOUT_S = 120
+"""How long `stop` waits for the background work of the last turn (narration, storing the turn,
+folding the chat summary) before it gives up on it."""
 MAX_PENDING_OUTPUTS = 50
 """Thinking/text blocks kept per agent until its next tool call (older ones are dropped)."""
 
@@ -278,6 +281,9 @@ class Session:
         self._git_head_time = float("-inf")
         self._pending_reasons: dict[str, tuple[str, str]] = {}
         self._tg: TaskGroup | None = None
+        self._pending = 0  # background tasks (narration, turn storage, folding)
+        self._quiet = anyio.Event()
+        self._quiet.set()
         self._run_done = anyio.Event()
         self._run_done.set()
         self._run_error: str | None = None
@@ -492,6 +498,7 @@ class Session:
                 if self._queue:  # messages Claude did not read are lost with the session
                     self._queue.clear()
                     await self._emit_safely(ChatQueue(messages=[]))
+                await self._wait_quiet()  # the last turn is recorded before the session ends
                 final: State = "failed" if self._run_error else "stopped"
                 await self._set_state_safely(final)
                 await self._store_call("recording the end of the session", self.store.end(final))
@@ -500,7 +507,9 @@ class Session:
         """Stop the Claude session and wait until its runner has ended.
 
         Open escalations are cancelled (their tool calls are denied). Claude's text that was
-        not narrated yet is dropped. Does nothing if no session runs.
+        not narrated yet is dropped. Waits for the background work of the last turn (narration,
+        storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds. Does nothing if no
+        session runs and nothing is pending.
         """
         self._claude_outputs.clear()
         if not self._run_done.is_set():
@@ -508,6 +517,7 @@ class Session:
             assert self.runner is not None
             await self.runner.stop()
             await self._run_done.wait()
+        await self._wait_quiet()
         if self.state not in ("stopped", "failed"):
             await self._set_state_safely("stopped")
 
@@ -674,7 +684,7 @@ class Session:
         self.context.step(record)
         if pending.outputs and pending.text is None and self.narrator and self._tg is not None:
             # No checker ran (rules, policy): narrate for the context without delaying the call.
-            self._tg.start_soon(self._narrate_record, record, pending.outputs)
+            self._spawn(self._narrate_record, record, pending.outputs)
         if step_id is not None:
             if outcome is not None:
                 await self._store_call(
@@ -1195,7 +1205,7 @@ class Session:
             self.context.current.narrated = self.narrator is not None
         turn = self.context.end_turn(event.result)
         if turn is not None and self._tg is not None:
-            self._tg.start_soon(self._finish_turn, turn, outputs)
+            self._spawn(self._finish_turn, turn, outputs)
 
     async def _hint_on_login_error(self, text: str) -> None:
         """After Claude Code's "Please run /login" error, send a setup hint once per process.
@@ -1279,7 +1289,7 @@ class Session:
             record.summary = CROSS_SESSION_HIDDEN
         self.context.step(record)
         if self.narrator is not None and self._tg is not None:
-            self._tg.start_soon(self._narrate_cross_session, record, text)
+            self._spawn(self._narrate_cross_session, record, text)
 
     async def _narrate_cross_session(self, record: StepRecord, text: str) -> None:
         """Narrate a message from another session into its turn entry; never raises.
@@ -1498,6 +1508,47 @@ class Session:
         self._escalations.clear()
 
     # ------------------------------------------------------------------ state and events
+
+    def _spawn(self, func: Callable[..., Awaitable[None]], *args: Any) -> None:
+        """Start a background task that `stop` waits for.
+
+        Narration, storing a turn and folding the chat summary run next to the next tool call,
+        so they must not delay Claude; `stop` and the end of the session wait for them, so that
+        a finished session has recorded its last turn.
+
+        Args:
+            func: The coroutine function to run.
+            *args: Its arguments.
+        """
+        if self._tg is None:
+            return
+        if self._pending == 0:
+            self._quiet = anyio.Event()
+        self._pending += 1
+        self._tg.start_soon(self._tracked, func, *args)
+
+    async def _tracked(self, func: Callable[..., Awaitable[None]], *args: Any) -> None:
+        """Run a background task and report when the last one has finished.
+
+        Args:
+            func: The coroutine function to run.
+            *args: Its arguments.
+        """
+        try:
+            await func(*args)
+        finally:
+            self._pending -= 1
+            if self._pending <= 0:
+                self._quiet.set()
+
+    async def _wait_quiet(self) -> None:
+        """Wait up to `BACKGROUND_TIMEOUT_S` seconds for the background tasks to finish."""
+        if self._quiet.is_set():
+            return
+        with anyio.move_on_after(BACKGROUND_TIMEOUT_S):
+            await self._quiet.wait()
+        if not self._quiet.is_set():
+            log.warning("%d background tasks did not finish in time", self._pending)
 
     async def emit(self, event: Event) -> None:
         """Send `event` to the clients.

@@ -68,6 +68,93 @@ class ContextConfig(BaseModel):
     skill_dirs: list[str] = Field(default_factory=lambda: [".claude/skills"])
 
 
+DEFAULT_DENY_READ = (
+    "~/.config/calu",
+    "~/.claude/.credentials.json",
+    "~/.claude.json",
+    "~/.ssh",
+    "~/.aws",
+    "~/.azure",
+    "~/.config/gcloud",
+    "~/.kube",
+    "~/.docker",
+    "~/.netrc",
+    "~/.gnupg",
+    "~/.config/gh",
+    "~/.npmrc",
+    "~/.pypirc",
+)
+"""Paths that sandboxed commands must not read (PLAN.md D15): calu's encrypted credentials,
+Claude Code's own credentials, SSH, cloud and registry credentials. Claude Code's built-in
+defaults additionally deny the container sockets, `/run/dbus` and `/run/user`."""
+
+
+class SandboxConfig(BaseModel):
+    """Isolation of Bash commands by Claude Code's own sandbox (PLAN.md D15).
+
+    calu passes these settings with `--settings`, which overrides the project's and the user's
+    settings files, so the agent cannot switch the sandbox off by writing
+    `.claude/settings.json`. The sandbox needs `bwrap` and `socat` on the machine
+    (`calu.preflight`).
+
+    `fail_if_unavailable` makes Claude Code refuse to start without a working sandbox, instead
+    of running commands unsandboxed. `allow_unsandboxed_commands` False stops a call from
+    leaving the sandbox with `dangerouslyDisableSandbox`. `auto_allow_bash` stays False: Claude
+    Code would otherwise approve sandboxed Bash calls by itself, which would skip the auto-mode
+    classifier that PLAN.md D5 uses as the second opinion next to the checkers.
+
+    `excluded_commands` run outside the sandbox and are therefore only covered by the checkers
+    and the deny lists; the default is empty. `allowed_domains` and `denied_domains` configure
+    the sandbox's network: with an empty `allowed_domains` the sandbox blocks outgoing network
+    access (verified in `spikes/RESULTS.md`).
+    """
+
+    enabled: bool = True
+    fail_if_unavailable: bool = True
+    allow_unsandboxed_commands: bool = False
+    auto_allow_bash: bool = False
+    weaker_nested_sandbox: bool = False
+    """Weaker sandbox inside unprivileged Docker containers (Linux); reduces the isolation."""
+    excluded_commands: list[str] = Field(default_factory=list)
+    deny_read: list[str] = Field(default_factory=lambda: list(DEFAULT_DENY_READ))
+    allowed_domains: list[str] = Field(default_factory=list)
+    denied_domains: list[str] = Field(default_factory=list)
+    allow_unix_sockets: list[str] = Field(default_factory=list)
+
+    def settings(self) -> dict[str, Any]:
+        """Return the Claude Code settings document for `--settings`.
+
+        Returns:
+            `{"sandbox": {...}}` with the keys Claude Code expects (camel case). The `network`
+            and `filesystem` entries are left out when they would be empty.
+
+        Example:
+            `SandboxConfig().settings()["sandbox"]["failIfUnavailable"]` is True.
+        """
+        sandbox: dict[str, Any] = {
+            "enabled": self.enabled,
+            "failIfUnavailable": self.fail_if_unavailable,
+            "allowUnsandboxedCommands": self.allow_unsandboxed_commands,
+            "autoAllowBashIfSandboxed": self.auto_allow_bash,
+        }
+        if self.weaker_nested_sandbox:
+            sandbox["enableWeakerNestedSandbox"] = True
+        if self.excluded_commands:
+            sandbox["excludedCommands"] = list(self.excluded_commands)
+        if self.deny_read:
+            sandbox["filesystem"] = {"denyRead": list(self.deny_read)}
+        network: dict[str, Any] = {}
+        if self.allowed_domains:
+            network["allowedDomains"] = list(self.allowed_domains)
+        if self.denied_domains:
+            network["deniedDomains"] = list(self.denied_domains)
+        if self.allow_unix_sockets:
+            network["allowUnixSockets"] = list(self.allow_unix_sockets)
+        if network:
+            sandbox["network"] = network
+        return {"sandbox": sandbox}
+
+
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 """Reasoning effort levels of Claude Code (`--effort`, `/effort`)."""
 
@@ -94,6 +181,9 @@ class ClaudeConfig(BaseModel):
 
     `stream_partial`: if true (default), text and thinking are also streamed token by token
     (`assistant.delta` events); otherwise they arrive per completed block only.
+
+    `sandbox`: how Bash commands are isolated (`SandboxConfig`); calu passes it to Claude Code
+    with `--settings`, which overrides the settings files in the project.
     """
 
     use_bedrock: bool = False
@@ -106,6 +196,8 @@ class ClaudeConfig(BaseModel):
     effort: Effort | None = None
     cli_path: str | None = None
     setting_sources: list[str] = Field(default_factory=lambda: ["project"])
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    """Isolation of Bash commands (PLAN.md D15, D4)."""
 
 
 class Config(BaseModel):

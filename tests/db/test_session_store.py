@@ -2,7 +2,7 @@ import psycopg
 import pytest
 
 from calu.context.turns import StepRecord, TurnRecord
-from calu.db import connect
+from calu.db import Db, connect
 from calu.setup import setup
 from calu.store import (
     CheckerRun,
@@ -33,7 +33,7 @@ async def session_store(db_url: str) -> tuple[DatabaseSessionStore, psycopg.Asyn
     finally:
         await owner.close()
     conn = await connect(session_url)
-    return DatabaseSessionStore(conn), conn
+    return DatabaseSessionStore(Db(conn)), conn
 
 
 async def test_session_row_records_identity_states_and_end(db_url: str) -> None:
@@ -164,7 +164,7 @@ async def test_turns_and_summary_survive_a_resume(db_url: str) -> None:
         )
         assert await cur.fetchall() == [(1, True, "really done"), (2, False, "")]
 
-        resumed = DatabaseSessionStore(conn)
+        resumed = DatabaseSessionStore(Db(conn))
         await resumed.start(IDENTITY)
         turns, summary = await resumed.load_previous("claude-1")
         assert [t.index for t in turns] == [2]  # turn 1 is folded into the summary
@@ -197,7 +197,7 @@ async def test_turn_records_round_trip(db_url: str) -> None:
             narrated=True,
         )
         await store.save_turn(turn)
-        other = DatabaseSessionStore(conn)
+        other = DatabaseSessionStore(Db(conn))
         await other.start(IDENTITY)
         turns, _ = await other.load_previous("claude-2")
     finally:
@@ -213,7 +213,7 @@ async def test_the_session_waits_for_an_operator_and_may_only_cancel(db_url: str
     _, session_url = await setup(owner, db_url, "test:model")
     conn = await connect(session_url)
     try:
-        store = DatabaseSessionStore(conn)
+        store = DatabaseSessionStore(Db(conn))
         await store.start(IDENTITY)
         step_id = await store.add_step(StepRow(seq=1, tool_name="Bash", tool_input={}))
         first = await store.open_escalation("why", {"rendered": "rm -rf /"}, step_id)

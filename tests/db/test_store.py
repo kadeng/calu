@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from calu.checkers import Step
-from calu.db import connect
+from calu.db import Db, connect
 from calu.setup import setup
 from calu.store import ConfigStore, ProjectSettings
 
@@ -44,7 +44,7 @@ async def set_settings(
 async def test_load_returns_defaults_of_a_fresh_database(db_url: str) -> None:
     conn = await prepared(db_url)
     try:
-        settings = await ConfigStore(conn, WORKSPACE).load()
+        settings = await ConfigStore(Db(conn), WORKSPACE).load()
     finally:
         await conn.close()
     assert sorted(settings.checkers) == ["command", "edit", "narrator", "subagent-result"]
@@ -69,8 +69,8 @@ async def test_project_settings_override_global_ones(db_url: str) -> None:
         await set_settings(conn, "global", "", {"claude": {"model": "sonnet", "effort": "low"}})
         await set_settings(conn, "project", "demo", {"claude": {"model": "haiku"}})
         await set_settings(conn, "project", "other", {"claude": {"model": "opus"}})
-        global_only = await ConfigStore(conn, WORKSPACE).load()
-        project = await ConfigStore(conn, WORKSPACE, "demo").load()
+        global_only = await ConfigStore(Db(conn), WORKSPACE).load()
+        project = await ConfigStore(Db(conn), WORKSPACE, "demo").load()
     finally:
         await conn.close()
     assert global_only.config.claude.model == "sonnet"
@@ -92,8 +92,8 @@ async def test_rules_combine_global_and_project_and_skip_disabled(db_url: str) -
             "        (%s, 'command-deny', '^other-rule$', 0, true)",
             (project, other),
         )
-        settings = await ConfigStore(conn, WORKSPACE, "demo").load()
-        global_only = await ConfigStore(conn, WORKSPACE).load()
+        settings = await ConfigStore(Db(conn), WORKSPACE, "demo").load()
+        global_only = await ConfigStore(Db(conn), WORKSPACE).load()
     finally:
         await conn.close()
     patterns = [rule.pattern.pattern for rule in settings.rules.lists("command-deny")[0]]
@@ -112,7 +112,7 @@ async def test_disabled_checker_type_is_left_out(db_url: str) -> None:
             "UPDATE checker_types SET model = 'other:model', max_tokens = 123"
             " WHERE name = 'command'"
         )
-        settings = await ConfigStore(conn, WORKSPACE).load()
+        settings = await ConfigStore(Db(conn), WORKSPACE).load()
     finally:
         await conn.close()
     assert "edit" not in settings.checkers
@@ -131,7 +131,7 @@ async def test_the_session_role_can_load_the_settings(db_url: str) -> None:
         await conn.close()
     session = await connect(session_url)
     try:
-        settings = await ConfigStore(session, WORKSPACE).load()
+        settings = await ConfigStore(Db(session), WORKSPACE).load()
     finally:
         await session.close()
     assert settings.instructions("edit")
@@ -142,9 +142,9 @@ async def test_invalid_stored_settings_raise(db_url: str) -> None:
     try:
         await set_settings(conn, "global", "", {"context": {"fold_every": 0}})
         with pytest.raises(ValidationError):
-            await ConfigStore(conn, WORKSPACE).load()
+            await ConfigStore(Db(conn), WORKSPACE).load()
         await set_settings(conn, "global", "", ["not", "an", "object"])
-        settings = await ConfigStore(conn, WORKSPACE).load()  # ignored, with a warning
+        settings = await ConfigStore(Db(conn), WORKSPACE).load()  # ignored, with a warning
     finally:
         await conn.close()
     assert settings.config.context.fold_every == 30
@@ -153,7 +153,7 @@ async def test_invalid_stored_settings_raise(db_url: str) -> None:
 async def test_watch_reloads_after_a_change(db_url: str) -> None:
     conn = await prepared(db_url)
     listener = await connect(db_url)
-    store = ConfigStore(conn, WORKSPACE)
+    store = ConfigStore(Db(conn), WORKSPACE)
     seen: list[ProjectSettings] = []
     reloaded = anyio.Event()
 
@@ -180,7 +180,7 @@ async def test_watch_survives_a_broken_configuration(
 ) -> None:
     conn = await prepared(db_url)
     listener = await connect(db_url)
-    store = ConfigStore(conn, WORKSPACE)
+    store = ConfigStore(Db(conn), WORKSPACE)
     reloaded = anyio.Event()
 
     async def on_change(settings: ProjectSettings) -> None:
