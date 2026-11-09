@@ -42,6 +42,9 @@ alongside calu is decided later (§11).
 | D12 | **Credential store** (2026-11-09, answers the first half of Q3): the database credentials (connection URLs) are kept encrypted in `~/.config/calu/credentials.json` (mode 0600). Each entry is encrypted with AES-256-GCM under a key derived from a password with Argon2id. Entries: `admin` (database owner, for `db init/migrate`, `setup`, configuration changes) and `session` (role `calu_session`, for `calu run`). The sandbox (D4) hides `~/.config/calu`. A per-session database role stays open (Q3). |
 | D13 | **Database access with psycopg 3 and plain SQL migrations** (2026-11-09): no ORM. Migrations are numbered SQL files in the package (`calu/db/migrations/`), applied in order and recorded in `schema_migrations`. psycopg's async connections support `LISTEN/NOTIFY` directly. |
 | D14 | **`calu db up` creates the local database owner** (2026-11-09): on the first start it generates the PostgreSQL owner password, stores it as the `admin` credential under an admin password the user chooses, and starts the container with it. The password is never written in plain text. |
+| D15 | **Isolation of tool calls: Claude Code's own sandbox, configured by calu** (2026-11-09, answers Q1 on the evidence of `spikes/RESULTS.md`, CLI 2.1.319): calu passes the sandbox settings through `--settings` (`enabled`, `failIfUnavailable: true`, `allowUnsandboxedCommands: false`, `filesystem.denyRead` for secrets including `~/.config/calu`, Claude's credentials, `~/.ssh`, cloud credentials and the Docker socket, `allowedDomains` per project) and loads only the setting sources it chooses. Sandboxed commands get their own PID namespace (no access to the Claude Code process), cannot write `~/.claude`, `.claude/settings*.json` or `.git` hooks/config, and leftover processes die. Requires `bwrap` and `socat`. Fallback: `CLAUDE_CODE_SHELL_PREFIX` with a bubblewrap wrapper (verified to route every Bash command, including background ones). Edit/Write/Read still run in the Claude Code process and stay covered by the hook and the deny lists. |
+| D16 | **Checkers on the Anthropic subscription through `claude -p --output-format json --json-schema`** (2026-11-09, answers Q7): schema-valid `structured_output` in 6 of 6 runs, 2.5-4.4 s per check with haiku; run with `--tools ""`, `--no-session-persistence` and stdin closed. |
+| D17 | **Checker API keys stay out of the database** (2026-11-09): calu reads them from its environment and `~/.config/calu/.env` and hides them from Claude Code (as in sitl). |
 
 ## 3. Architecture
 
@@ -259,13 +262,13 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 
 | # | Question |
 |---|---|
-| Q1 | Isolation mechanism for tool calls (§4.4); first spikes: Claude Code's sandbox (PID namespace?), `CLAUDE_CODE_SHELL_PREFIX` wrapping. |
+| Q1 | Answered by D15. Still open: the sandbox inside Docker containers (`enableWeakerNestedSandbox`), the network proxy's domain allow list. |
 | Q2 | Relationship to sitl: does calu replace it (VSCode extension as a calu client) or do both continue? |
 | Q3 | Whether calu uses a per-session database role (the credential location is decided in D12). |
 | Q4 | How clients authenticate remotely (tokens per session, operator accounts in the database, TLS). |
 | Q5 | Network policy for the sandbox (none, proxy allow list, full) and its default. |
 | Q6 | What happens to a session when no human answers an escalation for a long time (keep waiting, give Claude other work, stop after a timeout). |
-| Q7 | Checkers on the Anthropic subscription through headless Claude Code (§3.2): does `claude -p` with a JSON schema give reliable structured answers, and how fast is it? |
+| Q7 | Answered by D16. |
 
 ## 12. Phases
 
