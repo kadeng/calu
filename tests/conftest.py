@@ -7,8 +7,37 @@ import psycopg
 import pytest
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from pydantic_ai import models
 
+from calu.config import PROVIDER_KEYS_BY_PREFIX, load_secrets
 from calu.credentials import CredentialStore, KdfParams
+
+load_secrets()
+"""Checker API keys from `~/.config/calu/.env`, for the live tests."""
+
+LIVE_CHECKER_MODEL = "fireworks:accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b"
+"""Default checker model of live tests: follows instructions far better than Mistral Small."""
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Block real model requests unless the run selects live tests (`-m live`)."""
+    markexpr = config.getoption("markexpr") or ""
+    models.ALLOW_MODEL_REQUESTS = "live" in markexpr and "not live" not in markexpr
+
+
+@pytest.fixture
+def checker_test_model() -> str:
+    """The checker model for live tests: `CALU_TEST_CHECKER_MODEL` or Nemotron Lightning.
+
+    Skips the test if no key of the model's provider is set. Mistral models: small ones only
+    (see AGENTS.md, never Medium or Large).
+    """
+    model = os.environ.get("CALU_TEST_CHECKER_MODEL", LIVE_CHECKER_MODEL)
+    keys = PROVIDER_KEYS_BY_PREFIX.get(model.partition(":")[0], ())
+    if keys and not any(os.environ.get(k) for k in keys):
+        pytest.skip(f"{' or '.join(keys)} not set")
+    return model
+
 
 TEST_KDF = KdfParams(time_cost=1, memory_cost=8, parallelism=1)
 """Cheap Argon2id parameters, so tests stay fast."""

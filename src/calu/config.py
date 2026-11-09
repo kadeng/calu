@@ -246,6 +246,18 @@ PROVIDER_KEYS = frozenset(
 )
 """Keys of model providers used by checkers; always hidden from Claude Code."""
 
+PROVIDER_KEYS_BY_PREFIX: dict[str, tuple[str, ...]] = {
+    "mistral": ("MISTRAL_API_KEY",),
+    "fireworks": ("FIREWORKS_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "google-gla": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "groq": ("GROQ_API_KEY",),
+}
+"""Pydantic AI model-string prefix -> environment variables, any one of which holds the key.
+Prefixes that are not listed (e.g. "bedrock", "ollama", "test") need no key or take their
+credentials from elsewhere, so they are not checked."""
+
 
 def load_secrets(env_file: Path | None = None) -> set[str]:
     """Load checker API keys from calu's env file into `os.environ`.
