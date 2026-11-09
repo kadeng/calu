@@ -19,7 +19,7 @@
     calu project add DIR|list      register a project in the database
     calu config get|set|unset KEY  configuration values (`claude.model`, `context.narrate`, ...)
     calu checker list|show|set     checker definitions: instructions, model, limits
-    calu rules list|add|remove|enable|disable
+    calu rules list [LIST] | add LIST PATTERN | remove|enable|disable ID
                                    the allow and deny lists
 
 Passwords are read from the terminal without echo. If stdin is not a terminal, each password
@@ -666,16 +666,31 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
     """List the allow and deny lists, or add, remove, enable or disable one rule.
 
+    `target` is the list name for `list` and `add`, and the rule id for `remove`, `enable` and
+    `disable`.
+
     Args:
-        args: Parsed arguments (`action`, `list`, `pattern`, `comment`, `project`, `position`,
-            `id`).
+        args: Parsed arguments (`action`, `target`, `pattern`, `comment`, `project`,
+            `position`).
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential, or the rule or list is refused.
+        CliError: If an argument is missing or malformed, if there is no `admin` credential, or
+            if the rule does not exist.
         CredentialError: On a wrong password.
+        admin.AdminError: If the list name or the pattern is refused.
         psycopg.Error: On database errors.
     """
+    rule_id: int | None = None
+    if args.action in ("remove", "enable", "disable"):
+        if not args.target:
+            raise CliError(f"rules {args.action} needs a rule id (see `calu rules list`)")
+        try:
+            rule_id = int(args.target)
+        except ValueError as exc:
+            raise CliError(f"not a rule id: {args.target!r}") from exc
+    if args.action == "add" and not (args.target and args.pattern):
+        raise CliError("rules add needs a list name and a pattern")
 
     async def work(db: Db) -> str:
         """Run the requested rules action.
@@ -687,27 +702,24 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
             The report.
 
         Raises:
-            CliError: If an argument is missing or the rule does not exist.
+            CliError: If the rule does not exist.
         """
         if args.action == "list":
-            rows = await admin.rules(db, args.project, args.list)
+            rows = await admin.rules(db, args.project, args.target)
             return "\n".join(row.line() for row in rows) or "no rules"
         if args.action == "add":
-            if not args.list or not args.pattern:
-                raise CliError("rules add needs a LIST and a PATTERN")
             row = await admin.add_rule(
-                db, args.list, args.pattern, args.comment or "", args.project, args.position
+                db, args.target, args.pattern, args.comment or "", args.project, args.position
             )
             return f"added rule {row.id}: {row.line()}"
-        if args.id is None:
-            raise CliError(f"rules {args.action} needs an ID")
+        assert rule_id is not None
         if args.action == "remove":
-            if not await admin.remove_rule(db, args.id):
-                raise CliError(f"no rule {args.id}")
-            return f"removed rule {args.id}"
-        if not await admin.set_rule(db, args.id, args.action == "enable"):
-            raise CliError(f"no rule {args.id}")
-        return f"{args.action}d rule {args.id}"
+            if not await admin.remove_rule(db, rule_id):
+                raise CliError(f"no rule {rule_id}")
+            return f"removed rule {rule_id}"
+        if not await admin.set_rule(db, rule_id, args.action == "enable"):
+            raise CliError(f"no rule {rule_id}")
+        return f"{args.action}d rule {rule_id}"
 
     _admin_command(store, work)
 
@@ -830,11 +842,16 @@ def build_parser() -> argparse.ArgumentParser:
     checker.add_argument("--max-tokens", type=int)
     checker.set_defaults(handler=cmd_checker)
 
-    rules = sub.add_parser("rules", help="the allow and deny lists")
+    rules = sub.add_parser(
+        "rules",
+        help="the allow and deny lists",
+        description="calu rules list [LIST] | add LIST PATTERN | remove|enable|disable ID",
+    )
     rules.add_argument("action", choices=["list", "add", "remove", "enable", "disable"])
-    rules.add_argument("list", nargs="?", help="list name, e.g. command-deny")
+    rules.add_argument(
+        "target", nargs="?", help="list name (list, add) or rule id (remove, enable, disable)"
+    )
     rules.add_argument("pattern", nargs="?", help="regular expression (for add)")
-    rules.add_argument("--id", type=int, help="rule id (for remove, enable, disable)")
     rules.add_argument("--comment", help="why the rule exists")
     rules.add_argument("--project", help="the project's rules instead of the global ones")
     rules.add_argument("--position", type=int, help="position in the list (default: append)")
@@ -862,7 +879,14 @@ def main(
     args = build_parser().parse_args(argv)
     try:
         args.handler(args, store_factory())
-    except (CliError, CredentialError, local_db.DockerError, psycopg.Error, ValueError) as exc:
+    except (
+        CliError,
+        CredentialError,
+        admin.AdminError,
+        local_db.DockerError,
+        psycopg.Error,
+        ValueError,
+    ) as exc:
         print(f"calu: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     return 0

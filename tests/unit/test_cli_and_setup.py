@@ -118,3 +118,17 @@ def test_arguments_are_checked_before_the_password_is_asked(
         == 1
     )
     assert "cannot read /x" in capsys.readouterr().err
+
+
+def test_rules_arguments_are_interpreted_per_action(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli(monkeypatch, store, ["rules", "remove"], "") == 1
+    assert "needs a rule id" in capsys.readouterr().err
+    assert run_cli(monkeypatch, store, ["rules", "remove", "abc"], "") == 1
+    assert "not a rule id" in capsys.readouterr().err
+    assert run_cli(monkeypatch, store, ["rules", "add", "command-deny"], "") == 1
+    assert "needs a list name and a pattern" in capsys.readouterr().err
+    # A well-formed call gets as far as the credential.
+    assert run_cli(monkeypatch, store, ["rules", "add", "command-deny", "^x$"], "") == 1
+    assert "no credential 'admin'" in capsys.readouterr().err

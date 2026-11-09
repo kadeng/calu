@@ -215,6 +215,7 @@ checkers follow them:
 calu checker show edit > edit.md              # the edit checker's instructions
 calu checker set edit --instructions-file edit.md
 calu rules add command-deny '^ship-it( |$)' --comment "only from CI"
+calu rules list command-deny                   # with their ids, to remove or disable one
 calu config set claude.model opus
 calu evals --from-db                          # accuracy, critical misses, over-escalations
 ```
