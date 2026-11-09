@@ -164,6 +164,14 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   step, the file before the change, the conversation and chat summary of that moment, the checker
   runs with model and version); `checkers.get` returns the definitions, read-only;
   `session.history` returns the turns, steps and chat summary from the database.
+- **Deciding without the session** (D30, the invariant): an escalation can always be decided
+  from the database alone — `calu escalations` lists them, `calu escalation <id>` prints
+  everything a decision needs (reason, the command line or the agent's question with its
+  options, the step as the checker rendered it, the file before an edit, the changeset, the
+  narrated conversation, the folded summary), and `calu resolve <id> allow|deny|answer` decides.
+  The waiting session notices through the `escalation_resolved` notification **and** a poll of
+  the row every second. The database deliberately holds no live stream (D3): that is what
+  attaching to the session is for.
 - **Deciding an escalation** (D28): an operator with a database login uses
   `calu_resolve_escalation` (`calu resolve`); a client of the session has no login and tells the
   session, which records a real resolution with `calu_client_decision` — scoped to that session,

@@ -813,3 +813,24 @@ async def test_a_confirmation_the_harness_asks_for_escalates_even_after_a_pass(t
         assert answers[0].allow is True
         await session.stop()
         tg.cancel_scope.cancel()
+
+
+async def test_a_question_answered_in_the_database_reaches_the_session(tmp_path: Path):
+    """D30: a decision taken in the database alone must reach the waiting session."""
+    questions = [{"question": "Tabs or spaces?", "options": [{"label": "Spaces"}]}]
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "AskUserQuestion", "input": {"questions": questions}, "result": "unused"}]],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="set it up"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        # Nobody is attached: an operator answers it in the database, as `calu resolve` does.
+        store.resolve(int(request.escalation_id), "answered", "Spaces", by="operator")
+        session.note_resolution(int(request.escalation_id))
+        await rec.wait_for(TurnResult)
+        results = rec.of(ToolResult)
+        assert results and "The user answered your question: Spaces" in results[0].content
+        await session.stop()
+        tg.cancel_scope.cancel()

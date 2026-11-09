@@ -431,7 +431,8 @@ class MemorySessionStore:
 
         Args:
             escalation_id: Id from `open_escalation`.
-            state: "allowed", "denied" or "cancelled".
+            state: "allowed", "denied", "answered" (a question of the agent, the note holding
+                the answer) or "cancelled".
             note: The operator's note.
             by: Who resolved it.
         """

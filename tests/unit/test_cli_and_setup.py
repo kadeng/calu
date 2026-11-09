@@ -152,3 +152,18 @@ def test_the_protocol_schema_is_written_without_a_credential(
     assert json.loads(out.read_text(encoding="utf-8"))["version"] == 1
     assert run_cli(monkeypatch, store, ["protocol", "--out", "/no/such/dir/x.json"], "") == 1
     assert "cannot write" in capsys.readouterr().err
+
+
+def test_resolve_takes_the_answer_as_one_argument(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore
+) -> None:
+    """The hint `calu resolve <id> answer "..."` has to parse, or it is a lie."""
+    parser = cli.build_parser()
+    args = parser.parse_args(["resolve", "7", "answer", "Spaces, four of them"])
+    assert (args.id, args.decision, args.text) == (7, "answer", "Spaces, four of them")
+    assert args.note is None
+    # --note is the same thing written the other way, and wins if both are given.
+    other = parser.parse_args(["resolve", "7", "deny", "--note", "not today"])
+    assert other.note == "not today" and other.text is None
+    both = parser.parse_args(["resolve", "7", "deny", "positional", "--note", "flag"])
+    assert (both.text, both.note) == ("positional", "flag")

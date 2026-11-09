@@ -12,6 +12,7 @@
                                    session password; see `calu.run`)
     calu attach ADDRESS --token T  terminal client for a running session
     calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
+    calu escalation ID             everything needed to decide it, from the database
     calu token mint SESSION        client token for an editor or a remote interface
     calu web                       the herd overview in a browser (127.0.0.1 only)
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
@@ -557,6 +558,45 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
     _admin_command(store, work)
 
 
+def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Show everything needed to decide one escalation, from the database alone (PLAN.md D30).
+
+    No session process is involved: an operator who can reach the database sees why the step was
+    escalated, what it would do, what Claude asked if it was a question, and the conversation as
+    the checkers saw it — also for a session on another host, or one that has already ended. The
+    live stream of a running session is **not** in the database (D3); `calu attach` shows that.
+
+    Args:
+        args: Parsed arguments (`id`, `full`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential or no escalation with that id.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> str:
+        """Read the escalation and its context.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The rendering.
+
+        Raises:
+            CliError: If no escalation has that id.
+        """
+        row = await herd.escalation(db, args.id)
+        if row is None:
+            raise CliError(f"no escalation {args.id}")
+        context = await herd.escalation_context(db, args.id)
+        return herd.render_escalation(row, context, full=args.full)
+
+    _admin_command(store, work)
+
+
 def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
     """Allow, deny or answer an open escalation; the waiting session continues.
 
@@ -564,7 +604,9 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
     the answer it receives, and the call itself does not run.
 
     Args:
-        args: Parsed arguments (`id`, `decision`, `note`).
+        args: Parsed arguments (`id`, `decision`, `text`, `note`). `text` and `--note` are the
+            same thing written two ways, so `calu resolve 7 answer "Spaces"` works as well as
+            `calu resolve 7 answer --note Spaces`; `--note` wins if both are given.
         store: The credential store.
 
     Raises:
@@ -585,9 +627,11 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
         Raises:
             CliError: If the escalation is not open any more.
         """
-        if not await herd.resolve(db, args.id, args.decision, args.note or ""):
+        note = args.note or args.text or ""
+        if not await herd.resolve(db, args.id, args.decision, note):
             raise CliError(f"escalation {args.id} is not open (resolved, cancelled or unknown)")
-        return f"escalation {args.id}: {args.decision}"
+        shown = f": {note}" if note else ""
+        return f"escalation {args.id}: {args.decision}{shown}"
 
     _admin_command(store, work)
 
@@ -1184,9 +1228,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rendered", action="store_true", help="also print the rendered step")
     p.set_defaults(handler=cmd_escalations)
 
+    p = sub.add_parser("escalation", help="show one escalation with everything needed to decide it")
+    p.add_argument("id", type=int)
+    p.add_argument("--full", action="store_true", help="do not cut the long sections")
+    p.set_defaults(handler=cmd_escalation)
+
     p = sub.add_parser("resolve", help="allow, deny or answer an open escalation")
     p.add_argument("id", type=int, help="escalation id")
     p.add_argument("decision", choices=["allow", "deny", "answer"])
+    p.add_argument(
+        "text",
+        nargs="?",
+        help="the note, or the answer for `answer` (the same as --note, as one argument)",
+    )
     p.add_argument("--note", help="text for Claude and for the record")
     p.set_defaults(handler=cmd_resolve)
 

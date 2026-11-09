@@ -14,6 +14,8 @@ remote interface) attach without the terminal that started the session, and revo
 that access again.
 """
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -453,6 +455,91 @@ async def escalation(db: Db, escalation_id: int) -> EscalationRow | None:
         (escalation_id,),
     )
     return EscalationRow(*found[0]) if found else None
+
+
+MAX_SECTION_CHARS = 4_000
+"""Characters of a long context section that `render_escalation` prints without `--full`."""
+
+
+def render_escalation(row: EscalationRow, context: Mapping[str, Any], full: bool = False) -> str:
+    """Render everything needed to decide an escalation, for a terminal.
+
+    This is the **database-only** view (PLAN.md D30): an operator who can reach the database can
+    see why a step was escalated, what it would do, what Claude asked if it was a question, and
+    the conversation as the checkers saw it — without connecting to the session process, which
+    may be on another host or already gone.
+
+    Args:
+        row: The escalation row.
+        context: Its stored context (`escalation_context`).
+        full: Print the long sections whole; otherwise each is cut to `MAX_SECTION_CHARS`.
+
+    Returns:
+        The rendering, ending with the command that answers it.
+    """
+
+    def section(title: str, body: str) -> str:
+        """Render one titled section, cut unless `full`.
+
+        Args:
+            title: The heading.
+            body: The section's text.
+
+        Returns:
+            The section, or "" if the body is empty.
+        """
+        text = body.rstrip()
+        if not text:
+            return ""
+        if not full and len(text) > MAX_SECTION_CHARS:
+            text = text[:MAX_SECTION_CHARS] + "\n[... cut; run with --full]"
+        return f"\n## {title}\n\n{text}\n"
+
+    tool_name = str(context.get("tool_name") or "")
+    tool_input = context.get("tool_input")
+    tool_input = tool_input if isinstance(tool_input, dict) else {}
+    questions = tool_input.get("questions") if tool_name == "AskUserQuestion" else None
+    parts = [
+        f"escalation {row.id} [{row.state}]  {row.hostname}:{row.directory}",
+        f"session {row.session_id}  asked {row.created_at:%Y-%m-%d %H:%M:%S}",
+        f"\n{row.reason.strip()}",
+    ]
+    if row.resolved_by:
+        parts.append(f"\nanswered by {row.resolved_by}: {row.note or '(no note)'}")
+    if questions:
+        asked = []
+        for question in questions if isinstance(questions, list) else []:
+            if not isinstance(question, dict):
+                continue
+            asked.append(str(question.get("question") or question.get("header") or "a question"))
+            for option in question.get("options") or []:
+                if isinstance(option, dict):
+                    label = str(option.get("label", ""))
+                    why = str(option.get("description") or "")
+                    asked.append(f"  - {label}{f': {why}' if why else ''}")
+        parts.append(section("Claude asks", "\n".join(asked)))
+    elif tool_name:
+        command = str(tool_input.get("command") or "")
+        shown = command or json.dumps(tool_input, indent=2, sort_keys=True)[:MAX_SECTION_CHARS]
+        parts.append(section(f"The tool call ({tool_name})", shown))
+    parts.append(section("The step as the checker saw it", str(context.get("rendered") or "")))
+    parts.append(section("The change that would be committed", str(context.get("changeset") or "")))
+    files = context.get("files")
+    if isinstance(files, dict):
+        for path, content in files.items():
+            parts.append(section(f"{path}, before the change", str(content)))
+    parts.append(
+        section("The conversation, as the checkers see it", str(context.get("recent") or ""))
+    )
+    parts.append(section("The folded summary", str(context.get("chat_summary") or "")))
+    if row.state == "open":
+        answer = (
+            f'calu resolve {row.id} answer "your answer"'
+            if questions
+            else f"calu resolve {row.id} allow|deny [--note ...]"
+        )
+        parts.append(f"\nanswer it with: {answer}\n")
+    return "\n".join(part for part in parts if part)
 
 
 async def escalation_context(db: Db, escalation_id: int) -> dict[str, Any]:

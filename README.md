@@ -276,9 +276,19 @@ watch and unblock it:
 ```bash
 calu sessions             # every session of every host, with its state
 calu escalations          # steps that wait for a decision
+calu escalation 12        # everything needed to decide that one
 calu resolve 12 allow --note "go ahead"
-calu attach ws://127.0.0.1:8765 --token ...   # the full event stream, and a prompt
+calu resolve 13 answer "spaces, four of them"   # when Claude asked you something
+calu attach ws://127.0.0.1:8765 --token ...     # the full event stream, and a prompt
 ```
+
+Those first five need nothing but the database. That is deliberate: a session may run on a
+machine you cannot reach, or have stopped since it asked, and a decision must not depend on
+getting a connection to it. So the escalation itself carries what the decision needs — the
+reason, the command line or the question with its options, the step as the checker rendered it,
+the file before an edit, and the conversation as the checkers see it. The waiting session picks
+your answer up within a second. What is *not* in the database is the live stream: the text as it
+is written, the thinking, the tool results as they arrive. That is what attaching is for.
 
 A browser shows every session of every host at once:
 
