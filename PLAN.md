@@ -1,7 +1,8 @@
 # calu: implementation plan
 
 Status: planning (2026-11-09). This file holds the decisions, the architecture and the order of
-work. Decisions carry a date; open questions are listed in §11.
+work, derived from the owner's requirements in [REQUIREMENTS.md](REQUIREMENTS.md). Decisions carry
+a date; open questions are listed in §11.
 
 ## 1. Goal
 
@@ -82,6 +83,20 @@ starting ─► idle ◄──► running ─► checking ─► tool_call ─�
 `running`: Claude works (model turn). `checking`: a checker or the narrator runs for a tool call.
 `tool_call`: the tool executes. `escalated`: waits for a human decision. The current state and
 its start time are kept in the database (session row) and on the bus.
+
+### 3.2 Checker models
+
+Checkers, narrator and summarizer use Pydantic AI (as in sitl): structured output with
+validation and retry, prompt caching, usage limits, fake models for tests. Model strings are
+Pydantic AI's (`bedrock:...`, `anthropic:...`, `mistral:...`, `fireworks:...`), stored in the
+database per checker type.
+
+- **AWS Bedrock** and the **Anthropic API**: through Pydantic AI's providers.
+- **Anthropic subscription:** an API client cannot use the claude.ai subscription; only Claude
+  Code can. calu therefore gets a model type that runs the check through Claude Code itself in
+  headless mode (`claude -p` with a JSON schema for the structured answer, to verify in a spike),
+  on the subscription of the machine. Expected cost: 1-3 s CLI start per check.
+- **Fireworks.ai and Mistral:** through Pydantic AI's providers (as in sitl).
 
 ## 4. Threat model and isolation
 
@@ -241,6 +256,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 | Q4 | How clients authenticate remotely (tokens per session, operator accounts in the database, TLS). |
 | Q5 | Network policy for the sandbox (none, proxy allow list, full) and its default. |
 | Q6 | What happens to a session when no human answers an escalation for a long time (keep waiting, give Claude other work, stop after a timeout). |
+| Q7 | Checkers on the Anthropic subscription through headless Claude Code (§3.2): does `claude -p` with a JSON schema give reliable structured answers, and how fast is it? |
 
 ## 12. Phases
 
