@@ -61,6 +61,10 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   ESCALATE, ALLOW (run it whatever auto mode says) and DENY. PASS is the normal answer; the
   allow lists and the read-only tool routes produce PASS as well. The PreToolUse hook answers
   PASS without a decision while auto mode is in effect.
+- **Deciding an escalation** (D28): a client of the session has no database login; it decides
+  through the session, which records a real resolution with `calu_client_decision` — scoped to
+  that session and requiring the hash of one of its client tokens, which the role cannot read
+  back. An operator with its own login still uses `calu_resolve_escalation` for any session.
 - **Escalation timeout** (D27): `escalation_timeout_s` (default 8 h, 0 = no limit) bounds how
   long an escalation waits. On the timeout the step is denied, the row is cancelled with the
   reason, and the session stops; Claude's session id is in the database from the start of the
@@ -173,12 +177,7 @@ Results:
 
 ## Next steps
 
-1. **Q8 (ask the owner):** a client attached to the session decides an escalation in the
-   session, which cancels the row with a note, because `calu_session` may not allow or deny
-   (D18, §4.1 point 5). Alternatives: the client resolves with its own `calu_operator`
-   credentials, or a database function lets `calu_session` record a client decision for its own
-   session.
-2. **Q10 (ask the owner):** whether calu should also check *interactive* `claude` sessions
+1. **Q10 (ask the owner):** whether calu should also check *interactive* `claude` sessions
    through a Claude Code plugin. `PLAN.md` §4.5 has the assessment: a plugin cannot carry the
    sandbox settings or auto mode, and a shell hook fails open, so it does not simplify `calu
    run`; it is the only way to reach an interactive session, and it would need a `calu hook`

@@ -243,6 +243,46 @@ async def test_the_session_waits_for_an_operator_and_may_only_cancel(db_url: str
         await owner.close()
 
 
+async def test_a_client_of_the_session_decides_with_its_token(db_url: str) -> None:
+    owner = await connect(db_url)
+    _, session_url = await setup(owner, db_url, "test:model")
+    conn = await connect(session_url)
+    store = DatabaseSessionStore(Db(conn))
+    try:
+        await store.start(IDENTITY)
+        step = await store.add_step(StepRow(seq=1, tool_name="Bash", tool_input={}))
+        before_token = await store.open_escalation("why", {}, step)
+        # Without a client token the session cannot decide: nothing claims to be its client.
+        assert await store.decide_escalation(before_token, True, "go", "test") is False
+        assert (await store.escalation(before_token)).open
+
+        await store.add_client_token("a" * 64, "ws://127.0.0.1:1")
+        assert await store.decide_escalation(before_token, True, "go ahead", "attach") is True
+        decided = await store.escalation(before_token)
+        assert decided.allowed and decided.note == "go ahead"
+        assert decided.resolved_by == "client:attach"
+        # Only the first decision counts.
+        assert await store.decide_escalation(before_token, False, "no", "attach") is False
+
+        denied = await store.open_escalation("another", {}, step)
+        assert await store.decide_escalation(denied, False, "not today", "ide") is True
+        row = await store.escalation(denied)
+        assert row.state == "denied" and row.resolved_by == "client:ide"
+
+        # The role cannot read the token hashes back: they are a capability, not data.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await conn.execute(b"SELECT token_sha256 FROM client_tokens")
+        # An escalation of another session is refused, even with this session's token.
+        other = DatabaseSessionStore(Db(conn))
+        await other.start(IDENTITY)
+        elsewhere = await other.open_escalation("not ours", {}, None)
+        assert await store.decide_escalation(elsewhere, True, "", "attach") is False
+        assert (await store.escalation(elsewhere)).open
+    finally:
+        await conn.close()
+        await owner.close()
+
+
 async def test_comments_and_recent_sessions(db_url: str) -> None:
     store, conn = await session_store(db_url)
     try:

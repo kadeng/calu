@@ -817,18 +817,22 @@ class Session:
         )
         return comment
 
-    async def decide_escalation(self, escalation_id: str, decision: str, note: str | None) -> None:
+    async def decide_escalation(
+        self, escalation_id: str, decision: str, note: str | None, client: str = ""
+    ) -> None:
         """Resolve an open escalation from a client. Only the first decision counts.
 
-        The `escalations` row is cancelled with a note that records the decision: the role
-        `calu_session` may not allow or deny a row (see `calu.store.session`). An operator who
-        resolves the row in the database instead reaches the session through `note_resolution`
-        or its poll.
+        The decision is recorded in the `escalations` row as the resolution it is, with
+        `resolved_by` saying that a client of this session decided and which one (PLAN.md D28).
+        A client needs no database login for that: it authenticates to the session with its
+        token, and the session speaks to the database for it. An operator who resolves the row
+        in the database instead reaches the session through `note_resolution` or its poll.
 
         Args:
             escalation_id: Id from the `escalation.request` event.
             decision: "allow" or "deny".
             note: Optional text from the user; Claude receives it with a denial.
+            client: Name of the client that decided, for the record.
 
         Raises:
             SessionError: If no escalation with this id is open (unknown, or already decided).
@@ -843,11 +847,42 @@ class Session:
         esc.answer = HumanAnswer(allow=allow, message=message, note=note or "")
         esc.done.set()
         if esc.db_id is not None:
-            text = f"{'allowed' if allow else 'denied'} by a client of the session process"
-            await self._store_call(
-                "recording a client decision",
-                self.store.close_escalation(esc.db_id, f"{text}: {note}" if note else text),
+            await self._record_decision(esc.db_id, allow, note or "", client)
+
+    async def _record_decision(
+        self, escalation_id: int, allow: bool, note: str, client: str
+    ) -> None:
+        """Write a client's decision to the `escalations` row; never raises.
+
+        If the database refuses the decision — the row was resolved meanwhile, or this session
+        may not decide it — the row is cancelled with a note instead, so that it does not stay
+        open after the step has already run or been denied.
+
+        Args:
+            escalation_id: Id of the `escalations` row.
+            allow: Whether the step may run.
+            note: The human's note.
+            client: Name of the client that decided.
+        """
+        try:
+            recorded = await self.store.decide_escalation(escalation_id, allow, note, client)
+        except Exception as exc:
+            log.exception("recording a client decision failed")
+            await self._emit_safely(
+                Log(level="error", message=f"recording a client decision failed: {exc}")
             )
+            return
+        if recorded:
+            return
+        decided = "allowed" if allow else "denied"
+        await self._store_call(
+            "cancelling an escalation",
+            self.store.close_escalation(
+                escalation_id,
+                f"{decided} by the client {client or 'unknown'}, but the row could not be "
+                "resolved (already resolved, or this session may not decide it)",
+            ),
+        )
 
     def note_resolution(self, escalation_id: int) -> None:
         """Wake the session so it reads a resolved escalation at once.

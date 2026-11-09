@@ -102,6 +102,9 @@ async def test_session_role_cannot_change_config_or_resolve(db_url: str) -> None
             "UPDATE escalations SET state = 'allowed'",
             f"SELECT calu_resolve_escalation({escalation}, 'allowed', 'self')",
             "SELECT * FROM audit_log",
+            # The token hashes are a capability of the session process, not readable data:
+            # the database credential alone cannot forge a client decision (D28).
+            "SELECT token_sha256 FROM client_tokens",
         ):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 await session.execute(statement.encode())

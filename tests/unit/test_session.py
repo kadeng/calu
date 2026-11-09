@@ -137,11 +137,11 @@ async def test_escalation_waits_for_human(tmp_path: Path):
     assert "not today" in results[1].content
     with pytest.raises(SessionError):
         await session.decide_escalation("999", "allow", None)
-    # A client decision cancels the row and records what was decided.
+    # The decision of a client is recorded as the resolution it is, with who decided (D28).
     rows = [store.escalations[i] for i in sorted(store.escalations)]
-    assert [r.state for r in rows] == ["cancelled", "cancelled"]
-    assert rows[0].note == "allowed by a client of the session process"
-    assert "denied by a client" in rows[1].note and "not today" in rows[1].note
+    assert [r.state for r in rows] == ["allowed", "denied"]
+    assert [r.resolved_by for r in rows] == ["client:unknown", "client:unknown"]
+    assert rows[1].note == "not today"
 
 
 async def test_escalation_resolved_in_the_database_continues_the_session(tmp_path: Path):
@@ -412,11 +412,11 @@ async def test_an_escalation_nobody_answers_stops_the_session(tmp_path: Path):
             while session.state != "stopped":
                 await anyio.sleep(0.02)
         await session.stop()
+        timed_out = store.escalations[int(request.escalation_id)]
+        assert timed_out.state == "cancelled" and "No decision within" in timed_out.note
     (result,) = rec.of(ToolResult)
     assert result.is_error and "No decision within" in result.content
     assert "calu run --resume fake-session" in result.content
-    timed_out = store.escalations[int(request.escalation_id)]
-    assert timed_out.state == "cancelled" and "No decision within" in timed_out.note
     assert [e.message for e in rec.of(Log) if "No decision" in e.message]
     assert store.ended == "stopped"
 

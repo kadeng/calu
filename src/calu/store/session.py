@@ -13,11 +13,18 @@
 it against PostgreSQL with the rights of the role `calu_session`; `MemorySessionStore`
 (`calu.store.memory`) implements it without a database, for unit tests.
 
-The session role may **not** allow or deny an escalation: only an operator may, through
-`calu_resolve_escalation` (`calu resolve`, a web UI, SQL). The session waits for that resolution
-and may only cancel its own open escalations, which counts as a denial. A decision that reaches
-the session from an attached client is therefore recorded with `close_escalation`, which cancels
-the row and keeps the decision in its note.
+Escalations can be resolved from two sides (PLAN.md D28):
+
+- an **operator** resolves any escalation in the database (`calu_resolve_escalation`, used by
+  `calu resolve` and by a herd interface with its own database login); the waiting session
+  notices it through `escalation_resolved` or its poll;
+- a **client of the session** — `calu attach`, the ACP adapter, an IDE panel — has no database
+  login and tells the session, which records the decision with `decide_escalation`
+  (`calu_client_decision`). That function resolves only an escalation of this session, requires
+  the hash of one of its client tokens, and records in `resolved_by` that a client decided.
+
+`close_escalation` stays for a genuine cancellation: the session stopped, the turn was
+interrupted, or nobody answered in time.
 """
 
 import json
@@ -337,11 +344,30 @@ class SessionStore(Protocol):
     async def close_escalation(self, escalation_id: int, note: str = "") -> None:
         """Cancel an escalation that is still open (a cancelled escalation is a denial).
 
-        Does nothing if the escalation was already resolved.
+        Does nothing if the escalation was already resolved. A cancellation is not a decision:
+        it records that nobody decided (the session stopped, the turn was interrupted, the wait
+        timed out).
 
         Args:
             escalation_id: Id from `open_escalation`.
-            note: Why it was cancelled, e.g. a decision that reached the session from a client.
+            note: Why it was cancelled.
+        """
+        ...
+
+    async def decide_escalation(
+        self, escalation_id: int, allow: bool, note: str = "", actor: str = ""
+    ) -> bool:
+        """Record the decision of a client of this session (PLAN.md D28).
+
+        Args:
+            escalation_id: Id from `open_escalation`.
+            allow: Whether the step may run.
+            note: The human's note, which Claude receives with a denial.
+            actor: Name of the client that decided, for the record.
+
+        Returns:
+            True if the escalation was open and is now resolved; False if it was already
+            resolved or this session may not decide it.
         """
         ...
 
@@ -376,6 +402,7 @@ class DatabaseSessionStore:
         """
         self._db = db
         self.session_id: str | None = None
+        self._token_hash: str | None = None
 
     async def start(self, identity: SessionIdentity) -> str:
         """Create the host and session rows (see `SessionStore.start`).
@@ -800,6 +827,10 @@ class DatabaseSessionStore:
     async def add_client_token(self, token_sha256: str, address: str) -> int:
         """Record a client token's hash (see `SessionStore.add_client_token`).
 
+        Side effect: the hash is kept in memory as well, because `decide_escalation` needs it to
+        prove that the decision comes from this session's own client (D28). The role cannot read
+        it back from the table.
+
         Args:
             token_sha256: SHA-256 of the token.
             address: The address clients connect to.
@@ -811,10 +842,47 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
             RuntimeError: If the server returns no row for the insert.
         """
-        return await self._db.scalar(
+        row_id = await self._db.scalar(
             "INSERT INTO client_tokens (session_id, token_sha256, address)"
             " VALUES (%s, %s, %s) RETURNING id",
             (self._require_session(), token_sha256, address),
+        )
+        self._token_hash = token_sha256
+        return row_id
+
+    async def decide_escalation(
+        self, escalation_id: int, allow: bool, note: str = "", actor: str = ""
+    ) -> bool:
+        """Record a client's decision (see `SessionStore.decide_escalation`).
+
+        Args:
+            escalation_id: Id from `open_escalation`.
+            allow: Whether the step may run.
+            note: The human's note.
+            actor: Name of the client that decided.
+
+        Returns:
+            True if the escalation is now resolved; False if it was already resolved, if this
+            session has no client token recorded, or if the escalation belongs to another
+            session.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        if self._token_hash is None:
+            return False
+        return bool(
+            await self._db.scalar(
+                "SELECT calu_client_decision(%s, %s::uuid, %s, %s, %s, %s)",
+                (
+                    escalation_id,
+                    self._require_session(),
+                    self._token_hash,
+                    "allowed" if allow else "denied",
+                    note or None,
+                    actor or "unknown",
+                ),
+            )
         )
 
     async def open_escalation(
