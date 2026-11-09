@@ -4,13 +4,24 @@
 
 calu starts Claude Code for you and puts a second opinion in front of every command it runs and
 every file it edits. That second opinion comes from **checker agents**: LLMs that you steer with
-your own instructions. Each checker answers one of three things:
+your own instructions. Each checker answers one of four things:
 
-| Answer | What happens |
-|---|---|
-| ALLOW | the step runs; the checker may add a short remark that Claude receives with the approval |
-| DENY | the step does not run; Claude is told why and carries on |
-| ESCALATE | time freezes: Claude is paused until a human allows or denies the step |
+| Answer | What happens | How often |
+|---|---|---|
+| PASS | the checker has no objection; Claude Code's own auto-approval decides as usual | almost everything |
+| ESCALATE | time freezes: Claude is paused until a human allows or denies the step | the interesting cases |
+| ALLOW | the step runs, whatever the auto-approval would have said | a deliberate exception |
+| DENY | the step does not run; Claude is told why and carries on | a deliberate exception |
+
+The two ends of that table are the exceptions. A checker is not there to re-decide what Claude
+Code already decides well; it is there to notice the few steps that deserve a human, and to
+overrule the harness in the handful of cases where you know better.
+
+What a checker can do besides deciding is **comment**. It can let an edit through and still tell
+Claude to keep the names and the API documentation honest, or to stop widening the task. Claude
+receives the remark together with the approval. A checker can also **read files** in the project
+when the step alone does not tell it enough. That is all it can do: it cannot write, run
+commands or talk to the outside.
 
 The pause matters. Claude cannot retry, rephrase or probe the system while it waits, so a
 denial cannot be worked around. Decide from any client that is attached to the session, or
@@ -28,10 +39,16 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
 - **Checkers with your rules.** One checker reviews commands, one reviews edits. Their
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
   rules you would otherwise have to repeat to Claude every day (see
-  [what you can enforce](#what-you-can-enforce-with-a-checker)). They get high-level context
-  only — the conversation in condensed form, your project's AGENTS.md and the step itself —
-  because they judge the step, not the whole program. Overall correctness stays with a review
-  of the finished changeset.
+  [what you can enforce](#what-you-can-enforce-with-a-checker)). They get the conversation in
+  condensed form, your project's AGENTS.md and the step itself, and they can read a file when
+  they need more. They judge the step, not the whole program: overall correctness stays with a
+  review of the finished changeset.
+- **A readable trail instead of a transcript.** Every step is summarized by the checker that
+  judged it — one line saying what the step was meant to do — and the summaries go to the
+  database. Supervising a fleet of agents then means reading summaries, not transcripts, and
+  opening the details only where a summary looks wrong. An IDE or terminal client attaches to a
+  session for the full picture, and a colleague with access can watch your session the same
+  way.
 - **A check on what subagents hand back.** A subagent's final result is reviewed against the
   conversation, so an adversarial reviewer subagent cannot silently widen a task that you
   deliberately kept small.
@@ -48,7 +65,8 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
 
 Claude Code already asks you before it does something risky, and its auto mode can make that
 decision on its own. Other harnesses work the same way. calu does not replace any of this: it
-adds a second, independent opinion that **you** own, and a step runs only if both agree.
+keeps that judgment and puts a second, independent one that **you** own in front of it. A PASS
+leaves the decision where it was; the other three answers are where your rules take over.
 
 The two opinions are good at different things. The vendor's classifier knows what is generally
 dangerous, and it knows nothing about your project. A checker you write yourself knows your

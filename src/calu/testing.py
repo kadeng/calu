@@ -5,7 +5,9 @@ every decision without a model:
 
     step text contains "calu:deny"      -> DENY
     step text contains "calu:escalate"  -> ESCALATE
-    otherwise                           -> ALLOW
+    step text contains "calu:allow"     -> ALLOW (runs whatever the harness would say)
+    otherwise                           -> PASS
+    step text contains "calu:comment"   -> a remark to Claude next to the decision
 """
 
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, UserPromptPart
@@ -38,7 +40,7 @@ def _last_prompt(messages: list[ModelMessage]) -> str:
 
 
 def _rule_based(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """Decide by the markers in the "# Step to check" part of the last prompt.
+    """Decide by the markers in the "# Step to check" part of the last prompt (see the module).
 
     Args:
         messages: The message history.
@@ -53,8 +55,10 @@ def _rule_based(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         decision, reason = "DENY", "Denied by the rule-based fake checker (calu:deny)."
     elif "calu:escalate" in step:
         decision, reason = "ESCALATE", "Escalated by the rule-based fake checker (calu:escalate)."
+    elif "calu:allow" in step:
+        decision, reason = "ALLOW", "Allowed by the rule-based fake checker (calu:allow)."
     else:
-        decision, reason = "ALLOW", ""
+        decision, reason = "PASS", ""
     comment = "Fake checker remark (calu:comment)." if "calu:comment" in step else ""
     first_line = next((ln for ln in step.splitlines() if ln.startswith("Tool call")), "a step")
     return ModelResponse(

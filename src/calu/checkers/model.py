@@ -7,15 +7,28 @@ from pydantic import BaseModel, Field
 
 
 class Decision(StrEnum):
-    """Outcome of a check.
+    """Outcome of a check (PLAN.md D21).
 
-    ALLOW lets the tool call run. DENY blocks it and tells Claude the reason. ESCALATE pauses the
-    tool call until a human allows or denies it.
+    PASS is the normal answer: the checker has no objection, and Claude Code's auto mode decides
+    about the step as it would without calu. ESCALATE pauses the tool call until a human allows
+    or denies it. ALLOW and DENY are the deliberate exceptions: ALLOW runs the step whatever auto
+    mode would have said, DENY stops it and tells Claude why. Without auto mode, PASS has the
+    same effect as ALLOW, because the checkers then decide alone.
     """
 
+    PASS = "PASS"
     ALLOW = "ALLOW"
     DENY = "DENY"
     ESCALATE = "ESCALATE"
+
+    @property
+    def approves(self) -> bool:
+        """Whether the step may run as far as this checker is concerned.
+
+        Returns:
+            True for PASS and ALLOW.
+        """
+        return self in (Decision.PASS, Decision.ALLOW)
 
 
 class CheckDecision(BaseModel):
@@ -25,21 +38,27 @@ class CheckDecision(BaseModel):
     """
 
     decision: Decision = Field(
-        description="ALLOW to run the step, DENY to block it, ESCALATE to ask the human."
+        description=(
+            "PASS if you have no objection and the usual approval of the coding tool may decide "
+            "(the normal answer); ESCALATE to pause the step and ask the human; ALLOW to run it "
+            "even if the coding tool would refuse; DENY to stop it. Use ALLOW and DENY only "
+            "where your instructions clearly call for them."
+        )
     )
     reason: str = Field(
         description=(
             "Why this decision was made. For DENY, say what Claude should do instead; Claude "
-            "reads this text. For ESCALATE, say what the human should look at. May be short "
-            "for ALLOW. At most about 100 words."
+            "reads this text. For ESCALATE, say what the human should look at. For ALLOW, say "
+            "which rule allows it. May be empty for PASS. At most about 100 words."
         )
     )
     comment: str = Field(
         default="",
         description=(
-            "Only for ALLOW: an optional remark to Claude that does not block the step, e.g. a "
-            "minor style issue to fix in a later edit. Claude reads it and it is shown in the "
-            "user's chat. Leave empty if there is nothing worth saying. At most about 100 words."
+            "Only for PASS and ALLOW: an optional remark to Claude that does not block the "
+            "step, e.g. a minor style issue to fix in a later edit, or a reminder to keep "
+            "names and API documentation honest. Claude reads it and it is shown in the user's "
+            "chat. Leave empty if there is nothing worth saying. At most about 100 words."
         ),
     )
     step_summary: str = Field(

@@ -7,6 +7,7 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"thinking": "..."}                               Claude's thinking (assistant.thinking)
     {"text": "...", "stream": true}                   ... preceded by word-wise assistant.delta
     {"tool": "Bash", "input": {...}, "result": "..."} a tool call; it passes the ToolGate first
+                                                      (PASS runs it: there is no auto mode here)
     {"sleep": 0.5}                                    pause (lets tests inject messages)
     {"agent": {"description": "...", "background": false, "actions": [...]}}
                                                       a subagent runs the nested actions
@@ -295,7 +296,9 @@ class FakeRunner:
             answer = await gate.ask(step)
             allowed, message = answer.allow, answer.message or "The user denied this step."
         else:
-            allowed, message = gate_result.verdict is Verdict.ALLOW, gate_result.reason
+            # The fake runner has no auto mode of its own, so PASS runs the step (PLAN.md D21).
+            allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
+            message = gate_result.reason
         if allowed:
             content, is_error = str(action.get("result", "")), False
         else:

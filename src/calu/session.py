@@ -65,6 +65,7 @@ from calu.checkers import (
     SubagentResult,
     ToolPolicy,
 )
+from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
 from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
@@ -806,7 +807,7 @@ class Session:
                 source="internal",
             )
         route, result, source = decided.route, decided.decision, decided.source
-        comment = result.comment.strip() if result.decision is Decision.ALLOW else ""
+        comment = result.comment.strip() if result.decision.approves else ""
         if comment and self._comment_already_sent(comment, step.agent_id):
             comment = ""  # the same remark was already sent in this turn
         record = StepRecord(
@@ -857,10 +858,11 @@ class Session:
         )
         if result.decision is Decision.ESCALATE and step.tool_use_id:
             self._pending_reasons[step.tool_use_id] = (result.reason, source)
-        if result.decision is Decision.ALLOW and step.tool_use_id:
+        if result.decision.approves and step.tool_use_id:
             self._running_tools.add(step.tool_use_id)
         await self._refresh_state()
         verdict = {
+            Decision.PASS: Verdict.PASS,
             Decision.ALLOW: Verdict.ALLOW,
             Decision.DENY: Verdict.DENY,
             Decision.ESCALATE: Verdict.ASK,
@@ -1039,7 +1041,7 @@ class Session:
                         checker_name="subagent-result",
                         checker_version=self._version("subagent-result"),
                         model=_model_name(self.result_checker.model),
-                        decision="escalate" if escalated else "allow",
+                        decision="escalate" if escalated else "pass",
                         reason=review.note,
                         input_tokens=outcome.input_tokens,
                         output_tokens=outcome.output_tokens,
@@ -1053,7 +1055,7 @@ class Session:
                 self.store.decide_step(
                     step_id,
                     StepDecision(
-                        decision="escalate" if escalated else "allow",
+                        decision="escalate" if escalated else "pass",
                         reason=review.note,
                         summary=review.summary,
                     ),
@@ -1065,7 +1067,7 @@ class Session:
                 agent_id=result.agent_id,
                 tool_name="Agent",
                 route=Route.SUBAGENT,
-                decision=Decision.ESCALATE if escalated else Decision.ALLOW,
+                decision=Decision.ESCALATE if escalated else Decision.PASS,
                 reason=review.note if escalated else "",
                 step_summary=review.summary,
                 comment="" if escalated else review.note,
@@ -1157,8 +1159,10 @@ class Session:
         if outcome.notes:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
         if route is Route.COMMAND and step.tool_name == "Bash" and outcome.allowed:
+            # The allow lists say "no check needed", not "run this whatever the harness
+            # thinks": the step passes, and Claude Code's auto mode still sees it (D21).
             allowed = CheckDecision(
-                decision=Decision.ALLOW,
+                decision=Decision.PASS,
                 reason="Every command and path is on the user's allowlists.",
                 step_summary=label,
             )
@@ -1166,7 +1170,8 @@ class Session:
                 _Decided(route=route, decision=allowed, source="rules", rules=rules)
             )
         if route in (Route.ALLOW, Route.DENY, Route.ESCALATE):
-            decision = Decision(route.value.upper())
+            # Route.ALLOW means "no check": the step passes to Claude Code's own approval.
+            decision = Decision.PASS if route is Route.ALLOW else Decision(route.value.upper())
             reason = (
                 ""
                 if route is Route.ALLOW
@@ -1223,7 +1228,7 @@ class Session:
         route, source = decided.route, decided.source
         # A checker DENY stays a DENY: auto-escalation only turns approvals into questions, so
         # a hasty "allow" can never run a step that the checker blocked.
-        if decided.decision.decision is Decision.ALLOW and (
+        if decided.decision.decision.approves and (
             (route is Route.EDIT and auto.edits) or (route is Route.COMMAND and auto.commands)
         ):
             kind = "edits" if route is Route.EDIT else "commands"
@@ -1605,6 +1610,10 @@ class Session:
     async def _open_escalation(self, step: Step, reason: str, rendered: str) -> int | None:
         """Open an `escalations` row for a step that needs a human decision.
 
+        The context holds what an operator needs to decide and what an evaluation case needs
+        to reproduce the step later (`calu.evals.cases`): the rendered step, the tool input with
+        workspace-relative paths, and the content of the file an edit would change.
+
         Args:
             step: The tool call.
             reason: Why it needs a decision.
@@ -1616,8 +1625,9 @@ class Session:
         context: dict[str, Any] = {
             "rendered": rendered,
             "tool_name": step.tool_name,
-            "tool_input": step.tool_input,
+            "tool_input": workspace_relative_input(step.tool_input, self.workspace),
             "agent_id": step.agent_id,
+            "files": files_before(step, self.workspace),
             "recent": self.context.recent(),
             "chat_summary": self.context.summary,
             "calu_version": __version__,
@@ -1846,6 +1856,59 @@ class Session:
                 "a foreground subagent blocks the main agent until it finishes"
             )
         return agent
+
+
+def workspace_relative_input(tool_input: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    """Return `tool_input` with `file_path`/`notebook_path` relative to `workspace` if inside it.
+
+    Paths in an escalation's context are stored relative, so that an evaluation case built from
+    it can be reproduced in another directory.
+
+    Args:
+        tool_input: The tool call's input.
+        workspace: The workspace root.
+
+    Returns:
+        A copy; paths outside the workspace stay absolute.
+    """
+    result = dict(tool_input)
+    for key in ("file_path", "notebook_path"):
+        value = result.get(key)
+        if not value:
+            continue
+        path = Path(str(value))
+        if not path.is_absolute():
+            continue
+        try:
+            result[key] = path.resolve().relative_to(workspace.resolve()).as_posix()
+        except ValueError:
+            pass
+    return result
+
+
+def files_before(step: Step, workspace: Path, limit: int = 50_000) -> dict[str, str]:
+    """Return the current content of the file an edit step targets, for evaluation cases.
+
+    Args:
+        step: The escalated step.
+        workspace: The workspace root.
+        limit: Files longer than this many characters are not recorded.
+
+    Returns:
+        {workspace-relative path: content}, or {} for calls that are not edits and for
+        missing, long, binary or outside files.
+    """
+    raw = step.tool_input.get("file_path")
+    if step.tool_name not in EDIT_TOOLS or not raw:
+        return {}
+    relative = workspace_relative_input({"file_path": raw}, workspace)["file_path"]
+    if Path(relative).is_absolute():
+        return {}
+    try:
+        content = (workspace / relative).read_text(encoding="utf-8")
+    except OSError, UnicodeDecodeError, ValueError:
+        return {}
+    return {relative: content} if len(content) <= limit else {}
 
 
 def _rules_outcome(step: Step, outcome: RuleOutcome) -> str | None:

@@ -49,7 +49,7 @@ async def test_commands_auto_escalate_with_the_checker_opinion(tmp_path: Path):
         AutoEscalate(commands=True),
     )
     (esc,) = rec.of(EscalationRequest)
-    assert "Auto-escalation for commands" in esc.reason and "ALLOW" in esc.reason
+    assert "Auto-escalation for commands" in esc.reason and "PASS" in esc.reason
     assert rec.of(ToolResult)[0].content == "a"
 
 

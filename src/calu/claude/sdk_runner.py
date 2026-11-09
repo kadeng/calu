@@ -239,9 +239,11 @@ class SdkRunner:
         ) -> dict[str, Any]:
             """PreToolUse hook: ask `gate.pre_tool_use` and return its verdict to Claude Code.
 
-            For an ASK verdict the step is stored, so that `can_use_tool` reuses it. With
-            `claude.auto_mode` and an effective permission mode "auto" (hook input), an ALLOW
-            verdict is returned without a decision, so that auto mode decides as well.
+            For an ASK verdict the step is stored, so that `can_use_tool` reuses it. A PASS
+            verdict is answered without a decision where Claude Code's auto mode is in effect
+            (`claude.auto_mode` and the permission mode of the hook input), so that the auto
+            mode classifier decides as well (PLAN.md D5, D21); where there is no auto mode to
+            defer to, PASS becomes "allow". ALLOW always answers "allow".
 
             Args:
                 input_data: The hook input (dict with tool_name, tool_input, agent_id, cwd...).
@@ -249,27 +251,24 @@ class SdkRunner:
                 context: SDK hook context (unused).
 
             Returns:
-                The hook output with `permissionDecision` "allow", "deny" or "ask".
+                The hook output with `permissionDecision` "allow", "deny" or "ask", or without
+                a decision for PASS under auto mode.
             """
             step = self._step_from_hook(input_data, tool_use_id)
             result = await gate.pre_tool_use(step)
             if step.tool_use_id and result.verdict is Verdict.ASK:
                 self._steps[step.tool_use_id] = step  # taken again by can_use_tool
-            output: dict[str, Any] = {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": result.verdict.value,
-                "permissionDecisionReason": result.reason,
-            }
+            output: dict[str, Any] = {"hookEventName": "PreToolUse"}
             if result.context:
                 output["additionalContext"] = result.context  # verified: Claude reads it
-            if (
-                result.verdict is Verdict.ALLOW
-                and self.config.auto_mode
-                and input_data.get("permission_mode") == "auto"
-            ):
+            auto = self.config.auto_mode and input_data.get("permission_mode") == "auto"
+            if result.verdict is Verdict.PASS and auto:
                 # No decision: Claude Code's auto mode classifier decides as well (checkers AND
                 # auto mode). "allow" would skip the classifier (verified, spike_auto_mode.py).
-                del output["permissionDecision"], output["permissionDecisionReason"]
+                return {"hookSpecificOutput": output}
+            decision = "allow" if result.verdict is Verdict.PASS else result.verdict.value
+            output["permissionDecision"] = decision
+            output["permissionDecisionReason"] = result.reason
             return {"hookSpecificOutput": output}
 
         async def post_tool_use(

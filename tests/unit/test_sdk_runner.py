@@ -27,7 +27,7 @@ from calu.protocol.messages import (
 
 class AllowAll:
     async def pre_tool_use(self, step):
-        return GateResult(Verdict.ALLOW)
+        return GateResult(Verdict.PASS)
 
     async def ask(self, step):
         return HumanAnswer(allow=True)
@@ -155,9 +155,9 @@ async def run_hook(tmp_path: Path, gate, auto_mode: bool, effective_mode: str) -
 
 
 @pytest.mark.anyio
-async def test_auto_mode_lets_the_classifier_decide_after_a_checker_allow(tmp_path: Path):
-    """Checkers AND auto mode: ALLOW returns no decision (spike_auto_mode.py)."""
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.ALLOW, "nit"), True, "auto")
+async def test_auto_mode_decides_after_a_checker_pass(tmp_path: Path):
+    """Checkers AND auto mode: PASS returns no decision (spike_auto_mode.py, D21)."""
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS, "nit"), True, "auto")
     assert out == {"hookEventName": "PreToolUse", "additionalContext": "nit"}
     for verdict in (Verdict.DENY, Verdict.ASK):
         out = await run_hook(tmp_path, FixedVerdict(verdict), True, "auto")
@@ -165,9 +165,17 @@ async def test_auto_mode_lets_the_classifier_decide_after_a_checker_allow(tmp_pa
 
 
 @pytest.mark.anyio
-async def test_without_effective_auto_mode_allow_stays_allow(tmp_path: Path):
-    """E.g. haiku: auto mode unavailable, the effective mode is "default"."""
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.ALLOW), True, "default")
+async def test_an_explicit_allow_overrules_the_classifier(tmp_path: Path):
+    """ALLOW is the deliberate exception: the step runs whatever auto mode would say (D21)."""
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.ALLOW), True, "auto")
     assert out["permissionDecision"] == "allow"
-    out = await run_hook(tmp_path, FixedVerdict(Verdict.ALLOW), False, "auto")
+    assert out["permissionDecisionReason"] == "checker says so"
+
+
+@pytest.mark.anyio
+async def test_without_effective_auto_mode_pass_becomes_allow(tmp_path: Path):
+    """E.g. haiku: auto mode unavailable, the effective mode is "default"."""
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), True, "default")
+    assert out["permissionDecision"] == "allow"
+    out = await run_hook(tmp_path, FixedVerdict(Verdict.PASS), False, "auto")
     assert out["permissionDecision"] == "allow"

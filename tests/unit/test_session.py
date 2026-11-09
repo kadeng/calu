@@ -52,7 +52,8 @@ async def test_chat_turn_with_checked_tool_calls(tmp_path: Path):
         await session.stop()
 
     checks = {c.tool_name + ":" + c.decision for c in rec.of(CheckResult)}
-    assert checks == {"Read:ALLOW", "Bash:ALLOW", "Edit:ALLOW", "Bash:DENY"}
+    # PASS: the checkers have no objection, and Claude Code's auto mode decides as well (D21).
+    assert checks == {"Read:PASS", "Bash:PASS", "Edit:PASS", "Bash:DENY"}
     diff = rec.of(EditDiff)[0]
     assert (diff.path, diff.before, diff.after) == ("a.txt", "old\n", "new\n")
     denied = [r for r in rec.of(ToolResult) if r.is_error]
@@ -73,9 +74,9 @@ async def test_chat_turn_with_checked_tool_calls(tmp_path: Path):
     assert [s.row.seq for s in steps] == [1, 2, 3, 4]
     assert all(s.row.turn == 1 for s in steps)
     assert [s.decision.decision for s in steps if s.decision] == [
-        "allow",
-        "allow",
-        "allow",
+        "pass",
+        "pass",
+        "pass",
         "deny",
     ]
     # What the allow and deny lists found. The read and the edit of a workspace file are

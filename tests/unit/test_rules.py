@@ -227,7 +227,7 @@ async def test_session_runs_allow_listed_bash_without_checker(tmp_path: Path):
     # "calu:escalate" would make the fake checker escalate; the allowlist skips the checker.
     rec = await run_one(tmp_path, "Bash", {"command": "ls calu:escalate"})
     result = rec.of(CheckResult)[0]
-    assert result.decision == "ALLOW" and "allowlists" in result.reason
+    assert result.decision == "PASS" and "allowlists" in result.reason
 
 
 async def test_session_sends_unlisted_reads_to_the_command_checker(tmp_path: Path):
@@ -239,7 +239,7 @@ async def test_session_sends_unlisted_reads_to_the_command_checker(tmp_path: Pat
 async def test_auto_escalation_also_covers_allow_listed_commands(tmp_path: Path):
     config = Config(auto_escalate=AutoEscalate(commands=True))
     rec = await run_one(tmp_path, "Bash", {"command": "ls"}, config)
-    assert "The rules decided ALLOW" in rec.of(EscalationRequest)[0].reason
+    assert "The rules decided PASS" in rec.of(EscalationRequest)[0].reason
 
 
 async def test_a_deny_match_is_recorded_as_the_rules_outcome(tmp_path: Path):

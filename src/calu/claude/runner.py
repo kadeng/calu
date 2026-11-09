@@ -25,11 +25,18 @@ Priority = Literal["next", "later"]
 
 
 class Verdict(StrEnum):
-    """Result of the first stage of a tool call check (PreToolUse)."""
+    """Result of the first stage of a tool call check (PreToolUse), see PLAN.md D21.
 
+    PASS leaves the decision to Claude Code's own approval (the hook answers without a
+    decision); ALLOW runs the step whatever Claude Code would have decided; DENY stops it; ASK
+    makes the runner call `ToolGate.ask` and wait for the human. Where Claude Code has no
+    approval of its own to defer to (auto mode off or unavailable), PASS acts like ALLOW.
+    """
+
+    PASS = "pass"
     ALLOW = "allow"
     DENY = "deny"
-    ASK = "ask"  # the runner then calls `ToolGate.ask` and waits for its answer
+    ASK = "ask"
 
 
 @dataclass(frozen=True)

@@ -88,7 +88,7 @@ async def test_annotated_result_injects_a_note_for_the_main_agent(tmp_path: Path
     assert injected and 'subagent "reviewer"' in injected[0]
     reviewed = next(s for s in store.steps.values() if s.row.tool_name == "SubagentResult")
     assert reviewed.checker_runs[0].checker_name == "subagent-result"
-    assert reviewed.checker_runs[0].decision == "allow"
+    assert reviewed.checker_runs[0].decision == "pass"
 
 
 async def test_accepted_result_injects_nothing(tmp_path: Path):
@@ -99,7 +99,7 @@ async def test_accepted_result_injects_nothing(tmp_path: Path):
         await rec.wait_for(TurnResult)
         await session.stop()
     assert not [u for u in rec.of(UserInput) if "result checker" in u.text]
-    assert next(c for c in rec.of(CheckResult) if c.route == "subagent").decision == "ALLOW"
+    assert next(c for c in rec.of(CheckResult) if c.route == "subagent").decision == "PASS"
 
 
 async def test_escalated_result_waits_for_the_user(tmp_path: Path):

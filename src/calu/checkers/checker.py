@@ -287,6 +287,6 @@ def _require_reason(output: CheckDecision) -> CheckDecision:
         ModelRetry: If a DENY or ESCALATE decision has an empty reason; Pydantic AI then asks
             the model again.
     """
-    if output.decision is not Decision.ALLOW and not output.reason.strip():
+    if not output.decision.approves and not output.reason.strip():
         raise ModelRetry("A DENY or ESCALATE decision needs a reason.")
     return output

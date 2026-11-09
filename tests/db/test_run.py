@@ -99,7 +99,7 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
             "SELECT seq, tool_name, decision, result_summary FROM steps ORDER BY seq"
         )
         assert await cur.fetchall() == [
-            (1, "Bash", "allow", "a.py"),
+            (1, "Bash", "pass", "a.py"),
             (2, "Bash", "escalate", "shipped"),
         ]
         cur = await owner.execute("SELECT state, note, resolved_by FROM escalations ORDER BY id")
