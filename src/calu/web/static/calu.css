@@ -64,3 +64,12 @@ form.inline { display: inline-flex; gap: .4rem; align-items: center; }
 .setting label input[type=checkbox] { justify-self: start; }
 .setting textarea { min-height: 4.5rem; }
 .setting select, .setting input[type=text], .setting input[type=number] { font: inherit; padding: .25rem .4rem; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg); }
+#stream { max-height: 60vh; overflow-y: auto; font-family: var(--mono); font-size: .86em; }
+#stream .line { padding: .15rem 0; white-space: pre-wrap; word-break: break-word; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+#stream .user { color: var(--accent); font-weight: 600; }
+#stream .assistant { color: var(--fg); }
+#stream .thinking { color: var(--muted); font-style: italic; }
+#stream .tool { color: var(--good); }
+#stream .check { color: var(--warn); }
+#stream .result, #stream .log, #stream .diff, #stream .turn { color: var(--muted); }
+.escalation { border-color: var(--warn); }

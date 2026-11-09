@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Live · calu{% endblock %}
+{% block body %}
+<h1>
+  <span class="state" id="state">connecting</span>
+  <span class="mono">{{ session.hostname }}:{{ session.directory }}</span>
+</h1>
+<p class="muted">
+  <a href="{{ url_for('session', session_id=session.id) }}">recorded history</a>
+  · <span class="mono">{{ session.address }}</span>
+  · <span id="note">attaching…</span>
+</p>
+
+<div class="card" id="controls">
+  <div class="row">
+    <button id="start">Start</button>
+    <select id="model" title="model for a new session">
+      {% for m in models %}<option value="{{ m }}">{{ m or '(configured model)' }}</option>{% endfor %}
+    </select>
+    <select id="effort" title="reasoning effort for a new session">
+      {% for e in efforts %}<option value="{{ e }}">{{ e or '(configured effort)' }}</option>{% endfor %}
+    </select>
+    <button id="interrupt">Interrupt the turn</button>
+    <button id="stop" class="danger">Stop the session</button>
+  </div>
+</div>
+
+<div id="escalations"></div>
+
+<h2>Stream</h2>
+<div class="card" id="stream"></div>
+
+<h2>Say something</h2>
+<div class="card">
+  <div class="row">
+    <select id="to" title="who reads it"><option value="main">the main agent</option></select>
+    <span class="muted" id="queue"></span>
+  </div>
+  <textarea id="text" rows="3" placeholder="a message for Claude"></textarea>
+  <p class="row">
+    <button class="primary" id="send">Send (queued)</button>
+    <button id="steer">Steer (read after the running tool calls)</button>
+    <span class="muted">Ctrl+Enter sends, Ctrl+Shift+Enter steers</span>
+  </p>
+</div>
+<script src="{{ url_for('static', path='/live.js') }}" data-socket="{{ socket }}"></script>
+{% endblock %}

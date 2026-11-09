@@ -26,7 +26,7 @@ async def test_an_operator_can_work_through_a_session_in_the_browser(db_url: str
 
             # Clicking "open" leads into the session.
             async with page.expect_navigation():
-                await page.get_by_role("link", name="open").first.click()
+                await page.get_by_role("link", name="history").first.click()
             assert session_id in await page.inner_text("main")
             assert "Runs the test suite." in await page.inner_text("main")
 

@@ -262,6 +262,25 @@ calu resolve 12 allow --note "go ahead"
 calu attach ws://127.0.0.1:8765 --token ...   # the full event stream, and a prompt
 ```
 
+A browser shows every session of every host at once:
+
+```bash
+calu web          # http://127.0.0.1:8800, local only: there is no login yet
+```
+
+It leads with the sessions that cannot go on without you, opens one session's history at four
+levels of detail (from the summary a checker reads to every tool input), attaches to a running
+one live — the stream, a visible message queue, stop, interrupt, "steer" into the running turn,
+and a conversation with a background subagent — and answers escalations where they appear. The
+settings page is generated from calu's own configuration model, so Claude's model and effort,
+`CLAUDE_CODE_USE_BEDROCK=1`, each checker's model and thinking effort, the sandbox and the rest
+are all editable, and so are the checker instructions themselves. For git it links into whatever
+browser your project already has rather than growing one of its own.
+
+Other agent fleet tools do much of this; what they do not do is the part calu exists for. Some
+of them start the agent with `--dangerously-skip-permissions` so that nothing interrupts it.
+calu goes the other way: the interruption is the product.
+
 An editor that speaks ACP talks to the same session. Register `calu acp` as the agent's command
 in the editor (JetBrains Air, Zed, Neovim, Goose); the editor spawns it and it attaches to the
 running session:
@@ -295,7 +314,7 @@ without an editor, and `calu rules add|list|remove|enable|disable` work on singl
 
 A running session picks up such a change within a moment, at its next step.
 
-Not built yet: the web interface and the single-binary packaging. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
+Not built yet: forking or rewinding a conversation (it needs support from Claude Code that may not exist), answering the agent's own questions, and the single-binary packaging. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
 
 ## License
 

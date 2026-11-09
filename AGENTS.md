@@ -48,6 +48,7 @@ phases.
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
+| `src/calu/web/` | `calu web`: the herd overview (Starlette, the optional `web` extra), the settings form generated from `Config` (`settings.py`), the live relay to a session's own WebSocket, links into a git browser (`git.py`) |
 | `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |
 | `src/calu/comments/` | User comments on selections in diffs and files |
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
@@ -57,6 +58,7 @@ phases.
 | `src/calu/defaults/` | Built-in checker instructions and rule lists (loaded into the database) and the built-in evaluation cases |
 | `tests/unit/` | Tests without database, `claude` or API keys |
 | `tests/db/` | Tests against the test database (marker `db`) |
+| `tests/browser/` | Tests in a headless browser (markers `browser` and `db`; `scripts/get-browser.sh` installs it without root) |
 
 ## Commands
 

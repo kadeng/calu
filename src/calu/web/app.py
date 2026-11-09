@@ -4,14 +4,16 @@
 
 It is the herd client of PLAN.md §6.2: it works on the database, so it sees the sessions of
 every host without a process of its own on them, and it holds the `admin` credential, so it can
-also change what steers the checkers. What it deliberately does not do is drive a live session
-(chat, interrupt, comments): that belongs to the session's own WebSocket, and the page hands the
-user the command to attach to it instead.
+also change what steers the checkers. For the live view of one session it is a client of that
+session as well (D34): it mints a client token, connects to the address the session recorded and
+relays the event stream to the browser, so the browser needs no token and the session needs no
+new protocol.
 
 Pages:
 
     /                     every session of every host, newest first, with its open escalations
     /sessions/{id}        one session: its turns and tool calls, and how to attach to it
+    /sessions/{id}/live   the live view: the stream, the queue, stop, steer, the subagents
     /escalations          what waits for a human, with allow and deny
     /escalations/{id}     what the checker saw when it escalated the step
     /checkers             the checker definitions and their instructions, editable
@@ -30,18 +32,21 @@ or put a TLS proxy with its own authentication in front of it. Everything the pa
 import ipaddress
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from calu import __version__, admin, herd
 from calu.db import Db
+from calu.protocol.client import RequestFailed, connect
 from calu.web import git
 from calu.web import settings as web_settings
 
@@ -56,6 +61,46 @@ MAX_STEPS = 300
 
 MAX_TURNS = 50
 """Turns one session page shows (the newest ones)."""
+
+LIVE_METHODS = frozenset(
+    {
+        "state.get",
+        "session.start",
+        "session.stop",
+        "interrupt",
+        "chat.send",
+        "escalation.decide",
+        "escalation.context",
+        "context.get",
+        "checkers.get",
+        "session.history",
+        "session.list",
+        "auto_escalate.set",
+    }
+)
+"""What a browser may ask a session to do. `shutdown` is deliberately absent: it would end the
+calu process, which is not something a page should do by accident."""
+
+MODELS = ("", "fable", "opus", "sonnet", "haiku")
+"""Claude Code's model aliases for the start dropdown; "" keeps what the configuration says."""
+
+EFFORTS = ("", "low", "medium", "high", "xhigh", "max")
+"""Reasoning efforts for the start dropdown; "" keeps what the configuration says."""
+
+GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
+    ("needs_you", "Needs you", frozenset({"escalated"})),
+    ("working", "Working", frozenset({"running", "checking", "tool_call", "starting"})),
+    ("idle", "Idle", frozenset({"idle"})),
+    ("ended", "Ended", frozenset({"stopped", "failed"})),
+)
+"""How the fleet page groups the sessions, in the order it shows them (PLAN.md D33).
+
+Every agent UI that manages many sessions leads with the ones that cannot go on without a
+human — Claude Code's agent view groups into "Needs input", "Working", "Completed", Orca into
+"Needs You", "Working", "Done", "Idle". calu's escalations are exactly that, so a session that
+waits comes first, and a session with an open escalation counts as waiting whatever its state
+says.
+"""
 
 DETAIL_LEVELS = {
     "summary": "Narrated summary (what the checkers see)",
@@ -128,6 +173,8 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         Route("/", _page(fleet, state), name="fleet"),
         Route("/sessions/{session_id}", _page(session_page, state), name="session"),
         Route("/sessions/{session_id}/token", _page(mint, state), methods=["POST"], name="mint"),
+        Route("/sessions/{session_id}/live", _page(live_page, state), name="live"),
+        WebSocketRoute("/ws/sessions/{session_id}", _socket(live_socket, state), name="live_ws"),
         Route("/escalations", _page(escalations, state), name="escalations"),
         Route("/escalations/{escalation_id:int}", _page(escalation_page, state), name="escalation"),
         Route(
@@ -164,6 +211,16 @@ class _State:
         self.git_url_template = git_url_template
         self.minted: dict[str, tuple[int, str]] = {}
         """Session id -> the token id and token of the last `mint`, shown once on the page."""
+        self.live_tokens: dict[str, str] = {}
+        """Session id -> the token this server uses for its own live view.
+
+        One token per session and per run of the server, not one per browser connection: minting
+        is a database write, and revoking it when a browser disconnects would be a database write
+        in a cancelled teardown path, which is exactly what D19 says not to do (a statement
+        cancelled halfway leaves the connection unusable for everything else). The token is
+        labelled "calu web (live view)", so `calu token list` shows it and an operator can revoke
+        it; the next live view then mints a fresh one.
+        """
 
 
 Page = Callable[[Request, _State], Awaitable[Response]]
@@ -191,6 +248,32 @@ def _page(handler: Page, state: _State) -> Callable[[Request], Awaitable[Respons
             Its response.
         """
         return await handler(request, state)
+
+    return endpoint
+
+
+Socket = Callable[[WebSocket, _State], Awaitable[None]]
+"""A WebSocket handler: it gets the connection and the shared state."""
+
+
+def _socket(handler: Socket, state: _State) -> Callable[[WebSocket], Awaitable[None]]:
+    """Bind a WebSocket handler to the shared state.
+
+    Args:
+        handler: The handler.
+        state: The state to pass to it.
+
+    Returns:
+        The endpoint Starlette calls.
+    """
+
+    async def endpoint(websocket: WebSocket) -> None:
+        """Call the handler with the state.
+
+        Args:
+            websocket: The connection.
+        """
+        await handler(websocket, state)
 
     return endpoint
 
@@ -225,12 +308,24 @@ async def fleet(request: Request, state: _State) -> Response:
         The fleet page.
     """
     show_all = request.query_params.get("all") == "1"
+    query = (request.query_params.get("q") or "").strip().lower()
     rows = await herd.sessions(state.db, active_only=not show_all)
+    if query:
+        rows = [row for row in rows if query in _searchable(row)]
     waiting = await herd.escalations(state.db)
+    groups = [
+        (title, [row for row in rows if _group_of(row) == name]) for name, title, _states in GROUPS
+    ]
     return _render(
         request,
         "fleet.html",
-        {"sessions": rows, "open_escalations": len(waiting), "show_all": show_all},
+        {
+            "groups": [(title, found) for title, found in groups if found],
+            "sessions": rows,
+            "open_escalations": len(waiting),
+            "show_all": show_all,
+            "query": request.query_params.get("q") or "",
+        },
     )
 
 
@@ -306,6 +401,150 @@ async def mint(request: Request, state: _State) -> Response:
         return HTMLResponse(_not_found(session_id), status_code=404)
     state.minted[session_id] = (token_id, token)
     return RedirectResponse(request.url_for("session", session_id=session_id), 303)
+
+
+async def live_page(request: Request, state: _State) -> Response:
+    """Show the live view of one running session.
+
+    The page itself is static; everything in it arrives over the WebSocket of `live_socket`.
+
+    Args:
+        request: The request; its path holds the session id.
+        state: The shared state.
+
+    Returns:
+        The live page, or a 404 page if no session has that id.
+    """
+    session_id = request.path_params["session_id"]
+    row = await herd.session(state.db, session_id)
+    if row is None:
+        return HTMLResponse(_not_found(session_id), status_code=404)
+    return _render(
+        request,
+        "live.html",
+        {
+            "session": row,
+            "socket": request.url_for("live_ws", session_id=session_id),
+            "efforts": EFFORTS,
+            "models": MODELS,
+        },
+    )
+
+
+async def live_socket(websocket: WebSocket, state: _State) -> None:
+    """Relay one browser's live view to the session's own WebSocket (PLAN.md D34).
+
+    The server mints a client token for the session (D30), connects to the address the session
+    recorded (D29), forwards every event to the browser and every command of the browser to the
+    session. The token is reused for the lifetime of this server and is revocable by hand
+    (`live_tokens`).
+
+    Only the requests of `LIVE_METHODS` are forwarded. `shutdown` is not among them: a browser
+    should not be able to end the calu process by accident.
+
+    Side effects: mints and revokes a client token; sends messages to the Claude session.
+
+    Args:
+        websocket: The browser's connection.
+        state: The shared state.
+    """
+    await websocket.accept()
+    session_id = str(websocket.path_params["session_id"])
+    row = await herd.session(state.db, session_id)
+    if row is None or not row.address:
+        await websocket.send_json(
+            {
+                "type": "closed",
+                "message": (
+                    "this session serves no clients (it was started without the protocol "
+                    "server, or it has ended), so there is nothing live to show"
+                ),
+            }
+        )
+        await websocket.close()
+        return
+    token = state.live_tokens.get(session_id)
+    if token is None:
+        _id, token = await herd.mint_token(state.db, session_id, "calu web (live view)")
+        state.live_tokens[session_id] = token
+    try:
+        await _relay(websocket, row, token)
+    except (OSError, RequestFailed, ConnectionError) as exc:
+        await websocket.send_json(
+            {
+                "type": "closed",
+                "message": (
+                    f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}; "
+                    "run `calu web` on that host, or forward the port with an SSH tunnel."
+                ),
+            }
+        )
+    finally:
+        with suppress(RuntimeError):
+            await websocket.close()
+
+
+async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None:
+    """Forward events and commands between one browser and one session.
+
+    Args:
+        websocket: The browser's connection.
+        row: The session to attach to.
+        token: The client token minted for this connection.
+
+    Raises:
+        OSError: If the session's address cannot be reached.
+        calu.protocol.client.RequestFailed: If the session refuses the token.
+        ConnectionError: If the session closes the connection.
+    """
+    held: list[dict[str, Any]] = []
+    sent_snapshot = False
+
+    async def on_event(method: str, params: dict[str, Any]) -> None:
+        """Send one session event to the browser, or hold it until the snapshot is out.
+
+        Attaching replays the events the session has already published, and those arrive while
+        the snapshot is still being fetched. A browser needs the snapshot first to know what it
+        is applying the events to, so early events wait here.
+
+        Args:
+            method: The event method.
+            params: Its params.
+        """
+        message = {"type": "event", "method": method, "params": params}
+        if not sent_snapshot:
+            held.append(message)
+            return
+        with suppress(RuntimeError, WebSocketDisconnect):
+            await websocket.send_json(message)
+
+    async with connect(row.address, token, "calu web", on_event) as session:
+        snapshot = await session.request("state.get")
+        await websocket.send_json({"type": "snapshot", "snapshot": snapshot})
+        sent_snapshot = True
+        for message in held:
+            await websocket.send_json(message)
+        held.clear()
+        while True:
+            try:
+                command = await websocket.receive_json()
+            except WebSocketDisconnect, RuntimeError:
+                return
+            method = str(command.get("method") or "")
+            params = command.get("params") or {}
+            if method not in LIVE_METHODS:
+                await websocket.send_json(
+                    {"type": "refused", "method": method, "message": "not allowed from a browser"}
+                )
+                continue
+            try:
+                result = await session.request(method, params if isinstance(params, dict) else {})
+            except RequestFailed as exc:
+                await websocket.send_json(
+                    {"type": "refused", "method": method, "message": str(exc)}
+                )
+                continue
+            await websocket.send_json({"type": "result", "method": method, "result": result})
 
 
 async def escalations(request: Request, state: _State) -> Response:
@@ -510,6 +749,46 @@ async def settings_page(request: Request, state: _State) -> Response:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _group_of(row: herd.SessionRow) -> str:
+    """Decide which group of the fleet page a session belongs to.
+
+    Args:
+        row: The session.
+
+    Returns:
+        The group's name. A session with an open escalation is in "needs you" whatever its state
+        says, because that is what a human has to act on.
+    """
+    if row.open_escalations:
+        return "needs_you"
+    for name, _title, states in GROUPS:
+        if row.state in states:
+            return name
+    return "idle"
+
+
+def _searchable(row: herd.SessionRow) -> str:
+    """Return the text a fleet filter matches against.
+
+    Args:
+        row: The session.
+
+    Returns:
+        Host, user, directory, state, project directory and Claude's session id, lower case.
+    """
+    return " ".join(
+        part.lower()
+        for part in (
+            row.hostname,
+            row.os_user,
+            row.directory,
+            row.state,
+            row.claude_session_id or "",
+            row.id,
+        )
+    )
 
 
 def _connect(row: herd.SessionRow, token: str) -> list[tuple[str, str]]:

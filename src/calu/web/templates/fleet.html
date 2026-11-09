@@ -7,29 +7,43 @@
 {% endblock %}
 {% block body %}
 <h1>{{ sessions | length }} session{{ '' if sessions | length == 1 else 's' }}{{ ' (including ended)' if show_all }}</h1>
+<form class="inline" method="get" action="{{ url_for('fleet') }}">
+  <input type="text" name="q" value="{{ query }}" placeholder="filter by host, directory or state">
+  {% if show_all %}<input type="hidden" name="all" value="1">{% endif %}
+  <button>Filter</button>
+  {% if query %}<a href="{{ url_for('fleet') }}{{ '?all=1' if show_all }}">clear</a>{% endif %}
+</form>
 <p class="muted">
-  {% if show_all %}<a href="{{ url_for('fleet') }}">only the running ones</a>
-  {% else %}<a href="{{ url_for('fleet') }}?all=1">show the ended ones too</a>{% endif %}
+  {% if show_all %}<a href="{{ url_for('fleet') }}{% if query %}?q={{ query }}{% endif %}">only the running ones</a>
+  {% else %}<a href="{{ url_for('fleet') }}?all=1{% if query %}&q={{ query }}{% endif %}">show the ended ones too</a>{% endif %}
   · this page reloads every 5 seconds
 </p>
-{% if sessions %}
+{% for title, rows in groups %}
+<h2>{{ title }} <span class="muted">({{ rows | length }})</span></h2>
 <table>
   <thead><tr><th>State</th><th>Host</th><th>Directory</th><th>Started</th><th>Waiting</th><th></th></tr></thead>
   <tbody>
-  {% for s in sessions %}
+  {% for s in rows %}
     <tr>
       <td><span class="state {{ s.state }}">{{ s.state }}</span></td>
       <td class="mono">{{ s.hostname }}<span class="muted">/{{ s.os_user }}</span></td>
       <td class="mono">{{ s.directory }}</td>
       <td class="muted">{{ s.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
       <td>{% if s.open_escalations %}<span class="count">{{ s.open_escalations }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
-      <td><a href="{{ url_for('session', session_id=s.id) }}">open</a></td>
+      <td>
+        <a href="{{ url_for('session', session_id=s.id) }}">history</a>
+        {% if s.address %}· <a href="{{ url_for('live', session_id=s.id) }}">live</a>{% endif %}
+      </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
-{% else %}
-<p class="empty">No session is running. Start one with <code>calu run</code> in a project directory.</p>
+{% endfor %}
+{% if not sessions %}
+<p class="empty">
+  {% if query %}No session matches {{ query }}.
+  {% else %}No session is running. Start one with <code>calu run</code> in a project directory.{% endif %}
+</p>
 {% endif %}
 <script>setTimeout(() => location.reload(), 5000);</script>
 {% endblock %}

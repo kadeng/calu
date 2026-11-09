@@ -1,0 +1,73 @@
+"""The live view in a real browser: the stream fills, an escalation is answered from its card."""
+
+from pathlib import Path
+
+import pytest
+
+from tests.db.test_web_live import running
+
+pytestmark = [pytest.mark.browser, pytest.mark.db, pytest.mark.anyio]
+
+
+async def test_the_live_view_streams_and_answers_an_escalation(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    turns = [
+        [
+            {"text": "I will deploy."},
+            {"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"},
+        ]
+    ]
+    async with running(db_url, tmp_path, turns) as (base, session_id, _session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        # The relay attached and sent the snapshot, so the page knows the state.
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        assert await page.inner_text("#state") in ("idle", "running", "starting")
+
+        await page.fill("#text", "ship it")
+        await page.get_by_role("button", name="Send (queued)").click()
+
+        # Claude's text and the tool call arrive as events, without reloading the page.
+        await page.wait_for_function(
+            "document.getElementById('stream').textContent.includes('I will deploy.')"
+        )
+        await page.wait_for_selector(".escalation")
+        card = await page.inner_text(".escalation")
+        assert "deploy" in card and "calu:escalate" in card
+
+        # Answering from the card resolves it in the session, so the card goes and the turn ends.
+        await page.fill(".escalation input[type=text]", "go ahead")
+        await page.get_by_role("button", name="Allow").click()
+        await page.wait_for_function("!document.querySelector('.escalation')")
+        await page.wait_for_function(
+            "document.getElementById('stream').textContent.includes('turn ended')"
+        )
+        stream = await page.inner_text("#stream")
+        assert "command checker" in stream or "escalation" in stream
+        assert "ship it" in stream  # the user's own message came back as an event
+
+
+async def test_a_session_that_serves_no_clients_says_so_in_the_browser(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    from calu.db import Db, connect
+    from calu.setup import setup
+    from calu.store import DatabaseSessionStore, SessionIdentity
+    from calu.web.app import create_app
+    from tests.browser.conftest import serve
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        store = DatabaseSessionStore(Db(conn))
+        session_id = await store.start(
+            SessionIdentity(hostname="elsewhere", os_user="u", directory="/w", pid=1, os="Linux")
+        )
+        async with serve(create_app(Db(conn))) as base:
+            await page.goto(f"{base}/sessions/{session_id}/live")
+            await page.wait_for_function(
+                "document.getElementById('note').textContent.includes('serves no clients')"
+            )
+            assert await page.inner_text("#state") == "not attached"
+    finally:
+        await conn.close()
