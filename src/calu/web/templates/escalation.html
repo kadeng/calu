@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Escalation {{ escalation.id }} · calu{% endblock %}
+{% block body %}
+<h1>Escalation {{ escalation.id }} <span class="state {{ escalation.state }}">{{ escalation.state }}</span></h1>
+<p class="muted">
+  <a href="{{ url_for('session', session_id=escalation.session_id) }}">{{ escalation.hostname }}:{{ escalation.directory }}</a>
+  · asked {{ escalation.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+</p>
+<div class="card"><p>{{ escalation.reason }}</p></div>
+{% if escalation.state == 'open' %}
+<form class="inline" method="post" action="{{ url_for('resolve', escalation_id=escalation.id) }}">
+  <input type="hidden" name="back" value="{{ url_for('escalation', escalation_id=escalation.id) }}">
+  <input type="text" name="note" placeholder="note for Claude (optional)">
+  <button class="primary" name="decision" value="allow">Allow</button>
+  <button class="danger" name="decision" value="deny">Deny</button>
+</form>
+{% endif %}
+<h2>The step, as the checker saw it</h2>
+<pre>{{ rendered }}</pre>
+{% if changeset %}<h2>The change that would be committed</h2><pre>{{ changeset }}</pre>{% endif %}
+{% if files %}
+<h2>The files before the change</h2>
+{% for path, content in files.items() %}
+<p class="mono muted">{{ path }}</p>
+<pre>{{ content }}</pre>
+{% endfor %}
+{% endif %}
+{% if recent %}
+<h2>The conversation the checker had</h2>
+<pre>{{ recent }}</pre>
+{% endif %}
+{% endblock %}

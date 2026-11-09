@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}calu{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', path='/calu.css') }}">
+</head>
+<body>
+<header>
+  <span class="name"><a href="{{ url_for('fleet') }}">calu</a></span>
+  <nav>
+    <a href="{{ url_for('fleet') }}">Sessions</a>
+    <a href="{{ url_for('escalations') }}">Escalations</a>
+    <a href="{{ url_for('checkers') }}">Checkers</a>
+    <a href="{{ url_for('rules') }}">Rules</a>
+  </nav>
+  {% block header_extra %}{% endblock %}
+  <span class="version">calu {{ version }} · local only</span>
+</header>
+<main>
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

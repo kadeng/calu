@@ -222,6 +222,16 @@ class AutoEscalate(BaseModel):
     subagents: bool = False
 
 
+class WebConfig(BaseModel):
+    """Settings of the web interface (PLAN.md phase 6)."""
+
+    git_url_template: str = ""
+    """URL of one commit in whatever git browser the project uses, with `{commit}` and
+    `{remote}` as placeholders, e.g. "http://localhost:8080/calu/commit/{commit}". Empty guesses
+    the URL from the project's git remote, which works for GitHub, GitLab and Bitbucket; calu
+    does not browse git itself."""
+
+
 class ChangesConfig(BaseModel):
     """Whether calu measures what a command wrote, and how much of it (PLAN.md D31).
 
@@ -292,6 +302,7 @@ class Config(BaseModel):
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
     clock: ClockConfig = Field(default_factory=ClockConfig)
     changes: ChangesConfig = Field(default_factory=ChangesConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
 
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.

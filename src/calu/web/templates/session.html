@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Session · calu{% endblock %}
+{% block body %}
+<h1>
+  <span class="state {{ session.state }}">{{ session.state }}</span>
+  <span class="mono">{{ session.hostname }}:{{ session.directory }}</span>
+</h1>
+<p class="muted">
+  session <span class="mono">{{ session.id }}</span>
+  {% if project %}· project <strong>{{ project }}</strong>{% endif %}
+  {% if project_url %}· <a href="{{ project_url }}">git browser</a>{% endif %}
+  · started {{ session.started_at.strftime('%Y-%m-%d %H:%M:%S') }}
+  {% if session.claude_session_id %}· claude <span class="mono">{{ session.claude_session_id }}</span>{% endif %}
+</p>
+
+{% if escalations %}
+<h2>Waiting for a decision</h2>
+{% for e in escalations %}
+<div class="card">
+  <p>{{ e.reason }}</p>
+  <pre>{{ e.rendered }}</pre>
+  <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=e.id) }}">
+    <input type="hidden" name="back" value="{{ url_for('session', session_id=session.id) }}?detail={{ detail }}">
+    <input type="text" name="note" placeholder="note for Claude (optional)">
+    <button class="primary" name="decision" value="allow">Allow</button>
+    <button class="danger" name="decision" value="deny">Deny</button>
+  </form>
+  <p class="muted"><a href="{{ url_for('escalation', escalation_id=e.id) }}">what the checker saw</a></p>
+</div>
+{% endfor %}
+{% endif %}
+
+<h2>Chat log</h2>
+<p class="row">
+  {% for key, label in levels.items() %}
+    {% if key == detail %}<strong>{{ label }}</strong>
+    {% else %}<a href="{{ url_for('session', session_id=session.id) }}?detail={{ key }}">{{ label }}</a>{% endif %}
+    {{ '·' if not loop.last }}
+  {% endfor %}
+</p>
+{% if detail == 'detailed' or detail == 'full' %}
+<p class="muted">Claude's thinking is shown as the narrator retold it: its own words are never
+recorded, so that a checker cannot mistake them for an instruction. The live view of a running
+session shows the real thinking as it streams.</p>
+{% endif %}
+
+{% if not turns and not steps %}
+<p class="empty">Nothing has been recorded for this session yet.</p>
+{% endif %}
+
+{% if detail == 'summary' %}
+  {% for turn in turns %}<pre>{{ turn.render() }}</pre>{% endfor %}
+  {% if not turns %}<p class="empty">No turn has finished yet; a turn is recorded when it ends.</p>{% endif %}
+{% else %}
+  {% for turn in turns %}
+  <div class="card">
+    <p class="muted">Turn {{ turn.index }} · {{ turn.started_at.strftime('%H:%M:%S') }}</p>
+    {% for text in turn.user_inputs %}<p><strong>You:</strong></p><pre>{{ text }}</pre>{% endfor %}
+    {% for s in by_turn.get(turn.index, []) %}
+      <div class="step">
+        {% if detail != 'compact' and s.narration %}<p class="muted">{{ s.narration }}</p>{% endif %}
+        <p>
+          <span class="mono">{{ s.tool_name }}</span>
+          <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span>
+          {% if s.agent_id %}<span class="muted">subagent {{ s.agent_id }}</span>{% endif %}
+          {{ s.summary }}
+        </p>
+        {% if detail != 'compact' and s.reason %}<p class="muted">checker: {{ s.reason }}</p>{% endif %}
+        {% if detail == 'full' %}
+          <pre>{{ s.tool_input | tojson(indent=2) }}</pre>
+          {% if s.result_summary %}<pre>{{ s.result_summary }}</pre>{% endif %}
+          {% if s.wrote and s.wrote.paths %}
+          <p class="muted">wrote <span class="mono">{{ s.wrote.paths | join(', ') }}</span>
+            {% if s.wrote.undeclared %}<strong class="count">(undeclared: {{ s.wrote.undeclared | join(', ') }})</strong>{% endif %}
+          </p>
+          {% endif %}
+          {% if runs.get(s.seq) %}
+          <p class="muted">judged by
+            {% for name in runs.get(s.seq, []) %}<a href="{{ url_for('checker', name=name) }}">{{ name }}</a>{{ ', ' if not loop.last }}{% endfor %}
+          </p>
+          {% endif %}
+          {% if s.wrote and s.wrote.overlapping %}<p class="muted">overlapping calls: these paths cannot be attributed to this step alone</p>{% endif %}
+        {% endif %}
+      </div>
+    {% endfor %}
+    {% if turn.answer or turn.answer_narration %}
+      <p><strong>Claude:</strong></p>
+      <pre>{{ turn.answer_narration if (detail != 'compact' and turn.answer_narration) else turn.answer }}</pre>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if by_turn.get(None) %}
+  <div class="card">
+    <p class="muted">Steps of the running turn</p>
+    {% for s in by_turn.get(None, []) %}
+      <p><span class="mono">{{ s.tool_name }}</span>
+         <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span> {{ s.summary }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endif %}
+
+{% if agents %}
+<h2>Subagents ({{ agents | length }})</h2>
+<table>
+  <thead><tr><th>Agent</th><th>Parent</th><th>Type</th><th>Description</th><th>Status</th></tr></thead>
+  <tbody>
+  {% for a in agents %}
+    <tr>
+      <td class="mono">{{ a.agent_id }}{{ ' (background)' if a.background }}</td>
+      <td class="mono muted">{{ a.parent_agent_id or 'main agent' }}</td>
+      <td class="muted">{{ a.subagent_type or '–' }}</td>
+      <td>{{ a.description }}</td>
+      <td><span class="state {{ a.status }}">{{ a.status }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>Connect to this session</h2>
+<div class="card">
+  {% if minted %}
+  <p class="token">
+    Token {{ minted[0] }}, shown once: <span class="mono">{{ minted[1] }}</span><br>
+    <span class="muted">calu stored only its hash. Revoke it with <code>calu token revoke {{ minted[0] }}</code>.</span>
+  </p>
+  {% endif %}
+  <form class="inline" method="post" action="{{ url_for('mint', session_id=session.id) }}">
+    <input type="text" name="label" placeholder="what the token is for, e.g. zed on the laptop">
+    <button>Mint a client token</button>
+  </form>
+  <table>
+    <tbody>
+    {% for label, command in connect %}
+      <tr><td>{{ label }}</td><td><pre>{{ command }}</pre></td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if tokens %}
+  <p class="muted">{{ tokens | length }} token(s) for this session:
+    {% for t in tokens %}<span class="mono">{{ t.id }}{{ ' (revoked)' if t.revoked }}</span>{{ ', ' if not loop.last }}{% endfor %}
+  </p>
+  {% endif %}
+</div>
+
+<h2>What steers the checkers</h2>
+<p class="row">
+  {% for c in checker_names %}<a href="{{ url_for('checker', name=c) }}">edit the {{ c }} instructions</a>{{ '·' if not loop.last }}{% endfor %}
+  · <a href="{{ url_for('rules') }}">the allow and deny lists</a>
+</p>
+{% endblock %}

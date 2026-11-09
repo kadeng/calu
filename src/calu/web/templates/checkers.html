@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Checkers · calu{% endblock %}
+{% block body %}
+<h1>{{ checkers | length }} checker definition{{ '' if checkers | length == 1 else 's' }}</h1>
+<p class="muted">The instructions live in the database, out of the agent's reach. A running session picks a change up at its next step.</p>
+<table>
+  <thead><tr><th>Name</th><th>Route</th><th>Model</th><th>Version</th><th>State</th><th></th></tr></thead>
+  <tbody>
+  {% for c in checkers %}
+    <tr>
+      <td class="mono">{{ c.name }}</td>
+      <td class="muted">{{ c.route }}</td>
+      <td class="mono">{{ c.model }}</td>
+      <td class="muted">{{ c.version }}</td>
+      <td class="muted">{{ "enabled" if c.enabled else "disabled" }}</td>
+      <td><a href="{{ url_for('checker', name=c.name) }}">edit</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

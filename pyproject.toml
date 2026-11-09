@@ -23,6 +23,13 @@ dependencies = [
 [project.scripts]
 calu = "calu.cli:main"
 
+[project.optional-dependencies]
+web = [
+    "jinja2>=3.1.6",
+    "starlette>=1.10.0",
+    "uvicorn>=0.54.0",
+]
+
 [build-system]
 requires = ["uv_build>=0.9,<0.13"]
 build-backend = "uv_build"
@@ -31,7 +38,9 @@ build-backend = "uv_build"
 dev = [
     "anyio>=4.16.0",
     "dirty-equals>=0.11",
+    "httpx>=0.28.1",
     "inline-snapshot>=0.36.2",
+    "playwright>=1.65.0",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.4",
@@ -65,10 +74,11 @@ convention = "google"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m 'not live and not db'"
+addopts = "-ra --strict-markers -m 'not live and not db and not browser'"
 markers = [
     "live: needs a real `claude` CLI and/or real model API keys (run with `-m live`)",
     "db: needs the PostgreSQL test database (`docker compose up -d caludb`, run with `-m db`)",
+    "browser: needs a headless browser (`scripts/get-browser.sh`, run with `-m browser`)",
 ]
 
 [tool.pyright]

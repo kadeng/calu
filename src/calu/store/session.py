@@ -856,7 +856,7 @@ class DatabaseSessionStore:
                 b" ORDER BY number",
                 (previous,),
             )
-            turns = [_turn_record(row) for row in await cur.fetchall()]
+            turns = [turn_record(row) for row in await cur.fetchall()]
             cur = await conn.execute(
                 b"SELECT summary FROM chat_summaries WHERE session_id = %s", (previous,)
             )
@@ -964,7 +964,7 @@ class DatabaseSessionStore:
                 b" started_at, ended_at FROM turns WHERE session_id = %s::uuid ORDER BY number",
                 (session_id,),
             )
-            turns = [_turn_record(row) for row in await cur.fetchall()]
+            turns = [turn_record(row) for row in await cur.fetchall()]
             cur = await conn.execute(
                 b"SELECT seq, turn, agent_id, tool_use_id, tool_name, tool_input, decision,"
                 b" reason, summary, result_summary, created_at FROM steps"
@@ -1222,7 +1222,7 @@ class DatabaseSessionStore:
         return self.session_id
 
 
-def _turn_record(row: tuple[Any, ...]) -> TurnRecord:
+def turn_record(row: tuple[Any, ...]) -> TurnRecord:
     """Build a `TurnRecord` from a row of `turns`.
 
     Args:

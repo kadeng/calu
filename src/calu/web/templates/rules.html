@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Rules · calu{% endblock %}
+{% block body %}
+<h1>Allow and deny lists</h1>
+<p class="muted">Applied before any model call. Change them with <code>calu rules</code>; this page reads them.</p>
+{% for list_name, rows in grouped.items() %}
+<h2>{{ list_name }} <span class="muted">({{ rows | length }})</span></h2>
+<table>
+  <thead><tr><th>#</th><th>Pattern</th><th>Comment</th><th>State</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="muted">{{ r.id }}</td>
+      <td class="mono">{{ r.pattern }}</td>
+      <td class="muted">{{ r.comment }}</td>
+      <td>{{ 'enabled' if r.enabled else 'disabled' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endfor %}
+{% endblock %}

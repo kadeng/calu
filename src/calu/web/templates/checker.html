@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}{{ checker.name }} checker · calu{% endblock %}
+{% block body %}
+<h1>{{ checker.name }} checker</h1>
+<p class="muted">
+  route <span class="mono">{{ checker.route }}</span> ·
+  model <span class="mono">{{ checker.model }}</span> ·
+  version {{ checker.version }}
+  {% if saved %}· <strong class="state running">saved</strong>{% endif %}
+</p>
+<p class="muted">Markdown. Saving bumps the version and is written to the audit log; sessions that run now apply it at their next step.</p>
+<form method="post" action="{{ url_for('checker', name=checker.name) }}" id="edit">
+  <textarea name="instructions" spellcheck="false" autofocus>{{ instructions }}</textarea>
+  <p class="row"><button class="primary" type="submit">Save</button>
+  <span class="muted">or Ctrl+S / Cmd+S</span>
+  <a href="{{ url_for('checkers') }}">back</a></p>
+</form>
+<script>
+// Saving an instruction file should cost one keystroke: this is the page the owner edits most.
+addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+    event.preventDefault();
+    document.getElementById('edit').submit();
+  }
+});
+</script>
+{% endblock %}

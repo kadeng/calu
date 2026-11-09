@@ -11,6 +11,7 @@ from calu.store.session import (
     SessionStore,
     StepDecision,
     StepRow,
+    turn_record,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "SessionStore",
     "StepDecision",
     "StepRow",
+    "turn_record",
 ]

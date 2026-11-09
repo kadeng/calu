@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Sessions · calu{% endblock %}
+{% block header_extra %}
+  {% if open_escalations %}
+    <span class="count"><a href="{{ url_for('escalations') }}">{{ open_escalations }} waiting</a></span>
+  {% endif %}
+{% endblock %}
+{% block body %}
+<h1>{{ sessions | length }} session{{ '' if sessions | length == 1 else 's' }}{{ ' (including ended)' if show_all }}</h1>
+<p class="muted">
+  {% if show_all %}<a href="{{ url_for('fleet') }}">only the running ones</a>
+  {% else %}<a href="{{ url_for('fleet') }}?all=1">show the ended ones too</a>{% endif %}
+  · this page reloads every 5 seconds
+</p>
+{% if sessions %}
+<table>
+  <thead><tr><th>State</th><th>Host</th><th>Directory</th><th>Started</th><th>Waiting</th><th></th></tr></thead>
+  <tbody>
+  {% for s in sessions %}
+    <tr>
+      <td><span class="state {{ s.state }}">{{ s.state }}</span></td>
+      <td class="mono">{{ s.hostname }}<span class="muted">/{{ s.os_user }}</span></td>
+      <td class="mono">{{ s.directory }}</td>
+      <td class="muted">{{ s.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{% if s.open_escalations %}<span class="count">{{ s.open_escalations }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
+      <td><a href="{{ url_for('session', session_id=s.id) }}">open</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No session is running. Start one with <code>calu run</code> in a project directory.</p>
+{% endif %}
+<script>setTimeout(() => location.reload(), 5000);</script>
+{% endblock %}

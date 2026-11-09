@@ -14,10 +14,13 @@ remote interface) attach without the terminal that started the session, and revo
 that access again.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
+from calu.context.turns import TurnRecord
 from calu.db import Db
+from calu.store.session import turn_record
 from calu.tokens import new_token, token_hash
 
 
@@ -35,6 +38,8 @@ class SessionRow:
     ended_at: datetime | None
     claude_session_id: str | None
     open_escalations: int
+    address: str = ""
+    """Where the session's process listens for clients (D29); "" if it serves no clients."""
 
     def line(self) -> str:
         """Return the session as one terminal line.
@@ -119,7 +124,8 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
         "SELECT s.id::text, h.hostname, s.os_user, s.directory, s.state, s.state_since,"
         " s.started_at, s.ended_at, s.claude_session_id,"
         " (SELECT count(*) FROM escalations e"
-        "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations"
+        "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
+        " coalesce(s.address, '')"
         " FROM sessions s JOIN hosts h ON h.id = s.host_id"
         " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC",
         (active_only,),
@@ -178,6 +184,219 @@ async def resolve(db: Db, escalation_id: int, decision: str, note: str = "") -> 
             "SELECT calu_resolve_escalation(%s, %s, %s)", (escalation_id, state, note or None)
         )
     )
+
+
+@dataclass(frozen=True)
+class StepRow:
+    """One recorded step of any session, for a detail view."""
+
+    seq: int
+    turn: int | None
+    tool_name: str
+    decision: str | None
+    reason: str
+    summary: str
+    result_summary: str
+    created_at: datetime
+    agent_id: str | None
+    wrote: dict[str, Any] | None
+    """What the step wrote, if the snapshot of D31 measured it."""
+    tool_input: dict[str, Any] = field(default_factory=dict)
+    narration: str = ""
+    """Claude's thinking and text before the step, in indirect speech ("" if not narrated)."""
+
+
+async def steps(db: Db, session_id: str, limit: int = 200) -> list[StepRow]:
+    """Read the recorded steps of one session, oldest first.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+        limit: Maximum number of steps; the newest ones are kept if there are more.
+
+    Returns:
+        The steps, oldest first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    found = await db.all(
+        "SELECT seq, turn, tool_name, decision, coalesce(reason, ''), coalesce(summary, ''),"
+        " coalesce(result_summary, ''), created_at, agent_id, wrote, tool_input,"
+        " coalesce(narration, '')"
+        " FROM steps WHERE session_id = %s::uuid ORDER BY seq DESC LIMIT %s",
+        (session_id, limit),
+    )
+    return [StepRow(*row) for row in reversed(found)]
+
+
+async def turns(db: Db, session_id: str, limit: int = 50) -> list[TurnRecord]:
+    """Read the recorded turns of one session, oldest first.
+
+    A turn is the conversation as the **checkers** see it: the user's messages verbatim, one
+    record per step, and Claude's answer (narrated in indirect speech if narration was on).
+    `TurnRecord.render()` turns it into the Markdown a checker reads, which is what the web
+    interface shows as the "narrated summary" level of detail.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+        limit: Maximum number of turns; the newest ones are kept if there are more.
+
+    Returns:
+        The turns, oldest first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT number, user_inputs, steps, answer, narrated_answer, narrated,"
+        " started_at, ended_at FROM turns WHERE session_id = %s::uuid"
+        " ORDER BY number DESC LIMIT %s",
+        (session_id, limit),
+    )
+    return [turn_record(row) for row in reversed(rows)]
+
+
+@dataclass(frozen=True)
+class AgentRow:
+    """One subagent of a session (a row of `agents`, migration 0008)."""
+
+    agent_id: str
+    parent_agent_id: str | None
+    description: str
+    subagent_type: str | None
+    background: bool
+    status: str
+    started_at: datetime
+    ended_at: datetime | None
+
+
+async def agents(db: Db, session_id: str) -> list[AgentRow]:
+    """Read the subagents of one session, oldest first.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+
+    Returns:
+        The subagents, oldest first; `parent_agent_id` is None for one the main agent started.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT agent_id, parent_agent_id, description, subagent_type, background, status,"
+        " started_at, ended_at FROM agents WHERE session_id = %s::uuid ORDER BY id",
+        (session_id,),
+    )
+    return [AgentRow(*row) for row in rows]
+
+
+async def session(db: Db, session_id: str) -> SessionRow | None:
+    """Read one session by its id.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+
+    Returns:
+        The session, or None if no session has that id.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    found = [row for row in await sessions(db, active_only=False) if row.id == session_id]
+    return found[0] if found else None
+
+
+async def escalation(db: Db, escalation_id: int) -> EscalationRow | None:
+    """Read one escalation by its id, whatever its state.
+
+    Args:
+        db: The connection.
+        escalation_id: Id of the `escalations` row.
+
+    Returns:
+        The escalation, or None if no escalation has that id.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    found = await db.all(
+        "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
+        " coalesce(e.context->>'rendered', ''), h.hostname, s.directory"
+        " FROM escalations e JOIN sessions s ON s.id = e.session_id"
+        " JOIN hosts h ON h.id = s.host_id WHERE e.id = %s",
+        (escalation_id,),
+    )
+    return EscalationRow(*found[0]) if found else None
+
+
+async def escalation_context(db: Db, escalation_id: int) -> dict[str, Any]:
+    """Read what the checker saw when it escalated a step (the stored context).
+
+    Args:
+        db: The connection.
+        escalation_id: Id of the `escalations` row.
+
+    Returns:
+        The stored context (rendered step, recent turns, the file before an edit, ...), or an
+        empty dict if the escalation is unknown or has no context.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    row = await db.one("SELECT context FROM escalations WHERE id = %s", (escalation_id,))
+    context = row[0] if row else None
+    return context if isinstance(context, dict) else {}
+
+
+async def checker_runs(db: Db, session_id: str, limit: int = 200) -> dict[int, list[str]]:
+    """Read which checkers judged which step of a session.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+        limit: Maximum number of rows to read.
+
+    Returns:
+        For each step sequence number, the checker names that ran for it, in order.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT s.seq, r.checker_name FROM checker_runs r JOIN steps s ON s.id = r.step_id"
+        " WHERE s.session_id = %s::uuid ORDER BY r.id LIMIT %s",
+        (session_id, limit),
+    )
+    found: dict[int, list[str]] = {}
+    for seq, name in rows:
+        found.setdefault(int(seq), []).append(str(name))
+    return found
+
+
+async def project_of(db: Db, session_id: str) -> tuple[str, str] | None:
+    """Read the project a session belongs to.
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+
+    Returns:
+        The project's name and its git remote ("" if it has none), or None if the session has no
+        project row.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    row = await db.one(
+        "SELECT p.name, coalesce(p.git_remote, '') FROM sessions s"
+        " JOIN projects p ON p.id = s.project_id WHERE s.id = %s::uuid",
+        (session_id,),
+    )
+    return (str(row[0]), str(row[1])) if row else None
 
 
 async def mint_token(db: Db, session_id: str, label: str = "") -> tuple[int, str]:

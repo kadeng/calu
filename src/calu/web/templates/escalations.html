@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Escalations · calu{% endblock %}
+{% block body %}
+<h1>{{ escalations | length }} escalation{{ '' if escalations | length == 1 else 's' }} waiting</h1>
+{% if escalations %}
+<p class="muted">Each one holds its session until someone answers. This page reloads every 5 seconds.</p>
+{% for e in escalations %}
+<div class="card">
+  <p class="muted">
+    escalation {{ e.id }} · <a href="{{ url_for('session', session_id=e.session_id) }}">{{ e.hostname }}:{{ e.directory }}</a>
+    · since {{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+  </p>
+  <p>{{ e.reason }}</p>
+  {% if e.rendered %}<pre>{{ e.rendered }}</pre>{% endif %}
+  <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=e.id) }}">
+    <input type="hidden" name="back" value="{{ url_for('escalations') }}">
+    <input type="text" name="note" placeholder="note for Claude (optional)">
+    <button class="primary" name="decision" value="allow">Allow</button>
+    <button class="danger" name="decision" value="deny">Deny</button>
+  </form>
+  <p class="muted"><a href="{{ url_for('escalation', escalation_id=e.id) }}">what the checker saw</a></p>
+</div>
+{% endfor %}
+<script>setTimeout(() => location.reload(), 5000);</script>
+{% else %}
+<p class="empty">Nothing is waiting. Sessions run on.</p>
+<script>setTimeout(() => location.reload(), 5000);</script>
+{% endif %}
+{% endblock %}

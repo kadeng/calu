@@ -13,6 +13,7 @@
     calu attach ADDRESS --token T  terminal client for a running session
     calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
     calu token mint SESSION        client token for an editor or a remote interface
+    calu web                       the herd overview in a browser (127.0.0.1 only)
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
     calu sessions [--all]          list the sessions of all hosts
     calu escalations [SESSION]     list the open escalations
@@ -414,6 +415,62 @@ def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError(f"cannot attach to {args.address}: {exc}") from exc
     if code:
         raise CliError("the adapter ended with an error")
+
+
+def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Serve the web interface: every session of every host, their history, the checkers.
+
+    It needs the `admin` credential, because it also changes what steers the checkers, and it
+    serves the loopback interface only: there is no login yet (PLAN.md Q4), so reach it from
+    another machine through an SSH tunnel.
+
+    Args:
+        args: Parsed arguments (`host`, `port`).
+        store: The credential store.
+
+    Raises:
+        CliError: If the web dependencies are missing, the address is not local, or there is no
+            `admin` credential.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    try:
+        from calu.web.app import NotLocal, check_host, create_app
+    except ImportError as exc:  # the `web` extra is not installed
+        raise CliError(
+            "the web interface needs its extra dependencies: `uv tool install 'calu[web]'` "
+            f"(or `uv sync --extra web` in a clone). {exc}"
+        ) from exc
+    try:
+        check_host(args.host)
+    except NotLocal as exc:
+        raise CliError(str(exc)) from exc
+    url = load_credential(store, "admin", "Admin password: ")
+
+    async def serve() -> None:
+        """Open the connection, build the app and serve until interrupted."""
+        import uvicorn
+
+        conn = await connect(url.decode())
+        try:
+            db = Db(conn)
+            values = await admin.settings(db)
+            template = str((values.get("web") or {}).get("git_url_template") or "")
+            app = create_app(db, git_url_template=template)
+            print(f"calu web on http://{args.host}:{args.port} (no login: local only)")
+            config = uvicorn.Config(
+                app, host=args.host, port=args.port, log_level="warning", access_log=False
+            )
+            await uvicorn.Server(config).serve()
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(serve())
+    except KeyboardInterrupt:  # pragma: no cover - the usual way to stop a server
+        print("stopped")
+    finally:
+        wipe(url)
 
 
 def cmd_protocol(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1097,6 +1154,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("address", help="WebSocket address of the session, e.g. ws://127.0.0.1:8765")
     p.add_argument("--token", required=True, help="client token that `calu run` printed")
     p.set_defaults(handler=cmd_acp)
+
+    p = sub.add_parser("web", help="the herd overview in a browser (127.0.0.1 only)")
+    p.add_argument("--host", default="127.0.0.1", help="address to bind (loopback only)")
+    p.add_argument("--port", type=int, default=8800)
+    p.set_defaults(handler=cmd_web)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")
     p.add_argument("--out", help="write it to this file instead of stdout")
