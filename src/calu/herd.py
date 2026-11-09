@@ -68,6 +68,11 @@ class EscalationRow:
     rendered: str
     hostname: str
     directory: str
+    resolved_by: str = ""
+    """Who answered it: an operator's name, or "client:<name>" for a decision a session's own
+    client made (D28). Empty while it is open."""
+    note: str = ""
+    """What the human said when they answered ("" if nothing or still open)."""
 
     def line(self) -> str:
         """Return the escalation as one terminal line.
@@ -148,7 +153,8 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
     """
     rows = await db.all(
         "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
-        " coalesce(e.context->>'rendered', ''), h.hostname, s.directory"
+        " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"
+        " coalesce(e.resolved_by, ''), coalesce(e.note, '')"
         " FROM escalations e JOIN sessions s ON s.id = e.session_id"
         " JOIN hosts h ON h.id = s.host_id"
         " WHERE e.state = 'open' AND (%s::uuid IS NULL OR e.session_id = %s::uuid)"
@@ -325,7 +331,8 @@ async def escalation(db: Db, escalation_id: int) -> EscalationRow | None:
     """
     found = await db.all(
         "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
-        " coalesce(e.context->>'rendered', ''), h.hostname, s.directory"
+        " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"
+        " coalesce(e.resolved_by, ''), coalesce(e.note, '')"
         " FROM escalations e JOIN sessions s ON s.id = e.session_id"
         " JOIN hosts h ON h.id = s.host_id WHERE e.id = %s",
         (escalation_id,),

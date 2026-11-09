@@ -57,7 +57,14 @@ async def populate(db: Db) -> tuple[str, int]:
     )
     escalation = await store.open_escalation(
         "the deny list matched",
-        {"rendered": "## Step\n\n    sudo ls", "recent": "## Turn 1"},
+        # The same shape a session writes (`Session._open_escalation`), so the pages and the
+        # triage API are tested against what they really get.
+        {
+            "rendered": "## Step\n\n    sudo ls",
+            "recent": "## Turn 1",
+            "tool_name": "Bash",
+            "tool_input": {"command": "sudo ls"},
+        },
         second,
     )
     await store.save_turn(
@@ -285,5 +292,53 @@ async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None
             assert refused.status_code == 400
             assert "refused" in refused.text
             assert (await admin.settings(db))["claude"]["effort"] == "high"
+    finally:
+        await conn.close()
+
+
+async def test_triage_serves_the_queue_and_answers_it(db_url: str) -> None:
+    """The owner's ask: sit in one mode and answer what comes, with a queue behind it."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, first = await populate(db)
+        store = DatabaseSessionStore(db)
+        store.session_id = session_id
+        step = await store.add_step(
+            StepRow(seq=3, tool_name="Write", tool_input={"file_path": "b.py"}, turn=1)
+        )
+        second = await store.open_escalation("an edit to judge", {"rendered": "## Edit"}, step)
+        async with await client_for(db) as client:
+            assert "Triage" in (await client.get("/triage")).text
+
+            listing = (await client.get("/api/escalations")).json()["escalations"]
+            assert [entry["id"] for entry in listing] == [first, second]
+            # The one being decided carries its context; the queue behind it stays light.
+            assert "sudo ls" in listing[0]["rendered"]
+            assert listing[0]["command"] == "sudo ls"  # offered as an exact rule
+            assert listing[1]["rendered"] == "" and listing[1]["command"] == ""
+            assert listing[0]["where"] == "box:/w"
+
+            answered = await client.post(
+                f"/api/escalations/{first}/resolve",
+                json={"decision": "deny", "note": "no", "remember": "sudo ls"},
+            )
+            assert answered.json() == {"ok": True, "remembered": "^sudo\\ ls$"}
+            # The remembered rule is anchored to exactly that command and nothing wider.
+            patterns = [row.pattern for row in await admin.rules(db, rule_list="command-deny")]
+            assert "^sudo\\ ls$" in patterns
+
+            again = await client.post(
+                f"/api/escalations/{first}/resolve", json={"decision": "deny"}
+            )
+            assert again.status_code == 400 and again.json()["ok"] is False
+            bad = await client.post(
+                f"/api/escalations/{second}/resolve", json={"decision": "maybe"}
+            )
+            assert bad.status_code == 400
+
+            left = (await client.get("/api/escalations")).json()["escalations"]
+            assert [entry["id"] for entry in left] == [second]
     finally:
         await conn.close()

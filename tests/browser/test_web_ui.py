@@ -2,8 +2,10 @@
 
 import pytest
 
+from calu import herd
 from calu.db import Db, connect
 from calu.setup import setup
+from calu.store import DatabaseSessionStore, StepRow
 from calu.web.app import create_app
 from tests.browser.conftest import serve
 from tests.db.test_web import populate
@@ -81,5 +83,53 @@ async def test_the_escalation_detail_page_shows_what_the_checker_saw(db_url: str
             assert "the deny list matched" in body
             assert "sudo ls" in body  # the rendered step
             assert "## Turn 1" in body  # the conversation of that moment
+    finally:
+        await conn.close()
+
+
+async def test_triage_answers_one_escalation_after_another_by_keyboard(db_url: str, page) -> None:
+    """The mode the owner asked for: sit in it and answer what comes, without reloading."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _first = await populate(db)
+        store = DatabaseSessionStore(db)
+        store.session_id = session_id
+        step = await store.add_step(
+            StepRow(seq=3, tool_name="Write", tool_input={"file_path": "b.py"}, turn=1)
+        )
+        await store.open_escalation("an edit to judge", {"rendered": "## Edit"}, step)
+        async with serve(create_app(db)) as base:
+            await page.goto(f"{base}/triage")
+            await page.wait_for_selector("#current .escalation")
+            assert "2 waiting" in await page.inner_text("#count")
+            first_card = await page.inner_text("#current")
+            assert "the deny list matched" in first_card
+            assert "sudo ls" in first_card
+            assert "remember exactly this command" in first_card
+
+            # "d" denies the one on screen; the next one takes its place without a reload.
+            await page.keyboard.press("Escape")
+            await page.keyboard.press("d")
+            await page.wait_for_function(
+                "document.getElementById('current').textContent.includes('an edit to judge')"
+            )
+            assert "1 waiting" in await page.inner_text("#count")
+
+            # The second one is answered with a note, typed into the focused field.
+            await page.fill("#note", "go ahead")
+            await page.keyboard.press("Enter")
+            await page.wait_for_function(
+                "document.getElementById('current').textContent.includes('Nothing is waiting')"
+            )
+            # Both are resolved in the database, with the note of the second one.
+            assert await herd.escalations(db) == []
+            states = [
+                (row.state, row.note)
+                for row in [await herd.escalation(db, 1), await herd.escalation(db, 2)]
+                if row is not None
+            ]
+            assert states == [("denied", ""), ("allowed", "go ahead")]
     finally:
         await conn.close()

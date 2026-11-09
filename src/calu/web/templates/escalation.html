@@ -6,7 +6,13 @@
   <a href="{{ url_for('session', session_id=escalation.session_id) }}">{{ escalation.hostname }}:{{ escalation.directory }}</a>
   · asked {{ escalation.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
 </p>
-<div class="card"><p>{{ escalation.reason }}</p></div>
+<div class="card">
+  <p>{{ escalation.reason }}</p>
+  {% if escalation.resolved_by %}
+    <p class="muted">answered by <span class="mono">{{ escalation.resolved_by }}</span>
+    {% if escalation.note %}: {{ escalation.note }}{% endif %}</p>
+  {% endif %}
+</div>
 {% if escalation.state == 'open' %}
 <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=escalation.id) }}">
   <input type="hidden" name="back" value="{{ url_for('escalation', escalation_id=escalation.id) }}">

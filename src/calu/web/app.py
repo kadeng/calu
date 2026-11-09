@@ -15,6 +15,7 @@ Pages:
     /sessions/{id}        one session: its turns and tool calls, and how to attach to it
     /sessions/{id}/live   the live view: the stream, the queue, stop, steer, the subagents
     /escalations          what waits for a human, with allow and deny
+    /triage               one escalation at a time, with the queue behind it
     /escalations/{id}     what the checker saw when it escalated the step
     /checkers             the checker definitions and their instructions, editable
     /rules                the allow and deny lists
@@ -31,6 +32,7 @@ or put a TLS proxy with its own authentication in front of it. Everything the pa
 
 import ipaddress
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from pathlib import Path
@@ -38,7 +40,7 @@ from typing import Any
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -176,6 +178,14 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         Route("/sessions/{session_id}/live", _page(live_page, state), name="live"),
         WebSocketRoute("/ws/sessions/{session_id}", _socket(live_socket, state), name="live_ws"),
         Route("/escalations", _page(escalations, state), name="escalations"),
+        Route("/triage", _page(triage, state), name="triage"),
+        Route("/api/escalations", _page(waiting_json, state), name="waiting_json"),
+        Route(
+            "/api/escalations/{escalation_id:int}/resolve",
+            _page(resolve_json, state),
+            methods=["POST"],
+            name="resolve_json",
+        ),
         Route("/escalations/{escalation_id:int}", _page(escalation_page, state), name="escalation"),
         Route(
             "/escalations/{escalation_id:int}/resolve",
@@ -609,6 +619,101 @@ async def resolve(request: Request, state: _State) -> Response:
     log.info("escalation %s %s by the web interface (%s)", escalation_id, decision, resolved)
     back = str(form.get("back") or request.url_for("escalations"))
     return RedirectResponse(back, 303)
+
+
+async def triage(request: Request, state: _State) -> Response:
+    """Show the triage mode: one escalation at a time, with the queue behind it.
+
+    This is the mode the owner asked for — sit in front of it and answer what comes, across
+    every session and host. The page polls `waiting_json`, so an escalation that opens anywhere
+    appears without a reload, with a browser notification if the human allowed those.
+
+    Args:
+        request: The request.
+        state: The shared state.
+
+    Returns:
+        The triage page.
+    """
+    return _render(request, "triage.html", {"api": request.url_for("waiting_json")})
+
+
+async def waiting_json(request: Request, state: _State) -> Response:
+    """Return the open escalations as JSON, newest last, for the triage page.
+
+    The first entry carries its full context (the rendered step and, for a command, the command
+    line), because that is the one being decided; the rest are the queue behind it.
+
+    Args:
+        request: The request.
+        state: The shared state.
+
+    Returns:
+        `{"escalations": [...]}` with one entry per open escalation.
+    """
+    rows = await herd.escalations(state.db)
+    found: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        entry: dict[str, Any] = {
+            "id": row.id,
+            "session_id": row.session_id,
+            "where": f"{row.hostname}:{row.directory}",
+            "reason": row.reason,
+            "created_at": row.created_at.isoformat(),
+            "rendered": row.rendered if index == 0 else "",
+            "command": "",
+            "session_url": str(request.url_for("session", session_id=row.session_id)),
+        }
+        if index == 0:
+            context = await herd.escalation_context(state.db, row.id)
+            entry["rendered"] = str(context.get("rendered") or row.rendered)
+            tool_input = context.get("tool_input")
+            if str(context.get("tool_name")) == "Bash" and isinstance(tool_input, dict):
+                entry["command"] = str(tool_input.get("command") or "")
+        found.append(entry)
+    return JSONResponse({"escalations": found})
+
+
+async def resolve_json(request: Request, state: _State) -> Response:
+    """Answer one escalation from the triage page, optionally adding a rule for the command.
+
+    "Remember this command" adds an **exactly anchored** allow or deny rule for the command line
+    that was escalated (`^...$` with every regular-expression character escaped), so it can
+    never match more than the command a human just judged. A broader pattern is a deliberate
+    act and belongs in `calu rules add`.
+
+    Args:
+        request: The request; its JSON body holds `decision`, `note` and `remember`.
+        state: The shared state.
+
+    Returns:
+        `{"ok": true}`, or `{"ok": false, "message": ...}` with status 400 if the decision is not
+        "allow" or "deny" or the escalation is not open any more.
+    """
+    escalation_id = int(request.path_params["escalation_id"])
+    body = await request.json()
+    decision = str(body.get("decision") or "")
+    if decision not in ("allow", "deny"):
+        return JSONResponse({"ok": False, "message": "neither allow nor deny"}, status_code=400)
+    note = str(body.get("note") or "")
+    if not await herd.resolve(state.db, escalation_id, decision, note):
+        return JSONResponse({"ok": False, "message": "it is not open any more"}, status_code=400)
+    remembered = ""
+    command = str(body.get("remember") or "")
+    if command:
+        rule_list = "command-allow" if decision == "allow" else "command-deny"
+        pattern = f"^{re.escape(command)}$"
+        try:
+            await admin.add_rule(
+                state.db,
+                rule_list,
+                pattern,
+                comment=f"from the triage of escalation {escalation_id}",
+            )
+            remembered = pattern
+        except (admin.AdminError, ValueError) as exc:
+            log.warning("could not add the rule for %r: %s", command, exc)
+    return JSONResponse({"ok": True, "remembered": remembered})
 
 
 async def checkers(request: Request, state: _State) -> Response:

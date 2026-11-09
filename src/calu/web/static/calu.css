@@ -73,3 +73,5 @@ form.inline { display: inline-flex; gap: .4rem; align-items: center; }
 #stream .check { color: var(--warn); }
 #stream .result, #stream .log, #stream .diff, #stream .turn { color: var(--muted); }
 .escalation { border-color: var(--warn); }
+kbd { font-family: var(--mono); font-size: .85em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 .3rem; }
+#current .escalation { border-left: 3px solid var(--warn); }

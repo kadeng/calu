@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Triage · calu{% endblock %}
+{% block body %}
+<h1>Triage <span class="muted" id="count"></span></h1>
+<p class="muted">
+  One escalation at a time, across every session and host. Keys:
+  <kbd>a</kbd> allow · <kbd>d</kbd> deny · <kbd>s</kbd> skip to the next · <kbd>n</kbd> focus the note.
+  <span id="notify-row"><button id="notify">Turn browser notifications on</button></span>
+</p>
+<div id="current"></div>
+<h2>Behind it <span class="muted" id="queue-count"></span></h2>
+<div id="queue"></div>
+<script src="{{ url_for('static', path='/triage.js') }}" data-api="{{ api }}"></script>
+{% endblock %}
