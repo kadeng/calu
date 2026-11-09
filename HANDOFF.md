@@ -61,6 +61,11 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   ESCALATE, ALLOW (run it whatever auto mode says) and DENY. PASS is the normal answer; the
   allow lists and the read-only tool routes produce PASS as well. The PreToolUse hook answers
   PASS without a decision while auto mode is in effect.
+- **Escalation timeout** (D27): `escalation_timeout_s` (default 8 h, 0 = no limit) bounds how
+  long an escalation waits. On the timeout the step is denied, the row is cancelled with the
+  reason, and the session stops; Claude's session id is in the database from the start of the
+  session, so `calu run --resume <id>` (printed in the message and by `calu sessions`) takes the
+  conversation up again.
 - **The changeset checker** (D26, `checkers/changeset.py`): a Bash call that creates a `git
   commit` goes to `Route.CHANGESET`, and calu gives that checker the diff the commit would
   record (`git diff --cached`, against HEAD for `-a`, against `HEAD~1` for `--amend`) next to

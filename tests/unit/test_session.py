@@ -15,6 +15,7 @@ from calu.protocol.messages import (
     EditDiff,
     EscalationRequest,
     EscalationResolved,
+    Log,
     SessionState,
     ToolResult,
     TurnResult,
@@ -392,3 +393,48 @@ async def test_the_snapshot_shows_the_open_escalation_and_the_queue(tmp_path: Pa
         await session.stop()
     assert session.initialize_result().workspace == str(tmp_path)
     assert session.snapshot().escalations == []
+
+
+async def test_an_escalation_nobody_answers_stops_the_session(tmp_path: Path):
+    config = Config(escalation_timeout_s=0.3)
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "never"}]],
+        config,
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        # Claude's session id is recorded at the start, so the session stays resumable (D27).
+        assert store.claude_session_id == "fake-session"
+        await session.send_chat(ChatSendParams(text="ship it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        with anyio.fail_after(10):
+            while session.state != "stopped":
+                await anyio.sleep(0.02)
+        await session.stop()
+    (result,) = rec.of(ToolResult)
+    assert result.is_error and "No decision within" in result.content
+    assert "calu run --resume fake-session" in result.content
+    timed_out = store.escalations[int(request.escalation_id)]
+    assert timed_out.state == "cancelled" and "No decision within" in timed_out.note
+    assert [e.message for e in rec.of(Log) if "No decision" in e.message]
+    assert store.ended == "stopped"
+
+
+async def test_waiting_without_a_limit_is_possible(tmp_path: Path):
+    session, rec, _ = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"}]],
+        Config(escalation_timeout_s=0),
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="ship it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        await anyio.sleep(0.3)
+        assert session.state == "escalated"  # still waiting
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (result,) = rec.of(ToolResult)
+    assert not result.is_error

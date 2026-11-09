@@ -22,7 +22,9 @@ Tool call flow (ToolGate):
 
 A human resolves an escalation in the database (`calu resolve`, a web UI, SQL); the session
 notices the resolution through `note_resolution` (a `escalation_resolved` notification) or by
-polling the row every `ESCALATION_POLL_S` seconds. `decide_escalation` is the second path: a
+polling the row every `ESCALATION_POLL_S` seconds. An escalation nobody answers within
+`escalation_timeout_s` denies its step and stops the session, which stays resumable by Claude's
+session id (D27). `decide_escalation` is the second path: a
 client attached to the session process decides, and the session cancels the row with a note that
 records the decision, because the role `calu_session` may not allow or deny one
 (`calu.store.session`).
@@ -637,6 +639,9 @@ class Session:
         if not ready.is_set():
             await runner.stop()
             raise SessionError(f"Claude session was not ready within {START_TIMEOUT_S} s")
+        # As early as possible: a session that stops before its first turn (an escalation that
+        # timed out, for example) must still be resumable by its Claude session id (D27).
+        await self._record_claude_session(runner.session_id)
         await self._set_state("idle")
 
     async def _run(self, runner: ClaudeRunner, resume_id: str | None) -> None:
@@ -1029,8 +1034,12 @@ class Session:
             esc: The open escalation; its `answer` and `done` are set by this call or by
                 `decide_escalation`.
         """
+        timeout = self.config.escalation_timeout_s or float("inf")
         if esc.db_id is None:
-            await esc.done.wait()
+            with anyio.move_on_after(timeout):
+                await esc.done.wait()
+            if esc.answer is None:
+                await self._escalation_timed_out(esc)
             return
 
         async def poll() -> None:
@@ -1061,8 +1070,47 @@ class Session:
 
         async with anyio.create_task_group() as tg:
             tg.start_soon(poll)
-            await esc.done.wait()
+            with anyio.move_on_after(timeout):
+                await esc.done.wait()
             tg.cancel_scope.cancel()
+        if esc.answer is None:
+            await self._escalation_timed_out(esc)
+
+    async def _escalation_timed_out(self, esc: _Escalation) -> None:
+        """Deny the step of an escalation nobody answered, and stop the session (D27).
+
+        The session gives the machine and the Claude session back instead of waiting for ever.
+        Claude's session id is in the database, so `calu run --resume <id>` takes the
+        conversation up again; the escalation row is cancelled with the reason. The stop runs in
+        its own task, because this call happens inside the tool call that is being held: waiting
+        for the runner to end here would deadlock.
+
+        Args:
+            esc: The escalation that was not answered.
+        """
+        seconds = self.config.escalation_timeout_s
+        resume = f"calu run --resume {self.session_id}" if self.session_id else "calu sessions"
+        message = (
+            f"No decision within {seconds / 3600:.1f} h. The step was denied and the session "
+            f"stops; take the conversation up again with `{resume}`."
+        )
+        esc.answer = HumanAnswer(allow=False, message=message)
+        esc.done.set()
+        if esc.db_id is not None:
+            await self._store_call(
+                "cancelling an escalation", self.store.close_escalation(esc.db_id, message)
+            )
+        await self._emit_safely(Log(level="error", message=message))
+        if self._tg is not None:
+            # Not a tracked background task: `stop` waits for those, and this one calls it.
+            self._tg.start_soon(self._stop_after_timeout)
+
+    async def _stop_after_timeout(self) -> None:
+        """Stop the session after an escalation timed out; never raises."""
+        try:
+            await self.stop()
+        except Exception:
+            log.exception("stopping the session after an escalation timeout failed")
 
     async def review_subagent_result(self, result: SubagentResult) -> str:
         """Review a subagent's final result against the conversation (ToolGate).
@@ -1473,12 +1521,7 @@ class Session:
         Args:
             event: The turn result.
         """
-        if event.session_id and event.session_id != self.session_id:
-            self.session_id = event.session_id
-            await self._store_call(
-                "recording Claude's session id",
-                self.store.set_claude_session(event.session_id, self.config.claude.model),
-            )
+        await self._record_claude_session(event.session_id)
         outputs = self._claude_outputs.pop(None, [])
         if self.context.current is not None:
             # Recorded (and persisted) with the turn: never show the verbatim answer.
@@ -1486,6 +1529,24 @@ class Session:
         turn = self.context.end_turn(event.result)
         if turn is not None and self._tg is not None:
             self._spawn(self._finish_turn, turn, outputs)
+
+    async def _record_claude_session(self, claude_session_id: str | None) -> None:
+        """Write Claude's own session id to the `sessions` row, once and on every change.
+
+        The id is what `calu run --resume` and `session.history` need, so it is recorded as soon
+        as Claude Code reports it (at the start, not only after the first turn): a session that
+        ends before its first turn must still be resumable (D27).
+
+        Args:
+            claude_session_id: The id Claude Code reports, or None if it is not known yet.
+        """
+        if not claude_session_id or claude_session_id == self.session_id:
+            return
+        self.session_id = claude_session_id
+        await self._store_call(
+            "recording Claude's session id",
+            self.store.set_claude_session(claude_session_id, self.config.claude.model),
+        )
 
     async def _hint_on_login_error(self, text: str) -> None:
         """After Claude Code's "Please run /login" error, send a setup hint once per process.

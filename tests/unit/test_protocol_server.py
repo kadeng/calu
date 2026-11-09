@@ -151,7 +151,9 @@ async def test_a_client_starts_a_session_and_receives_its_events(tmp_path: Path)
             snapshot = await protocol.request("state.get")
             assert snapshot["state"] == "stopped" and snapshot["escalations"] == []
             started = await protocol.request("session.start", {})
-            assert started["claude_session_id"] is None  # known after the first turn
+            # Known right after the start, so a session that ends before its first turn is
+            # still resumable (D27).
+            assert started["claude_session_id"] == "fake-session"
             await protocol.request("chat.send", {"text": "please look"})
             await events.wait_for("turn.result")
             texts = [p["text"] for p in events.of("assistant.text")]

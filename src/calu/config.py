@@ -232,6 +232,14 @@ class Config(BaseModel):
     check_subagent_results: bool = True
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)
     """Categories that always wait for the human (see `AutoEscalate`); all off by default."""
+    escalation_timeout_s: float = Field(default=8 * 3600, ge=0)
+    """How long an escalation waits for a human before the session stops (PLAN.md D27).
+
+    An unsupervised run can sit in front of an escalation for a long time; at some point the
+    session should give the machine and the Claude session back instead of waiting for ever. On
+    the timeout the step is denied and the session stops, with Claude's session id recorded, so
+    that `calu run --resume <id>` takes the conversation up again. 0 waits without a limit.
+    """
     hidden_env: list[str] = Field(default_factory=list)
     """Further environment variables (e.g. API keys of other checker providers) that Claude
     Code must not see, in addition to the ones from the env files and `PROVIDER_KEYS`."""

@@ -34,12 +34,14 @@ class SessionRow:
         """Return the session as one terminal line.
 
         Returns:
-            Id, state, host and directory, with the number of open escalations if there are any.
+            Id, state, host and directory, the number of open escalations if there are any, and
+            Claude's session id, which `calu run --resume` takes (D27).
         """
         waiting = f" ({self.open_escalations} open)" if self.open_escalations else ""
+        resume = f"  resume {self.claude_session_id}" if self.claude_session_id else ""
         return (
             f"{self.id}  {self.state}{waiting}  {self.hostname}:{self.directory}"
-            f"  since {self.state_since:%Y-%m-%d %H:%M:%S}"
+            f"  since {self.state_since:%Y-%m-%d %H:%M:%S}{resume}"
         )
 
 
