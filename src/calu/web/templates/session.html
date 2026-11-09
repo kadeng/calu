@@ -54,7 +54,19 @@ session shows the real thinking as it streams.</p>
 {% else %}
   {% for turn in turns %}
   <div class="card">
-    <p class="muted">Turn {{ turn.index }} · {{ turn.started_at.strftime('%H:%M:%S') }}</p>
+    <p class="muted">Turn {{ turn.index }} · {{ turn.started_at.strftime('%H:%M:%S') }}
+      {% if forks.get(turn.index) %}
+        · <a href="#fork-{{ turn.index }}">fork before this turn</a>
+      {% endif %}
+    </p>
+    {% if forks.get(turn.index) %}
+    <details id="fork-{{ turn.index }}">
+      <summary class="muted">Fork before turn {{ turn.index }}: keep everything up to the previous
+        turn and drop this one. The fork gets its own session id; this conversation stays as it is.</summary>
+      <pre>{{ forks[turn.index].command() }}</pre>
+      <p class="muted">Run it on {{ session.hostname }}, in {{ session.directory }}.</p>
+    </details>
+    {% endif %}
     {% for text in turn.user_inputs %}<p><strong>You:</strong></p><pre>{{ text }}</pre>{% endfor %}
     {% for s in by_turn.get(turn.index, []) %}
       <div class="step">

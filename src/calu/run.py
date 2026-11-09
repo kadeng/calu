@@ -30,9 +30,9 @@ import anyio.to_thread
 import psycopg
 from pydantic_ai.models import Model
 
-from calu import preflight
+from calu import herd, preflight
 from calu.bus import Bus
-from calu.claude.runner import ClaudeRunner
+from calu.claude.runner import ClaudeRunner, Fork
 from calu.claude.sdk_runner import SdkRunner
 from calu.clock import ClockWatch
 from calu.config import ClaudeConfig, load_secrets
@@ -88,6 +88,9 @@ class RunOptions:
     project: str | None = None
     prompt: str | None = None
     resume_id: str | None = None
+    fork_before_turn: int | None = None
+    """With `resume_id`: branch the conversation off before this turn instead of continuing it
+    (PLAN.md D36). The new session gets its own id, so the original stays as it was."""
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
     interactive: bool = True
@@ -380,6 +383,12 @@ async def _run(
     dirty = Dirty()
     notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
     failed = False
+    # Before anything starts: a fork that cannot be made must not turn into a plain resume,
+    # which would continue the conversation instead of branching it (PLAN.md D36).
+    fork = await _fork_point(db, options, console)
+    if options.fork_before_turn and fork is None:
+        return 1
+
     clock = settings.config.clock
     watch = ClockWatch(
         session.clock_jumped,
@@ -396,7 +405,7 @@ async def _run(
             tg.start_soon(watch.run)
         server: SessionServer | None = None
         try:
-            await session.start(tg, options.resume_id, options.model, options.effort)
+            await session.start(tg, options.resume_id, options.model, options.effort, fork)
             if options.serve:
                 # After the start, so that the session row and its id exist when the first
                 # client asks; the events of the start are in the bus and are replayed.
@@ -419,6 +428,61 @@ async def _run(
                 await session.stop()
             tg.cancel_scope.cancel()
     return 1 if failed or session.state == "failed" else 0
+
+
+async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | None:
+    """Resolve `--fork-before-turn` into the uuids Claude Code needs (PLAN.md D36).
+
+    Side effect: reports why a fork cannot be made, as an error on the console.
+
+    Args:
+        db: The database connection.
+        options: What `calu run` was asked to do.
+        console: Where to report a problem.
+
+    Returns:
+        The fork point, or None — both when no fork was asked for and when it cannot be made.
+        The caller distinguishes the two by `options.fork_before_turn`.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    turn = options.fork_before_turn
+    if not turn:
+        return None
+    if not options.resume_id:
+        await console(Log(level="error", message="--fork-before-turn needs --resume <session id>"))
+        return None
+    if turn < 2:
+        await console(
+            Log(
+                level="error",
+                message="a fork before turn 1 would keep nothing; pick turn 2 or later",
+            )
+        )
+        return None
+    point = await herd.fork_point(db, options.resume_id, turn)
+    if point is None:
+        await console(
+            Log(
+                level="error",
+                message=(
+                    f"no fork point for turn {turn} of {options.resume_id}: calu records the "
+                    "transcript uuids from migration 0012 on, and only for turns it saw itself"
+                ),
+            )
+        )
+        return None
+    await console(
+        Log(
+            level="info",
+            message=(
+                f"forking before turn {turn}: keeping the conversation up to {point.resume_at} "
+                "and discarding that turn; the fork gets its own session id"
+            ),
+        )
+    )
+    return Fork(resume_at=point.resume_at, drops_turn=point.drops_turn)
 
 
 async def _listen(

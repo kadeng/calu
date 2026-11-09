@@ -264,35 +264,48 @@ class ForkPoint:
         return f"calu run --resume {self.claude_session_id} --fork-before-turn {self.turn}"
 
 
-async def fork_point(db: Db, session_id: str, turn: int) -> ForkPoint | None:
-    """Read where a session has to be resumed to fork before one of its turns.
+async def fork_point(db: Db, claude_session_id: str, turn: int) -> ForkPoint | None:
+    """Read where a conversation has to be resumed to fork before one of its turns.
+
+    Keyed by **Claude's** session id, because that is what `calu run --resume` takes. A
+    conversation that was resumed several times has a `sessions` row per run, all with the same
+    Claude session id; the newest row that recorded both uuids for these turns is used.
 
     Args:
         db: The connection.
-        session_id: Id of the `sessions` row.
-        turn: Number of the first turn the fork discards (so turn 1 cannot be forked before:
-            there would be nothing to keep).
+        claude_session_id: Claude Code's own session id.
+        turn: Number of the first turn the fork discards. Turn 1 has no predecessor, so there is
+            nothing to keep and the answer is None.
 
     Returns:
-        The fork point, or None if the session has no Claude session id, the turn or the one
-        before it is unknown, or Claude Code reported no uuids for them (a session recorded by
-        an older calu).
+        The fork point, or None if no session has that id, the turn or the one before it is
+        unknown, or Claude Code reported no uuids for them (a conversation recorded by a calu
+        before migration 0012).
 
     Raises:
         psycopg.Error: On database errors.
     """
+    # One conversation has a `sessions` row per `calu run`, and its turns are spread over them
+    # (a resumed run records only the turns it saw itself), so the lookup spans every row with
+    # this Claude session id instead of joining within one row.
     row = await db.one(
-        "SELECT s.claude_session_id, previous.last_entry_uuid, dropped.prompt_uuid"
-        " FROM sessions s"
-        " JOIN turns previous ON previous.session_id = s.id AND previous.number = %s - 1"
-        " JOIN turns dropped ON dropped.session_id = s.id AND dropped.number = %s"
-        " WHERE s.id = %s::uuid",
-        (turn, turn, session_id),
+        "WITH conversation AS (SELECT id FROM sessions WHERE claude_session_id = %s)"
+        " SELECT previous.last_entry_uuid, dropped.prompt_uuid"
+        " FROM turns dropped JOIN turns previous ON previous.number = dropped.number - 1"
+        " WHERE dropped.session_id IN (SELECT id FROM conversation)"
+        "  AND previous.session_id IN (SELECT id FROM conversation)"
+        "  AND dropped.number = %s"
+        "  AND previous.last_entry_uuid IS NOT NULL AND dropped.prompt_uuid IS NOT NULL"
+        " ORDER BY dropped.started_at DESC LIMIT 1",
+        (claude_session_id, turn),
     )
-    if row is None or not row[0] or not row[1] or not row[2]:
+    if row is None:
         return None
     return ForkPoint(
-        turn=turn, resume_at=str(row[1]), drops_turn=str(row[2]), claude_session_id=str(row[0])
+        turn=turn,
+        resume_at=str(row[0]),
+        drops_turn=str(row[1]),
+        claude_session_id=claude_session_id,
     )
 
 
@@ -304,18 +317,25 @@ async def fork_points(db: Db, session_id: str) -> list[ForkPoint]:
         session_id: Id of the `sessions` row.
 
     Returns:
-        One entry per turn that has both uuids and a predecessor that has them, oldest first.
+        One entry per turn of the **conversation** (every `sessions` row with the same Claude
+        session id) that has both uuids and a predecessor that has them, oldest first. Empty for
+        a session without a Claude session id.
 
     Raises:
         psycopg.Error: On database errors.
     """
+    # Like `fork_point`: the turns of one conversation may sit in several `sessions` rows, so
+    # the conversation is resolved by its Claude session id first.
     rows = await db.all(
-        "SELECT dropped.number, previous.last_entry_uuid, dropped.prompt_uuid,"
-        " s.claude_session_id FROM sessions s"
-        " JOIN turns dropped ON dropped.session_id = s.id"
-        " JOIN turns previous ON previous.session_id = s.id"
-        "  AND previous.number = dropped.number - 1"
-        " WHERE s.id = %s::uuid AND s.claude_session_id IS NOT NULL"
+        "WITH conversation AS ("
+        "  SELECT other.id, other.claude_session_id FROM sessions mine"
+        "  JOIN sessions other ON other.claude_session_id = mine.claude_session_id"
+        "  WHERE mine.id = %s::uuid AND mine.claude_session_id IS NOT NULL)"
+        " SELECT DISTINCT dropped.number, previous.last_entry_uuid, dropped.prompt_uuid,"
+        " (SELECT claude_session_id FROM conversation LIMIT 1)"
+        " FROM turns dropped JOIN turns previous ON previous.number = dropped.number - 1"
+        " WHERE dropped.session_id IN (SELECT id FROM conversation)"
+        "  AND previous.session_id IN (SELECT id FROM conversation)"
         "  AND previous.last_entry_uuid IS NOT NULL AND dropped.prompt_uuid IS NOT NULL"
         " ORDER BY dropped.number",
         (session_id,),

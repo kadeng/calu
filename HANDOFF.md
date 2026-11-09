@@ -40,7 +40,7 @@ in `calu/` only.
 | 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**364 tests pass** (plus 6 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**370 tests pass** (plus 6 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 56 commits, ~20k lines of source, ~7k of tests, 10 migrations, 16 CLI commands,
 16 protocol requests.
 
@@ -127,6 +127,20 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   `use_bedrock`, each checker's model and thinking effort, the sandbox, the clock, the write sets
   — is editable with the right control, and `/checkers/{name}` edits the instructions with
   Ctrl+S. Git links point into the project's own browser (`calu.web.git`); calu browses no git.
+- **Forking a conversation** (D36, verified end to end): `calu run --resume <id>
+  --fork-before-turn <n>` keeps everything up to the previous turn and discards turn n, under a
+  new session id, so the original conversation stays as it was. calu records the transcript uuids
+  of each turn (the prompt, and the last assistant entry) from the events Claude Code replays and
+  stores them on `turns` (migration 0012); `herd.fork_point` finds the pair again **across the
+  `sessions` rows of one conversation**, because a resumed run opens a new row and records only
+  the turns it saw. The session page offers the command per turn. A fork point the CLI refuses is
+  reported with `FORK_HINT` rather than the authentication hint. Putting the **files** back as
+  well is Q14 and not built.
+- **A confirmation the harness asks for** (D38): any permission question the SDK raises arrives
+  at `can_use_tool`, which is calu's wait for a human, so a step the checkers passed escalates if
+  Claude Code's own approval asks. Its reason says so (`HARNESS_ASKED`). In headless mode the
+  classifier never asked in four attempts, and allowed a write outside the project directory —
+  the deny lists, not the harness, are what stop that.
 - **Questions of the agent** (D35): `AskUserQuestion` is routed to `Route.QUESTION`, escalates
   without a checker, carries its options in the `escalation.request` event, and the answer goes
   back as the message of the refusal that keeps the call from running. The row is recorded as
@@ -192,7 +206,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   database. Verified in the tests and by hand against a real PostgreSQL.
 - **Migrations**: 0001 initial · 0002 turn records · 0003 comments · 0004 client tokens ·
   0005 the PASS decision · 0006 the changeset route · 0007 `calu_client_decision` ·
-  0008 `sessions.address` and the `agents` table · 0009 minted client tokens · 0010 write sets · 0011 the `answered` state.
+  0008 `sessions.address` and the `agents` table · 0009 minted client tokens · 0010 write sets · 0011 the `answered` state · 0012 fork points.
 
 ### Verified by hand with the real CLI
 
@@ -245,12 +259,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **Fork a session before a turn** (D36, measured and specified, not built): record the prompt
-   uuid and the last assistant uuid of each turn (the runner already sees both, because
-   `replay-user-messages` is on), store them on `turns` (migration 0012), add
-   `calu run --resume <id> --fork-before-turn <n>`, and offer the command per turn on the session
-   page. Mind the two findings of the spike: a user-role entry is not always a prompt, and the
-   fork point is the entry before the next prompt. Whether to rewind the **files** too is Q14.
+1. **Rewind the files of a fork** (Q14, optional): a fork rewinds the conversation but leaves
+   the working tree as it is, so the files still hold what the dropped turn wrote. The SDK has
+   `enable_file_checkpointing` and `ClaudeSDKClient.rewind_files(<user message uuid>)`; whether
+   calu should use it, or leave the tree to the human (D31's snapshots already undo one step), is
+   the owner's call.
 2. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the

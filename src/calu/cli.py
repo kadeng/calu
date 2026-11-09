@@ -319,6 +319,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         project=args.project,
         prompt=prompt,
         resume_id=args.resume,
+        fork_before_turn=args.fork_before_turn,
         model=args.model,
         effort=args.effort,
         interactive=not args.batch,
@@ -1130,6 +1131,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-p", "--prompt", help="first message for Claude")
     p.add_argument("--prompt-file", help="read the first message from this file")
     p.add_argument("--resume", help="Claude session id to resume")
+    p.add_argument(
+        "--fork-before-turn",
+        type=int,
+        metavar="N",
+        help="with --resume: branch the conversation off before turn N instead of continuing it;"
+        " the fork gets its own session id (`calu sessions` and the web interface show the turns)",
+    )
     p.add_argument("--model", help="Claude model alias or id (overrides the configuration)")
     p.add_argument(
         "--effort",

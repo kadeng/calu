@@ -78,7 +78,14 @@ from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
 from calu.checkers.tools import StepTime
-from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
+from calu.claude.runner import (
+    ClaudeRunner,
+    EventSink,
+    Fork,
+    GateResult,
+    HumanAnswer,
+    Verdict,
+)
 from calu.claude.sdk_runner import AGENT_TOOLS
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
@@ -188,6 +195,27 @@ CROSS_SESSION_LABEL = "Message from another Claude session, not from the user"
 """Turn entry label of a message from another session (`calu.context.foreign`)."""
 CROSS_SESSION_PENDING = "(content not shown; its narration is pending)"
 CROSS_SESSION_HIDDEN = "(content not shown: it could not be narrated)"
+
+HARNESS_ASKED = (
+    "Claude Code's own approval asked for a confirmation; calu's checkers had no objection to "
+    "this step (PASS, see the check above). Whoever answers decides whether it runs."
+)
+"""Reason of an escalation that nothing in calu raised (PLAN.md D38).
+
+Claude Code's auto mode does not only allow and deny: it can also ask. A PASS leaves the
+decision to it (D21), and when it decides to ask, the SDK calls `can_use_tool`, which is calu's
+wait for a human — so the step escalates even though no checker objected. Saying that plainly
+matters, because the human would otherwise look for a checker's reason that does not exist.
+"""
+
+FORK_REJECTED = "Resume rejected by --resume-drops-turn:"
+"""What Claude Code says when a fork point does not match the turn it should discard (D36)."""
+
+FORK_HINT = (
+    "Claude Code refused the fork point: the turn to discard does not start where calu said it "
+    "does. Resume the conversation whole (without --fork-before-turn), or pick another turn."
+)
+"""Hint for a refused fork, instead of the authentication hint."""
 
 CLAUDE_SETUP_HINT = (
     "If Claude Code is not set up for this folder yet, run `claude` once in a terminal in this "
@@ -1012,6 +1040,7 @@ class Session:
         resume_id: str | None = None,
         model: str | None = None,
         effort: Effort | Literal["default"] | None = None,
+        fork: Fork | None = None,
     ) -> None:
         """Start a Claude session in `tg` and return once it accepts messages.
 
@@ -1022,6 +1051,9 @@ class Session:
         Args:
             tg: Task group that runs the session; it must outlive the session.
             resume_id: Claude session id to resume, or None for a new session.
+            fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
+                whole. Needs `resume_id`; the forked conversation gets its own session id, so
+                the one that was forked from is left untouched.
             model: Claude model alias or id for this and later sessions; None keeps the
                 configured model.
             effort: Reasoning effort for this and later sessions; "default" uses Claude Code's
@@ -1065,7 +1097,7 @@ class Session:
         for warning in self.startup_warnings:
             await self.emit(Log(level="warning", message=warning))
         runner = self.runner = self.runner_factory()
-        tg.start_soon(self._run, runner, resume_id)
+        tg.start_soon(self._run, runner, resume_id, fork)
 
         ready = anyio.Event()
 
@@ -1090,7 +1122,9 @@ class Session:
         await self._record_claude_session(runner.session_id)
         await self._set_state("idle")
 
-    async def _run(self, runner: ClaudeRunner, resume_id: str | None) -> None:
+    async def _run(
+        self, runner: ClaudeRunner, resume_id: str | None = None, fork: Fork | None = None
+    ) -> None:
         """Run `runner` until it ends; then mark the session as stopped or failed.
 
         Never raises: runner errors are logged and reported as a `log` event.
@@ -1098,15 +1132,20 @@ class Session:
         Args:
             runner: The runner of this session.
             resume_id: Claude session id to resume, or None.
+            fork: Where to branch off the resumed conversation, or None (PLAN.md D36).
         """
         try:
-            await runner.run(self, self._on_runner_event, resume_id)
+            await runner.run(self, self._on_runner_event, resume_id, fork)
         except Exception as exc:
             log.exception("Claude session failed")
             self._run_error = f"{type(exc).__name__}: {exc}"
             hints = CLAUDE_SETUP_HINT
             if not self.config.claude.use_bedrock:
                 hints += f" {BEDROCK_HINT}"
+            if FORK_REJECTED in str(exc):
+                # Deterministic: the fork point does not match the dropped turn (D36). Say so
+                # instead of pointing at the authentication.
+                hints = FORK_HINT
             await self._emit_safely(
                 Log(level="error", message=f"Claude session failed: {exc} {hints}")
             )
@@ -1479,13 +1518,18 @@ class Session:
         Args:
             step: The tool call that needs a decision.
 
+        Not every escalation comes from a checker: the SDK calls `can_use_tool` for any call
+        that needs permission, so a step the checkers passed can still arrive here because
+        Claude Code's own approval decided to ask (D38). Then there is no stored reason, and
+        `HARNESS_ASKED` says so instead of inventing one.
+
         Returns:
             The human's answer. A cancelled escalation counts as a denial. If the escalation
             cannot be stored, the step is denied with `DB_UNREACHABLE`, because no human could
             see it.
         """
         reason, source = self._pending_reasons.pop(
-            step.tool_use_id or "", ("Approval required.", "internal")
+            step.tool_use_id or "", (HARNESS_ASKED, "harness")
         )
         rendered = _render_safely(step, self.workspace)
         db_id = await self._open_escalation(step, reason, rendered)

@@ -6,6 +6,8 @@ import anyio
 import pytest
 
 from calu.checkers import Decision, Route, Step
+from calu.claude import FakeRunner
+from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
 from calu.config import ChangesConfig, ClaudeConfig, Config, ContextConfig
 from calu.protocol.messages import (
@@ -754,5 +756,60 @@ async def test_a_question_of_the_agent_is_answered_by_the_human(tmp_path: Path):
         # The row says what happened: answered, not allowed and not denied.
         row = store.escalations[int(request.escalation_id)]
         assert row.state == "answered" and row.note == "Spaces"
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_a_fork_point_reaches_the_runner_and_the_uuids_are_recorded(tmp_path: Path):
+    """D36: a fork tells the runner where to branch, and turns keep the uuids it needs."""
+    session, _rec, _store = make_session(tmp_path, [[{"text": "done"}]])
+    fork = Fork(resume_at="entry-of-turn-1", drops_turn="prompt-of-turn-2")
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, resume_id="claude-1", fork=fork)
+        runner = session.runner
+        assert isinstance(runner, FakeRunner)
+        assert runner.fork == fork  # the runner would pass it to resume_session_at/drops_turn
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+    # The uuids come from the events Claude Code replays; the fake runner reports none, so a
+    # turn recorded from it has none either. Feed them by hand to check they are kept.
+    session.context.user_input("fix it", uuid="prompt-uuid")
+    session.context.assistant_entry("assistant-uuid")
+    turn = session.context.end_turn("done")
+    assert turn is not None
+    assert turn.prompt_uuid == "prompt-uuid"
+    assert turn.last_entry_uuid == "assistant-uuid"
+    # A second prompt in the same turn does not move the fork point.
+    session.context.user_input("and this", uuid="later-uuid")
+    assert session.context.current is not None
+    assert session.context.current.prompt_uuid == "later-uuid"  # a new turn, its own prompt
+
+
+async def test_a_confirmation_the_harness_asks_for_escalates_even_after_a_pass(tmp_path: Path):
+    """D38: auto mode can ask, not only allow or deny, and that reaches calu as an escalation."""
+    session, rec, store = make_session(tmp_path, [])
+    step = Step(
+        tool_name="Bash", tool_input={"command": "deploy"}, tool_use_id="t1", cwd=str(tmp_path)
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        answers: list[HumanAnswer] = []
+
+        async def ask() -> None:
+            """Stand in for the SDK's permission callback with no checker escalation behind it."""
+            answers.append(await session.ask(step))
+
+        tg.start_soon(ask)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        # The reason names the harness, so nobody looks for a checker verdict that does not exist.
+        assert "Claude Code's own approval asked for a confirmation" in request.reason
+        assert "had no objection" in request.reason
+        assert store.contexts[int(request.escalation_id)]["tool_name"] == "Bash"
+        await session.decide_escalation(request.escalation_id, "allow", "fine")
+        with anyio.fail_after(10):
+            while not answers:
+                await anyio.sleep(0.01)
+        assert answers[0].allow is True
         await session.stop()
         tg.cancel_scope.cancel()

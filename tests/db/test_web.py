@@ -387,3 +387,77 @@ async def test_a_question_of_the_agent_is_answered_from_the_triage_queue(db_url:
             assert row.state == "answered" and row.note == "Spaces"
     finally:
         await conn.close()
+
+
+async def test_the_fork_points_of_a_session_are_offered_per_turn(db_url: str) -> None:
+    """D36: a turn can be forked before when calu recorded the uuids of it and its predecessor."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        await store.set_claude_session("claude-xyz")
+        for number, (prompt, last) in enumerate([("p1", "a1"), ("p2", "a2"), ("p3", "")], start=1):
+            await store.save_turn(
+                TurnRecord(
+                    index=number,
+                    user_inputs=[f"turn {number}"],
+                    answer="ok",
+                    prompt_uuid=prompt,
+                    last_entry_uuid=last,
+                )
+            )
+
+        # Turn 1 has no predecessor; turn 3 can be forked before (turn 2 has its last entry).
+        points = await herd.fork_points(db, session_id)
+        assert [point.turn for point in points] == [2, 3]
+        assert points[0].resume_at == "a1" and points[0].drops_turn == "p2"
+        assert points[0].command() == "calu run --resume claude-xyz --fork-before-turn 2"
+
+        # The same by Claude's session id, which is what `calu run --resume` takes.
+        by_claude = await herd.fork_point(db, "claude-xyz", 3)
+        assert by_claude is not None
+        assert by_claude.resume_at == "a2" and by_claude.drops_turn == "p3"
+        assert await herd.fork_point(db, "claude-xyz", 1) is None  # nothing to keep
+        assert await herd.fork_point(db, "claude-xyz", 9) is None  # no such turn
+        assert await herd.fork_point(db, "no-such-session", 2) is None
+
+        async with await client_for(db) as client:
+            page = (await client.get(f"/sessions/{session_id}")).text
+            assert "fork before this turn" in page
+            assert "calu run --resume claude-xyz --fork-before-turn 2" in page
+    finally:
+        await conn.close()
+
+
+async def test_a_fork_point_spans_the_runs_of_one_conversation(db_url: str) -> None:
+    """A resumed conversation has a session row per run, and its turns are spread over them."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        first = DatabaseSessionStore(db)
+        await first.start(IDENTITY)
+        await first.set_claude_session("claude-same")
+        await first.save_turn(
+            TurnRecord(index=1, user_inputs=["one"], prompt_uuid="p1", last_entry_uuid="a1")
+        )
+        await first.end("stopped")
+
+        # `calu run --resume claude-same` opens a second row for the same conversation.
+        second = DatabaseSessionStore(db)
+        second_id = await second.start(IDENTITY)
+        await second.set_claude_session("claude-same")
+        await second.save_turn(
+            TurnRecord(index=2, user_inputs=["two"], prompt_uuid="p2", last_entry_uuid="a2")
+        )
+
+        # Turn 1 lives in the first row, turn 2 in the second, and the fork still finds both.
+        point = await herd.fork_point(db, "claude-same", 2)
+        assert point is not None
+        assert point.resume_at == "a1" and point.drops_turn == "p2"
+        # The session page of the second run offers it as well.
+        assert [p.turn for p in await herd.fork_points(db, second_id)] == [2]
+    finally:
+        await conn.close()

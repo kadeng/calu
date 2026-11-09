@@ -319,3 +319,53 @@ Claude Code does **not** see the key, or it would bill the API for the main conv
 **Conclusion.** The setup works today (D37): put `ANTHROPIC_API_KEY` in `~/.config/calu/.env`,
 point the checkers at `anthropic:...` models, and Claude Code keeps the subscription because
 calu blanks the key for it. Re-run this check after a CLI update.
+
+## calu forking its own recorded conversation (2026-11-10, D36 end to end)
+
+**Setup** (`spikes/spike_calu_fork.py <dir>`, CLI 2.1.319, haiku, fake checkers). Three runs of
+`run_session` against a throwaway database: "create alpha.txt", then `--resume` with "create
+beta.txt", then `--resume --fork-before-turn 2` asking which files it created.
+
+**Observations.**
+
+- calu recorded a prompt uuid and a last-entry uuid for **both** turns, from the events Claude
+  Code replays (`replay-user-messages`), and the two turns landed in **different `sessions`
+  rows** — one per run — which is why the fork lookup spans every row with the same Claude
+  session id. A first version joined within one row and found nothing; the database test
+  `test_a_fork_point_spans_the_runs_of_one_conversation` now covers it.
+- `herd.fork_point` returned the right pair, and the forked run answered "alpha.txt": it kept
+  turn 1 and did not know turn 2. Its Claude session id differed from the original's, so the
+  conversation that was forked from is untouched.
+
+**Conclusion.** `calu run --resume <id> --fork-before-turn <n>` works, and the session page
+offers the command per turn.
+
+## Does auto mode ask, and would calu notice? (2026-11-10, D38)
+
+**Why it matters.** calu's PASS hands the decision to Claude Code's own approval (D21). The
+owner observed that auto mode can also *ask* for a confirmation rather than only allowing or
+denying, which should become an escalation even though no checker objected.
+
+**Setup** (`spikes/spike_auto_mode_ask.py`, CLI 2.1.319, haiku). `permission_mode="auto"`, a
+PreToolUse hook that returns an empty output (no decision, exactly as calu does for PASS), and a
+`can_use_tool` that records what it is asked about and refuses. Four prompts: `ls`, a write
+**outside** the project directory, `rm -rf` of a directory, and a first `WebFetch` of a domain.
+
+**Observations.**
+
+- `can_use_tool` was **never** called. Auto mode allowed all four, including the write outside
+  the project directory and the first fetch of a domain never seen before.
+- So in headless mode auto mode is more permissive than the confirmation dialog of the
+  interactive terminal, where the owner saw the question. It is not a layer to lean on: the step
+  that wrote outside the project would have been stopped only by calu's own rules.
+- The handling is nevertheless in place and is the only one the SDK allows: a permission
+  question can reach a host program through `can_use_tool` and nowhere else, and calu's
+  `can_use_tool` goes straight to `Session.ask`, which opens an escalation and waits without a
+  limit. A step the checkers passed therefore escalates if the harness asks, with
+  `HARNESS_ASKED` as the reason so nobody looks for a checker verdict that does not exist
+  (`tests/unit/test_session.py::test_a_confirmation_the_harness_asks_for_escalates_even_after_a_pass`).
+
+**Conclusion.** calu handles it, and this is the verified path; what could not be reproduced is
+auto mode asking at all in headless mode. Re-run this spike after a CLI update — if the
+classifier starts asking, nothing in calu has to change, and if it asks a lot, that is a reason
+to look at `auto_escalate` instead.
