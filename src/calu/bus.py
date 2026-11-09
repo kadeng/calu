@@ -99,6 +99,10 @@ class Bus:
         self.last_seq = 0
         self._recent: deque[tuple[int, RecordedEvent]] = deque(maxlen=capacity)
         self._clients: list[Subscription] = []
+        self.no_clients = anyio.Event()
+        """Set while no client is subscribed; `calu run` waits for it before it ends a run that
+        a client is watching."""
+        self.no_clients.set()
 
     async def publish(self, event: Event) -> None:
         """Number `event`, keep it for replay and hand it to every client. Never raises.
@@ -125,6 +129,7 @@ class Bus:
         """
         subscription = Subscription(bus=self)
         self._clients.append(subscription)
+        self.no_clients = anyio.Event()
         return subscription
 
     def unsubscribe(self, subscription: Subscription) -> None:
@@ -135,6 +140,8 @@ class Bus:
         """
         if subscription in self._clients:
             self._clients.remove(subscription)
+        if not self._clients:
+            self.no_clients.set()
 
     @property
     def clients(self) -> int:

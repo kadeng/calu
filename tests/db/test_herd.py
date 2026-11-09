@@ -3,9 +3,11 @@
 import pytest
 
 from calu import herd
+from calu.checkers import Decision
 from calu.db import Db, connect
+from calu.evals import cases_from_escalations
 from calu.setup import setup
-from calu.store import DatabaseSessionStore, SessionIdentity, StepRow
+from calu.store import CheckerRun, DatabaseSessionStore, SessionIdentity, StepRow
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -48,5 +50,49 @@ async def test_sessions_escalations_and_resolution(db_url: str) -> None:
         await store.end("stopped")
         assert await herd.sessions(db) == []
         assert len(await herd.sessions(db, active_only=False)) == 1
+    finally:
+        await owner.close()
+
+
+async def test_resolved_escalations_become_evaluation_cases(db_url: str) -> None:
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        # A step the command checker escalated and a human then allowed becomes a case.
+        checked = await store.add_step(
+            StepRow(seq=1, tool_name="Bash", tool_input={"command": "deploy"})
+        )
+        await store.add_checker_run(
+            checked,
+            CheckerRun(
+                checker_name="command",
+                checker_version=1,
+                model="test:model",
+                decision="escalate",
+            ),
+        )
+        first = await store.open_escalation(
+            "why", {"tool_input": {"command": "deploy"}, "files": {}}, checked
+        )
+        await herd.resolve(db, first, "allow", "go ahead")
+        # A step the rules escalated (no checker run) says nothing about the checkers.
+        unchecked = await store.add_step(
+            StepRow(seq=2, tool_name="Bash", tool_input={"command": "sudo ls"})
+        )
+        second = await store.open_escalation(
+            "deny rule", {"tool_input": {"command": "sudo ls"}}, unchecked
+        )
+        await herd.resolve(db, second, "deny")
+        # An open escalation has no human decision yet.
+        await store.open_escalation("open", {"tool_input": {"command": "x"}}, checked)
+
+        cases = await cases_from_escalations(db)
+        assert [c.name for c in cases] == [f"escalation-{first}"]
+        assert cases[0].checker == "command"
+        assert cases[0].expected == [Decision.ALLOW, Decision.ESCALATE]
+        assert cases[0].source == "escalations"
     finally:
         await owner.close()

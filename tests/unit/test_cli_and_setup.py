@@ -83,3 +83,10 @@ def test_herd_commands_need_the_admin_credential(
     for argv in (["sessions"], ["escalations"], ["resolve", "1", "allow"]):
         assert run_cli(monkeypatch, store, argv, "") == 1
         assert "no credential 'admin'" in capsys.readouterr().err
+
+
+def test_evals_needs_the_admin_credential(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert run_cli(monkeypatch, store, ["evals"], "") == 1
+    assert "no credential 'admin'" in capsys.readouterr().err

@@ -15,6 +15,7 @@
     calu escalations [SESSION]     list the open escalations
     calu resolve ID allow|deny [--note TEXT]
                                    resolve an escalation; the waiting session continues
+    calu evals [FILE ...]          measure how well the configured checkers decide
 
 Passwords are read from the terminal without echo. If stdin is not a terminal, each password
 is read as one line from stdin (for scripts and tests).
@@ -35,6 +36,7 @@ from calu.attach import attach
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
+from calu.evals.cli import run_evals
 from calu.protocol.client import RequestFailed
 from calu.run import RunOptions, run_session
 from calu.setup import DEFAULT_CHECKER_MODEL, setup
@@ -465,6 +467,56 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
     _admin_command(store, work)
 
 
+def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Run the checker evaluation and print its report.
+
+    Args:
+        args: Parsed arguments (`files`, `from_db`, `no_builtin`, `model`, `repeat`,
+            `directory`, `project`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, a case file cannot be read, or the run
+            found a critical miss (a checker let a step through that it should not have).
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    workspace = Path(args.directory).resolve()
+    critical = 0
+
+    async def work(db: Db) -> str:
+        """Run the evaluation.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report text.
+
+        Raises:
+            CliError: If a case file cannot be read.
+        """
+        nonlocal critical
+        try:
+            report, critical = await run_evals(
+                db,
+                workspace,
+                args.project,
+                args.files,
+                from_db=args.from_db,
+                builtin=not args.no_builtin,
+                model=args.model,
+                repeat=args.repeat,
+            )
+        except OSError as exc:
+            raise CliError(f"cannot read a case file: {exc}") from exc
+        return report
+
+    _admin_command(store, work)
+    if critical:
+        raise CliError(f"{critical} critical miss(es): a checker let a step through")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser of `calu`.
 
@@ -535,6 +587,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("decision", choices=["allow", "deny"])
     p.add_argument("--note", help="text for Claude and for the record")
     p.set_defaults(handler=cmd_resolve)
+
+    p = sub.add_parser("evals", help="measure how well the configured checkers decide")
+    p.add_argument("files", nargs="*", help="further YAML case files")
+    p.add_argument("--directory", default=".", help="project directory whose settings apply")
+    p.add_argument("--project", help="name of the project row whose settings apply")
+    p.add_argument(
+        "--from-db", action="store_true", help="also use the resolved escalations as cases"
+    )
+    p.add_argument("--no-builtin", action="store_true", help="leave out the built-in cases")
+    p.add_argument("--model", help="one model for every checker, instead of the configured ones")
+    p.add_argument("--repeat", type=int, default=1, help="how often each case runs")
+    p.set_defaults(handler=cmd_evals)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove"])

@@ -229,6 +229,7 @@ calu run  ──► asks for the password ──► Argon2id(password, salt) ─
 | `chat_summaries` | session, folded summary text, covered turns |
 | `audit_log` | who changed which configuration, rule or checker definition, when |
 | `comments` | a user's comment on a selection in a diff or a file, with the step's turn (migration 0003) |
+| `escalations.context` | also holds the tool input with workspace-relative paths and the content of the file an edit would change, so that `calu evals` can rebuild the step as a case |
 | `client_tokens` | SHA-256 of the tokens with which clients may attach to a session (migration 0004) |
 
 Narrator instructions may stay built into calu (not in the database); `calu setup` loads the
@@ -251,6 +252,7 @@ session cancelled.
 | `calu credential list/set/remove` | manage the encrypted credential store (D12), e.g. `set admin` for an existing PostgreSQL server |
 | `calu project add <dir>` | register a project (git remote, settings) in the database; writes nothing into the project by default and leaves existing Claude Code configuration untouched |
 | `calu config get/set`, `calu checker list/show/edit`, `calu rules ...` | configuration in the database |
+| `calu evals [FILE ...]` | run the checkers on evaluation cases (built-in, files, resolved escalations) and report accuracy, critical misses and over-escalations |
 | `calu run [<dir>]` | start a session in the foreground (for tmux); prints the WebSocket address and a client token |
 | `calu attach <session>` | terminal client for a running session |
 | `calu sessions`, `calu escalations`, `calu resolve <id> allow\|deny [--note]` | herd management through the database |
@@ -309,5 +311,6 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    with operator rights).
 5. **Sandboxing of tool calls**: the settings exist (D15); still open are the network policy
    per project (Q5), the nested-sandbox case in Docker (Q1) and `calu project add`.
+   The evaluation of the checkers (`calu evals`, ported from sitl) is done.
 6. **Herd management:** a web UI on top of the commands of phase 3.
 7. **IDE client** (from sitl's VSCode extension), packaging as a single binary.

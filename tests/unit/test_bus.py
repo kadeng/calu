@@ -88,3 +88,14 @@ async def test_replay_reports_a_gap_in_the_buffer():
     events, complete = bus.replay(0)
     assert not complete and [e.params["seq"] for e in events] == [3, 4, 5]
     assert not bus.replay(1)[1]
+
+
+async def test_the_bus_reports_when_the_last_client_detaches():
+    bus = Bus()
+    assert bus.no_clients.is_set()
+    first, second = bus.subscribe(), bus.subscribe()
+    assert not bus.no_clients.is_set()
+    first.close()
+    assert not bus.no_clients.is_set()  # one client is still attached
+    second.close()
+    assert bus.no_clients.is_set()

@@ -37,9 +37,10 @@ phases.
 | `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |
 | `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve` (database only) |
+| `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
-| `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker and result checker agents |
+| `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker and result checker agents, the checkers' `read_file` tool |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
@@ -48,7 +49,7 @@ phases.
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |
 | `src/calu/testing.py` | Rule-based fake checkers for tests without model calls |
 | `src/calu/db/` | Connections (`Db`: one connection, several tasks), migrations (`migrations/NNNN_*.sql`), notifications (`notify.py`), local Docker database (`local.py`, `local-compose.yml`) |
-| `src/calu/defaults/` | Built-in checker instructions and rule lists, loaded into the database |
+| `src/calu/defaults/` | Built-in checker instructions and rule lists (loaded into the database) and the built-in evaluation cases |
 | `tests/unit/` | Tests without database, `claude` or API keys |
 | `tests/db/` | Tests against the test database (marker `db`) |
 

@@ -78,8 +78,9 @@ class RunOptions:
     """What `calu run` was asked to do.
 
     `prompt` is sent as the first user message. `interactive` reads further messages from stdin
-    until end of input or `/quit`; without it the command ends after the first turn, which is
-    the form for unattended runs (`calu run -p "..." < /dev/null`).
+    until end of input or `/quit`; without it the command ends when Claude has nothing left to
+    do, which is the form for unattended runs (`calu run -p "..." --batch`). A client that is
+    attached when that moment comes keeps the run alive until it detaches or sends `shutdown`.
     """
 
     workspace: Path
@@ -388,7 +389,7 @@ async def _run(
             if options.interactive:
                 await read_lines(lambda text: session.send_chat(ChatSendParams(text=text)))
             elif server is not None:
-                await _first_of(idle, server.shutdown)
+                await _until_done(idle, server, bus)
             else:
                 await idle.wait()
         except SessionError as exc:
@@ -443,23 +444,31 @@ async def _listen(
         print(f"calu: the protocol server could not start: {exc}", flush=True)
 
 
-async def _first_of(idle: IdleSignal, shutdown: anyio.Event) -> None:
-    """Return as soon as the session is idle or a client asked the process to stop.
+async def _until_done(idle: IdleSignal, server: SessionServer, bus: Bus) -> None:
+    """Wait until an unattended run is finished, or a client ends it.
+
+    A run without `--interactive` ends when Claude has nothing left to do. A client that is
+    attached at that moment keeps the session alive, because it may want to send the next
+    message: the run then ends when that client sends `shutdown` or the last client detaches.
 
     Args:
         idle: The idle signal of the session.
-        shutdown: Set by a client's `shutdown` request.
+        server: The protocol server, for its `shutdown` event.
+        bus: The bus, for the number of attached clients.
     """
     async with anyio.create_task_group() as tg:
 
         async def wait_idle() -> None:
-            """Wait for the idle signal, then end the wait."""
+            """End the wait when the session is idle and nobody is watching."""
             await idle.wait()
+            if bus.clients:
+                log.info("the session is idle; waiting for its %d client(s)", bus.clients)
+                await bus.no_clients.wait()
             tg.cancel_scope.cancel()
 
         async def wait_shutdown() -> None:
-            """Wait for the shutdown event, then end the wait."""
-            await shutdown.wait()
+            """End the wait when a client asked the process to stop."""
+            await server.shutdown.wait()
             tg.cancel_scope.cancel()
 
         tg.start_soon(wait_idle)
