@@ -17,6 +17,29 @@ State at the end of the planning session (2026-11-09). Read this, then `AGENTS.m
   policy (Q5), long-unanswered escalations (Q6), checkers on the Anthropic subscription through
   headless Claude Code (Q7).
 
+## Background from the planning discussion
+
+- **Why Python (2026-11-09):** the owner first wanted a single executable and asked about Go or
+  Rust with a Pydantic AI-like library. Findings then: no Go port of Pydantic AI was found; Go has
+  langchaingo and several young typed-agent libraries; Rust has Rig (Anthropic, OpenAI, Bedrock
+  as the `rig-bedrock` crate; Mistral and Fireworks not confirmed; pre-1.0). The Claude Agent SDK
+  is official only for Python and TypeScript; community ports of its control protocol exist for
+  Go (e.g. panbanda/claude-agent-sdk-go) and Rust (e.g. claude-agent-sdk-rs, rusty_claw), all
+  young. The owner then simplified: Python now (reusing sitl's core of about 10,000 lines plus
+  3,300 lines of unit tests), uv package first, PyApp or PyInstaller later, a port to Go or Rust
+  possible once calu works.
+- **Anthropic subscription for checkers:** no model library can call the API with the claude.ai
+  subscription; only Claude Code can. Hence the planned model type that runs checks through
+  headless Claude Code (`PLAN.md` §3.2, Q7). The owner's requirement of subscription support
+  stands in `REQUIREMENTS.md`.
+- **Why the sandbox encloses the tool calls (D4):** a Bash command running as the same user as
+  Claude Code can open `/proc/<claude-pid>/fd/0` and write forged messages into Claude Code's
+  stdin (forged hook answers or user messages), and could change Claude Code's code or settings.
+  Yama's ptrace restriction does not prevent this. Separating only calu from Claude Code is
+  therefore not enough; tool commands must not reach the Claude Code process or its files. A
+  separate Unix user for Claude Code may not be possible where calu will be used, so the
+  mechanism stays open (Q1).
+
 ## Working rules the owner set
 
 - Until the owner says otherwise, only these files in calu may be changed: `PLAN.md`,
