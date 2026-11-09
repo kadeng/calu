@@ -11,6 +11,7 @@ through reviewer subagents).
 """
 
 import secrets
+import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -19,7 +20,7 @@ from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
 from pydantic_ai.capabilities import Caching
 from pydantic_ai.models import Model
 
-from calu.checkers.checker import CheckContext, context_parts
+from calu.checkers.checker import CheckContext, context_parts, elapsed_ms
 from calu.markdown import fence
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
@@ -59,6 +60,21 @@ class ResultReview(BaseModel):
             "result, up to about 200 words for a large one."
         )
     )
+
+
+@dataclass(frozen=True)
+class ResultOutcome:
+    """The result of one result-checker model call: the review and what it cost.
+
+    The token counts are None if the call failed (then `review` is an ESCALATE review that
+    names the error). `duration_ms` is the wall-clock time of the call, retries included.
+    """
+
+    review: ResultReview
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    duration_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -159,8 +175,25 @@ class ResultChecker:
             context: Cached project/conversation context and recent turns.
 
         Returns:
-            The review.
+            The review; `run` returns the same review with the cost of the call.
         """
+        return (await self.run(result, context)).review
+
+    async def run(self, result: SubagentResult, context: CheckContext) -> ResultOutcome:
+        """Review `result` and return the review with the cost of the model call.
+
+        Never raises for model or network errors (see the class docstring); the session stores
+        the outcome as a `checker_runs` row.
+
+        Args:
+            result: The subagent's task and result.
+            context: Cached project/conversation context and recent turns.
+
+        Returns:
+            The review, the token counts (None after a failure) and the duration in
+            milliseconds.
+        """
+        started = time.monotonic()
         try:
             run = await run_bounded(
                 self.agent,
@@ -171,12 +204,21 @@ class ResultChecker:
                 max_tokens=self.max_tokens,
             )
         except Exception as exc:  # every failure must reach a human
-            return ResultReview(
-                verdict=ResultVerdict.ESCALATE,
-                note=f"The subagent result checker failed ({type(exc).__name__}: {exc}).",
-                summary="Subagent result not reviewed because the check failed.",
+            return ResultOutcome(
+                review=ResultReview(
+                    verdict=ResultVerdict.ESCALATE,
+                    note=f"The subagent result checker failed ({type(exc).__name__}: {exc}).",
+                    summary="Subagent result not reviewed because the check failed.",
+                ),
+                duration_ms=elapsed_ms(started),
             )
-        return run.output
+        return ResultOutcome(
+            review=run.output,
+            input_tokens=run.usage.input_tokens,
+            output_tokens=run.usage.output_tokens,
+            cache_read_tokens=run.usage.cache_read_tokens,
+            duration_ms=elapsed_ms(started),
+        )
 
 
 def _require_note(output: ResultReview) -> ResultReview:

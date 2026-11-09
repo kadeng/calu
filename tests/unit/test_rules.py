@@ -1,16 +1,22 @@
-"""The allow and deny lists: shell splitting, rule lists and their evaluation.
-
-The tests of the session's use of the rules come back with the session runner (phase 3).
-"""
+"""The allow and deny lists: shell splitting, rule lists, their evaluation and the session."""
 
 from pathlib import Path
 
+import anyio
 import pytest
 
 from calu.checkers import Step
 from calu.checkers.rules import Rules, parse_rules
 from calu.checkers.shell import parse_command
-from tests.unit.helpers import default_rules
+from calu.config import Config
+from calu.protocol.messages import (
+    AutoEscalate,
+    ChatSendParams,
+    CheckResult,
+    EscalationRequest,
+    TurnResult,
+)
+from tests.unit.helpers import Recorder, default_rules, make_session
 
 HOME = Path("/home/u")
 
@@ -192,3 +198,45 @@ class TestDefaultRules:
     def test_unlisted_read_is_noted_for_the_checker(self, tmp_path: Path):
         outcome = default_rules(tmp_path).evaluate(read("/opt/data.csv"))
         assert not outcome.allowed and "read allowlist" in outcome.notes[0]
+
+
+pytestmark = pytest.mark.anyio
+
+
+async def run_one(
+    tmp_path: Path, tool: str, tool_input: dict, config: Config | None = None
+) -> Recorder:
+    """Run one scripted tool call and deny an escalation if one is raised."""
+    session, rec, _ = make_session(tmp_path, [[{"tool": tool, "input": tool_input}]], config)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        with anyio.fail_after(10):
+            while not rec.of(TurnResult):
+                if rec.of(EscalationRequest):
+                    esc = rec.of(EscalationRequest)[0]
+                    await session.decide_escalation(esc.escalation_id, "deny", None)
+                    break
+                await anyio.sleep(0.01)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    return rec
+
+
+async def test_session_runs_allow_listed_bash_without_checker(tmp_path: Path):
+    # "calu:escalate" would make the fake checker escalate; the allowlist skips the checker.
+    rec = await run_one(tmp_path, "Bash", {"command": "ls calu:escalate"})
+    result = rec.of(CheckResult)[0]
+    assert result.decision == "ALLOW" and "allowlists" in result.reason
+
+
+async def test_session_sends_unlisted_reads_to_the_command_checker(tmp_path: Path):
+    rec = await run_one(tmp_path, "Read", {"file_path": "/opt/calu:escalate"})
+    result = rec.of(CheckResult)[0]
+    assert result.route == "command" and result.decision == "ESCALATE"
+
+
+async def test_auto_escalation_also_covers_allow_listed_commands(tmp_path: Path):
+    config = Config(auto_escalate=AutoEscalate(commands=True))
+    rec = await run_one(tmp_path, "Bash", {"command": "ls"}, config)
+    assert "The rules decided ALLOW" in rec.of(EscalationRequest)[0].reason

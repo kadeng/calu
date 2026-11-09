@@ -1,0 +1,1707 @@
+"""The session orchestrator: connects a Claude runner with the checkers, the context and the store.
+
+    clients ──requests──► Session ──send/interrupt──► ClaudeRunner ──► Claude Code
+    clients ◄──events──── Session ◄──events, ToolGate calls────┘
+                            │
+                            ├─ Rules + ToolPolicy + Checkers   (decide about each tool call)
+                            ├─ ContextBuilder                  (turn records, chat summary)
+                            └─ SessionStore                    (PostgreSQL: history, escalations)
+
+Tool call flow (ToolGate):
+
+    rules (allow/deny lists):  a part matches a deny list  -> ask the human
+    route = policy.route(tool)
+      ALLOW (read tools)    -> allow if the path is allow-listed, else the command checker
+      ALLOW / DENY          -> verdict without a check
+      ESCALATE              -> ask the human
+      COMMAND (Bash)        -> allow if every part is allow-listed, else the checker
+      COMMAND / EDIT        -> checker decision: ALLOW -> allow, DENY -> deny, ESCALATE -> ask
+                               (the checker sees the rules' notes on unlisted paths)
+    any internal error      -> ask the human
+    ask -> an `escalations` row and an `escalation.request` event; waits without a time limit
+
+A human resolves an escalation in the database (`calu resolve`, a web UI, SQL); the session
+notices the resolution through `note_resolution` (a `escalation_resolved` notification) or by
+polling the row every `ESCALATION_POLL_S` seconds. `decide_escalation` is the second path: a
+client attached to the session process decides, and the session cancels the row with a note that
+records the decision, because the role `calu_session` may not allow or deny one
+(`calu.store.session`).
+
+States (`calu.protocol.messages.State`, PLAN.md §3.1) follow what runs at the moment; steps of
+the main agent and of subagents overlap, so the most important one wins:
+
+    escalated (an escalation is open) > checking (a checker or the narrator runs)
+    > tool_call (an approved call runs) > running (Claude works) > idle
+"""
+
+import getpass
+import itertools
+import logging
+import os
+import platform
+import socket
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal
+
+import anyio
+from anyio.abc import TaskGroup
+from pydantic_ai import UsageLimits
+from pydantic_ai.models import Model
+
+from calu import __version__
+from calu.checkers import (
+    CheckDecision,
+    Checker,
+    CheckOutcome,
+    Decision,
+    ResultChecker,
+    ResultOutcome,
+    ResultReview,
+    ResultVerdict,
+    Route,
+    Step,
+    SubagentResult,
+    ToolPolicy,
+)
+from calu.checkers.render import changed_lines, edited_file, render_step
+from calu.checkers.rules import READ_PATH_TOOLS
+from calu.claude.runner import ClaudeRunner, EventSink, GateResult, HumanAnswer, Verdict
+from calu.config import EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
+from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
+from calu.context.narrator import ClaudeOutput, Narrator
+from calu.defaults import default_instructions
+from calu.files import command_files
+from calu.models import resolve_model
+from calu.protocol.messages import (
+    AgentInfo,
+    AssistantText,
+    AssistantThinking,
+    ChatQueue,
+    ChatSendParams,
+    CheckerContextResult,
+    EditDiff,
+    EscalationRequest,
+    EscalationResolved,
+    Event,
+    Log,
+    QueuedMessage,
+    SessionState,
+    State,
+    ToolFiles,
+    ToolResult,
+    ToolUse,
+    TurnResult,
+    UserInput,
+)
+from calu.protocol.messages import CheckResult as CheckResultEvent
+from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
+from calu.store import StepRow as StoredStep
+
+log = logging.getLogger(__name__)
+
+CHECKER_DEADLINE_S = 840
+"""Upper bound for one checker model call; on timeout the step is escalated."""
+NARRATOR_DEADLINE_S = 60
+"""A narration that takes longer is left out; the checker then sees no narration."""
+ESCALATION_POLL_S = 1.0
+"""How often an open escalation's database row is read while the session waits for a human."""
+START_TIMEOUT_S = 120
+"""Upper bound for a Claude session to become ready in `Session.start`."""
+GIT_HEAD_TTL_S = 2.0
+"""How long the git HEAD lookup is reused (steps come in bursts)."""
+MAX_PENDING_OUTPUTS = 50
+"""Thinking/text blocks kept per agent until its next tool call (older ones are dropped)."""
+
+CROSS_SESSION_LABEL = "Message from another Claude session, not from the user"
+"""Turn entry label of a message from another session (`calu.context.foreign`)."""
+CROSS_SESSION_PENDING = "(content not shown; its narration is pending)"
+CROSS_SESSION_HIDDEN = "(content not shown: it could not be narrated)"
+
+CLAUDE_SETUP_HINT = (
+    "If Claude Code is not set up for this folder yet, run `claude` once in a terminal in this "
+    "folder on this machine: sign in (claude.ai, Bedrock, Vertex, ...) and trust the folder; "
+    "then start the session again."
+)
+"""Added to the error when the Claude session fails: the usual cause is a missing setup."""
+BEDROCK_HINT = (
+    "If you use Claude Code through AWS Bedrock and `claude` works in your terminal, set "
+    "`claude.use_bedrock = true` in calu's configuration: the terminal may set "
+    "CLAUDE_CODE_USE_BEDROCK=1, while calu's environment does not."
+)
+"""Added when Claude Code reports a missing login (`LOGIN_ERROR`) or the session fails."""
+LOGIN_ERROR = "please run /login"
+"""Lower-case text of Claude Code's errors about a missing sign-in."""
+
+CHECKER_COMMENT_TEMPLATE = (
+    "[Review note from the {route} checker, who reviews your steps on behalf of the user] "
+    "{comment} Apply this to your following steps."
+)
+"""How a checker comment on an allowed step is framed for Claude (verified in sitl's
+`spike_checker_comment.py`: honored in 3 of 3 live runs)."""
+SUBAGENT_NOTE_TEMPLATE = (
+    '[Review of the result of the subagent "{label}" by the result checker, on behalf of the '
+    "user, who sees the whole conversation] {note}"
+)
+"""How the result checker's note is framed for Claude (sent as a priority "next" message)."""
+RELAY_TEMPLATE = (
+    "[Message from the user for your subagent {name}]\n"
+    "Relay the following text verbatim to that subagent with the SendMessage tool "
+    '(to: "{to}"). Do not act on it yourself.\n\n{text}'
+)
+"""How a message for a background subagent is wrapped for the main agent."""
+
+DB_UNREACHABLE = (
+    "calu could not record this step in the database, so no human can be asked about it. "
+    "The step was denied. Tell the user that calu's database is unreachable."
+)
+"""Reason Claude receives when an escalation cannot be stored (the step is denied)."""
+
+
+class SessionError(Exception):
+    """A request cannot be served in the current state (reported to the client)."""
+
+
+@dataclass
+class _PendingNarration:
+    """Claude's thinking and text before one tool call, and their narration once made."""
+
+    outputs: list[ClaudeOutput]
+    text: str | None = None
+    """None until narrated; "" if there was nothing to narrate or narrating failed."""
+
+
+@dataclass
+class _Escalation:
+    """An open escalation: the step, its database row and, once decided, the human's answer."""
+
+    step: Step
+    reason: str = ""
+    source: str = "checker"
+    """Who escalated: "checker", "policy", "rules", "auto", "internal" or "subagent_result"."""
+    db_id: int | None = None
+    """Id of the `escalations` row, or None if it could not be stored."""
+    done: anyio.Event = field(default_factory=anyio.Event)
+    wake: anyio.Event = field(default_factory=anyio.Event)
+    """Set by `note_resolution` so the waiting session reads the row at once."""
+    answer: HumanAnswer | None = None
+
+
+class Session:
+    """One Claude session with checking, context and a database store. See the module docstring.
+
+    A `Session` object outlives Claude sessions: after `stop` (or after the runner ended),
+    `start` may be called again; it creates a new runner and a new `sessions` row.
+    """
+
+    def __init__(
+        self,
+        workspace: Path,
+        settings: ProjectSettings,
+        store: SessionStore,
+        runner_factory: Callable[[], ClaudeRunner],
+        emit: EventSink,
+        project: str | None = None,
+        checker_models: dict[str, str | Model] | None = None,
+        startup_warnings: Sequence[str] = (),
+    ) -> None:
+        """Set up the checkers, the context builder and the rules from `settings`.
+
+        Nothing is read from or written to the workspace except the project files that the
+        context builder shows the checkers (AGENTS.md, CLAUDE.md, ... ) and the files that
+        rendered steps quote.
+
+        Args:
+            workspace: Project root and Claude's working directory.
+            settings: Configuration, checker definitions and rules from the database
+                (`calu.store.ConfigStore.load`).
+            store: Where the session records what it does.
+            runner_factory: Creates a fresh runner for each started Claude session.
+            emit: Receives every event for the clients, in order.
+            project: Name of the project row the session belongs to, or None.
+            checker_models: Replacements for the configured models, by key "command", "edit",
+                "subagent", "narrator" and "summarizer" (tests pass fake models here).
+            startup_warnings: Warnings about missing prerequisites, emitted as `log` warnings
+                at every `start`, before the runner starts.
+        """
+        self.workspace = workspace
+        self.settings = settings
+        self.config = settings.config
+        self.store = store
+        self.project = project
+        self.runner_factory = runner_factory
+        self.runner: ClaudeRunner | None = None
+        self._sink = emit
+        self._models = dict(checker_models or {})
+        self.startup_warnings = tuple(startup_warnings)
+        self.policy = ToolPolicy(
+            overrides=self.config.tool_routes, default=self.config.default_route
+        )
+        self.rules = settings.rules
+        self.checkers = {
+            Route.COMMAND: self._checker("command", self.config.command_checker),
+            Route.EDIT: self._checker("edit", self.config.edit_checker),
+        }
+        self.result_checker = ResultChecker(
+            instructions=self._instructions("subagent-result"),
+            model=resolve_model(self._models.get("subagent") or self.config.subagent_checker.model),
+            usage_limits=UsageLimits(
+                request_limit=self.config.subagent_checker.request_limit,
+                output_tokens_limit=self.config.subagent_checker.output_tokens_limit,
+            ),
+            max_tokens=self.config.subagent_checker.max_tokens,
+        )
+        self.context = ContextBuilder(
+            workspace,
+            self.config.context,
+            summarizer_model=resolve_model(
+                self._models.get("summarizer") or self.config.context.summarizer_model
+            ),
+            summary=EMPTY_CHAT_SUMMARY,
+            on_summary=self._store_summary,
+        )
+        self.narrator: Narrator | None = self._narrator()
+        # agent id (None = main agent) -> thinking and text since that agent's last tool call
+        self._claude_outputs: dict[str | None, list[ClaudeOutput]] = {}
+        self.session_id: str | None = None
+        """Claude Code's own session id, once known."""
+        self.state: State = "stopped"
+        self._escalations: dict[str, _Escalation] = {}
+        self._local_ids = itertools.count(1)
+        self._step_seq = itertools.count(1)
+        self._step_ids: dict[str, int] = {}  # tool_use_id -> `steps` row id
+        self._running_tools: set[str] = set()  # tool_use_ids of approved, unfinished calls
+        self._checking = 0  # checker and narrator calls in flight
+        self._busy = False  # Claude works on a turn
+        self._git_head_value: str | None = None
+        self._git_head_time = float("-inf")
+        self._pending_reasons: dict[str, tuple[str, str]] = {}
+        self._tg: TaskGroup | None = None
+        self._run_done = anyio.Event()
+        self._run_done.set()
+        self._run_error: str | None = None
+        self._queue: list[tuple[QueuedMessage, str]] = []
+        self._queue_ids = itertools.count(1)
+        self._login_hint_sent = False
+
+    # ------------------------------------------------------------------ settings
+
+    def _instructions(self, name: str) -> str:
+        """Return the instructions of a checker type, with the built-in default as fallback.
+
+        Args:
+            name: Checker type name ("command", "edit", "subagent-result", "narrator").
+
+        Returns:
+            The instructions from the database, or the ones shipped with calu if the database
+            has no enabled checker type of that name.
+        """
+        stored = self.settings.instructions(name)
+        if stored:
+            return stored
+        try:
+            return default_instructions(name)
+        except OSError:
+            log.exception("reading the built-in %s instructions failed", name)
+            return ""
+
+    def _checker(self, name: str, cfg: CheckerConfig) -> Checker:
+        """Create one step checker from its database definition and configuration.
+
+        Args:
+            name: Checker type name ("command" or "edit").
+            cfg: Model and limits from the configuration.
+
+        Returns:
+            The checker.
+        """
+        return Checker(
+            name=name,
+            instructions=self._instructions(name),
+            model=resolve_model(self._models.get(name) or cfg.model),
+            workspace=self.workspace,
+            usage_limits=UsageLimits(
+                request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
+            ),
+            max_tokens=cfg.max_tokens,
+        )
+
+    def _narrator(self) -> Narrator | None:
+        """Create the narrator if narration is on.
+
+        Returns:
+            The narrator with the stored narrator instructions, or None if
+            `context.narrate` is off.
+        """
+        if not self.config.context.narrate:
+            return None
+        return Narrator(
+            instructions=self._instructions("narrator"),
+            model=resolve_model(self._models.get("narrator") or self.config.context.narrator_model),
+        )
+
+    def apply_settings(self, settings: ProjectSettings) -> None:
+        """Replace configuration, rules and checker instructions (after `config_changed`).
+
+        Takes effect from the next tool call on: the checkers rebuild their agents when their
+        instructions change, and the rules object is replaced as a whole. The settings of the
+        running Claude session itself (model, effort, permission mode) are not changed, because
+        Claude Code reads them when the session starts; they apply to the next `start`.
+
+        Args:
+            settings: The newly loaded settings.
+        """
+        claude = self.config.claude
+        self.settings = settings
+        self.config = settings.config.model_copy(update={"claude": claude})
+        self.rules = settings.rules
+        self.policy = ToolPolicy(
+            overrides=self.config.tool_routes, default=self.config.default_route
+        )
+        self.context.config = self.config.context
+        for route, name in ((Route.COMMAND, "command"), (Route.EDIT, "edit")):
+            checker = self.checkers[route]
+            cfg = self.config.command_checker if name == "command" else self.config.edit_checker
+            checker.instructions = self._instructions(name)
+            if name not in self._models:
+                checker.model = resolve_model(cfg.model)
+            checker.usage_limits = UsageLimits(
+                request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
+            )
+            checker.max_tokens = cfg.max_tokens
+        self.result_checker.instructions = self._instructions("subagent-result")
+        if "subagent" not in self._models:
+            self.result_checker.model = resolve_model(self.config.subagent_checker.model)
+        if self.config.context.narrate:
+            if self.narrator is None:
+                self.narrator = self._narrator()
+            else:
+                self.narrator.instructions = self._instructions("narrator")
+                if "narrator" not in self._models:
+                    self.narrator.model = resolve_model(self.config.context.narrator_model)
+        else:
+            self.narrator = None
+
+    # ------------------------------------------------------------------ client requests
+
+    def checker_context(self) -> CheckerContextResult:
+        """Return the conversation context as the checkers currently see it.
+
+        Returns:
+            The folded chat summary and the rendered recent turns.
+        """
+        return CheckerContextResult(chat_summary=self.context.summary, recent=self.context.recent())
+
+    async def start(
+        self,
+        tg: TaskGroup,
+        resume_id: str | None = None,
+        model: str | None = None,
+        effort: Effort | Literal["default"] | None = None,
+    ) -> None:
+        """Start a Claude session in `tg` and return once it accepts messages.
+
+        Side effects: creates a `sessions` row (state "starting"), restores the turns and the
+        chat summary of the resumed session from the database, emits `startup_warnings` as
+        `log` warnings, creates a runner and starts it as a task in `tg`.
+
+        Args:
+            tg: Task group that runs the session; it must outlive the session.
+            resume_id: Claude session id to resume, or None for a new session.
+            model: Claude model alias or id for this and later sessions; None keeps the
+                configured model.
+            effort: Reasoning effort for this and later sessions; "default" uses Claude Code's
+                default effort; None keeps the configured effort.
+
+        Raises:
+            SessionError: If a session is already running, if the runner ended before it was
+                ready (the message names the runner's error), or if it was not ready within
+                `START_TIMEOUT_S` seconds (the runner is stopped then).
+        """
+        self._claude_outputs.clear()  # text of an earlier session must not reach this one
+        if self.state not in ("stopped", "failed") or not self._run_done.is_set():
+            raise SessionError(f"a session is already {self.state}")
+        overrides: dict[str, str | None] = {}
+        if model is not None:
+            overrides["model"] = model
+        if effort is not None:
+            overrides["effort"] = None if effort == "default" else effort
+        if overrides:
+            self.config.claude = self.config.claude.model_copy(update=overrides)
+        self._tg = tg
+        self._run_done = anyio.Event()
+        self._run_error = None
+        self.session_id = None
+        self._busy = False
+        self._running_tools.clear()
+        self._checking = 0
+        self.state = "stopped"
+        await self._store_call("creating the session row", self.store.start(self._identity()))
+        await self._set_state("starting")
+        await self._restore_context(resume_id)
+        for warning in self.startup_warnings:
+            await self.emit(Log(level="warning", message=warning))
+        runner = self.runner = self.runner_factory()
+        tg.start_soon(self._run, runner, resume_id)
+
+        ready = anyio.Event()
+
+        async def wait_ready() -> None:
+            """Wait until the runner is ready, then set `ready`."""
+            await runner.wait_ready()
+            ready.set()
+
+        async with anyio.create_task_group() as waiters:
+            waiters.start_soon(wait_ready)
+            with anyio.move_on_after(START_TIMEOUT_S):
+                await _first_of(ready, self._run_done)
+            waiters.cancel_scope.cancel()
+
+        if self._run_done.is_set():
+            raise SessionError(f"Claude session ended during start: {self._run_error or 'exit'}")
+        if not ready.is_set():
+            await runner.stop()
+            raise SessionError(f"Claude session was not ready within {START_TIMEOUT_S} s")
+        await self._set_state("idle")
+
+    async def _run(self, runner: ClaudeRunner, resume_id: str | None) -> None:
+        """Run `runner` until it ends; then mark the session as stopped or failed.
+
+        Never raises: runner errors are logged and reported as a `log` event.
+
+        Args:
+            runner: The runner of this session.
+            resume_id: Claude session id to resume, or None.
+        """
+        try:
+            await runner.run(self, self._on_runner_event, resume_id)
+        except Exception as exc:
+            log.exception("Claude session failed")
+            self._run_error = f"{type(exc).__name__}: {exc}"
+            hints = CLAUDE_SETUP_HINT
+            if not self.config.claude.use_bedrock:
+                hints += f" {BEDROCK_HINT}"
+            await self._emit_safely(
+                Log(level="error", message=f"Claude session failed: {exc} {hints}")
+            )
+        finally:
+            self._run_done.set()  # first, so that `stop` never waits for a broken client
+            with anyio.CancelScope(shield=True):
+                await self._cancel_escalations("The Claude session ended.")
+                if self._queue:  # messages Claude did not read are lost with the session
+                    self._queue.clear()
+                    await self._emit_safely(ChatQueue(messages=[]))
+                final: State = "failed" if self._run_error else "stopped"
+                await self._set_state_safely(final)
+                await self._store_call("recording the end of the session", self.store.end(final))
+
+    async def stop(self) -> None:
+        """Stop the Claude session and wait until its runner has ended.
+
+        Open escalations are cancelled (their tool calls are denied). Claude's text that was
+        not narrated yet is dropped. Does nothing if no session runs.
+        """
+        self._claude_outputs.clear()
+        if not self._run_done.is_set():
+            await self._cancel_escalations("The session was stopped.")
+            assert self.runner is not None
+            await self.runner.stop()
+            await self._run_done.wait()
+        if self.state not in ("stopped", "failed"):
+            await self._set_state_safely("stopped")
+
+    async def interrupt(self) -> None:
+        """Stop Claude's current turn; the session stays usable.
+
+        Raises:
+            SessionError: If no session runs.
+        """
+        runner = self._require_running()
+        self._claude_outputs.pop(None, None)  # the main agent's text of the interrupted turn
+        # Pending reviews of foreground subagent results belong to the interrupted turn; the
+        # hooks that wait for them may not be cancelled by Claude Code, so they are ended here
+        # (as cancelled: no note is sent to Claude). Background subagents keep running.
+        for esc_id, esc in list(self._escalations.items()):
+            if esc.step.tool_name == "SubagentResult" and not esc.step.tool_input.get("background"):
+                self._escalations.pop(esc_id, None)
+                esc.answer = HumanAnswer(
+                    allow=False, message="The turn was interrupted.", cancelled=True
+                )
+                esc.done.set()
+                if esc.db_id is not None:
+                    await self._store_call(
+                        "cancelling an escalation",
+                        self.store.close_escalation(esc.db_id, "the turn was interrupted"),
+                    )
+        await runner.interrupt()
+
+    async def send_chat(self, params: ChatSendParams) -> None:
+        """Send a chat message to the main agent, or relayed to a background subagent.
+
+        "queued" messages are read after the current turn, "inject" messages as soon as the
+        running tool calls finish. A message to a subagent is wrapped in a request to the main
+        agent to relay it with SendMessage and is always injected.
+
+        Args:
+            params: Text, delivery and target of the message.
+
+        Raises:
+            SessionError: If no session runs, the target subagent is unknown, or it is not a
+                running background subagent.
+        """
+        runner = self._require_running()
+        priority: Literal["next", "later"] = "next" if params.delivery == "inject" else "later"
+        text = params.text
+        if params.to != "main":
+            agent = self._find_agent(params.to)
+            text = RELAY_TEMPLATE.format(
+                name=agent.description or agent.agent_id,
+                to=agent.sdk_agent_id or agent.agent_id,
+                text=params.text,
+            )
+            priority = "next"
+        await runner.send(text, priority)
+        queued = QueuedMessage(
+            id=f"q{next(self._queue_ids)}", text=params.text, delivery=params.delivery, to=params.to
+        )
+        self._queue.append((queued, text))
+        await self._emit_queue()
+        await self._mark_busy()
+
+    async def _emit_queue(self) -> None:
+        """Send `chat.queue` with the messages that Claude has not taken in yet."""
+        await self.emit(ChatQueue(messages=[message for message, _ in self._queue]))
+
+    async def _take_from_queue(self, text: str) -> None:
+        """Remove the oldest queued message whose sent text is `text`, then send `chat.queue`.
+
+        Does nothing if no queued message matches.
+
+        Args:
+            text: The text of a user message that Claude took in.
+        """
+        for i, (_, sent) in enumerate(self._queue):
+            if sent.strip() == text.strip():
+                del self._queue[i]
+                await self._emit_queue()
+                return
+
+    async def decide_escalation(self, escalation_id: str, decision: str, note: str | None) -> None:
+        """Resolve an open escalation from a client. Only the first decision counts.
+
+        The `escalations` row is cancelled with a note that records the decision: the role
+        `calu_session` may not allow or deny a row (see `calu.store.session`). An operator who
+        resolves the row in the database instead reaches the session through `note_resolution`
+        or its poll.
+
+        Args:
+            escalation_id: Id from the `escalation.request` event.
+            decision: "allow" or "deny".
+            note: Optional text from the user; Claude receives it with a denial.
+
+        Raises:
+            SessionError: If no escalation with this id is open (unknown, or already decided).
+        """
+        esc = self._escalations.pop(escalation_id, None)
+        if esc is None:
+            raise SessionError(f"no open escalation {escalation_id!r}")
+        allow = decision == "allow"
+        message = "The user denied this step."
+        if note:
+            message += f" Note from the user: {note}"
+        esc.answer = HumanAnswer(allow=allow, message=message, note=note or "")
+        esc.done.set()
+        if esc.db_id is not None:
+            text = f"{'allowed' if allow else 'denied'} by a client of the session process"
+            await self._store_call(
+                "recording a client decision",
+                self.store.close_escalation(esc.db_id, f"{text}: {note}" if note else text),
+            )
+
+    def note_resolution(self, escalation_id: int) -> None:
+        """Wake the session so it reads a resolved escalation at once.
+
+        Called with the id from an `escalation_resolved` notification (`calu.db.notify`). An
+        unknown id is ignored; without this call the session notices the resolution with its
+        next poll (`ESCALATION_POLL_S`).
+
+        Args:
+            escalation_id: Id of the resolved `escalations` row.
+        """
+        for esc in self._escalations.values():
+            if esc.db_id == escalation_id:
+                esc.wake.set()
+
+    # ------------------------------------------------------------------ ToolGate
+
+    async def pre_tool_use(self, step: Step) -> GateResult:
+        """Decide about a tool call before it runs (ToolGate).
+
+        Side effects: records the step in the database and in the context, emits `edit.diff`
+        (edits) and `check.result`, and remembers the reason of an escalation for `ask`.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            ALLOW, DENY (with the reason for Claude) or ASK. Any internal error yields ASK, so
+            a human decides instead of the call running unchecked.
+        """
+        pending = _PendingNarration(self._claude_outputs.pop(step.agent_id, []))
+        step_id = await self._add_step(step)
+        try:
+            route, result, source, outcome = await self._decide(step, pending)
+        except Exception as exc:
+            log.exception("pre_tool_use failed")
+            route, source, outcome = self.policy.route(step.tool_name), "internal", None
+            result = CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=f"Checking failed with an internal error ({type(exc).__name__}: {exc}).",
+                step_summary=label_for_unchecked(step.tool_name, step.tool_input),
+            )
+        comment = result.comment.strip() if result.decision is Decision.ALLOW else ""
+        if comment and self._comment_already_sent(comment, step.agent_id):
+            comment = ""  # the same remark was already sent in this turn
+        record = StepRecord(
+            tool_name=step.tool_name,
+            agent_id=step.agent_id,
+            decision=result.decision.value,
+            summary=result.step_summary,
+            comment=comment,
+            narration=pending.text or "",
+        )
+        self.context.step(record)
+        if pending.outputs and pending.text is None and self.narrator and self._tg is not None:
+            # No checker ran (rules, policy): narrate for the context without delaying the call.
+            self._tg.start_soon(self._narrate_record, record, pending.outputs)
+        if step_id is not None:
+            if outcome is not None:
+                await self._store_call(
+                    "recording a checker run",
+                    self.store.add_checker_run(
+                        step_id, self._checker_run(self.checkers[route], route.value, outcome)
+                    ),
+                )
+            await self._store_call(
+                "recording a decision",
+                self.store.decide_step(
+                    step_id,
+                    StepDecision(
+                        decision=result.decision.value.lower(),
+                        reason=result.reason,
+                        summary=result.step_summary,
+                        narration=pending.text or "",
+                        rules_outcome=source if source == "rules" else None,
+                    ),
+                ),
+            )
+        await self._emit_safely(
+            CheckResultEvent(
+                tool_use_id=step.tool_use_id,
+                agent_id=step.agent_id,
+                tool_name=step.tool_name,
+                route=route,
+                decision=result.decision,
+                reason=result.reason,
+                step_summary=result.step_summary,
+                comment=comment,
+                git_head=await self._git_head(),
+            )
+        )
+        if result.decision is Decision.ESCALATE and step.tool_use_id:
+            self._pending_reasons[step.tool_use_id] = (result.reason, source)
+        if result.decision is Decision.ALLOW and step.tool_use_id:
+            self._running_tools.add(step.tool_use_id)
+        await self._refresh_state()
+        verdict = {
+            Decision.ALLOW: Verdict.ALLOW,
+            Decision.DENY: Verdict.DENY,
+            Decision.ESCALATE: Verdict.ASK,
+        }[result.decision]
+        context = ""
+        if comment:
+            context = CHECKER_COMMENT_TEMPLATE.format(route=route.value, comment=comment)
+        return GateResult(verdict=verdict, reason=result.reason, context=context)
+
+    async def ask(self, step: Step) -> HumanAnswer:
+        """Ask the human about `step` and wait for the answer, without a time limit (ToolGate).
+
+        Side effects: opens an `escalations` row, emits `escalation.request`, sets the state to
+        `escalated`, and emits `escalation.resolved` when the escalation ends — also when it is
+        cancelled (stop, interrupt, end of the session), with decision "cancelled".
+
+        Args:
+            step: The tool call that needs a decision.
+
+        Returns:
+            The human's answer. A cancelled escalation counts as a denial. If the escalation
+            cannot be stored, the step is denied with `DB_UNREACHABLE`, because no human could
+            see it.
+        """
+        reason, source = self._pending_reasons.pop(
+            step.tool_use_id or "", ("Approval required.", "internal")
+        )
+        rendered = _render_safely(step, self.workspace)
+        db_id = await self._open_escalation(step, reason, rendered)
+        if db_id is None:
+            return HumanAnswer(allow=False, message=DB_UNREACHABLE)
+        escalation_id = str(db_id)
+        esc = _Escalation(step=step, reason=reason, source=source, db_id=db_id)
+        self._escalations[escalation_id] = esc
+        try:
+            await self._emit_safely(
+                EscalationRequest(
+                    escalation_id=escalation_id,
+                    tool_use_id=step.tool_use_id,
+                    agent_id=step.agent_id,
+                    tool_name=step.tool_name,
+                    tool_input=step.tool_input,
+                    reason=reason,
+                    rendered=rendered,
+                )
+            )
+            await self._refresh_state()
+            await self._wait_for_decision(esc)
+        finally:
+            self._escalations.pop(escalation_id, None)
+            with anyio.CancelScope(shield=True):
+                answer = esc.answer
+                decision = "cancelled" if answer is None else "allow" if answer.allow else "deny"
+                await self._emit_safely(
+                    EscalationResolved(
+                        escalation_id=escalation_id,
+                        decision=decision,
+                        note=None
+                        if answer is None
+                        else (answer.note or None)
+                        if answer.allow
+                        else answer.message,
+                    )
+                )
+                await self._refresh_state()
+        assert esc.answer is not None
+        return esc.answer
+
+    async def _wait_for_decision(self, esc: _Escalation) -> None:
+        """Wait until `esc` is decided locally or in the database.
+
+        Reads the escalation row every `ESCALATION_POLL_S` seconds, and at once when
+        `note_resolution` was called for it, until it is no longer open; a local
+        `decide_escalation` ends the wait as well. Store errors are logged and the poll
+        continues, so a short database outage does not turn into a denial.
+
+        Args:
+            esc: The open escalation; its `answer` and `done` are set by this call or by
+                `decide_escalation`.
+        """
+        if esc.db_id is None:
+            await esc.done.wait()
+            return
+
+        async def poll() -> None:
+            """Read the escalation row until it is resolved."""
+            while True:
+                wake = esc.wake
+                with anyio.move_on_after(ESCALATION_POLL_S):
+                    await wake.wait()
+                esc.wake = anyio.Event()
+                assert esc.db_id is not None
+                try:
+                    row = await self.store.escalation(esc.db_id)
+                except Exception:
+                    log.exception("reading an escalation failed")
+                    continue
+                if row.open:
+                    continue
+                message = (
+                    "The user denied this step."
+                    if not row.allowed
+                    else "The user allowed this step."
+                )
+                if row.note:
+                    message += f" Note from the user: {row.note}"
+                esc.answer = HumanAnswer(allow=row.allowed, message=message, note=row.note)
+                esc.done.set()
+                return
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(poll)
+            await esc.done.wait()
+            tg.cancel_scope.cancel()
+
+    async def review_subagent_result(self, result: SubagentResult) -> str:
+        """Review a subagent's final result against the conversation (ToolGate).
+
+        Side effects: records a step and a checker run, emits `check.result` (route "subagent";
+        the triage note in `comment`), records the review in the context, and for ESCALATE asks
+        the human like a tool call (`escalation.request` with tool name "SubagentResult").
+
+        Args:
+            result: The subagent's task and final result.
+
+        Returns:
+            The note for the main agent ("" if the result was accepted without remarks or the
+            review is disabled by `check_subagent_results = false`).
+        """
+        # The subagent's text after its last tool call is its result, reviewed below.
+        self._claude_outputs.pop(result.agent_id, None)
+        if not self.config.check_subagent_results:
+            return ""
+        label = result.description or "subagent"
+        step = Step(
+            tool_name="SubagentResult",
+            tool_input={
+                "description": label,
+                "background": result.background,
+                "result": result.result[:4_000],
+            },
+            tool_use_id=f"result-{result.agent_id}",
+            agent_id=result.agent_id,
+            cwd=str(self.workspace),
+        )
+        step_id = await self._add_step(step)
+        outcome = await self._review(result)
+        review = outcome.review
+        if self.config.auto_escalate.subagents and review.verdict is not ResultVerdict.ESCALATE:
+            note = review.note.strip()
+            review = ResultReview(
+                verdict=ResultVerdict.ESCALATE,
+                note=(
+                    "Auto-escalation for subagent results is on. The result checker decided "
+                    f"{review.verdict.value}" + (f": {note}" if note else ".")
+                ),
+                summary=review.summary,
+            )
+        escalated = review.verdict is ResultVerdict.ESCALATE
+        self.context.step(
+            StepRecord(
+                tool_name="Agent result",
+                agent_id=result.agent_id,
+                decision=review.verdict.value,
+                summary=review.summary,
+            )
+        )
+        if step_id is not None:
+            await self._store_call(
+                "recording a checker run",
+                self.store.add_checker_run(
+                    step_id,
+                    CheckerRun(
+                        checker_name="subagent-result",
+                        checker_version=self._version("subagent-result"),
+                        model=_model_name(self.result_checker.model),
+                        decision="escalate" if escalated else "allow",
+                        reason=review.note,
+                        input_tokens=outcome.input_tokens,
+                        output_tokens=outcome.output_tokens,
+                        cache_read_tokens=outcome.cache_read_tokens,
+                        duration_ms=outcome.duration_ms,
+                    ),
+                ),
+            )
+            await self._store_call(
+                "recording a decision",
+                self.store.decide_step(
+                    step_id,
+                    StepDecision(
+                        decision="escalate" if escalated else "allow",
+                        reason=review.note,
+                        summary=review.summary,
+                    ),
+                ),
+            )
+        await self._emit_safely(
+            CheckResultEvent(
+                tool_use_id=result.agent_id,
+                agent_id=result.agent_id,
+                tool_name="Agent",
+                route=Route.SUBAGENT,
+                decision=Decision.ESCALATE if escalated else Decision.ALLOW,
+                reason=review.note if escalated else "",
+                step_summary=review.summary,
+                comment="" if escalated else review.note,
+            )
+        )
+        note = review.note.strip()
+        if escalated:
+            self._pending_reasons[step.tool_use_id or ""] = (note, "subagent_result")
+            answer = await self.ask(step)
+            if answer.cancelled:
+                return ""
+            if answer.allow:
+                decision = "The user accepts the result; act on it as appropriate."
+            else:
+                decision = "The user does not want you to act on this result now."
+            if answer.note:
+                decision += f" Note from the user: {answer.note}"
+            note = f"{note}\n\nDecision of the user: {decision}".strip()
+        if not note:
+            return ""
+        return SUBAGENT_NOTE_TEMPLATE.format(label=label, note=note)
+
+    async def _review(self, result: SubagentResult) -> ResultOutcome:
+        """Run the result checker; never raises.
+
+        Args:
+            result: The subagent's task and final result.
+
+        Returns:
+            The review with the cost of the call; an internal error yields an ESCALATE review.
+        """
+        self._checking += 1
+        await self._refresh_state()
+        try:
+            return await self.result_checker.run(result, self.context.check_context())
+        except Exception as exc:
+            log.exception("reviewing a subagent result failed")
+            return ResultOutcome(
+                review=ResultReview(
+                    verdict=ResultVerdict.ESCALATE,
+                    note=f"Reviewing the result failed ({type(exc).__name__}: {exc}).",
+                    summary="Subagent result not reviewed because of an internal error.",
+                )
+            )
+        finally:
+            self._checking -= 1
+            await self._refresh_state()
+
+    # ------------------------------------------------------------------ deciding
+
+    async def _decide(
+        self, step: Step, pending: _PendingNarration | None
+    ) -> tuple[Route, CheckDecision, str, CheckOutcome | None]:
+        """Return the route, the decision, its source and the checker run for `step`.
+
+        Side effect: if a checker runs, narrates `pending` first (sets `pending.text`) and
+        passes the narration to the checker.
+
+        Args:
+            step: The tool call.
+            pending: Claude's thinking and text before the call, or None.
+
+        Returns:
+            The route, the decision, who decided ("rules", "policy", "checker" or "auto") and
+            the checker run (None if no checker ran). Checker failures already yield ESCALATE
+            decisions.
+        """
+        route = self.policy.route(step.tool_name)
+        outcome = self.rules.evaluate(step)
+        label = label_for_unchecked(step.tool_name, step.tool_input)
+        if outcome.ask:
+            decided = CheckDecision(
+                decision=Decision.ESCALATE, reason=outcome.reason, step_summary=label
+            )
+            return route, decided, "rules", None
+        if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
+            route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
+        if outcome.notes:
+            step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
+        if route is Route.COMMAND and step.tool_name == "Bash" and outcome.allowed:
+            allowed = CheckDecision(
+                decision=Decision.ALLOW,
+                reason="Every command and path is on the user's allowlists.",
+                step_summary=label,
+            )
+            return (*self._auto_escalate(route, allowed, "rules"), None)
+        if route in (Route.ALLOW, Route.DENY, Route.ESCALATE):
+            decision = Decision(route.value.upper())
+            reason = (
+                ""
+                if route is Route.ALLOW
+                else f"The tool policy routes {step.tool_name} to {route}."
+            )
+            decided = CheckDecision(decision=decision, reason=reason, step_summary=label)
+            return route, decided, "policy", None
+        if route is Route.EDIT:
+            await self._emit_edit_diff(step)
+        if pending is not None:
+            if pending.text is None:
+                pending.text = await self._narrate_safely(pending.outputs)
+            if pending.text:
+                step = step.model_copy(update={"narration": pending.text})
+        checker = self.checkers[route]
+        context = self.context.check_context()
+        self._checking += 1
+        await self._refresh_state()
+        try:
+            with anyio.fail_after(CHECKER_DEADLINE_S):
+                run = await checker.run(step, context)
+        except TimeoutError:
+            run = CheckOutcome(
+                decision=CheckDecision(
+                    decision=Decision.ESCALATE,
+                    reason=(
+                        f"The {route.value} checker did not answer within {CHECKER_DEADLINE_S} s."
+                    ),
+                    step_summary=label,
+                ),
+                duration_ms=CHECKER_DEADLINE_S * 1000,
+            )
+        finally:
+            self._checking -= 1
+            await self._refresh_state()
+        return (*self._auto_escalate(route, run.decision, "checker"), run)
+
+    def _auto_escalate(
+        self, route: Route, decided: CheckDecision, source: str
+    ) -> tuple[Route, CheckDecision, str]:
+        """Turn an approval into an escalation if auto-escalation is on for its route.
+
+        Args:
+            route: COMMAND or EDIT (other routes are returned unchanged).
+            decided: The decision of the checker or of the rules.
+            source: Who decided ("checker" or "rules").
+
+        Returns:
+            `(route, decided, source)` unchanged, or an ESCALATE decision with source "auto".
+        """
+        auto = self.config.auto_escalate
+        # A checker DENY stays a DENY: auto-escalation only turns approvals into questions, so
+        # a hasty "allow" can never run a step that the checker blocked.
+        if decided.decision is Decision.ALLOW and (
+            (route is Route.EDIT and auto.edits) or (route is Route.COMMAND and auto.commands)
+        ):
+            kind = "edits" if route is Route.EDIT else "commands"
+            decided = CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=(
+                    f"Auto-escalation for {kind} is on. "
+                    + (f"The {route.value} checker" if source == "checker" else "The rules")
+                    + f" decided {decided.decision.value}"
+                    + (f": {decided.reason}" if decided.reason else ".")
+                ),
+                step_summary=decided.step_summary,
+            )
+            return route, decided, "auto"
+        return route, decided, source
+
+    async def _emit_edit_diff(self, step: Step) -> None:
+        """Emit `edit.diff` with the file content before and after an edit; never raises.
+
+        Args:
+            step: The edit tool call.
+        """
+        try:
+            edited = edited_file(step, self.workspace)
+        except Exception:
+            log.exception("rendering an edit failed")
+            return
+        if edited is None:
+            return
+        path, before, after = edited
+        await self._emit_safely(
+            EditDiff(
+                tool_use_id=step.tool_use_id,
+                agent_id=step.agent_id,
+                path=path,
+                before=before,
+                after=after,
+                **dict(zip(("start_line", "end_line"), changed_lines(before, after), strict=False)),
+            )
+        )
+
+    def _comment_already_sent(self, comment: str, agent_id: str | None) -> bool:
+        """Tell whether the same checker comment was already sent in the running turn.
+
+        Comparison ignores case and whitespace, so a checker that repeats itself for similar
+        steps reaches Claude only once. Only steps of the same agent count: a subagent has its
+        own context and has not seen comments that went to the main agent.
+
+        Args:
+            comment: The new comment.
+            agent_id: The agent of the step (None for the main agent).
+
+        Returns:
+            True if an equal comment is recorded for the same agent in the running turn.
+        """
+
+        def norm(text: str) -> str:
+            """Normalize a comment for comparison.
+
+            Args:
+                text: The comment.
+
+            Returns:
+                The text in lower case with single spaces.
+            """
+            return " ".join(text.lower().split())
+
+        turn = self.context.current
+        return turn is not None and any(
+            s.agent_id == agent_id and norm(s.comment) == norm(comment) for s in turn.steps
+        )
+
+    # ------------------------------------------------------------------ runner events
+
+    async def _on_runner_event(self, event: Event) -> None:
+        """Update context, state and store from a runner event, then forward it to the clients.
+
+        Args:
+            event: The event from the runner.
+        """
+        match event:
+            case UserInput() if event.source == "cross_session":
+                self._record_cross_session(event.text)
+            case UserInput():
+                self.context.user_input(event.text)
+                await self._take_from_queue(event.text)
+            case AssistantText() | AssistantThinking() if self.narrator is not None:
+                kind = "thinking" if isinstance(event, AssistantThinking) else "text"
+                outputs = self._claude_outputs.setdefault(event.agent_id, [])
+                outputs.append(ClaudeOutput(kind, event.text))
+                del outputs[:-MAX_PENDING_OUTPUTS]
+            case ToolResult():
+                self._pending_reasons.pop(event.tool_use_id, None)
+                self._running_tools.discard(event.tool_use_id)
+                step_id = self._step_ids.pop(event.tool_use_id, None)
+                if step_id is not None:
+                    await self._store_call(
+                        "recording a step result",
+                        self.store.finish_step(step_id, _result_summary(event)),
+                    )
+            case TurnResult():
+                await self._on_turn_result(event)
+            case _:
+                pass
+        await self.emit(event)
+        if isinstance(event, AssistantText) and event.agent_id is None:
+            await self._hint_on_login_error(event.text)
+        if isinstance(event, TurnResult) and event.is_error:
+            await self._hint_on_login_error(event.result)
+        if isinstance(event, ToolUse) and event.name == "Bash":
+            await self._emit_command_files(event)
+        if isinstance(event, TurnResult):
+            self._busy = False
+            await self._refresh_state()
+        else:
+            await self._mark_busy()
+
+    async def _on_turn_result(self, event: TurnResult) -> None:
+        """Record Claude's session id and close the running turn.
+
+        Args:
+            event: The turn result.
+        """
+        if event.session_id and event.session_id != self.session_id:
+            self.session_id = event.session_id
+            await self._store_call(
+                "recording Claude's session id",
+                self.store.set_claude_session(event.session_id, self.config.claude.model),
+            )
+        outputs = self._claude_outputs.pop(None, [])
+        if self.context.current is not None:
+            # Recorded (and persisted) with the turn: never show the verbatim answer.
+            self.context.current.narrated = self.narrator is not None
+        turn = self.context.end_turn(event.result)
+        if turn is not None and self._tg is not None:
+            self._tg.start_soon(self._finish_turn, turn, outputs)
+
+    async def _hint_on_login_error(self, text: str) -> None:
+        """After Claude Code's "Please run /login" error, send a setup hint once per process.
+
+        Args:
+            text: An answer of the main agent or the result of a failed turn.
+        """
+        if self._login_hint_sent or LOGIN_ERROR not in text.lower():
+            return
+        self._login_hint_sent = True
+        bedrock = (
+            "Claude Code runs through AWS Bedrock here (use_bedrock is on): check the AWS "
+            "credentials and the region on this machine."
+            if self.config.claude.use_bedrock
+            else BEDROCK_HINT
+        )
+        await self.emit(
+            Log(
+                level="warning",
+                message=f"Claude Code is not signed in. {CLAUDE_SETUP_HINT} {bedrock}",
+            )
+        )
+
+    async def _emit_command_files(self, event: ToolUse) -> None:
+        """Send `tool.files` with the existing text files that a Bash command names.
+
+        Relative paths resolve against the workspace (Claude's working directory); errors are
+        logged, never raised, because links are optional.
+
+        Args:
+            event: The Bash `tool.use` event.
+        """
+        try:
+            files = command_files(str(event.input.get("command", "")), self.workspace, self.rules)
+        except Exception:
+            log.exception("finding the files of a command failed")
+            return
+        if files:
+            await self.emit(
+                ToolFiles(agent_id=event.agent_id, tool_use_id=event.tool_use_id, files=files)
+            )
+
+    # ------------------------------------------------------------------ narration and turns
+
+    async def _narrate_safely(self, outputs: list[ClaudeOutput]) -> str:
+        """Narrate `outputs`; never raises (errors are logged).
+
+        Args:
+            outputs: Claude's thinking and text blocks of one agent.
+
+        Returns:
+            The narration, or "" if narration is off, there is nothing to narrate, or the
+            narrator failed or took longer than `NARRATOR_DEADLINE_S`.
+        """
+        if self.narrator is None or not outputs:
+            return ""
+        self._checking += 1
+        await self._refresh_state()
+        try:
+            with anyio.fail_after(NARRATOR_DEADLINE_S):
+                return await self.narrator.narrate(outputs)
+        except Exception:
+            log.exception("narrating Claude's output failed")
+            return ""
+        finally:
+            self._checking -= 1
+            await self._refresh_state()
+
+    def _record_cross_session(self, text: str) -> None:
+        """Record a message from another Claude session as a turn entry, not as user input.
+
+        The entry's summary is a placeholder until the narrator has retold the message (in the
+        background); with narration off it stays a fixed text. The message is never put into
+        the checkers' context verbatim.
+
+        Args:
+            text: The message as Claude Code delivered it.
+        """
+        record = StepRecord(tool_name=CROSS_SESSION_LABEL, summary=CROSS_SESSION_PENDING)
+        if self.narrator is None:
+            record.summary = CROSS_SESSION_HIDDEN
+        self.context.step(record)
+        if self.narrator is not None and self._tg is not None:
+            self._tg.start_soon(self._narrate_cross_session, record, text)
+
+    async def _narrate_cross_session(self, record: StepRecord, text: str) -> None:
+        """Narrate a message from another session into its turn entry; never raises.
+
+        Args:
+            record: The turn entry created by `_record_cross_session`.
+            text: The message.
+        """
+        narration = await self._narrate_safely([ClaudeOutput("message", text)])
+        record.summary = narration or CROSS_SESSION_HIDDEN
+
+    async def _narrate_record(self, record: StepRecord, outputs: list[ClaudeOutput]) -> None:
+        """Narrate the thinking and text before an unchecked step into its record; never raises.
+
+        Args:
+            record: The step record (already in the context); its `narration` is set.
+            outputs: Claude's thinking and text before the step.
+        """
+        record.narration = await self._narrate_safely(outputs)
+
+    async def _finish_turn(self, turn: TurnRecord, outputs: list[ClaudeOutput]) -> None:
+        """Narrate the end of a turn, store it, then fold old turns if due; never raises.
+
+        Folding waits for the narration, so the chat summary is made from the narrated answer.
+
+        Args:
+            turn: The finished turn; its `answer_narration` is set if narration is on.
+            outputs: The main agent's thinking and text after its last tool call.
+        """
+        if self.narrator is not None and outputs:
+            turn.answer_narration = await self._narrate_safely(outputs)
+        await self._store_call("storing a turn", self.store.save_turn(turn))
+        if self.context.needs_fold():
+            await self._fold()
+
+    async def _fold(self) -> None:
+        """Fold old turns into the chat summary; never raises (errors are logged)."""
+        try:
+            await self.context.fold()
+        except Exception:
+            log.exception("folding the context failed")
+
+    async def _store_summary(self, summary: str, covered_turns: int) -> None:
+        """Store the chat summary after a fold and mark the folded turns (never raises).
+
+        Args:
+            summary: The new chat summary.
+            covered_turns: Number of the newest folded turn.
+        """
+        await self._store_call(
+            "storing the chat summary", self.store.save_summary(summary, covered_turns)
+        )
+        await self._store_call("marking folded turns", self.store.mark_folded(covered_turns))
+
+    async def _restore_context(self, resume_id: str | None) -> None:
+        """Load the turns and the chat summary of the session that is resumed.
+
+        A new session (or a database error) starts with no turns and the empty summary.
+
+        Args:
+            resume_id: Claude session id to resume, or None for a new session.
+        """
+        turns: list[TurnRecord] = []
+        summary = ""
+        if resume_id is not None:
+            try:
+                turns, summary = await self.store.load_previous(resume_id)
+            except Exception:
+                log.exception("restoring the context of %s failed", resume_id)
+        self.context.restore(turns)
+        self.context.summary = summary or EMPTY_CHAT_SUMMARY
+
+    # ------------------------------------------------------------------ store helpers
+
+    def _identity(self) -> SessionIdentity:
+        """Describe where this session runs, for the `sessions` row.
+
+        Returns:
+            Host name, operating system, OS user, directory, process id, git commit, project
+            and Claude model.
+        """
+        return SessionIdentity(
+            hostname=socket.gethostname(),
+            os_user=getpass.getuser(),
+            directory=str(self.workspace),
+            pid=os.getpid(),
+            os=f"{platform.system()} {platform.release()}".strip(),
+            git_commit=self._git_head_value,
+            project=self.project,
+            model=self.config.claude.model,
+        )
+
+    def _version(self, checker: str) -> int:
+        """Return the stored version of a checker definition.
+
+        Args:
+            checker: Checker type name.
+
+        Returns:
+            The version from the database, or 0 if the definition is built in.
+        """
+        definition = self.settings.checkers.get(checker)
+        return definition.version if definition else 0
+
+    def _checker_run(self, checker: Checker, route: str, outcome: CheckOutcome) -> CheckerRun:
+        """Build the `checker_runs` row of one step check.
+
+        Args:
+            checker: The checker that ran.
+            route: Its route value ("command" or "edit"), used as the checker type name.
+            outcome: What the call returned and cost.
+
+        Returns:
+            The row.
+        """
+        return CheckerRun(
+            checker_name=route,
+            checker_version=self._version(route),
+            model=_model_name(checker.model),
+            decision=outcome.decision.decision.value.lower(),
+            reason=outcome.decision.reason,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
+            cache_read_tokens=outcome.cache_read_tokens,
+            duration_ms=outcome.duration_ms,
+        )
+
+    async def _add_step(self, step: Step) -> int | None:
+        """Record a tool call in the database before it is checked.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            The id of the `steps` row, or None if it could not be stored (then the step is
+            still checked; only its history is lost).
+        """
+        row = StoredStep(
+            seq=next(self._step_seq),
+            tool_name=step.tool_name,
+            tool_input=step.tool_input,
+            turn=self.context.turn_number,
+            agent_id=step.agent_id,
+            tool_use_id=step.tool_use_id,
+            git_commit=await self._git_head(),
+        )
+        try:
+            step_id = await self.store.add_step(row)
+        except Exception as exc:
+            log.exception("recording a step failed")
+            await self._emit_safely(
+                Log(level="error", message=f"recording a step in the database failed: {exc}")
+            )
+            return None
+        if step.tool_use_id:
+            self._step_ids[step.tool_use_id] = step_id
+        return step_id
+
+    async def _open_escalation(self, step: Step, reason: str, rendered: str) -> int | None:
+        """Open an `escalations` row for a step that needs a human decision.
+
+        Args:
+            step: The tool call.
+            reason: Why it needs a decision.
+            rendered: The step rendered as Markdown, for the operator.
+
+        Returns:
+            The id of the row, or None if it could not be stored.
+        """
+        context: dict[str, Any] = {
+            "rendered": rendered,
+            "tool_name": step.tool_name,
+            "tool_input": step.tool_input,
+            "agent_id": step.agent_id,
+            "recent": self.context.recent(),
+            "chat_summary": self.context.summary,
+            "calu_version": __version__,
+        }
+        try:
+            return await self.store.open_escalation(
+                reason, context, self._step_ids.get(step.tool_use_id or "")
+            )
+        except Exception as exc:
+            log.exception("opening an escalation failed")
+            await self._emit_safely(
+                Log(level="error", message=f"storing an escalation failed: {exc}")
+            )
+            return None
+
+    async def _store_call(self, what: str, call: Any) -> None:
+        """Await a store call and report its failure as a `log` error; never raises.
+
+        Args:
+            what: What was attempted, for the message (e.g. "storing a turn").
+            call: The awaitable returned by the store method.
+        """
+        try:
+            await call
+        except Exception as exc:
+            log.exception("%s failed", what)
+            await self._emit_safely(Log(level="error", message=f"{what} failed: {exc}"))
+
+    async def _cancel_escalations(self, message: str) -> None:
+        """Deny all open escalations with `message` (their `ask` calls then return).
+
+        Args:
+            message: The text Claude receives with the denial.
+        """
+        for esc in list(self._escalations.values()):
+            esc.answer = HumanAnswer(allow=False, message=message)
+            esc.done.set()
+            if esc.db_id is not None:
+                await self._store_call(
+                    "cancelling an escalation", self.store.close_escalation(esc.db_id, message)
+                )
+        self._escalations.clear()
+
+    # ------------------------------------------------------------------ state and events
+
+    async def emit(self, event: Event) -> None:
+        """Send `event` to the clients.
+
+        Args:
+            event: The event.
+
+        Raises:
+            Exception: Whatever the client sink raises (e.g. a closed connection).
+        """
+        await self._sink(event)
+
+    def _derived_state(self) -> State:
+        """Return the state that the running work implies (see the module docstring).
+
+        Returns:
+            "escalated", "checking", "tool_call", "running" or "idle".
+        """
+        if self._escalations:
+            return "escalated"
+        if self._checking > 0:
+            return "checking"
+        if self._running_tools:
+            return "tool_call"
+        return "running" if self._busy else "idle"
+
+    async def _refresh_state(self) -> None:
+        """Set the state to what the running work implies, unless the session is not active."""
+        if self.state in ("stopped", "failed", "starting"):
+            return
+        await self._set_state_safely(self._derived_state())
+
+    async def _set_state(self, state: State) -> None:
+        """Change the state, record it in the database and emit `session.state`.
+
+        Does nothing if the state is unchanged.
+
+        Args:
+            state: The new state.
+
+        Raises:
+            Exception: Whatever the client sink raises.
+        """
+        if state == self.state:
+            return
+        self.state = state
+        # "starting" is the state the session row is created in, "stopped" and "failed" are
+        # written by `store.end`, so only the states in between need an update.
+        if self.store.session_id is not None and state not in (
+            "starting",
+            "stopped",
+            "failed",
+        ):
+            await self._store_call("recording the session state", self.store.set_state(state))
+        sid = self.session_id or (self.runner.session_id if self.runner else None)
+        await self.emit(SessionState(state=state, session_id=sid))
+
+    async def _set_state_safely(self, state: State) -> None:
+        """Like `_set_state`, but errors of the client sink are logged, not raised.
+
+        Args:
+            state: The new state.
+        """
+        try:
+            await self._set_state(state)
+        except Exception:
+            log.exception("emitting the session state failed")
+
+    async def _mark_busy(self) -> None:
+        """Note that Claude is working and update the state."""
+        self._busy = True
+        await self._refresh_state()
+
+    async def _emit_safely(self, event: Event) -> None:
+        """Emit `event`; errors of the client sink are logged, not raised.
+
+        Args:
+            event: The event to send.
+        """
+        try:
+            await self.emit(event)
+        except Exception:
+            log.exception("emitting %s failed", event.method)
+
+    async def _git_head(self) -> str | None:
+        """Return the commit id of the workspace's git HEAD, cached for `GIT_HEAD_TTL_S`.
+
+        Returns:
+            The full commit id, or None if the workspace is not a git repository (or git fails).
+        """
+        now = anyio.current_time()
+        if now - self._git_head_time < GIT_HEAD_TTL_S:
+            return self._git_head_value
+        value: str | None = None
+        try:
+            with anyio.fail_after(5):
+                done = await anyio.run_process(
+                    ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
+                    cwd=self.workspace,
+                    check=False,
+                )
+            if done.returncode == 0:
+                value = done.stdout.decode().strip() or None
+        except OSError, TimeoutError:
+            value = None
+        self._git_head_value, self._git_head_time = value, now
+        return value
+
+    def _require_running(self) -> ClaudeRunner:
+        """Return the active runner.
+
+        Returns:
+            The runner of the running session.
+
+        Raises:
+            SessionError: If no session accepts messages (stopped or still starting).
+        """
+        if self.state in ("stopped", "failed", "starting") or self.runner is None:
+            raise SessionError("no Claude session is running (send session.start first)")
+        return self.runner
+
+    def _find_agent(self, agent_id: str) -> AgentInfo:
+        """Return the running background subagent `agent_id`.
+
+        Args:
+            agent_id: Protocol agent id (id of the Agent tool call).
+
+        Returns:
+            The subagent's record.
+
+        Raises:
+            SessionError: If no session runs, the subagent is unknown, or it is not a running
+                background subagent.
+        """
+        agent = self._require_running().agents.get(agent_id)
+        if agent is None:
+            raise SessionError(f"unknown subagent {agent_id!r}")
+        if not agent.background or agent.status != "running":
+            raise SessionError(
+                "messages can only be sent to running background subagents; "
+                "a foreground subagent blocks the main agent until it finishes"
+            )
+        return agent
+
+
+def _result_summary(event: ToolResult, limit: int = 2_000) -> str:
+    """Return a short description of a tool result for the `steps` row.
+
+    Args:
+        event: The tool result event.
+        limit: Maximum number of characters kept.
+
+    Returns:
+        The result content, cut at `limit`, prefixed with "error: " if the tool failed.
+    """
+    content = event.content[:limit]
+    return f"error: {content}" if event.is_error else content
+
+
+def _model_name(model: object) -> str:
+    """Return a printable name of a checker model.
+
+    Args:
+        model: A Pydantic AI model string or `Model` instance.
+
+    Returns:
+        The string itself, or the instance's `model_name`.
+    """
+    return model if isinstance(model, str) else str(getattr(model, "model_name", model))
+
+
+async def _first_of(*events: anyio.Event) -> None:
+    """Return as soon as one of `events` is set.
+
+    Args:
+        *events: The events to wait for.
+    """
+    async with anyio.create_task_group() as tg:
+
+        async def wait(event: anyio.Event) -> None:
+            """Wait for `event`, then cancel the waits for the other events.
+
+            Args:
+                event: The event to wait for.
+            """
+            await event.wait()
+            tg.cancel_scope.cancel()
+
+        for event in events:
+            tg.start_soon(wait, event)
+
+
+def _render_safely(step: Step, workspace: Path) -> str:
+    """Render `step` for an escalation; fall back to the raw input if rendering fails.
+
+    Args:
+        step: The tool call.
+        workspace: Workspace root for relative paths.
+
+    Returns:
+        The Markdown rendering of the step.
+    """
+    try:
+        return render_step(step, workspace)
+    except Exception:
+        log.exception("rendering a step failed")
+        return f"`{step.tool_name}` {step.tool_input!r}"

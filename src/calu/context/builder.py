@@ -8,7 +8,7 @@ folded: a summarizer agent merges them into the narrative part of the chat summa
 user inputs are appended verbatim to its "User inputs" section. Folding runs in the background;
 checks continue with the old context until it is done. The summary is kept in memory
 (`ContextBuilder.summary`) and handed to `on_summary` after each fold, so the session can store
-it in the database (table `chat_summaries`).
+it in the database (table `chat_summaries`, with the number of the newest folded turn).
 
 Chat summary layout (an operator may edit both parts):
 
@@ -85,7 +85,8 @@ class ContextBuilder:
 
     `summarizer_model` is a Pydantic AI model string or `Model`; it is only used for folding.
     `on_turn_end` (optional) is called with each completed turn, e.g. to persist it.
-    `on_summary` (optional) is awaited with the new chat summary after each fold.
+    `on_summary` (optional) is awaited with the new chat summary and the number of the newest
+    folded turn after each fold.
     """
 
     def __init__(
@@ -95,7 +96,7 @@ class ContextBuilder:
         summarizer_model: str | Model | None = None,
         on_turn_end: Callable[[TurnRecord], None] | None = None,
         summary: str = "",
-        on_summary: Callable[[str], Awaitable[None]] | None = None,
+        on_summary: Callable[[str, int], Awaitable[None]] | None = None,
     ) -> None:
         """Create a builder with no turns; turn indexes start at 1.
 
@@ -105,7 +106,8 @@ class ContextBuilder:
             summarizer_model: Model for folding; None uses `config.summarizer_model`.
             on_turn_end: Called with each completed turn, or None.
             summary: The chat summary so far (e.g. loaded from the database); "" if none.
-            on_summary: Awaited with the new summary after each fold, or None.
+            on_summary: Awaited with the new summary and the number of the newest folded
+                turn after each fold, or None.
         """
         self.workspace = workspace
         self.summary = summary
@@ -172,6 +174,15 @@ class ContextBuilder:
         self.turns = list(turns[-(self.config.fold_every - 1) :])
         self.current = None
         self._next_index = max((t.index for t in turns), default=0) + 1
+
+    @property
+    def turn_number(self) -> int:
+        """Number of the running turn, or of the turn that the next record will start.
+
+        Returns:
+            `current.index` while a turn runs, else the index the next turn will get.
+        """
+        return self.current.index if self.current is not None else self._next_index
 
     def needs_fold(self) -> bool:
         """Tell whether enough turns are unfolded to fold.
@@ -304,7 +315,8 @@ class ContextBuilder:
 
         The summary is read before and compared again after the (slow) summarizer call; if it
         was replaced meanwhile, nothing changes and the turns stay unfolded for the next try.
-        On success, `summary` is replaced and `on_summary` is awaited with it.
+        On success, `summary` is replaced and `on_summary` is awaited with it and the number
+        of the newest folded turn.
         Concurrent calls are serialized. Does not raise (except cancellation): errors are
         logged.
 
@@ -332,7 +344,7 @@ class ContextBuilder:
                 all_inputs = "\n\n".join(p for p in (inputs, new_inputs) if p)
                 self.summary = join_summary(result.output, all_inputs)
                 if self.on_summary is not None:
-                    await self.on_summary(self.summary)
+                    await self.on_summary(self.summary, batch[-1].index)
             except Exception:  # folding is best effort
                 log.exception("folding turns into the chat summary failed")
                 return False

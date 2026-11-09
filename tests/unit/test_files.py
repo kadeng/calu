@@ -60,3 +60,24 @@ def test_skill_file_links_skill_md(tmp_path: Path):
     assert skill_file(str(skill)) is None
     (skill / "SKILL.md").write_text("---\nname: greet\n---\n")
     assert skill_file(f"{skill}  ") == FileLink(raw="greet", path=str(skill / "SKILL.md"))
+
+
+@pytest.mark.anyio
+async def test_session_sends_tool_files_for_bash(tmp_path: Path):
+    import anyio
+
+    from calu.protocol.messages import ChatSendParams, ToolFiles, TurnResult
+    from tests.unit.helpers import make_session
+
+    (tmp_path / "notes.md").write_text("x")
+    session, rec, _ = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "make; wc -l notes.md"}, "result": "1"}]],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="count"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (files,) = rec.of(ToolFiles)
+    assert files.files == [FileLink(raw="notes.md", path=str(tmp_path.resolve() / "notes.md"))]

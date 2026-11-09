@@ -24,6 +24,7 @@ ContextBuilder (`calu.context`).
 
 import logging
 import secrets
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,6 +60,33 @@ class CheckContext:
             `turns` and the joined `current` pieces, separated by a blank line.
         """
         return "\n\n".join(p for p in (self.turns, "".join(self.current)) if p)
+
+
+@dataclass(frozen=True)
+class CheckOutcome:
+    """The result of one checker model call: the decision and what it cost.
+
+    The token counts are None if the call failed (then `decision` is an ESCALATE decision that
+    names the error). `duration_ms` is the wall-clock time of the whole call, retries included.
+    """
+
+    decision: CheckDecision
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    duration_ms: int = 0
+
+
+def elapsed_ms(started: float) -> int:
+    """Return the milliseconds since a `time.monotonic()` reading.
+
+    Args:
+        started: The earlier reading.
+
+    Returns:
+        The elapsed time in milliseconds, rounded down.
+    """
+    return int((time.monotonic() - started) * 1000)
 
 
 def context_parts(context: CheckContext, prefix_heading: str) -> list[str | CachePoint]:
@@ -166,9 +194,7 @@ class Checker:
     ) -> CheckDecision:
         """Review `step` with the checker model and return its decision.
 
-        By default it never raises (except cancellation): any failure, including an unreadable
-        instructions file or a step that cannot be rendered, yields an ESCALATE decision whose
-        reason names the error, so that a human decides in live operation.
+        Like `run`, but returns the decision alone.
 
         Args:
             step: The tool call to check.
@@ -177,11 +203,37 @@ class Checker:
                 errors, not as escalations).
 
         Returns:
-            The model's decision, or the ESCALATE decision described above.
+            The model's decision, or the ESCALATE decision described in `run`.
 
         Raises:
             Exception: Only with `raise_errors`: whatever the model call or rendering raised.
         """
+        return (await self.run(step, context, raise_errors)).decision
+
+    async def run(
+        self, step: Step, context: CheckContext, raise_errors: bool = False
+    ) -> CheckOutcome:
+        """Review `step` and return the decision with the cost of the model call.
+
+        By default it never raises (except cancellation): any failure, including instructions
+        the model rejects or a step that cannot be rendered, yields an ESCALATE decision whose
+        reason names the error, so that a human decides in live operation. The session stores
+        the outcome as a `checker_runs` row.
+
+        Args:
+            step: The tool call to check.
+            context: Context prefix and recent summaries.
+            raise_errors: If True, failures are raised instead (evaluation counts them as
+                errors, not as escalations).
+
+        Returns:
+            The decision, the token counts (None after a failure) and the duration in
+            milliseconds.
+
+        Raises:
+            Exception: Only with `raise_errors`: whatever the model call or rendering raised.
+        """
+        started = time.monotonic()
         try:
             result = await run_bounded(
                 self.agent,
@@ -203,12 +255,23 @@ class Checker:
         except Exception as exc:
             if raise_errors:
                 raise
-            return CheckDecision(
-                decision=Decision.ESCALATE,
-                reason=f"The {self.name} checker failed ({type(exc).__name__}: {exc}).",
-                step_summary=f"{step.tool_name} call; not summarized because the check failed.",
+            return CheckOutcome(
+                decision=CheckDecision(
+                    decision=Decision.ESCALATE,
+                    reason=f"The {self.name} checker failed ({type(exc).__name__}: {exc}).",
+                    step_summary=(
+                        f"{step.tool_name} call; not summarized because the check failed."
+                    ),
+                ),
+                duration_ms=elapsed_ms(started),
             )
-        return result.output
+        return CheckOutcome(
+            decision=result.output,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            duration_ms=elapsed_ms(started),
+        )
 
 
 def _require_reason(output: CheckDecision) -> CheckDecision:

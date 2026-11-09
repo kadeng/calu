@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import anyio
 import pytest
 from claude_agent_sdk import AssistantMessage, TextBlock
 from claude_agent_sdk.types import StreamEvent
@@ -11,7 +12,10 @@ from calu.config import ClaudeConfig
 from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
+    ChatSendParams,
+    TurnResult,
 )
+from tests.unit.helpers import make_session
 
 pytestmark = pytest.mark.anyio
 
@@ -83,3 +87,16 @@ def test_stream_deltas_keep_their_agent(tmp_path: Path):
     assert isinstance(main, AssistantDelta) and isinstance(sub, AssistantDelta)
     assert (main.agent_id, main.message_id) == (None, "main1")
     assert (sub.agent_id, sub.message_id) == ("agent-1", "sub1")
+
+
+async def test_fake_runner_streams_words_before_final_text(tmp_path: Path):
+    session, rec, _ = make_session(tmp_path, [[{"text": "one two three", "stream": True}]])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    deltas = rec.of(AssistantDelta)
+    final = rec.of(AssistantText)[0]
+    assert "".join(d.text for d in deltas).strip() == "one two three"
+    assert {d.message_id for d in deltas} == {final.message_id}
