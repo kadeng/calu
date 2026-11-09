@@ -241,8 +241,9 @@ calu run  ──► asks for the password ──► Argon2id(password, salt) ─
 - One WebSocket endpoint per session process (default: local only, `127.0.0.1` or a Unix
   socket; remote access through SSH tunnels or a TLS proxy). JSON-RPC 2.0 messages.
 - Requests (from sitl's protocol): `session.start/stop/interrupt`, `chat.send` (queued or
-  inject), `escalation.decide`, `context.get`, `comment.add`, plus `state.get` and
-  `events.subscribe`.
+  inject), `escalation.decide`, `context.get`, `comment.add`, plus `state.get`,
+  `events.subscribe`, `session.list`, `session.history`, `escalation.context` and
+  `checkers.get`. Everything that **changes** configuration is deliberately absent (§6.2).
 - Events: sitl's event set (`assistant.*`, `tool.use`, `tool.result`, `check.result`,
   `escalation.request/resolved`, `chat.queue`, `tool.files`, ...), each with a sequence number
   (`Event.seq`, counted per calu process). A client that connects gets a snapshot (`state.get`)
@@ -314,6 +315,30 @@ calu's own protocol (§6), which calu-aware clients use.
    methods — the ones calu would want most — are marked UNSTABLE, and `session/load` requires
    replaying the whole conversation, which needs the step and turn history from the database
    (the `session.history` request that §6 dropped with sitl's file-based event log).
+
+### 6.2 Two kinds of calu client: session clients and herd clients (2026-11-09)
+
+ACP is the floor (§6.1). calu's own user interfaces go beyond it, and the features that do fall
+into two groups that talk to **different** sides of calu, because the rights differ:
+
+| Feature | Talks to | Why |
+|---|---|---|
+| Chat, events, interrupt, comments, deciding **this** session's escalations | the session process, over §6's protocol | the session owns the live state; only it can hold a tool call |
+| **Inspecting what a checker saw** for an escalation (`escalation.context`): the rendered step, the file before the change, the conversation and the chat summary of that moment, the checker runs with model and version | the session process | the row is written by the session, and `calu_session` may read `escalations` and `checker_runs` |
+| **Reading** the checker definitions and their instructions (`checkers.get`) | the session process | `calu_session` has SELECT on `checker_types` |
+| **Editing** the checker instructions, the rules, the configuration | the database, with the `admin` credential (`calu.admin`) | a session must not be able to change the rules it is judged by (§4.1 point 1); its role has no write access, and that is deliberate |
+| Escalations and sessions of **other** hosts and sessions, resolving them | the database, with `calu_operator` (`calu.herd`) | herd management works without any session process, from any machine that reaches the database (REQUIREMENTS 13) |
+
+So a calu user interface is two clients in one window: a session client for the session it
+watches, and a database client for the fleet and for the configuration. A web interface runs
+both on its server side; `calu attach` is only the first (it shows the checker definitions and
+the escalation context, and it changes nothing), and the configuration commands are only the
+second.
+
+This also shapes the answer to Q8: a calu interface that has operator rights should resolve an
+escalation **in the database** (`calu_resolve_escalation`), which notifies the waiting session
+and records who decided. The session path (D18, a cancellation with a note) stays for a client
+that has no database credential, for example the ACP adapter in an editor.
 
 ## 7. Database (first sketch)
 

@@ -74,6 +74,12 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
   enable/disable, a new checker with `--route`) and `calu rules list|add|remove|enable|disable`
   (patterns compiled before they are stored). They need the `admin` credential; every change
   announces itself on `config_changed`, so a running session applies it at its next step.
+- **Inspecting a decision**: `escalation.context` returns what the checker saw and said for an
+  escalated step (rendered step, the file before the change, the conversation and the chat
+  summary of that moment, the checker runs with model and version); `checkers.get` returns the
+  checker definitions with their instructions, read-only. `calu attach` has `/why <id>` and
+  `/checkers`. PLAN.md §6.2 says which user-interface feature talks to the session and which to
+  the database, and why editing the configuration can only be the second.
 - **`session.history`**: a client that joins a session which started before it (or before calu
   was restarted) rebuilds its view from the database — the turns, the steps with their input,
   decision and result, and the chat summary. The bus buffer only covers the running process.

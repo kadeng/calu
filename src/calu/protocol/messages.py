@@ -205,6 +205,79 @@ class SessionHistoryResult(BaseModel):
     steps: list[StoredStep] = Field(default_factory=list)
 
 
+class CheckerRunInfo(BaseModel):
+    """One checker model call that judged a step (a row of `checker_runs`)."""
+
+    checker_name: str
+    checker_version: int
+    model: str
+    decision: str
+    reason: str = ""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    duration_ms: int | None = None
+
+
+class EscalationContextParams(BaseModel):
+    """`escalation.context`: everything the checker saw and said when it escalated a step.
+
+    An `escalation.request` event carries what a client needs to show the question (the step,
+    its rendering, the reason). This request adds what a client needs to **judge** it: the
+    condensed conversation and the chat summary as they were at that moment, the content of the
+    file an edit would change, and the checker runs with their models and versions. The result
+    is an `EscalationContextResult`.
+    """
+
+    escalation_id: str
+
+
+class EscalationContextResult(BaseModel):
+    """Result of `escalation.context` (see `EscalationContextParams`).
+
+    `recent` and `chat_summary` are the context of the moment the step was checked, not of now:
+    they are stored with the escalation, so they still answer "what did the checker know?" after
+    the session has moved on. `state` is "open", "allowed", "denied" or "cancelled".
+    """
+
+    escalation_id: str
+    state: str
+    reason: str = ""
+    rendered: str = ""
+    """The step as the checker saw it, rendered as Markdown."""
+    tool_name: str = ""
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    agent_id: str | None = None
+    files: dict[str, str] = Field(default_factory=dict)
+    """Content of the file an edit would change, before the change."""
+    recent: str = ""
+    chat_summary: str = ""
+    checker_runs: list[CheckerRunInfo] = Field(default_factory=list)
+    note: str = ""
+    resolved_by: str | None = None
+
+
+class CheckerInfo(BaseModel):
+    """One checker definition as a client may read it (a row of `checker_types`).
+
+    Clients read these; changing them needs other credentials than a session has (PLAN.md §6.2),
+    so there is no request to write them here.
+    """
+
+    name: str
+    route: str
+    model: str
+    version: int
+    enabled: bool = True
+    instructions: str = ""
+
+
+class CheckerListResult(BaseModel):
+    """Result of `checkers.get`: the checker definitions this session uses, by name."""
+
+    checkers: list[CheckerInfo] = Field(default_factory=list)
+
+
 class SessionSummary(BaseModel):
     """A stored session of this project, for a "resume session" list in a client."""
 
@@ -289,6 +362,8 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "chat.send": ChatSendParams,
     "comment.add": CommentAddParams,
     "escalation.decide": EscalationDecideParams,
+    "escalation.context": EscalationContextParams,
+    "checkers.get": EmptyParams,
     "auto_escalate.set": AutoEscalateSetParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,

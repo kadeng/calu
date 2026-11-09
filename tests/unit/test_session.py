@@ -122,7 +122,7 @@ async def test_escalation_waits_for_human(tmp_path: Path):
         assert session.state == "escalated"
         assert "calu:escalate" in first.reason or "fake checker" in first.reason
         assert "git push" in first.rendered
-        assert store.escalation_context[int(first.escalation_id)]["rendered"] == first.rendered
+        assert store.contexts[int(first.escalation_id)]["rendered"] == first.rendered
         await anyio.sleep(0.05)
         assert not rec.of(ToolResult)  # still blocked
         await session.decide_escalation(first.escalation_id, "allow", None)

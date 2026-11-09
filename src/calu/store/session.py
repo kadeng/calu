@@ -27,7 +27,14 @@ from typing import Any, Literal, Protocol
 from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
-from calu.protocol.messages import SessionHistoryResult, SessionSummary, State, StoredStep
+from calu.protocol.messages import (
+    CheckerRunInfo,
+    EscalationContextResult,
+    SessionHistoryResult,
+    SessionSummary,
+    State,
+    StoredStep,
+)
 
 EscalationState = Literal["open", "allowed", "denied", "cancelled"]
 """States of an `escalations` row."""
@@ -335,6 +342,18 @@ class SessionStore(Protocol):
         Args:
             escalation_id: Id from `open_escalation`.
             note: Why it was cancelled, e.g. a decision that reached the session from a client.
+        """
+        ...
+
+    async def escalation_context(self, escalation_id: int) -> EscalationContextResult | None:
+        """Read what the checker saw and said when it escalated a step.
+
+        Args:
+            escalation_id: Id from `open_escalation`.
+
+        Returns:
+            The stored context with the checker runs of the step, or None if no escalation has
+            that id.
         """
         ...
 
@@ -819,6 +838,68 @@ class DatabaseSessionStore:
             "INSERT INTO escalations (session_id, step_id, reason, context)"
             " VALUES (%s, %s, %s, %s) RETURNING id",
             (self._require_session(), step_id, reason, json.dumps(context, default=str)),
+        )
+
+    async def escalation_context(self, escalation_id: int) -> EscalationContextResult | None:
+        """Read the stored context of an escalation (see `SessionStore.escalation_context`).
+
+        Args:
+            escalation_id: Id from `open_escalation`.
+
+        Returns:
+            The context with the checker runs of its step, or None if the id is unknown.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        async with self._db.exclusive() as conn:
+            cur = await conn.execute(
+                b"SELECT state, reason, context, note, resolved_by, step_id FROM escalations"
+                b" WHERE id = %s",
+                (escalation_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            state, reason, context, note, resolved_by, step_id = row
+            runs: list[CheckerRunInfo] = []
+            if step_id is not None:
+                cur = await conn.execute(
+                    b"SELECT checker_name, checker_version, model, decision, reason,"
+                    b" input_tokens, output_tokens, cache_read_tokens, duration_ms"
+                    b" FROM checker_runs WHERE step_id = %s ORDER BY id",
+                    (step_id,),
+                )
+                runs = [
+                    CheckerRunInfo(
+                        checker_name=run[0],
+                        checker_version=run[1],
+                        model=run[2],
+                        decision=run[3],
+                        reason=run[4] or "",
+                        input_tokens=run[5],
+                        output_tokens=run[6],
+                        cache_read_tokens=run[7],
+                        duration_ms=run[8],
+                    )
+                    for run in await cur.fetchall()
+                ]
+        stored = context if isinstance(context, dict) else {}
+        files = stored.get("files")
+        return EscalationContextResult(
+            escalation_id=str(escalation_id),
+            state=state,
+            reason=reason or "",
+            rendered=str(stored.get("rendered") or ""),
+            tool_name=str(stored.get("tool_name") or ""),
+            tool_input=dict(stored.get("tool_input") or {}),
+            agent_id=stored.get("agent_id"),
+            files=dict(files) if isinstance(files, dict) else {},
+            recent=str(stored.get("recent") or ""),
+            chat_summary=str(stored.get("chat_summary") or ""),
+            checker_runs=runs,
+            note=note or "",
+            resolved_by=resolved_by,
         )
 
     async def escalation(self, escalation_id: int) -> Escalation:

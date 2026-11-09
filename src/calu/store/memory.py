@@ -11,7 +11,12 @@ from typing import Any
 
 from calu.comments import Comment
 from calu.context.turns import TurnRecord
-from calu.protocol.messages import SessionHistoryResult, SessionSummary, State
+from calu.protocol.messages import (
+    EscalationContextResult,
+    SessionHistoryResult,
+    SessionSummary,
+    State,
+)
 from calu.store.session import (
     CheckerRun,
     Escalation,
@@ -54,7 +59,8 @@ class MemorySessionStore:
     folded_up_to: int = 0
     summaries: list[tuple[str, int]] = field(default_factory=list)
     escalations: dict[int, Escalation] = field(default_factory=dict)
-    escalation_context: dict[int, dict[str, Any]] = field(default_factory=dict)
+    contexts: dict[int, dict[str, Any]] = field(default_factory=dict)
+    """The context each escalation was opened with, by id."""
     previous: dict[str, tuple[list[TurnRecord], str]] = field(default_factory=dict)
     stored_sessions: list[SessionSummary] = field(default_factory=list)
     """What `recent_sessions` returns (a test sets it)."""
@@ -257,7 +263,7 @@ class MemorySessionStore:
         """
         escalation_id = next(self._ids)
         self.escalations[escalation_id] = Escalation(id=escalation_id, state="open")
-        self.escalation_context[escalation_id] = context
+        self.contexts[escalation_id] = context
         return escalation_id
 
     async def escalation(self, escalation_id: int) -> Escalation:
@@ -285,6 +291,33 @@ class MemorySessionStore:
             self.escalations[escalation_id] = Escalation(
                 id=escalation_id, state="cancelled", note=note
             )
+
+    async def escalation_context(self, escalation_id: int) -> EscalationContextResult | None:
+        """Return the recorded context of an escalation.
+
+        Args:
+            escalation_id: Id from `open_escalation`.
+
+        Returns:
+            A result built from `escalation_context`, or None if the id is unknown.
+        """
+        current = self.escalations.get(escalation_id)
+        if current is None:
+            return None
+        stored = self.contexts.get(escalation_id, {})
+        return EscalationContextResult(
+            escalation_id=str(escalation_id),
+            state=current.state,
+            rendered=str(stored.get("rendered") or ""),
+            tool_name=str(stored.get("tool_name") or ""),
+            tool_input=dict(stored.get("tool_input") or {}),
+            agent_id=stored.get("agent_id"),
+            files=dict(stored.get("files") or {}),
+            recent=str(stored.get("recent") or ""),
+            chat_summary=str(stored.get("chat_summary") or ""),
+            note=current.note,
+            resolved_by=current.resolved_by,
+        )
 
     def resolve(
         self, escalation_id: int, state: EscalationState, note: str = "", by: str = "operator"

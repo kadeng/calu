@@ -84,8 +84,11 @@ from calu.protocol.messages import (
     ChatQueue,
     ChatSendParams,
     CheckerContextResult,
+    CheckerInfo,
+    CheckerListResult,
     CommentAddParams,
     EditDiff,
+    EscalationContextResult,
     EscalationRequest,
     EscalationResolved,
     Event,
@@ -497,6 +500,53 @@ class Session:
         except Exception:
             log.exception("reading the history of %s failed", claude_session_id or "this session")
             return SessionHistoryResult(claude_session_id=claude_session_id)
+
+    async def escalation_context(self, escalation_id: str) -> EscalationContextResult | None:
+        """Return what the checker saw and said when it escalated a step.
+
+        A client shows this next to the question: the condensed conversation and the chat
+        summary of that moment, the file an edit would change, and the checker runs with their
+        model and version. It comes from the `escalations` row, so it still answers "what did
+        the checker know?" after the session has moved on.
+
+        Args:
+            escalation_id: Id from the `escalation.request` event.
+
+        Returns:
+            The stored context, or None if no escalation has that id (or it is not a number, or
+            the database cannot be read; the error is logged).
+        """
+        try:
+            return await self.store.escalation_context(int(escalation_id))
+        except ValueError:
+            log.warning("not an escalation id: %r", escalation_id)
+            return None
+        except Exception:
+            log.exception("reading the context of escalation %s failed", escalation_id)
+            return None
+
+    def checker_definitions(self) -> CheckerListResult:
+        """Return the checker definitions this session uses (`checkers.get`).
+
+        A client shows them so that a human can see which instructions, which model and which
+        version judged a step. Changing them needs other credentials than a session has
+        (PLAN.md §6.2), so this is read-only.
+
+        Returns:
+            The definitions by name, with their instructions.
+        """
+        return CheckerListResult(
+            checkers=[
+                CheckerInfo(
+                    name=definition.name,
+                    route=definition.route,
+                    model=definition.model,
+                    version=definition.version,
+                    instructions=definition.instructions,
+                )
+                for definition in sorted(self.settings.checkers.values(), key=lambda d: d.name)
+            ]
+        )
 
     def checker_context(self) -> CheckerContextResult:
         """Return the conversation context as the checkers currently see it.

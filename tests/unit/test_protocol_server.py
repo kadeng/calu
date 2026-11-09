@@ -316,3 +316,56 @@ async def test_the_history_of_the_running_session_needs_no_id(tmp_path: Path):
             history = await protocol.request("session.history", {})
             # The in-memory store builds it from the turns it stored.
             assert [t["user_inputs"] for t in history["turns"]] == [["say hello"]]
+
+
+async def test_a_client_inspects_what_the_checker_saw_for_an_escalation(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("old\n", encoding="utf-8")
+    turns = [
+        [
+            {
+                "tool": "Edit",
+                "input": {
+                    "file_path": "a.txt",
+                    "old_string": "old",
+                    "new_string": "new # calu:escalate",
+                },
+                "result": "ok",
+            }
+        ]
+    ]
+    async with served(tmp_path, turns) as run:
+        events = Events()
+        async with client(run, events) as protocol:
+            await protocol.request("session.start", {})
+            await protocol.request("chat.send", {"text": "change it"})
+            request = (await events.wait_for("escalation.request"))[0]
+            found = await protocol.request(
+                "escalation.context", {"escalation_id": request["escalation_id"]}
+            )
+            assert found["state"] == "open"
+            assert found["tool_name"] == "Edit"
+            assert found["rendered"] == request["rendered"]
+            assert found["files"] == {"a.txt": "old\n"}  # before the change
+            assert "change it" in found["recent"]
+            assert "No turns have been folded" in found["chat_summary"]
+            with pytest.raises(RequestFailed):
+                await protocol.request("escalation.context", {"escalation_id": "999999"})
+            with pytest.raises(RequestFailed):
+                await protocol.request("escalation.context", {"escalation_id": "not-a-number"})
+            await protocol.request(
+                "escalation.decide",
+                {"escalation_id": request["escalation_id"], "decision": "deny", "note": "no"},
+            )
+            await events.wait_for("turn.result")
+
+
+async def test_a_client_reads_the_checker_definitions(tmp_path: Path):
+    async with served(tmp_path) as run:
+        events = Events()
+        async with client(run, events) as protocol:
+            result = await protocol.request("checkers.get")
+            names = [c["name"] for c in result["checkers"]]
+            assert names == ["command", "edit", "narrator", "subagent-result"]
+            command = result["checkers"][0]
+            assert command["route"] == "command" and command["version"] == 1
+            assert command["instructions"].startswith("#")

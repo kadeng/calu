@@ -17,6 +17,8 @@ Commands typed instead of a message:
     /stop                 stop the Claude session (`session.stop`)
     /start [resume id]    start a Claude session (`session.start`)
     /interrupt            end Claude's current turn
+    /why <id>             what the checker saw and said when it escalated this step
+    /checkers             the checker definitions this session uses (name, model, version)
     /allow <id> [note]    resolve an escalation (`escalation.decide`)
     /deny <id> [note]     resolve an escalation
     /inject <text>        send the text so Claude reads it after its running tool calls
@@ -190,6 +192,34 @@ class Console:
                 await self._comment(rest)
             case "/allow" | "/deny":
                 await self._decide(command.removeprefix("/"), rest)
+            case "/why":
+                if not rest:
+                    print("[error] /why needs an escalation id", flush=True)
+                    return
+                found = await self.client.request("escalation.context", {"escalation_id": rest})
+                print(f"--- escalation {found['escalation_id']} ({found['state']})", flush=True)
+                print(found.get("reason", ""), flush=True)
+                for run in found.get("checker_runs", []):
+                    print(
+                        f"  [{run['checker_name']} v{run['checker_version']}, {run['model']}]"
+                        f" {run['decision']}: {one_line(run.get('reason', ''))}",
+                        flush=True,
+                    )
+                print(found.get("rendered", ""), flush=True)
+                for path, content in (found.get("files") or {}).items():
+                    print(f"--- {path} before the change\n{content}", flush=True)
+                print(
+                    f"--- the conversation the checker saw\n{found.get('recent', '')}", flush=True
+                )
+            case "/checkers":
+                result = await self.client.request("checkers.get")
+                for checker in result.get("checkers", []):
+                    print(
+                        f"{checker['name']}  route {checker['route']}  {checker['model']}"
+                        f"  v{checker['version']}  "
+                        f"{len(checker.get('instructions', ''))} chars of instructions",
+                        flush=True,
+                    )
             case "/state":
                 print(describe_state(await self.client.request("state.get")), flush=True)
             case "/context":

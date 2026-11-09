@@ -39,6 +39,7 @@ from calu.protocol.messages import (
     ChatSendParams,
     CommentAddParams,
     CommentAddResult,
+    EscalationContextParams,
     EscalationDecideParams,
     Event,
     EventsSubscribeParams,
@@ -365,6 +366,14 @@ class Client:
                 assert isinstance(params, EscalationDecideParams)
                 await session.decide_escalation(params.escalation_id, params.decision, params.note)
                 return {}
+            case "escalation.context":
+                assert isinstance(params, EscalationContextParams)
+                found = await session.escalation_context(params.escalation_id)
+                if found is None:
+                    raise RpcError(-32000, f"no escalation {params.escalation_id!r}")
+                return found
+            case "checkers.get":
+                return session.checker_definitions()
             case "auto_escalate.set":
                 assert isinstance(params, AutoEscalateSetParams)
                 session.config.auto_escalate = AutoEscalate(**params.model_dump())

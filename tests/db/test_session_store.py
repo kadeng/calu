@@ -337,3 +337,60 @@ async def test_the_history_of_a_session_comes_back_from_the_database(db_url: str
         assert empty.claude_session_id == "claude-unknown"
     finally:
         await conn.close()
+
+
+async def test_the_stored_context_of_an_escalation_comes_back_with_its_checker_runs(
+    db_url: str,
+) -> None:
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Edit", tool_input={"file_path": "a.py"})
+        )
+        await store.add_checker_run(
+            step,
+            CheckerRun(
+                checker_name="edit",
+                checker_version=3,
+                model="test:model",
+                decision="escalate",
+                reason="the contract does not match the code",
+                input_tokens=120,
+                duration_ms=900,
+            ),
+        )
+        escalation = await store.open_escalation(
+            "the contract does not match the code",
+            {
+                "rendered": "```diff\n-old\n+new\n```",
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "a.py"},
+                "agent_id": None,
+                "files": {"a.py": "old\n"},
+                "recent": "## Turn 1\n\n**User:**\n\n    fix it",
+                "chat_summary": "# Chat summary\n\nEarlier work.\n",
+            },
+            step,
+        )
+        found = await store.escalation_context(escalation)
+        assert found is not None
+        assert found.state == "open" and found.escalation_id == str(escalation)
+        assert found.reason == "the contract does not match the code"
+        assert found.rendered.startswith("```diff")
+        assert found.files == {"a.py": "old\n"}
+        assert "fix it" in found.recent and "Earlier work." in found.chat_summary
+        assert [(r.checker_name, r.checker_version, r.decision) for r in found.checker_runs] == [
+            ("edit", 3, "escalate")
+        ]
+        assert found.checker_runs[0].input_tokens == 120
+        assert found.checker_runs[0].duration_ms == 900
+
+        await store.close_escalation(escalation, "the session was stopped")
+        closed = await store.escalation_context(escalation)
+        assert closed is not None and closed.state == "cancelled"
+        assert closed.note == "the session was stopped"
+        assert closed.resolved_by == "calu_session"
+        assert await store.escalation_context(999_999) is None
+    finally:
+        await conn.close()

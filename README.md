@@ -53,6 +53,11 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   opening the details only where a summary looks wrong. An IDE or terminal client attaches to a
   session for the full picture, and a colleague with access can watch your session the same
   way.
+- **The checker's own view, when you have to decide.** For an escalated step a client can ask
+  what the checker saw and said: the step as it was rendered, the file as it was before the
+  change, the condensed conversation and the chat summary of that moment, and which checker
+  version and model answered. You decide on the same material the checker had, not on a
+  one-line reason.
 - **A check on what subagents hand back.** A subagent's final result is reviewed against the
   conversation, so an adversarial reviewer subagent cannot silently widen a task that you
   deliberately kept small.
