@@ -1,0 +1,129 @@
+"""`calu attach`: rendering received events and turning typed lines into requests."""
+
+from typing import Any
+
+import pytest
+
+from calu.attach import Console, Printer, describe_state, render
+from calu.protocol.client import RequestFailed
+
+pytestmark = pytest.mark.anyio
+
+
+class FakeClient:
+    """Records the requests a `Console` sends and answers them from `results`."""
+
+    def __init__(self, results: dict[str, Any] | None = None) -> None:
+        """Create the client.
+
+        Args:
+            results: Result per method; a method that is missing answers `{}`.
+        """
+        self.sent: list[tuple[str, dict[str, Any]]] = []
+        self.results = results or {}
+        self.fail: str | None = None
+
+    async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+        """Record the request and return its prepared result.
+
+        Args:
+            method: The request method.
+            params: Its params.
+        """
+        self.sent.append((method, params or {}))
+        if self.fail == method:
+            raise RequestFailed({"code": -32000, "message": "no"})
+        return self.results.get(method, {})
+
+
+def console(results: dict[str, Any] | None = None) -> tuple[Console, FakeClient]:
+    """Return a console on a fake client."""
+    client = FakeClient(results)
+    return Console(client), client  # type: ignore[arg-type]
+
+
+def test_events_are_rendered_like_the_terminal_of_calu_run():
+    assert render("session.state", {"state": "idle", "seq": 1}) == "[idle]"
+    assert render("assistant.text", {"text": "hi", "seq": 2}) == "hi"
+    assert render("assistant.delta", {"message_id": "m", "text": "x", "seq": 3}) is None
+    # An event of an unknown method or with unexpected params is shown raw, never dropped.
+    assert "unknown.method" in str(render("unknown.method", {"a": 1}))
+    assert "session.state" in str(render("session.state", {"state": "nonsense"}))
+
+
+def test_the_state_line_names_the_open_escalations():
+    line = describe_state(
+        {
+            "state": "escalated",
+            "workspace": "/w",
+            "model": "opus",
+            "escalations": [{"escalation_id": "1"}],
+        }
+    )
+    assert line == "[state] escalated · /w · model opus · 1 escalation(s) open"
+
+
+async def test_plain_text_is_sent_as_a_chat_message():
+    con, client = console()
+    await con.line("fix the test")
+    assert client.sent == [("chat.send", {"text": "fix the test"})]
+
+
+async def test_commands_become_requests():
+    con, client = console({"session.start": {"claude_session_id": "c1"}})
+    await con.line("/start")
+    await con.line("/start resume-me")
+    await con.line("/stop")
+    await con.line("/interrupt")
+    await con.line("/inject later")
+    await con.line("/allow 7 go ahead")
+    await con.line("/deny 8")
+    assert client.sent == [
+        ("session.start", {}),
+        ("session.start", {"resume_id": "resume-me"}),
+        ("session.stop", {}),
+        ("interrupt", {}),
+        ("chat.send", {"text": "later", "delivery": "inject"}),
+        (
+            "escalation.decide",
+            {"escalation_id": "7", "decision": "allow", "note": "go ahead"},
+        ),
+        ("escalation.decide", {"escalation_id": "8", "decision": "deny", "note": None}),
+    ]
+    assert not con.quit.is_set()
+
+
+async def test_quit_and_shutdown_end_the_client():
+    con, client = console()
+    await con.line("/quit")
+    assert con.quit.is_set()
+    con, client = console()
+    await con.line("/shutdown")
+    assert client.sent == [("shutdown", {})] and con.quit.is_set()
+
+
+async def test_bad_input_is_reported_and_does_not_send_anything(capsys):
+    con, client = console()
+    await con.line("/nonsense")
+    await con.line("/allow")
+    await con.line("/inject")
+    assert client.sent == []
+    output = capsys.readouterr().out
+    assert "unknown command /nonsense" in output
+    assert "/allow needs an escalation id" in output
+    assert "/inject needs a text" in output
+
+
+async def test_a_refused_request_is_printed_not_raised(capsys):
+    con, client = console()
+    client.fail = "chat.send"
+    await con.line("hello")
+    assert "[error] no (code -32000)" in capsys.readouterr().out
+    assert not con.quit.is_set()
+
+
+async def test_the_printer_hides_thinking_unless_asked(capsys):
+    await Printer()("assistant.thinking", {"text": "hmm"})
+    assert capsys.readouterr().out == ""
+    await Printer(show_thinking=True)("assistant.thinking", {"text": "hmm"})
+    assert "(thinking) hmm" in capsys.readouterr().out

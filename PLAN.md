@@ -46,6 +46,7 @@ alongside calu is decided later (§11).
 | D16 | **Checkers on the Anthropic subscription through `claude -p --output-format json --json-schema`** (2026-11-09, answers Q7): schema-valid `structured_output` in 6 of 6 runs, 2.5-4.4 s per check with haiku; run with `--tools ""`, `--no-session-persistence` and stdin closed. |
 | D17 | **Checker API keys stay out of the database** (2026-11-09): calu reads them from its environment and `~/.config/calu/.env` and hides them from Claude Code (as in sitl). |
 | D18 | **A decision that reaches the session from a client is recorded as a cancellation with a note** (2026-11-09). Only `calu_operator` may call `calu_resolve_escalation`; the session role may not, so that a session which somehow lost its credential cannot approve its own steps (§4.1 point 5). A client attached to the session process therefore decides in the session, which then cancels the row with a note that holds the decision and the client. The audit trail of such a decision is weaker than that of an operator's resolution; whether clients should instead resolve escalations with their own operator credentials is Q8. |
+| D20 | **One token per session for its clients** (2026-11-09): `calu run` issues a client token, prints it once and stores only its SHA-256 (`client_tokens`). A client sends it in `initialize`; every other request is refused before that. The endpoint binds 127.0.0.1 by default, so remote access goes through an SSH tunnel or a TLS proxy until Q4 is answered. |
 | D19 | **One database connection per session, serialized and shielded** (2026-11-09): `calu run` opens two connections before it wipes the credentials (one for queries, one for notifications) and cannot open more later, because reconnecting would need the password again (§5). psycopg allows one statement at a time per connection, and a session writes from several tasks at once, so every statement goes through `calu.db.Db`: a lock serializes them, and each statement is shielded from cancellation (bounded by a timeout), because a task cancelled in the middle of a statement leaves the connection unusable for every other task. |
 
 ## 3. Architecture
@@ -201,9 +202,12 @@ calu run  ──► asks for the password ──► Argon2id(password, salt) ─
   inject), `escalation.decide`, `context.get`, `comment.add`, plus `state.get` and
   `events.subscribe`.
 - Events: sitl's event set (`assistant.*`, `tool.use`, `tool.result`, `check.result`,
-  `escalation.request/resolved`, `chat.queue`, `tool.files`, ...), each with a sequence number.
-  A client that connects gets a snapshot (`state.get`) and then the events after its sequence
-  number; several clients see the same stream.
+  `escalation.request/resolved`, `chat.queue`, `tool.files`, ...), each with a sequence number
+  (`Event.seq`, counted per calu process). A client that connects gets a snapshot (`state.get`)
+  and then the events after its sequence number (`events.subscribe`); several clients see the
+  same stream. The replay buffer holds the last 5000 events of the process and nothing is
+  written to the database (D3), so a client that was away longer is told that its replay has a
+  gap and takes a fresh snapshot.
 - The protocol is defined by Pydantic models; a JSON Schema is generated for non-Python clients.
 
 ## 7. Database (first sketch)
@@ -222,6 +226,8 @@ calu run  ──► asks for the password ──► Argon2id(password, salt) ─
 | `config` | scope (global, project, session), key, value (JSON) |
 | `chat_summaries` | session, folded summary text, covered turns |
 | `audit_log` | who changed which configuration, rule or checker definition, when |
+| `comments` | a user's comment on a selection in a diff or a file, with the step's turn (migration 0003) |
+| `client_tokens` | SHA-256 of the tokens with which clients may attach to a session (migration 0004) |
 
 Narrator instructions may stay built into calu (not in the database); `calu setup` loads the
 built-in ones, and a session falls back to them if the database has no row for a checker type.
@@ -279,7 +285,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 | Q6 | What happens to a session when no human answers an escalation for a long time (keep waiting, give Claude other work, stop after a timeout). |
 | Q7 | Answered by D16. |
 | Q8 | How a client attached to the session process decides an escalation: as now (the session cancels the row with a note, D18), with the client's own `calu_operator` credentials, or with a database function that lets `calu_session` record a client decision for its own session. |
-| Q9 | Where the user comments of sitl (diff and file comments) and its training mode (human review of checker decisions, for evaluation data) belong in calu: both were left out of the session port and need tables of their own. |
+| Q9 | Where sitl's training mode belongs in calu (human review of checker decisions, to collect evaluation data): it was left out of the session port and needs tables of its own. The user comments it was grouped with are ported (migration 0003). |
 
 ## 12. Phases
 
@@ -292,9 +298,13 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    credentials dropped before Claude starts, sandbox settings passed with `--settings` (D15).
    `calu sessions/escalations/resolve` were pulled forward from phase 6, because without them
    nobody could unblock a session.
-4. **Bus and terminal client:** WebSocket JSON-RPC, snapshot and event stream, `calu attach`.
-   The protocol models still carry sitl's file-based parts (`files`, the training requests) and
-   need a pass here.
+4. **Bus and terminal client** (done): `calu.bus` numbers the events and keeps them for replay,
+   `calu.protocol.server` serves JSON-RPC over WebSocket to several clients at once (token per
+   session, `state.get`, `events.subscribe`), `calu.protocol.client` is the client side, and
+   `calu attach` is a terminal client. Comments were ported with it (migration 0003). Still
+   open: a client cannot change the configuration, the rules or the checker instructions
+   through the protocol, because the session role may only read them (§8 commands, or a web UI
+   with operator rights).
 5. **Sandboxing of tool calls**: the settings exist (D15); still open are the network policy
    per project (Q5), the nested-sandbox case in Docker (Q1) and `calu project add`.
 6. **Herd management:** a web UI on top of the commands of phase 3.

@@ -166,6 +166,21 @@ class ProtocolClient:
             await self.on_event(str(method), params)
 
 
+def _single(group: BaseExceptionGroup[BaseException]) -> BaseException:
+    """Return the one exception of a (possibly nested) group, or the group itself.
+
+    Args:
+        group: The exception group raised by a task group.
+
+    Returns:
+        The single leaf exception if the group holds exactly one, else `group` unchanged.
+    """
+    if len(group.exceptions) != 1:
+        return group
+    inner = group.exceptions[0]
+    return _single(inner) if isinstance(inner, BaseExceptionGroup) else inner
+
+
 @asynccontextmanager
 async def connect(
     address: str,
@@ -195,20 +210,29 @@ async def connect(
     Raises:
         OSError: If the address cannot be reached.
         RequestFailed: If the token is refused.
+        ConnectionError: If the session closes the connection during the handshake.
     """
     async with ws_connect(address) as connection:
         protocol = ProtocolClient(connection, on_event)
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(protocol._read)
-            try:
-                protocol.initialize = await protocol.request(
-                    "initialize",
-                    {"client": client, "client_version": client_version, "token": token},
-                )
-                replay = await protocol.request("events.subscribe", {"after_seq": after_seq})
-                for event in replay.get("events", []):
-                    await protocol._dispatch({"method": event["method"], "params": event["params"]})
-                protocol.complete = bool(replay.get("complete", True))
-                yield protocol
-            finally:
-                tg.cancel_scope.cancel()
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(protocol._read)
+                try:
+                    protocol.initialize = await protocol.request(
+                        "initialize",
+                        {"client": client, "client_version": client_version, "token": token},
+                    )
+                    replay = await protocol.request("events.subscribe", {"after_seq": after_seq})
+                    for event in replay.get("events", []):
+                        await protocol._dispatch(
+                            {"method": event["method"], "params": event["params"]}
+                        )
+                    protocol.complete = bool(replay.get("complete", True))
+                    yield protocol
+                finally:
+                    tg.cancel_scope.cancel()
+        except BaseExceptionGroup as group:
+            # The reader runs in a task group, which wraps every error in a group; a caller
+            # should see the error it caused (a refused token, its own exception), not a group.
+            error = _single(group)
+            raise error from None

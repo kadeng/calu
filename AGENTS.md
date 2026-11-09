@@ -30,7 +30,10 @@ phases.
 | `src/calu/cli.py` | The `calu` command |
 | `src/calu/credentials.py` | Encrypted credential store (Argon2id, AES-GCM) |
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
-| `src/calu/run.py` | `calu run`: credentials, connections, session, terminal output |
+| `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
+| `src/calu/attach.py` | `calu attach`: terminal client of a running session |
+| `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
+| `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
 | `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |
 | `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve` (database only) |
@@ -39,7 +42,7 @@ phases.
 | `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker and result checker agents |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
-| `src/calu/protocol/` | Client protocol messages (Pydantic) and JSON Schema export |
+| `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
 | `src/calu/comments/` | User comments on selections in diffs and files |
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |

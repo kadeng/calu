@@ -9,6 +9,8 @@ import pytest
 from calu.claude import FakeRunner, FakeScript
 from calu.config import SETTINGS_KEY
 from calu.db import connect
+from calu.db import connect as connect_db
+from calu.protocol.client import connect as connect_client
 from calu.run import RunOptions, run_session
 from calu.setup import setup
 from calu.testing import fake_models
@@ -106,5 +108,76 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
         assert await cur.fetchall() == [(1, ["have a look"], "All done.")]
         cur = await owner.execute("SELECT checker_name, decision FROM checker_runs ORDER BY id")
         assert await cur.fetchall() == [("command", "escalate")]
+    finally:
+        await owner.close()
+
+
+CHAT_SCRIPT = FakeScript(
+    turns=[
+        [
+            {"tool": "Bash", "input": {"command": "ls"}, "result": "a.py"},
+            {"text": "One file."},
+        ]
+    ]
+)
+
+
+async def test_a_client_attaches_to_a_running_session(db_url: str, tmp_path: Path) -> None:
+    session_url = await prepare(db_url, tmp_path)
+    options = RunOptions(workspace=tmp_path, interactive=False)
+    serving: list[tuple[str, str]] = []
+    ready = anyio.Event()
+
+    async def on_serving(address: str, token: str) -> None:
+        serving.append((address, token))
+        ready.set()
+
+    codes: list[int] = []
+
+    async def run() -> None:
+        codes.append(
+            await run_session(
+                session_url,
+                options,
+                runner_factory=lambda workspace, _c, _h: FakeRunner(CHAT_SCRIPT, workspace),
+                checker_models=fake_models(),
+                on_serving=on_serving,
+            )
+        )
+
+    received: list[tuple[str, dict]] = []
+
+    async def on_event(method: str, params: dict) -> None:
+        received.append((method, params))
+
+    async def client_work() -> None:
+        with anyio.fail_after(20):
+            await ready.wait()
+        address, token = serving[0]
+        async with connect_client(address, token, "test-client", on_event) as client:
+            snapshot = await client.request("state.get")
+            assert snapshot["workspace"] == str(tmp_path)
+            assert snapshot["calu_session_id"] is not None
+            await client.request("chat.send", {"text": "how many files?"})
+            with anyio.fail_after(20):
+                while not [m for m, _ in received if m == "turn.result"]:
+                    await anyio.sleep(0.02)
+            assert [p["content"] for m, p in received if m == "tool.result"] == ["a.py"]
+            assert client.last_seq > 0
+            await client.request("shutdown")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(run)
+        tg.start_soon(client_work)
+    assert codes == [0]
+
+    owner = await connect_db(db_url)
+    try:
+        cur = await owner.execute(
+            "SELECT count(*) FROM client_tokens WHERE address = %s", (serving[0][0],)
+        )
+        assert await cur.fetchone() == (1,)
+        cur = await owner.execute("SELECT state FROM sessions")
+        assert await cur.fetchall() == [("stopped",)]
     finally:
         await owner.close()

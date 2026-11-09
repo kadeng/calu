@@ -69,6 +69,9 @@ RunnerFactory = Callable[[Path, ClaudeConfig, set[str]], ClaudeRunner]
 """Creates the runner of one Claude session from workspace, Claude settings and the names of
 the environment variables that Claude Code must not see."""
 
+Serving = Callable[[str, str], Awaitable[None]]
+"""Called with the WebSocket address and the client token once the protocol server listens."""
+
 
 @dataclass(frozen=True)
 class RunOptions:
@@ -272,6 +275,7 @@ async def run_session(
     options: RunOptions,
     runner_factory: RunnerFactory | None = None,
     checker_models: dict[str, str | Model] | None = None,
+    on_serving: Serving | None = None,
 ) -> int:
     """Run one session until it ends, and report what happened.
 
@@ -286,6 +290,8 @@ async def run_session(
             hidden environment variables; None uses `SdkRunner` (tests pass a fake runner).
         checker_models: Replacements for the configured checker models; None uses the models
             from the database (tests pass fake models).
+        on_serving: Awaited with the WebSocket address and the client token once the protocol
+            server listens, in addition to printing them (a supervisor or a test uses it).
 
     Returns:
         0 if the session ended normally, 1 if it failed (the reason was printed).
@@ -299,7 +305,9 @@ async def run_session(
     if isinstance(url, bytearray):
         wipe(url)  # Claude Code starts below; nothing must still hold the credential
     try:
-        return await _run(conn, listener, hidden, options, runner_factory, checker_models)
+        return await _run(
+            conn, listener, hidden, options, runner_factory, checker_models, on_serving
+        )
     finally:
         await conn.close()
         await listener.close()
@@ -312,6 +320,7 @@ async def _run(
     options: RunOptions,
     runner_factory: RunnerFactory | None = None,
     checker_models: dict[str, str | Model] | None = None,
+    on_serving: Serving | None = None,
 ) -> int:
     """Load the settings, start the session and drive it until it ends.
 
@@ -322,6 +331,7 @@ async def _run(
         options: What to run.
         runner_factory: Creates the runner; None uses `SdkRunner`.
         checker_models: Replacements for the configured checker models, or None.
+        on_serving: Awaited with the address and the token once the server listens, or None.
 
     Returns:
         0 if the session ended normally, 1 if it failed.
@@ -365,12 +375,14 @@ async def _run(
         tg.start_soon(notifier.run)
         tg.start_soon(config_store.reload_loop, dirty, on_settings)
         server: SessionServer | None = None
-        if options.serve:
-            token = new_token()
-            server = SessionServer(session, bus, token_hash(token), tg)
-            tg.start_soon(_listen, server, options, token, store)
         try:
             await session.start(tg, options.resume_id, options.model, options.effort)
+            if options.serve:
+                # After the start, so that the session row and its id exist when the first
+                # client asks; the events of the start are in the bus and are replayed.
+                token = new_token()
+                server = SessionServer(session, bus, token_hash(token), tg)
+                tg.start_soon(_listen, server, options, token, store, on_serving)
             if options.prompt:
                 await session.send_chat(ChatSendParams(text=options.prompt))
             if options.interactive:
@@ -390,7 +402,11 @@ async def _run(
 
 
 async def _listen(
-    server: SessionServer, options: RunOptions, token: str, store: DatabaseSessionStore
+    server: SessionServer,
+    options: RunOptions,
+    token: str,
+    store: DatabaseSessionStore,
+    on_serving: Serving | None = None,
 ) -> None:
     """Serve the protocol and print the address and the token once; never raises.
 
@@ -402,6 +418,7 @@ async def _listen(
         options: Host and port to bind.
         token: The client token to print.
         store: The session store, for the token's hash.
+        on_serving: Awaited with the address and the token as well, or None.
     """
     try:
         async with anyio.create_task_group() as tg:
@@ -420,6 +437,8 @@ async def _listen(
                     await store.add_client_token(token_hash(token), server.address)
                 except Exception:
                     log.exception("recording the client token failed")
+            if on_serving is not None:
+                await on_serving(server.address, token)
     except OSError as exc:
         print(f"calu: the protocol server could not start: {exc}", flush=True)
 

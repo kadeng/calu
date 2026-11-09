@@ -62,6 +62,10 @@ NO_AUTH_METHODS = frozenset({"initialize"})
 UNAUTHENTICATED = -32001
 """JSON-RPC error code for a request before a successful `initialize`."""
 
+GRACE_S = 0.1
+"""How long `listen` keeps the connections open after a `shutdown` request, so that the events
+and responses already written reach the clients."""
+
 
 def encode_event(event: Event) -> str:
     """Return the JSON-RPC notification text for `event`.
@@ -148,6 +152,7 @@ class SessionServer:
             self.ready.set()
             log.info("protocol server listening on %s", self.address)
             await self.shutdown.wait()
+            await anyio.sleep(GRACE_S)  # let the other clients' last events go out
 
     async def _handle(self, connection: ServerConnection) -> None:
         """Serve one WebSocket connection until it closes. Never raises.
@@ -195,21 +200,22 @@ class Client:
         """Handle the client's messages until the connection closes.
 
         Control requests (`CONTROL_METHODS`) run next to a running request; the others run one
-        after another, in the order the client sent them.
-
-        Raises:
-            websockets.exceptions.ConnectionClosed: When the client disconnects.
+        after another, in the order the client sent them. A client that disconnects ends this
+        method without an error.
         """
         async with anyio.create_task_group() as tg:
             self._tasks = tg
-            async for message in self.connection:
-                text = message if isinstance(message, str) else message.decode()
-                if not text.strip():
-                    continue
-                if _method_of(text) in CONTROL_METHODS:
-                    tg.start_soon(self._handle_message, text)
-                else:
-                    await self._handle_message(text)
+            try:
+                async for message in self.connection:
+                    text = message if isinstance(message, str) else message.decode()
+                    if not text.strip():
+                        continue
+                    if _method_of(text) in CONTROL_METHODS:
+                        tg.start_soon(self._handle_message, text)
+                    else:
+                        await self._handle_message(text)
+            except ConnectionClosed:
+                log.info("client %r disconnected", self.name or "unknown")
             tg.cancel_scope.cancel()
 
     async def send(self, text: str) -> None:
@@ -260,7 +266,13 @@ class Client:
                     )
                 )
             if method == "shutdown":
-                self.server.shutdown.set()  # after the response, so the client receives it
+                self.server.shutdown.set()
+                # Then close this connection: the close flushes the response above, which the
+                # teardown of the process would otherwise abort and lose. Shielded, because
+                # the closing connection ends the loop that reads from this client, which
+                # cancels this task.
+                with anyio.move_on_after(GRACE_S, shield=True):
+                    await self.connection.close()
         except RpcError as exc:
             await self._error(request_id, exc.code, exc.message, exc.data)
         except (SessionError, ValueError) as exc:

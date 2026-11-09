@@ -10,6 +10,7 @@
                                    manage the encrypted credential store
     calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
                                    session password; see `calu.run`)
+    calu attach ADDRESS --token T  terminal client for a running session
     calu sessions [--all]          list the sessions of all hosts
     calu escalations [SESSION]     list the open escalations
     calu resolve ID allow|deny [--note TEXT]
@@ -30,9 +31,11 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from calu import __version__, herd
+from calu.attach import attach
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
+from calu.protocol.client import RequestFailed
 from calu.run import RunOptions, run_session
 from calu.setup import DEFAULT_CHECKER_MODEL, setup
 
@@ -350,6 +353,27 @@ def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]])
         wipe(url)
 
 
+def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Attach a terminal client to a running session.
+
+    Needs no database credential: the session process authenticates the client with the token
+    it printed at its start.
+
+    Args:
+        args: Parsed arguments (`address`, `token`, `after_seq`, `thinking`).
+        store: The credential store (unused).
+
+    Raises:
+        CliError: If the address cannot be reached or the token is refused.
+    """
+    try:
+        code = asyncio.run(attach(args.address, args.token, args.after_seq, args.thinking))
+    except (OSError, RequestFailed) as exc:
+        raise CliError(f"cannot attach to {args.address}: {exc}") from exc
+    if code:
+        raise CliError("the client ended with an error")
+
+
 def cmd_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
     """List the sessions of all hosts.
 
@@ -487,6 +511,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_run)
+
+    p = sub.add_parser("attach", help="terminal client for a running session")
+    p.add_argument("address", help="WebSocket address that `calu run` printed")
+    p.add_argument("--token", required=True, help="client token that `calu run` printed")
+    p.add_argument(
+        "--after-seq", type=int, default=0, help="continue after this event sequence number"
+    )
+    p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
+    p.set_defaults(handler=cmd_attach)
 
     p = sub.add_parser("sessions", help="list the sessions of all hosts")
     p.add_argument("--all", action="store_true", help="also show sessions that have ended")
