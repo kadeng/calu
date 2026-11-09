@@ -271,6 +271,20 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def add_client_token(self, token_sha256: str, address: str) -> int:
+        """Record the hash of a client token of this session (PLAN.md §5).
+
+        The token itself is never stored: a client sends it, and the session compares the hash.
+
+        Args:
+            token_sha256: SHA-256 of the token (`calu.tokens.token_hash`).
+            address: The address clients connect to, e.g. "ws://127.0.0.1:8765".
+
+        Returns:
+            The id of the new `client_tokens` row.
+        """
+        ...
+
     async def open_escalation(
         self, reason: str, context: dict[str, Any], step_id: int | None = None
     ) -> int:
@@ -688,6 +702,26 @@ class DatabaseSessionStore:
                 comment.text,
                 comment.model_dump_json(),
             ),
+        )
+
+    async def add_client_token(self, token_sha256: str, address: str) -> int:
+        """Record a client token's hash (see `SessionStore.add_client_token`).
+
+        Args:
+            token_sha256: SHA-256 of the token.
+            address: The address clients connect to.
+
+        Returns:
+            The id of the new row.
+
+        Raises:
+            psycopg.Error: On database errors.
+            RuntimeError: If the server returns no row for the insert.
+        """
+        return await self._db.scalar(
+            "INSERT INTO client_tokens (session_id, token_sha256, address)"
+            " VALUES (%s, %s, %s) RETURNING id",
+            (self._require_session(), token_sha256, address),
         )
 
     async def open_escalation(

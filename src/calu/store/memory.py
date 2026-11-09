@@ -59,6 +59,7 @@ class MemorySessionStore:
     stored_sessions: list[SessionSummary] = field(default_factory=list)
     """What `recent_sessions` returns (a test sets it)."""
     comments: list[tuple[int, Comment, int | None]] = field(default_factory=list)
+    client_tokens: list[tuple[str, str]] = field(default_factory=list)
     _ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     async def start(self, identity: SessionIdentity) -> str:
@@ -191,6 +192,20 @@ class MemorySessionStore:
         comment_id = next(self._ids)
         self.comments.append((comment_id, comment, turn))
         return comment_id
+
+    async def add_client_token(self, token_sha256: str, address: str) -> int:
+        """Record a client token's hash.
+
+        Args:
+            token_sha256: SHA-256 of the token.
+            address: The address clients connect to.
+
+        Returns:
+            A new id, counted from 1 (shared with the step ids).
+        """
+        token_id = next(self._ids)
+        self.client_tokens.append((token_sha256, address))
+        return token_id
 
     async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
         """Return the prepared session list.

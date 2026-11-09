@@ -5,6 +5,7 @@
                  └► the password, the key and the connection string are wiped
     load configuration, rules and checker instructions (calu.store.ConfigStore)
     create the sessions row, start Claude Code (calu.session.Session, calu.claude.SdkRunner)
+    serve the protocol on a WebSocket (calu.protocol.server) and print its address and token
     print events to the terminal, read further messages from stdin
     reload the configuration on `config_changed`, continue on `escalation_resolved`
 
@@ -12,8 +13,9 @@ The Claude Code process never sees calu's secrets: the connection string is wipe
 starts, the checker API keys are blanked in its environment (`calu.config.load_secrets`,
 `SdkRunner.hidden_env`), and its sandbox hides `~/.config/calu` (PLAN.md D15).
 
-The terminal output of this command is a stand-in until the WebSocket bus and `calu attach`
-exist (PLAN.md phase 4); clients will then receive the same events.
+Clients (`calu attach`, an IDE, a web interface) connect to the WebSocket address with the
+token; several at once. The terminal output of this command shows the same events, so a
+session can also be watched where it was started.
 """
 
 import logging
@@ -29,6 +31,7 @@ import psycopg
 from pydantic_ai.models import Model
 
 from calu import preflight
+from calu.bus import Bus
 from calu.claude.runner import ClaudeRunner
 from calu.claude.sdk_runner import SdkRunner
 from calu.config import ClaudeConfig, load_secrets
@@ -49,10 +52,15 @@ from calu.protocol.messages import (
     TurnResult,
     UserInput,
 )
+from calu.protocol.server import SessionServer
 from calu.session import Session, SessionError
 from calu.store import ConfigStore, DatabaseSessionStore, ProjectSettings
+from calu.tokens import new_token, token_hash
 
 log = logging.getLogger(__name__)
+
+START_TIMEOUT_S = 10.0
+"""How long `calu run` waits for the protocol server to bind its socket."""
 
 QUIT_COMMANDS = ("/quit", "/exit")
 """Lines that end the session when they are typed instead of a message."""
@@ -79,6 +87,12 @@ class RunOptions:
     effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
     interactive: bool = True
     show_thinking: bool = False
+    host: str = "127.0.0.1"
+    """Interface the protocol server binds; the default accepts only local clients."""
+    port: int = 0
+    """Port of the protocol server; 0 lets the operating system choose a free one."""
+    serve: bool = True
+    """Serve the protocol at all; False runs the session without clients (used by tests)."""
 
 
 def format_event(event: Event) -> str | None:
@@ -320,13 +334,14 @@ async def _run(
     settings = await config_store.load()
     console = Console(options.show_thinking)
     idle = IdleSignal()
+    bus = Bus()
     store = DatabaseSessionStore(db)
     session = Session(
         options.workspace,
         settings,
         store,
         lambda: (runner_factory or SdkRunner)(options.workspace, session.config.claude, hidden),
-        both(console, idle),
+        both(bus.publish, both(console, idle)),
         project=options.project,
         checker_models=checker_models,
         startup_warnings=preflight.warnings(settings.config),
@@ -349,12 +364,19 @@ async def _run(
     async with anyio.create_task_group() as tg:
         tg.start_soon(notifier.run)
         tg.start_soon(config_store.reload_loop, dirty, on_settings)
+        server: SessionServer | None = None
+        if options.serve:
+            token = new_token()
+            server = SessionServer(session, bus, token_hash(token), tg)
+            tg.start_soon(_listen, server, options, token, store)
         try:
             await session.start(tg, options.resume_id, options.model, options.effort)
             if options.prompt:
                 await session.send_chat(ChatSendParams(text=options.prompt))
             if options.interactive:
                 await read_lines(lambda text: session.send_chat(ChatSendParams(text=text)))
+            elif server is not None:
+                await _first_of(idle, server.shutdown)
             else:
                 await idle.wait()
         except SessionError as exc:
@@ -365,6 +387,64 @@ async def _run(
                 await session.stop()
             tg.cancel_scope.cancel()
     return 1 if failed or session.state == "failed" else 0
+
+
+async def _listen(
+    server: SessionServer, options: RunOptions, token: str, store: DatabaseSessionStore
+) -> None:
+    """Serve the protocol and print the address and the token once; never raises.
+
+    The token's hash is recorded with the session (`client_tokens`), so an operator can see
+    which sessions accept clients and revoke one; the token itself is only printed here.
+
+    Args:
+        server: The protocol server.
+        options: Host and port to bind.
+        token: The client token to print.
+        store: The session store, for the token's hash.
+    """
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(server.listen, options.host, options.port)
+            with anyio.move_on_after(START_TIMEOUT_S):
+                await server.ready.wait()
+            if not server.ready.is_set():
+                print("calu: the protocol server did not start", flush=True)
+                return
+            print(f"[clients] {server.address}", flush=True)
+            print(
+                f"[clients] attach with: calu attach {server.address} --token {token}", flush=True
+            )
+            if store.session_id is not None:
+                try:
+                    await store.add_client_token(token_hash(token), server.address)
+                except Exception:
+                    log.exception("recording the client token failed")
+    except OSError as exc:
+        print(f"calu: the protocol server could not start: {exc}", flush=True)
+
+
+async def _first_of(idle: IdleSignal, shutdown: anyio.Event) -> None:
+    """Return as soon as the session is idle or a client asked the process to stop.
+
+    Args:
+        idle: The idle signal of the session.
+        shutdown: Set by a client's `shutdown` request.
+    """
+    async with anyio.create_task_group() as tg:
+
+        async def wait_idle() -> None:
+            """Wait for the idle signal, then end the wait."""
+            await idle.wait()
+            tg.cancel_scope.cancel()
+
+        async def wait_shutdown() -> None:
+            """Wait for the shutdown event, then end the wait."""
+            await shutdown.wait()
+            tg.cancel_scope.cancel()
+
+        tg.start_soon(wait_idle)
+        tg.start_soon(wait_shutdown)
 
 
 def _note(session: Session, payload: object) -> None:

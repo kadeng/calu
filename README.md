@@ -27,10 +27,11 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
   credentials) always ask a human. Everything else goes to a checker.
 - **Checkers with your rules.** One checker reviews commands, one reviews edits. Their
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
-  stylistic rules you would otherwise have to repeat to Claude every day. They get high-level
-  context only — the conversation in condensed form, your project's AGENTS.md and the step
-  itself — because they judge the step, not the whole program. Overall correctness stays with a
-  review of the finished changeset.
+  rules you would otherwise have to repeat to Claude every day (see
+  [what you can enforce](#what-you-can-enforce-with-a-checker)). They get high-level context
+  only — the conversation in condensed form, your project's AGENTS.md and the step itself —
+  because they judge the step, not the whole program. Overall correctness stays with a review
+  of the finished changeset.
 - **A check on what subagents hand back.** A subagent's final result is reviewed against the
   conversation, so an adversarial reviewer subagent cannot silently widen a task that you
   deliberately kept small.
@@ -42,6 +43,66 @@ extra budget for Claude itself, only an API key for the (much smaller) checker m
 - **Unsupervised runs.** Claude Code works in its auto mode with the checkers on top of it, so a
   session can run for hours — overnight, for example — and stops only when something genuinely
   needs you.
+
+## Where calu fits in
+
+Claude Code already asks you before it does something risky, and its auto mode can make that
+decision on its own. Other harnesses work the same way. calu does not replace any of this: it
+adds a second, independent opinion that **you** own, and a step runs only if both agree.
+
+The two opinions are good at different things. The vendor's classifier knows what is generally
+dangerous, and it knows nothing about your project. A checker you write yourself knows your
+project and nothing about anything else. Together they cover more than either does alone, and
+they fail differently: a prompt injection that talks one of them into approving a step still has
+to get past the other, which reads different instructions and sees the step through a different
+lens.
+
+The second difference is *when* the judgment happens. Review after the fact catches a bad diff
+once it exists, after Claude has built on it for twenty more steps. A checker sees each step
+before it takes effect, so it can stop a direction instead of having to unwind it.
+
+### What you can enforce with a checker
+
+Checkers are useful for everything that is obvious to a human reader but invisible to a linter:
+
+- **Writing that sounds like a language model.** The mannered summaries, the rhythmic triads, the
+  confident filler. A checker holds every docstring, comment and commit message to your house
+  style, every time, without you having to say it again.
+- **Over-engineering, while it happens.** A factory for the one case that exists, a cache nobody
+  measured, an abstraction with a single implementation. The checker sees the edit that
+  introduces it and can send it back with a reason.
+- **Scope creep.** You asked for a bug fix and get a refactor on the side. The checker compares
+  the step against what you actually asked for — it reads your messages in condensed form — and
+  escalates when the two drift apart. The same check runs on what subagents hand back, so a
+  reviewer subagent cannot quietly widen a task you deliberately kept narrow.
+
+### Code honesty, and why it is a security measure
+
+The rule that pays off most is the one that is hardest to enforce by hand: a codebase should be
+**honest**. Every function, class, module and command-line tool says what it does — in its name
+and in its API documentation — at a level of detail that fits, and leaves out nothing that would
+surprise the reader. No side effects that the name does not suggest, no network call hiding in a
+formatting helper, no "and also" that only the implementation knows about.
+
+Honesty is usually argued for as a matter of readability. It is also a security property, and it
+compounds: once the documentation of a codebase can be relied on, every reviewer — human or
+model — can judge a call site without reading the implementation behind it. That is exactly what
+an attacker needs to take away. A function called `hello_world(name)`, documented as greeting
+someone, cannot also POST `name` to a host on the internet and exfiltrate your customer
+database: the code would be dishonest, and the checker that read the diff would have said so
+before it ever ran.
+
+Honesty is hard to keep up by hand, because it costs attention on every single edit and it
+decays silently. That is precisely the kind of rule an agent applies well: calu's edit checker
+sees the function and its documentation together, in the same step, and can refuse the edit.
+
+### When plain Claude Code is the better tool
+
+If you sit in front of the session and read every diff as it appears, you are already the
+checker, and calu mostly adds latency and the cost of the checker models. calu earns its place
+when the session is long, when it runs while you are not watching, when several sessions run at
+once, or when the rules you care about are too specific for a linter and too repetitive to
+restate every day.
 
 ## How it is put together
 
