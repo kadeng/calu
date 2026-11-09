@@ -21,7 +21,7 @@ phases.
 | `pyproject.toml` | Package, dependencies, ruff, pyright and pytest settings |
 | `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
 | `scripts/wsl-test.sh` | Format check, lint, type check and tests in WSL |
-| `spikes/` | Experiments on Claude Code behaviour; results in `spikes/RESULTS.md` |
+| `spikes/` | Experiments on Claude Code behaviour (results in `spikes/RESULTS.md`) and `smoke_session.py`, a manual end-to-end run with the real `claude` |
 
 ## Code layout
 

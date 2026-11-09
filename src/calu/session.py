@@ -457,6 +457,9 @@ class Session:
         self.session_id = None
         self._busy = False
         self._running_tools.clear()
+        self._step_ids.clear()
+        self._pending_reasons.clear()
+        self._step_seq = itertools.count(1)
         self._checking = 0
         self.state = "stopped"
         await self._store_call("creating the session row", self.store.start(self._identity()))
@@ -813,6 +816,9 @@ class Session:
                 )
                 await self._refresh_state()
         assert esc.answer is not None
+        if esc.answer.allow and step.tool_use_id:
+            self._running_tools.add(step.tool_use_id)
+            await self._refresh_state()
         return esc.answer
 
     async def _wait_for_decision(self, esc: _Escalation) -> None:
@@ -956,6 +962,11 @@ class Session:
             )
         )
         note = review.note.strip()
+        if step_id is not None and not escalated:
+            await self._store_call(
+                "recording a step result",
+                self.store.finish_step(step_id, note or "accepted"),
+            )
         if escalated:
             self._pending_reasons[step.tool_use_id or ""] = (note, "subagent_result")
             answer = await self.ask(step)
@@ -968,6 +979,10 @@ class Session:
             if answer.note:
                 decision += f" Note from the user: {answer.note}"
             note = f"{note}\n\nDecision of the user: {decision}".strip()
+            if step_id is not None:
+                await self._store_call(
+                    "recording a step result", self.store.finish_step(step_id, note)
+                )
         if not note:
             return ""
         return SUBAGENT_NOTE_TEMPLATE.format(label=label, note=note)

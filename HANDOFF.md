@@ -70,8 +70,14 @@ Checks: `scripts/wsl-test.sh -m 'not live'` gives ruff format/lint clean, pyrigh
 
 ### Verified by hand (2026-11-09, real Claude Code 2.1.319, haiku, fake checker models)
 
-`spikes/` has no script for this; the runs used throwaway scripts in the scratchpad. Two runs
-against the test database, sandbox off (no `socat` on this machine), narration off:
+`spikes/smoke_session.py` runs one real session against a throwaway database on the test server
+and prints what it wrote; `--resolve allow|deny` plays the operator. The sandbox is off by
+default, because this machine has no `socat`, so the commands Claude runs are not isolated: use
+a throwaway directory.
+
+    uv run python spikes/smoke_session.py /tmp/project --resolve deny
+
+Results:
 
 1. "run `ls`, then say what you found": allow-listed command, no model call, one `steps` row
    with `rules_outcome = allow`, turn and answer stored, states starting → idle → running →
@@ -80,11 +86,11 @@ against the test database, sandbox off (no `socat` on this machine), narration o
    edit checker (ALLOW, one `checker_runs` row), the command to the command checker. Note that
    the default deny list only denies **force** pushes and deletions, not a plain `git push`
    (sitl commit 433aaa4), so this did not escalate.
-
-The escalation path (`ask`, the wait, an operator's `calu_resolve_escalation`, the notification)
-is covered by `tests/db/test_run.py` with the fake runner against the real database; it has not
-been run with the real CLI yet (`can_use_tool`). A third throwaway run with `sudo -n ls /root`
-(a deny-list match) was prepared but not finished.
+3. "run `sudo -n ls /root`" (the default prompt of the script): the deny rule
+   `^(sudo|su|doas)( |$)` matched, so no model call; the session opened escalation 1, went to
+   state `escalated` and waited; `calu_resolve_escalation(1, 'denied', ...)` let it continue
+   within a second, and Claude reported the denial with the note. This is REQUIREMENTS 12 end to
+   end with the real CLI (`can_use_tool`).
 
 ### Left out of the port, on purpose
 
