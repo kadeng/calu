@@ -548,6 +548,12 @@ the owner, for whom the policies do not apply; and the failure mode of forgettin
 **immediate and total** -- the session cannot write its first step -- rather than subtle, which
 is better than I assumed when I recommended deferring it.
 
+**Shipped** as migration 0015 (D49) on the same day, with two more owner-side functions that
+only writing it for real turned up: `calu_recent_sessions` for `session.list` and the resume
+list, and `calu_conversation_sessions` plus `calu_same_conversation` for the rows of one Claude
+conversation, which a resume or a fork continues under a new `sessions` row. The notes below are
+what the spike itself measured.
+
 **What follows.** The shape is sound, and the work it needs is now exact: one migration (the
 policies, `calu_start_session`, the operator's read policies), `store.start` calling that
 function instead of its plain insert, one `set_config` after a session connects, and the same in

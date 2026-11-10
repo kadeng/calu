@@ -7,7 +7,7 @@ import pytest
 from calu import herd
 from calu.db import Db, connect, migrate, migrations
 from calu.setup import enable_operator_login, setup
-from calu.store import DatabaseSessionStore, SessionIdentity
+from calu.store import DatabaseSessionStore, SessionIdentity, StepRow
 from calu.tokens import token_hash
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -70,16 +70,21 @@ async def test_checker_change_bumps_version_and_is_audited(db_url: str) -> None:
 
 
 async def _session_with_escalation(conn: psycopg.AsyncConnection) -> int:
+    """Create a session and an open escalation on a `calu_session` connection.
+
+    It goes through `calu_start_session` and sets `calu.session_id`, like
+    `DatabaseSessionStore.start` does, because row-level security (migration 0015) refuses a
+    direct insert of a `sessions` row: the id does not exist until the insert happens.
+    """
     cur = await conn.execute("INSERT INTO hosts (hostname) VALUES ('h') RETURNING id")
     host = await cur.fetchone()
     assert host is not None
     cur = await conn.execute(
-        "INSERT INTO sessions (host_id, os_user, directory, pid) VALUES (%s, 'u', '/p', 1)"
-        " RETURNING id",
-        (host[0],),
+        "SELECT calu_start_session(NULL, %s, 'u', '/p', NULL, 1, NULL)", (host[0],)
     )
     session = await cur.fetchone()
     assert session is not None
+    await conn.execute("SELECT set_config('calu.session_id', %s, false)", (str(session[0]),))
     cur = await conn.execute(
         "INSERT INTO escalations (session_id, reason) VALUES (%s, 'why') RETURNING id",
         (session[0],),
@@ -305,4 +310,69 @@ async def test_the_operator_login_reads_and_resolves_and_changes_nothing_else(
                 await operator.execute(statement.encode())
     finally:
         await operator.close()
+        await owner.close()
+
+
+async def test_a_session_reads_and_writes_only_its_own_rows(db_url: str) -> None:
+    """Row-level security keeps one session out of another's history (PLAN.md D49)."""
+    conn = await connect(db_url)
+    try:
+        _, session_url = await setup(conn, db_url, "test:model")
+    finally:
+        await conn.close()
+    owner = await connect(db_url)
+    first = await connect(session_url)
+    second = await connect(session_url)
+    try:
+        one = DatabaseSessionStore(Db(first))
+        two = DatabaseSessionStore(Db(second))
+        mine = await one.start(SessionIdentity(hostname="h", os_user="u", directory="/a", pid=1))
+        theirs = await two.start(SessionIdentity(hostname="h", os_user="u", directory="/b", pid=2))
+        await one.add_step(StepRow(seq=1, tool_name="Bash", tool_input={"command": "mine"}))
+        await two.add_step(StepRow(seq=1, tool_name="Bash", tool_input={"command": "theirs"}))
+
+        # Each sees one step: its own.
+        for store in (one, two):
+            rows = await store._db.all("SELECT tool_input->>'command' FROM steps")
+            assert len(rows) == 1
+        assert (await one._db.all("SELECT tool_input->>'command' FROM steps"))[0][0] == "mine"
+
+        # The other session's rows cannot be read, changed or added to.
+        assert (
+            await one._db.all("SELECT id FROM steps WHERE session_id = %s::uuid", (theirs,)) == []
+        )
+        await one._db.execute(
+            "UPDATE steps SET tool_name = 'Tampered' WHERE session_id = %s::uuid", (theirs,)
+        )
+        still = await owner.execute(
+            "SELECT tool_name FROM steps WHERE session_id = %s::uuid", (theirs,)
+        )
+        assert [row[0] for row in await still.fetchall()] == ["Bash"]
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await second.execute(
+                "INSERT INTO turns (session_id, number, user_inputs) VALUES (%s::uuid, 1, '[]')",
+                (mine,),
+            )
+
+        # A connection that never set the id sees nothing and writes nothing: the failure is
+        # immediate rather than silent.
+        blind = await connect(session_url)
+        try:
+            cur = await blind.execute("SELECT id FROM steps")
+            assert await cur.fetchall() == []
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await blind.execute(
+                    "INSERT INTO steps (session_id, seq, tool_name, tool_input)"
+                    " VALUES (%s::uuid, 9, 'Bash', '{}')",
+                    (mine,),
+                )
+        finally:
+            await blind.close()
+
+        # The owner still sees everything, which the web interface and the herd rely on.
+        cur = await owner.execute("SELECT count(*) FROM steps")
+        assert (await cur.fetchone()) == (2,)
+    finally:
+        await first.close()
+        await second.close()
         await owner.close()

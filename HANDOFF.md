@@ -45,9 +45,9 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**444 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**445 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 90 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
-instructions), ~8.9k of tests, 14 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+instructions), ~8.9k of tests, 15 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
 
@@ -303,6 +303,14 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    idle -> stopped cleanly. So the gate, the hook, the rules, the edit route and the turn
    storage all still work with the real CLI after the session, store and schema changes.
 
+13. **Row-level security** (D49, migration 0015): after switching the policies on, a real
+   session ran end to end again -- it created its row through `calu_start_session`, recorded
+   the step, raised the deny-rule escalation, took the denial an operator wrote in the database
+   and recorded the turn. A database test additionally holds the line: two sessions on two
+   connections each see only their own steps, an UPDATE of the other's changes nothing, an
+   INSERT for the other is refused, a connection that never set the id sees and writes nothing,
+   and the owner still sees everything.
+
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
 `project add`, `checker list|show|set|edit`, `config set|get`, a refused value, `rules
@@ -354,37 +362,34 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    auto-escalation switches, which are session-local and audited (D42, D43). Editing a single
    list entry is done: `calu config add|remove <key> <entry>` (D44).
 
-## Open questions for the owner (`PLAN.md` §11)
+## What the owner still has to decide (`PLAN.md` §11)
 
-- **Q2** Relationship to sitl: replace it or keep both? The technical half is settled by the ACP
-  adapter -- any ACP editor drives a calu session with no extension of its own, and what ACP
-  does not carry (checker verdicts as structure, the herd view) lives in the web interface. What
+Everything else is either built or recommended with its reasons. These need a person:
+
+- **Q5 — the network default of a new project** (D45, implemented as a proposal): "proxy" with a
+  starter allow list (package registries, git over HTTPS, OS packages) instead of "full". One
+  flag overrules it (`calu project add --network full`) and existing projects are untouched.
+  The trade to confirm: a task that needs an unlisted domain stops until someone adds it
+  (`calu config add claude.sandbox.allowed_domains <domain> --project <p>`).
+- **Q15 — publishing the binary** (D41, built): `scripts/build-binary.sh` makes a 70 MiB
+  one-file `calu` and `release.yml` builds and runs it on every tag. To decide: whether a
+  release publishes it beside the wheel, and for which platforms (each is its own runner).
+- **Publishing at all**: the PyPI project with a trusted publisher and the `pypi` GitHub
+  environment, both of which only you can create (next step 2).
+- **Q9 — a training mode**: recommended **against**. Every resolved escalation is already a
+  labelled case and `calu evals --from-db` uses them; for labels on steps the checkers
+  approved, switch an auto-escalation category on for a while (D42) instead of building tables.
+- **Q2 — sitl's future**: the technical half is settled (any ACP editor drives a calu session
+  with no extension of its own, and what ACP does not carry lives in the web interface). What
   is left is whether sitl keeps living for VSCode users, which ACP does not reach yet.
-- **Q3** A database role per session: measured and ready, needs your word to switch on. Not a
-  role per session but row-level security on the one `calu_session` login, keyed on
-  `calu.session_id`; `spikes/spike_session_rls.py` builds the policies and all ten checks
-  pass. It also found what would have broken it: a session creates its own `sessions` row, which
-  a `WITH CHECK` policy refuses, so the migration needs a SECURITY DEFINER starter that returns
-  the new id. Cost: one migration (policies, starter, operator read policies), `store.start`
-  calling the starter, one `set_config` after connecting, and the same in the test fixtures.
-- **Q4** Closed. The transport half is loopback plus an SSH tunnel, documented in the README's
-  "From another machine"; the operator half is built (D48): `calu credential new operator`, and
-  the read-and-resolve commands prefer that credential over `admin`.
-- **Q5** Answered as a proposal (D45): a new project gets "proxy" with a starter allow list
-  instead of "full". One flag overrules it (`calu project add --network full`); existing
-  projects are untouched. The owner should confirm the list and the trade (a task that needs an
-  unlisted domain stops until someone adds it).
-- **Q9** A training mode: recommended **against**. Every resolved escalation is already a
-  labelled case and `calu evals --from-db` uses them; if more labels are wanted, switching an
-  auto-escalation category on for a while produces them for the steps the checkers approved,
-  with no new tables.
-- Answered this session: Q5 (D45, as a proposal to confirm), Q14 (D46, measured: no).
-- **Q15** The single executable: **built** (`scripts/build-binary.sh`, 70 MiB, starts faster
-  than the wheel, applies the migrations and serves the web interface) and run on every tag by
-  the `binary` job of `release.yml`. Left to decide: whether a release publishes it beside the
-  wheel, and for which platforms. My first argument against it was partly wrong and PLAN's D41
-  says where.
-- Answered this session: Q6 (D27), Q8 (D28), Q10 (no plugin mode), Q11 (D23).
+- **Q1's last line**: what `claude.sandbox.weaker_nested_sandbox` changes. Needs a real tool
+  call inside a container, so it needs Claude Code credentials there; the cheap route is a
+  measured dead end (next step 3).
+
+Answered and built in this session: **Q3** (D49, row-level security per session, migration
+0015), **Q4** (D48, the operator login), **Q14** (D46, a fork does not rewind files), and the
+ones listed above as proposals. Earlier: Q6 (D27), Q8 (D28), Q10 (no plugin mode), Q11 (D23),
+Q13 (D36).
 
 ## Environment notes (owner's machine)
 

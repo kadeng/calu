@@ -224,8 +224,9 @@ it, and the more sessions run at once.
   the settings are database rows, and the credential that reads them is wiped before Claude
   Code starts, so an edit or a command cannot change the rules it is judged by. For the
   commands themselves calu configures Claude Code's own sandbox — own process namespace, no
-  write access to Claude Code's configuration, read denials for credentials — which is as far
-  as the isolation goes today.
+  write access to Claude Code's configuration, read denials for credentials. A session's
+  database login reaches only its own rows, so one session cannot rewrite another session's
+  history and change what you see when you review it.
 
 **Status: early implementation.** `calu run` starts a checked session, records it in the
 database and waits for human decisions; the network clients, the web interface and the sandbox

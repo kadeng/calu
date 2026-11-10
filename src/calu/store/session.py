@@ -34,6 +34,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+import psycopg
+
 from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
@@ -556,10 +558,12 @@ class DatabaseSessionStore:
                 )
                 row = await cur.fetchone()
                 project_id = row[0] if row else None
+            # Through the function, not with a plain INSERT: under the row-level security of
+            # migration 0015 a session may only touch rows that carry its own id, and at this
+            # moment that id does not exist yet. The function runs as the owner and hands it
+            # back (PLAN.md D49).
             cur = await conn.execute(
-                b"INSERT INTO sessions"
-                b" (project_id, host_id, os_user, directory, git_commit, pid, model)"
-                b" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                b"SELECT calu_start_session(%s, %s, %s, %s, %s, %s, %s)",
                 (
                     project_id,
                     host[0],
@@ -571,8 +575,11 @@ class DatabaseSessionStore:
                 ),
             )
             row = await cur.fetchone()
-            if row is None:
+            if row is None or row[0] is None:
                 raise RuntimeError("the sessions row was not created")
+            # From here on this connection may read and write this session's rows and no
+            # others. `false` makes the setting last for the connection, not the transaction.
+            await conn.execute(b"SELECT set_config('calu.session_id', %s, false)", (str(row[0]),))
         self.session_id = str(row[0])
         return self.session_id
 
@@ -916,6 +923,37 @@ class DatabaseSessionStore:
         )
         return str(row[0]) if row and row[0] else ""
 
+    async def _claim_conversation(
+        self, conn: psycopg.AsyncConnection, claude_session_id: str
+    ) -> None:
+        """Record on this session's row which conversation it reads, if it has none yet.
+
+        Reading a conversation spans the `sessions` rows of its earlier runs (a resume or a
+        fork continues it under a new row), and the row-level security of migration 0015 lets a
+        session read only the rows of sessions that share its own Claude session id. A session
+        that is about to read a conversation therefore says which one, by writing that id to
+        its own row -- which is both the key to the policy and a record an operator can see: a
+        session that claimed a conversation it has no business with stands in the database next
+        to the real one, with a different directory.
+
+        An id that is already recorded is left alone, so this never overwrites what Claude Code
+        reported.
+
+        Args:
+            conn: The connection to use (the caller holds the lock).
+            claude_session_id: The conversation about to be read.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        if self.session_id is None:
+            return
+        await conn.execute(
+            b"UPDATE sessions SET claude_session_id = %s"
+            b" WHERE id = %s::uuid AND claude_session_id IS NULL",
+            (claude_session_id, self.session_id),
+        )
+
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
         """Load turns and summary of the last session of a Claude session (see `SessionStore`).
 
@@ -929,9 +967,12 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
         """
         async with self._db.exclusive() as conn:
+            # Through the function: the sibling rows of one conversation are what row-level
+            # security keeps this role out of (PLAN.md D49).
+            await self._claim_conversation(conn, claude_session_id)
             cur = await conn.execute(
-                b"SELECT id FROM sessions WHERE claude_session_id = %s"
-                b" AND id IS DISTINCT FROM %s::uuid ORDER BY started_at DESC LIMIT 1",
+                b"SELECT id FROM calu_conversation_sessions(%s)"
+                b" WHERE id IS DISTINCT FROM %s::uuid LIMIT 1",
                 (claude_session_id, self.session_id),
             )
             row = await cur.fetchone()
@@ -964,11 +1005,12 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
+        # Through the function: this spans other sessions' rows, which row-level security
+        # keeps this role out of, and the function returns their metadata and first prompt and
+        # nothing else of them (PLAN.md D49).
         rows = await self._db.all(
-            "SELECT s.id::text, s.claude_session_id, s.state, s.directory, s.started_at,"
-            " s.ended_at, coalesce((SELECT t.user_inputs->>0 FROM turns t"
-            "   WHERE t.session_id = s.id ORDER BY t.number LIMIT 1), '')"
-            " FROM sessions s WHERE s.directory = %s ORDER BY s.started_at DESC LIMIT %s",
+            "SELECT id, claude_session_id, state, directory, started_at, ended_at, first_input"
+            " FROM calu_recent_sessions(%s, %s)",
             (directory, limit),
         )
         return [
@@ -1033,9 +1075,9 @@ class DatabaseSessionStore:
             if claude_session_id is None:
                 session_id = self.session_id
             else:
+                await self._claim_conversation(conn, claude_session_id)
                 cur = await conn.execute(
-                    b"SELECT id FROM sessions WHERE claude_session_id = %s"
-                    b" ORDER BY started_at DESC LIMIT 1",
+                    b"SELECT id FROM calu_conversation_sessions(%s) LIMIT 1",
                     (claude_session_id,),
                 )
                 row = await cur.fetchone()
