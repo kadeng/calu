@@ -3,6 +3,32 @@
 {% block body %}
 <h1>Allow and deny lists</h1>
 <p class="muted">Applied before any model call. Change them with <code>calu rules</code>; this page reads them.</p>
+
+{% if marks %}
+<h2>Code recorded as dishonest <span class="muted">({{ marks | length }})</span></h2>
+<p class="muted">A checker found that these say something other than what they do. While
+  <code>honesty.mode</code> is <code>enforce</code>, a command that would run them is refused;
+  editing them is not, because that is how the record clears itself. Clear a mark by hand when
+  nobody agrees with it.</p>
+<table>
+  <thead><tr><th>#</th><th>Where</th><th>What disagrees</th><th>Branch</th><th></th></tr></thead>
+  <tbody>
+  {% for m in marks %}
+    <tr>
+      <td class="muted">{{ m.id }}</td>
+      <td class="mono">{{ m.label() }}</td>
+      <td>{{ m.reason }}</td>
+      <td class="muted">{{ m.git_branch or '' }}</td>
+      <td>
+        <form method="post" action="{{ url_for('clear_mark', mark_id=m.id) }}">
+          <button type="submit">clear</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
 {% for list_name, rows in grouped.items() %}
 <h2>{{ list_name }} <span class="muted">({{ rows | length }})</span></h2>
 <table>

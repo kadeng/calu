@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from calu import admin, herd
+from calu.checkers import CodeMark
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db, connect
 from calu.setup import setup
@@ -724,5 +725,46 @@ async def test_the_checkers_page_shows_what_they_cost(db_url: str) -> None:
             cold = (await client.get("/checkers")).text
             assert "0% of the input from cache" in cold
             assert "decision deny" in cold
+    finally:
+        await conn.close()
+
+
+async def test_the_rules_page_shows_the_honesty_register_and_clears_a_mark(db_url: str) -> None:
+    """D82, D83: the register blocks steps like a deny list, so it is on that page."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/parser.py"})
+        )
+        await store.apply_honesty_marks(
+            [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
+            [],
+            step,
+            "feature/x",
+        )
+        async with await client_for(db) as client:
+            page = (await client.get("/rules")).text
+            assert "Code recorded as dishonest" in page
+            assert "src/parser.py:fields" in page
+            assert "the docstring lies" in page
+            assert "feature/x" in page
+
+            (mark,) = await herd.honesty_marks(db)
+            # Clearing is the override for a mark nobody agrees with; the row is kept.
+            cleared = await client.post(f"/honesty/{mark.id}/clear", follow_redirects=False)
+            assert cleared.status_code == 303
+            assert await herd.honesty_marks(db) == []
+            (kept,) = await herd.honesty_marks(db, closed=True)
+            assert kept.closed_by == "the web interface"
+            assert "Code recorded as dishonest" not in (await client.get("/rules")).text
+
+            # A mark that is already closed is not found rather than cleared twice.
+            assert (
+                await client.post(f"/honesty/{mark.id}/clear", follow_redirects=False)
+            ).status_code == 404
     finally:
         await conn.close()

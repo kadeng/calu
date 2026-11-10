@@ -143,6 +143,40 @@ Honesty is hard to keep up by hand, because it costs attention on every single e
 decays silently. That is precisely the kind of rule an agent applies well: calu's edit checker
 sees the function and its documentation together, in the same step, and can refuse the edit.
 
+### The register, because a change is honest only when it is finished
+
+Edits come in steps, and a change of any size makes the codebase dishonest **on purpose** for a
+while: a signature changes in one step, its callers and its documentation follow in the next
+five. A checker that objected to every one of those steps would be noise, and one that refused
+them would stop the work.
+
+So the honesty checker does not judge each step in isolation. It **records** the spot — a file,
+or one function in it — with what disagrees, and it clears the record when the code and its
+documentation agree again. calu enforces that record at the one point where temporary
+dishonesty becomes a risk: a command that would **run** the recorded code is refused, with the
+reason, until the record is clear.
+
+Editing recorded code is never refused. That is the way out, and it has to stay open: fixing
+the dishonesty is an edit.
+
+    calu config set honesty.mode track      # record and report, block nothing
+    calu config set honesty.mode enforce    # ... and refuse to run recorded code
+    calu config set honesty.mode off        # the default
+
+`track` is how to judge the checker on your own project before trusting it to block anything:
+the marks appear, nothing stops. The register belongs to the project, not to one session, so
+debt that one session leaves behind is still there for the next one, and a session with open
+marks says so when it starts.
+
+    calu honesty list                  # what is recorded as dishonest, and why
+    calu honesty list --all            # ... including what has been cleared again
+    calu honesty list --project demo   # only one project's
+    calu honesty clear 12              # the override when a mark is wrong
+
+`clear` keeps the row and records that a person closed it, so the register still shows what
+happened. The judgement needs a capable checker model; give this checker one of its own with
+`calu checker set honesty --model ...`.
+
 ## calu does not replace Claude Code
 
 calu is a layer **on top of** Claude Code, not an alternative to it. Claude Code stays the agent

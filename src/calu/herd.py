@@ -22,6 +22,7 @@ from typing import Any
 
 from calu.context.turns import TurnRecord
 from calu.db import Db
+from calu.honesty import HonestyMark
 from calu.store.session import turn_record
 from calu.tokens import new_token, token_hash
 
@@ -1126,6 +1127,92 @@ class CheckerMiss:
             f"  {self.at:%Y-%m-%d %H:%M}\n    step: {' '.join(what.split())[:160]}"
             f"\n    checker: {said}\n    human: denied -- {note}"
         )
+
+
+async def honesty_marks(
+    db: Db, project: str | None = None, closed: bool = False, limit: int = 50
+) -> list[HonestyMark]:
+    """List the honesty register of a project, open marks first (PLAN.md D82).
+
+    The register says which code calu will not let a session run, so this is what an operator
+    reads when a session reports that it is blocked -- and what they read to see whether the
+    honesty checker is marking sensibly at all, which is the point of `honesty.mode = "track"`.
+
+    Args:
+        db: A connection that may read `honesty_marks` and `projects`.
+        project: Only the marks of this project; None reads every project's.
+        closed: True also lists the marks that were cleared, newest last; False only the open
+            ones.
+        limit: Maximum number of rows.
+
+    Returns:
+        The marks, open ones first and oldest first within each group.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT m.id, m.path, m.symbol, m.reason, m.opened_at, m.git_branch, m.closed_at,"
+        " m.closed_by"
+        " FROM honesty_marks m LEFT JOIN projects p ON p.id = m.project_id"
+        " WHERE (%s::text IS NULL OR p.name = %s)"
+        "   AND (%s::bool OR m.closed_at IS NULL)"
+        " ORDER BY m.closed_at IS NOT NULL, m.opened_at, m.id"
+        " LIMIT %s",
+        (project, project, closed, limit),
+    )
+    return [
+        HonestyMark(
+            id=row[0],
+            path=row[1],
+            symbol=row[2],
+            reason=row[3],
+            opened_at=row[4],
+            git_branch=row[5],
+            closed_at=row[6],
+            closed_by=row[7],
+        )
+        for row in rows
+    ]
+
+
+async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> HonestyMark | None:
+    """Close one open mark by hand, which is the override when a checker is wrong (D83).
+
+    A checker normally closes its own marks when the code and its documentation agree again.
+    This is the way out when it does not: a mark that blocks a step nobody agrees is dishonest
+    would otherwise stop the work with no remedy. The row is kept and recorded as closed by a
+    person, so the register still shows what happened.
+
+    Args:
+        db: A connection that may update `honesty_marks` (operator or owner).
+        mark_id: Id of the mark, as `honesty_marks` lists it.
+        by: Who closed it, for the record.
+
+    Returns:
+        The mark as it now stands, or None if there is no open mark with that id.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    row = await db.one(
+        "UPDATE honesty_marks SET closed_at = now(), closed_by = %s"
+        " WHERE id = %s AND closed_at IS NULL"
+        " RETURNING id, path, symbol, reason, opened_at, git_branch, closed_at, closed_by",
+        (by, mark_id),
+    )
+    if row is None:
+        return None
+    return HonestyMark(
+        id=row[0],
+        path=row[1],
+        symbol=row[2],
+        reason=row[3],
+        opened_at=row[4],
+        git_branch=row[5],
+        closed_at=row[6],
+        closed_by=row[7],
+    )
 
 
 async def checker_misses(

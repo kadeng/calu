@@ -213,6 +213,12 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
             name="checker",
         ),
         Route("/rules", _page(rules, state), name="rules"),
+        Route(
+            "/honesty/{mark_id:int}/clear",
+            _page(clear_mark, state),
+            methods=["POST"],
+            name="clear_mark",
+        ),
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
@@ -922,7 +928,38 @@ async def rules(request: Request, state: _State) -> Response:
     grouped: dict[str, list[admin.RuleRow]] = {}
     for row in rows:
         grouped.setdefault(row.list, []).append(row)
-    return _render(request, "rules.html", {"grouped": grouped})
+    return _render(
+        request,
+        "rules.html",
+        {
+            "grouped": grouped,
+            # The honesty register blocks steps as the deny lists do, so it belongs on the page
+            # about what blocks a step (PLAN.md D82). Clearing one is the override for a mark
+            # nobody agrees with (D83).
+            "marks": await herd.honesty_marks(state.db),
+        },
+    )
+
+
+async def clear_mark(request: Request, state: _State) -> Response:
+    """Close one honesty mark by hand and go back to the rules page (PLAN.md D83).
+
+    The override for a mark nobody agrees with: while `honesty.mode` is "enforce" an open mark
+    stops every step that would run that code, so somebody has to be able to say "this is fine".
+    The row is kept and recorded as closed from the web interface.
+
+    Args:
+        request: The request; its path carries the mark id.
+        state: The shared state.
+
+    Returns:
+        A redirect back to the rules page, or 404 if no open mark has that id.
+    """
+    mark_id = int(request.path_params["mark_id"])
+    cleared = await herd.clear_honesty_mark(state.db, mark_id, "the web interface")
+    if cleared is None:
+        return HTMLResponse(_not_found(f"open honesty mark {mark_id}"), status_code=404)
+    return RedirectResponse(request.url_for("rules"), status_code=303)
 
 
 async def settings_page(request: Request, state: _State) -> Response:

@@ -3,7 +3,7 @@
 import pytest
 
 from calu import herd
-from calu.checkers import Decision
+from calu.checkers import CodeMark, Decision
 from calu.db import Db, connect
 from calu.evals import cases_from_escalations
 from calu.setup import setup
@@ -568,5 +568,67 @@ async def test_step_stats_say_how_many_steps_were_free_and_how_long_the_gate_too
         await db.execute("UPDATE escalations SET resolved_at = now() - interval '30 days'")
         old = await herd.step_stats(db, since_days=7)
         assert old.steps == 0 and old.resolved == 0 and old.median_gate_ms is None
+    finally:
+        await owner.close()
+
+
+async def test_the_honesty_register_is_written_read_and_cleared(db_url: str) -> None:
+    """D82, D83: a checker's marks reach the register, and a person can override one."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/parser.py"})
+        )
+
+        # The checker marks two spots; one of them it marks again with a better reason.
+        opened, closed = await store.apply_honesty_marks(
+            [
+                CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies"),
+                CodeMark(path="docs/api.md", reason="it documents a removed flag"),
+            ],
+            [],
+            step,
+            "feature/parser",
+        )
+        assert (opened, closed) == (2, 0)
+        opened, _ = await store.apply_honesty_marks(
+            [CodeMark(path="src/parser.py", symbol="fields", reason="it returns insertion order")],
+            [],
+            step,
+        )
+        assert opened == 1
+        marks = await store.open_honesty_marks()
+        assert [m.label() for m in marks] == ["src/parser.py:fields", "docs/api.md"]
+        assert marks[0].reason == "it returns insertion order", "a repeated mark refreshes it"
+        assert marks[0].git_branch == "feature/parser"
+
+        # The checker finds one of them honest again; a clean mark for an unmarked spot does
+        # nothing, which the count reports.
+        _, closed = await store.apply_honesty_marks(
+            [],
+            [
+                CodeMark(path="src/parser.py", symbol="fields", reason="fixed"),
+                CodeMark(path="src/other.py", reason="never was dirty"),
+            ],
+            step,
+        )
+        assert closed == 1, "only the open mark was closed"
+        assert [m.label() for m in await store.open_honesty_marks()] == ["docs/api.md"]
+
+        # The operator's view, and the override for a mark nobody agrees with.
+        standing = await herd.honesty_marks(db)
+        assert [m.label() for m in standing] == ["docs/api.md"]
+        assert "it documents a removed flag" in standing[0].line()
+        everything = await herd.honesty_marks(db, closed=True)
+        assert len(everything) == 2, "the cleared mark is kept as history"
+
+        cleared = await herd.clear_honesty_mark(db, standing[0].id, "kai")
+        assert cleared is not None and not cleared.open and cleared.closed_by == "kai"
+        assert await herd.honesty_marks(db) == []
+        assert await herd.clear_honesty_mark(db, standing[0].id) is None, "already closed"
     finally:
         await owner.close()
