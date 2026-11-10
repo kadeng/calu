@@ -167,3 +167,107 @@ async def test_calu_acp_answers_an_editor_and_keeps_stdout_clean(tmp_path: Path)
         said = errors.read_text(encoding="utf-8")
         assert "serving ACP" in said, f"nothing was logged to stderr:\n{said}"
         assert str(tmp_path) in said
+
+
+async def test_calu_acp_carries_a_denial_and_replays_a_loaded_session(tmp_path: Path) -> None:
+    """A denied step and `session/load`, through the real pipes (PLAN.md D24, D65b, D81).
+
+    These are the two paths an editor depends on and that no in-process test covers end to end:
+    a refusal has to arrive as a failed tool call with the reason, because an editor shows
+    nothing else, and `session/load` has to replay the conversation **before** it returns, which
+    the ACP specification requires of an agent that advertises `loadSession`.
+    """
+    turns = [
+        [
+            {"text": "I will try the deploy."},
+            # The marker makes the rule-based fake checker deny the step (`calu.testing`).
+            {"tool": "Bash", "input": {"command": "deploy # calu:deny"}, "result": "refused"},
+            {"text": "It was refused, so I stopped."},
+        ]
+    ]
+    async with served(tmp_path, turns) as run:
+        environment = dict(os.environ)
+        environment["PYTHONUNBUFFERED"] = "1"
+        host, _, port = run.address.removeprefix("ws://").partition(":")
+        with anyio.move_on_after(10):
+            while True:
+                try:
+                    probe = await anyio.connect_tcp(host, int(port))
+                except OSError:
+                    await anyio.sleep(0.05)
+                    continue
+                await probe.aclose()
+                break
+        errors = tmp_path / "stderr-denial.log"
+        with errors.open("wb") as log:
+            process = await anyio.open_process(
+                [sys.executable, "-m", "calu", "acp", run.address, "--token", run.token],
+                env=environment,
+                cwd=str(tmp_path),
+                stderr=log.fileno(),
+            )
+        editor = Editor(process)
+        try:
+            with anyio.fail_after(TIMEOUT_S):
+                first = await editor.send("initialize", {"protocolVersion": 1})
+                await editor.read_until(lambda m: m.get("id") == first)
+                second = await editor.send("session/new", {"cwd": str(tmp_path), "mcpServers": []})
+                created = await editor.read_until(lambda m: m.get("id") == second)
+                session_id = created["result"]["sessionId"]
+
+                third = await editor.send(
+                    "session/prompt",
+                    {"sessionId": session_id, "prompt": [{"type": "text", "text": "deploy it"}]},
+                )
+                await editor.read_until(lambda m: m.get("id") == third)
+
+                updates = [
+                    message["params"]["update"]
+                    for message in editor.lines
+                    if message.get("method") == "session/update"
+                ]
+                # The denial reached the editor as a failed call with the checker's reason.
+                denials = [
+                    update
+                    for update in updates
+                    if update.get("sessionUpdate") == "tool_call_update"
+                    and update.get("status") == "failed"
+                ]
+                assert denials, f"no failed tool call among {len(updates)} updates"
+                said = json.dumps(denials)
+                assert "checker: DENY" in said
+                assert "calu:deny" in said, "the editor has to see why it was refused"
+
+                # `session/load` replays the conversation before it answers, so every update
+                # that belongs to the replay is already on the wire when the result arrives.
+                before = len(editor.lines)
+                fourth = await editor.send(
+                    "session/load",
+                    {
+                        "sessionId": session_id,
+                        "cwd": str(tmp_path),
+                        "mcpServers": [],
+                    },
+                )
+                loaded = await editor.read_until(lambda m: m.get("id") == fourth)
+                assert "error" not in loaded, loaded
+                replayed = [
+                    message
+                    for message in editor.lines[before:]
+                    if message.get("method") == "session/update"
+                ]
+                assert replayed, "session/load sent no history"
+                # The replay carries the conversation: the user's own message and Claude's
+                # answer, in the shapes an editor renders as chat.
+                shapes = {message["params"]["update"].get("sessionUpdate") for message in replayed}
+                assert {"user_message_chunk", "agent_message_chunk"} <= shapes, shapes
+                text = json.dumps(replayed)
+                assert "deploy it" in text, "the user's own message belongs in the replay"
+                index_of_result = editor.lines.index(loaded)
+                assert all(editor.lines.index(message) < index_of_result for message in replayed), (
+                    "the specification requires the replay before the result"
+                )
+        finally:
+            process.terminate()
+            with anyio.move_on_after(10):
+                await process.wait()
