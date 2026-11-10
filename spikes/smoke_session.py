@@ -9,7 +9,12 @@ The checkers are the rule-based fakes (`calu.testing`), so no checker API key is
                                           [--sandbox] [--model haiku]
 
 It creates a throwaway database on the test server, runs `calu setup` in it, runs one session
-and prints what the database holds afterwards; the database is dropped at the end. With
+and prints what the database holds afterwards; the database is dropped at the end -- but a run
+that is **interrupted** (Ctrl-C, a timeout around the command, a crash of the interpreter)
+leaves it behind, so they collect. `docker compose exec caludb psql -U calu_owner -d calu -c
+"SELECT datname FROM pg_database WHERE datname LIKE 'calu_smoke%'"` lists them, and
+`DROP DATABASE <name> WITH (FORCE)` removes one; five had accumulated by the evening of
+2026-11-10, all from interrupted runs. With
 `--resolve` a task plays the operator: it waits for the first escalation and resolves it like
 `calu resolve` would, which is the only way an unattended run can continue.
 

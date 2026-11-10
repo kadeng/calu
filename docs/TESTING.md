@@ -137,7 +137,10 @@ Before a release, or after changing the runner, the gate or the sandbox. `HANDOF
 what was run and what came out of it, under "Verified by hand with the real CLI"; on 2026-11-10
 items 1, 2, 5, 6, 7, 9, 10, 12 and 14 were exercised, and item 4 as part of the network
 measurement in `spikes/RESULTS.md`; item 11 was done as an automated test instead
-(`tests/db/test_run.py`), and item 13 needs an editor, which this machine has none of.
+(`tests/db/test_run.py`), and item 13 needs an editor, which this machine has none of. Items 1,
+2 and 6 were run again at the end of that day, after a dozen changes to the gate, the register
+and the clients -- an allow-listed command and an edit through a real `claude`, and a deny-rule
+escalation resolved from the database alone.
 
 1. `calu doctor --db` on the machine — nothing essential missing.
 2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
@@ -217,6 +220,19 @@ Read the result as follows:
   escalation a case **wanted** is the checker working, and one **spent on a step that should
   pass** is what a user pays for. A third of answers being escalations is fine when none of
   them is waste.
+
+### Throwaway databases that a killed run leaves behind
+
+`smoke_session.py` and the `db_url` fixture each create a database per run and drop it in a
+`finally`, which an interrupted process never reaches. They collect quietly on the development
+machine, named `calu_smoke_*` and `calu_test_*`:
+
+```bash
+docker compose exec caludb psql -U calu_owner -d calu -c "SELECT datname FROM pg_database WHERE datname LIKE 'calu_smoke%' OR datname LIKE 'calu_test%'"
+```
+
+Drop one with `DROP DATABASE <name> WITH (FORCE)`. They hold nothing but a throwaway session,
+so dropping all of them when no run is going is safe.
 
 ## What coverage says, measured once
 

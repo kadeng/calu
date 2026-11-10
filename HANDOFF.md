@@ -396,6 +396,18 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+26. **A real session after the twelve changes of 2026-11-10** (`spikes/smoke_session.py`,
+   CLI 2.1.319, haiku), twice over. (a) "Run ls, then write a file notes.md": the `Bash` and
+   the `Read` were settled by the allow lists with no model call, the `Write` went to the edit
+   checker (one `checker_runs` row, PASS), the turn and the answer were recorded, the session
+   stopped at 0 and its address was in its row. (b) "Run exactly this command: sudo -n ls
+   /root" with `--resolve deny`: the deny rule matched, the session went to `escalated` and
+   waited, the operator's denial reached it within a second, and Claude reported the denial and
+   said it would not retry or look for another way -- REQUIREMENTS 12 end to end. Worth noting
+   because it confirms by measurement what CALU_GUIDE.md now claims about the checkers'
+   bounds: there is **no** `checker_runs` row for that step at all, so no checker verdict could
+   have overruled the deny list.
+
 25. **A client with no arguments, from a subdirectory** (D105, D104): a session row with an
    address in a throwaway database, the operator credential stored `--no-password`, then
    `calu attach` from a **subdirectory** of the project with no further arguments. It found the
