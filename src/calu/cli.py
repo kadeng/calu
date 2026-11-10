@@ -64,7 +64,7 @@ from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, run_session
-from calu.setup import DEFAULT_CHECKER_MODEL, setup
+from calu.setup import DEFAULT_CHECKER_MODEL, enable_operator_login, setup
 
 
 class CliError(Exception):
@@ -263,15 +263,66 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
     print("stored credential 'session'")
 
 
+def _new_operator(store: CredentialStore) -> None:
+    """Renew the `calu_operator` login and print its connection string once.
+
+    The password is random and replaces any earlier one, so every copy handed out before stops
+    working -- that is how an operator's access is taken back. calu does not store the string:
+    the person who gets it stores it on their own machine with `calu credential set operator`.
+
+    Args:
+        store: The credential store; its `admin` credential is used to reach the database.
+
+    Raises:
+        CliError: If there is no `admin` credential.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    url = load_credential(store, "admin", "Admin password: ")
+
+    async def work() -> str:
+        """Give the operator role a new password.
+
+        Returns:
+            Its connection string.
+        """
+        conn = await connect(url.decode())
+        try:
+            return await enable_operator_login(conn, url.decode())
+        finally:
+            await conn.close()
+
+    try:
+        operator_url = asyncio.run(work())
+    finally:
+        wipe(url)
+    print(
+        "connection string for the operator role (this is the only copy):\n\n"
+        f"    {operator_url}\n\n"
+        "Store it on the machine that will use it with `calu credential set operator`. It reads "
+        "the fleet and resolves escalations (`calu sessions`, `calu escalations`, `calu "
+        "escalation`, `calu resolve`, `calu evals`) and can change nothing else. Running "
+        "`calu credential new operator` again replaces it and stops every earlier copy."
+    )
+
+
 def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
-    """List, set or remove credentials.
+    """List, set, remove or newly create credentials.
+
+    `set` stores a connection string the user has; `new operator` is the other direction -- it
+    needs the `admin` credential, gives `calu_operator` a fresh password in the database and
+    prints the connection string once, for a person who should watch the herd without owning it
+    (PLAN.md D48).
 
     Args:
         args: Parsed arguments (`action`, `name`).
         store: The credential store.
 
     Raises:
-        CliError: If `name` is missing or unknown, or a password is empty or mismatched.
+        CliError: If `name` is missing or unknown, a password is empty or mismatched, or
+            `new` was asked for something other than the operator.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors (for `new`).
     """
     if args.action == "list":
         for name in store.names():
@@ -283,6 +334,14 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
         if not store.remove(args.name):
             raise CliError(f"no credential {args.name!r}")
         print(f"removed credential {args.name!r}")
+        return
+    if args.action == "new":
+        if args.name != "operator":
+            raise CliError(
+                "`calu credential new` only makes an operator connection string: "
+                "`calu credential new operator`"
+            )
+        _new_operator(store)
         return
     secret = read_password("Connection string (not echoed): ")
     password = read_password(f"New password for {args.name!r}: ", confirm=True)
@@ -361,6 +420,41 @@ async def _with_admin(url: str, work: Callable[[Db], Awaitable[str]]) -> str:
         return await work(Db(conn))
     finally:
         await conn.close()
+
+
+OPERATOR_FIRST = ("operator", "admin")
+"""Credentials a read-and-resolve command tries, in order (PLAN.md D48).
+
+`operator` is the `calu_operator` login: it reads every table and resolves an escalation and can
+change nothing else, which is exactly what watching a herd needs. `admin` is the database owner
+and works too, so a setup that never made an operator credential keeps working unchanged.
+"""
+
+
+def _herd_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) -> None:
+    """Run a read-and-resolve command with the narrowest credential available.
+
+    Args:
+        store: The credential store.
+        work: Called with the connection; its return value is printed.
+
+    Raises:
+        CliError: If neither an `operator` nor an `admin` credential is stored.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    for name in OPERATOR_FIRST:
+        if name in store:
+            url = load_credential(store, name, f"{name.capitalize()} password: ")
+            try:
+                print(asyncio.run(_with_admin(url.decode(), work)))
+            finally:
+                wipe(url)
+            return
+    raise CliError(
+        "no credential 'operator' or 'admin'; `calu credential new operator` makes an operator "
+        "connection string on the database machine, `calu credential set operator` stores it here"
+    )
 
 
 def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) -> None:
@@ -536,7 +630,7 @@ def cmd_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential.
+        CliError: If neither an `operator` nor an `admin` credential is stored.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -553,7 +647,7 @@ def cmd_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
         rows = await herd.sessions(db, active_only=not args.all)
         return "\n".join(row.line() for row in rows) or "no sessions"
 
-    _admin_command(store, work)
+    _herd_command(store, work)
 
 
 def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -564,7 +658,7 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential.
+        CliError: If neither an `operator` nor an `admin` credential is stored.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -584,7 +678,7 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
         parts = [row.line() + (f"\n{row.rendered}" if args.rendered else "") for row in rows]
         return "\n".join(parts)
 
-    _admin_command(store, work)
+    _herd_command(store, work)
 
 
 def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -714,7 +808,8 @@ def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential or no escalation with that id.
+        CliError: If neither credential is stored (`operator` or `admin`), or no
+            escalation has that id.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -737,7 +832,7 @@ def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
         context = await herd.escalation_context(db, args.id)
         return herd.render_escalation(row, context, full=args.full)
 
-    _admin_command(store, work)
+    _herd_command(store, work)
 
 
 def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -753,7 +848,8 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential or the escalation is not open.
+        CliError: If neither credential is stored (`operator` or `admin`), or the
+            escalation is not open.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -776,7 +872,7 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
         shown = f": {note}" if note else ""
         return f"escalation {args.id}: {args.decision}{shown}"
 
-    _admin_command(store, work)
+    _herd_command(store, work)
 
 
 def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -835,7 +931,7 @@ def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
         rows = await herd.list_tokens(db, args.session)
         return "\n".join(row.line() for row in rows) if rows else "no client tokens"
 
-    _admin_command(store, work)
+    _herd_command(store, work)
 
 
 def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -847,8 +943,9 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential, a case file cannot be read, or the run
-            found a critical miss (a checker let a step through that it should not have).
+        CliError: If neither credential is stored (`operator` or `admin`), a case file cannot
+            be read, or the run found a critical miss (a checker let a step through that it
+            should not have).
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -883,7 +980,7 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
             raise CliError(f"cannot read a case file: {exc}") from exc
         return report
 
-    _admin_command(store, work)
+    _herd_command(store, work)
     if critical:
         raise CliError(f"{critical} critical miss(es): a checker let a step through")
 
@@ -1547,7 +1644,7 @@ def build_parser() -> argparse.ArgumentParser:
     rules.set_defaults(handler=cmd_rules)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
-    p.add_argument("action", choices=["list", "set", "remove"])
+    p.add_argument("action", choices=["list", "set", "remove", "new"])
     p.add_argument("name", nargs="?")
     p.set_defaults(handler=cmd_credential)
     return parser

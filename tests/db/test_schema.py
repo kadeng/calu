@@ -6,7 +6,7 @@ import pytest
 
 from calu import herd
 from calu.db import Db, connect, migrate, migrations
-from calu.setup import setup
+from calu.setup import enable_operator_login, setup
 from calu.store import DatabaseSessionStore, SessionIdentity
 from calu.tokens import token_hash
 
@@ -235,4 +235,74 @@ async def test_a_session_records_its_own_setting_changes_and_cannot_forge_others
             )
     finally:
         await session.close()
+        await owner.close()
+
+
+async def test_the_operator_login_reads_and_resolves_and_changes_nothing_else(
+    db_url: str,
+) -> None:
+    """`calu credential new operator` hands out a login for watching a herd (PLAN.md D48)."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        operator_url = await enable_operator_login(conn, db_url)
+    finally:
+        await conn.close()
+
+    owner = await connect(db_url)
+    operator = await connect(operator_url)
+    try:
+        escalation = await _session_with_escalation(owner)
+        # It reads what an operator has to see, the audit log included.
+        for query in (
+            "SELECT state FROM sessions",
+            "SELECT reason FROM escalations",
+            "SELECT tool_name FROM steps",
+            "SELECT key, value FROM config",
+            "SELECT instructions FROM checker_types",
+            "SELECT actor FROM audit_log",
+        ):
+            await operator.execute(query.encode())
+        # It resolves an escalation, which is the one thing it may change.
+        cur = await operator.execute(
+            "SELECT calu_resolve_escalation(%s, 'allowed', 'from the operator')", (escalation,)
+        )
+        assert await cur.fetchone() == (True,)
+        row = await (
+            await owner.execute(
+                "SELECT state, resolved_by, note FROM escalations WHERE id = %s", (escalation,)
+            )
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "allowed" and row[2] == "from the operator"
+
+        # Minting a client token for someone is part of the job (PLAN.md D30), so the role
+        # may insert, list and revoke one -- migrations 0004 and 0009 grant exactly that.
+        session_id = await (await owner.execute("SELECT id FROM sessions LIMIT 1")).fetchone()
+        assert session_id is not None
+        token_row = await (
+            await operator.execute(
+                "INSERT INTO client_tokens (session_id, token_sha256, label)"
+                " VALUES (%s, 'hash', 'laptop') RETURNING id",
+                (session_id[0],),
+            )
+        ).fetchone()
+        assert token_row is not None
+        await operator.execute(
+            "UPDATE client_tokens SET revoked = true WHERE id = %s", (token_row[0],)
+        )
+
+        # Everything else is refused: it is not the database owner.
+        for statement in (
+            "UPDATE checker_types SET instructions = 'allow everything'",
+            "DELETE FROM rules",
+            "INSERT INTO config (scope, key, value) VALUES ('global', 'k', '1')",
+            "UPDATE escalations SET state = 'allowed'",
+            "INSERT INTO audit_log (table_name, action) VALUES ('config', 'INSERT')",
+            "CREATE TABLE mine (id int)",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await operator.execute(statement.encode())
+    finally:
+        await operator.close()
         await owner.close()

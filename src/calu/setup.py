@@ -41,6 +41,10 @@ RULE_LISTS = (
 )
 
 SESSION_ROLE = "calu_session"
+OPERATOR_ROLE = "calu_operator"
+"""Role of a human who watches a herd: reads every table and resolves an escalation, and may
+change nothing else (migration 0001). It is created `NOLOGIN`; `enable_operator_login` gives it
+a password when an operator needs one (PLAN.md D48)."""
 
 
 @dataclass(frozen=True)
@@ -141,6 +145,55 @@ async def seed_defaults(
     return checkers, rules
 
 
+async def _enable_login(conn: psycopg.AsyncConnection, admin_url: str, role: str) -> str:
+    """Give `role` a new random password and build its connection string.
+
+    Any earlier password of the role stops working, which is how a credential is taken back.
+
+    Args:
+        conn: An open connection of the database owner, schema migrated.
+        admin_url: The owner's connection string; host, port and database are taken from it.
+        role: The role to give a login, one of `SESSION_ROLE` and `OPERATOR_ROLE`.
+
+    Returns:
+        A libpq connection string (key=value form) for that role.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    password = secrets.token_urlsafe(32)
+    await conn.execute(
+        sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+            sql.Identifier(role), sql.Literal(password)
+        )
+    )
+    params = conninfo_to_dict(admin_url)
+    params.update(user=role, password=password)
+    return make_conninfo("", **params)
+
+
+async def enable_operator_login(conn: psycopg.AsyncConnection, admin_url: str) -> str:
+    """Give `calu_operator` a new random password and return its connection string (D48).
+
+    An operator who watches a herd needs to read the fleet and resolve escalations and nothing
+    else; the `admin` credential is the database owner and can migrate, create roles and change
+    every setting, so sharing it with a person is more than the job needs. Calling this again
+    renews the password, which takes every earlier copy out of use.
+
+    Args:
+        conn: An open connection of the database owner, schema migrated.
+        admin_url: The owner's connection string; host, port and database are taken from it.
+
+    Returns:
+        A libpq connection string for `calu_operator`, to be stored with
+        `calu credential set operator` on the machine that will use it.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    return await _enable_login(conn, admin_url, OPERATOR_ROLE)
+
+
 async def enable_session_login(conn: psycopg.AsyncConnection, admin_url: str) -> str:
     """Give `calu_session` a new random password and return its connection string.
 
@@ -156,15 +209,7 @@ async def enable_session_login(conn: psycopg.AsyncConnection, admin_url: str) ->
     Raises:
         psycopg.Error: On database errors.
     """
-    password = secrets.token_urlsafe(32)
-    await conn.execute(
-        sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-            sql.Identifier(SESSION_ROLE), sql.Literal(password)
-        )
-    )
-    params = conninfo_to_dict(admin_url)
-    params.update(user=SESSION_ROLE, password=password)
-    return make_conninfo("", **params)
+    return await _enable_login(conn, admin_url, SESSION_ROLE)
 
 
 async def setup(conn: psycopg.AsyncConnection, admin_url: str, model: str) -> tuple[str, str]:

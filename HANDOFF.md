@@ -45,7 +45,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**441 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**443 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 90 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
 instructions), ~8.9k of tests, 14 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -57,7 +57,7 @@ there.
   `calu.configdoc`; `tests/unit/test_configdoc.py` fails when the file and the model
   disagree, or a field has no docstring), `docs/TESTING.md` for the four layers and the
   manual checklist, `PLAN.md` for the decisions, `AGENTS.md` for the rules.
-- **CLI** (`src/calu/cli.py`): `db up|down|migrate`, `setup`, `credential list|set|remove`,
+- **CLI** (`src/calu/cli.py`): `db up|down|migrate`, `setup`, `credential list|set|remove|new`,
   `run`, `attach`, `protocol`, `sessions`, `escalations`, `resolve`, `evals`, `project`,
   `config`, `checker`, `rules`. Passwords via getpass, or one line each from stdin when stdin is
   not a terminal (tests use that).
@@ -357,10 +357,9 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 - **Q3** A database role per session. Recommendation in PLAN: not yet, and not as a role per
   session -- row-level security keyed on a session id the connection sets is the cheaper shape,
   and it should come after the first real unsupervised runs.
-- **Q4** Remote access: the transport half is recommended and documented (loopback plus an SSH
-  tunnel, README "From another machine"); open is whether operators get their own
-  `calu_operator` logins instead of sharing the `admin` credential, which matters as soon as
-  more than one person uses one database.
+- **Q4** Closed. The transport half is loopback plus an SSH tunnel, documented in the README's
+  "From another machine"; the operator half is built (D48): `calu credential new operator`, and
+  the read-and-resolve commands prefer that credential over `admin`.
 - **Q5** Answered as a proposal (D45): a new project gets "proxy" with a starter allow list
   instead of "full". One flag overrules it (`calu project add --network full`); existing
   projects are untouched. The owner should confirm the list and the trade (a task that needs an

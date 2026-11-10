@@ -79,19 +79,21 @@ def test_run_rejects_a_directory_that_does_not_exist(
     assert "is not a directory" in capsys.readouterr().err
 
 
-def test_herd_commands_need_the_admin_credential(
+def test_herd_commands_need_a_credential(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # They take `operator` or `admin` (D48), so the message names both.
     for argv in (["sessions"], ["escalations"], ["resolve", "1", "allow"]):
         assert run_cli(monkeypatch, store, argv, "") == 1
-        assert "no credential 'admin'" in capsys.readouterr().err
+        assert "no credential 'operator' or 'admin'" in capsys.readouterr().err
 
 
-def test_evals_needs_the_admin_credential(
+def test_evals_needs_a_credential(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Reading the cases and scoring them changes nothing, so an operator may run it (D48).
     assert run_cli(monkeypatch, store, ["evals"], "") == 1
-    assert "no credential 'admin'" in capsys.readouterr().err
+    assert "no credential 'operator' or 'admin'" in capsys.readouterr().err
 
 
 def test_the_configuration_commands_need_the_admin_credential(
@@ -173,3 +175,35 @@ def test_resolve_takes_the_answer_as_one_argument(
     assert other.note == "not today" and other.text is None
     both = parser.parse_args(["resolve", "7", "deny", "positional", "--note", "flag"])
     assert (both.text, both.note) == ("positional", "flag")
+
+
+def test_watching_a_herd_prefers_the_operator_credential(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Read-and-resolve commands take the narrow credential when there is one (PLAN.md D48)."""
+    watching = (
+        ["sessions"],
+        ["escalations"],
+        ["escalation", "1"],
+        ["resolve", "1", "allow"],
+        ["token", "list"],
+        ["evals", "--from-db"],
+    )
+    # With neither credential the message names both and says how to get the narrow one.
+    for argv in watching:
+        assert run_cli(monkeypatch, store, argv, "") == 1
+        said = capsys.readouterr().err
+        assert "no credential 'operator' or 'admin'" in said
+        assert "calu credential new operator" in said
+
+    # With only an operator credential they use it; the password is wrong here, which proves
+    # which credential was asked for without needing a database.
+    store.save("operator", bytearray(b"postgresql://calu_operator@127.0.0.1/calu"), b"pw")
+    for argv in watching:
+        assert run_cli(monkeypatch, store, argv, "wrong-password") == 1
+        assert "password" in capsys.readouterr().err.lower()
+
+    # Commands that change the configuration keep asking for `admin` only.
+    for argv in (["config", "get"], ["checker", "list"], ["rules", "list"], ["project", "list"]):
+        assert run_cli(monkeypatch, store, argv, "") == 1
+        assert "no credential 'admin'" in capsys.readouterr().err

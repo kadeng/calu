@@ -317,9 +317,22 @@ is written, the thinking, the tool results as they arrive. That is what attachin
 Nothing calu runs binds a public interface, and that is deliberate: there is no login in front
 of the web interface and no TLS in front of a session's WebSocket. Two ways to work remotely:
 
-**Through the database.** The five commands above need nothing but a reachable PostgreSQL and
-the `admin` credential, so an operator anywhere can watch the fleet and answer escalations
-without touching the machines the sessions run on. This is the intended way to run a herd.
+**Through the database.** The five commands above need nothing but a reachable PostgreSQL, so
+an operator anywhere can watch the fleet and answer escalations without touching the machines
+the sessions run on. This is the intended way to run a herd. Give that person their own
+credential rather than the `admin` one, which is the database owner and can migrate, create
+roles and rewrite every rule:
+
+```bash
+calu credential new operator     # on the database machine; prints a connection string once
+calu credential set operator     # on the operator's machine; paste it there
+```
+
+The operator login reads every table, resolves escalations and mints or revokes client tokens,
+and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu
+sessions`, `calu escalations`, `calu escalation`, `calu resolve`, `calu token` and `calu evals`
+use it when it is there and fall back to `admin` when it is not. Running `calu credential new
+operator` again replaces the password, which takes every copy handed out before out of use.
 
 **Through an SSH tunnel**, when you want the live stream or the browser:
 
