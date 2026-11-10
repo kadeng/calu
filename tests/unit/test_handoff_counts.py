@@ -87,3 +87,34 @@ def test_the_handoff_does_not_claim_fewer_tests_than_there_are_test_functions() 
     )
     assert functions > 100, f"only {functions} test functions found; the check would prove little"
     assert stated(r"\*\*(\d+) tests pass\*\*") >= functions
+
+
+def test_the_structural_counts_in_the_handoff_are_exact() -> None:
+    """Commands, protocol requests and events are countable, so these are exact, not loose.
+
+    They are also the numbers a reader uses to judge whether the document is current at all: a
+    handoff that names 16 protocol requests where there are 19 has been left behind, whatever
+    else it says.
+    """
+    import argparse
+
+    from calu.cli import build_parser
+    from calu.protocol import messages
+    from calu.protocol.messages import Event
+
+    parser = build_parser()
+    subparsers = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    assert stated(r"(\d+) CLI commands") == len(subparsers.choices)
+
+    from tests.unit.test_web_methods import dispatched_methods
+
+    assert stated(r"(\d+) protocol requests") == len(dispatched_methods())
+
+    events = [
+        value
+        for value in vars(messages).values()
+        if isinstance(value, type) and issubclass(value, Event) and value is not Event
+    ]
+    assert stated(r"(\d+) events") == len(events)

@@ -278,3 +278,33 @@ def test_cache_points_reuse_the_previous_check(tmp_path: Path):
             assert isinstance(second[i + 1], CachePoint)
             break
     assert "".join(turn.render_parts()) == turn.render()
+
+
+def test_the_guide_names_every_tool_a_checker_has(tmp_path: Path) -> None:
+    """CALU_GUIDE.md claims a checker has exactly five tools, all reads (D123).
+
+    That claim is part of the security argument -- "a checker cannot edit your code, run a
+    command or send your source anywhere" -- so it must not be able to go stale quietly. Adding
+    a tool to `calu.checkers.tools` fails this test until the guide says so.
+    """
+    from calu.checkers.tools import CodeTools
+    from calu.context.turns import StepRecord
+
+    guide = (Path(__file__).resolve().parents[2] / "CALU_GUIDE.md").read_text(encoding="utf-8")
+
+    plain = CodeTools(tmp_path).toolset()
+    with_times = CodeTools(tmp_path, times=lambda: [StepRecord(tool_name="Bash")]).toolset()
+    read_only = {"read_file", "find_files", "grep_files"}
+    extra = {"step_times", "changed_files"}
+
+    assert set(plain.tools) == read_only, (
+        "a checker without the step times has the three reading tools and nothing else"
+    )
+    assert set(with_times.tools) == read_only | extra
+
+    for name in read_only | extra:
+        assert f"`{name}`" in guide, f"the guide does not name the tool {name}"
+    # And the count in the sentence is the count in the code.
+    assert f"exactly {len(read_only | extra)} tools" in guide.replace("five", "5"), (
+        "the guide's tool count and the toolset disagree"
+    )
