@@ -157,6 +157,8 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
         # Not a defect: it is a choice, made for the commands that would otherwise ask for a
         # password every time (D104). It is reported because it is invisible otherwise, and
         # because `session` and `admin` are the wrong entries to choose it for.
+        # `session` cannot get here any more (D115 refuses it), but a store written by an
+        # older calu can still hold one, and that is exactly when a report has to say so.
         risky = [name for name in unprotected if name in ("admin", "session")]
         found.append(
             Finding(

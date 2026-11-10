@@ -314,3 +314,26 @@ def test_a_credential_without_a_password_is_read_without_a_prompt(
     assert run_cli(monkeypatch, store, ["credential", "set", "operator"], "dsn\npw\npw\n") == 0
     assert run_cli(monkeypatch, store, ["credential", "list"], "") == 0
     assert "operator  (password)" in capsys.readouterr().out
+
+
+def test_the_session_credential_cannot_be_stored_without_a_password(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D115: `--no-password` must not offer a one-flag way around REQUIREMENTS 17.
+
+    Starting a session is password protected by design, and it asks once per session -- the
+    complaint the switch answers was about the read-and-resolve commands, which ask several
+    times an hour.
+    """
+    assert run_cli(monkeypatch, store, ["credential", "set", "session", "--no-password"], "") == 1
+    said = capsys.readouterr().err
+    assert "cannot be stored without a password" in said
+    assert "REQUIREMENTS 17" in said and "'operator'" in said
+    assert store.names() == [], "and nothing was stored"
+
+    # The operator credential, which the switch is for, still works.
+    assert (
+        run_cli(monkeypatch, store, ["credential", "set", "operator", "--no-password"], "dsn\n")
+        == 0
+    )
+    assert store.needs_password("operator") is False

@@ -327,7 +327,9 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     (PLAN.md D48).
 
     `set --no-password` stores the connection string protected by the file's mode alone, so
-    that the commands that use it ask nothing; it prints what that costs (PLAN.md D104).
+    that the commands that use it ask nothing; it prints what that costs (PLAN.md D104). It is
+    refused for the `session` credential, because starting a session is password protected
+    (REQUIREMENTS 17, D115).
 
     Args:
         args: Parsed arguments (`action`, `name`, `no_password`).
@@ -359,6 +361,16 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
             )
         _new_operator(store)
         return
+    if args.no_password and args.name == "session":
+        # REQUIREMENTS 17: starting a session is password protected. The ergonomics complaint
+        # that `--no-password` answers was about the read-and-resolve commands, which ask for a
+        # password several times an hour; starting a session asks once (D115).
+        raise CliError(
+            "the 'session' credential cannot be stored without a password: starting a session "
+            "is password protected by design (REQUIREMENTS 17), and this credential is what a "
+            "session writes its steps and escalations with. `--no-password` is meant for the "
+            "'operator' credential, which reads the fleet and resolves escalations"
+        )
     secret = read_password("Connection string (not echoed): ")
     password = None
     if not args.no_password:
@@ -2212,7 +2224,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-password",
         action="store_true",
         help="store it protected by the file mode only, so no command asks for a password "
-        "(for the narrow 'operator' credential; prints what it costs)",
+        "(for the narrow 'operator' credential; refused for 'session'; prints what it costs)",
     )
     p.set_defaults(handler=cmd_credential)
     return parser

@@ -503,10 +503,11 @@ calu credential set operator --no-password
 The secret then sits in `~/.config/calu/credentials.json` (file mode 0600, directory 0700) and
 the five read-and-resolve commands ask nothing. Anyone who can read that file has the
 credential — another process of your user, a backup, a synchronised dotfile directory — so this
-is for the operator login, which reads and resolves and can change nothing else. `calu doctor`
-lists an unprotected credential, and calls it a problem for `admin` or `session`, which can
-migrate the schema and start sessions. `calu credential set operator` without the switch puts a
-password back on it.
+is for the operator login, which reads and resolves and can change nothing else. For the
+`session` credential the switch is **refused**: starting a session is password protected by
+design (REQUIREMENTS 17), and it asks once per session rather than several times an hour.
+`calu doctor` lists an unprotected credential and calls it a problem for `admin`, which owns
+the schema. `calu credential set operator` without the switch puts a password back on it.
 
 The operator login reads every table, resolves escalations and mints or revokes client tokens,
 and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu
