@@ -133,7 +133,10 @@ throwaway directory.
 
 ## The manual checklist
 
-Before a release, or after changing the runner, the gate or the sandbox:
+Before a release, or after changing the runner, the gate or the sandbox. `HANDOFF.md` records
+what was run and what came out of it, under "Verified by hand with the real CLI"; on 2026-11-10
+items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network measurement in
+`spikes/RESULTS.md`.
 
 1. `calu doctor --db` on the machine — nothing essential missing.
 2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
