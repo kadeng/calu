@@ -520,7 +520,7 @@ CHECK`, plus a permissive SELECT policy for `calu_operator`, because only a supe
 `BYPASSRLS`. Three `calu_session` connections -- two with an id set, one that never sets one --
 and one operator connection.
 
-**Observations.** All eight checks pass:
+**Observations.** All ten checks pass:
 
 | | |
 |---|---|
@@ -531,15 +531,27 @@ and one operator connection.
 | its own escalation can still be cancelled (`calu_cancel_escalation`, SECURITY DEFINER) | yes |
 | a connection that never set the id sees nothing | yes |
 | ... and cannot write either | yes |
+| a session **cannot insert its own `sessions` row** any more | yes -- see below |
+| a SECURITY DEFINER starter creates that row and the session takes it over | yes |
 | `calu_operator` still sees every session's rows | yes |
+
+The eighth line is the one worth having built this for. `DatabaseSessionStore.start` creates the
+session's own row with `INSERT INTO sessions ... RETURNING id`, and under a `WITH CHECK` policy
+that insert is refused: the id does not exist until the insert happens, so the connection cannot
+have set it beforehand. Switching the policies on without noticing would have broken **every**
+session at startup. The way around it is a SECURITY DEFINER `calu_start_session(...)` that
+creates the row as the owner and returns the id for the session to set, which the spike now also
+measures.
 
 Two details worth keeping: the SECURITY DEFINER functions are unaffected, because they run as
 the owner, for whom the policies do not apply; and the failure mode of forgetting the setting is
 **immediate and total** -- the session cannot write its first step -- rather than subtle, which
 is better than I assumed when I recommended deferring it.
 
-**What follows.** The shape is sound and is one migration plus one `set_config` after connecting
-away from being real. Enabling it is the owner's call, because it is what Q3 asks about: it
+**What follows.** The shape is sound, and the work it needs is now exact: one migration (the
+policies, `calu_start_session`, the operator's read policies), `store.start` calling that
+function instead of its plain insert, one `set_config` after a session connects, and the same in
+every test fixture that connects as `calu_session`. Enabling it is the owner's call, because it is what Q3 asks about: it
 changes the threat model (a compromised session process can no longer rewrite another session's
 history) and adds a precondition to every path that connects as `calu_session`, the test
 fixtures included. What it does **not** buy: a session can still write nonsense about itself,

@@ -16,7 +16,12 @@ What it tries, with the candidate policies applied to the tables a session write
 3. the SECURITY DEFINER functions still work for its own escalation;
 4. a connection that **forgets** to set the id sees nothing and can insert nothing -- the
    failure mode to weigh against the protection;
-5. `calu_operator` still sees every row, which a herd needs.
+5. `calu_operator` still sees every row, which a herd needs;
+6. the **bootstrap**: a session creates its own `sessions` row (`store.start`), and at that
+   moment it cannot know the id the database will generate, so a `WITH CHECK` policy on
+   `sessions` refuses the insert. The spike measures that refusal and then the way around it: a
+   SECURITY DEFINER function that creates the row and returns the id, which the session sets
+   before it writes anything else.
 
 Nothing here is applied to a real database: the SQL lives in this file as a proposal, and the
 verdict is what Q3 needs in order to be decided.
@@ -63,6 +68,22 @@ CREATE POLICY own_checker_runs ON checker_runs TO calu_session
 CREATE POLICY own_summary ON chat_summaries TO calu_session
     USING (session_id = current_setting('calu.session_id', true)::uuid)
     WITH CHECK (session_id = current_setting('calu.session_id', true)::uuid);
+
+-- The bootstrap: a session cannot insert its own `sessions` row under the policy above,
+-- because the id does not exist until the insert happens. This function runs as the owner, so
+-- no policy applies to it, and hands the new id back for the session to set.
+CREATE FUNCTION calu_start_session(for_host bigint, os_user text, directory text, pid int)
+    RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+DECLARE
+    new_id uuid;
+BEGIN
+    INSERT INTO sessions (host_id, os_user, directory, pid)
+    VALUES (for_host, os_user, directory, pid)
+    RETURNING id INTO new_id;
+    RETURN new_id;
+END
+$$;
+GRANT EXECUTE ON FUNCTION calu_start_session(bigint, text, text, int) TO calu_session;
 
 -- A herd has to see everything, so the operator gets a policy of its own rather than the
 -- BYPASSRLS attribute, which only a superuser can grant.
@@ -199,10 +220,43 @@ async def main() -> int:
             except psycopg.errors.InsufficientPrivilege:
                 verdicts["a connection without the id cannot write"] = True
 
+            # 6. the bootstrap: the plain insert a session does today is refused ...
+            cur = await a.execute("SELECT id FROM hosts LIMIT 1")
+            host = await cur.fetchone()
+            assert host is not None
+            try:
+                await a.execute(
+                    "INSERT INTO sessions (host_id, os_user, directory, pid)"
+                    " VALUES (%s, 'u', '/three', 3) RETURNING id",
+                    (host[0],),
+                )
+                verdicts["a session cannot insert its own row directly"] = False
+            except psycopg.errors.InsufficientPrivilege:
+                verdicts["a session cannot insert its own row directly"] = True
+            # ... and the SECURITY DEFINER starter is the way around it.
+            fresh = await psycopg.AsyncConnection.connect(session_url, autocommit=True)
+            try:
+                cur = await fresh.execute(
+                    "SELECT calu_start_session(%s, 'u', '/three', 3)", (host[0],)
+                )
+                row = await cur.fetchone()
+                third = str(row[0]) if row else ""
+                await fresh.execute("SELECT set_config('calu.session_id', %s, false)", (third,))
+                await fresh.execute(
+                    "INSERT INTO steps (session_id, seq, tool_name, tool_input)"
+                    " VALUES (%s, 1, 'Bash', '{}'::jsonb)",
+                    (third,),
+                )
+                verdicts["a starter function creates the row and the session takes it over"] = (
+                    bool(third) and await rows(fresh, "SELECT id FROM steps") == 1
+                )
+            finally:
+                await fresh.close()
+
             # 5. the herd still sees everything
             verdicts["the operator still sees every session's rows"] = (
-                await rows(operator, "SELECT id FROM steps") == 2
-                and await rows(operator, "SELECT id FROM sessions") == 2
+                await rows(operator, "SELECT id FROM steps") == 3
+                and await rows(operator, "SELECT id FROM sessions") == 3
             )
         finally:
             for conn in (a, b, blind, operator):

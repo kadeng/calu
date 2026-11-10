@@ -357,10 +357,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
   is left is whether sitl keeps living for VSCode users, which ACP does not reach yet.
 - **Q3** A database role per session: measured and ready, needs your word to switch on. Not a
   role per session but row-level security on the one `calu_session` login, keyed on
-  `calu.session_id`; `spikes/spike_session_rls.py` builds the policies and all eight checks
-  pass (a session sees only its own rows, the SECURITY DEFINER functions still work, the
-  operator still sees everything, and a connection that forgets the id fails at once). Cost:
-  one migration, one `set_config` after connecting, and the same in the test fixtures.
+  `calu.session_id`; `spikes/spike_session_rls.py` builds the policies and all ten checks
+  pass. It also found what would have broken it: a session creates its own `sessions` row, which
+  a `WITH CHECK` policy refuses, so the migration needs a SECURITY DEFINER starter that returns
+  the new id. Cost: one migration (policies, starter, operator read policies), `store.start`
+  calling the starter, one `set_config` after connecting, and the same in the test fixtures.
 - **Q4** Closed. The transport half is loopback plus an SSH tunnel, documented in the README's
   "From another machine"; the operator half is built (D48): `calu credential new operator`, and
   the read-and-resolve commands prefer that credential over `admin`.
