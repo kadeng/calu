@@ -10,7 +10,8 @@
 #      required reviewer, which makes every publish wait for a human.
 #
 # Until the environment exists the `publish` job cannot run, so a tag pushed by accident builds
-# the wheel and stops there. Release:
+# the wheel, builds and runs the single-file binary (the `binary` job, which attaches it to the
+# run as an artifact) and stops there. Release:
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 name: release
@@ -55,6 +56,24 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  binary:
+    name: the single-file binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # The script builds the binary **and runs it**: a dependency that reads its own package
+      # metadata at import time breaks a frozen build with nothing to show at build time
+      # (measured: `spikes/RESULTS.md`, "A single-file binary"), so building alone proves
+      # nothing.
+      - run: scripts/build-binary.sh dist-binary
+      - uses: actions/upload-artifact@v4
+        with:
+          name: calu-linux-x86_64
+          path: dist-binary/calu
 
   publish:
     name: publish to PyPI

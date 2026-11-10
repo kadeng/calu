@@ -37,7 +37,7 @@ in `calu/` only.
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
 | 5 Sandboxing | Built: the settings (D15), the per-project network policy (D39) with a proposed default for new projects (D45, Q5 asks the owner to confirm it), `calu evals`. Untested: what `weaker_nested_sandbox` changes, which needs a logged-in `claude` inside a container (the rest of Q1 is measured). |
 | 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
-| 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format (D41, no single binary) |
+| 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format with the single-file binary buildable beside it (D41, `scripts/build-binary.sh`) |
 
 All seven phases are **implemented**; what is left is listed under "Next steps" and "Open
 questions" and is either the owner's decision, a proposal of mine to confirm, or something this
@@ -329,8 +329,9 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    escalations, and the session mode -- the three auto-escalation switches are offered both as
    ACP's session modes and as its newer boolean config options, and a change made anywhere
    reaches every client (D42).
-2. **Publishing** needs two steps only the owner can take (and Q15 asks whether a single
-   executable should ship beside the wheel). The wheel itself is verified
+2. **Publishing** needs two steps only the owner can take (and Q15 asks whether the
+   single-file binary, which `release.yml` already builds and runs, should ship beside the
+   wheel). The wheel itself is verified
    (D41, `tests/unit/test_packaging.py`, and CI installs it on every push), and
    `.github/workflows/release.yml` builds and publishes it for a `v*` tag — but it stays inert
    until (a) the PyPI project exists with a trusted publisher for owner `kadeng`, repository
@@ -372,10 +373,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
   auto-escalation category on for a while produces them for the steps the checkers approved,
   with no new tables.
 - Answered this session: Q5 (D45, as a proposal to confirm), Q14 (D46, measured: no).
-- **Q15** The single executable of REQUIREMENTS 21 and soft goal 2. D41 recommends **against**
-  building one and says why; the owner asked for it, so the recommendation needs their word.
-  Nothing in the code depends on the answer: `uv tool install` works today and
-  `tests/unit/test_packaging.py` pins what a binary would have to carry.
+- **Q15** The single executable: **built** (`scripts/build-binary.sh`, 70 MiB, starts faster
+  than the wheel, applies the migrations and serves the web interface) and run on every tag by
+  the `binary` job of `release.yml`. Left to decide: whether a release publishes it beside the
+  wheel, and for which platforms. My first argument against it was partly wrong and PLAN's D41
+  says where.
 - Answered this session: Q6 (D27), Q8 (D28), Q10 (no plugin mode), Q11 (D23).
 
 ## Environment notes (owner's machine)

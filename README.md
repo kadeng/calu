@@ -421,7 +421,7 @@ without an editor, and `calu rules add|list|remove|enable|disable` work on singl
 
 A running session picks up such a change within a moment, at its next step.
 
-Forking a conversation before an earlier turn is built (`calu fork`, and the fork points in the web interface); rewinding the files along with it is not, and needs a decision about Claude Code's file checkpointing. There is no single-file binary and none is planned: `uv tool install` installs the wheel, and `calu doctor` reports what is still missing. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
+Forking a conversation before an earlier turn is built (`calu fork`, and the fork points in the web interface); the files are deliberately left as they are, because Claude Code's file checkpointing only puts back what its edit tools changed and would leave a tree that looks consistent and is not. `uv tool install` installs the wheel, and `calu doctor` reports what is still missing; a single-file binary can be built with `scripts/build-binary.sh` (70 MiB, no Python needed to run it) but is not published yet. The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
 
 ## License
 

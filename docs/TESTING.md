@@ -101,6 +101,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_calu_fork.py` | Does `calu run --fork-before-turn` branch a conversation calu recorded? | the fork code changes |
 | `spike_rewind_files.py` | What does `rewind_files` put back -- tool edits only, or a command's writes too? (D46) | the SDK or the CLI changes what checkpointing tracks |
 | `spike_session_rls.py` | Would row-level security keyed on a per-connection session id separate two sessions? (Q3) | the schema gains a table a session writes |
+| `scripts/build-binary.sh` | Does a frozen one-file calu still find its package data, and what does it cost? (Q15) | a dependency is added or pydantic-ai is updated (the release workflow runs it on every tag) |
 | `smoke_session.py` | A whole calu session against the real `claude` | before a release, and after changes to the runner |
 
 ```bash

@@ -547,3 +547,45 @@ which no role separation prevents, because a compromised session process *is* th
 
 **Re-run when** the schema gains a table a session writes, which would need a policy of its own
 (the spike's SQL is the place to add it).
+
+## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
+
+**Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable
+package. D41 recommended against building one, and one of its three reasons was that freezing
+would put the data calu reads at run time -- migrations, default checker instructions, rules,
+eval cases, web templates, static files -- "behind a frozen-import layer that
+`importlib.resources` reaches differently in each freezer". That claim was never measured, so
+here it is.
+
+**Setup** (`scripts/build-binary.sh`, PyInstaller 6.22.3, Linux x86_64, Python 3.14). One-file
+build of a tiny entry point that calls `calu.cli.main`, with `--collect-data calu`,
+`--collect-submodules calu` and the `web` extra. Then the binary against a throwaway database
+with its own `XDG_CONFIG_HOME`.
+
+**Observations.**
+
+| | |
+|---|---|
+| size | 70 MiB |
+| startup (`calu --version`) | ~1.8 s -- **faster** than the same command from the installed wheel (~2.6 s), because the imports come out of one archive |
+| `calu protocol` | 52 definitions, as from a checkout |
+| `calu setup` | **14 migrations applied, 5 checker types, 45 rules** -- `importlib.resources` finds the package data inside the archive |
+| `calu web` | serves the fleet page and `/static/calu.css`, so Jinja2 templates and static files work too |
+| `calu doctor` | runs, and sees the `web` extra through `find_spec` |
+
+The one real obstacle was not the package data. `genai_prices`, a dependency of pydantic-ai,
+reads its **own package metadata** at import time, so the first binary died with
+`PackageNotFoundError` before `main()` ran; `--copy-metadata genai_prices` fixes it. Nothing at
+build time warned about it, which is why `scripts/build-binary.sh` runs the binary it builds and
+why the release workflow's `binary` job does the same.
+
+**What follows.** D41's reason about package data was **wrong**, and so was the implied cost: a
+binary is one script and one CI job, and it starts faster than the wheel. What remains true is
+that it does not remove the other two prerequisites (PostgreSQL and the `claude` CLI), that it
+is 70 MiB per platform and libc, and that a new dependency which reads its own metadata or data
+files will break it silently at build time. So the recipe and the CI job now exist (Q15), and
+the choice of whether to publish the binary beside the wheel is the owner's, with the numbers in
+hand instead of my guess.
+
+**Re-run when** a dependency is added or pydantic-ai is updated -- that is what the `binary` job
+of `release.yml` does on every tag.
