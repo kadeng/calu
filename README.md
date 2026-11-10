@@ -170,7 +170,7 @@ calu resolve 12 allow --note "go ahead"
 Attach when you want the live stream, the thinking and the tool results as they arrive:
 
 ```bash
-calu attach ws://127.0.0.1:8765 --token ...
+calu attach ws://127.0.0.1:8765 --token=...
 ```
 
 A plain line you type there is a message for Claude; the rest are commands, and `/help` lists

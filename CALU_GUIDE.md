@@ -334,7 +334,7 @@ calu escalation 12        # everything needed to decide that one
 calu resolve 12 allow --note "go ahead"
 calu resolve 13 answer "spaces, four of them"   # when Claude asked you something
 calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting for any more
-calu attach ws://127.0.0.1:8765 --token ...     # the full event stream, and a prompt
+calu attach ws://127.0.0.1:8765 --token=...     # the full event stream, and a prompt
 ```
 
 Those first five need nothing but the database. That is deliberate: a session may run on a
@@ -386,7 +386,7 @@ operator` again replaces the password, which takes every copy handed out before 
 ssh the-host 'calu token mint <session id> --label laptop'   # asks for the admin password
 ssh -L 8800:127.0.0.1:8800 the-host     # then open http://127.0.0.1:8800 at home
 ssh -L 8765:127.0.0.1:8765 the-host     # the port `calu sessions` shows for that session
-calu attach ws://127.0.0.1:8765 --token <the token it printed>
+calu attach ws://127.0.0.1:8765 --token=<the token it printed>
 ```
 
 Mint the token in its own step: every command that reads the configuration asks for the `admin`
@@ -442,8 +442,19 @@ in the editor (JetBrains Air, Zed, Neovim, Goose); the editor spawns it and it a
 running session:
 
 ```bash
-calu acp ws://127.0.0.1:8765 --token ...
+calu acp ws://127.0.0.1:8765 --token=...
 ```
+
+An editor usually takes the command as a program and a list of arguments rather than as a
+shell line, for example:
+
+```json
+{ "command": "calu", "args": ["acp", "ws://127.0.0.1:8765", "--token=..."] }
+```
+
+Write `--token=` with the equals sign in both forms. A token is base64url and may contain `-`;
+one issued before calu stopped generating tokens that **start** with a dash would otherwise be
+read as an option rather than as the token's value (PLAN.md D102).
 
 The editor's own agent-mode picker works too. calu offers what waits for a human as an ACP
 session mode and, for an editor that supports the newer config options, as three switches:

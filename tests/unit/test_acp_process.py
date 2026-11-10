@@ -142,7 +142,7 @@ async def test_calu_acp_answers_an_editor_and_keeps_stdout_clean(tmp_path: Path)
         errors = tmp_path / "stderr.log"
         with errors.open("wb") as log:
             process = await anyio.open_process(
-                [sys.executable, "-m", "calu", "acp", run.address, "--token", run.token],
+                [sys.executable, "-m", "calu", "acp", run.address, f"--token={run.token}"],
                 env=environment,
                 cwd=str(tmp_path),
                 stderr=log.fileno(),
@@ -227,7 +227,7 @@ async def test_calu_acp_carries_a_denial_and_replays_a_loaded_session(tmp_path: 
         errors = tmp_path / "stderr-denial.log"
         with errors.open("wb") as log:
             process = await anyio.open_process(
-                [sys.executable, "-m", "calu", "acp", run.address, "--token", run.token],
+                [sys.executable, "-m", "calu", "acp", run.address, f"--token={run.token}"],
                 env=environment,
                 cwd=str(tmp_path),
                 stderr=log.fileno(),

@@ -99,7 +99,7 @@ async def test_attach_prints_the_state_takes_a_prompt_and_detaches(tmp_path: Pat
         errors = tmp_path / "attach-stderr.log"
         with errors.open("wb") as log:
             process = await anyio.open_process(
-                [sys.executable, "-m", "calu", "attach", run.address, "--token", run.token],
+                [sys.executable, "-m", "calu", "attach", run.address, f"--token={run.token}"],
                 env=environment,
                 cwd=str(tmp_path),
                 stderr=log.fileno(),
@@ -197,7 +197,7 @@ async def test_attach_answers_an_escalation_and_the_session_continues(tmp_path: 
         errors = tmp_path / "attach-escalation-stderr.log"
         with errors.open("wb") as log:
             process = await anyio.open_process(
-                [sys.executable, "-m", "calu", "attach", run.address, "--token", run.token],
+                [sys.executable, "-m", "calu", "attach", run.address, f"--token={run.token}"],
                 env=environment,
                 cwd=str(tmp_path),
                 stderr=log.fileno(),
