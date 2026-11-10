@@ -13,9 +13,11 @@ import pytest
 from calu import admin
 from calu.db import Db, connect
 from calu.evals.cases import case_line, cases_to_yaml, load_cases
+from calu.evals.cli import _rows_to_measure as cli_rows
 from calu.evals.cli import collect_cases, run_evals
 from calu.evals.runner import CaseResult, Report
 from calu.setup import setup
+from calu.store import ConfigStore
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -69,6 +71,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         async def fake_run_cases(
             cases: list[Any],
             checker: Any,
+            row_name: str,
             instructions: str,
             model: Any,
             repeat: int = 1,
@@ -79,7 +82,8 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
 
             Args:
                 cases: The cases handed to the checker.
-                checker: Which checker is being run.
+                checker: Which kind of case is being run.
+                row_name: Name of the checker definition being measured (D93).
                 instructions: Its instructions from the database.
                 model: The model string it should use.
                 repeat: How often each case runs.
@@ -89,11 +93,11 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
             Returns:
                 A report with one critical miss for the command checker, none otherwise.
             """
-            asked.append((str(checker), str(model), len(cases)))
-            budgets[str(checker)] = request_limit
+            asked.append((str(row_name), str(model), len(cases)))
+            budgets[str(row_name)] = request_limit
             assert rules is not None, "the report needs the project's rules to mark guarded misses"
             assert instructions, "a checker must be run with its instructions"
-            return _report(str(checker), str(model), critical=1 if checker == "command" else 0)
+            return _report(str(row_name), str(model), critical=1 if checker == "command" else 0)
 
         monkeypatch.setattr("calu.evals.cli.run_cases", fake_run_cases)
         text, critical = await run_evals(db, tmp_path, builtin=True, from_db=False)
@@ -103,7 +107,9 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
             ("command", "stored:command"),
             ("edit", "stored:edit"),
             ("changeset", "stored:changeset"),
-            ("subagent", "stored:subagent"),
+            # Reported by row name, which is how an extra checker on a route is told apart
+            # from the route's own (D93).
+            ("subagent-result", "stored:subagent"),
         ]
         # The built-in cases were handed to each of them.
         assert all(count > 0 for _checker, _model, count in asked)
@@ -129,7 +135,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         assert [checker for checker, _model, _count in asked] == [
             "command",
             "changeset",
-            "subagent",
+            "subagent-result",
         ]
         assert "none" in text
     finally:
@@ -221,3 +227,33 @@ def load_cases_text(document: str) -> list:
         path = Path(directory) / "cases.yaml"
         path.write_text(document, encoding="utf-8")
         return load_cases(path)
+
+
+async def test_every_enabled_checker_is_measured_including_an_extra_one(db_url: str) -> None:
+    """D93: a route carries several checkers, and each is a judgement of its own.
+
+    `calu evals` measured one checker per route, so the honesty checker -- which sits beside
+    the edit checker -- was never measured, and an eval case about it would have been judged by
+    the edit checker instead and passed for the wrong reason.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.set_checker(db, "honesty", enabled=True)
+        settings = await ConfigStore(db, Path("/w")).load()
+        measured = [row for _kind, row in cli_rows(settings)]
+        assert "honesty" in measured, "an enabled extra checker has to be measured"
+        # Its kind is the one its route judges, so it gets the edit cases.
+        kinds = {row: kind for kind, row in cli_rows(settings)}
+        assert kinds["honesty"] == "edit"
+        assert kinds["edit"] == "edit"
+        # The built-in rows keep their order, so a report reads as before without extras.
+        assert measured[:4] == ["command", "edit", "changeset", "subagent-result"]
+
+        # A disabled checker is not measured at all: `ConfigStore` only loads enabled rows.
+        await admin.set_checker(db, "honesty", enabled=False)
+        again = await ConfigStore(db, Path("/w")).load()
+        assert "honesty" not in [row for _kind, row in cli_rows(again)]
+    finally:
+        await conn.close()

@@ -29,9 +29,46 @@ from calu.evals.cases import CheckerName, EvalCase, builtin_cases, cases_from_es
 from calu.evals.cases import load_cases as load_case_file
 from calu.evals.runner import Report, run_cases
 from calu.store import ConfigStore
+from calu.store.config import ProjectSettings
 
 CHECKERS: tuple[CheckerName, ...] = ("command", "edit", "changeset", "subagent")
 """The checkers `calu evals` measures, in the order it reports them."""
+
+
+def _rows_to_measure(settings: ProjectSettings) -> list[tuple[CheckerName, str]]:
+    """Return every enabled checker row to measure, with the kind of case it judges (D93).
+
+    A route carries several checkers (D81) -- honesty beside the edit checker, a security
+    checker beside the command checker -- and each is a separate judgement with its own
+    instructions, so each is measured separately. The kind of case a row judges follows from
+    its route, because that is what decides the shape of the input: a step, a whole commit or
+    a subagent's result.
+
+    The route's own row comes first in its group, so a report reads as before when no extra
+    checker is configured.
+
+    Args:
+        settings: The project's settings, whose `checkers` holds the enabled definitions.
+
+    Returns:
+        (kind of case, row name) pairs: the four built-in rows in their usual order, then every
+        other enabled row whose route is one the evaluation can run.
+    """
+    by_route: dict[str, CheckerName] = {
+        "command": "command",
+        "edit": "edit",
+        "changeset": "changeset",
+        "subagent": "subagent",
+    }
+    pairs: list[tuple[CheckerName, str]] = [(kind, ROW_NAMES[kind]) for kind in CHECKERS]
+    for name, definition in sorted(settings.checkers.items()):
+        if name in ROW_NAMES.values():
+            continue
+        kind = by_route.get(definition.route)
+        if kind is not None:
+            pairs.append((kind, name))
+    return pairs
+
 
 ROW_NAMES: dict[CheckerName, str] = {
     "command": "command",
@@ -105,22 +142,28 @@ async def run_evals(
     settings = await ConfigStore(db, workspace, project).load()
     cases = await collect_cases(db, files, from_db, builtin)
     reports: list[Report] = []
-    for checker in CHECKERS:
-        definition = settings.checkers.get(ROW_NAMES[checker])
-        instructions = definition.instructions if definition else ""
-        if not instructions:
-            reports.append(Report(checker=checker, model="none"))
+    for checker, row_name in _rows_to_measure(settings):
+        definition = settings.checkers.get(row_name)
+        if definition is None or not definition.instructions:
+            # Reported as "none" rather than skipped: `calu evals` must not look as if it had
+            # measured a checker that is switched off.
+            reports.append(Report(checker=row_name, model="none"))
             continue
+        instructions = definition.instructions
         configured = {
             "command": settings.config.command_checker,
             "edit": settings.config.edit_checker,
             "changeset": settings.config.changeset_checker,
             "subagent": settings.config.subagent_checker,
         }[checker]
+        # Its own row's model and limits where it has them, because an extra checker on a
+        # route (D81) is configured by its row and not by the route's `*_checker` settings.
+        configured = definition.limits() if row_name not in ROW_NAMES.values() else configured
         reports.append(
             await run_cases(
                 cases,
                 checker,
+                row_name,
                 instructions,
                 model or configured.model,
                 repeat=repeat,

@@ -256,7 +256,9 @@ class CaseResult:
 class Report:
     """All results of an evaluation run of one checker."""
 
-    checker: CheckerName
+    checker: str
+    """Name of the checker definition that was measured, which is a row name and not a route:
+    a route may carry several checkers and each is measured on its own (PLAN.md D93)."""
     model: str
     results: list[CaseResult] = field(default_factory=list)
 
@@ -370,6 +372,7 @@ class Report:
 async def run_cases(
     cases: list[EvalCase],
     checker: CheckerName,
+    row_name: str,
     instructions: str,
     model: str | Model,
     repeat: int = 1,
@@ -384,7 +387,10 @@ async def run_cases(
 
     Args:
         cases: Cases of any checker; only those with `case.checker == checker` are run.
-        checker: Which checker to evaluate.
+        checker: The **kind** of case to run: which shape of input this checker judges.
+        row_name: Name of the checker definition being measured, for the report. It differs
+            from `checker` when a route carries more than one checker (PLAN.md D81, D93): the
+            honesty checker judges edits, so its kind is "edit" and its name is "honesty".
         instructions: The checker's Markdown instructions (from the database).
         model: Pydantic AI model string or `Model` instance.
         repeat: How often each case is run (to measure decision stability).
@@ -402,7 +408,7 @@ async def run_cases(
     selected = [c for c in cases if c.checker == checker]
     lists = rules if rules is not None else shipped_rules()
     model_name = model if isinstance(model, str) else model.model_name
-    report = Report(checker=checker, model=model_name)
+    report = Report(checker=row_name, model=model_name)
     limiter = anyio.CapacityLimiter(max_concurrency)
 
     async def one(case: EvalCase) -> None:

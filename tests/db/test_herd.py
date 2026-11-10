@@ -725,8 +725,8 @@ async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: st
 
         # Opening a mark announces itself, and the payload names the session that wrote it so
         # that this very session can skip its own.
+        notes: list[list[tuple[str, str]]] = []
         async with anyio.create_task_group() as tg:
-            notes: list[list[tuple[str, str]]] = []
 
             async def collect() -> None:
                 """Wait for one notification."""
@@ -745,8 +745,8 @@ async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: st
 
         # Clearing one announces itself on the same channel, with no session of its own.
         (mark,) = await herd.honesty_marks(db)
+        cleared: list[list[tuple[str, str]]] = []
         async with anyio.create_task_group() as tg:
-            cleared: list[list[tuple[str, str]]] = []
 
             async def collect_clear() -> None:
                 """Wait for the notification of the override."""
@@ -759,8 +759,8 @@ async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: st
         assert after and after[0][0] == HONESTY_CHANGED
 
         # A call that changes nothing stays quiet, so an edit without marks is not a broadcast.
+        quiet: list[list[tuple[str, str]]] = []
         async with anyio.create_task_group() as tg:
-            quiet: list[list[tuple[str, str]]] = []
 
             async def collect_quiet() -> None:
                 """Wait, and expect nothing."""

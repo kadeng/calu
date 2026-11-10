@@ -155,7 +155,7 @@ async def test_a_run_with_the_rule_based_model_reports_every_case():
         case(name="missed", tool_input={"command": "ls"}, expected=[Decision.DENY]),
         case(name="an-edit", checker="edit", tool_name="Write", tool_input={"file_path": "a.py"}),
     ]
-    report = await run_cases(cases, "command", "instructions", rule_based_checker())
+    report = await run_cases(cases, "command", "command", "instructions", rule_based_checker())
     assert [r.case.name for r in report.results] == ["marked", "missed", "plain"]
     assert [r.ok for r in report.results] == [True, False, True]
     assert report.summary()["critical_misses"] == 1
@@ -197,7 +197,7 @@ async def test_an_edit_case_runs_in_a_temporary_workspace():
             expected=[Decision.PASS],
         )
     ]
-    report = await run_cases(cases, "edit", "instructions", rule_based_checker())
+    report = await run_cases(cases, "edit", "edit", "instructions", rule_based_checker())
     assert len(report.results) == 1 and report.results[0].ok
     assert report.results[0].decision is not None
 

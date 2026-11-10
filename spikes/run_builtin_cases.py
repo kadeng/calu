@@ -41,7 +41,14 @@ async def main() -> None:
         text = Path(f"src/calu/defaults/checkers/{instructions_file}").read_text(encoding="utf-8")
         limits = {"changeset": 8}.get(checker)
         report = await run_cases(
-            cases, checker, text, MODEL, repeat=3, max_concurrency=4, request_limit=limits
+            cases,
+            checker,
+            checker,
+            text,
+            MODEL,
+            repeat=3,
+            max_concurrency=4,
+            request_limit=limits,
         )
         print(report.render())
         print()
