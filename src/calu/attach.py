@@ -1,6 +1,7 @@
 """`calu attach`: a terminal client for a running session (PLAN.md phase 4).
 
-    calu attach ws://127.0.0.1:8765 --token <token>
+    calu attach                                      # the session running in this directory
+    calu attach ws://127.0.0.1:8765 --token=<token>  # a session elsewhere, through a tunnel
 
 It connects to the session's WebSocket, prints the current state and then every event, and
 sends what you type as a chat message. Several clients may be attached at the same time, and

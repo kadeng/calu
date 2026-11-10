@@ -156,7 +156,8 @@ there.
   calu's business.
 - **Bus and protocol** (phase 4): `calu.bus` numbers every event and keeps the last 5000 for
   replay; `calu.protocol.server` serves JSON-RPC over WebSocket to several clients (one token
-  per session, `calu.tokens`); `calu.protocol.client`; `calu attach ADDRESS --token T` with
+  per session, `calu.tokens`); `calu.protocol.client`; `calu attach [ADDRESS --token=T]` (no arguments finds the session of this directory and
+  mints its own token, D105) with
   `/start /stop /interrupt /allow /deny /inject /to /comment /why /checkers /state /context
   /sessions /history /shutdown`. `calu protocol [--out FILE]` writes the JSON Schema.
 - **The web interface** (phase 6, `src/calu/web/`, the optional `web` extra): `calu web` serves
@@ -194,7 +195,7 @@ there.
   back as the message of the refusal that keeps the call from running. The row is recorded as
   `answered` (migration 0011). Answer it from the browser (buttons), `calu attach` (`/answer`)
   or `calu resolve <id> answer "..."`.
-- **ACP adapter** (phase 7, D24, `src/calu/acp/`): `calu acp ADDRESS --token T` speaks the Agent
+- **ACP adapter** (phase 7, D24, `src/calu/acp/`): `calu acp [ADDRESS --token=T]` speaks the Agent
   Client Protocol on stdin and stdout (newline-delimited JSON, protocol version 1) and attaches
   to a running session as an ordinary client, so the session outlives the editor and several
   editors can attach at once. Implemented: `initialize`, `session/new` (checks the editor's `cwd`
@@ -438,7 +439,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
+1. **Try `calu acp` with a real editor** (Zed or JetBrains Air). Its whole configuration is
+   now `{ "command": "calu", "args": ["acp"] }` -- the adapter finds the session running in the
+   editor's project directory and mints its own token (D105), which needs the operator
+   credential stored with `calu credential set operator --no-password` (D104), because an editor
+   gives the adapter no terminal to answer a password prompt with. The adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, and is
    driven as a real process over real pipes for the handshake, a prompt, a **denied** step and
    `session/load`'s replay -- but no editor has driven it yet, so expect small mismatches in
@@ -472,7 +477,15 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    auto-escalation switches, which are session-local and audited (D42, D43). Editing a single
    list entry is done: `calu config add|remove <key> <entry>` (D44).
 
-5. **Honesty enforcement is built and switched off** (§13, D81-D86). What is left needs a
+5. **The ergonomics of auth** were the owner's complaint of 2026-11-10 ("if I need to worry
+   about auth and token passing for every single command, it's not easy") and are answered in
+   two halves: `calu credential set operator --no-password` takes the password prompt off the
+   read-and-resolve commands (D104), and `calu attach` / `calu acp` with no arguments find the
+   session of this directory and mint their own token (D105). What is left of the question --
+   whether the terminal or the browser is meant to be the interactive tool -- no longer blocks
+   anything, because both now work without a prompt.
+
+6. **Honesty enforcement is built and switched off** (§13, D81-D86). What is left needs a
    person rather than more code: a capable checker model for it (Q17), the choice between one
    combined checker and several (Q18), and what a mark should mean after a branch switch (Q19).
    To try it on a real project: `calu checker set honesty --enable` and
