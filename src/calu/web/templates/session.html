@@ -130,6 +130,25 @@ session shows the real thinking as it streams.</p>
 </table>
 {% endif %}
 
+{% if setting_changes %}
+<h2>Settings changed while the session ran ({{ setting_changes | length }})</h2>
+<p class="muted">What holds a step back lives in the running session, so a client can change it.
+  Every change is on the record with the name of whoever asked.</p>
+<table>
+  <thead><tr><th>When</th><th>Who</th><th>Setting</th><th>Change</th></tr></thead>
+  <tbody>
+  {% for change in setting_changes %}
+    <tr>
+      <td class="muted">{{ change.at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td>{{ change.actor }}</td>
+      <td class="mono">{{ change.setting }}</td>
+      <td class="mono">{{ change.changed() | join(', ') or 'nothing' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <h2>Connect to this session</h2>
 <div class="card">
   {% if minted %}

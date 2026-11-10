@@ -513,3 +513,29 @@ async def test_the_chat_summary_can_be_read_and_corrected(db_url: str) -> None:
             assert (await client.get("/sessions/does-not-exist/summary")).status_code == 404
     finally:
         await conn.close()
+
+
+async def test_the_session_page_names_who_weakened_the_session(db_url: str) -> None:
+    """A client's change of what waits for a human is visible to an operator (PLAN.md D43)."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _ = await populate(db)
+        async with await client_for(db) as client:
+            # Nothing was changed yet, so the page does not mention it at all.
+            assert (
+                "Settings changed while the session ran"
+                not in (await client.get(f"/sessions/{session_id}")).text
+            )
+            await db.execute(
+                "SELECT calu_session_setting_change(%s::uuid, 'auto_escalate',"
+                " '{\"edits\": true}'::jsonb, '{\"edits\": false}'::jsonb, 'zed on the laptop')",
+                (session_id,),
+            )
+            page = (await client.get(f"/sessions/{session_id}")).text
+            assert "Settings changed while the session ran (1)" in page
+            assert "zed on the laptop" in page
+            assert "edits: True -&gt; False" in page
+    finally:
+        await conn.close()

@@ -416,6 +416,63 @@ async def agents(db: Db, session_id: str) -> list[AgentRow]:
     return [AgentRow(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class SettingChange:
+    """One change of a running session's settings, from the audit log (PLAN.md D43)."""
+
+    at: datetime
+    actor: str
+    setting: str
+    old: dict[str, Any]
+    new: dict[str, Any]
+
+    def changed(self) -> list[str]:
+        """Name the fields that really changed, and how.
+
+        Returns:
+            One "field: old -> new" entry per field whose value differs, sorted by field name;
+            fields only present on one side count as changed.
+        """
+        keys = sorted(set(self.old) | set(self.new))
+        return [
+            f"{key}: {self.old.get(key)!r} -> {self.new.get(key)!r}"
+            for key in keys
+            if self.old.get(key) != self.new.get(key)
+        ]
+
+
+async def setting_changes(db: Db, session_id: str, limit: int = 50) -> list[SettingChange]:
+    """Read the changes of one session's own settings, newest first.
+
+    These are the changes that live in the running process rather than in the project's
+    configuration -- `auto_escalate.set` from a client, and the categories a settings reload
+    brought -- written by `calu_session_setting_change` (migration 0013). Changes of the
+    project's configuration are in the same table with `session_id IS NULL`, recorded by the
+    triggers of migration 0001, and are not returned here.
+
+    Args:
+        db: The connection (needs SELECT on `audit_log`: the owner or `calu_operator`).
+        session_id: Id of the `sessions` row.
+        limit: How many to read at most, newest first.
+
+    Returns:
+        The changes, newest first; empty if the session changed nothing.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT at, actor, action, old_row, new_row FROM audit_log"
+        " WHERE session_id = %s::uuid AND table_name = 'session_settings'"
+        " ORDER BY at DESC, id DESC LIMIT %s",
+        (session_id, limit),
+    )
+    return [
+        SettingChange(at, actor, action, old or {}, new or {})
+        for at, actor, action, old, new in rows
+    ]
+
+
 async def session(db: Db, session_id: str) -> SessionRow | None:
     """Read one session by its id.
 

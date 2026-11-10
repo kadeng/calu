@@ -382,10 +382,10 @@ async def _run(
         """
         before = session.config.auto_escalate
         session.apply_settings(new)
-        if session.config.auto_escalate != before:
-            # A client may offer the categories as a setting of its own (the ACP adapter maps
-            # them to ACP's session modes), so it has to hear about a change made elsewhere.
-            await session.announce_auto_escalate()
+        # A client may offer the categories as a setting of its own (the ACP adapter maps them
+        # to ACP's session modes), so it has to hear about a change made elsewhere -- and the
+        # change belongs in the audit log either way (D43).
+        await session.announce_auto_escalate(before)
         # The chat summary is a row like the rules and the instructions, and an operator may
         # have corrected it (D40), so the same notification re-reads it.
         await session.reload_summary()

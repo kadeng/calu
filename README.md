@@ -332,9 +332,11 @@ calu config set auto_escalate.subagents true  # ... and every subagent's result
 ```
 
 The checkers still run and still write down what they decided; the switches only mean that their
-approval is not the last word. Changing one of them anywhere -- in an editor, in the web
-interface, with `calu config set` -- reaches every client of the session, so two editors and a
-browser do not disagree about what the session is doing.
+approval is not the last word. Changing one of them anywhere — in an editor, in the web
+interface, with `calu config set` — reaches every client of the session, so two editors and a
+browser do not disagree about what the session is doing. Switching one *off* weakens the
+session, so every such change is written to the audit log with the name of whoever asked, and
+the session's page lists them.
 
 For a client that keeps its token in its own configuration, mint one instead of passing on the
 token `calu run` printed: a minted token outlives the session you made it for, and you can take

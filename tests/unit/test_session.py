@@ -9,9 +9,10 @@ from calu.checkers import Decision, Route, Step
 from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
-from calu.config import ChangesConfig, ClaudeConfig, Config, ContextConfig
+from calu.config import AutoEscalate, ChangesConfig, ClaudeConfig, Config, ContextConfig
 from calu.protocol.messages import (
     AgentsUpdate,
+    AutoEscalateChanged,
     ChatSendParams,
     CheckResult,
     CommentAddParams,
@@ -857,3 +858,51 @@ async def test_a_corrected_chat_summary_reaches_the_checkers(tmp_path: Path):
         assert len([e for e in rec.of(Log) if "chat summary was changed" in e.message]) == len(said)
         await session.stop()
         tg.cancel_scope.cancel()
+
+
+async def test_changing_the_auto_escalation_categories_is_recorded_with_who_asked(
+    tmp_path: Path,
+) -> None:
+    """A client can weaken a running session, so the change goes on the record (PLAN.md D43)."""
+    session, rec, store = make_session(tmp_path, [])
+    await session.set_auto_escalate(AutoEscalate(edits=True), client="zed on the laptop")
+    assert session.config.auto_escalate.edits is True
+    assert store.setting_changes == [
+        (
+            "auto_escalate",
+            {"commands": False, "edits": False, "subagents": False},
+            {"commands": False, "edits": True, "subagents": False},
+            "zed on the laptop",
+        )
+    ]
+    assert [event.settings.edits for event in rec.of(AutoEscalateChanged)] == [True]
+
+    # A request that changes nothing is neither recorded nor announced.
+    await session.set_auto_escalate(AutoEscalate(edits=True), client="zed on the laptop")
+    assert len(store.setting_changes) == 1
+    assert len(rec.of(AutoEscalateChanged)) == 1
+
+    # Switching it off again is recorded as well -- that is the direction that matters.
+    await session.set_auto_escalate(AutoEscalate(), client="whoever")
+    assert store.setting_changes[-1][1:] == (
+        {"commands": False, "edits": True, "subagents": False},
+        {"commands": False, "edits": False, "subagents": False},
+        "whoever",
+    )
+
+
+async def test_a_reloaded_configuration_records_the_categories_it_changed(tmp_path: Path) -> None:
+    """A reload is the other way the categories change, and it names itself as the actor."""
+    session, rec, store = make_session(tmp_path, [])
+    before = session.config.auto_escalate
+    session.apply_settings(
+        default_settings(tmp_path, Config(auto_escalate=AutoEscalate(commands=True)))
+    )
+    await session.announce_auto_escalate(before)
+    assert store.setting_changes[-1][0] == "auto_escalate"
+    assert store.setting_changes[-1][3] == "session: reloaded settings"
+    assert [event.settings.commands for event in rec.of(AutoEscalateChanged)] == [True]
+
+    # A reload that leaves them alone records nothing.
+    await session.announce_auto_escalate(session.config.auto_escalate)
+    assert len(store.setting_changes) == 1

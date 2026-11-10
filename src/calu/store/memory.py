@@ -71,6 +71,10 @@ class MemorySessionStore:
     write_sets: dict[int, dict[str, Any]] = field(default_factory=dict)
     """What each step wrote, as `record_changes` recorded it (PLAN.md D31)."""
     address: str = ""
+    setting_changes: list[tuple[str, dict[str, Any], dict[str, Any], str]] = field(
+        default_factory=list
+    )
+    """Changed session settings as `note_setting_change` recorded them (PLAN.md D43)."""
     agents: dict[str, AgentInfo] = field(default_factory=dict)
     """The subagents as `update_agents` recorded them, by agent id."""
     agent_parents: dict[str, str | None] = field(default_factory=dict)
@@ -118,6 +122,19 @@ class MemorySessionStore:
             address: "ws://host:port" or a Unix socket path.
         """
         self.address = address
+
+    async def note_setting_change(
+        self, setting: str, old: dict[str, Any], new: dict[str, Any], actor: str
+    ) -> None:
+        """Remember a changed session setting in `setting_changes`.
+
+        Args:
+            setting: Which setting changed.
+            old: Its value before the change.
+            new: Its value after the change.
+            actor: Who asked for it.
+        """
+        self.setting_changes.append((setting, old, new, actor))
 
     async def add_agent(self, agent_id: str, parent_agent_id: str | None = None) -> None:
         """Record a subagent and its parent, keeping the first parent seen.

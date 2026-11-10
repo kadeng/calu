@@ -221,6 +221,26 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def note_setting_change(
+        self, setting: str, old: dict[str, Any], new: dict[str, Any], actor: str
+    ) -> None:
+        """Record that a setting of this running session changed, and who asked for it.
+
+        For the audit log, not for the session's own behaviour: `auto_escalate.set` is the one
+        setting a client may change through the protocol (PLAN.md D42), and switching it off
+        weakens the session, so an operator reading the history afterwards must be able to see
+        it (D43). Changes of the project's configuration are logged by database triggers
+        instead; this is for the ones that live in the process.
+
+        Args:
+            setting: Which setting changed, e.g. "auto_escalate".
+            old: Its value before the change, as a JSON object.
+            new: Its value after the change, as a JSON object.
+            actor: Who asked for it: the name of the client, or "session" when a reloaded
+                configuration brought the change.
+        """
+        ...
+
     async def end(self, state: State) -> None:
         """Record the end of the session.
 
@@ -583,6 +603,25 @@ class DatabaseSessionStore:
         await self._db.execute(
             "UPDATE sessions SET claude_session_id = %s, model = coalesce(%s, model) WHERE id = %s",
             (claude_session_id, model, self._require_session()),
+        )
+
+    async def note_setting_change(
+        self, setting: str, old: dict[str, Any], new: dict[str, Any], actor: str
+    ) -> None:
+        """Write an audit entry for a changed session setting (see `SessionStore`).
+
+        Args:
+            setting: Which setting changed, e.g. "auto_escalate".
+            old: Its value before the change.
+            new: Its value after the change.
+            actor: Who asked for it.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        await self._db.execute(
+            "SELECT calu_session_setting_change(%s::uuid, %s, %s::jsonb, %s::jsonb, %s)",
+            (self._require_session(), setting, json.dumps(old), json.dumps(new), actor),
         )
 
     async def set_address(self, address: str) -> None:

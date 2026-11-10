@@ -386,6 +386,7 @@ async def session_page(request: Request, state: _State) -> Response:
             "forks": {point.turn: point for point in await herd.fork_points(state.db, session_id)},
             "by_turn": by_turn,
             "agents": await herd.agents(state.db, session_id),
+            "setting_changes": await herd.setting_changes(state.db, session_id),
             "checker_names": [row.name for row in await admin.checkers(state.db)],
             "escalations": await herd.escalations(state.db, session_id),
             "tokens": await herd.list_tokens(state.db, session_id),

@@ -178,3 +178,61 @@ async def test_the_session_role_checks_a_client_token_without_reading_any(db_url
             assert await cur.fetchone() == (expected,), token_value
     finally:
         await session.close()
+
+
+async def test_a_session_records_its_own_setting_changes_and_cannot_forge_others(
+    db_url: str,
+) -> None:
+    """The session writes audit entries only through the function, only for itself (D43)."""
+    conn = await connect(db_url)
+    try:
+        _, session_url = await setup(conn, db_url, "test:model")
+    finally:
+        await conn.close()
+    session = await connect(session_url)
+    owner = await connect(db_url)
+    try:
+        store = DatabaseSessionStore(Db(session))
+        session_id = await store.start(
+            SessionIdentity(hostname="h", os_user="u", directory="/p", pid=1)
+        )
+        await store.note_setting_change(
+            "auto_escalate",
+            {"commands": False, "edits": False, "subagents": False},
+            {"commands": False, "edits": True, "subagents": False},
+            "zed on the laptop",
+        )
+        # An operator reads it back with the session it belongs to.
+        changes = await herd.setting_changes(Db(owner), session_id)
+        assert len(changes) == 1
+        assert changes[0].actor == "zed on the laptop"
+        assert changes[0].setting == "auto_escalate"
+        assert changes[0].changed() == ["edits: False -> True"]
+
+        # A change of the project's configuration lands in the same table with no session, so
+        # the two kinds stay apart and `setting_changes` returns only the session's.
+        await owner.execute(
+            b"INSERT INTO config (scope, key, value) VALUES ('global', 'claude.model', '\"opus\"')"
+        )
+        cur = await owner.execute(
+            "SELECT count(*) FROM audit_log WHERE session_id IS NULL AND table_name = 'config'"
+        )
+        row = await cur.fetchone()
+        assert row is not None and row[0] == 1
+        assert await herd.setting_changes(Db(owner), session_id) == changes
+
+        # The role may not write the table itself, so it cannot forge an entry ...
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await session.execute(
+                b"INSERT INTO audit_log (table_name, action) VALUES ('config', 'INSERT')"
+            )
+        # ... and the function refuses a session that does not exist.
+        with pytest.raises(psycopg.errors.RaiseException):
+            await session.execute(
+                b"SELECT calu_session_setting_change("
+                b"'00000000-0000-0000-0000-000000000000'::uuid, 'auto_escalate',"
+                b" '{}'::jsonb, '{}'::jsonb, 'nobody')"
+            )
+    finally:
+        await session.close()
+        await owner.close()

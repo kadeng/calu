@@ -514,32 +514,62 @@ class Session:
             Log(level="info", message="the chat summary was changed; the checkers see the new one")
         )
 
-    async def set_auto_escalate(self, auto: AutoEscalate) -> None:
-        """Replace the auto-escalation categories and tell every attached client.
+    async def set_auto_escalate(self, auto: AutoEscalate, client: str = "unknown") -> None:
+        """Replace the auto-escalation categories, record who did it, tell every client.
 
         Takes effect from the next check on: a step already waiting for a decision keeps the
         escalation it has. The change lives in the running session only -- it is not written to
-        the project's settings -- so a restart goes back to what `calu config` holds.
+        the project's settings -- so a restart goes back to what `calu config` holds. Switching a
+        category off weakens the session, so the change goes into the audit log with the name of
+        the client that asked for it (PLAN.md D43); a change that changes nothing is not
+        recorded.
 
         Args:
             auto: The categories that must wait for a human whatever the checker decided.
+            client: Name of the client that asked, for the audit entry.
+
+        Raises:
+            psycopg.Error: If the audit entry cannot be written; the setting is then unchanged,
+                because a change nobody can see afterwards is worse than a refused request.
 
         Side effects:
-            Emits `auto_escalate.changed` (errors of the client sink are logged, not raised).
+            Writes an audit entry and emits `auto_escalate.changed` (errors of the client sink
+            are logged, not raised).
         """
+        before = self.config.auto_escalate
+        if before == auto:
+            return
+        await self.store.note_setting_change(
+            "auto_escalate", before.model_dump(), auto.model_dump(), client
+        )
         self.config.auto_escalate = auto
         await self._emit_safely(AutoEscalateChanged(settings=auto))
 
-    async def announce_auto_escalate(self) -> None:
-        """Emit `auto_escalate.changed` for the categories the session currently uses.
+    async def announce_auto_escalate(self, before: AutoEscalate) -> None:
+        """Record and announce auto-escalation categories that a settings reload changed.
 
-        `apply_settings` is synchronous and cannot emit, so the caller that reloaded the
-        settings calls this when the reload changed the categories.
+        `apply_settings` is synchronous and can neither write nor emit, so the caller that
+        reloaded the settings calls this afterwards with what the categories were before.
+
+        Args:
+            before: The categories the session used before the reload.
+
+        Raises:
+            psycopg.Error: If the audit entry cannot be written. Unlike `set_auto_escalate` the
+                setting is already in force, because the project's configuration is the source
+                of truth for a reload.
 
         Side effects:
-            Emits `auto_escalate.changed` (errors of the client sink are logged, not raised).
+            Writes an audit entry and emits `auto_escalate.changed` (errors of the client sink
+            are logged, not raised).
         """
-        await self._emit_safely(AutoEscalateChanged(settings=self.config.auto_escalate))
+        auto = self.config.auto_escalate
+        if before == auto:
+            return
+        await self.store.note_setting_change(
+            "auto_escalate", before.model_dump(), auto.model_dump(), "session: reloaded settings"
+        )
+        await self._emit_safely(AutoEscalateChanged(settings=auto))
 
     def apply_settings(self, settings: ProjectSettings) -> None:
         """Replace configuration, rules and checker instructions (after `config_changed`).
