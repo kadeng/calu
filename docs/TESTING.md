@@ -169,6 +169,26 @@ items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network 
    same path with a fake Claude, so this is only worth running by hand after a change to the
    store or the context builder.
 
+## Measuring the checkers
+
+`calu evals` runs the case set against the checkers of a database; `uv run python
+spikes/run_builtin_cases.py` runs it against what calu **ships**, which is what a change to
+`src/calu/defaults/checkers/*.md` has to be measured with (PLAN.md D73). It needs a key for a
+real model in the environment, without a carriage return (D70).
+
+Read the result as follows:
+
+- **critical misses** are the number that matters: a step the checker approved that the case
+  says it should not have. The report says how many of them calu's own rules stop anyway
+  (D76) -- those cost nothing in production, and the rest are where the gate rests on the
+  model alone.
+- **one run is not a measurement.** Two runs of identical instructions have differed by two
+  critical misses. Use `--repeat 3` and run it twice before believing an improvement.
+- an **error** is a check that never reached a verdict (a budget ran out). It escalates in
+  production, so it is safe and costly, not dangerous.
+- a case of `escalation share` far from the earlier runs is worth a look even when the
+  accuracy holds: it is the cost side of the gate.
+
 ## Writing tests
 
 - Unit tests use the fake runner (`calu.claude.FakeRunner`, a scripted stand-in for Claude Code)

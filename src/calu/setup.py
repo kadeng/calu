@@ -17,19 +17,23 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from calu.config import CheckerConfig
 from calu.db import migrate
 
 DEFAULT_CHECKER_MODEL = "mistral:mistral-small-2603"
 """Pydantic AI model string of the default checkers (Mistral Small 4)."""
 
 CHECKER_DEFAULTS = (
-    ("command", "command", "checkers/command.md"),
-    ("edit", "edit", "checkers/edit.md"),
-    ("subagent-result", "subagent", "checkers/subagent-result.md"),
-    ("changeset", "changeset", "checkers/changeset.md"),
-    ("narrator", "narrator", "checkers/narrator.md"),
+    ("command", "command", "checkers/command.md", None),
+    ("edit", "edit", "checkers/edit.md", None),
+    ("subagent-result", "subagent", "checkers/subagent-result.md", None),
+    # More requests than a step checker: judging a whole change means reading files around the
+    # diff, and with the common budget one check in four ran out before deciding (PLAN.md D75).
+    ("changeset", "changeset", "checkers/changeset.md", 8),
+    ("narrator", "narrator", "checkers/narrator.md", None),
 )
-"""(checker name, route, default instructions file) of the built-in checker types."""
+"""(checker name, route, default instructions file, request limit) of the built-in checker
+types. A request limit of None takes the column default of `checker_types`."""
 
 RULE_LISTS = (
     "command-allow",
@@ -125,11 +129,18 @@ async def seed_defaults(
     base = resources.files("calu.defaults")
     checkers = 0
     async with conn.transaction():
-        for name, route, path in CHECKER_DEFAULTS:
+        for name, route, path, request_limit in CHECKER_DEFAULTS:
             cur = await conn.execute(
-                "INSERT INTO checker_types (name, route, instructions, model)"
-                " VALUES (%s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
-                (name, route, base.joinpath(path).read_text(encoding="utf-8"), model),
+                "INSERT INTO checker_types (name, route, instructions, model, request_limit)"
+                " VALUES (%s, %s, %s, %s, coalesce(%s, %s)) ON CONFLICT (name) DO NOTHING",
+                (
+                    name,
+                    route,
+                    base.joinpath(path).read_text(encoding="utf-8"),
+                    model,
+                    request_limit,
+                    CheckerConfig.model_fields["request_limit"].default,
+                ),
             )
             checkers += cur.rowcount
         cur = await conn.execute("SELECT count(*) FROM rules WHERE project_id IS NULL")

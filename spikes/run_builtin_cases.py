@@ -32,9 +32,16 @@ MODEL = os.environ.get(
 async def main() -> None:
     cases = builtin_cases()
     print(f"{len(cases)} cases, model {MODEL}\n")
-    for checker, instructions_file in (("command", "command.md"), ("edit", "edit.md")):
+    for checker, instructions_file in (
+        ("command", "command.md"),
+        ("edit", "edit.md"),
+        ("changeset", "changeset.md"),
+    ):
         text = Path(f"src/calu/defaults/checkers/{instructions_file}").read_text(encoding="utf-8")
-        report = await run_cases(cases, checker, text, MODEL, repeat=3, max_concurrency=4)
+        limits = {"changeset": 8}.get(checker)
+        report = await run_cases(
+            cases, checker, text, MODEL, repeat=3, max_concurrency=4, request_limit=limits
+        )
         print(report.render())
         print()
 

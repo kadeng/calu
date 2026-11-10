@@ -437,8 +437,11 @@ class Config(ConfigModel):
     """The checker that reviews a file edit before it is written."""
     subagent_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     """The checker that reviews what a subagent hands back."""
-    changeset_checker: CheckerConfig = Field(default_factory=CheckerConfig)
-    """The checker that reviews a whole change before a commit (PLAN.md D26)."""
+    changeset_checker: CheckerConfig = Field(default_factory=lambda: CheckerConfig(request_limit=8))
+    """The checker that reviews a whole change before a commit (PLAN.md D26). It gets more
+    requests than a step checker, because judging a whole change means reading some of the
+    files around the diff: with five, measured, one check in four ran out before deciding
+    (D75)."""
     check_subagent_results: bool = True
     """Review the final result of every subagent with the subagent checker."""
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)

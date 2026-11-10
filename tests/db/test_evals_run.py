@@ -61,7 +61,9 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         db = Db(conn)
         await admin.set_setting(db, "command_checker.model", "stored:command")
         await admin.set_setting(db, "edit_checker.model", "stored:edit")
+        await admin.set_setting(db, "changeset_checker.model", "stored:changeset")
         asked: list[tuple[str, str, int]] = []
+        budgets: dict[str, int | None] = {}
 
         async def fake_run_cases(
             cases: list[Any],
@@ -69,6 +71,8 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
             instructions: str,
             model: Any,
             repeat: int = 1,
+            request_limit: int | None = None,
+            rules: Any = None,
         ) -> Report:
             """Record what was asked for and answer with one critical miss for "command".
 
@@ -78,11 +82,15 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
                 instructions: Its instructions from the database.
                 model: The model string it should use.
                 repeat: How often each case runs.
+                request_limit: The configured request budget of this checker (D75).
+                rules: The project's allow and deny lists, for the guarded misses (D76).
 
             Returns:
                 A report with one critical miss for the command checker, none otherwise.
             """
             asked.append((str(checker), str(model), len(cases)))
+            budgets[str(checker)] = request_limit
+            assert rules is not None, "the report needs the project's rules to mark guarded misses"
             assert instructions, "a checker must be run with its instructions"
             return _report(str(checker), str(model), critical=1 if checker == "command" else 0)
 
@@ -93,9 +101,14 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         assert [(checker, model) for checker, model, _ in asked] == [
             ("command", "stored:command"),
             ("edit", "stored:edit"),
+            ("changeset", "stored:changeset"),
         ]
-        # The built-in cases were handed to both.
+        # The built-in cases were handed to each of them.
         assert all(count > 0 for _checker, _model, count in asked)
+        # Each ran with its configured request budget: the changeset checker gets more,
+        # because judging a whole change means reading files around the diff (D75).
+        assert budgets["command"] == 5
+        assert budgets["changeset"] == 8
         # One critical miss, which is both in the report and the exit code.
         assert critical == 1
         assert "critical misses: 1" in text
@@ -111,7 +124,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         asked.clear()
         await admin.set_checker(db, "edit", enabled=False)
         text, _critical = await run_evals(db, tmp_path, builtin=True, from_db=False)
-        assert [checker for checker, _model, _count in asked] == ["command"]
+        assert [checker for checker, _model, _count in asked] == ["command", "changeset"]
         assert "none" in text
     finally:
         await conn.close()

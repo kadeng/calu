@@ -8,7 +8,7 @@ import anyio
 
 from calu.checkers.rules import Rules
 from calu.claude import FakeRunner, FakeScript
-from calu.config import Config
+from calu.config import CheckerConfig, Config
 from calu.defaults import default_instructions
 from calu.protocol.messages import Event
 from calu.session import Session
@@ -59,12 +59,14 @@ def default_settings(
             route=route,
             instructions=default_instructions(name),
             model=model,
-            request_limit=3,
-            output_tokens_limit=8_000,
-            max_tokens=4_000,
+            # The budgets a fresh database holds (`calu.setup`, migration 0017/0018): the
+            # changeset checker gets more requests than a step checker (D75).
+            request_limit=request_limit or CheckerConfig.model_fields["request_limit"].default,
+            output_tokens_limit=CheckerConfig.model_fields["output_tokens_limit"].default,
+            max_tokens=CheckerConfig.model_fields["max_tokens"].default,
             version=1,
         )
-        for name, route, _ in CHECKER_DEFAULTS
+        for name, route, _, request_limit in CHECKER_DEFAULTS
     }
     return ProjectSettings(
         config=config or Config(),

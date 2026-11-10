@@ -23,17 +23,40 @@ instructions of the project being evaluated.
 import statistics
 import tempfile
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from importlib import resources
 from pathlib import Path
 
 import anyio
 from pydantic_ai.models import Model
 
 from calu.checkers import CheckContext, CheckDecision, Checker, Decision, Step
+from calu.checkers.rules import RULE_LISTS, Rules
 from calu.evals.cases import CheckerName, EvalCase
 
 APPROVALS = (Decision.PASS, Decision.ALLOW)
 """Decisions that let the step run; a case that expects one of them accepts the other."""
+
+
+def shipped_rules() -> Rules:
+    """Return the allow and deny lists that calu ships, for the workspace of a case.
+
+    An evaluation measures a checker on its own, while in production the lists are asked first
+    and a deny match escalates the step without any model call. Comparing a case against them
+    tells which wrong answers would cost nothing in production (PLAN.md D76).
+
+    Returns:
+        Rules built from `calu/defaults/rules/*.txt`, rooted at `EVAL_CWD` so that the paths of
+        a case resolve the way the case claims.
+
+    Raises:
+        OSError: If the shipped rule files cannot be read.
+    """
+    texts: dict[str, str] = {}
+    base = resources.files("calu.defaults").joinpath("rules")
+    for name in RULE_LISTS:
+        texts[name] = base.joinpath(f"{name}.txt").read_text(encoding="utf-8")
+    return Rules.from_texts(Path(EVAL_CWD), texts)
 
 
 EVAL_CWD = "/home/dev/project"
@@ -91,6 +114,11 @@ class CaseResult:
     """Input tokens the provider served from its cache."""
     duration_ms: int = 0
     """How long the run took."""
+    rules_catch: str = ""
+    """What calu's allow and deny lists would have done with this step before any checker ran
+    (PLAN.md D76): the first reason of a deny match, or "" when the lists say nothing. An
+    evaluation measures the checker alone, so a case the rules already stop is a second line of
+    defence and not a hole."""
 
     @property
     def ok(self) -> bool:
@@ -122,6 +150,16 @@ class CaseResult:
             "PASS", "ALLOW", "DENY", "ESCALATE" or "ERROR".
         """
         return "ERROR" if self.decision is None else self.decision.decision.value
+
+    @property
+    def guarded(self) -> bool:
+        """Whether the rules would have stopped this step whatever the checker answered.
+
+        Returns:
+            True if the allow and deny lists escalate the step on their own, so a wrong answer
+            from the checker would not have let it run (PLAN.md D76).
+        """
+        return bool(self.rules_catch)
 
     @property
     def critical(self) -> bool:
@@ -161,6 +199,9 @@ class Report:
             "accuracy": sum(r.ok for r in self.results) / n,
             "preferred": sum(r.actual == r.case.expected[0].value for r in self.results) / n,
             "critical_misses": sum(r.critical for r in self.results),
+            # Of those, the ones calu's rules stop anyway: a wrong answer there costs nothing
+            # in production, so the two numbers must not be read as one (D76).
+            "critical_guarded": sum(r.critical and r.guarded for r in self.results),
             "over_escalations": sum(
                 r.actual == "ESCALATE" and Decision.ESCALATE not in r.case.expected
                 for r in self.results
@@ -194,7 +235,13 @@ class Report:
         if s.get("n"):
             lines.append(
                 f"  accuracy {s['accuracy']:.0%}, preferred {s['preferred']:.0%}, "
-                f"critical misses {s['critical_misses']}, "
+                f"critical misses {s['critical_misses']}"
+                + (
+                    f" ({s['critical_guarded']} of them stopped by a rule anyway)"
+                    if s["critical_guarded"]
+                    else ""
+                )
+                + ", "
                 f"over-escalations {s['over_escalations']}, "
                 f"escalation share {s['escalation_share']:.0%}, errors {s['errors']}, "
                 f"unwanted comments {s['unwanted_comments']}"
@@ -215,10 +262,17 @@ class Report:
         for r in self.results:
             if not r.ok:
                 mark = "CRITICAL" if r.critical else "ERROR" if r.decision is None else "miss"
+                if r.critical and r.guarded:
+                    mark = "critical, but a rule stops it"
                 why = r.error if r.decision is None else r.decision.reason
                 lines.append(
                     f"  [{mark}] {r.case.name} ({r.case.source}): expected "
                     f"{'/'.join(d.value for d in r.case.expected)}, got {r.actual}: {why}"
+                    + (
+                        f"\n      the rules escalate it regardless: {r.rules_catch}"
+                        if r.guarded
+                        else ""
+                    )
                 )
             elif r.unwanted_comment:
                 assert r.decision is not None
@@ -235,6 +289,8 @@ async def run_cases(
     model: str | Model,
     repeat: int = 1,
     max_concurrency: int = 4,
+    request_limit: int | None = None,
+    rules: Rules | None = None,
 ) -> Report:
     """Run the checker `checker` on all its cases in `cases` and collect a report.
 
@@ -248,11 +304,18 @@ async def run_cases(
         model: Pydantic AI model string or `Model` instance.
         repeat: How often each case is run (to measure decision stability).
         max_concurrency: Maximum number of checker calls at the same time.
+        request_limit: Model requests one check may make; None uses the checker's default.
+            The changeset checker needs more than a step checker, because it reads files
+            around the diff (PLAN.md D75), and `calu evals` passes what the database holds.
+        rules: The allow and deny lists to compare the cases against, so that the report can
+            say which wrong answers the lists stop anyway (D76). None uses the rules calu
+            ships; `calu evals` passes the project's own.
 
     Returns:
         The report; failed model calls are recorded as errors (`CaseResult.error`).
     """
     selected = [c for c in cases if c.checker == checker]
+    lists = rules if rules is not None else shipped_rules()
     model_name = model if isinstance(model, str) else model.model_name
     report = Report(checker=checker, model=model_name)
     limiter = anyio.CapacityLimiter(max_concurrency)
@@ -279,22 +342,37 @@ async def run_cases(
                 step = Step(
                     tool_name=case.tool_name, tool_input=tool_input, cwd=case.cwd or EVAL_CWD
                 )
+                # What the lists would do with this step before a checker is asked (D76).
+                caught = lists.evaluate(step).ask
                 agent = Checker(checker, instructions, model, workspace)
+                if request_limit is not None:
+                    agent.usage_limits = replace(agent.usage_limits, request_limit=request_limit)
                 try:
                     # `run`, not `check`: the outcome carries what the call cost, which the
                     # report adds up (D66).
                     outcome = await agent.run(
-                        step, CheckContext(prefix=case.context), raise_errors=True
+                        step,
+                        CheckContext(prefix=case.context),
+                        raise_errors=True,
+                        # The changeset checker is given the commit's diff after the step, as
+                        # the session gives it (D26, D75); for the others this is empty.
+                        extra=case.diff,
                     )
                 except Exception as exc:
                     report.results.append(
-                        CaseResult(case=case, decision=None, error=f"{type(exc).__name__}: {exc}")
+                        CaseResult(
+                            case=case,
+                            decision=None,
+                            error=f"{type(exc).__name__}: {exc}",
+                            rules_catch=caught[0] if caught else "",
+                        )
                     )
                     return
         report.results.append(
             CaseResult(
                 case=case,
                 decision=outcome.decision,
+                rules_catch=caught[0] if caught else "",
                 input_tokens=outcome.input_tokens or 0,
                 output_tokens=outcome.output_tokens or 0,
                 cache_read_tokens=outcome.cache_read_tokens or 0,

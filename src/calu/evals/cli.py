@@ -3,7 +3,7 @@
     calu evals                        the built-in cases, with the checkers of the database
     calu evals --from-db              also the resolved escalations as cases
     calu evals cases/*.yaml           further case files
-    calu evals --model mistral:...    one model for both checkers, instead of the configured
+    calu evals --model mistral:...    one model for every checker, instead of the configured
     calu evals --repeat 3             run every case three times (decision stability)
 
 The checker instructions and models come from the database, so the command measures the
@@ -27,7 +27,7 @@ from calu.evals.cases import load_cases as load_case_file
 from calu.evals.runner import Report, run_cases
 from calu.store import ConfigStore
 
-CHECKERS: tuple[CheckerName, ...] = ("command", "edit")
+CHECKERS: tuple[CheckerName, ...] = ("command", "edit", "changeset")
 """The checkers an evaluation run measures."""
 
 
@@ -98,13 +98,25 @@ async def run_evals(
         if not instructions:
             reports.append(Report(checker=checker, model="none"))
             continue
-        configured = (
-            settings.config.command_checker
-            if checker == "command"
-            else settings.config.edit_checker
-        )
+        configured = {
+            "command": settings.config.command_checker,
+            "edit": settings.config.edit_checker,
+            "changeset": settings.config.changeset_checker,
+        }[checker]
         reports.append(
-            await run_cases(cases, checker, instructions, model or configured.model, repeat=repeat)
+            await run_cases(
+                cases,
+                checker,
+                instructions,
+                model or configured.model,
+                repeat=repeat,
+                # As configured: the changeset checker is given more requests than a step
+                # checker, because it reads files around the diff (D75).
+                request_limit=configured.request_limit,
+                # The project's own lists, so that the report says which wrong answers this
+                # project's rules stop before a checker is asked (D76).
+                rules=settings.rules,
+            )
         )
     text = "\n\n".join(report.render() for report in reports)
     critical = sum(int(report.summary().get("critical_misses", 0)) for report in reports)
