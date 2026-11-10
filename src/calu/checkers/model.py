@@ -94,3 +94,12 @@ class Step(BaseModel):
     """Hints from the user's rules for the checker, e.g. paths outside the allowlists."""
     narration: str = ""
     """Claude's thinking and text before this call, narrated in indirect speech (may be "")."""
+    asked_about: str = ""
+    """What Claude Code says it is asking permission for, when **it** raised the question
+    (PLAN.md D60).
+
+    Its own prompt sentence and subtitle, e.g. "Claude wants to fetch https://example.net/" --
+    the SDK says to show this rather than rebuilding a sentence from the tool name and the
+    input, and for a capability request like `SandboxNetworkAccess` the name and the input say
+    nothing a human can act on. Empty for the ordinary case, where a checker or a rule raised
+    the escalation and the step speaks for itself."""

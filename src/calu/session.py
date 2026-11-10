@@ -207,6 +207,9 @@ Claude Code's auto mode does not only allow and deny: it can also ask. A PASS le
 decision to it (D21), and when it decides to ask, the SDK calls `can_use_tool`, which is calu's
 wait for a human — so the step escalates even though no checker objected. Saying that plainly
 matters, because the human would otherwise look for a checker's reason that does not exist.
+
+What Claude Code itself says it is asking about goes **before** this (`Step.asked_about`,
+D60), because that is the part a human acts on; this explains how the question got to them.
 """
 
 FORK_REJECTED = "Resume rejected by --resume-drops-turn:"
@@ -1653,6 +1656,10 @@ class Session:
         reason, source = self._pending_reasons.pop(
             step.tool_use_id or "", (HARNESS_ASKED, "harness")
         )
+        if source == "harness" and step.asked_about:
+            # Claude Code's own prompt sentence first, then why it reached a human: for a
+            # capability request the tool name and the input say nothing actionable (D60).
+            reason = f"{step.asked_about}\n\n{reason}"
         rendered = _render_safely(step, self.workspace)
         db_id = await self._open_escalation(step, reason, rendered)
         if db_id is None:

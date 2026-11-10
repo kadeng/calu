@@ -49,6 +49,9 @@ REPORT = (
     "SELECT checker_name, checker_version, decision, duration_ms IS NOT NULL FROM checker_runs"
     " ORDER BY id",
     "SELECT state, resolved_by, note FROM escalations ORDER BY id",
+    # What a human sees for an escalation: the tool, its input and the reason (PLAN.md D30).
+    "SELECT reason, context->>'tool_name', context->'tool_input', left(coalesce("
+    "context->>'rendered', ''), 200) FROM escalations ORDER BY id",
     "SELECT seq, tool_name, snapshot_before IS NOT NULL AS snapshotted, wrote FROM steps"
     " WHERE wrote IS NOT NULL ORDER BY seq",
     "SELECT number, user_inputs, left(answer, 60) FROM turns ORDER BY number",

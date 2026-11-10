@@ -1021,3 +1021,52 @@ async def test_a_single_failure_does_not_end_an_overnight_run(tmp_path: Path) ->
     assert session._store_failures == 0
     # Each failure was still reported, because a silent failure is worse than a noisy one.
     assert len([m for m in (e.message for e in rec.of(Log)) if "a hiccup" in m]) == 4
+
+
+async def test_a_harness_question_leads_with_what_claude_code_asked(tmp_path: Path) -> None:
+    """A capability request has no useful tool name or input, so its sentence comes first (D60).
+
+    Without this the human reads "SandboxNetworkAccess" and a paragraph about checkers having
+    no objection, and has to guess which domain or path is meant.
+    """
+    session, rec, store = make_session(tmp_path, [])
+    step = Step(
+        tool_name="SandboxNetworkAccess",
+        tool_input={},
+        tool_use_id="call-1",
+        cwd=str(tmp_path),
+        asked_about="Allow network connection to example.net?",
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        answers: list[object] = []
+
+        async def ask() -> None:
+            """Wait for the human, as the permission callback does."""
+            answers.append(await session.ask(step))
+
+        tg.start_soon(ask)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        # The harness's own sentence first, then how the question reached a human.
+        assert request.reason.startswith("Allow network connection to example.net?")
+        assert "no objection to this step" in request.reason
+        stored = store.reasons[int(request.escalation_id)]
+        assert "example.net" in stored, "the database must carry it too (D30)"
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        with anyio.fail_after(10):
+            while not answers:
+                await anyio.sleep(0.01)
+        await session.stop()
+
+    # An ordinary escalation is unchanged: nothing is prefixed when calu raised it.
+    session2, rec2, _ = make_session(
+        tmp_path, [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}}]]
+    )
+    async with anyio.create_task_group() as tg:
+        await session2.start(tg)
+        await session2.send_chat(ChatSendParams(text="ship"))
+        request = (await rec2.wait_for(EscalationRequest))[0]
+        assert not request.reason.startswith("Allow network")
+        assert "no objection to this step" not in request.reason
+        await session2.decide_escalation(request.escalation_id, "deny", None)
+        await session2.stop()

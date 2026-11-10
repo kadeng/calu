@@ -63,6 +63,9 @@ class MemorySessionStore:
     escalations: dict[int, Escalation] = field(default_factory=dict)
     contexts: dict[int, dict[str, Any]] = field(default_factory=dict)
     """The context each escalation was opened with, by id."""
+    reasons: dict[int, str] = field(default_factory=dict)
+    """The reason each escalation was opened with, by id. The database keeps it (it is what a
+    human reads when they decide, PLAN.md D30), so the stand-in keeps it too."""
     previous: dict[str, tuple[list[TurnRecord], str]] = field(default_factory=dict)
     stored_sessions: list[SessionSummary] = field(default_factory=list)
     """What `recent_sessions` returns (a test sets it)."""
@@ -369,6 +372,7 @@ class MemorySessionStore:
         escalation_id = next(self._ids)
         self.escalations[escalation_id] = Escalation(id=escalation_id, state="open")
         self.contexts[escalation_id] = context
+        self.reasons[escalation_id] = reason
         return escalation_id
 
     async def escalation(self, escalation_id: int) -> Escalation:

@@ -115,6 +115,42 @@ def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "\n[... truncated]"
 
 
+def permission_prompt(ctx: Any) -> str:
+    """Return what Claude Code says it is asking permission for (PLAN.md D60).
+
+    `ToolPermissionContext` carries its own prompt sentence (`title`), a subtitle
+    (`description`), why the request was raised (`decision_reason`) and the path that triggered
+    it (`blocked_path`). The SDK's own documentation says to show the title rather than
+    rebuilding a sentence from the tool name and the input, which is doubly true for a
+    capability request, where the "tool" is something like `SandboxNetworkAccess` and the input
+    is empty.
+
+    Args:
+        ctx: The SDK's permission context (any object; missing fields are ignored).
+
+    Returns:
+        The parts that are present, joined with " — "; "" when the context says nothing, which
+        is the case for an older CLI.
+
+    Example:
+        A command that wants an unlisted domain gives something like
+        "Claude wants to fetch https://example.net/ — the sandbox allows only the configured
+        domains".
+    """
+    parts = [
+        str(getattr(ctx, name, "") or "").strip()
+        for name in ("title", "description", "decision_reason")
+    ]
+    blocked = str(getattr(ctx, "blocked_path", "") or "").strip()
+    if blocked:
+        parts.append(f"the path it asked for: {blocked}")
+    seen: list[str] = []
+    for part in parts:
+        if part and part not in seen:
+            seen.append(part)
+    return " — ".join(seen)
+
+
 class SdkRunner:
     """Runs one Claude Code session through `ClaudeSDKClient`. See the module docstring.
 
@@ -411,6 +447,11 @@ class SdkRunner:
                 agent_id=self._agent_id(getattr(ctx, "agent_id", None)),
                 cwd=str(self.workspace),
             )
+            # What Claude Code says it is asking about. Without this a capability request --
+            # `SandboxNetworkAccess` for a command that wants an unlisted domain -- reaches the
+            # human as a tool name and an empty input, and says neither the domain nor the
+            # command (D60).
+            step = step.model_copy(update={"asked_about": permission_prompt(ctx)})
             answer = await gate.ask(step)
             if answer.allow:
                 if answer.note:

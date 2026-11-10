@@ -689,6 +689,13 @@ wall. A session that needs a domain nobody listed stops and says which domain it
 person allows it in one command, and the task goes on -- no configuration change, no restart.
 The allow list still matters, because without it every package install would wait for a human.
 
+**Follow-up (same day, D60).** The escalation this produces said only
+`*** escalation 1: SandboxNetworkAccess` and the generic sentence about no checker objecting --
+not which domain, not which command. The SDK's permission context carries Claude Code's own
+prompt sentence and calu was throwing it away; with that wired through, the same spike now
+shows "Allow network connection to example.net?", which is what a person needs in order to
+decide.
+
 **Not measured**: whether an allowed confirmation is remembered for later requests to the same
 domain within a session, and what the sandbox does when `allowed_domains` is empty and a
 command tries the network (the empty case is "nothing reachable" by configuration, which

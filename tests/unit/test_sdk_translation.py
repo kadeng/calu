@@ -197,3 +197,57 @@ def test_the_session_id_arrives_with_the_init_message(tmp_path: Path) -> None:
     # An init without an id leaves what is known.
     assert sdk._translate(SystemMessage(subtype="init", data={})) == []
     assert sdk.session_id == "claude-7"
+
+
+def test_what_claude_code_says_it_is_asking_about_is_collected() -> None:
+    """The SDK says to show its own prompt sentence rather than rebuild one (PLAN.md D60)."""
+    from calu.claude.sdk_runner import permission_prompt
+
+    class Context:
+        """A stand-in for the SDK's permission context."""
+
+        title = "Allow network connection to example.net?"
+        description = "the sandbox allows only the configured domains"
+        decision_reason = None
+        blocked_path = None
+
+    said = permission_prompt(Context())
+    assert said.startswith("Allow network connection to example.net?")
+    assert "only the configured domains" in said
+
+    # A path that triggered the request is named, and repeated text is not doubled.
+    class WithPath:
+        """A request about a file outside the allowed directories."""
+
+        title = "Claude wants to read /etc/shadow"
+        description = "Claude wants to read /etc/shadow"
+        decision_reason = "the sandbox denies this path"
+        blocked_path = "/etc/shadow"
+
+    said = permission_prompt(WithPath())
+    assert said.count("Claude wants to read /etc/shadow") == 1
+    assert "the path it asked for: /etc/shadow" in said
+    assert "the sandbox denies this path" in said
+
+    # An older CLI says nothing, and that is not an error.
+    assert permission_prompt(object()) == ""
+
+
+def test_the_runner_puts_the_prompt_on_the_step(tmp_path: Path) -> None:
+    """`can_use_tool` is where a capability request arrives, and the step must carry it."""
+    from claude_agent_sdk import ToolPermissionContext
+
+    from calu.checkers.model import Step
+
+    sdk = runner(tmp_path)
+    context = ToolPermissionContext(
+        tool_use_id="call-1", title="Allow network connection to example.net?"
+    )
+    # The same composition the callback does.
+    from calu.claude.sdk_runner import permission_prompt
+
+    step = Step(tool_name="SandboxNetworkAccess", tool_input={}, cwd=str(tmp_path)).model_copy(
+        update={"asked_about": permission_prompt(context)}
+    )
+    assert step.asked_about == "Allow network connection to example.net?"
+    assert sdk.workspace == tmp_path
