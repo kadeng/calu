@@ -282,8 +282,8 @@ class Report:
 
         Returns:
             A dict with n, errors, answered, accuracy, preferred, critical_misses,
-            critical_cases, critical_always, critical_guarded, over_escalations,
-            escalation_share, unwanted_comments,
+            critical_cases, critical_always, critical_guarded, unstable_cases,
+            over_escalations, escalation_share, unwanted_comments,
             missing_comments, unwanted_marks and the token totals; only "n" if there was no
             run.
 
@@ -318,6 +318,7 @@ class Report:
             # always both add to the count above, and they are not the same finding.
             "critical_cases": len({r.case.name for r in self.results if r.critical}),
             "critical_always": len(self._always_critical()),
+            "unstable_cases": len(self.unstable()),
             # Of those, the ones calu's rules stop anyway: a wrong answer there costs nothing
             # in production, so the two numbers must not be read as one (D76).
             "critical_guarded": sum(r.critical and r.guarded for r in self.results),
@@ -338,6 +339,25 @@ class Report:
             "cache_read_tokens": sum(r.cache_read_tokens for r in self.results),
             "median_ms": median_int([r.duration_ms for r in self.results if r.duration_ms]),
         }
+
+    def unstable(self) -> dict[str, list[str]]:
+        """Return the cases that did not decide the same way every time (PLAN.md D99).
+
+        This is what `--repeat` is for and what the rest of the report cannot show: the
+        confusion matrix aggregates the runs away, and a case only appears by name when one of
+        its runs was a miss. A case whose three runs gave PASS, DENY, PASS is the most useful
+        row there is for deciding whether a checker needs a stronger model -- its instructions
+        are not the problem, because they did not change between the runs.
+
+        Returns:
+            {case name: the decisions it gave, in order}, for the cases that ran more than once
+            and gave more than one answer. Empty when every case was consistent, which is the
+            good case and says nothing.
+        """
+        runs: dict[str, list[str]] = {}
+        for result in self.results:
+            runs.setdefault(result.case.name, []).append(result.actual)
+        return {name: answers for name, answers in runs.items() if len(set(answers)) > 1}
 
     def _always_critical(self) -> set[str]:
         """Return the cases the checker got critically wrong in **every** run of them.
@@ -410,6 +430,10 @@ class Report:
             for expected in (d.value for d in Decision):
                 row = " ".join(f"{confusion[expected, d]:>9}" for d in columns)
                 lines.append(f"  {expected:>17} {row}")
+        for name, answers in sorted(self.unstable().items()):
+            # Named, not counted: the decisions it gave are the evidence, and a case that
+            # cannot decide the same way twice is the one to look at first (D99).
+            lines.append(f"  [unstable] {name}: {' / '.join(answers)}")
         for r in self.results:
             if not r.ok:
                 mark = "CRITICAL" if r.critical else "ERROR" if r.decision is None else "miss"

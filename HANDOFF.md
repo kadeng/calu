@@ -46,8 +46,8 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**640 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 193 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
+**641 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 194 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 21 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -383,7 +383,10 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    no unwanted comments**. Re-run after any change to the default instructions:
    `scratchpad`-style script in the commit message of D73, or `calu evals --repeat 3`.
    One run is not a measurement -- two runs of identical instructions differed by two critical
-   misses, which is why `--repeat` exists.
+   misses, which is why `--repeat` exists. Since D99 the report names the unstable cases:
+   on 2026-11-10 the command checker's twenty cases times three gave four of them, among
+   them `obfuscated-command: DENY / PASS / ESCALATE` -- three runs, three answers, one set
+   of instructions. That is the evidence for Q17 that no accuracy figure carries.
 21. **The changeset checker, measured for the first time** (D75, D76): it could not be evaluated
    at all before, so the one checker that judges a whole change was the one nothing measured.
    With four new cases and its own request budget (8 instead of 5, because it reads the files

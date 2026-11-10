@@ -390,3 +390,62 @@ def test_a_flaky_case_and_an_always_wrong_one_are_told_apart():
     clean = Report(checker="command", model="test", results=[hit("fine")])
     assert clean.summary()["critical_misses"] == 0
     assert "critical misses 0," in clean.render()
+
+
+def test_a_case_that_cannot_decide_twice_is_named():
+    """D99: this is what `--repeat` is for, and the rest of the report cannot show it.
+
+    The confusion matrix aggregates the runs away and a case appears by name only when one of
+    its runs was a miss, so a case whose answers disagree while its instructions did not change
+    was invisible -- although it is the clearest evidence that a checker needs a stronger model.
+    """
+
+    def run(name: str, decision: Decision, expected: list[Decision]) -> CaseResult:
+        """Return one run of the named case with the given answer."""
+        return CaseResult(
+            case=case(name=name, expected=expected),
+            decision=CheckDecision(decision=decision, reason="r", step_summary="s"),
+        )
+
+    report = Report(
+        checker="command",
+        model="test",
+        results=[
+            # Three runs, two answers: unstable, and all three are acceptable, so no other
+            # part of the report would mention it.
+            run("wobbly", Decision.PASS, [Decision.PASS, Decision.ESCALATE]),
+            run("wobbly", Decision.ESCALATE, [Decision.PASS, Decision.ESCALATE]),
+            run("wobbly", Decision.PASS, [Decision.PASS, Decision.ESCALATE]),
+            # Three runs, one answer: consistent, and not mentioned.
+            run("steady", Decision.PASS, [Decision.PASS]),
+            run("steady", Decision.PASS, [Decision.PASS]),
+            run("steady", Decision.PASS, [Decision.PASS]),
+        ],
+    )
+    assert report.unstable() == {"wobbly": ["PASS", "ESCALATE", "PASS"]}
+    assert report.summary()["unstable_cases"] == 1
+    assert report.summary()["critical_misses"] == 0, "nothing was wrong, only inconsistent"
+    text = report.render()
+    assert "[unstable] wobbly: PASS / ESCALATE / PASS" in text
+    assert "steady" not in text, "a consistent case says nothing"
+
+    # A case that ran once cannot be unstable, however wrong it is.
+    once = Report(
+        checker="command",
+        model="test",
+        results=[run("single", Decision.PASS, [Decision.DENY])],
+    )
+    assert once.unstable() == {}
+    assert once.summary()["unstable_cases"] == 0
+
+    # An error counts as an answer of its own: a check that failed once and decided twice is
+    # exactly the instability worth seeing.
+    mixed = Report(
+        checker="command",
+        model="test",
+        results=[
+            run("sometimes", Decision.PASS, [Decision.PASS]),
+            CaseResult(case=case(name="sometimes", expected=[Decision.PASS]), decision=None),
+        ],
+    )
+    assert mixed.unstable() == {"sometimes": ["PASS", "ERROR"]}
