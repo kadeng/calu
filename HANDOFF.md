@@ -45,7 +45,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**600 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**601 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 160 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 18 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -391,6 +391,12 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+22. **The subagent-result checker, measured for the first time** (D77, D78), which completes the
+   set -- all four checkers are now measurable. Its first result was the worst so far: 67% and
+   three critical misses in nine runs, all three the same case, a subagent demanding that a
+   script the user called throwaway be rewritten as a state machine. The rule for it existed;
+   what was missing was a procedure to run before answering ACCEPT. With that, two runs of
+   three: 100% and no critical misses, at the price of a higher escalation share (44-56%).
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,

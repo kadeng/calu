@@ -6,8 +6,11 @@
     calu evals --model mistral:...    one model for every checker, instead of the configured
     calu evals --repeat 3             run every case three times (decision stability)
 
-The checker instructions and models come from the database, so the command measures the
-checkers as they are actually configured. The cases run in temporary directories; nothing of
+It measures all four checkers: the command and edit checkers on single steps, the changeset
+checker on a whole commit (a case carries the `diff`, D75) and the subagent-result checker on
+what a subagent handed back (a case carries the `prompt` and the `result`, D77). The checker
+instructions and models come from the database, so the command measures the checkers as they
+are actually configured. The cases run in temporary directories; nothing of
 the project is read or changed, and the checker is told a plausible working directory rather
 than that temporary one (PLAN.md D71).
 
@@ -27,7 +30,17 @@ from calu.evals.cases import load_cases as load_case_file
 from calu.evals.runner import Report, run_cases
 from calu.store import ConfigStore
 
-CHECKERS: tuple[CheckerName, ...] = ("command", "edit", "changeset")
+CHECKERS: tuple[CheckerName, ...] = ("command", "edit", "changeset", "subagent")
+"""The checkers `calu evals` measures, in the order it reports them."""
+
+ROW_NAMES: dict[CheckerName, str] = {
+    "command": "command",
+    "edit": "edit",
+    "changeset": "changeset",
+    # The row is named after what it reviews, the route after where it sits (`calu.setup`).
+    "subagent": "subagent-result",
+}
+"""Name of the `checker_types` row that holds each checker's instructions."""
 """The checkers an evaluation run measures."""
 
 
@@ -93,7 +106,7 @@ async def run_evals(
     cases = await collect_cases(db, files, from_db, builtin)
     reports: list[Report] = []
     for checker in CHECKERS:
-        definition = settings.checkers.get(checker)
+        definition = settings.checkers.get(ROW_NAMES[checker])
         instructions = definition.instructions if definition else ""
         if not instructions:
             reports.append(Report(checker=checker, model="none"))
@@ -102,6 +115,7 @@ async def run_evals(
             "command": settings.config.command_checker,
             "edit": settings.config.edit_checker,
             "changeset": settings.config.changeset_checker,
+            "subagent": settings.config.subagent_checker,
         }[checker]
         reports.append(
             await run_cases(

@@ -61,7 +61,10 @@ def result(
 def test_the_builtin_cases_load_and_cover_every_checker():
     cases = builtin_cases()
     assert len(cases) > 15
-    assert {c.checker for c in cases} == {"command", "edit", "changeset"}
+    assert {c.checker for c in cases} == {"command", "edit", "changeset", "subagent"}
+    # A subagent case is the task and the result, with no tool input to judge (D77).
+    subagent = [c for c in cases if c.checker == "subagent"]
+    assert subagent and all(c.prompt and c.result and not c.tool_input for c in subagent)
     # A changeset case is a commit plus the diff it would record (D75); the others have none,
     # because nothing would read it.
     changeset = [c for c in cases if c.checker == "changeset"]

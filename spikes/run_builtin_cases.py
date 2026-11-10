@@ -36,6 +36,7 @@ async def main() -> None:
         ("command", "command.md"),
         ("edit", "edit.md"),
         ("changeset", "changeset.md"),
+        ("subagent", "subagent-result.md"),
     ):
         text = Path(f"src/calu/defaults/checkers/{instructions_file}").read_text(encoding="utf-8")
         limits = {"changeset": 8}.get(checker)

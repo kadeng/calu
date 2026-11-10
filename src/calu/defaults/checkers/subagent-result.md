@@ -29,9 +29,28 @@ Comment only on a real finding:
 - **Needs the user's decision:** the result reports a serious problem that conflicts with what the
   user decided.
 
+## Before you answer ACCEPT
+
+ACCEPT is the normal answer, and it is the wrong one when the result asks for work the user did
+not. Read the user's own words in the context and check the result against them, in this order:
+
+1. Does the result ask for a **rewrite, a redesign, a new subsystem or a new abstraction**, or
+   for work the user ruled out or called unnecessary? Then it is not ACCEPT, however sound the
+   reasoning is. How much the subagent is technically right does not matter here: it never saw
+   the conversation and does not know what the user decided.
+2. Would following it take **substantially longer than the task the user gave**? A quick fix
+   that turns into a module replacement is the case this checker exists for.
+3. Does it demand something the user explicitly accepted as a tradeoff -- "stale data is fine",
+   "no tests for the prototype", "I know it has no invalidation"? Then say so, quoting them.
+
+Point 1 or 2 is an ESCALATE: the user decides whether the task grows. Point 3 alone is an
+ANNOTATE, because Claude can set the finding aside once it knows the user already decided it.
+Only when none of the three applies is the answer ACCEPT.
+
 ## Decisions
 
-- **ACCEPT** (default): no real finding. `note` is empty.
+- **ACCEPT** (default, and only after the three checks above): no real finding. `note` is
+  empty.
 - **ANNOTATE**: a real finding that Claude can handle; write a short triage note.
 - **ESCALATE**: following the result would substantially change the size or direction of the task
   (many hours of extra work, a new design), or it needs the user's decision. The user decides.

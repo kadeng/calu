@@ -31,11 +31,72 @@ import anyio
 from pydantic_ai.models import Model
 
 from calu.checkers import CheckContext, CheckDecision, Checker, Decision, Step
+from calu.checkers.checker import CheckOutcome
+from calu.checkers.result_checker import (
+    ResultChecker,
+    ResultVerdict,
+    SubagentResult,
+)
 from calu.checkers.rules import RULE_LISTS, Rules
 from calu.evals.cases import CheckerName, EvalCase
 
 APPROVALS = (Decision.PASS, Decision.ALLOW)
 """Decisions that let the step run; a case that expects one of them accepts the other."""
+
+
+async def review_subagent_result(
+    case: EvalCase, instructions: str, model: str | Model, max_requests: int | None
+) -> CheckOutcome:
+    """Run a subagent-result case and return its outcome in the step checkers' vocabulary.
+
+    The result checker answers ACCEPT, ANNOTATE or ESCALATE (`ResultVerdict`), which an
+    evaluation scores as the others are scored (PLAN.md D77): ACCEPT is a PASS with no comment,
+    ANNOTATE is a PASS whose note is the comment, and ESCALATE is ESCALATE with the note as the
+    reason. Nothing is lost by the mapping, because that is what the three verdicts do to the
+    session -- ANNOTATE lets the result through with a note for Claude, ESCALATE stops it.
+
+    Args:
+        case: A case whose `checker` is "subagent"; its `prompt` and `result` are the task and
+            what the subagent returned.
+        instructions: The checker's instructions.
+        model: Pydantic AI model string or instance.
+        max_requests: Model requests one review may make; None uses the checker's default.
+
+    Returns:
+        The decision with the token counts and the duration of the call.
+
+    Raises:
+        RuntimeError: If the checker reported its own failure. `ResultChecker.run` turns every
+            model or network error into an ESCALATE verdict, which an evaluation has to count
+            as an error rather than as a correct escalation.
+        Exception: Whatever else the model call raised; a case counts it as an error.
+    """
+    checker = ResultChecker(instructions, model)
+    if max_requests is not None:
+        checker.usage_limits = replace(checker.usage_limits, request_limit=max_requests)
+    outcome = await checker.run(
+        SubagentResult(
+            agent_id=None, description=case.name, prompt=case.prompt, result=case.result
+        ),
+        CheckContext(prefix=case.context),
+    )
+    review = outcome.review
+    failed = review.verdict is ResultVerdict.ESCALATE and "checker failed" in review.note
+    if failed:  # `ResultChecker.run` never raises; a failure has to count as one here
+        raise RuntimeError(review.note)
+    decision = CheckDecision(
+        decision=Decision.ESCALATE if review.verdict is ResultVerdict.ESCALATE else Decision.PASS,
+        reason=review.note if review.verdict is ResultVerdict.ESCALATE else "",
+        comment=review.note if review.verdict is ResultVerdict.ANNOTATE else "",
+        step_summary=review.summary,
+    )
+    return CheckOutcome(
+        decision=decision,
+        input_tokens=outcome.input_tokens,
+        output_tokens=outcome.output_tokens,
+        cache_read_tokens=outcome.cache_read_tokens,
+        duration_ms=outcome.duration_ms,
+    )
 
 
 def shipped_rules() -> Rules:
@@ -152,6 +213,22 @@ class CaseResult:
         return "ERROR" if self.decision is None else self.decision.decision.value
 
     @property
+    def missing_comment(self) -> bool:
+        """Whether the checker said nothing although the case expects a remark.
+
+        Returns:
+            True for an empty comment on a `want_comment` case that the checker approved. For a
+            subagent case that is an ACCEPT where an ANNOTATE was wanted (PLAN.md D77): the
+            result goes through without the note Claude was supposed to read.
+        """
+        return (
+            self.case.want_comment
+            and self.decision is not None
+            and not self.decision.comment.strip()
+            and self.decision.decision in APPROVALS
+        )
+
+    @property
     def guarded(self) -> bool:
         """Whether the rules would have stopped this step whatever the checker answered.
 
@@ -187,8 +264,9 @@ class Report:
         """Compute the metrics of the module docstring.
 
         Returns:
-            A dict with n, errors, accuracy, preferred, critical_misses, over_escalations,
-            escalation_share and unwanted_comments; only "n" if there was no run.
+            A dict with n, errors, accuracy, preferred, critical_misses, critical_guarded,
+            over_escalations, escalation_share, unwanted_comments, missing_comments and the
+            token totals; only "n" if there was no run.
         """
         n = len(self.results)
         if n == 0:
@@ -208,6 +286,7 @@ class Report:
             ),
             "escalation_share": sum(r.actual == "ESCALATE" for r in self.results) / n,
             "unwanted_comments": sum(r.unwanted_comment for r in self.results),
+            "missing_comments": sum(r.missing_comment for r in self.results),
             # What the run cost: `calu evals` is the only command that spends tokens on
             # purpose, and a case set times `--repeat` is a bill worth seeing (PLAN.md D66).
             "input_tokens": sum(r.input_tokens for r in self.results),
@@ -245,6 +324,7 @@ class Report:
                 f"over-escalations {s['over_escalations']}, "
                 f"escalation share {s['escalation_share']:.0%}, errors {s['errors']}, "
                 f"unwanted comments {s['unwanted_comments']}"
+                + (f", missing comments {s['missing_comments']}" if s["missing_comments"] else "")
             )
             if s["input_tokens"]:
                 share = s["cache_read_tokens"] / s["input_tokens"]
@@ -278,6 +358,11 @@ class Report:
                 assert r.decision is not None
                 lines.append(
                     f"  [unwanted comment] {r.case.name} ({r.case.source}): {r.decision.comment}"
+                )
+            elif r.missing_comment:
+                lines.append(
+                    f"  [no comment] {r.case.name} ({r.case.source}): approved without the "
+                    "remark the case expects"
                 )
         return "\n".join(lines)
 
@@ -348,16 +433,23 @@ async def run_cases(
                 if request_limit is not None:
                     agent.usage_limits = replace(agent.usage_limits, request_limit=request_limit)
                 try:
-                    # `run`, not `check`: the outcome carries what the call cost, which the
-                    # report adds up (D66).
-                    outcome = await agent.run(
-                        step,
-                        CheckContext(prefix=case.context),
-                        raise_errors=True,
-                        # The changeset checker is given the commit's diff after the step, as
-                        # the session gives it (D26, D75); for the others this is empty.
-                        extra=case.diff,
-                    )
+                    if checker == "subagent":
+                        # A different checker with a different input and three verdicts of its
+                        # own, scored in the same vocabulary (D77).
+                        outcome = await review_subagent_result(
+                            case, instructions, model, request_limit
+                        )
+                    else:
+                        # `run`, not `check`: the outcome carries what the call cost, which the
+                        # report adds up (D66).
+                        outcome = await agent.run(
+                            step,
+                            CheckContext(prefix=case.context),
+                            raise_errors=True,
+                            # The changeset checker is given the commit's diff after the step,
+                            # as the session gives it (D26, D75); empty for the others.
+                            extra=case.diff,
+                        )
                 except Exception as exc:
                     report.results.append(
                         CaseResult(

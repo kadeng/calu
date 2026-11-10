@@ -62,6 +62,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         await admin.set_setting(db, "command_checker.model", "stored:command")
         await admin.set_setting(db, "edit_checker.model", "stored:edit")
         await admin.set_setting(db, "changeset_checker.model", "stored:changeset")
+        await admin.set_setting(db, "subagent_checker.model", "stored:subagent")
         asked: list[tuple[str, str, int]] = []
         budgets: dict[str, int | None] = {}
 
@@ -102,6 +103,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
             ("command", "stored:command"),
             ("edit", "stored:edit"),
             ("changeset", "stored:changeset"),
+            ("subagent", "stored:subagent"),
         ]
         # The built-in cases were handed to each of them.
         assert all(count > 0 for _checker, _model, count in asked)
@@ -124,7 +126,11 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         asked.clear()
         await admin.set_checker(db, "edit", enabled=False)
         text, _critical = await run_evals(db, tmp_path, builtin=True, from_db=False)
-        assert [checker for checker, _model, _count in asked] == ["command", "changeset"]
+        assert [checker for checker, _model, _count in asked] == [
+            "command",
+            "changeset",
+            "subagent",
+        ]
         assert "none" in text
     finally:
         await conn.close()

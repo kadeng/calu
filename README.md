@@ -437,6 +437,7 @@ calu config set claude.model opus
 calu checker stats                             # what they decided, what they cost, where a human disagreed
                                                # and how many steps the rules settled for free
 calu checker misses                            # the steps they approved that you then denied
+calu evals                                     # all four checkers against the built-in cases
 calu evals --from-db                          # accuracy, critical misses, over-escalations
 calu evals --from-db --list                    # the cases your sessions produced, no model called
 calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.yaml` re-runs them
