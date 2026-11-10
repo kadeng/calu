@@ -9,12 +9,13 @@ The credential path is replaced for these tests: `_with_admin` is given the test
 no credential store and no password are involved.
 """
 
+import os
 from typing import Any, cast
 
 import anyio
 import pytest
 
-from calu import cli
+from calu import admin, cli
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
 from calu.setup import setup
@@ -229,3 +230,60 @@ async def test_the_summary_command_shows_the_folded_conversation(prepared, capsy
     said = capsys.readouterr().out
     # Only the summary itself, so that `calu summary <id> > CHAT_SUMMARY.md` is usable.
     assert said.strip() == "## Folded\n\nThe user asked for a cleanup."
+
+
+async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_path) -> None:
+    """`calu checker edit` and `calu summary --edit` go through $EDITOR (PLAN.md D40).
+
+    The editor is a stub script that rewrites the file it is given, so the whole path is
+    covered: calu writes the current text out, the editor changes it, calu reads it back and
+    stores it. An editor that fails must store nothing.
+    """
+    db, session_id, _escalation = prepared
+    editor = tmp_path / "fake-editor"
+    editor.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, sys\n"
+        "open(sys.argv[1], 'w', encoding='utf-8').write(os.environ['EDITOR_WRITES'])\n"
+        "sys.exit(int(os.environ.get('EDITOR_EXIT', '0')))\n",
+        encoding="utf-8",
+    )
+    editor.chmod(0o755)
+    os.environ["EDITOR"] = str(editor)
+    os.environ["EDITOR_WRITES"] = "Only one rule: say no to everything with rm -rf.\n"
+    try:
+        assert await run(["checker", "edit", "command"]) == 0
+        said = capsys.readouterr().out
+        assert "editing" in said and "command" in said
+        assert await admin.instructions(db, "command") == (
+            "Only one rule: say no to everything with rm -rf.\n"
+        )
+        rows = await admin.checkers(db)
+        edited = next(row for row in rows if row.name == "command")
+        assert edited.version > 1, "a changed definition gets a new version"
+
+        # The same for the folded conversation, which is what the checkers read (D40).
+        await db.execute(
+            "INSERT INTO chat_summaries (session_id, summary, covered_turns)"
+            " VALUES (%s::uuid, 'old', 2)",
+            (session_id,),
+        )
+        os.environ["EDITOR_WRITES"] = "## Folded\n\nThe user asked for a rewrite.\n"
+        assert await run(["summary", session_id, "--edit"]) == 0
+        capsys.readouterr()
+        assert await admin.chat_summary(db, session_id) == (
+            "## Folded\n\nThe user asked for a rewrite.\n"
+        )
+
+        # An editor that fails stores nothing and says so.
+        os.environ["EDITOR_WRITES"] = "this must not be stored"
+        os.environ["EDITOR_EXIT"] = "1"
+        assert await run(["summary", session_id, "--edit"]) == 1
+        complaint = capsys.readouterr()
+        assert "nothing was stored" in complaint.out + complaint.err
+        assert await admin.chat_summary(db, session_id) == (
+            "## Folded\n\nThe user asked for a rewrite.\n"
+        )
+    finally:
+        for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_EXIT"):
+            os.environ.pop(name, None)
