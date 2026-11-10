@@ -434,7 +434,7 @@ calu checker edit edit                        # opens the edit checker's instruc
 calu summary <session id> --edit              # correct what the checkers read of the old turns
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
 calu config set claude.model opus
-calu checker stats                             # what they decided, and where a human disagreed
+calu checker stats                             # what they decided, what they cost, where a human disagreed
 calu checker misses                            # the steps they approved that you then denied
 calu evals --from-db                          # accuracy, critical misses, over-escalations
 calu evals --from-db --list                    # the cases your sessions produced, no model called

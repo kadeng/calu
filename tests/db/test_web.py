@@ -677,3 +677,50 @@ async def test_the_checkers_page_shows_the_cases_to_fix_the_instructions_against
             )
     finally:
         await conn.close()
+
+
+async def test_the_checkers_page_shows_what_they_cost(db_url: str) -> None:
+    """D63: the token totals and the cache share are readable without a model call."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+
+        async def check(seq: int, cached: int) -> None:
+            step = await store.add_step(
+                StepRow(seq=seq, tool_name="Bash", tool_input={"command": "x"})
+            )
+            await store.add_checker_run(
+                step,
+                CheckerRun(
+                    checker_name="command",
+                    checker_version=1,
+                    model="test:model",
+                    decision="pass",
+                    input_tokens=20_000,
+                    output_tokens=50,
+                    cache_read_tokens=cached,
+                ),
+            )
+
+        async with await client_for(db) as client:
+            # A checker that has never run says nothing about tokens rather than "0".
+            assert "Tokens" in (await client.get("/checkers")).text
+
+            await check(1, 19_000)
+            await check(2, 19_000)
+            warm = (await client.get("/checkers")).text
+            assert "40k in / 100 out" in warm
+            assert "95% of the input from cache" in warm
+            assert "decision deny" not in warm, "a working cache must not be flagged"
+
+            # With the prefix missing from the cache the share is marked, because the checks
+            # then cost several times what they should.
+            await db.execute("UPDATE checker_runs SET cache_read_tokens = 0")
+            cold = (await client.get("/checkers")).text
+            assert "0% of the input from cache" in cold
+            assert "decision deny" in cold
+    finally:
+        await conn.close()

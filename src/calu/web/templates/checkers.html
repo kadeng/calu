@@ -3,12 +3,17 @@
 {% block body %}
 <h1>{{ checkers | length }} checker definition{{ '' if checkers | length == 1 else 's' }}</h1>
 <p class="muted">The instructions live in the database, out of the agent's reach. A running session picks a change up at its next step.</p>
-<p class="muted">The last two columns are the record, not a measurement: an escalation a human
-  allowed cost an interruption for nothing, and a step a checker approved that a human then
-  denied is a miss. <code>calu evals</code> measures the checkers against a case set instead.</p>
+<p class="muted">The record, not a measurement: an escalation a human allowed cost an
+  interruption for nothing, and a step a checker approved that a human then denied is a miss.
+  <code>calu evals</code> measures the checkers against a case set instead.</p>
+<p class="muted">The tokens are what the checkers have cost. A checker runs on every step with
+  nearly the same long prefix, so most of its input should come from the provider's cache; a
+  marked share means each check pays for the whole prefix again. That is not always calu's
+  doing &mdash; some providers do not cache, and a hybrid-SSM model such as Nemotron reuses a
+  cache only for an identical prompt.</p>
 <table>
   <thead><tr><th>Name</th><th>Route</th><th>Model</th><th>Version</th><th>State</th>
-    <th>Decided</th><th>Humans disagreed</th><th></th></tr></thead>
+    <th>Decided</th><th>Humans disagreed</th><th>Tokens</th><th></th></tr></thead>
   <tbody>
   {% for c in checkers %}
     <tr>
@@ -25,6 +30,10 @@
         {% if s.passed_then_denied %}<span class="decision deny">{{ s.passed_then_denied }}
           approved then denied</span>{% endif %}
         {% elif s %}no{% else %}–{% endif %}</td>
+      <td class="muted">{% if s and s.tokens_text %}{{ s.tokens_text }}<br>
+        {% if s.cache_is_cold %}<span class="decision deny">{{ s.cache_text }}</span>
+        {% else %}{{ s.cache_text }}{% endif %}
+        {% else %}–{% endif %}</td>
       <td><a href="{{ url_for('checker', name=c.name) }}">edit</a></td>
     </tr>
   {% endfor %}

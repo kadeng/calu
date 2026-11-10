@@ -435,3 +435,58 @@ async def test_the_steps_a_checker_approved_and_a_human_denied_are_listable(
         assert await herd.checker_misses(db, since_days=7) == []
     finally:
         await owner.close()
+
+
+async def test_checker_token_totals_show_whether_the_cache_is_working(db_url: str) -> None:
+    """D63: the recorded tokens are readable, and one step's two escalations do not double them."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+
+        async def run(seq: int, inp: int | None, out: int, cached: int) -> int:
+            step = await store.add_step(
+                StepRow(seq=seq, tool_name="Bash", tool_input={"command": "x"})
+            )
+            await store.add_checker_run(
+                step,
+                CheckerRun(
+                    checker_name="command",
+                    checker_version=1,
+                    model="test:model",
+                    decision="escalate",
+                    input_tokens=inp,
+                    output_tokens=out,
+                    cache_read_tokens=cached,
+                ),
+            )
+            return step
+
+        # Two checks on a long prompt: the second one was served from the cache.
+        await run(1, 20_000, 40, 0)
+        shared = await run(2, 20_000, 60, 19_000)
+        # The same step escalated twice. The join over escalations must not count its tokens
+        # again -- it is one check, not two.
+        await store.open_escalation("first", {}, shared)
+        await store.open_escalation("again", {}, shared)
+
+        (stats,) = await herd.checker_stats(db)
+        assert stats.input_tokens == 40_000, "two escalations on one step doubled its tokens"
+        assert stats.output_tokens == 100
+        assert stats.cache_read_tokens == 19_000
+        assert stats.cached_share is not None
+        assert stats.cached_share == pytest.approx(0.475)
+        line = stats.line()
+        assert "40k in / 100 out" in line
+        assert "48% of the input from cache" in line
+
+        # A checker whose model reports no usage says nothing about tokens instead of "0% cached".
+        await db.execute("UPDATE checker_runs SET input_tokens = NULL, cache_read_tokens = NULL")
+        (none,) = await herd.checker_stats(db)
+        assert none.input_tokens == 0
+        assert none.cached_share is None
+        assert "from cache" not in none.line() and " in / " not in none.line()
+    finally:
+        await owner.close()

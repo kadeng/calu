@@ -780,6 +780,22 @@ async def checker_runs(db: Db, session_id: str, limit: int = 200) -> dict[int, l
     return found
 
 
+def _tokens(n: int) -> str:
+    """Render a token count short enough for one terminal line.
+
+    Args:
+        n: A token count, zero or more.
+
+    Returns:
+        The number itself below 10 000, else thousands ("31k") or millions ("2.4M").
+    """
+    if n < 10_000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1000:.0f}k"
+    return f"{n / 1_000_000:.1f}M"
+
+
 @dataclass(frozen=True)
 class CheckerStats:
     """How one checker has decided so far, and how often a human disagreed (PLAN.md D61)."""
@@ -799,6 +815,68 @@ class CheckerStats:
     them anyway (D42): the misses, which are the error that matters (D50)."""
     median_ms: int | None
     """Median duration of one check, or None when nothing was timed."""
+    input_tokens: int
+    """Input tokens of all its checks, cached ones included (0 if nothing was counted)."""
+    output_tokens: int
+    """Output tokens of all its checks."""
+    cache_read_tokens: int
+    """Input tokens the provider served from its cache (PLAN.md D63).
+
+    calu builds the checkers' context so that the long part can be cached (the cached prefix of
+    §2.4, `CachePoint`). If this stays near zero while `input_tokens` grows, the caching is not
+    working and every check pays for the whole prefix again."""
+
+    @property
+    def cached_share(self) -> float | None:
+        """Share of the input tokens that came from the provider's cache.
+
+        Returns:
+            A value between 0 and 1, or None when no input tokens were counted (a fake model,
+            or a provider that reports no usage).
+        """
+        if self.input_tokens <= 0:
+            return None
+        return self.cache_read_tokens / self.input_tokens
+
+    @property
+    def tokens_text(self) -> str:
+        """The token totals in short form, or "" when the model reported no usage.
+
+        Returns:
+            Something like `31k in / 2.4k out`, or an empty string when nothing was counted.
+        """
+        if not self.input_tokens:
+            return ""
+        return f"{_tokens(self.input_tokens)} in / {_tokens(self.output_tokens)} out"
+
+    @property
+    def cache_text(self) -> str:
+        """How much of the input the provider served from its cache, as text.
+
+        Returns:
+            Something like `48% of the input from cache`, or an empty string when no input
+            tokens were counted. See `cached_share` for what a low value means.
+        """
+        share = self.cached_share
+        return "" if share is None else f"{share * 100:.0f}% of the input from cache"
+
+    @property
+    def cache_is_cold(self) -> bool:
+        """Whether the cached prefix looks like it is not working (D63).
+
+        A checker runs on every step with nearly the same long prefix, so after a few thousand
+        input tokens most of the input should come from the provider's cache. True means it does
+        not, so the checks cost several times what they could. The cause is not always calu: a
+        provider may not cache at all, and a hybrid-SSM model such as Nemotron on Fireworks
+        reuses a cache only for an identical prompt (`calu.checkers.checker` module docstring).
+        The flag therefore says "look at this", not "calu is broken".
+
+        Returns:
+            True when at least 5000 input tokens were counted and under a third of them came
+            from the cache; False when the share is healthy or too little ran to tell.
+        """
+        share = self.cached_share
+        return share is not None and self.input_tokens >= 5000 and share < 1 / 3
 
     def line(self) -> str:
         """Render the checker's record as one terminal line.
@@ -807,6 +885,10 @@ class CheckerStats:
             The counts, and the human's verdicts on what it escalated and what it passed.
         """
         timing = f"  ~{self.median_ms} ms" if self.median_ms is not None else ""
+        tokens = f"  {self.tokens_text}" if self.tokens_text else ""
+        cached = f", {self.cache_text}" if self.cache_text else ""
+        if self.cache_is_cold:
+            cached += " -- the prefix is not being reused; check the model's provider caches"
         judged = self.escalated_then_allowed + self.escalated_then_denied
         agreed = (
             f"  humans: {self.escalated_then_denied}/{judged} agreed with its escalations"
@@ -821,7 +903,7 @@ class CheckerStats:
         return (
             f"{self.checker_name}  {self.runs} run(s): {self.passed} pass, "
             f"{self.escalated} escalate, {self.allowed} allow, {self.denied} deny{timing}"
-            f"{agreed}{missed}"
+            f"{tokens}{cached}{agreed}{missed}"
         )
 
 
@@ -840,12 +922,24 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
         since_days: Only count runs of the last N days; None counts everything.
 
     Returns:
-        One entry per checker that has run, most runs first.
+        One entry per checker that has run, most runs first, with its token totals and the
+        share of the input that the provider served from its cache (D63).
 
     Raises:
         psycopg.Error: On database errors.
     """
     rows = await db.all(
+        # The token sums come from their own aggregate, not from the joined rows: a step may
+        # have more than one escalation, and the LEFT JOIN would then count its tokens twice.
+        "WITH tokens AS ("
+        "  SELECT checker_name,"
+        "   coalesce(sum(input_tokens), 0)::int AS input_tokens,"
+        "   coalesce(sum(output_tokens), 0)::int AS output_tokens,"
+        "   coalesce(sum(cache_read_tokens), 0)::int AS cache_read_tokens"
+        "  FROM checker_runs"
+        "  WHERE (%s::int IS NULL OR created_at > now() - make_interval(days => %s::int))"
+        "  GROUP BY checker_name"
+        ")"
         "SELECT c.checker_name,"
         " count(*)::int,"
         " count(*) FILTER (WHERE c.decision = 'pass')::int,"
@@ -855,12 +949,18 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
         " count(*) FILTER (WHERE c.decision = 'escalate' AND e.state = 'allowed')::int,"
         " count(*) FILTER (WHERE c.decision = 'escalate' AND e.state = 'denied')::int,"
         " count(*) FILTER (WHERE c.decision = 'pass' AND e.state = 'denied')::int,"
-        " percentile_disc(0.5) WITHIN GROUP (ORDER BY c.duration_ms)"
+        " percentile_disc(0.5) WITHIN GROUP (ORDER BY c.duration_ms),"
+        # What the checkers cost, and whether the cached prefix is working (D63). The columns
+        # were recorded from the first version on and nothing read them before.
+        " max(t.input_tokens),"
+        " max(t.output_tokens),"
+        " max(t.cache_read_tokens)"
         " FROM checker_runs c"
         " LEFT JOIN escalations e ON e.step_id = c.step_id"
+        " JOIN tokens t ON t.checker_name = c.checker_name"
         " WHERE (%s::int IS NULL OR c.created_at > now() - make_interval(days => %s::int))"
         " GROUP BY c.checker_name ORDER BY count(*) DESC, c.checker_name",
-        (since_days, since_days),
+        (since_days, since_days, since_days, since_days),
     )
     return [CheckerStats(*row) for row in rows]
 
