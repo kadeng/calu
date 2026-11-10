@@ -23,8 +23,12 @@ What it tries, with the candidate policies applied to the tables a session write
    SECURITY DEFINER function that creates the row and returns the id, which the session sets
    before it writes anything else.
 
-Nothing here is applied to a real database: the SQL lives in this file as a proposal, and the
-verdict is what Q3 needs in order to be decided.
+**This is the original measurement, kept as the record.** The answer it produced shipped the
+same day as migration 0015 (PLAN.md D49), and the shipped policies go further than the ones
+below: a conversation spans several `sessions` rows when it is resumed or forked, so there the
+turns, steps and chat summary of the sibling rows stay readable (`calu_same_conversation`) and
+`calu_recent_sessions` and `calu_conversation_sessions` serve the reads that span sessions. Read
+the migration for what calu does; read this for what was measured before it existed.
 """
 
 import asyncio

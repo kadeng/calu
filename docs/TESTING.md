@@ -142,7 +142,11 @@ Before a release, or after changing the runner, the gate or the sandbox:
    the settings page and watch an attached `calu attach` report it; then the session page must
    list the change with who asked for it (D43). With an ACP editor, the same through its own
    agent-mode picker.
-9. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
+9. Session isolation (D49): `uv run pytest -m db tests/db/test_schema.py` covers it, and by
+   hand after any change to the schema or the store, `smoke_session.py --resolve deny` must
+   still record its step, its escalation and its turn -- a session that cannot write says so at
+   once (an `InsufficientPrivilege` on its first step), which is the failure mode to recognise.
+10. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
    `bwrap --unshare-user ...` — the `dev` service needs `security_opt: [seccomp:unconfined]`,
    because Docker's default seccomp profile blocks user namespaces.
 
