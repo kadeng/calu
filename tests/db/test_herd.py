@@ -90,11 +90,37 @@ async def test_resolved_escalations_become_evaluation_cases(db_url: str) -> None
         # An open escalation has no human decision yet.
         await store.open_escalation("open", {"tool_input": {"command": "x"}}, checked)
 
+        # A step the checker **approved** and a human then denied, because an
+        # auto-escalation category was on (D42): the label for a false negative, which is the
+        # one the evals could not see before.
+        approved = await store.add_step(
+            StepRow(seq=3, tool_name="Write", tool_input={"file_path": "a.py", "content": "x"})
+        )
+        await store.add_checker_run(
+            approved,
+            CheckerRun(
+                checker_name="edit",
+                checker_version=1,
+                model="test:model",
+                decision="pass",
+            ),
+        )
+        third = await store.open_escalation(
+            "every edit waits for a human",
+            {"tool_input": {"file_path": "a.py", "content": "x"}, "files": {}},
+            approved,
+        )
+        await herd.resolve(db, third, "deny", "not like that")
+
         cases = await cases_from_escalations(db)
-        assert [c.name for c in cases] == [f"escalation-{first}"]
-        assert cases[0].checker == "command"
-        assert cases[0].expected == [Decision.ALLOW, Decision.ESCALATE]
-        assert cases[0].source == "escalations"
+        # Newest first, and the rules escalation stays out: no checker ran on it.
+        assert [c.name for c in cases] == [f"escalation-{third}", f"escalation-{first}"]
+        assert cases[0].checker == "edit"
+        # The checker said PASS here, so ALLOW is scored as a critical miss.
+        assert cases[0].expected == [Decision.DENY, Decision.ESCALATE]
+        assert cases[1].checker == "command"
+        assert cases[1].expected == [Decision.ALLOW, Decision.ESCALATE]
+        assert cases[1].source == "escalations"
     finally:
         await owner.close()
 

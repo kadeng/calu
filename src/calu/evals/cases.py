@@ -147,9 +147,20 @@ def builtin_cases() -> list[EvalCase]:
 async def cases_from_escalations(db: Db, limit: int = 500) -> list[EvalCase]:
     """Turn the resolved escalations of the database into cases.
 
-    Only escalations that a checker caused are used: an escalation of the rules or of the tool
-    policy says nothing about how well a checker decides. Escalations whose step cannot be
-    reproduced (an absolute path outside the workspace, a missing context) are skipped.
+    An escalation counts when a checker **ran** on the step, whatever it decided. Two kinds
+    therefore arrive:
+
+    * the checker escalated and a human decided -- how good its caution was;
+    * the checker approved the step and a human still had to decide it, because one of the
+      auto-escalation categories was on (PLAN.md D42). These are the valuable ones: a human
+      verdict on a step the checkers let through is the only way a **false negative** gets a
+      label, and a checker that approved something a human then denied is scored here as the
+      critical miss it is.
+
+    An escalation of the rules or of the tool policy is left out, because no checker ran on
+    that step (the rule decided before it) and the case would say nothing about a checker.
+    Escalations whose step cannot be reproduced (an absolute path outside the workspace, a
+    missing context) are skipped.
 
     Args:
         db: A connection that may read `escalations`, `steps` and `checker_runs`.
@@ -165,8 +176,9 @@ async def cases_from_escalations(db: Db, limit: int = 500) -> list[EvalCase]:
         "SELECT e.id, s.tool_name, e.context, e.state FROM escalations e"
         " JOIN steps s ON s.id = e.step_id"
         " WHERE e.state IN ('allowed', 'denied')"
-        "   AND EXISTS (SELECT 1 FROM checker_runs c"
-        "               WHERE c.step_id = s.id AND c.decision = 'escalate')"
+        # Any checker run, not only one that escalated: a step a checker approved and a human
+        # then judged (D42) is the case that shows a miss.
+        "   AND EXISTS (SELECT 1 FROM checker_runs c WHERE c.step_id = s.id)"
         " ORDER BY e.id DESC LIMIT %s",
         (limit,),
     )

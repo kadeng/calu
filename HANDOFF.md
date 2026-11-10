@@ -378,7 +378,8 @@ Everything else is either built or recommended with its reasons. These need a pe
   environment, both of which only you can create (next step 2).
 - **Q9 — a training mode**: recommended **against**. Every resolved escalation is already a
   labelled case and `calu evals --from-db` uses them; for labels on steps the checkers
-  approved, switch an auto-escalation category on for a while (D42) instead of building tables.
+  approved, switch an auto-escalation category on for a while (D42) -- which the eval set now
+  really collects (D50; it used to drop exactly those rows).
 - **Q2 — sitl's future**: the technical half is settled (any ACP editor drives a calu session
   with no extension of its own, and what ACP does not carry lives in the web interface). What
   is left is whether sitl keeps living for VSCode users, which ACP does not reach yet.
