@@ -422,6 +422,8 @@ class Session:
         self._git_head_time = float("-inf")
         self._pending_reasons: dict[str, tuple[str, str]] = {}
         self._tg: TaskGroup | None = None
+        self._store_failures = 0  # database writes that failed in a row (D59)
+        self._stopping = False  # a stop was already started, so it is not started twice
         self._pending = 0  # background tasks (narration, turn storage, folding)
         self._quiet = anyio.Event()
         self._quiet.set()
@@ -2507,11 +2509,9 @@ class Session:
         try:
             step_id = await self.store.add_step(row)
         except Exception as exc:
-            log.exception("recording a step failed")
-            await self._emit_safely(
-                Log(level="error", message=f"recording a step in the database failed: {exc}")
-            )
+            await self._store_failed("recording a step in the database", exc)
             return None
+        self._store_failures = 0
         self._times.append(
             StepTime(
                 seq=row.seq,
@@ -2552,15 +2552,14 @@ class Session:
             "calu_version": __version__,
         }
         try:
-            return await self.store.open_escalation(
+            stored = await self.store.open_escalation(
                 reason, context, self._step_ids.get(step.tool_use_id or "")
             )
         except Exception as exc:
-            log.exception("opening an escalation failed")
-            await self._emit_safely(
-                Log(level="error", message=f"storing an escalation failed: {exc}")
-            )
+            await self._store_failed("storing an escalation", exc)
             return None
+        self._store_failures = 0
+        return stored
 
     async def _store_call(self, what: str, call: Any) -> None:
         """Await a store call and report its failure as a `log` error; never raises.
@@ -2568,12 +2567,56 @@ class Session:
         Args:
             what: What was attempted, for the message (e.g. "storing a turn").
             call: The awaitable returned by the store method.
+
+        Side effects:
+            Counts the failure (`_store_failed`), which stops the session once writes have
+            failed `config.store_failures_before_stop` times in a row (PLAN.md D59).
         """
         try:
             await call
         except Exception as exc:
-            log.exception("%s failed", what)
-            await self._emit_safely(Log(level="error", message=f"{what} failed: {exc}"))
+            await self._store_failed(what, exc)
+        else:
+            self._store_failures = 0
+
+    async def _store_failed(self, what: str, exc: BaseException) -> None:
+        """Report a failed database write and stop the session if they keep failing.
+
+        A session that cannot write is one nobody can watch or unblock: its steps and its
+        escalations do not reach the database, and the fleet shows it as gone (D56). A single
+        failure is tolerated, because a network hiccup must not end an overnight run; the
+        `config.store_failures_before_stop`-th in a row stops the session, which gives the
+        machine back and leaves the conversation resumable.
+
+        Args:
+            what: What was attempted, for the message.
+            exc: Why it failed.
+
+        Side effects:
+            Emits a `log` error; past the limit, emits another and starts the stop in its own
+            task (this runs inside whatever call failed, so it must not wait for the stop).
+        """
+        log.exception("%s failed", what, exc_info=exc)
+        self._store_failures += 1
+        await self._emit_safely(Log(level="error", message=f"{what} failed: {exc}"))
+        limit = self.config.store_failures_before_stop
+        if limit <= 0 or self._store_failures < limit or self._stopping:
+            return
+        self._stopping = True
+        resume = f"calu run --resume {self.session_id}" if self.session_id else "calu sessions"
+        await self._emit_safely(
+            Log(
+                level="error",
+                message=(
+                    f"{self._store_failures} database writes failed in a row, so nobody can "
+                    f"watch or unblock this session: it stops. Take it up again with "
+                    f"`{resume}` once the database answers."
+                ),
+            )
+        )
+        if self._tg is not None:
+            # Not a tracked task: `stop` waits for those, and this one calls it.
+            self._tg.start_soon(self._stop_after_timeout)
 
     async def _cancel_escalations(self, message: str) -> None:
         """Deny all open escalations with `message` (their `ask` calls then return).

@@ -442,6 +442,16 @@ class Config(ConfigModel):
     the timeout the step is denied and the session stops, with Claude's session id recorded, so
     that `calu run --resume <id>` takes the conversation up again. 0 waits without a limit.
     """
+    store_failures_before_stop: int = Field(default=10, ge=0)
+    """How many database writes may fail in a row before the session stops (PLAN.md D59).
+
+    A session that cannot write is a session nobody can watch or unblock: its steps, its turns
+    and its escalations do not reach the database, and with the heartbeat of D56 the fleet shows
+    it as gone. Stopping at the first failure would make a network hiccup end an overnight run,
+    so failures are tolerated and counted, and the count resets on the next write that works.
+    0 never stops, which keeps a session running blind -- only sensible when somebody is
+    attached to it.
+    """
     hidden_env: list[str] = Field(default_factory=list)
     """Further environment variables (e.g. API keys of other checker providers) that Claude
     Code must not see, in addition to the ones from the env files and `PROVIDER_KEYS`."""

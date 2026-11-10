@@ -158,8 +158,11 @@ class SessionStore(Protocol):
     """Where a session records what it does. See the module docstring.
 
     Every method may raise `psycopg.Error` (or, for the in-memory store, nothing). The session
-    treats store errors as fatal for the session: without the database it cannot be watched or
-    unblocked, so it stops.
+    reports a failed call as a `log` error and counts it: a single failure is tolerated, because
+    a network hiccup must not end an overnight run, and
+    `config.store_failures_before_stop` failures in a row stop the session, because one nobody
+    can watch or unblock should give the machine back (PLAN.md D59). The count resets on the
+    next call that works.
     """
 
     session_id: str | None

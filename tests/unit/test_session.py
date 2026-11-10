@@ -954,3 +954,70 @@ async def test_a_failing_heartbeat_is_reported_and_the_loop_goes_on(tmp_path: Pa
     assert calls["n"] >= 3, "the loop stopped at the first failure"
     said = [event.message for event in rec.of(Log)]
     assert any("heartbeat failed" in message for message in said)
+
+
+async def test_a_database_that_keeps_refusing_stops_the_session(tmp_path: Path) -> None:
+    """A session nobody can watch or unblock gives the machine back (PLAN.md D59)."""
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "ls"}, "result": "ok"}]],
+        Config(store_failures_before_stop=3),
+    )
+
+    async def refuse(*_args: object, **_kwargs: object) -> None:
+        """Fail every write.
+
+        Raises:
+            RuntimeError: Always, as a database that is gone does.
+        """
+        raise RuntimeError("the database went away")
+
+    store.add_checker_run = refuse  # type: ignore[method-assign]
+    store.save_turn = refuse  # type: ignore[method-assign]
+    store.set_state = refuse  # type: ignore[method-assign]
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="look"))
+        with anyio.fail_after(15):
+            while session.state != "stopped":
+                await anyio.sleep(0.02)
+        await session.stop()
+
+    said = [event.message for event in rec.of(Log)]
+    assert any("failed:" in message for message in said), said[:4]
+    stopping = [m for m in said if "database writes failed in a row" in m]
+    assert stopping, f"the session stopped without saying why: {said[-3:]}"
+    assert "watch or unblock" in stopping[0]
+    assert "--resume" in stopping[0] or "calu sessions" in stopping[0]
+
+
+async def test_a_single_failure_does_not_end_an_overnight_run(tmp_path: Path) -> None:
+    """A network hiccup must not stop a session: the count resets on the next write."""
+    session, rec, store = make_session(tmp_path, [], Config(store_failures_before_stop=3))
+    calls = {"n": 0}
+    real = store.set_state
+
+    async def flaky(state: object) -> None:
+        """Fail every other call.
+
+        Args:
+            state: The new state.
+
+        Raises:
+            RuntimeError: On every second call.
+        """
+        calls["n"] += 1
+        if calls["n"] % 2:
+            raise RuntimeError("a hiccup")
+        await real(state)  # type: ignore[arg-type]
+
+    store.set_state = flaky  # type: ignore[method-assign]
+    for _ in range(8):
+        await session._store_call("setting the state", store.set_state("idle"))
+    # Eight attempts, four failures, never two in a row: the limit of three is never reached,
+    # so nothing says the session is giving up and the counter is back at zero.
+    assert calls["n"] == 8
+    assert not [m for m in (e.message for e in rec.of(Log)) if "in a row" in m]
+    assert session._store_failures == 0
+    # Each failure was still reported, because a silent failure is worse than a noisy one.
+    assert len([m for m in (e.message for e in rec.of(Log)) if "a hiccup" in m]) == 4
