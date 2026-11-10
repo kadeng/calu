@@ -191,6 +191,11 @@ Read the result as follows:
 
 ## Writing tests
 
+- A test that spawns a process must guard its teardown: `terminate()` on a process that has
+  already exited raises `ProcessLookupError` and turns a passing test into a flake. Write
+  `if process.returncode is None:` around it. This cost two red runs in one day before the
+  three process-level tests were made consistent.
+
 - Unit tests use the fake runner (`calu.claude.FakeRunner`, a scripted stand-in for Claude Code)
   and the rule-based fake checkers (`calu.testing`), so they need no API key and no `claude`.
   A scripted call can really write files (`"writes": {...}`) when a feature watches the file

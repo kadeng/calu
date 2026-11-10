@@ -105,6 +105,10 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
             # And it refreshes itself, which is what makes it usable as a watch window.
             assert "location.reload" in answer.text
     finally:
-        server.terminate()
-        with anyio.move_on_after(10):
-            await server.wait()
+        # Only if it is still running: `terminate()` on an exited process raises
+        # ProcessLookupError, which turns a passing test into a flake (see
+        # `tests/unit/test_acp_process.py`).
+        if server.returncode is None:
+            server.terminate()
+            with anyio.move_on_after(10):
+                await server.wait()

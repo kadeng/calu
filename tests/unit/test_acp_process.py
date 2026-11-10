@@ -158,9 +158,13 @@ async def test_calu_acp_answers_an_editor_and_keeps_stdout_clean(tmp_path: Path)
                 for update in texts
             ), f"no answer among {len(texts)} updates"
         finally:
-            process.terminate()
-            with anyio.move_on_after(10):
-                await process.wait()
+            # Only if it is still running: `terminate()` on a process that has already exited
+            # raises ProcessLookupError, which failed this test twice in one day without
+            # anything being wrong with the adapter. The attach test guards it the same way.
+            if process.returncode is None:
+                process.terminate()
+                with anyio.move_on_after(10):
+                    await process.wait()
 
         # The log went to stderr; stdout stayed a protocol stream (`read_until` fails the test
         # on any line of stdout that is not JSON).
@@ -268,6 +272,10 @@ async def test_calu_acp_carries_a_denial_and_replays_a_loaded_session(tmp_path: 
                     "the specification requires the replay before the result"
                 )
         finally:
-            process.terminate()
-            with anyio.move_on_after(10):
-                await process.wait()
+            # Only if it is still running: `terminate()` on a process that has already exited
+            # raises ProcessLookupError, which failed this test twice in one day without
+            # anything being wrong with the adapter. The attach test guards it the same way.
+            if process.returncode is None:
+                process.terminate()
+                with anyio.move_on_after(10):
+                    await process.wait()
