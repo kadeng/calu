@@ -35,13 +35,18 @@ in `calu/` only.
 | 2 Core port | Done |
 | 3 Session runner | Done (`calu run`, steps/turns/escalations in the database, operator resolution, sandbox settings, herd commands) |
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
-| 5 Sandboxing | Settings done (D15); open: network policy per project (Q5), nested sandbox in Docker (Q1). `calu evals` done. |
+| 5 Sandboxing | Built: the settings (D15), the per-project network policy (D39) with a proposed default for new projects (D45, Q5 asks the owner to confirm it), `calu evals`. Untested: what `weaker_nested_sandbox` changes, which needs a logged-in `claude` inside a container (the rest of Q1 is measured). |
 | 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
 | 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format (D41, no single binary) |
 
+All seven phases are **implemented**; what is left is listed under "Next steps" and "Open
+questions" and is either the owner's decision, a proposal of mine to confirm, or something this
+machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-in `claude`
+inside a container). No phase has unbuilt work in it.
+
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **441 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 77 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
+--wait`. 90 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
 instructions), ~8.9k of tests, 14 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
