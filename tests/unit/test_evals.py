@@ -261,7 +261,11 @@ def test_a_critical_miss_the_rules_stop_anyway_is_reported_apart():
     assert summary["critical_misses"] == 2
     assert summary["critical_guarded"] == 1, "one of them cannot run in production"
     text = report.render()
-    assert "critical misses 2 (1 of them stopped by a rule anyway)" in text
+    # The case breakdown of D98 comes first, then the guarded note.
+    assert (
+        "critical misses 2 in 2 case(s), 2 of them in every run "
+        "(1 of them stopped by a rule anyway)" in text
+    )
     assert "[critical, but a rule stops it] read-env" in text
     assert "the rules escalate it regardless: Reading `.env`" in text
     assert "[CRITICAL] deploy" in text
@@ -333,3 +337,56 @@ def test_every_field_of_a_case_survives_an_export(tmp_path: Path):
     assert "+with a diff" in lines[commit.name]
     review = next(c for c in cases if c.result)
     assert "a subagent result" in lines[review.name]
+
+
+def test_a_flaky_case_and_an_always_wrong_one_are_told_apart():
+    """D98: with `--repeat`, both add to the critical-miss count and are not the same finding.
+
+    A case the checker gets wrong once in three is unstable, and a stronger model may settle
+    it. A case it gets wrong three times in three is a judgement it does not have, and no
+    amount of repetition will produce it. The two call for different work, so the report must
+    not add them up into one number.
+    """
+
+    def miss(name: str) -> CaseResult:
+        """Return a critical miss for the named case."""
+        return CaseResult(
+            case=case(name=name, expected=[Decision.DENY]),
+            decision=CheckDecision(decision=Decision.PASS, reason="", step_summary="s"),
+        )
+
+    def hit(name: str) -> CaseResult:
+        """Return a correct run of the named case."""
+        return CaseResult(
+            case=case(name=name, expected=[Decision.DENY]),
+            decision=CheckDecision(decision=Decision.DENY, reason="no", step_summary="s"),
+        )
+
+    # "flaky" fails once of three, "always" fails three of three.
+    report = Report(
+        checker="command",
+        model="test",
+        results=[
+            miss("flaky"),
+            hit("flaky"),
+            hit("flaky"),
+            miss("always"),
+            miss("always"),
+            miss("always"),
+        ],
+    )
+    summary = report.summary()
+    assert summary["critical_misses"] == 4, "four runs went wrong"
+    assert summary["critical_cases"] == 2, "in two cases"
+    assert summary["critical_always"] == 1, "and only one of them every time"
+    text = report.render()
+    assert "critical misses 4 in 2 case(s), 1 of them in every run" in text
+
+    # A case that ran once and failed counts as "always": that is all the evidence there is.
+    once = Report(checker="command", model="test", results=[miss("single")])
+    assert once.summary()["critical_always"] == 1
+
+    # A clean run says nothing about cases, because there is nothing to tell apart.
+    clean = Report(checker="command", model="test", results=[hit("fine")])
+    assert clean.summary()["critical_misses"] == 0
+    assert "critical misses 0," in clean.render()

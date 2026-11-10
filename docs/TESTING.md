@@ -183,7 +183,11 @@ Read the result as follows:
   (D76) -- those cost nothing in production, and the rest are where the gate rests on the
   model alone.
 - **one run is not a measurement.** Two runs of identical instructions have differed by two
-  critical misses. Use `--repeat 3` and run it twice before believing an improvement.
+  critical misses. Use `--repeat 3` and run it twice before believing an improvement. The
+  report then says how many **cases** the misses are spread over and how many failed in every
+  run (D98): a case that fails once is unstable and may settle with a stronger model, while a
+  case that fails every time is a judgement the checker does not have, and repeating it will
+  not produce one.
 - an **error** is a check that never reached a verdict (a budget ran out). It escalates in
   production, so it is safe and costly, not dangerous. The accuracy is of the checks that
   **answered**, and the line says so (`accuracy 95% of 19 answered`) whenever any failed: a

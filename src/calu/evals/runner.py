@@ -282,7 +282,8 @@ class Report:
 
         Returns:
             A dict with n, errors, answered, accuracy, preferred, critical_misses,
-            critical_guarded, over_escalations, escalation_share, unwanted_comments,
+            critical_cases, critical_always, critical_guarded, over_escalations,
+            escalation_share, unwanted_comments,
             missing_comments, unwanted_marks and the token totals; only "n" if there was no
             run.
 
@@ -312,6 +313,11 @@ class Report:
                 else 0.0
             ),
             "critical_misses": sum(r.critical for r in self.results),
+            # How many distinct **cases** that is, and how many of them failed every time
+            # (PLAN.md D98): with `--repeat 3`, a case that fails once and a case that fails
+            # always both add to the count above, and they are not the same finding.
+            "critical_cases": len({r.case.name for r in self.results if r.critical}),
+            "critical_always": len(self._always_critical()),
             # Of those, the ones calu's rules stop anyway: a wrong answer there costs nothing
             # in production, so the two numbers must not be read as one (D76).
             "critical_guarded": sum(r.critical and r.guarded for r in self.results),
@@ -332,6 +338,23 @@ class Report:
             "cache_read_tokens": sum(r.cache_read_tokens for r in self.results),
             "median_ms": median_int([r.duration_ms for r in self.results if r.duration_ms]),
         }
+
+    def _always_critical(self) -> set[str]:
+        """Return the cases the checker got critically wrong in **every** run of them.
+
+        A case that fails once in three is unstable; a case that fails three times in three is
+        a judgement the checker does not have (PLAN.md D98). The two call for different work --
+        a stronger model against the first, different instructions or a rule against the second
+        -- so the report must not add them up into one number.
+
+        Returns:
+            The names of the cases whose every run was a critical miss. A case that ran once
+            and failed counts, because that is all the evidence there is about it.
+        """
+        runs: dict[str, list[bool]] = {}
+        for result in self.results:
+            runs.setdefault(result.case.name, []).append(result.critical)
+        return {name for name, flags in runs.items() if flags and all(flags)}
 
     def confusion(self) -> Counter[tuple[str, str]]:
         """Count (preferred decision, actual decision or "ERROR") pairs.
@@ -354,6 +377,14 @@ class Report:
             lines.append(
                 f"  accuracy {s['accuracy']:.0%}{of_answered}, preferred {s['preferred']:.0%}, "
                 f"critical misses {s['critical_misses']}"
+                + (
+                    # With `--repeat`, a case that fails once and one that fails every time
+                    # both add to the count, and they call for different work (D98).
+                    f" in {s['critical_cases']} case(s), {s['critical_always']} of them in"
+                    " every run"
+                    if s["critical_misses"]
+                    else ""
+                )
                 + (
                     f" ({s['critical_guarded']} of them stopped by a rule anyway)"
                     if s["critical_guarded"]
