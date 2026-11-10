@@ -406,6 +406,9 @@ async def _run(
         # The chat summary is a row like the rules and the instructions, and an operator may
         # have corrected it (D40), so the same notification re-reads it.
         await session.reload_summary()
+        # So is the honesty register: a mark an operator cleared has to reach the running
+        # session, or the override only works for the next one (D84).
+        await session.reload_register()
         await console(Log(level="info", message="configuration reloaded"))
 
     notifier = Notifier(listener)

@@ -6,7 +6,7 @@ from pathlib import Path
 import anyio
 import pytest
 
-from calu.checkers import CheckDecision, Decision, Route, Step
+from calu.checkers import CheckDecision, CodeMark, Decision, Route, Step
 from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
@@ -18,6 +18,7 @@ from calu.config import (
     ContextConfig,
     HonestyConfig,
 )
+from calu.honesty import blocking_marks
 from calu.protocol.messages import (
     AgentsUpdate,
     AutoEscalateChanged,
@@ -27,6 +28,7 @@ from calu.protocol.messages import (
     EditDiff,
     EscalationRequest,
     EscalationResolved,
+    HonestyUpdate,
     Log,
     SessionState,
     ToolResult,
@@ -1384,3 +1386,40 @@ async def test_a_deny_rule_outranks_the_honesty_register(tmp_path: Path):
         await session.decide_escalation(request.escalation_id, "deny", None)
         await rec.wait_for(TurnResult)
         await session.stop()
+
+
+async def test_a_cleared_mark_reaches_a_running_session(tmp_path: Path):
+    """D84: the override has to work on the session that is refusing, not only the next one.
+
+    `calu honesty clear` and the web interface close a mark for a person who disagrees with it.
+    A running session keeps the register in memory, so without re-reading it the session would
+    go on refusing the step and the override would be useless exactly when it is needed.
+    """
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
+    session, rec, store = make_session(tmp_path, [], settings=settings)
+    # As if a checker had recorded it earlier.
+    await store.apply_honesty_marks(
+        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")], [], None
+    )
+    session.honesty_marks = await store.open_honesty_marks()
+    step = Step(tool_name="Bash", tool_input={"command": "python src/parser.py"}, cwd=str(tmp_path))
+    assert blocking_marks(step, session.honesty_marks, tmp_path), "the step is refused now"
+
+    # The person clears it in the database; the session hears about it with the configuration.
+    mark_id = session.honesty_marks[0].id
+    await store.apply_honesty_marks(
+        [], [CodeMark(path="src/parser.py", symbol="fields", reason="cleared by hand")], None
+    )
+    await session.reload_register()
+
+    assert session.honesty_marks == [], "the running session dropped the cleared mark"
+    assert not blocking_marks(step, session.honesty_marks, tmp_path)
+    # Clients are told, so an editor or `calu attach` stops showing it as blocked.
+    update = rec.of(HonestyUpdate)[-1]
+    assert update.marks == [] and update.mode == "enforce"
+    assert mark_id not in {mark.id for mark in update.marks}
+
+    # Nothing is emitted when the register did not change, so a settings reload is quiet.
+    before = len(rec.of(HonestyUpdate))
+    await session.reload_register()
+    assert len(rec.of(HonestyUpdate)) == before

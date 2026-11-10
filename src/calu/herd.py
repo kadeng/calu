@@ -1203,6 +1203,12 @@ async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> H
     )
     if row is None:
         return None
+    # The same notification the configuration uses: a running session re-reads the register
+    # and stops refusing the code this mark covered (D84). Without it the override would only
+    # reach the next session.
+    await db.execute(
+        "SELECT pg_notify('config_changed', json_build_object('table', 'honesty_marks')::text)"
+    )
     return HonestyMark(
         id=row[0],
         path=row[1],

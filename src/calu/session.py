@@ -665,6 +665,36 @@ class Session:
             model=resolve_model(self._models.get("narrator") or self.config.context.narrator_model),
         )
 
+    async def reload_register(self) -> None:
+        """Read the honesty register again, in case a person cleared a mark (PLAN.md D84).
+
+        An open mark refuses every command that would run that code, and `calu honesty clear`
+        and the web interface are the override for a mark nobody agrees with. Without this the
+        override reached only the next session: the running one kept its copy of the register
+        and went on refusing, which makes the override useless exactly when it is needed.
+        Called after a `config_changed` notification, with which `clear_honesty_mark` announces
+        itself.
+
+        Side effects: replaces `honesty_marks` and emits `honesty.update` when it changed.
+        Never raises: a failed read is reported by `_store_value` and the register stays as it
+        is, which is the safe direction -- a mark that is already cleared refuses one more step
+        rather than letting a dishonest one run.
+        """
+        if self.config.honesty.mode == "off":
+            return
+        marks = await self._store_value(
+            "reading the honesty register", self.store.open_honesty_marks()
+        )
+        if marks is None:
+            return
+        before = {mark.id for mark in self.honesty_marks}
+        self.honesty_marks = marks
+        if before == {mark.id for mark in marks}:
+            return
+        await self._emit_safely(
+            HonestyUpdate(marks=[_mark_info(mark) for mark in marks], mode=self.config.honesty.mode)
+        )
+
     async def reload_summary(self) -> None:
         """Read the chat summary again, in case an operator corrected it (PLAN.md D40).
 
