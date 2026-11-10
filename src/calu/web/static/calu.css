@@ -75,3 +75,10 @@ form.inline { display: inline-flex; gap: .4rem; align-items: center; }
 .escalation { border-color: var(--warn); }
 kbd { font-family: var(--mono); font-size: .85em; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 .3rem; }
 #current .escalation { border-left: 3px solid var(--warn); }
+#palette { position: fixed; inset: 0; background: color-mix(in srgb, #000 45%, transparent); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; z-index: 20; }
+.palette-box { width: min(42rem, 92vw); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: .6rem; box-shadow: 0 10px 40px color-mix(in srgb, #000 35%, transparent); }
+.palette-box input { width: 100%; font: inherit; padding: .5rem .6rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.palette-list { margin-top: .4rem; max-height: 50vh; overflow-y: auto; }
+.palette-row { display: block; padding: .4rem .6rem; border-radius: 6px; text-decoration: none; color: var(--fg); font-family: var(--mono); font-size: .9em; }
+.palette-row.chosen { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+header .hint { color: var(--muted); font-size: .85em; }

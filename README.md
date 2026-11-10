@@ -297,7 +297,8 @@ A browser shows every session of every host at once:
 calu web          # http://127.0.0.1:8800, local only: there is no login yet
 ```
 
-It leads with the sessions that cannot go on without you, opens one session's history at four
+Every page shows what needs you and jumps to any session with Ctrl+K. It leads with the
+sessions that cannot go on without you, opens one session's history at four
 levels of detail (from the summary a checker reads to every tool input), attaches to a running
 one live — the stream, a visible message queue, stop, interrupt, "steer" into the running turn,
 and a conversation with a background subagent — and answers escalations where they appear. The

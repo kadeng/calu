@@ -105,8 +105,20 @@ async def test_the_fleet_page_lists_the_sessions_and_their_escalations(db_url: s
             assert page.status_code == 200
             assert "box" in page.text and "/w" in page.text
             assert "escalated" in page.text
-            assert "1 waiting" in page.text
             assert session_id in page.text
+            # The session's own waiting count is in the table; the header badge is filled from
+            # the API, so that every page shows it and not only this one.
+            assert 'class="count"' in page.text
+            assert 'id="attention"' in page.text
+
+            fleet = (await client.get("/api/sessions")).json()
+            assert fleet["waiting"] == 1
+            assert [s["where"] for s in fleet["sessions"]] == ["box:/w"]
+            assert fleet["sessions"][0]["group"] == "needs_you"
+            assert fleet["sessions"][0]["open_escalations"] == 1
+            assert fleet["sessions"][0]["url"].endswith(session_id)
+            # It serves clients, so the palette jumps straight to the live view.
+            assert fleet["sessions"][0]["live"].endswith(f"{session_id}/live")
     finally:
         await conn.close()
 

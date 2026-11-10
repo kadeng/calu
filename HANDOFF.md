@@ -36,7 +36,7 @@ in `calu/` only.
 | 3 Session runner | Done (`calu run`, steps/turns/escalations in the database, operator resolution, sandbox settings, herd commands) |
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
 | 5 Sandboxing | Settings done (D15); open: network policy per project (Q5), nested sandbox in Docker (Q1). `calu evals` done. |
-| 6 Herd management | Done: the commands and the web interface (`calu web`) |
+| 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
 | 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
@@ -130,6 +130,8 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   queue, Send and Steer, a recipient selector for background subagents, and escalation cards.
   `/triage` is the mode to sit in: one escalation at a time across every session, answered from
   the keyboard, with "remember exactly this command" turning the decision into an anchored rule.
+  Every page carries an attention badge (filled from `/api/sessions`, also in the tab title) and
+  a jump palette on Ctrl+K that goes to any session's live view.
   `/settings` is generated from `calu.config.Config`, so every value — Claude's model and effort,
   `use_bedrock`, each checker's model and thinking effort, the sandbox, the clock, the write sets
   — is editable with the right control, and `/checkers/{name}` edits the instructions with
@@ -301,9 +303,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
    `AutoEscalate`, and the single-binary packaging.
-3. **Phase 6 polish**: a web UI feature the research turned up and this version lacks — an
-   inbox with unread counts across sessions, sounds, and a jump palette (Orca has ⌘J). The
-   escalation queue covers the important half of it.
+3. **Phase 7's last item**: the single binary (PyApp or PyInstaller), which D1 deferred to
+   "later" — `uv tool install calu` is the supported way today.
 4. **Phase 5**: nothing blocking left. The network policy is built (D39; only its default for a
    new project is the owner's call, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs

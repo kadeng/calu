@@ -1,10 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Sessions · calu{% endblock %}
-{% block header_extra %}
-  {% if open_escalations %}
-    <span class="count"><a href="{{ url_for('escalations') }}">{{ open_escalations }} waiting</a></span>
-  {% endif %}
-{% endblock %}
 {% block body %}
 <h1>{{ sessions | length }} session{{ '' if sessions | length == 1 else 's' }}{{ ' (including ended)' if show_all }}</h1>
 <form class="inline" method="get" action="{{ url_for('fleet') }}">

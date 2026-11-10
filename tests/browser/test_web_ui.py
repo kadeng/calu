@@ -133,3 +133,41 @@ async def test_triage_answers_one_escalation_after_another_by_keyboard(db_url: s
             assert states == [("denied", ""), ("allowed", "go ahead")]
     finally:
         await conn.close()
+
+
+async def test_the_badge_and_the_jump_palette_work_on_every_page(db_url: str, page) -> None:
+    """Managing many sessions: see what needs you anywhere, and jump to one in two keystrokes."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _escalation = await populate(db)
+        async with serve(create_app(db)) as base:
+            # The badge is filled from the API, so it shows on a page that knows nothing of it.
+            await page.goto(f"{base}/rules")
+            await page.wait_for_function(
+                "document.getElementById('attention').textContent.includes('1 waiting')"
+            )
+            assert (await page.title()).startswith("(1)")  # and in the tab title
+
+            # Ctrl+K opens the palette, typing filters it, Enter jumps to the session.
+            await page.keyboard.press("Control+k")
+            await page.wait_for_selector("#palette input")
+            assert "box:/w" in await page.inner_text(".palette-list")
+            await page.fill("#palette input", "nothing matches this")
+            await page.wait_for_function(
+                "document.querySelector('.palette-list').textContent.includes('no session matches')"
+            )
+            await page.fill("#palette input", "box")
+            await page.wait_for_selector(".palette-row.chosen")
+            async with page.expect_navigation():
+                await page.keyboard.press("Enter")
+            assert session_id in page.url  # the live view of the session it offered
+
+            # Escape closes it again.
+            await page.keyboard.press("Control+k")
+            await page.wait_for_selector("#palette input")
+            await page.keyboard.press("Escape")
+            await page.wait_for_function("!document.getElementById('palette')")
+    finally:
+        await conn.close()

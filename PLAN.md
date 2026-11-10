@@ -475,7 +475,11 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    what a command wrote, warns about paths its summary did not mention, and can let a checker
    review the change and undo it. The evaluation of the checkers
    (`calu evals`, ported from sitl) is done.
-6. **Herd management:** a web UI on top of the commands of phase 3.
+6. **Herd management** (done): the commands of phase 3 and the web interface of `calu web`
+   (D33, D34, D40) — the fleet grouped by what needs a human, a session's history at four levels
+   of detail, the live view over the session's own WebSocket, the escalation queue of `/triage`,
+   the settings generated from the configuration model, the checker instructions and the folded
+   conversation editable, and on every page an attention badge and a jump palette (Ctrl+K).
 7. **Third-party user interfaces and packaging:** `calu acp`, the ACP adapter of §6.1 (D24),
    is **done** (`src/calu/acp/`): `initialize`, `session/new`, `session/load` with the required
    replay from `session.history`, `session/prompt`, `session/cancel`, `session/close`, the

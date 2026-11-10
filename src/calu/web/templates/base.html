@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}calu{% endblock %}</title>
 <link rel="stylesheet" href="{{ url_for('static', path='/calu.css') }}">
+<script src="{{ url_for('static', path='/calu.js') }}" defer></script>
 </head>
-<body>
+<body data-sessions-api="{{ url_for('sessions_json') }}" data-triage-url="{{ url_for('triage') }}">
 <header>
   <span class="name"><a href="{{ url_for('fleet') }}">calu</a></span>
   <nav>
@@ -18,6 +19,8 @@
     <a href="{{ url_for('settings') }}">Settings</a>
   </nav>
   {% block header_extra %}{% endblock %}
+  <span class="count" id="attention"></span>
+  <span class="hint">Ctrl+K</span>
   <span class="version">calu {{ version }} · local only</span>
 </header>
 <main>

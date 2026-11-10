@@ -17,6 +17,7 @@ Pages:
     /sessions/{id}/summary  the folded conversation the checkers read, editable
     /escalations          what waits for a human, with allow and deny
     /triage               one escalation at a time, with the queue behind it
+    /api/sessions         the fleet as JSON, for the jump palette and the attention badge
     /escalations/{id}     what the checker saw when it escalated the step
     /checkers             the checker definitions and their instructions, editable
     /rules                the allow and deny lists
@@ -187,6 +188,7 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         Route("/escalations", _page(escalations, state), name="escalations"),
         Route("/triage", _page(triage, state), name="triage"),
         Route("/api/escalations", _page(waiting_json, state), name="waiting_json"),
+        Route("/api/sessions", _page(sessions_json, state), name="sessions_json"),
         Route(
             "/api/escalations/{escalation_id:int}/resolve",
             _page(resolve_json, state),
@@ -681,6 +683,41 @@ async def triage(request: Request, state: _State) -> Response:
         The triage page.
     """
     return _render(request, "triage.html", {"api": request.url_for("waiting_json")})
+
+
+async def sessions_json(request: Request, state: _State) -> Response:
+    """Return the sessions as JSON, for the jump palette and the attention badge.
+
+    Every page carries them (`calu.js`), so one query has to serve both: where each session is,
+    what it is doing, whether it waits for a human, and the two links that open it.
+
+    Args:
+        request: The request; `?all=1` includes the sessions that have ended.
+        state: The shared state.
+
+    Returns:
+        `{"sessions": [...], "waiting": n}` with the number of escalations waiting anywhere.
+    """
+    show_all = request.query_params.get("all") == "1"
+    rows = await herd.sessions(state.db, active_only=not show_all)
+    waiting = await herd.escalations(state.db)
+    return JSONResponse(
+        {
+            "waiting": len(waiting),
+            "sessions": [
+                {
+                    "id": row.id,
+                    "where": f"{row.hostname}:{row.directory}",
+                    "state": row.state,
+                    "open_escalations": row.open_escalations,
+                    "group": _group_of(row),
+                    "url": str(request.url_for("session", session_id=row.id)),
+                    "live": str(request.url_for("live", session_id=row.id)) if row.address else "",
+                }
+                for row in rows
+            ],
+        }
+    )
 
 
 async def waiting_json(request: Request, state: _State) -> Response:
