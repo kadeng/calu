@@ -350,3 +350,5 @@ Not built yet: forking or rewinding a conversation (it needs support from Claude
 ## License
 
 GPL-2.0, see [LICENSE](LICENSE).
+
+Contributing: [AGENTS.md](AGENTS.md) for the layout and the rules, [docs/TESTING.md](docs/TESTING.md) for the test layers and the manual checklist, [PLAN.md](PLAN.md) for the decisions behind all of it.
