@@ -194,7 +194,10 @@ Read the result as follows:
   check that never judged the step was not wrong about it, and mixing the two would hide a run
   that mostly failed behind a plausible-looking percentage (PLAN.md D97).
 - a case of `escalation share` far from the earlier runs is worth a look even when the
-  accuracy holds: it is the cost side of the gate.
+  accuracy holds: it is the cost side of the gate. Read the split beside it (D100): an
+  escalation a case **wanted** is the checker working, and one **spent on a step that should
+  pass** is what a user pays for. A third of answers being escalations is fine when none of
+  them is waste.
 
 ## Writing tests
 

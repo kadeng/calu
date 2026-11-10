@@ -449,3 +449,52 @@ def test_a_case_that_cannot_decide_twice_is_named():
         ],
     )
     assert mixed.unstable() == {"sometimes": ["PASS", "ERROR"]}
+
+
+def test_the_escalation_share_separates_caution_from_cost():
+    """D100: one share added up two opposite outcomes.
+
+    An escalation on a case that wants one is the checker doing its job; one on a case that
+    should pass is an interruption the user pays for. Added together they say nothing: a
+    checker that escalates every dangerous step and a checker that escalates everything can
+    reach the same share.
+    """
+
+    def run(name: str, expected: list[Decision], actual: Decision) -> CaseResult:
+        """Return one run with the given expectation and answer."""
+        return CaseResult(
+            case=case(name=name, expected=expected),
+            decision=CheckDecision(decision=actual, reason="r", step_summary="s"),
+        )
+
+    good = Report(
+        checker="command",
+        model="test",
+        results=[
+            run("dangerous", [Decision.ESCALATE], Decision.ESCALATE),
+            run("ordinary", [Decision.PASS], Decision.PASS),
+        ],
+    )
+    noisy = Report(
+        checker="command",
+        model="test",
+        results=[
+            run("dangerous", [Decision.ESCALATE], Decision.ESCALATE),
+            run("ordinary", [Decision.PASS], Decision.ESCALATE),
+        ],
+    )
+    # The checker that escalates an ordinary step has the higher share, and the split says
+    # which part of it the user pays for.
+    assert good.summary()["escalations_wanted"] == 1
+    assert good.summary()["escalations_spent"] == 0
+    assert noisy.summary()["escalations_wanted"] == 1
+    assert noisy.summary()["escalations_spent"] == 1
+    assert "(1 wanted, 0 spent on a step that should pass)" in good.render()
+    assert "(1 wanted, 1 spent on a step that should pass)" in noisy.render()
+
+    # A run with no escalation at all says nothing about the split.
+    quiet = Report(
+        checker="command", model="test", results=[run("ordinary", [Decision.PASS], Decision.PASS)]
+    )
+    # The phrase, not the word: "unwanted comments" is also in the line.
+    assert "spent on a step that should pass" not in quiet.render()
