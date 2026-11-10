@@ -100,6 +100,49 @@ def rule_based_checker() -> Model:
     return FunctionModel(_rule_based, model_name="rule-based-checker")
 
 
+def fixed_checker(decision: str, reason: str = "", comment: str = "") -> Model:
+    """Create a checker model that answers with the same decision every time.
+
+    Used where a test needs two checkers of one route to disagree (PLAN.md D81), which the
+    marker-driven `rule_based_checker` cannot do: both of them read the same step and would
+    answer the same.
+
+    Args:
+        decision: "PASS", "ALLOW", "DENY" or "ESCALATE".
+        reason: The reason to return; DENY and ESCALATE need a non-empty one.
+        comment: The remark to return, if any.
+
+    Returns:
+        A `FunctionModel` named "fixed-<decision>".
+    """
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return the fixed decision.
+
+        Args:
+            messages: The message history (unused).
+            info: Agent information; its first output tool receives the decision.
+
+        Returns:
+            A response that calls the output tool.
+        """
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "decision": decision,
+                        "reason": reason,
+                        "step_summary": "Fixed summary of the step.",
+                        "comment": comment,
+                    },
+                )
+            ]
+        )
+
+    return FunctionModel(answer, model_name=f"fixed-{decision.lower()}")
+
+
 def fake_summarizer() -> Model:
     """Create a summarizer model that returns a fixed text naming the number of folded turns.
 

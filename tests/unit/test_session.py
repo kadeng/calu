@@ -1,11 +1,12 @@
 """The session orchestrator: turns, checked tool calls, escalations, state and store records."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import anyio
 import pytest
 
-from calu.checkers import Decision, Route, Step
+from calu.checkers import CheckDecision, Decision, Route, Step
 from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
@@ -25,7 +26,9 @@ from calu.protocol.messages import (
     TurnResult,
     UserInput,
 )
-from calu.session import Session, SessionError
+from calu.session import Session, SessionError, combine_decisions
+from calu.store.config import CheckerDefinition
+from calu.testing import fake_models, fixed_checker
 from tests.unit.helpers import default_settings, make_session
 
 pytestmark = pytest.mark.anyio
@@ -297,7 +300,8 @@ async def test_changed_settings_take_effect_from_the_next_step(tmp_path: Path):
     )
     session.apply_settings(strict)
     assert session.config.claude.model == "opus"  # the Claude settings of the run are kept
-    assert session.checkers[Route.COMMAND].instructions.startswith("#")
+    # A route carries a list of checkers now (D81); its own comes first.
+    assert session.checkers[Route.COMMAND][0].instructions.startswith("#")
     session.apply_settings(default_settings(tmp_path, Config(context=ContextConfig(narrate=False))))
     assert session.narrator is None
     async with anyio.create_task_group() as tg:
@@ -1117,3 +1121,112 @@ async def test_a_message_out_of_the_session_is_checked_but_a_relay_is_not(tmp_pa
     )
     # Neither is denied here -- the point is that the second one was judged at all.
     assert [c.decision for c in sent] == [Decision.PASS, Decision.PASS]
+
+
+def test_verdicts_of_several_checkers_combine_most_restrictively():
+    """D81: one DENY denies, one ESCALATE escalates, and ALLOW needs every checker."""
+
+    def verdict(name: str, decision: Decision, reason: str = "", comment: str = "") -> tuple:
+        """Return a (checker name, decision) pair for the combination."""
+        return name, CheckDecision(
+            decision=decision, reason=reason, comment=comment, step_summary=f"summary by {name}"
+        )
+
+    # One checker alone is passed through unchanged, including its summary and comment.
+    single = combine_decisions([verdict("command", Decision.PASS, comment="a remark")])
+    assert single.decision is Decision.PASS
+    assert single.comment == "a remark", "a lone checker's comment must not be relabelled"
+
+    deny = combine_decisions(
+        [
+            verdict("command", Decision.PASS),
+            verdict("honesty", Decision.DENY, reason="src/parser.py:fields is dirty"),
+            verdict("security", Decision.ESCALATE, reason="reaches the network"),
+        ]
+    )
+    assert deny.decision is Decision.DENY
+    assert deny.reason == "honesty: src/parser.py:fields is dirty", (
+        "only the reasons of the checkers that produced the decision belong in it"
+    )
+
+    escalate = combine_decisions(
+        [verdict("command", Decision.PASS), verdict("security", Decision.ESCALATE, reason="why")]
+    )
+    assert escalate.decision is Decision.ESCALATE and "security: why" in escalate.reason
+
+    # ALLOW overrules Claude Code's own approval, so it needs every voice.
+    assert (
+        combine_decisions(
+            [verdict("command", Decision.ALLOW), verdict("honesty", Decision.PASS)]
+        ).decision
+        is Decision.PASS
+    )
+    assert (
+        combine_decisions(
+            [verdict("command", Decision.ALLOW), verdict("honesty", Decision.ALLOW)]
+        ).decision
+        is Decision.ALLOW
+    )
+
+    # Every comment is kept and named; the summary comes from the first checker that wrote one.
+    passed = combine_decisions(
+        [
+            verdict("command", Decision.PASS, comment="name the units"),
+            verdict("honesty", Decision.PASS, comment="the docstring is vague"),
+        ]
+    )
+    assert passed.decision is Decision.PASS
+    assert "command: name the units" in passed.comment
+    assert "honesty: the docstring is vague" in passed.comment
+    assert passed.step_summary == "summary by command"
+
+    with pytest.raises(ValueError, match="no checker"):
+        combine_decisions([])
+
+
+async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
+    """D81: a checker row added to a route is asked about every step of that route.
+
+    This is what lets an honesty, security or over-engineering checker exist beside the command
+    checker without a code change (§13.5): the row decides, not the session.
+    """
+    settings = default_settings(tmp_path)
+    extra = CheckerDefinition(
+        name="honesty",
+        route="command",
+        instructions="# Honesty checker\n\nJudge whether the code tells the truth.",
+        model="test:model",
+        request_limit=5,
+        output_tokens_limit=24_000,
+        max_tokens=8_000,
+        version=1,
+    )
+    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "deploy the parser"}, "result": "ok"}]],
+        settings=settings,
+        checker_models={
+            **fake_models(),
+            # The command checker passes this step; the second checker denies it.
+            "honesty": fixed_checker("DENY", "src/parser.py:fields is dirty: fix the docstring"),
+        },
+    )
+    assert [c.name for c in session.checkers[Route.COMMAND]] == ["command", "honesty"]
+
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    # The step was denied, although the route's own checker had no objection.
+    (check,) = [e for e in rec.of(CheckResult) if e.tool_name == "Bash"]
+    assert check.decision is Decision.DENY
+    assert "honesty: src/parser.py:fields is dirty" in check.reason, (
+        "a denial must name the checker it came from"
+    )
+    # Both checkers are recorded, so `calu checker stats` can price and judge each of them.
+    runs = [run for step in store.steps.values() for run in step.checker_runs]
+    assert sorted(run.checker_name for run in runs) == ["command", "honesty"]
+    assert {run.decision for run in runs} == {"pass", "deny"}  # rows keep them lower case

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+from pydantic_ai.models import Model
 
 from calu.checkers.rules import Rules
 from calu.claude import FakeRunner, FakeScript
@@ -120,6 +121,7 @@ def make_session(
     turns: Sequence[Sequence[dict[str, Any]]],
     config: Config | None = None,
     settings: ProjectSettings | None = None,
+    checker_models: dict[str, str | Model] | None = None,
 ) -> tuple[Session, Recorder, MemorySessionStore]:
     """Build a session with a scripted fake runner, fake models and an in-memory store.
 
@@ -130,6 +132,8 @@ def make_session(
         settings: Complete settings; None builds them from `config` and the built-in defaults.
             The write-set snapshots (D31) are kept next to the workspace, not in the user's
             state directory, so a test never writes outside its temporary directory.
+        checker_models: Models by checker name; None uses `calu.testing.fake_models()`. A test
+            with an extra checker on a route (D81) passes a model for it under its name.
 
     Returns:
         The session, the event recorder and the store.
@@ -143,7 +147,7 @@ def make_session(
         store,
         lambda: FakeRunner(script, workspace),
         rec,
-        checker_models=fake_models(),
+        checker_models=checker_models if checker_models is not None else fake_models(),
         snapshot_root=workspace.parent / f"{workspace.name}-snapshots",
     )
     return session, rec, store

@@ -60,6 +60,7 @@ from pydantic_ai.models import Model
 from calu import __version__
 from calu.changes import ChangeSet, SnapshotError, SnapshotStore, default_root
 from calu.checkers import (
+    CheckContext,
     CheckDecision,
     Checker,
     CheckOutcome,
@@ -90,7 +91,7 @@ from calu.claude.sdk_runner import AGENT_TOOLS
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
-from calu.config import CHECKER_FIELDS, EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort
+from calu.config import EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort
 from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
@@ -300,14 +301,81 @@ class _Decided:
 
     `source` is who decided: "rules", "policy", "checker", "auto" or "internal". `rules` is
     what the allow and deny lists found ("deny", "allow", "unlisted") or None for a tool the
-    lists do not cover. `run` is the checker's model call, or None if no checker ran.
+    lists do not cover. `runs` holds one model call per checker that ran, in the order of the
+    route's checkers (PLAN.md D81), and is empty when no checker ran.
     """
 
     route: Route
     decision: CheckDecision
     source: str
     rules: str | None = None
-    run: CheckOutcome | None = None
+    runs: list[tuple[Checker, CheckOutcome]] = field(default_factory=list)
+
+
+def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecision:
+    """Combine the verdicts of the checkers of one route into one (PLAN.md D81).
+
+    Most restrictive wins: one DENY denies the step, else one ESCALATE escalates it, else it
+    passes. ALLOW is the exception and needs every checker to say it, because ALLOW overrules
+    Claude Code's own approval and an override should not rest on one voice out of four.
+
+    The reason is composed of the reasons of the checkers that produced the winning decision,
+    and every non-empty comment is kept; both name the checker they came from when more than one
+    checker ran, so a denial can be attributed. The summary of the step is taken from the first
+    checker that wrote one, because all of them describe the same step and the route's own
+    checker comes first.
+
+    Args:
+        verdicts: One (checker name, decision) pair per checker that ran, the route's own
+            checker first; must not be empty.
+
+    Returns:
+        The combined decision.
+
+    Raises:
+        ValueError: If `verdicts` is empty -- a route always has at least one checker, so an
+            empty list is a programming error rather than a state to handle.
+    """
+    if not verdicts:
+        raise ValueError("combining the verdicts of no checker")
+    if len(verdicts) == 1:
+        return verdicts[0][1]
+    kinds = [decision.decision for _, decision in verdicts]
+    if Decision.DENY in kinds:
+        winner = Decision.DENY
+    elif Decision.ESCALATE in kinds:
+        winner = Decision.ESCALATE
+    elif all(kind is Decision.ALLOW for kind in kinds):
+        winner = Decision.ALLOW
+    else:
+        winner = Decision.PASS
+
+    def labelled(parts: list[tuple[str, str]]) -> str:
+        """Join texts of several checkers, each named.
+
+        Args:
+            parts: (checker name, text) pairs; empty texts are left out by the caller.
+
+        Returns:
+            One paragraph per checker, prefixed with its name.
+        """
+        return "\n\n".join(f"{name}: {text}" for name, text in parts)
+
+    reasons = [
+        (name, decision.reason.strip())
+        for name, decision in verdicts
+        if decision.reason.strip() and decision.decision is winner
+    ]
+    comments = [
+        (name, decision.comment.strip()) for name, decision in verdicts if decision.comment.strip()
+    ]
+    summary = next((d.step_summary for _, d in verdicts if d.step_summary.strip()), "")
+    return CheckDecision(
+        decision=winner,
+        reason=labelled(reasons),
+        comment=labelled(comments),
+        step_summary=summary,
+    )
 
 
 @dataclass(frozen=True)
@@ -378,11 +446,14 @@ class Session:
             overrides=self.config.tool_routes, default=self.config.default_route
         )
         self.rules = settings.rules
-        self.checkers = {
-            Route.COMMAND: self._checker("command", self.config.command_checker),
-            Route.EDIT: self._checker("edit", self.config.edit_checker),
-            Route.CHANGESET: self._checker("changeset", self.config.changeset_checker),
+        self.checkers: dict[Route, list[Checker]] = {
+            Route.COMMAND: self._route_checkers(Route.COMMAND, self.config.command_checker),
+            Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
+            Route.CHANGESET: self._route_checkers(Route.CHANGESET, self.config.changeset_checker),
         }
+        """The checkers of each step route, in the order they are reported. A route may carry
+        several -- honesty, security, over-engineering beside the built-in one -- and a step runs
+        all of them (D81)."""
         self.result_checker = ResultChecker(
             instructions=self._instructions("subagent-result"),
             model=resolve_model(self._models.get("subagent") or self.config.subagent_checker.model),
@@ -481,6 +552,96 @@ class Session:
             ),
             max_tokens=cfg.max_tokens,
         )
+
+    async def _run_checkers(
+        self, route: Route, step: Step, context: CheckContext, extra: str = ""
+    ) -> tuple[CheckDecision, list[tuple[Checker, CheckOutcome]]]:
+        """Run every checker of `route` at the same time and combine their verdicts (D81).
+
+        The checkers are independent, so they run concurrently: the step waits for the slowest
+        of them and not for their sum. Each has its own deadline, and one that misses it yields
+        an ESCALATE for itself instead of failing the step -- a checker that does not answer
+        must not be able to let a step through, and must not be able to stop the others from
+        being heard either.
+
+        Side effects: raises and lowers the "checking" count, which the session state and the
+        clients show.
+
+        Args:
+            route: The step route whose checkers run.
+            step: The tool call to check.
+            context: The cached context for the checkers.
+            extra: A further prompt block after the step (the commit diff for the changeset
+                route, the write set for a review).
+
+        Returns:
+            The combined decision, and one (checker, outcome) pair per checker in the order of
+            the route's checkers, for the `checker_runs` rows.
+        """
+        checkers = self.checkers[route]
+        outcomes: list[CheckOutcome | None] = [None] * len(checkers)
+
+        async def one(index: int, checker: Checker) -> None:
+            """Run one checker and keep its outcome at its own index.
+
+            Args:
+                index: Position in the route's checker list.
+                checker: The checker to run.
+            """
+            try:
+                with anyio.fail_after(CHECKER_DEADLINE_S):
+                    outcomes[index] = await checker.run(step, context, extra=extra)
+            except TimeoutError:
+                outcomes[index] = CheckOutcome(
+                    decision=CheckDecision(
+                        decision=Decision.ESCALATE,
+                        reason=(
+                            f"The {checker.name} checker did not answer within "
+                            f"{CHECKER_DEADLINE_S} s."
+                        ),
+                        step_summary=label_for_unchecked(step.tool_name, step.tool_input),
+                    ),
+                    duration_ms=CHECKER_DEADLINE_S * 1000,
+                )
+
+        self._checking += 1
+        await self._refresh_state()
+        try:
+            async with anyio.create_task_group() as tg:
+                for index, checker in enumerate(checkers):
+                    tg.start_soon(one, index, checker)
+        finally:
+            self._checking -= 1
+            await self._refresh_state()
+        runs = [
+            (checker, outcome)
+            for checker, outcome in zip(checkers, outcomes, strict=True)
+            if outcome
+        ]
+        return combine_decisions([(c.name, o.decision) for c, o in runs]), runs
+
+    def _route_checkers(self, route: Route, cfg: CheckerConfig) -> list[Checker]:
+        """Create every enabled checker of one step route (PLAN.md D81).
+
+        The route's own name (`command`, `edit`, `changeset`) comes first and is always present,
+        with the built-in instructions when the database holds none. Every other enabled
+        `checker_types` row of this route follows, in the order of its name, each with the model
+        and limits of its own row -- so a `honesty` or `security` checker is added by inserting a
+        row and needs no code change.
+
+        Args:
+            route: The step route.
+            cfg: Model and limits for the route's own checker, from the configuration (D51).
+
+        Returns:
+            One checker per enabled definition, the route's own first; never empty.
+        """
+        checkers = [self._checker(route.value, cfg)]
+        for name, definition in sorted(self.settings.checkers.items()):
+            if definition.route != route.value or name == route.value:
+                continue
+            checkers.append(self._checker(name, definition.limits()))
+        return checkers
 
     def _narrator(self) -> Narrator | None:
         """Create the narrator if narration is on.
@@ -595,21 +756,15 @@ class Session:
             overrides=self.config.tool_routes, default=self.config.default_route
         )
         self.context.config = self.config.context
-        for route, name in (
-            (Route.COMMAND, "command"),
-            (Route.EDIT, "edit"),
-            (Route.CHANGESET, "changeset"),
-        ):
-            checker = self.checkers[route]
-            cfg = getattr(self.config, CHECKER_FIELDS[name])
-            checker.instructions = self._instructions(name)
-            checker.rules = self.rules  # the code tools follow the new read deny lists
-            if name not in self._models:
-                checker.model = resolve_model(cfg.model)
-            checker.usage_limits = UsageLimits(
-                request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
-            )
-            checker.max_tokens = cfg.max_tokens
+        # Rebuilt rather than updated in place: a route carries a list now (D81), so a checker
+        # row added, removed or disabled while the session runs takes effect at the next step,
+        # as its instructions and its model already did. The code tools of the new checkers
+        # follow the new read deny lists, because `_checker` passes the current rules.
+        self.checkers = {
+            Route.COMMAND: self._route_checkers(Route.COMMAND, self.config.command_checker),
+            Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
+            Route.CHANGESET: self._route_checkers(Route.CHANGESET, self.config.changeset_checker),
+        }
         self.result_checker.instructions = self._instructions("subagent-result")
         if "subagent" not in self._models:
             self.result_checker.model = resolve_model(self.config.subagent_checker.model)
@@ -867,21 +1022,20 @@ class Session:
             The checker's decision; a failure of the checker yields ESCALATE, so a human
             decides instead of the change standing unreviewed.
         """
-        checker = self.checkers[Route.CHANGESET]
         extra = WRITE_SET_PROMPT.format(summary=change.summary(), patch=change.patch)
-        self._checking += 1
-        await self._refresh_state()
         try:
-            with anyio.fail_after(CHECKER_DEADLINE_S):
-                run = await checker.run(step, self.context.check_context(), extra=extra)
+            decision, runs = await self._run_checkers(
+                Route.CHANGESET, step, self.context.check_context(), extra=extra
+            )
             if step_id is not None:
-                await self._store_call(
-                    "recording the review of a write set",
-                    self.store.add_checker_run(
-                        step_id, self._checker_run(checker, Route.CHANGESET.value, run)
-                    ),
-                )
-            return run.decision
+                for checker, run in runs:
+                    await self._store_call(
+                        "recording the review of a write set",
+                        self.store.add_checker_run(
+                            step_id, self._checker_run(checker, Route.CHANGESET.value, run)
+                        ),
+                    )
+            return decision
         except TimeoutError:
             return CheckDecision(
                 decision=Decision.ESCALATE,
@@ -1587,11 +1741,11 @@ class Session:
             # No checker ran (rules, policy): narrate for the context without delaying the call.
             self._spawn(self._narrate_record, record, pending.outputs)
         if step_id is not None:
-            if decided.run is not None:
+            for checker, run in decided.runs:
                 await self._store_call(
                     "recording a checker run",
                     self.store.add_checker_run(
-                        step_id, self._checker_run(self.checkers[route], route.value, decided.run)
+                        step_id, self._checker_run(checker, route.value, run)
                     ),
                 )
             await self._store_call(
@@ -2058,29 +2212,11 @@ class Session:
                 pending.text = await self._narrate_safely(pending.outputs)
             if pending.text:
                 step = step.model_copy(update={"narration": pending.text})
-        checker = self.checkers[route]
-        context = self.context.check_context()
-        self._checking += 1
-        await self._refresh_state()
-        try:
-            with anyio.fail_after(CHECKER_DEADLINE_S):
-                run = await checker.run(step, context, extra=diff)
-        except TimeoutError:
-            run = CheckOutcome(
-                decision=CheckDecision(
-                    decision=Decision.ESCALATE,
-                    reason=(
-                        f"The {route.value} checker did not answer within {CHECKER_DEADLINE_S} s."
-                    ),
-                    step_summary=label,
-                ),
-                duration_ms=CHECKER_DEADLINE_S * 1000,
-            )
-        finally:
-            self._checking -= 1
-            await self._refresh_state()
+        decision, runs = await self._run_checkers(
+            route, step, self.context.check_context(), extra=diff
+        )
         return self._auto_escalate(
-            _Decided(route=route, decision=run.decision, source="checker", rules=rules, run=run)
+            _Decided(route=route, decision=decision, source="checker", rules=rules, runs=runs)
         )
 
     def _auto_escalate(self, decided: _Decided) -> _Decided:
@@ -2486,17 +2622,22 @@ class Session:
     def _checker_run(self, checker: Checker, route: str, outcome: CheckOutcome) -> CheckerRun:
         """Build the `checker_runs` row of one step check.
 
+        The row is keyed by the **checker's own name**, not by its route: a route may carry
+        several checkers (PLAN.md D81), and a row named after the route would merge them, so
+        `calu checker stats` and `calu checker misses` could no longer tell which of them
+        decided or what each one costs.
+
         Args:
-            checker: The checker that ran.
-            route: Its route value ("command" or "edit"), used as the checker type name.
+            checker: The checker that ran; its name and version go into the row.
+            route: Its route value, kept for the caller's own bookkeeping.
             outcome: What the call returned and cost.
 
         Returns:
             The row.
         """
         return CheckerRun(
-            checker_name=route,
-            checker_version=self._version(route),
+            checker_name=checker.name,
+            checker_version=self._version(checker.name),
             model=_model_name(checker.model),
             decision=outcome.decision.decision.value.lower(),
             reason=outcome.decision.reason,

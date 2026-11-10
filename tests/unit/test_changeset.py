@@ -87,7 +87,8 @@ async def test_a_commit_goes_to_the_changeset_checker_with_its_diff(tmp_path: Pa
         root, [[{"tool": "Bash", "input": {"command": "git commit -m 'second'"}, "result": "ok"}]]
     )
     seen: list[str] = []
-    checker = session.checkers[Route.CHANGESET]
+    # A route carries a list of checkers (D81); the route's own is the first.
+    (checker,) = session.checkers[Route.CHANGESET]
     original = checker.build_prompt  # keep the fake model, but record the prompt it gets
 
     def build_prompt(step, context, extra=""):
