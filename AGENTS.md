@@ -82,6 +82,7 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
 - `scripts/wsl-test.sh [pytest args]`: all of the above
 - Sync with `uv sync --all-extras`: the web interface is the optional `web` extra, and its tests skip without it.
 - CI runs the same checks on every push and pull request, plus the browser layer and the installed wheel (`.github/workflows/checks.yml`). The live layer never runs in CI.
+- Every `calu ...` line in the documentation's code blocks is parsed by the real parser in a test (`tests/unit/test_documented_commands.py`), so a renamed flag or a stale example fails the suite rather than a reader's terminal.
 
 ## Coding rules (from sitl, PLAN.md D11)
 
