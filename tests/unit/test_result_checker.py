@@ -129,3 +129,37 @@ async def test_the_review_can_be_turned_off(tmp_path: Path):
         await session.stop()
     assert not [c for c in rec.of(CheckResult) if c.route == "subagent"]
     assert not rec.of(EscalationRequest)
+
+
+async def test_an_interrupt_ends_a_waiting_subagent_review_without_telling_claude(tmp_path: Path):
+    """The hook that waits for a result review is not cancelled by Claude Code (D119).
+
+    A subagent result that escalated holds a hook open until a human answers. If the turn is
+    interrupted instead, nobody is going to answer it: the escalation belongs to a turn that no
+    longer exists. The session therefore ends it as **cancelled** -- the waiting call returns,
+    the escalation row is closed, and Claude is told nothing, because an interrupted turn needs
+    no note about a review of it. Without this the hook would wait for the session's lifetime.
+    """
+    session, rec, store = make_session(
+        tmp_path, agent_turn("Rewrite everything calu:escalate-result")
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        esc = (await rec.wait_for(EscalationRequest))[0]
+        assert esc.tool_name == "SubagentResult"
+
+        await session.interrupt()
+        # The turn ends, which it cannot do while a hook is still waiting for a decision.
+        await rec.wait_for(TurnResult)
+
+        # Nothing was injected: a note about the review of an interrupted turn would be noise,
+        # and the interrupt is what Claude already knows about.
+        assert not [u for u in rec.of(UserInput) if "result checker" in u.text]
+        # The escalation is gone from the session and closed in the store, so `calu escalations`
+        # does not keep offering a decision nobody can use.
+        assert session.snapshot().escalations == []
+        closed = [e for e in store.escalations.values() if e.state != "open"]
+        assert closed, "the row has to be closed, or the fleet shows a dead escalation"
+        assert any("interrupted" in (e.note or "") for e in closed)
+        await session.stop()
