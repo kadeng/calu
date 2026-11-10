@@ -125,14 +125,42 @@ def change_warnings(config: Config) -> list[str]:
     return []
 
 
+def network_warnings(config: Config) -> list[str]:
+    """Return warnings about the sandbox's network settings (PLAN.md D39).
+
+    Args:
+        config: The session configuration, with the project's network policy already applied.
+
+    Returns:
+        A warning if the commands may reach **every** domain (the wildcard of the "full"
+        policy), because that is a deliberate choice worth seeing at every start; nothing
+        otherwise. A policy that reaches nothing needs no warning: that is the safe end.
+    """
+    sandbox = config.claude.sandbox
+    if not sandbox.enabled or "*" not in sandbox.allowed_domains:
+        return []
+    denied = f", except {', '.join(sandbox.denied_domains)}" if sandbox.denied_domains else ""
+    return [
+        "the sandbox lets commands reach every domain through its proxy (network policy "
+        f'"full"{denied}). Narrow it with `calu project network --name <project> --network '
+        "proxy` and `claude.sandbox.allowed_domains`."
+    ]
+
+
 def warnings(config: Config, environ: Mapping[str, str] | None = None) -> list[str]:
-    """Return all start-up warnings (sandbox, API keys and write sets).
+    """Return all start-up warnings (sandbox, API keys, write sets, network).
 
     Args:
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
 
     Returns:
-        The warnings of `sandbox_warnings`, `key_warnings` and `change_warnings`.
+        The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings` and
+        `network_warnings`.
     """
-    return sandbox_warnings(config) + key_warnings(config, environ) + change_warnings(config)
+    return (
+        sandbox_warnings(config)
+        + key_warnings(config, environ)
+        + change_warnings(config)
+        + network_warnings(config)
+    )

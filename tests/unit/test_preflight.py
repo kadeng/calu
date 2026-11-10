@@ -92,3 +92,39 @@ def test_a_review_without_a_snapshot_is_reported() -> None:
     assert len(preflight.change_warnings(broken)) == 1
     assert "needs the snapshot" in preflight.change_warnings(broken)[0]
     assert preflight.change_warnings(broken)[0] in preflight.warnings(broken, {})
+
+
+def test_the_three_network_policies_are_expressed_in_the_sandbox_settings() -> None:
+    """D39: measured against the real CLI — no network key, an allow list, or the wildcard."""
+    configured = SandboxConfig(allowed_domains=["pypi.org"], denied_domains=["evil.example"])
+
+    nothing = configured.with_policy("none").settings()["sandbox"]
+    assert "allowedDomains" not in nothing.get("network", {})
+    assert nothing["network"]["deniedDomains"] == ["evil.example"]  # the deny list is kept
+
+    only_listed = configured.with_policy("proxy").settings()["sandbox"]
+    assert only_listed["network"]["allowedDomains"] == ["pypi.org"]
+
+    everything = configured.with_policy("full").settings()["sandbox"]
+    assert everything["network"]["allowedDomains"] == ["*"]
+    # The deny list still wins over the wildcard, which is "everything except these".
+    assert everything["network"]["deniedDomains"] == ["evil.example"]
+
+
+def test_an_open_network_is_reported_at_every_start() -> None:
+    open_network = Config(
+        claude=ClaudeConfig(sandbox=SandboxConfig(allowed_domains=["*"], denied_domains=["x.io"]))
+    )
+    said = preflight.network_warnings(open_network)
+    assert len(said) == 1
+    assert "every domain" in said[0] and "except x.io" in said[0]
+    assert said[0] in preflight.warnings(open_network, {})
+
+    # A narrow policy, and a sandbox that is off, say nothing about the network.
+    assert preflight.network_warnings(Config()) == []
+    narrow = Config(claude=ClaudeConfig(sandbox=SandboxConfig(allowed_domains=["pypi.org"])))
+    assert preflight.network_warnings(narrow) == []
+    disabled = Config(
+        claude=ClaudeConfig(sandbox=SandboxConfig(enabled=False, allowed_domains=["*"]))
+    )
+    assert preflight.network_warnings(disabled) == []

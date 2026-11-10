@@ -836,11 +836,12 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`action`, `directory`, `name`, `git_remote`, `network`).
+            `network` changes the policy of an existing project (D39); `add` sets it at once.
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential, the directory does not exist, or the
-            project exists already.
+        CliError: If there is no `admin` credential, the directory does not exist, the project
+            exists already, or `network` was asked for without a name.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -852,17 +853,28 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
         name = directory.name
 
     async def work(db: Db) -> str:
-        """Add or list projects.
+        """Add a project, list them, or change one's network policy.
 
         Args:
             db: The connection.
 
         Returns:
             The report.
+
+        Raises:
+            CliError: If `network` was asked for without a project name.
         """
         if args.action == "list":
             rows = await admin.projects(db)
             return "\n".join(row.line() for row in rows) or "no projects"
+        if args.action == "network":
+            if not name:
+                raise CliError("calu project network needs --name and a --network policy")
+            changed = await admin.set_network_policy(db, name, args.network)
+            return (
+                f"project {changed.name!r} now has network {changed.network_policy}; a running "
+                "session applies it when it next starts"
+            )
         row = await admin.add_project(db, name or "", args.git_remote, args.network)
         return f"added project {row.name!r}; use it with `calu run --project {row.name}`"
 
@@ -1300,7 +1312,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_evals)
 
     project = sub.add_parser("project", help="register a project in the database")
-    project.add_argument("action", choices=["add", "list"])
+    project.add_argument("action", choices=["add", "list", "network"])
     project.add_argument("directory", nargs="?", help="project directory (for add)")
     project.add_argument("--name", help="project name (default: the directory's name)")
     project.add_argument("--git-remote", help="git remote of the project")

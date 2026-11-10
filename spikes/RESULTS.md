@@ -403,3 +403,34 @@ with a prompt that runs `bash probe.sh > probe.out` (CLI 2.1.319, haiku, fake ch
 on this machine is socat, which `apt install socat` solves permanently and `get-socat.sh` solves
 without root; re-run this check after a CLI update, and prefer `--sandbox` when running the smoke
 session.
+
+## The sandbox's network policy (2026-11-10, answers Q5's mechanism, D39)
+
+**Why it matters.** `projects.network_policy` has existed since the first migration with the
+values "none", "proxy" and "full", and **nothing applied it**: the column was inert and its
+default said "full" while the sandbox in fact blocked everything. To wire it, the three policies
+have to be expressible in Claude Code's sandbox settings.
+
+**Setup.** `claude -p` with the sandbox on (CLI 2.1.319, haiku, socat from `get-socat.sh`) and a
+probe inside it that prints the proxy environment and tries `https://example.com` and
+`https://1.1.1.1`, first with raw TCP (`/dev/tcp`), then with curl.
+
+**Observations.**
+
+- The sandbox runs a filtering HTTP proxy and exports it: `HTTPS_PROXY=http://<credentials>@127.
+  0.0.1:3128`. **Raw TCP is blocked whatever the policy says** — `/dev/tcp/example.com/443`
+  failed even with the domain allowed, so the policy only governs what goes through the proxy.
+  Anything that ignores the proxy variables reaches nothing, which is a useful property in
+  itself.
+- No `network` key: curl to both hosts failed. Nothing is reachable.
+- `network.allowedDomains: ["example.com"]`: `https://example.com` answered **200**, and
+  `https://1.1.1.1` failed. The allow list works, and it is a domain list, not an address list.
+- `network.allowedDomains: ["*"]`: both answered (200 and a 301). So the wildcard is how
+  "everything" is written.
+- `allowedDomains: ["*"]` with `deniedDomains: ["example.com"]`: example.com failed, 1.1.1.1
+  still answered. The deny list wins over the wildcard, so "everything except these" works.
+
+**Conclusion.** The mapping of D39: "none" emits no allow list, "proxy" emits the configured
+domains, "full" emits `["*"]`, and the deny list is kept in every case. What remains for the
+owner (Q5) is only the **default** for new projects, which stays "full" in the schema while the
+start-up warnings now say plainly when a session can reach every domain.

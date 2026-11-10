@@ -93,6 +93,19 @@ Claude Code's own credentials, SSH, cloud and registry credentials. Claude Code'
 defaults additionally deny the container sockets, `/run/dbus` and `/run/user`."""
 
 
+NetworkPolicy = Literal["none", "proxy", "full"]
+"""What a project's commands may reach (`projects.network_policy`, PLAN.md §7 and D39).
+
+Measured with the real CLI (`spikes/RESULTS.md`, "The sandbox's network policy"): the sandbox
+runs a filtering HTTP proxy and exports it as `HTTPS_PROXY`, and raw TCP is blocked whatever the
+policy says. So the three policies are expressed through the proxy's allow list:
+
+    none    no `network` key at all: nothing is reachable, not even through the proxy
+    proxy   `allowedDomains` = the configured list: only those domains
+    full    `allowedDomains` = ["*"]: everything, minus `deniedDomains`, which still wins
+"""
+
+
 class SandboxConfig(BaseModel):
     """Isolation of Bash commands by Claude Code's own sandbox (PLAN.md D15).
 
@@ -124,6 +137,26 @@ class SandboxConfig(BaseModel):
     allowed_domains: list[str] = Field(default_factory=list)
     denied_domains: list[str] = Field(default_factory=list)
     allow_unix_sockets: list[str] = Field(default_factory=list)
+
+    def with_policy(self, policy: NetworkPolicy) -> SandboxConfig:
+        """Return a copy whose network settings express `policy` (PLAN.md D39).
+
+        The deny list is kept in every case: it still overrides the wildcard of "full", which is
+        how "everything except these domains" is written.
+
+        Args:
+            policy: The project's network policy.
+
+        Returns:
+            A copy with `allowed_domains` set accordingly: empty for "none", the wildcard for
+            "full", and unchanged for "proxy" — where an empty list means nothing is reachable,
+            which `calu.preflight` warns about.
+        """
+        if policy == "none":
+            return self.model_copy(update={"allowed_domains": []})
+        if policy == "full":
+            return self.model_copy(update={"allowed_domains": ["*"]})
+        return self
 
     def settings(self) -> dict[str, Any]:
         """Return the Claude Code settings document for `--settings`.

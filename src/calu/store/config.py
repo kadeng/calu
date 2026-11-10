@@ -18,18 +18,21 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import anyio
 import psycopg
 from pydantic import ValidationError
 
 from calu.checkers.rules import Rules
-from calu.config import SETTINGS_KEY, CheckerConfig, Config, build_config
+from calu.config import SETTINGS_KEY, CheckerConfig, Config, NetworkPolicy, build_config
 from calu.db import Db
 from calu.db.notify import CONFIG_CHANGED, Dirty, Notifier
 
 log = logging.getLogger(__name__)
+
+POLICIES = ("none", "proxy", "full")
+"""The values of `projects.network_policy` this store understands (D39)."""
 
 RELOAD_DEBOUNCE_S = 0.25
 """Quiet time after a `config_changed` notification before the settings are reloaded, so that
@@ -138,7 +141,7 @@ class ConfigStore:
         """
         async with self._db.exclusive() as conn:
             # One lock for all four queries, so the settings cannot be read half-changed.
-            project_id = await self._project_id(conn)
+            project_id, policy = await self._project(conn)
             layers = await self._settings_layers(conn)
             checkers = await self._checker_definitions(conn)
             rules = await self._rules(conn, project_id)
@@ -149,6 +152,17 @@ class ConfigStore:
                 for c in checkers.values()
             ],
         )
+        if policy is not None:
+            # The project's network policy shapes the sandbox the commands run in (D39). It
+            # lives in its own column rather than in the settings, because it is a property of
+            # the project, not a value someone sets per session.
+            config = config.model_copy(
+                update={
+                    "claude": config.claude.model_copy(
+                        update={"sandbox": config.claude.sandbox.with_policy(policy)}
+                    )
+                }
+            )
         return ProjectSettings(config=config, checkers=checkers, rules=rules)
 
     async def watch(
@@ -213,24 +227,32 @@ class ConfigStore:
 
     # ------------------------------------------------------------------ single queries
 
-    async def _project_id(self, conn: psycopg.AsyncConnection) -> int | None:
-        """Look up the id of the configured project.
+    async def _project(
+        self, conn: psycopg.AsyncConnection
+    ) -> tuple[int | None, NetworkPolicy | None]:
+        """Look up the id and the network policy of the configured project.
 
         Args:
             conn: The locked connection.
 
         Returns:
-            The `projects.id` of `self.project`, or None if no project is configured or no row
-            has that name.
+            (`projects.id`, `projects.network_policy`), or (None, None) if no project is
+            configured or no row has that name. A policy of None leaves the sandbox settings as
+            they are configured, which is what a session without a project row gets.
 
         Raises:
             psycopg.Error: On database errors.
         """
         if self.project is None:
-            return None
-        cur = await conn.execute(b"SELECT id FROM projects WHERE name = %s", (self.project,))
+            return None, None
+        cur = await conn.execute(
+            b"SELECT id, network_policy FROM projects WHERE name = %s", (self.project,)
+        )
         row = await cur.fetchone()
-        return row[0] if row else None
+        if row is None:
+            return None, None
+        policy = str(row[1])
+        return row[0], cast("NetworkPolicy", policy) if policy in POLICIES else None
 
     async def _settings_layers(self, conn: psycopg.AsyncConnection) -> list[Mapping[str, Any]]:
         """Read the partial configurations of the `config` table.

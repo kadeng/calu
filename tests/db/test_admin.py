@@ -1,5 +1,7 @@
 """Changing projects, configuration, checker definitions and rules in the database."""
 
+from pathlib import Path
+
 import pytest
 
 from calu import admin
@@ -218,3 +220,43 @@ async def test_a_whole_rule_list_is_replaced_from_its_file_form(db_url: str, tmp
         assert "^new-one$" not in patterns and "^old-one$" not in patterns
     finally:
         await conn.close()  # type: ignore[attr-defined]
+
+
+async def test_a_projects_network_policy_shapes_the_sandbox(db_url: str) -> None:
+    """D39: the column was inert until now — a session must actually get the policy."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.add_project(db, "narrow", network_policy="proxy")
+        await admin.set_setting(
+            db, "claude.sandbox.allowed_domains", ["pypi.org"], project="narrow"
+        )
+
+        narrow = await ConfigStore(db, Path("/w"), "narrow").load()
+        assert narrow.config.claude.sandbox.allowed_domains == ["pypi.org"]
+
+        # "none" clears the allow list, whatever the settings say, so nothing is reachable.
+        await admin.set_network_policy(db, "narrow", "none")
+        closed = await ConfigStore(db, Path("/w"), "narrow").load()
+        assert closed.config.claude.sandbox.allowed_domains == []
+        assert "allowedDomains" not in closed.config.claude.sandbox.settings()["sandbox"].get(
+            "network", {}
+        )
+
+        # "full" is the wildcard the spike verified against the real CLI.
+        await admin.set_network_policy(db, "narrow", "full")
+        open_network = await ConfigStore(db, Path("/w"), "narrow").load()
+        assert open_network.config.claude.sandbox.allowed_domains == ["*"]
+
+        # A session without a project keeps the configured settings untouched.
+        await admin.set_setting(db, "claude.sandbox.allowed_domains", ["global.example"])
+        plain = await ConfigStore(db, Path("/w"), None).load()
+        assert plain.config.claude.sandbox.allowed_domains == ["global.example"]
+
+        with pytest.raises(admin.AdminError):
+            await admin.set_network_policy(db, "narrow", "wide-open")
+        with pytest.raises(admin.AdminError):
+            await admin.set_network_policy(db, "no-such-project", "none")
+    finally:
+        await conn.close()

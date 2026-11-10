@@ -146,6 +146,40 @@ async def add_project(
     return ProjectRow(*row)
 
 
+async def set_network_policy(db: Db, name: str, network_policy: str) -> ProjectRow:
+    """Change what a project's sandboxed commands may reach (PLAN.md D39).
+
+    A running session applies it at its **next start**, not at its next step: the policy becomes
+    part of the sandbox that Claude Code was started with.
+
+    Args:
+        db: A connection with write access to `projects` (the owner).
+        name: The project's name.
+        network_policy: One of `NETWORK_POLICIES` — "none" (nothing reachable), "proxy" (only
+            the configured `claude.sandbox.allowed_domains`) or "full" (everything except
+            `denied_domains`).
+
+    Returns:
+        The project row as it is now.
+
+    Raises:
+        AdminError: If the policy is not one of `NETWORK_POLICIES`, or no project has that name.
+        psycopg.Error: On database errors.
+    """
+    if network_policy not in NETWORK_POLICIES:
+        raise AdminError(
+            f"network policy must be one of {', '.join(NETWORK_POLICIES)}, not {network_policy!r}"
+        )
+    row = await db.one(
+        "UPDATE projects SET network_policy = %s WHERE name = %s"
+        " RETURNING id, name, git_remote, network_policy",
+        (network_policy, name.strip()),
+    )
+    if row is None:
+        raise AdminError(f"no project {name!r}")
+    return ProjectRow(*row)
+
+
 async def projects(db: Db) -> list[ProjectRow]:
     """List the registered projects by name.
 

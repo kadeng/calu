@@ -209,6 +209,14 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   `tests/unit/test_credentials.py` holds the two tests for it. The one link not verified here is
   a checker actually billing the Anthropic API, which needs the owner's key.
   Bedrock needs no key here, and `claude.use_bedrock` is the separate switch for Claude itself.
+- **Network policy per project** (D39): `projects.network_policy` is no longer inert. "none"
+  reaches nothing, "proxy" only `claude.sandbox.allowed_domains`, "full" everything through the
+  sandbox's proxy (`allowedDomains: ["*"]`), and `denied_domains` overrides the wildcard.
+  `calu project add --network` and `calu project network --name <p> --network <policy>`; a
+  running session applies a change when it next starts. Measured against the real CLI: the
+  sandbox exports a filtering proxy as `HTTPS_PROXY` and raw TCP is blocked whatever the policy
+  says. The start-up warnings say when a session may reach every domain. Open (Q5): the default
+  for new projects, still "full".
 - **Sandbox** (D15): `SandboxConfig` passed to Claude Code as a `--settings` document;
   `calu.preflight` warns about missing `bwrap`/`socat`, a disabled sandbox and missing checker
   API keys at every start.
@@ -291,7 +299,9 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 3. **Phase 6 polish**: a web UI feature the research turned up and this version lacks — an
    inbox with unread counts across sessions, sounds, and a jump palette (Orca has ⌘J). The
    escalation queue covers the important half of it.
-4. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
+4. **Phase 5**: the nested-sandbox case in Docker (Q1, `enableWeakerNestedSandbox` exists and is
+   untested). The network policy is built (D39); only its default for new projects is the
+   owner's to choose (Q5).
 5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
    read, not edited, through a client.
 
