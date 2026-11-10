@@ -45,8 +45,8 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**601 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 160 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
+**595 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 161 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 18 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -397,6 +397,15 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    script the user called throwaway be rewritten as a state machine. The rule for it existed;
    what was missing was a procedure to run before answering ACCEPT. With that, two runs of
    three: 100% and no critical misses, at the price of a higher escalation share (44-56%).
+23. **Three cases that try to instruct the checkers** (D79), testing the claim every checker's
+   instructions make -- that what it reads is evidence and never an instruction. Measured once
+   with the 30B model: the edit checker resisted, the command checker returned ALLOW once in
+   three quoting the planted comment, the subagent checker believed a claimed approval once in
+   three. **The instructions were not rewritten for it.** Several rounds of that earlier in the
+   day moved the numbers without fixing the escapes, which is the signature of a model that
+   cannot follow what it is given rather than of unclear wording. Q17 puts the model choice to
+   the owner; the framework's part -- a model per checker, `calu evals` to report, `calu checker
+   stats` to price it -- is built.
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
