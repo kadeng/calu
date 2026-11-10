@@ -604,7 +604,9 @@ def _inside(path: Path, directory: str) -> bool:
         return False
 
 
-def _find_endpoint(store: CredentialStore, hint: str | None, label: str) -> Endpoint:
+def _find_endpoint(
+    store: CredentialStore, hint: str | None, label: str, may_ask: bool = True
+) -> Endpoint:
     """Find the local session a client should connect to and mint a token for it.
 
     This is the zero-argument path of `calu attach` and `calu acp` (PLAN.md D105): instead of
@@ -620,6 +622,8 @@ def _find_endpoint(store: CredentialStore, hint: str | None, label: str) -> Endp
             `calu credential set operator --no-password` (D104) nothing is asked.
         hint: `--session`, a session id or its beginning, or None for "this directory".
         label: What to write in the token's label, e.g. "calu attach".
+        may_ask: Whether a password may be asked for; False for `calu acp`, whose standard
+            input is the editor's protocol stream (see `_herd_value`).
 
     Returns:
         The endpoint, with `token_id` set to the minted token.
@@ -643,10 +647,10 @@ def _find_endpoint(store: CredentialStore, hint: str | None, label: str) -> Endp
         token_id, token = await herd.mint_token(db, row.id, label)
         return Endpoint(row.address, token, token_id, row.id)
 
-    return _herd_value(store, work)
+    return _herd_value(store, work, may_ask)
 
 
-def _revoke(store: CredentialStore, token_id: int) -> None:
+def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None:
     """Revoke a token that `_find_endpoint` minted. Never raises.
 
     A client that ends should not leave a usable token behind, and `calu token list` should not
@@ -658,6 +662,9 @@ def _revoke(store: CredentialStore, token_id: int) -> None:
     Args:
         store: The credential store.
         token_id: The token to revoke.
+        may_ask: Whether a password may be asked for; False for `calu acp`, where a prompt
+            would read from the editor's protocol stream (see `_herd_value`). The token was
+            minted without asking, so this only matters if the credential changed meanwhile.
     """
 
     async def work(db: Db) -> bool:
@@ -672,7 +679,7 @@ def _revoke(store: CredentialStore, token_id: int) -> None:
         return await herd.revoke_token(db, token_id)
 
     try:
-        _herd_value(store, work)
+        _herd_value(store, work, may_ask)
     except (CliError, CredentialError, OSError, psycopg.Error) as exc:
         print(
             f"note: the client token {token_id} could not be revoked ({exc}); "
@@ -681,7 +688,9 @@ def _revoke(store: CredentialStore, token_id: int) -> None:
         )
 
 
-def _herd_value[T](store: CredentialStore, work: Callable[[Db], Awaitable[T]]) -> T:
+def _herd_value[T](
+    store: CredentialStore, work: Callable[[Db], Awaitable[T]], may_ask: bool = True
+) -> T:
     """Run `work` with the narrowest credential available and return its value.
 
     `_herd_command` prints what `work` returns, which is right for a report and useless for a
@@ -690,17 +699,32 @@ def _herd_value[T](store: CredentialStore, work: Callable[[Db], Awaitable[T]]) -
     Args:
         store: The credential store.
         work: Called with the connection.
+        may_ask: Whether a password may be asked for. False for a process whose stdin carries
+            something else -- `calu acp` speaks the editor's protocol on it, and
+            `read_password` reads a line from stdin when it is not a terminal, so a prompt
+            there would eat the editor's first request and call it the password. An encrypted
+            credential is then an error that says what to do instead.
 
     Returns:
         What `work` returned.
 
     Raises:
-        CliError: If neither an `operator` nor an `admin` credential is stored.
+        CliError: If neither an `operator` nor an `admin` credential is stored, or if the one
+            that is needs a password and `may_ask` is False.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
     for name in OPERATOR_FIRST:
         if name in store:
+            if not may_ask and store.needs_password(name):
+                raise CliError(
+                    f"the {name!r} credential is protected by a password, and this command has "
+                    "no terminal to ask for one on -- its standard input carries the editor's "
+                    "protocol. Either store it without a password (`calu credential set "
+                    f"{name} --no-password`, which leaves the file's mode as its protection), "
+                    "or give this command the session's address and `--token=<token>`, which "
+                    "needs no database at all"
+                )
             url = load_credential(store, name, f"{name.capitalize()} password: ")
             try:
                 return asyncio.run(_with_admin_value(url.decode(), work))
@@ -784,7 +808,9 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError("the client ended with an error")
 
 
-def _endpoint_of(args: argparse.Namespace, store: CredentialStore, label: str) -> Endpoint:
+def _endpoint_of(
+    args: argparse.Namespace, store: CredentialStore, label: str, may_ask: bool = True
+) -> Endpoint:
     """Return where a client should connect, from its arguments or from the database.
 
     An address on the command line is used as it is, with the token next to it; that is the
@@ -795,6 +821,8 @@ def _endpoint_of(args: argparse.Namespace, store: CredentialStore, label: str) -
         args: Parsed arguments (`address`, `token`, `session`).
         store: The credential store, used only for the lookup.
         label: The label of a minted token, e.g. "calu attach".
+        may_ask: Whether a password may be asked for; False for `calu acp` (see
+            `_herd_value`).
 
     Returns:
         The endpoint; `token_id` is set only when a token was minted here.
@@ -813,7 +841,7 @@ def _endpoint_of(args: argparse.Namespace, store: CredentialStore, label: str) -
         raise CliError("--token names the session's address too, e.g. ws://127.0.0.1:8765")
     if args.address:
         return Endpoint(args.address, args.token)
-    return _find_endpoint(store, args.session, label)
+    return _find_endpoint(store, args.session, label, may_ask)
 
 
 def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -836,14 +864,14 @@ def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
         CliError: If the address cannot be reached, the token is refused, or no single session
             of this directory is running.
     """
-    endpoint = _endpoint_of(args, store, "calu acp")
+    endpoint = _endpoint_of(args, store, "calu acp", may_ask=False)
     try:
         code = asyncio.run(serve_acp(endpoint.address, endpoint.token))
     except (OSError, RequestFailed) as exc:
         raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
     finally:
         if endpoint.token_id is not None:
-            _revoke(store, endpoint.token_id)
+            _revoke(store, endpoint.token_id, may_ask=False)
     if code:
         raise CliError("the adapter ended with an error")
 

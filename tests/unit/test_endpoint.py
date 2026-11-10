@@ -1,5 +1,6 @@
 """Finding the session a client means when it is given no address (PLAN.md D105)."""
 
+import io
 import socket
 from datetime import UTC, datetime
 from pathlib import Path
@@ -152,3 +153,31 @@ def test_a_session_behind_a_symbolic_link_is_still_found(
     link.symlink_to(project)
     monkeypatch.chdir(link)
     assert _pick_session([row(str(project.resolve()))], None).directory == str(project.resolve())
+
+
+def test_the_acp_adapter_never_reads_a_password_from_the_editor_s_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An editor's protocol line must not be taken for a password.
+
+    `calu acp` speaks ACP on its standard input, and `read_password` reads a line from standard
+    input whenever it is not a terminal. Asking for the password of an encrypted credential
+    there would therefore swallow the editor's `initialize` request, treat it as the password
+    and fail with "wrong password" -- with the stream already broken. The adapter refuses
+    instead, and the assertion that the line is still unread is the assertion that it did.
+    """
+    from calu.credentials import CredentialStore
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("operator", "postgresql://op@localhost/calu", "a password")
+    monkeypatch.chdir(tmp_path)
+    first_request = '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n'
+    stdin = io.StringIO(first_request)
+    monkeypatch.setattr("sys.stdin", stdin)
+
+    assert cli.main(["acp"], store_factory=lambda: store) == 1
+    printed = capsys.readouterr()
+    assert printed.out == "", "stdout carries the protocol and nothing else"
+    assert "no terminal" in printed.err
+    assert "--no-password" in printed.err and "--token=" in printed.err
+    assert stdin.read() == first_request, "the editor's request was read as a password"

@@ -474,7 +474,9 @@ directory and it attaches to the session running there:
 
 The adapter has no terminal, so it cannot ask for a password: store the operator credential
 with `calu credential set operator --no-password` (above) and the editor needs no
-configuration beyond that line. A session on another machine, reached through a tunnel, is
+configuration beyond that line. With a password on it, the adapter says so and stops rather
+than prompting -- a prompt would read the editor's first request from the protocol stream and
+treat it as the password (PLAN.md D106). A session on another machine, reached through a tunnel, is
 given its address and token instead:
 
 ```bash
