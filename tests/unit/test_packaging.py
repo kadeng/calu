@@ -127,3 +127,28 @@ def test_no_undeclared_data_directory(package: str) -> None:
         f"the data directories of {package} changed; check `uv build` ships the new one, "
         "then update DATA_DIRECTORIES"
     )
+
+
+def test_the_package_says_what_it_is_and_where_it_lives() -> None:
+    """The metadata is the PyPI page: without it a visitor gets no link and no platform.
+
+    `importlib.metadata` reads it from the installed distribution, which is what a user gets,
+    not from `pyproject.toml`.
+    """
+    from importlib.metadata import metadata
+
+    found = metadata("calu")
+    classifiers = found.get_all("Classifier") or []
+    # Linux only, on the machine where Claude Code runs (REQUIREMENTS 3).
+    assert "Operating System :: POSIX :: Linux" in classifiers
+    assert "Programming Language :: Python :: 3.14" in classifiers
+    # The state has to be stated rather than implied by a version number.
+    assert any(c.startswith("Development Status ::") for c in classifiers)
+    # The package is fully typed and ships the marker that says so.
+    assert "Typing :: Typed" in classifiers
+    assert Path(str(resources.files("calu").joinpath("py.typed"))).is_file()
+
+    urls = " ".join(found.get_all("Project-URL") or [])
+    assert "github.com/kadeng/calu" in urls, "a visitor must be able to find the repository"
+    assert "Issues" in urls
+    assert found["License-Expression"] == "GPL-2.0-only" or "GPL-2.0" in str(found.get("License"))

@@ -6,6 +6,19 @@ readme = "README.md"
 license = "GPL-2.0-only"
 license-files = ["LICENSE"]
 requires-python = ">=3.14"
+keywords = ["claude-code", "coding-agent", "code-review", "llm", "supervision", "sandbox"]
+classifiers = [
+    # Honest about the state: `calu run` works end to end, nothing is published yet.
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    # Linux only, on the machine where Claude Code runs (REQUIREMENTS 3).
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
 dependencies = [
     "argon2-cffi>=25.1.0",
     "claude-agent-sdk>=0.2.164",
@@ -19,6 +32,12 @@ dependencies = [
     "tree-sitter-bash>=0.25.1",
     "websockets>=17.4",
 ]
+
+[project.urls]
+Homepage = "https://github.com/kadeng/calu"
+Repository = "https://github.com/kadeng/calu"
+Issues = "https://github.com/kadeng/calu/issues"
+Changelog = "https://github.com/kadeng/calu/commits/main"
 
 [project.scripts]
 calu = "calu.cli:main"
