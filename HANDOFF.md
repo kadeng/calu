@@ -37,10 +37,10 @@ in `calu/` only.
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
 | 5 Sandboxing | Settings done (D15); open: network policy per project (Q5), nested sandbox in Docker (Q1). `calu evals` done. |
 | 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
-| 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); open: single binary, ACP session modes |
+| 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); the wheel is the shipping format and the single binary is decided against (D41); open: ACP session modes |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**370 tests pass** (plus 6 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**417 tests pass** (plus 6 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 56 commits, ~20k lines of source, ~7k of tests, 10 migrations, 16 CLI commands,
 16 protocol requests.
 
@@ -279,6 +279,12 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    afterwards), Claude reported the refusal and did not retry, and the database held the write
    set and a `checker_runs` row for the review.
 
+11. The **installed wheel**: `uv build` ships every piece of package data (13 migrations, 16
+   default instruction files, 13 templates, 5 static files), and in a throwaway virtual
+   environment `calu --version`, `calu protocol` (51 definitions) and `calu doctor` run out of
+   `site-packages` with that data resolving correctly (D41). `calu doctor` exits non-zero there,
+   which is right: that environment has no session credential.
+
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
 `project add`, `checker list|show|set|edit`, `config set|get`, a refused value, `rules
@@ -307,9 +313,12 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
-   `AutoEscalate`, and the single-binary packaging.
-3. **Phase 7's last item**: the single binary (PyApp or PyInstaller), which D1 deferred to
-   "later" — `uv tool install calu` is the supported way today.
+   `AutoEscalate`.
+3. **Publishing** is the only packaging step left: the wheel is verified (D41 — `uv build`,
+   then `calu --version`, `calu protocol` and `calu doctor` from a throwaway virtual
+   environment, with migrations, default instructions, templates and static files resolving out
+   of `site-packages`; `tests/unit/test_packaging.py` guards it), but nothing is on PyPI, so
+   `uv tool install calu` in the README does not work yet.
 4. **Phase 5**: nothing blocking left. The network policy is built (D39; only its default for a
    new project is the owner's call, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs
