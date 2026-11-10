@@ -21,13 +21,17 @@ pytestmark = pytest.mark.anyio
 TIMEOUT_S = 40
 
 
-async def _read_until(process: object, wanted: str, collected: list[str]) -> str:
+async def _read_until(
+    process: object, wanted: str, collected: list[str], errors: Path | None = None
+) -> str:
     """Read the process's stdout until a line contains `wanted`.
 
     Args:
         process: The running `calu attach` process.
         wanted: The text to wait for.
         collected: Every chunk read so far, appended to.
+        errors: File the process's stderr was redirected to; its content goes into the failure
+            message, because a process that ends before printing says why only there.
 
     Returns:
         Everything read so far.
@@ -43,7 +47,14 @@ async def _read_until(process: object, wanted: str, collected: list[str]) -> str
         except anyio.EndOfStream:
             chunk = b""
         if not chunk:
-            pytest.fail(f"stdout ended before {wanted!r} appeared; saw:\n{text}")
+            said = ""
+            if errors is not None and errors.exists():
+                said = errors.read_text(encoding="utf-8", errors="replace")
+            code = getattr(process, "returncode", None)
+            pytest.fail(
+                f"stdout ended before {wanted!r} appeared (exit {code}).\n"
+                f"stdout was:\n{text or '(empty)'}\nstderr was:\n{said or '(empty)'}"
+            )
         collected.append(chunk.decode(errors="replace"))
         text = "".join(collected)
     return text
@@ -55,16 +66,19 @@ async def test_attach_prints_the_state_takes_a_prompt_and_detaches(tmp_path: Pat
     async with served(tmp_path, turns) as run:
         environment = dict(os.environ)
         environment["PYTHONUNBUFFERED"] = "1"
-        process = await anyio.open_process(
-            [sys.executable, "-m", "calu", "attach", run.address, "--token", run.token],
-            env=environment,
-            cwd=str(tmp_path),
-        )
+        errors = tmp_path / "attach-stderr.log"
+        with errors.open("wb") as log:
+            process = await anyio.open_process(
+                [sys.executable, "-m", "calu", "attach", run.address, "--token", run.token],
+                env=environment,
+                cwd=str(tmp_path),
+                stderr=log.fileno(),
+            )
         seen: list[str] = []
         try:
             with anyio.fail_after(TIMEOUT_S):
                 # On attaching it prints the session's state and the command line.
-                shown = await _read_until(process, "[attached]", seen)
+                shown = await _read_until(process, "[attached]", seen, errors)
                 # The state line names the state, the workspace and the model, so an operator
                 # knows what they attached to before typing anything.
                 assert "[state]" in shown
@@ -74,17 +88,17 @@ async def test_attach_prints_the_state_takes_a_prompt_and_detaches(tmp_path: Pat
                 # A command, not a chat message: the checker definitions come from the session
                 # and print one line each.
                 await process.stdin.send(b"/checkers\n")
-                await _read_until(process, "route command", seen)
+                await _read_until(process, "route command", seen, errors)
 
                 # Starting the session and sending a prompt both go through the protocol, and
                 # the answer comes back as an event on the same connection.
                 await process.stdin.send(b"/start\n")
-                await _read_until(process, "[started]", seen)
+                await _read_until(process, "[started]", seen, errors)
                 await process.stdin.send(b"have a look\n")
-                await _read_until(process, "the answer", seen)
+                await _read_until(process, "the answer", seen, errors)
 
                 # The turn's end is printed too, so an operator knows Claude stopped.
-                await _read_until(process, "turn ended", seen)
+                await _read_until(process, "turn ended", seen, errors)
 
                 # End of input detaches, and the process ends by itself.
                 await process.stdin.aclose()
