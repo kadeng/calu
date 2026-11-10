@@ -284,3 +284,33 @@ def test_run_refuses_a_prompt_file_it_cannot_read(
     assert run_cli(monkeypatch, store, ["run", "--prompt-file", "/no/such/file"], "") == 1
     said = capsys.readouterr().err
     assert "cannot read /no/such/file" in said
+
+
+def test_a_credential_without_a_password_is_read_without_a_prompt(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D104: `--no-password` takes the prompt out of every command that uses the credential.
+
+    The test does not mock the prompt away -- it leaves **nothing** on stdin after the
+    connection string. A command that still asked for a password would read the empty line and
+    fail, so the assertion that the credential comes back is also the assertion that nothing
+    was asked.
+    """
+    assert (
+        run_cli(monkeypatch, store, ["credential", "set", "operator", "--no-password"], "dsn\n")
+        == 0
+    )
+    printed = capsys.readouterr().out
+    assert "only the file's mode protects it" in printed
+    assert str(store.path) in printed, "the warning has to name the file that now holds it"
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert cli.load_credential(store, "operator", "Operator password: ") == bytearray(b"dsn")
+
+    assert run_cli(monkeypatch, store, ["credential", "list"], "") == 0
+    assert "operator  (file mode only)" in capsys.readouterr().out
+
+    # Setting it again without the switch puts a password back on it.
+    assert run_cli(monkeypatch, store, ["credential", "set", "operator"], "dsn\npw\npw\n") == 0
+    assert run_cli(monkeypatch, store, ["credential", "list"], "") == 0
+    assert "operator  (password)" in capsys.readouterr().out

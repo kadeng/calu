@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import stat
@@ -128,3 +129,40 @@ def test_a_missing_anthropic_key_for_a_checker_is_reported(
     # With the key in the environment there is nothing left to say about this provider.
     with_key = preflight.key_warnings(config, {"ANTHROPIC_API_KEY": "sk-ant-x"})
     assert [w for w in with_key if "ANTHROPIC" in w] == []
+
+
+def test_an_entry_can_be_protected_by_the_file_mode_alone(store: CredentialStore) -> None:
+    """D104: a password typed for every `calu sessions` is a password people take off.
+
+    The entry is readable without a password, says so through `needs_password`, and the file
+    still has no plaintext of any *encrypted* entry -- but this one is plainly in it, which is
+    the cost and is reported rather than hidden.
+    """
+    store.save("operator", "postgresql://op:p@h/db", None)
+    assert store.needs_password("operator") is False
+    assert store.load("operator") == bytearray(b"postgresql://op:p@h/db")
+    # A password offered for such an entry is ignored rather than refused: a caller that asks
+    # `needs_password` first never passes one, and one that does should not get an error it
+    # cannot act on.
+    assert store.load("operator", "anything") == bytearray(b"postgresql://op:p@h/db")
+
+    store.save("admin", "postgresql://a:p@h/db", "pw")
+    assert store.needs_password("admin") is True
+    assert sorted(store.names()) == ["admin", "operator"]
+    text = store.path.read_text(encoding="utf-8")
+    assert "postgresql://a:p@h/db" not in text, "the encrypted entry must stay encrypted"
+    assert (
+        "postgresql://op:p@h/db"
+        in base64.b64decode(json.loads(text)["entries"]["operator"]["secret"]).decode()
+    )
+
+    with pytest.raises(UnknownCredential):
+        store.needs_password("nothing")
+
+
+def test_an_encrypted_entry_read_without_a_password_is_an_error(store: CredentialStore) -> None:
+    """Silently returning nothing, or treating None as the password, would both be worse."""
+    store.save("admin", "postgresql://a:p@h/db", "pw")
+    with pytest.raises(CorruptStore) as raised:
+        store.load("admin")
+    assert "without a password" in str(raised.value)

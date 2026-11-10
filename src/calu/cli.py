@@ -109,12 +109,16 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
 
 
 def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray:
-    """Ask for a password and decrypt the credential `name`.
+    """Return the secret of credential `name`, asking for its password if it has one.
+
+    An entry stored with `calu credential set <name> --no-password` is read without asking: it
+    is protected by the file's mode rather than by a password, and prompting for a password
+    that is then thrown away would teach the user that the prompt means nothing (PLAN.md D104).
 
     Args:
         store: The credential store.
         name: The credential name.
-        prompt: The password prompt.
+        prompt: The password prompt, used only for an encrypted entry.
 
     Returns:
         The decrypted secret; the caller should `wipe` it.
@@ -125,6 +129,8 @@ def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray
     """
     if name not in store:
         raise CliError(f"no credential {name!r}; run `calu db up` or `calu credential set {name}`")
+    if not store.needs_password(name):
+        return store.load(name)
     password = read_password(prompt)
     try:
         return store.load(name, password)
@@ -316,8 +322,11 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     prints the connection string once, for a person who should watch the herd without owning it
     (PLAN.md D48).
 
+    `set --no-password` stores the connection string protected by the file's mode alone, so
+    that the commands that use it ask nothing; it prints what that costs (PLAN.md D104).
+
     Args:
-        args: Parsed arguments (`action`, `name`).
+        args: Parsed arguments (`action`, `name`, `no_password`).
         store: The credential store.
 
     Raises:
@@ -328,7 +337,8 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     """
     if args.action == "list":
         for name in store.names():
-            print(name)
+            protection = "password" if store.needs_password(name) else "file mode only"
+            print(f"{name}  ({protection})")
         return
     if not args.name:
         raise CliError(f"credential {args.action} needs a NAME")
@@ -346,12 +356,24 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
         _new_operator(store)
         return
     secret = read_password("Connection string (not echoed): ")
-    password = read_password(f"New password for {args.name!r}: ", confirm=True)
+    password = None
+    if not args.no_password:
+        password = read_password(f"New password for {args.name!r}: ", confirm=True)
     try:
         store.save(args.name, secret, password)
     finally:
         wipe(secret)
-        wipe(password)
+        if password is not None:
+            wipe(password)
+    if args.no_password:
+        print(
+            f"stored credential {args.name!r} without a password: every command that uses it "
+            "runs without a prompt, and only the file's mode protects it. Anyone who can read "
+            f"{store.path} -- another process of your user, a backup, a synchronised dotfile "
+            "directory -- has this credential. `calu credential set "
+            f"{args.name}` again (without --no-password) puts a password back on it."
+        )
+        return
     print(f"stored credential {args.name!r}")
 
 
@@ -1860,6 +1882,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove", "new"])
     p.add_argument("name", nargs="?")
+    p.add_argument(
+        "--no-password",
+        action="store_true",
+        help="store it protected by the file mode only, so no command asks for a password "
+        "(for the narrow 'operator' credential; prints what it costs)",
+    )
     p.set_defaults(handler=cmd_credential)
     return parser
 

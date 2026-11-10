@@ -374,6 +374,22 @@ calu credential new operator     # on the database machine; prints a connection 
 calu credential set operator     # on the operator's machine; paste it there
 ```
 
+Every stored credential is encrypted under a password of its own, and the commands that use it
+ask for that password each time. For the operator credential that is a prompt in front of every
+`calu sessions`, so it can be stored the way a database client stores `~/.pgpass` instead:
+
+```bash
+calu credential set operator --no-password
+```
+
+The secret then sits in `~/.config/calu/credentials.json` (file mode 0600, directory 0700) and
+the five read-and-resolve commands ask nothing. Anyone who can read that file has the
+credential — another process of your user, a backup, a synchronised dotfile directory — so this
+is for the operator login, which reads and resolves and can change nothing else. `calu doctor`
+lists an unprotected credential, and calls it a problem for `admin` or `session`, which can
+migrate the schema and start sessions. `calu credential set operator` without the switch puts a
+password back on it.
+
 The operator login reads every table, resolves escalations and mints or revokes client tokens,
 and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu
 sessions`, `calu escalations`, `calu escalation`, `calu resolve`, `calu token` and `calu evals`

@@ -128,13 +128,16 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
     """Check the encrypted credential store.
 
     Args:
-        store: The store to inspect; nothing is decrypted, only the names are read.
+        store: The store to inspect; nothing is decrypted, only the names and the kind of
+            protection are read.
 
     Returns:
-        A finding for each of the two credentials calu uses.
+        A finding for each of the two credentials calu uses, and one more when an entry is
+        stored without a password (D104), which says so even when that is the right choice.
     """
     names = set(store.names())
-    return [
+    unprotected = sorted(name for name in names if not store.needs_password(name))
+    found = [
         Finding(
             "credential 'admin'",
             "admin" in names,
@@ -150,6 +153,24 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
             essential=True,
         ),
     ]
+    if unprotected:
+        # Not a defect: it is a choice, made for the commands that would otherwise ask for a
+        # password every time (D104). It is reported because it is invisible otherwise, and
+        # because `session` and `admin` are the wrong entries to choose it for.
+        risky = [name for name in unprotected if name in ("admin", "session")]
+        found.append(
+            Finding(
+                "credential protection",
+                not risky,
+                f"{', '.join(unprotected)} stored without a password (file mode only)",
+                f"{', '.join(risky)} can start sessions or change the schema; store "
+                "those with a password (`calu credential set <name>`) and leave only "
+                "'operator' unprotected."
+                if risky
+                else "",
+            )
+        )
+    return found
 
 
 def key_findings(environ: Sequence[str] | None = None) -> list[Finding]:

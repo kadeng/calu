@@ -62,6 +62,30 @@ def test_the_credential_store_is_reported_without_decrypting_anything(
     assert after[1].ok is True and after[1].detail == "stored"
 
 
+def test_a_credential_without_a_password_is_reported(store: CredentialStore) -> None:
+    """D104: the choice is legitimate, but it is invisible in the store, so `doctor` says it.
+
+    It is a note for the narrow `operator` credential and a problem for `admin` or `session`,
+    which can change the schema or start sessions.
+    """
+    store.save("operator", "postgresql://op@localhost/calu", None)
+    (said,) = [f for f in doctor.credential_findings(store) if f.name == "credential protection"]
+    assert said.ok is True, "the operator credential is what the switch is for"
+    assert "operator stored without a password" in said.detail
+    assert said.advice == ""
+
+    store.save("admin", "postgresql://a@localhost/calu", None)
+    (worse,) = [f for f in doctor.credential_findings(store) if f.name == "credential protection"]
+    assert worse.ok is False
+    assert "admin" in worse.advice and "with a password" in worse.advice
+
+    # With a password on everything the report says nothing about protection at all.
+    store.save("admin", "postgresql://a@localhost/calu", "pw")
+    store.save("operator", "postgresql://op@localhost/calu", "pw")
+    names = [f.name for f in doctor.credential_findings(store)]
+    assert "credential protection" not in names
+
+
 def test_a_workspace_is_checked_for_being_a_git_repository(tmp_path: Path) -> None:
     plain = doctor.workspace_findings(tmp_path)
     assert plain[0].ok is True  # the directory exists

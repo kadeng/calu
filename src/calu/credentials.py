@@ -14,6 +14,18 @@ File format (version 1):
                            "parallelism": 4, "salt": "<base64>", "nonce": "<base64>",
                            "ciphertext": "<base64>"}}}
 
+An entry can also be stored **unprotected** (`calu credential set <name> --no-password`), and
+then only the file's permissions protect it:
+
+    {"version": 1, "entries": {"operator": {"kdf": "none", "secret": "<base64>"}}}
+
+That is the trade every database client makes with `~/.pgpass`, and calu offers it for one
+reason: a password typed again for every `calu sessions` is a password people take off
+altogether. What it costs is stated where it is chosen and reported by `calu doctor`: anyone who
+can read the file -- another process of the same user, a backup, a synchronised dotfile
+directory -- has the credential. The `session` and `admin` entries should stay protected; the
+narrow `operator` credential (read and resolve, no schema rights) is the one worth unprotecting.
+
 The name is the associated data of the encryption, so an entry copied under another name does
 not decrypt. Decrypted secrets are returned as `bytearray`, so callers can overwrite them with
 `wipe` once they are no longer needed. Python and the libraries used here may keep further
@@ -210,25 +222,65 @@ class CredentialStore:
         """
         return name in self._read()
 
+    def needs_password(self, name: str) -> bool:
+        """Tell whether `load` of this entry needs a password.
+
+        A caller asks this **before** prompting: an unprotected entry (`save` with
+        `password=None`) is read without one, and prompting for a password that is then thrown
+        away would teach the user that the prompt means nothing.
+
+        Args:
+            name: The credential name.
+
+        Returns:
+            True if the entry is encrypted, False if it is unprotected.
+
+        Raises:
+            UnknownCredential: If there is no entry `name`.
+            CorruptStore: If the file has an unknown format.
+            OSError: If the file cannot be read.
+        """
+        entries = self._read()
+        if name not in entries:
+            raise UnknownCredential(name)
+        return entries[name].get("kdf") != "none"
+
     def save(
-        self, name: str, secret: str | bytes | bytearray, password: str | bytes | bytearray
+        self,
+        name: str,
+        secret: str | bytes | bytearray,
+        password: str | bytes | bytearray | None,
     ) -> None:
-        """Encrypt `secret` under `password` and store it as `name`.
+        """Store `secret` as `name`, encrypted under `password` or protected by the file mode.
 
         An existing entry of the same name is replaced; other entries are kept.
 
         Args:
             name: The credential name, e.g. "admin" or "session". Must not be empty.
             secret: The secret, e.g. a connection URL.
-            password: The password that will be needed to decrypt it. Must not be empty.
+            password: The password that will be needed to decrypt it; must not be empty.
+                `None` writes the secret **unprotected** (base64, no encryption), so that
+                `load` returns it without asking anything. Only the file's mode (0600) and the
+                directory's (0700) then stand between the secret and another process of the
+                same user. See the module docstring.
 
         Raises:
-            ValueError: If `name` or `password` is empty.
+            ValueError: If `name` is empty, or `password` is given but empty.
             CorruptStore: If the existing file has an unknown format.
             OSError: If the file cannot be read or written.
         """
-        if not name or not password:
-            raise ValueError("name and password must not be empty")
+        if not name:
+            raise ValueError("name must not be empty")
+        if password is not None and not password:
+            raise ValueError("password must not be empty")
+        if password is None:
+            entries = self._read()
+            entries[name] = {
+                "kdf": "none",
+                "secret": base64.b64encode(_as_bytes(secret)).decode(),
+            }
+            self._write(entries)
+            return
         salt = secrets.token_bytes(16)
         nonce = secrets.token_bytes(12)
         key = _derive_key(password, salt, self.kdf)
@@ -245,12 +297,14 @@ class CredentialStore:
         }
         self._write(entries)
 
-    def load(self, name: str, password: str | bytes | bytearray) -> bytearray:
-        """Decrypt the entry `name` with `password`.
+    def load(self, name: str, password: str | bytes | bytearray | None = None) -> bytearray:
+        """Return the secret of the entry `name`, decrypting it with `password` if it has one.
 
         Args:
             name: The credential name.
-            password: The password the entry was saved with.
+            password: The password the entry was saved with, or None for an unprotected entry.
+                A password given for an unprotected entry is ignored, and `needs_password` says
+                beforehand which kind an entry is.
 
         Returns:
             The secret. The caller should `wipe` it after use.
@@ -258,13 +312,21 @@ class CredentialStore:
         Raises:
             UnknownCredential: If there is no entry `name`.
             WrongPassword: If the password is wrong or the entry was modified.
-            CorruptStore: If the file or the entry has an unknown format.
+            CorruptStore: If the file or the entry has an unknown format, or if an encrypted
+                entry is read without a password.
             OSError: If the file cannot be read.
         """
         entries = self._read()
         if name not in entries:
             raise UnknownCredential(name)
         entry = entries[name]
+        if entry.get("kdf") == "none":
+            try:
+                return bytearray(base64.b64decode(str(entry["secret"]), validate=True))
+            except (KeyError, ValueError, TypeError) as exc:
+                raise CorruptStore(f"{name}: {exc}") from exc
+        if password is None:
+            raise CorruptStore(f"{name} is encrypted and was read without a password")
         try:
             if entry["kdf"] != "argon2id":
                 raise CorruptStore(f"{name}: unknown kdf {entry['kdf']!r}")
