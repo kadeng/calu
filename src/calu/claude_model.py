@@ -125,16 +125,23 @@ def _usage_of(answer: dict[str, Any]) -> RequestUsage:
 
     Returns:
         The usage, with zeros for anything the CLI did not report, so that `checker_runs` holds
-        the same four numbers as for an API checker. The CLI also reports `total_cost_usd`,
+        the same four numbers as for an API checker. `input_tokens` is the **whole** prompt,
+        cached parts included, which is calu's convention and not the CLI's. The CLI also reports `total_cost_usd`,
         which is **not** carried over: `RequestUsage.details` takes integers, and calu's reports
         price tokens themselves rather than trusting a per-call figure.
     """
     usage = answer.get("usage") or {}
+    cache_read = int(usage.get("cache_read_input_tokens") or 0)
+    cache_write = int(usage.get("cache_creation_input_tokens") or 0)
     return RequestUsage(
-        input_tokens=int(usage.get("input_tokens") or 0),
+        # The CLI counts the cached prompt **beside** `input_tokens`, and calu counts it
+        # **inside** ("input tokens the run used, cached ones included": `CaseResult`,
+        # `CheckerStats.cached_share`). Passing the raw number through made the first real run
+        # report "119950% of them from the provider's cache" (D118).
+        input_tokens=int(usage.get("input_tokens") or 0) + cache_read + cache_write,
         output_tokens=int(usage.get("output_tokens") or 0),
-        cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
-        cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
     )
 
 

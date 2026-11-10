@@ -40,6 +40,7 @@ from calu.checkers.result_checker import (
 )
 from calu.checkers.rules import RULE_LISTS, Rules
 from calu.evals.cases import CheckerName, EvalCase
+from calu.models import resolve_model
 
 APPROVALS = (Decision.PASS, Decision.ALLOW)
 """Decisions that let the step run; a case that expects one of them accepts the other."""
@@ -72,7 +73,7 @@ async def review_subagent_result(
             as an error rather than as a correct escalation.
         Exception: Whatever else the model call raised; a case counts it as an error.
     """
-    checker = ResultChecker(instructions, model)
+    checker = ResultChecker(instructions, resolve_model(model))
     if max_requests is not None:
         checker.usage_limits = replace(checker.usage_limits, request_limit=max_requests)
     outcome = await checker.run(
@@ -578,7 +579,9 @@ async def run_cases(
                 )
                 # What the lists would do with this step before a checker is asked (D76).
                 caught = lists.evaluate(step).ask
-                agent = Checker(checker, instructions, model, workspace)
+                # Through `resolve_model`, like a session does (D118): a bare string would
+                # miss Mistral's EU endpoint and reject `claude:` outright.
+                agent = Checker(checker, instructions, resolve_model(model), workspace)
                 if request_limit is not None:
                     agent.usage_limits = replace(agent.usage_limits, request_limit=request_limit)
                 try:

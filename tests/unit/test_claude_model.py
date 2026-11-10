@@ -84,9 +84,13 @@ async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
     assert result.output.decision is Decision.DENY
     assert "root filesystem" in result.output.reason
     # The token counts reach Pydantic AI, so `checker_runs` records this check like any other.
-    assert result.usage.input_tokens == 7
+    # `input_tokens` is the whole prompt, cached parts included: calu counts it that way
+    # (`CaseResult.input_tokens`) while the CLI counts the cache beside it, and passing the raw
+    # number through made the first real run report a cached share of 119950% (D118).
+    assert result.usage.input_tokens == 7 + 11 + 5917
     assert result.usage.output_tokens == 365
     assert result.usage.cache_read_tokens == 11
+    assert result.usage.cache_write_tokens == 5917
 
     argv = record.read_text(encoding="utf-8").splitlines()
     assert argv[0] == "-p"

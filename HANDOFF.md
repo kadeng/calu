@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**693 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**694 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 212 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -396,6 +396,16 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+27. **A checker on the machine's Claude Code account, measured through calu** (D117, D118):
+   a throwaway database, `calu setup --checker-model claude:haiku`, and three of the built-in
+   command cases through `calu evals`. The first run failed with "Unknown model: claude:haiku"
+   -- the eval runner skipped `resolve_model` -- and the second printed a cached share of
+   119950%, because the CLI counts the cached prompt beside the input tokens and calu counts it
+   inside. With both fixed: `accuracy 100%`, `cost: 30768 input tokens (23% of them from the
+   provider's cache), 849 output tokens, ~3950 ms per case`. That is also the price of this
+   model type -- about 10k input tokens per check, since Claude Code's own system prompt is
+   part of every call -- and no checker API key was involved at any point.
+
 26. **A real session after the twelve changes of 2026-11-10** (`spikes/smoke_session.py`,
    CLI 2.1.319, haiku), twice over. (a) "Run ls, then write a file notes.md": the `Bash` and
    the `Read` were settled by the allow lists with no model call, the `Write` went to the edit
