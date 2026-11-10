@@ -334,7 +334,18 @@ calu escalation 12        # everything needed to decide that one
 calu resolve 12 allow --note "go ahead"
 calu resolve 13 answer "spaces, four of them"   # when Claude asked you something
 calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting for any more
-calu attach ws://127.0.0.1:8765 --token=...     # the full event stream, and a prompt
+calu attach                                     # the full event stream, and a prompt
+```
+
+`calu attach` and `calu acp` take no arguments in the project directory: they ask the database
+which session runs there on this host, mint a client token for themselves and revoke it when
+they end, so `calu token list` shows one row per client and not one per attach. Two sessions in
+one directory, or a session you want from elsewhere in the file system, are named with
+`--session <id>`. A session on **another** machine is reached the explicit way, which needs no
+database at all -- its address through an SSH tunnel and the token that `calu run` printed:
+
+```bash
+calu attach ws://127.0.0.1:8765 --token=<the token it printed>
 ```
 
 Those first five need nothing but the database. That is deliberate: a session may run on a
@@ -454,23 +465,25 @@ calu goes the other way: the interruption is the product.
 ## Editors that speak ACP
 
 An editor that speaks ACP talks to the same session. Register `calu acp` as the agent's command
-in the editor (JetBrains Air, Zed, Neovim, Goose); the editor spawns it and it attaches to the
-running session:
-
-```bash
-calu acp ws://127.0.0.1:8765 --token=...
-```
-
-An editor usually takes the command as a program and a list of arguments rather than as a
-shell line, for example:
+in the editor (JetBrains Air, Zed, Neovim, Goose); the editor spawns it in the project
+directory and it attaches to the session running there:
 
 ```json
-{ "command": "calu", "args": ["acp", "ws://127.0.0.1:8765", "--token=..."] }
+{ "command": "calu", "args": ["acp"] }
 ```
 
-Write `--token=` with the equals sign in both forms. A token is base64url and may contain `-`;
-one issued before calu stopped generating tokens that **start** with a dash would otherwise be
-read as an option rather than as the token's value (PLAN.md D102).
+The adapter has no terminal, so it cannot ask for a password: store the operator credential
+with `calu credential set operator --no-password` (above) and the editor needs no
+configuration beyond that line. A session on another machine, reached through a tunnel, is
+given its address and token instead:
+
+```bash
+calu acp ws://127.0.0.1:8765 --token=<the token it printed>
+```
+
+Write `--token=` with the equals sign, also in an editor's `args` list. A token is base64url
+and may contain `-`; one issued before calu stopped generating tokens that **start** with a
+dash would otherwise be read as an option rather than as the token's value (PLAN.md D102).
 
 The editor's own agent-mode picker works too. calu offers what waits for a human as an ACP
 session mode and, for an editor that supports the newer config options, as three switches:

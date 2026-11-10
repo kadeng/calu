@@ -776,3 +776,54 @@ async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: st
     finally:
         await listener.close()
         await owner.close()
+
+
+async def test_a_client_with_no_address_finds_the_session_and_mints_its_own_token(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D105: `calu attach` with no arguments, through the real database.
+
+    The CLI helpers are synchronous and call `asyncio.run` themselves, so they run in a worker
+    thread here -- which is also how they run in reality, with no loop around them.
+    """
+    import socket as socket_module
+
+    from calu.cli import _find_endpoint, _revoke
+    from calu.credentials import CredentialStore
+
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(
+            SessionIdentity(
+                hostname=socket_module.gethostname(),
+                os_user="u",
+                directory=str(tmp_path),
+                pid=7,
+                os="Linux",
+            )
+        )
+        await store.set_address("ws://127.0.0.1:8765")
+
+        credentials = CredentialStore(tmp_path / "credentials.json")
+        credentials.save("operator", db_url, None)  # no password: nothing is asked (D104)
+        monkeypatch.chdir(tmp_path)
+
+        endpoint = await anyio.to_thread.run_sync(_find_endpoint, credentials, None, "calu attach")
+        assert endpoint.address == "ws://127.0.0.1:8765"
+        assert endpoint.session_id == session_id
+        assert endpoint.token_id is not None
+        # The minted token is one the session really accepts, which is the whole point.
+        assert await store.client_token_ok(token_hash(endpoint.token)) is True
+
+        rows = await herd.list_tokens(db, session_id)
+        assert [row.label for row in rows] == ["calu attach"]
+
+        await anyio.to_thread.run_sync(_revoke, credentials, endpoint.token_id)
+        assert await store.client_token_ok(token_hash(endpoint.token)) is False
+        # Revoking twice is not an error the user has to see; it prints a note at most.
+        await anyio.to_thread.run_sync(_revoke, credentials, endpoint.token_id)
+    finally:
+        await owner.close()

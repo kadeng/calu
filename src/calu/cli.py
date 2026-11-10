@@ -10,8 +10,10 @@
                                    manage the encrypted credential store
     calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
                                    session password; see `calu.run`)
-    calu attach ADDRESS --token T  terminal client for a running session
-    calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
+    calu attach [ADDRESS --token T]
+                                   terminal client for the session of this directory, or of
+                                   the address given
+    calu acp [ADDRESS --token T]   serve that session to an ACP editor (stdin/stdout)
     calu escalation ID             everything needed to decide it, from the database
     calu summary ID [--edit]       the conversation the checkers read, folded
     calu doctor [--db]             what is in place, and what a session would miss
@@ -42,10 +44,12 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -500,6 +504,236 @@ def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]])
         wipe(url)
 
 
+@dataclass(frozen=True)
+class Endpoint:
+    """Where a client should connect, and with which token (PLAN.md D105)."""
+
+    address: str
+    """`ws://host:port` or `unix:<path>`, as `sessions.address` holds it."""
+    token: str
+    """A client token for that session."""
+    token_id: int | None = None
+    """The id of a token minted for this one client, to be revoked when it disconnects; None
+    for a token the user passed on the command line."""
+    session_id: str = ""
+    """Which session it belongs to, for messages."""
+
+
+def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.SessionRow:
+    """Choose the session a client with no address means.
+
+    Only sessions of **this** host are considered, because the address a session publishes is a
+    loopback port or a Unix socket path: an address from another machine would not be reachable
+    even though the database shows it. Of those, the session whose directory is the current
+    directory or the nearest ancestor of it wins, so that `calu attach` works from a
+    subdirectory of the project. A session that has stopped saying it is running is left out
+    (`SessionRow.stale`), and so is one that serves no clients (empty `address`).
+
+    Args:
+        rows: The active sessions, as `herd.sessions` returns them.
+        hint: A session id or the beginning of one, from `--session`; None means "the one
+            for this directory".
+
+    Returns:
+        The session to connect to.
+
+    Raises:
+        CliError: If no session matches, or if several do and `hint` does not single one out.
+            The message says what to do: which sessions there are, or how to name one.
+    """
+    here = Path.cwd().resolve()
+    local = [
+        row
+        for row in rows
+        if row.hostname == socket.gethostname() and row.address and not row.stale
+    ]
+    if hint:
+        chosen = [row for row in local if row.id.startswith(hint)]
+        if not chosen:
+            raise CliError(
+                f"no session on this host whose id starts with {hint!r} is serving clients "
+                "(`calu sessions` lists them)"
+            )
+        if len(chosen) > 1:
+            ids = ", ".join(row.id for row in chosen)
+            raise CliError(f"{hint!r} matches several sessions: {ids}")
+        return chosen[0]
+    matching = [row for row in local if here == Path(row.directory) or _inside(here, row.directory)]
+    if not matching:
+        raise CliError(
+            f"no running session of {here} on this host\n"
+            "`calu sessions` lists the sessions of every host; a session elsewhere is reached "
+            "with its address and `--token=<token>` through an SSH tunnel, and `calu run` "
+            "starts one here"
+        )
+    # The nearest project directory wins: a session of a subproject is meant before the
+    # session of the directory above it.
+    deepest = max(len(Path(row.directory).parts) for row in matching)
+    nearest = [row for row in matching if len(Path(row.directory).parts) == deepest]
+    if len({row.directory for row in nearest}) > 1:
+        places = ", ".join(sorted({row.directory for row in nearest}))
+        raise CliError(
+            f"{here} is inside more than one project directory ({places}); "
+            "name the session with --session <id> (`calu sessions` lists them)"
+        )
+    if len(nearest) > 1:
+        lines = "\n".join(
+            f"    {row.id}  started {row.started_at:%Y-%m-%d %H:%M:%S}" for row in nearest
+        )
+        raise CliError(
+            f"{len(nearest)} sessions of {nearest[0].directory} are running; "
+            f"name one with --session <id>:\n{lines}"
+        )
+    return nearest[0]
+
+
+def _inside(path: Path, directory: str) -> bool:
+    """Tell whether `path` is inside `directory`.
+
+    Args:
+        path: An absolute, resolved path.
+        directory: The session's project directory.
+
+    Returns:
+        True if `path` is `directory` or below it; False also when `directory` is not a
+        usable path.
+    """
+    try:
+        return path.is_relative_to(Path(directory))
+    except OSError, ValueError:  # pragma: no cover - a directory that is not a path
+        return False
+
+
+def _find_endpoint(store: CredentialStore, hint: str | None, label: str) -> Endpoint:
+    """Find the local session a client should connect to and mint a token for it.
+
+    This is the zero-argument path of `calu attach` and `calu acp` (PLAN.md D105): instead of
+    the address and the 43-character token that `calu run` printed, the client asks the
+    database which session runs in this directory on this host and mints its own token. The
+    token is minted rather than read because only the hash of a token is stored, so a token
+    printed once cannot be recovered; `calu attach` revokes the one it minted when it ends.
+
+    Side effects: inserts a `client_tokens` row.
+
+    Args:
+        store: The credential store; the `operator` credential is enough, and with
+            `calu credential set operator --no-password` (D104) nothing is asked.
+        hint: `--session`, a session id or its beginning, or None for "this directory".
+        label: What to write in the token's label, e.g. "calu attach".
+
+    Returns:
+        The endpoint, with `token_id` set to the minted token.
+
+    Raises:
+        CliError: If there is no database credential, or no single session matches.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+
+    async def work(db: Db) -> Endpoint:
+        """Pick the session and mint a token.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The endpoint.
+        """
+        row = _pick_session(await herd.sessions(db, active_only=True), hint)
+        token_id, token = await herd.mint_token(db, row.id, label)
+        return Endpoint(row.address, token, token_id, row.id)
+
+    return _herd_value(store, work)
+
+
+def _revoke(store: CredentialStore, token_id: int) -> None:
+    """Revoke a token that `_find_endpoint` minted. Never raises.
+
+    A client that ends should not leave a usable token behind, and `calu token list` should not
+    fill up with one row per attach. A failure here is reported and ignored: the client's work
+    is done, and the token stays visible in `calu token list` either way.
+
+    Side effects: sets `revoked` on the `client_tokens` row; prints a line if that fails.
+
+    Args:
+        store: The credential store.
+        token_id: The token to revoke.
+    """
+
+    async def work(db: Db) -> bool:
+        """Revoke it.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            Whether the row was there.
+        """
+        return await herd.revoke_token(db, token_id)
+
+    try:
+        _herd_value(store, work)
+    except (CliError, CredentialError, OSError, psycopg.Error) as exc:
+        print(
+            f"note: the client token {token_id} could not be revoked ({exc}); "
+            f"`calu token revoke {token_id}` does it",
+            file=sys.stderr,
+        )
+
+
+def _herd_value[T](store: CredentialStore, work: Callable[[Db], Awaitable[T]]) -> T:
+    """Run `work` with the narrowest credential available and return its value.
+
+    `_herd_command` prints what `work` returns, which is right for a report and useless for a
+    caller that needs the value. Both choose the credential the same way (`OPERATOR_FIRST`).
+
+    Args:
+        store: The credential store.
+        work: Called with the connection.
+
+    Returns:
+        What `work` returned.
+
+    Raises:
+        CliError: If neither an `operator` nor an `admin` credential is stored.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    for name in OPERATOR_FIRST:
+        if name in store:
+            url = load_credential(store, name, f"{name.capitalize()} password: ")
+            try:
+                return asyncio.run(_with_admin_value(url.decode(), work))
+            finally:
+                wipe(url)
+    raise CliError(
+        "no credential 'operator' or 'admin'; `calu credential new operator` makes an operator "
+        "connection string on the database machine, `calu credential set operator` stores it "
+        "here. A client can also be given the address and `--token=<token>` that `calu run` "
+        "printed, which needs no database at all"
+    )
+
+
+async def _with_admin_value[T](url: str, work: Callable[[Db], Awaitable[T]]) -> T:
+    """Connect, run `work`, close the connection and return its value.
+
+    Args:
+        url: The connection string.
+        work: Called with the wrapped connection.
+
+    Returns:
+        What `work` returned.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    conn = await connect(url)
+    try:
+        return await work(Db(conn))
+    finally:
+        await conn.close()
+
+
 def _socket_path(chosen: str | None) -> Path | None:
     """Turn the `--socket` argument into a path.
 
@@ -526,42 +760,90 @@ def _socket_path(chosen: str | None) -> Path | None:
 def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
     """Attach a terminal client to a running session.
 
-    Needs no database credential: the session process authenticates the client with the token
-    it printed at its start.
+    With an ADDRESS it needs no database credential: the session process authenticates the
+    client with the token it printed at its start. Without one it finds the session running in
+    this directory and mints its own token, which it revokes when it ends (PLAN.md D105).
 
     Args:
-        args: Parsed arguments (`address`, `token`, `after_seq`, `thinking`).
-        store: The credential store (unused).
+        args: Parsed arguments (`address`, `token`, `session`, `after_seq`, `thinking`).
+        store: The credential store; used only when no address is given.
 
     Raises:
-        CliError: If the address cannot be reached or the token is refused.
+        CliError: If the address cannot be reached, the token is refused, or no single session
+            of this directory is running.
     """
+    endpoint = _endpoint_of(args, store, "calu attach")
     try:
-        code = asyncio.run(attach(args.address, args.token, args.after_seq, args.thinking))
+        code = asyncio.run(attach(endpoint.address, endpoint.token, args.after_seq, args.thinking))
     except (OSError, RequestFailed) as exc:
-        raise CliError(f"cannot attach to {args.address}: {exc}") from exc
+        raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
+    finally:
+        if endpoint.token_id is not None:
+            _revoke(store, endpoint.token_id)
     if code:
         raise CliError("the client ended with an error")
+
+
+def _endpoint_of(args: argparse.Namespace, store: CredentialStore, label: str) -> Endpoint:
+    """Return where a client should connect, from its arguments or from the database.
+
+    An address on the command line is used as it is, with the token next to it; that is the
+    remote path and it touches no database. Without an address the session of this directory is
+    looked up and a token minted for this client (PLAN.md D105).
+
+    Args:
+        args: Parsed arguments (`address`, `token`, `session`).
+        store: The credential store, used only for the lookup.
+        label: The label of a minted token, e.g. "calu attach".
+
+    Returns:
+        The endpoint; `token_id` is set only when a token was minted here.
+
+    Raises:
+        CliError: If an address was given without a token, if a token was given without an
+            address, or if no single session of this directory is running.
+    """
+    if args.address and not args.token:
+        raise CliError(
+            f"{args.address} needs the token of that session: `--token=<token>`. Without an "
+            "address, the session running in this directory is found in the database and no "
+            "token is needed"
+        )
+    if args.token and not args.address:
+        raise CliError("--token names the session's address too, e.g. ws://127.0.0.1:8765")
+    if args.address:
+        return Endpoint(args.address, args.token)
+    return _find_endpoint(store, args.session, label)
 
 
 def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve a running session to an editor that speaks the Agent Client Protocol.
 
     The editor spawns this command and talks ACP on its stdin and stdout; stdout therefore
-    carries protocol lines only and every message goes to stderr. Needs no database credential,
-    like `calu attach`: the session authenticates the client with the token it printed.
+    carries protocol lines only and every message goes to stderr. With an ADDRESS it needs no
+    database credential: the session authenticates the client with the token it printed.
+    Without one -- which is what an editor is configured with, because it has neither an
+    address nor a token to put in its arguments -- the session running in the editor's project
+    directory is looked up and a token is minted for this adapter (PLAN.md D105). That lookup
+    must not ask for a password: an editor gives this process no terminal, so the credential
+    has to be stored with `calu credential set operator --no-password` (D104).
 
     Args:
-        args: Parsed arguments (`address`, `token`).
-        store: The credential store (unused).
+        args: Parsed arguments (`address`, `token`, `session`).
+        store: The credential store; used only when no address is given.
 
     Raises:
-        CliError: If the address cannot be reached or the token is refused.
+        CliError: If the address cannot be reached, the token is refused, or no single session
+            of this directory is running.
     """
+    endpoint = _endpoint_of(args, store, "calu acp")
     try:
-        code = asyncio.run(serve_acp(args.address, args.token))
+        code = asyncio.run(serve_acp(endpoint.address, endpoint.token))
     except (OSError, RequestFailed) as exc:
-        raise CliError(f"cannot attach to {args.address}: {exc}") from exc
+        raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
+    finally:
+        if endpoint.token_id is not None:
+            _revoke(store, endpoint.token_id)
     if code:
         raise CliError("the adapter ended with an error")
 
@@ -1710,8 +1992,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_run)
 
     p = sub.add_parser("attach", help="terminal client for a running session")
-    p.add_argument("address", help="WebSocket address that `calu run` printed")
-    p.add_argument("--token", required=True, help="client token that `calu run` printed")
+    p.add_argument(
+        "address",
+        nargs="?",
+        help="WebSocket address that `calu run` printed; left out, the session running in this "
+        "directory is used",
+    )
+    p.add_argument("--token", help="client token that `calu run` printed (needed with an address)")
+    p.add_argument("--session", help="session id, when several run in this directory")
     p.add_argument(
         "--after-seq", type=int, default=0, help="continue after this event sequence number"
     )
@@ -1719,8 +2007,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_attach)
 
     p = sub.add_parser("acp", help="serve a running session to an ACP editor (stdin/stdout)")
-    p.add_argument("address", help="WebSocket address of the session, e.g. ws://127.0.0.1:8765")
-    p.add_argument("--token", required=True, help="client token that `calu run` printed")
+    p.add_argument(
+        "address",
+        nargs="?",
+        help="address of the session, e.g. ws://127.0.0.1:8765; left out, the session running "
+        "in this directory is used, which is what an editor is configured with",
+    )
+    p.add_argument("--token", help="client token that `calu run` printed (needed with an address)")
+    p.add_argument("--session", help="session id, when several run in this directory")
     p.set_defaults(handler=cmd_acp)
 
     p = sub.add_parser("web", help="the herd overview in a browser (127.0.0.1 only)")

@@ -147,6 +147,17 @@ class _AnyCredential:
         """
         return ["admin", "session"]
 
+    def needs_password(self, _name: str) -> bool:
+        """Say that every entry is encrypted (D104).
+
+        Args:
+            _name: The credential name.
+
+        Returns:
+            True, always, so `calu doctor` says nothing about protection here.
+        """
+        return True
+
 
 async def test_the_fleet_and_the_waiting_steps_are_listed(prepared, capsys) -> None:
     """`calu sessions` and `calu escalations` are how a person finds what needs them."""

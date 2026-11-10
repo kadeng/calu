@@ -167,10 +167,11 @@ calu escalation 12        # everything the checker saw, so you decide on the sam
 calu resolve 12 allow --note "go ahead"
 ```
 
-Attach when you want the live stream, the thinking and the tool results as they arrive:
+Attach when you want the live stream, the thinking and the tool results as they arrive. In the
+project directory it takes no arguments — it finds the session running there:
 
 ```bash
-calu attach ws://127.0.0.1:8765 --token=...
+calu attach
 ```
 
 A plain line you type there is a message for Claude; the rest are commands, and `/help` lists
