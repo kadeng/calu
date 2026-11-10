@@ -96,6 +96,7 @@ from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unche
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
 from calu.files import command_files
+from calu.honesty import HonestyMark, blocking_marks, register_note
 from calu.models import resolve_model
 from calu.protocol.messages import (
     AgentInfo,
@@ -440,6 +441,11 @@ class Session:
         self._sink = emit
         self._models = dict(checker_models or {})
         self.startup_warnings = tuple(startup_warnings)
+        self._git_branch_value: str | None = None
+        self._git_branch_time = float("-inf")
+        self.honesty_marks: list[HonestyMark] = []
+        """The open marks of the project, reloaded when a checker changes them (PLAN.md D82).
+        Empty while `honesty.mode` is "off", which is the default."""
         self.snapshot_root = snapshot_root or default_root()
         """Where the write-set snapshots of this process live (PLAN.md D31)."""
         self.policy = ToolPolicy(
@@ -1380,6 +1386,30 @@ class Session:
         await self._store_call("creating the session row", self.store.start(self._identity()))
         await self._set_state("starting")
         await self._restore_context(resume_id)
+        if self.config.honesty.mode != "off":
+            # The register belongs to the project, so a session starts with the debt the
+            # previous ones left behind (D82).
+            self.honesty_marks = (
+                await self._store_value(
+                    "reading the honesty register", self.store.open_honesty_marks()
+                )
+                or []
+            )
+            if self.honesty_marks:
+                await self.emit(
+                    Log(
+                        level="warning",
+                        message=(
+                            f"{len(self.honesty_marks)} spot(s) are recorded as dishonest and "
+                            + (
+                                "cannot be run until they are fixed"
+                                if self.config.honesty.mode == "enforce"
+                                else "are only reported (honesty.mode is 'track')"
+                            )
+                            + f": {', '.join(m.label() for m in self.honesty_marks[:5])}"
+                        ),
+                    )
+                )
         for warning in self.startup_warnings:
             await self.emit(Log(level="warning", message=warning))
         runner = self.runner = self.runner_factory()
@@ -1748,6 +1778,7 @@ class Session:
                         step_id, self._checker_run(checker, route.value, run)
                     ),
                 )
+            await self._apply_honesty(decided, step_id)
             await self._store_call(
                 "recording a decision",
                 self.store.decide_step(
@@ -2163,6 +2194,37 @@ class Session:
                 source="rules",
                 rules=rules,
             )
+        if self.config.honesty.mode != "off" and self.honesty_marks:
+            # Enforcement first, because it needs no model call: a command that would run code
+            # the register calls dishonest is denied, and the reason tells Claude how to clear
+            # it (PLAN.md D83). Editing the dirty code is never blocked.
+            blocked = (
+                blocking_marks(step, self.honesty_marks, self.workspace)
+                if self.config.honesty.mode == "enforce"
+                else []
+            )
+            if blocked:
+                spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in blocked)
+                return _Decided(
+                    route=route,
+                    decision=CheckDecision(
+                        decision=Decision.DENY,
+                        reason=(
+                            "This would run code that is recorded as dishonest: "
+                            f"{spots}. Make the code and its documentation agree first -- "
+                            "either change the code or document what it really does -- and "
+                            "the record clears itself."
+                        ),
+                        step_summary=label,
+                    ),
+                    source="honesty",
+                    rules=rules,
+                )
+            # Not blocked deterministically, but the checkers have to know: a command that
+            # names no path at all (`make test`) is theirs to judge (§13.4).
+            note = register_note(self.honesty_marks)
+            if note:
+                step = step.model_copy(update={"notes": [*step.notes, note]})
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
             route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
         if route is Route.ALLOW and step.tool_name == "SendMessage" and not self._own_agent(step):
@@ -2739,6 +2801,31 @@ class Session:
         else:
             self._store_failures = 0
 
+    async def _store_value[T](self, what: str, call: Awaitable[T]) -> T | None:
+        """Await a store call that has a result, and report its failure; never raises.
+
+        Like `_store_call`, but for a read or a write whose return value the caller needs: the
+        honesty register says how many marks it applied, and reading it back gives the marks.
+
+        Args:
+            what: What was attempted, for the message.
+            call: The awaitable returned by the store method.
+
+        Returns:
+            What the call returned, or None if it failed.
+
+        Side effects:
+            Counts the failure (`_store_failed`) exactly as `_store_call` does, so a store that
+            keeps failing stops the session (D59).
+        """
+        try:
+            value = await call
+        except Exception as exc:
+            await self._store_failed(what, exc)
+            return None
+        self._store_failures = 0
+        return value
+
     async def _store_failed(self, what: str, exc: BaseException) -> None:
         """Report a failed database write and stop the session if they keep failing.
 
@@ -2918,6 +3005,78 @@ class Session:
             await self.emit(event)
         except Exception:
             log.exception("emitting %s failed", event.method)
+
+    async def _apply_honesty(self, decided: _Decided, step_id: int) -> None:
+        """Write the honesty marks of a step's verdicts and reload the register (D82).
+
+        Every checker of the step may contribute marks, so the marks of all of them are applied
+        together. A mark for a spot that is already open refreshes its reason; a clean mark that
+        matches nothing open is counted and reported as such, because a checker claiming to
+        have cleaned what was never dirty is worth seeing. Nothing happens while
+        `honesty.mode` is "off".
+
+        Side effects: writes `honesty_marks`, reloads `self.honesty_marks` and emits a `log`
+        event naming what changed. A store failure is logged by `_store_call`, not raised: a
+        session whose register cannot be written is still a session, and the next step tries
+        again.
+
+        Args:
+            decided: The verdicts of the step, with the marks their checkers asked for.
+            step_id: The step the marks belong to.
+        """
+        if self.config.honesty.mode == "off":
+            return
+        dirty = [mark for _c, run in decided.runs for mark in run.decision.marks_dirty]
+        clean = [mark for _c, run in decided.runs for mark in run.decision.marks_clean]
+        if not dirty and not clean:
+            return
+        branch = await self._git_branch()
+        applied = await self._store_value(
+            "recording honesty marks",
+            self.store.apply_honesty_marks(dirty, clean, step_id, branch),
+        )
+        if applied is None:  # the write failed and was reported; the next step tries again
+            return
+        self.honesty_marks = (
+            await self._store_value("reading the honesty register", self.store.open_honesty_marks())
+            or []
+        )
+        opened, closed = applied
+        parts: list[str] = []
+        if opened:
+            parts.append(f"{opened} spot(s) recorded as dishonest")
+        if closed:
+            parts.append(f"{closed} cleared")
+        if len(clean) > closed:
+            parts.append(f"{len(clean) - closed} clean mark(s) matched nothing recorded")
+        if parts:
+            await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
+
+    async def _git_branch(self) -> str | None:
+        """Return the branch of the workspace's git HEAD, cached like `_git_head`.
+
+        The honesty register records it, because a mark means something else after a branch
+        switch (PLAN.md Q19 asks the owner which rule to apply to that).
+
+        Returns:
+            The branch name, "HEAD" on a detached head, or None if the workspace is not a git
+            repository or git fails.
+        """
+        now = anyio.current_time()
+        if now - self._git_branch_time < GIT_HEAD_TTL_S:
+            return self._git_branch_value
+        value: str | None = None
+        try:
+            with anyio.fail_after(5):
+                done = await anyio.run_process(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.workspace, check=False
+                )
+            if done.returncode == 0:
+                value = done.stdout.decode().strip() or None
+        except OSError, TimeoutError:
+            value = None
+        self._git_branch_value, self._git_branch_time = value, now
+        return value
 
     async def _git_head(self) -> str | None:
         """Return the commit id of the workspace's git HEAD, cached for `GIT_HEAD_TTL_S`.

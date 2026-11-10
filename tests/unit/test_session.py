@@ -10,7 +10,14 @@ from calu.checkers import CheckDecision, Decision, Route, Step
 from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
-from calu.config import AutoEscalate, ChangesConfig, ClaudeConfig, Config, ContextConfig
+from calu.config import (
+    AutoEscalate,
+    ChangesConfig,
+    ClaudeConfig,
+    Config,
+    ContextConfig,
+    HonestyConfig,
+)
 from calu.protocol.messages import (
     AgentsUpdate,
     AutoEscalateChanged,
@@ -28,7 +35,7 @@ from calu.protocol.messages import (
 )
 from calu.session import Session, SessionError, combine_decisions
 from calu.store.config import CheckerDefinition
-from calu.testing import fake_models, fixed_checker
+from calu.testing import fake_models, fixed_checker, marking_checker
 from tests.unit.helpers import default_settings, make_session
 
 pytestmark = pytest.mark.anyio
@@ -1230,3 +1237,99 @@ async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
     runs = [run for step in store.steps.values() for run in step.checker_runs]
     assert sorted(run.checker_name for run in runs) == ["command", "honesty"]
     assert {run.decision for run in runs} == {"pass", "deny"}  # rows keep them lower case
+
+
+async def test_the_honesty_register_blocks_running_dirty_code_but_not_editing_it(tmp_path: Path):
+    """§13 end to end: a checker marks code dirty, a command that runs it is denied.
+
+    The checker's marks travel as fields of its verdict and calu applies them (D82). The
+    enforcement is deterministic and needs no model call, and the way out stays open: editing
+    the dishonest code is never blocked (D83).
+    """
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
+    extra = CheckerDefinition(
+        name="honesty",
+        route="edit",
+        instructions="# Honesty checker",
+        model="test:model",
+        request_limit=5,
+        output_tokens_limit=24_000,
+        max_tokens=8_000,
+        version=1,
+    )
+    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [
+                # The edit leaves the code dishonest, and the honesty checker says so.
+                {"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"},
+                # Running it is denied; editing it again is not.
+                {"tool": "Bash", "input": {"command": "python src/parser.py"}, "result": "ok"},
+                {"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"},
+            ]
+        ],
+        settings=settings,
+        checker_models={
+            **fake_models(),
+            "honesty": marking_checker(
+                dirty=[("src/parser.py", "fields", "the docstring promises a sorted list")]
+            ),
+        },
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    # The mark was recorded from the verdict.
+    (open_mark,) = [m for m in store.honesty_marks if m.open]
+    assert open_mark.label() == "src/parser.py:fields"
+
+    checks = {c.tool_name: c for c in rec.of(CheckResult)}
+    # The command that would run the dirty file is denied, with the reason Claude needs.
+    assert checks["Bash"].decision is Decision.DENY
+    assert "recorded as dishonest" in checks["Bash"].reason
+    assert "src/parser.py:fields" in checks["Bash"].reason
+    # The edit of the same file is not blocked: that is how the dishonesty gets fixed.
+    assert checks["Write"].decision is not Decision.DENY
+
+
+async def test_tracking_honesty_records_without_blocking(tmp_path: Path):
+    """D83: `track` is how a user judges the checker before trusting it to block."""
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="track")))
+    extra = CheckerDefinition(
+        name="honesty",
+        route="edit",
+        instructions="# Honesty checker",
+        model="test:model",
+        request_limit=5,
+        output_tokens_limit=24_000,
+        max_tokens=8_000,
+        version=1,
+    )
+    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [
+                {"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"},
+                {"tool": "Bash", "input": {"command": "python src/parser.py"}, "result": "ok"},
+            ]
+        ],
+        settings=settings,
+        checker_models={
+            **fake_models(),
+            "honesty": marking_checker(dirty=[("src/parser.py", "", "the name lies")]),
+        },
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    assert [m.label() for m in store.honesty_marks if m.open] == ["src/parser.py"]
+    checks = {c.tool_name: c for c in rec.of(CheckResult)}
+    assert checks["Bash"].decision is not Decision.DENY, "track records, it does not block"

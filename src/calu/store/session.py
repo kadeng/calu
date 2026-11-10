@@ -36,9 +36,11 @@ from typing import Any, Literal, Protocol
 
 import psycopg
 
+from calu.checkers import CodeMark
 from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
+from calu.honesty import HonestyMark
 from calu.protocol.messages import (
     AgentInfo,
     CheckerRunInfo,
@@ -223,6 +225,43 @@ class SessionStore(Protocol):
         Args:
             agents: The session's subagents as the runner reports them; a status other than
                 "running" also sets `ended_at`.
+        """
+        ...
+
+    async def open_honesty_marks(self) -> list[HonestyMark]:
+        """Read the open marks of this session's project (PLAN.md D82).
+
+        The register is shared by every session of the project, because honesty debt outlives
+        the session that incurred it.
+
+        Returns:
+            The open marks, oldest first; empty when nothing is recorded or the session has no
+            project.
+        """
+        ...
+
+    async def apply_honesty_marks(
+        self,
+        dirty: Sequence[CodeMark],
+        clean: Sequence[CodeMark],
+        step_id: int | None,
+        git_branch: str | None = None,
+    ) -> tuple[int, int]:
+        """Open and close marks as a checker's verdict asked (PLAN.md D82).
+
+        A dirty mark for a spot that is already open updates its reason instead of adding a
+        row. A clean mark closes the open mark of that spot; one that matches nothing open
+        changes nothing and is counted as not applied, because a checker claiming to have
+        cleaned what was never dirty is worth seeing.
+
+        Args:
+            dirty: Spots the step left dishonest.
+            clean: Spots that say what they do again.
+            step_id: The step whose check produced the marks, for the record; may be None.
+            git_branch: The branch the marks were made on (Q19 asks what it should mean).
+
+        Returns:
+            How many marks were opened or updated, and how many were closed.
         """
         ...
 
@@ -636,6 +675,86 @@ class DatabaseSessionStore:
             "UPDATE sessions SET claude_session_id = %s, model = coalesce(%s, model) WHERE id = %s",
             (claude_session_id, model, self._require_session()),
         )
+
+    async def open_honesty_marks(self) -> list[HonestyMark]:
+        """Read the open marks of this session's project (see `SessionStore`).
+
+        Returns:
+            The open marks of the project, oldest first.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        rows = await self._db.all(
+            "SELECT id, path, symbol, reason, opened_at, git_branch"
+            " FROM honesty_marks"
+            " WHERE closed_at IS NULL AND project_id IS NOT DISTINCT FROM"
+            "       (SELECT project_id FROM sessions WHERE id = %s::uuid)"
+            " ORDER BY opened_at, id",
+            (self._require_session(),),
+        )
+        return [
+            HonestyMark(
+                id=row[0],
+                path=row[1],
+                symbol=row[2],
+                reason=row[3],
+                opened_at=row[4],
+                git_branch=row[5],
+            )
+            for row in rows
+        ]
+
+    async def apply_honesty_marks(
+        self,
+        dirty: Sequence[CodeMark],
+        clean: Sequence[CodeMark],
+        step_id: int | None,
+        git_branch: str | None = None,
+    ) -> tuple[int, int]:
+        """Open and close marks as a checker asked (see `SessionStore`).
+
+        Args:
+            dirty: Spots the step left dishonest; an open mark of the same spot keeps its row
+                and gets the new reason.
+            clean: Spots that say what they do again.
+            step_id: The step whose check produced the marks; may be None.
+            git_branch: The branch the marks were made on.
+
+        Returns:
+            How many marks were opened or updated, and how many were closed.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        session = self._require_session()
+        opened = 0
+        for entry in dirty:
+            # One open row per spot: a repeated "still dirty" refreshes the reason, so the
+            # register holds the current explanation rather than the first one.
+            await self._db.execute(
+                "INSERT INTO honesty_marks"
+                " (project_id, path, symbol, reason, git_branch, opened_session, opened_step)"
+                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s FROM sessions s"
+                " WHERE s.id = %s::uuid"
+                " ON CONFLICT (project_id, path, symbol) WHERE closed_at IS NULL"
+                " DO UPDATE SET reason = excluded.reason",
+                (entry.path, entry.symbol, entry.reason, git_branch, step_id, session),
+            )
+            opened += 1
+        closed = 0
+        for entry in clean:
+            row = await self._db.one(
+                "UPDATE honesty_marks SET closed_at = now(), closed_session = %s::uuid,"
+                " closed_step = %s, closed_by = 'a checker'"
+                " WHERE closed_at IS NULL AND path = %s AND symbol = %s"
+                " AND project_id IS NOT DISTINCT FROM"
+                "     (SELECT project_id FROM sessions WHERE id = %s::uuid)"
+                " RETURNING id",
+                (session, step_id, entry.path, entry.symbol, session),
+            )
+            closed += 1 if row is not None else 0
+        return opened, closed
 
     async def note_setting_change(
         self, setting: str, old: dict[str, Any], new: dict[str, Any], actor: str

@@ -406,6 +406,27 @@ class ChangesConfig(ConfigModel):
     noticed; they are the ones that matter most and the ones git would otherwise hide."""
 
 
+HonestyMode = Literal["off", "track", "enforce"]
+"""What calu does with the honesty register (PLAN.md D83)."""
+
+
+class HonestyConfig(ConfigModel):
+    """Whether dishonest code is recorded, and whether it may be run (PLAN.md §13).
+
+    A checker whose instructions ask for it records which files or symbols say something other
+    than what they do, and clears the record when they agree again. The register is enforced
+    where temporary dishonesty becomes a risk: a step that would **run** dirty code is denied.
+    Editing it is never blocked, because fixing the dishonesty is an edit.
+    """
+
+    mode: HonestyMode = "off"
+    """`off`: the register is neither written nor read, and a checker's marks are ignored.
+    `track`: marks are recorded and reported (`calu honesty list`, the web interface) and
+    nothing is blocked -- which is how to judge the checker on a real project before trusting
+    it. `enforce`: a step that would run dirty code is denied, with the mark's reason. Default
+    `off`, because the judgement needs a capable checker model (Q17)."""
+
+
 class ClockConfig(ConfigModel):
     """How closely calu watches its own clock (PLAN.md D32, `calu.clock`).
 
@@ -437,6 +458,8 @@ class Config(ConfigModel):
     """The checker that reviews a file edit before it is written."""
     subagent_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     """The checker that reviews what a subagent hands back."""
+    honesty: HonestyConfig = Field(default_factory=HonestyConfig)
+    """Whether dishonest code is recorded and whether it may be run (§13)."""
     changeset_checker: CheckerConfig = Field(default_factory=lambda: CheckerConfig(request_limit=8))
     """The checker that reviews a whole change before a commit (PLAN.md D26). It gets more
     requests than a step checker, because judging a whole change means reading some of the

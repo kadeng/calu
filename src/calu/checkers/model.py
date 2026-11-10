@@ -36,6 +36,53 @@ class Decision(StrEnum):
         return self in (Decision.PASS, Decision.ALLOW)
 
 
+class CodeMark(BaseModel):
+    """A file or a symbol that a checker calls dishonest, or honest again (PLAN.md D82).
+
+    "Dishonest" means that the code and what it says about itself disagree: a name, a docstring
+    or a document promises something the code does not do. A complex change makes that true on
+    purpose for a few steps, so a checker records it instead of objecting to every step, and
+    calu stops the dirty code from being **run** until the record is cleared (D83).
+    """
+
+    path: str = Field(
+        description=(
+            "Path of the file, relative to the project root, e.g. `src/parser.py`. Never "
+            "absolute and never outside the project."
+        )
+    )
+    symbol: str = Field(
+        default="",
+        description=(
+            "The function, method or class inside the file, e.g. `fields` or "
+            "`Parser.fields`. Empty if the whole file is meant."
+        ),
+    )
+    reason: str = Field(
+        description=(
+            "What disagrees with what, in one or two sentences, and what would settle it: "
+            '"the docstring promises a sorted list, the code returns insertion order; either '
+            'sort or document the order". Claude reads this when a step is blocked.'
+        )
+    )
+
+    def key(self) -> tuple[str, str]:
+        """Return what identifies this mark, for matching a clean mark to an open one.
+
+        Returns:
+            The path and the symbol; two marks with the same pair are the same spot.
+        """
+        return self.path, self.symbol
+
+    def label(self) -> str:
+        """Render the marked spot for a person or for Claude.
+
+        Returns:
+            `path:symbol`, or the path alone when no symbol is named.
+        """
+        return f"{self.path}:{self.symbol}" if self.symbol else self.path
+
+
 class CheckDecision(BaseModel):
     """Structured output of a checker agent.
 
@@ -74,6 +121,21 @@ class CheckDecision(BaseModel):
             "script, a heredoc, ...) must be named as an edit, with the files and the change. "
             "This becomes the record of the step in the context of later checks."
         )
+    )
+    marks_dirty: list[CodeMark] = Field(
+        default_factory=list,
+        description=(
+            "Only for a checker whose instructions ask for it: code that this step leaves "
+            "dishonest, so that it cannot be run until it is honest again. Leave empty "
+            "otherwise."
+        ),
+    )
+    marks_clean: list[CodeMark] = Field(
+        default_factory=list,
+        description=(
+            "Only for a checker whose instructions ask for it: code that was recorded as "
+            "dishonest and now says what it does. Leave empty otherwise."
+        ),
     )
 
 

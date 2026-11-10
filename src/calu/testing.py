@@ -10,6 +10,8 @@ every decision without a model:
     step text contains "calu:comment"   -> a remark to Claude next to the decision
 """
 
+from collections.abc import Sequence
+
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
@@ -141,6 +143,61 @@ def fixed_checker(decision: str, reason: str = "", comment: str = "") -> Model:
         )
 
     return FunctionModel(answer, model_name=f"fixed-{decision.lower()}")
+
+
+def marking_checker(
+    dirty: Sequence[tuple[str, str, str]] = (),
+    clean: Sequence[tuple[str, str, str]] = (),
+    decision: str = "PASS",
+) -> Model:
+    """Create a checker model that passes the step and writes honesty marks (PLAN.md §13).
+
+    Stands in for the honesty checker, whose judgement needs a capable model: the test decides
+    what it finds, so that the register, its enforcement and the reporting can be tested without
+    one.
+
+    Args:
+        dirty: (path, symbol, reason) of each spot the step leaves dishonest.
+        clean: (path, symbol, reason) of each spot that says what it does again.
+        decision: What it answers about the step itself; "PASS" leaves the step to the others.
+
+    Returns:
+        A `FunctionModel` named "marking-checker".
+    """
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return the fixed decision with the fixed marks.
+
+        Args:
+            messages: The message history (unused).
+            info: Agent information; its first output tool receives the decision.
+
+        Returns:
+            A response that calls the output tool.
+        """
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "decision": decision,
+                        "reason": "" if decision == "PASS" else "the marking fake checker",
+                        "step_summary": "Fixed summary of the step.",
+                        "comment": "",
+                        "marks_dirty": [
+                            {"path": path, "symbol": symbol, "reason": reason}
+                            for path, symbol, reason in dirty
+                        ],
+                        "marks_clean": [
+                            {"path": path, "symbol": symbol, "reason": reason}
+                            for path, symbol, reason in clean
+                        ],
+                    },
+                )
+            ]
+        )
+
+    return FunctionModel(answer, model_name="marking-checker")
 
 
 def fake_summarizer() -> Model:
