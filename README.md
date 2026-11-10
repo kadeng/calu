@@ -312,6 +312,32 @@ the file before an edit, and the conversation as the checkers see it. The waitin
 your answer up within a second. What is *not* in the database is the live stream: the text as it
 is written, the thinking, the tool results as they arrive. That is what attaching is for.
 
+### From another machine
+
+Nothing calu runs binds a public interface, and that is deliberate: there is no login in front
+of the web interface and no TLS in front of a session's WebSocket. Two ways to work remotely:
+
+**Through the database.** The five commands above need nothing but a reachable PostgreSQL and
+the `admin` credential, so an operator anywhere can watch the fleet and answer escalations
+without touching the machines the sessions run on. This is the intended way to run a herd.
+
+**Through an SSH tunnel**, when you want the live stream or the browser:
+
+```bash
+ssh the-host 'calu token mint <session id> --label laptop'   # asks for the admin password
+ssh -L 8800:127.0.0.1:8800 the-host     # then open http://127.0.0.1:8800 at home
+ssh -L 8765:127.0.0.1:8765 the-host     # the port `calu sessions` shows for that session
+calu attach ws://127.0.0.1:8765 --token <the token it printed>
+```
+
+Mint the token in its own step: every command that reads the configuration asks for the `admin`
+password, so it wants a terminal, and the token is printed once and never stored. A minted token
+outlives the session you made it for and can be taken back (`calu token list|revoke`), which is
+what makes it usable from a second machine at all. For a session that serves a Unix socket
+instead of a port, forward the socket at the path `calu sessions` shows for it (it is named
+after the session's process, `/run/user/<uid>/calu/<pid>.sock`): `ssh -L
+8765:/run/user/1000/calu/4711.sock the-host`.
+
 A browser shows every session of every host at once:
 
 ```bash

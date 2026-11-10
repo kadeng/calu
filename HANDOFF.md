@@ -310,20 +310,14 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **Rewind the files of a fork**: answered and closed (Q14 -> D46). Measured with the real
-   CLI (`spikes/spike_rewind_files.py`): `rewind_files` puts back what the Write tool changed,
-   leaves what a Bash command overwrote, and does not remove what a command created. A fork
-   using it would leave a half-reverted tree that looks consistent and is not, so a fork
-   rewinds the conversation only and both the CLI's help and the web fork card say so. If file
-   rewinding is ever wanted, it belongs on D31's snapshots, which do cover commands.
-2. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
+1. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. What the editor
    can drive is complete: prompts, the replay of `session/load`, permission requests for
    escalations, and the session mode -- the three auto-escalation switches are offered both as
    ACP's session modes and as its newer boolean config options, and a change made anywhere
    reaches every client (D42).
-3. **Publishing** needs two steps only the owner can take (and Q15 asks whether a single
+2. **Publishing** needs two steps only the owner can take (and Q15 asks whether a single
    executable should ship beside the wheel). The wheel itself is verified
    (D41, `tests/unit/test_packaging.py`, and CI installs it on every push), and
    `.github/workflows/release.yml` builds and publishes it for a `v*` tag — but it stays inert
@@ -331,13 +325,13 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    `calu`, workflow `release.yml`, environment `pypi`, and (b) that GitHub environment is
    created. Until then `uv tool install calu` in the README does not work. A tag pushed before
    the setup builds the wheel and stops, so nothing is published by accident.
-4. **Phase 5**: nothing blocking left. The network policy is built (D39) and its default for a
+3. **Phase 5**: nothing blocking left. The network policy is built (D39) and its default for a
    new project is now a proposal to confirm (D45, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs
    `security_opt: [seccomp:unconfined]` and socat — calu's own `dev` service and image now have
    both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested, because it needs
    a logged-in `claude` inside a container.
-5. Smaller gaps: a client of a session still cannot change what steers the checkers through the
+4. Smaller gaps: a client of a session still cannot change what steers the checkers through the
    protocol, by design (the session role may only read it, §12 phase 4) -- except the
    auto-escalation switches, which are session-local and audited (D42, D43). Editing a single
    list entry is done: `calu config add|remove <key> <entry>` (D44).
@@ -345,8 +339,13 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 ## Open questions for the owner (`PLAN.md` §11)
 
 - **Q2** Relationship to sitl: replace it or keep both?
-- **Q3** A database role per session (would allow row-level security, and narrow D28 further).
-- **Q4** How clients authenticate remotely (tokens, operator accounts, TLS) — see next step 2.
+- **Q3** A database role per session. Recommendation in PLAN: not yet, and not as a role per
+  session -- row-level security keyed on a session id the connection sets is the cheaper shape,
+  and it should come after the first real unsupervised runs.
+- **Q4** Remote access: the transport half is recommended and documented (loopback plus an SSH
+  tunnel, README "From another machine"); open is whether operators get their own
+  `calu_operator` logins instead of sharing the `admin` credential, which matters as soon as
+  more than one person uses one database.
 - **Q5** Answered as a proposal (D45): a new project gets "proxy" with a starter allow list
   instead of "full". One flag overrules it (`calu project add --network full`); existing
   projects are untouched. The owner should confirm the list and the trade (a task that needs an
