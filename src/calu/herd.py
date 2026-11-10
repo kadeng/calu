@@ -15,7 +15,7 @@ that access again.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -518,7 +518,62 @@ MAX_SECTION_CHARS = 4_000
 """Characters of a long context section that `render_escalation` prints without `--full`."""
 
 
-def render_escalation(row: EscalationRow, context: Mapping[str, Any], full: bool = False) -> str:
+@dataclass(frozen=True)
+class CheckerRunRow:
+    """What one checker decided about one step (a row of `checker_runs`)."""
+
+    checker_name: str
+    checker_version: int
+    model: str
+    decision: str
+    reason: str
+
+    def line(self) -> str:
+        """Render the run as one line for a terminal.
+
+        Returns:
+            "[command v3, test:model] escalate: the reason", the reason on one line.
+        """
+        reason = " ".join((self.reason or "").split())
+        return f"[{self.checker_name} v{self.checker_version}, {self.model}] {self.decision}" + (
+            f": {reason}" if reason else ""
+        )
+
+
+async def escalation_runs(db: Db, escalation_id: int) -> list[CheckerRunRow]:
+    """Read what the checkers decided about the step of one escalation.
+
+    The escalation's own `reason` says why the step stopped, which is not the same thing: when
+    an auto-escalation category holds a step back (PLAN.md D42) the reason is "every edit waits
+    for a human" and what the checkers actually thought is only here. `calu escalation` prints
+    these, so a decision taken from the database alone sees them (D30).
+
+    Args:
+        db: The connection.
+        escalation_id: Id of the `escalations` row.
+
+    Returns:
+        The runs of that escalation's step, oldest first; empty if the escalation has no step
+        (a session-level escalation) or no checker ran on it (a rule decided).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT c.checker_name, c.checker_version, c.model, c.decision, coalesce(c.reason, '')"
+        " FROM checker_runs c JOIN escalations e ON e.step_id = c.step_id"
+        " WHERE e.id = %s ORDER BY c.id",
+        (escalation_id,),
+    )
+    return [CheckerRunRow(*row) for row in rows]
+
+
+def render_escalation(
+    row: EscalationRow,
+    context: Mapping[str, Any],
+    full: bool = False,
+    runs: Sequence[CheckerRunRow] = (),
+) -> str:
     """Render everything needed to decide an escalation, for a terminal.
 
     This is the **database-only** view (PLAN.md D30): an operator who can reach the database can
@@ -530,6 +585,10 @@ def render_escalation(row: EscalationRow, context: Mapping[str, Any], full: bool
         row: The escalation row.
         context: Its stored context (`escalation_context`).
         full: Print the long sections whole; otherwise each is cut to `MAX_SECTION_CHARS`.
+        runs: What the checkers decided about the step (`escalation_runs`); left out when
+            empty. They are not the same as `row.reason`: a step held back by an
+            auto-escalation category (D42) has a reason that says so and checker runs that say
+            the checkers approved it.
 
     Returns:
         The rendering, ending with the command that answers it.
@@ -579,6 +638,8 @@ def render_escalation(row: EscalationRow, context: Mapping[str, Any], full: bool
         command = str(tool_input.get("command") or "")
         shown = command or json.dumps(tool_input, indent=2, sort_keys=True)[:MAX_SECTION_CHARS]
         parts.append(section(f"The tool call ({tool_name})", shown))
+    if runs:
+        parts.append(section("What the checkers decided", "\n".join(run.line() for run in runs)))
     parts.append(section("The step as the checker saw it", str(context.get("rendered") or "")))
     parts.append(section("The change that would be committed", str(context.get("changeset") or "")))
     files = context.get("files")

@@ -798,10 +798,11 @@ def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
     """Show everything needed to decide one escalation, from the database alone (PLAN.md D30).
 
-    No session process is involved: an operator who can reach the database sees why the step was
-    escalated, what it would do, what Claude asked if it was a question, and the conversation as
-    the checkers saw it — also for a session on another host, or one that has already ended. The
-    live stream of a running session is **not** in the database (D3); `calu attach` shows that.
+    No session process is involved: an operator who can reach the database sees why the step
+    was escalated, what each checker decided about it and why, what it would do, what Claude
+    asked if it was a question, and the conversation as the checkers saw it — also for a
+    session on another host, or one that has already ended. The live stream of a running
+    session is **not** in the database (D3); `calu attach` shows that.
 
     Args:
         args: Parsed arguments (`id`, `full`).
@@ -830,7 +831,8 @@ def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
         if row is None:
             raise CliError(f"no escalation {args.id}")
         context = await herd.escalation_context(db, args.id)
-        return herd.render_escalation(row, context, full=args.full)
+        runs = await herd.escalation_runs(db, args.id)
+        return herd.render_escalation(row, context, full=args.full, runs=runs)
 
     _herd_command(store, work)
 
