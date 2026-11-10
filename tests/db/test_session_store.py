@@ -508,3 +508,98 @@ async def test_the_write_set_of_a_step_is_recorded(db_url: str) -> None:
         assert again is not None and again[0]["overlapping"] is True
     finally:
         await conn.close()
+
+
+async def test_a_second_fold_after_a_resume_keeps_every_turn_exactly_once(db_url: str) -> None:
+    """The invariant the checkers' context rests on, across two sessions.
+
+    A turn must reach the checkers either folded into the summary or verbatim, never both and
+    never neither: seeing it twice inflates the prompt the fold exists to bound (D63 measures
+    what that costs), and seeing it nowhere loses the conversation. The interesting case is the
+    second fold, because `load_previous` filters on `folded` of the session it loads from while
+    `mark_folded` writes the flag on the session that folds.
+    """
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-9")
+        for i in (1, 2, 3):
+            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+        await store.save_summary("covers 1-2", 2)
+        await store.mark_folded(2)
+
+        resumed = DatabaseSessionStore(Db(conn))
+        await resumed.start(IDENTITY)
+        await resumed.set_claude_session("claude-9")
+        turns, summary = await resumed.load_previous("claude-9")
+        assert [t.index for t in turns] == [3]
+        assert summary == "covers 1-2"
+
+        # The resumed session continues the numbering and folds again, this time over a turn it
+        # restored (3) and one of its own (4).
+        for i in (4, 5):
+            await resumed.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+        await resumed.save_summary("covers 1-4", 4)
+        await resumed.mark_folded(4)
+
+        again = DatabaseSessionStore(Db(conn))
+        await again.start(IDENTITY)
+        await again.set_claude_session("claude-9")
+        later, summary = await again.load_previous("claude-9")
+        assert summary == "covers 1-4"
+        # Turn 3 is in the summary now, so it must not come back verbatim as well; turn 5 is
+        # not in the summary, so it must.
+        assert [t.index for t in later] == [5], "a folded turn came back verbatim"
+        covered = 4
+        assert covered + len(later) == 5, "every turn is either folded or verbatim, exactly once"
+    finally:
+        await conn.close()
+
+
+async def test_a_second_resume_keeps_the_summary_and_the_turns_between(db_url: str) -> None:
+    """D65: the conversation is read from every session of it, not from the newest one.
+
+    A resume saves only the turns it runs itself, and writes a `chat_summaries` row only when
+    it folds. Reading one session therefore lost everything older as soon as a resume ended
+    without a fold: the newest session had turns and no summary, so the checkers started from
+    nothing and the turns recorded by the session before it were never read again.
+    """
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-7")
+        for i in (1, 2, 3):
+            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+        await store.save_summary("covers 1-2", 2)
+        await store.mark_folded(2)
+
+        second = DatabaseSessionStore(Db(conn))
+        await second.start(IDENTITY)
+        await second.set_claude_session("claude-7")
+        turns, summary = await second.load_previous("claude-7")
+        assert ([t.index for t in turns], summary) == ([3], "covers 1-2")
+        # It runs two turns and never folds, which is the normal case: the default is to fold
+        # every 30 turns.
+        for i in (4, 5):
+            await second.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+
+        third = DatabaseSessionStore(Db(conn))
+        await third.start(IDENTITY)
+        await third.set_claude_session("claude-7")
+        turns, summary = await third.load_previous("claude-7")
+        assert summary == "covers 1-2", "the summary of the fold two sessions ago was lost"
+        assert [t.index for t in turns] == [3, 4, 5], "turn 3 was recorded by the first session"
+        assert [t.user_inputs for t in turns] == [["turn 3"], ["turn 4"], ["turn 5"]]
+
+        # A later fold, by whichever session, bounds what comes back verbatim: turn 3 stays
+        # unmarked in the session that recorded it, so the number decides, not the flag.
+        await third.save_summary("covers 1-4", 4)
+        await third.mark_folded(4)
+        fourth = DatabaseSessionStore(Db(conn))
+        await fourth.start(IDENTITY)
+        await fourth.set_claude_session("claude-7")
+        turns, summary = await fourth.load_previous("claude-7")
+        assert summary == "covers 1-4"
+        assert [t.index for t in turns] == [5], "a folded turn came back verbatim as well"
+    finally:
+        await conn.close()

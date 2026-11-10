@@ -980,13 +980,32 @@ class DatabaseSessionStore:
         )
 
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
-        """Load turns and summary of the last session of a Claude session (see `SessionStore`).
+        """Load the conversation's unfolded turns and its chat summary (see `SessionStore`).
+
+        The state is read from **every** session of the conversation, not from the last one,
+        because a resume splits it (PLAN.md D65): the resumed session saves only the turns it
+        runs itself and writes a `chat_summaries` row only when it folds. Reading one session
+        therefore lost the whole earlier conversation after the second resume -- the newest
+        session held turns but no summary, so the checkers started again from nothing.
+
+        What is read:
+
+        - the summary with the highest `covered_turns` of the conversation, which is the newest
+          fold whichever session performed it;
+        - every turn of the conversation above that number that is not marked folded, one row
+          per turn number, preferring the newest session when two rows carry the same number
+          (a fork continues from the same numbers).
+
+        The `covered_turns` bound is what keeps a turn from appearing twice: a turn folded by a
+        later session stays unmarked in the session that recorded it, so the flag alone is not
+        enough.
 
         Args:
             claude_session_id: The Claude session id that is resumed.
 
         Returns:
-            Its unfolded turns (oldest first) and its chat summary.
+            The unfolded turns (oldest first) and the chat summary ("" when nothing was folded
+            yet). Both are empty for a conversation with no other session.
 
         Raises:
             psycopg.Error: On database errors.
@@ -996,26 +1015,30 @@ class DatabaseSessionStore:
             # security keeps this role out of (PLAN.md D49).
             await self._claim_conversation(conn, claude_session_id)
             cur = await conn.execute(
-                b"SELECT id FROM calu_conversation_sessions(%s)"
-                b" WHERE id IS DISTINCT FROM %s::uuid LIMIT 1",
+                b"SELECT id FROM calu_conversation_sessions(%s) WHERE id IS DISTINCT FROM %s::uuid",
                 (claude_session_id, self.session_id),
             )
-            row = await cur.fetchone()
-            if row is None:
+            others = [row[0] for row in await cur.fetchall()]
+            if not others:
                 return [], ""
-            previous = row[0]
             cur = await conn.execute(
-                b"SELECT number, user_inputs, steps, answer, narrated_answer, narrated,"
-                b" started_at, ended_at FROM turns WHERE session_id = %s AND NOT folded"
-                b" ORDER BY number",
-                (previous,),
+                b"SELECT summary, covered_turns FROM chat_summaries"
+                b" WHERE session_id = ANY(%s) ORDER BY covered_turns DESC LIMIT 1",
+                (others,),
+            )
+            row = await cur.fetchone()
+            summary, covered = (row[0], row[1]) if row else ("", 0)
+            cur = await conn.execute(
+                b"SELECT DISTINCT ON (t.number)"
+                b" t.number, t.user_inputs, t.steps, t.answer, t.narrated_answer, t.narrated,"
+                b" t.started_at, t.ended_at"
+                b" FROM turns t JOIN sessions s ON s.id = t.session_id"
+                b" WHERE t.session_id = ANY(%s) AND NOT t.folded AND t.number > %s"
+                b" ORDER BY t.number, s.started_at DESC",
+                (others, covered),
             )
             turns = [turn_record(row) for row in await cur.fetchall()]
-            cur = await conn.execute(
-                b"SELECT summary FROM chat_summaries WHERE session_id = %s", (previous,)
-            )
-            row = await cur.fetchone()
-        return turns, row[0] if row else ""
+        return turns, summary
 
     async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
         """List the stored sessions of one directory (see `SessionStore.recent_sessions`).
