@@ -1046,6 +1046,14 @@ class Session:
         event buffer of the bus only covers the running process. The rows come from the
         database, so the history of an earlier session survives a restart of calu.
 
+        A turn is narrated and stored in a background task, so that neither delays Claude, and
+        the `turn.result` event goes out before that task has finished. A client that reads the
+        history as soon as a turn ends -- which is exactly what `calu attach` and the ACP
+        adapter do -- would otherwise see one turn too few. This call therefore waits for the
+        background work of the running session first, for at most `BACKGROUND_TIMEOUT_S`
+        seconds; after that it answers with what the store holds, because a late history is
+        worse than one that is a turn behind.
+
         Args:
             claude_session_id: Which session; None is the one that runs now.
             limit: Maximum number of steps returned (the newest ones).
@@ -1054,6 +1062,7 @@ class Session:
             The turns, the steps and the chat summary; empty fields if the database cannot be
             read (the error is logged).
         """
+        await self._wait_quiet()
         try:
             return await self.store.load_history(claude_session_id, limit)
         except Exception:

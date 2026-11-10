@@ -491,3 +491,26 @@ async def test_setting_the_auto_escalation_categories_tells_every_client(tmp_pat
                 # A client that joins afterwards reads them from the snapshot.
                 snapshot = await watcher.request("state.get")
                 assert snapshot["auto_escalate"] == announced["settings"]
+
+
+async def test_the_history_holds_the_turn_that_just_ended(tmp_path: Path):
+    """A client reading the history right after `turn.result` sees that turn.
+
+    The turn is narrated and stored in a background task while the event is already out, so
+    without a wait this is a race -- and it was one: the test above failed intermittently.
+    """
+    turns = [[{"text": "first"}], [{"text": "second"}]]
+    async with served(tmp_path, turns) as run:
+        events = Events()
+        async with client(run, events) as protocol:
+            await protocol.request("session.start", {})
+            for number, text in enumerate(("one", "two"), start=1):
+                await protocol.request("chat.send", {"text": text})
+                with anyio.fail_after(15):
+                    while len(events.of("turn.result")) < number:
+                        await anyio.sleep(0.005)
+                history = await protocol.request("session.history", {})
+                # Every turn that ended is in the history, including the one just finished.
+                assert [t["user_inputs"] for t in history["turns"]] == [
+                    [name] for name in ("one", "two")[:number]
+                ]
