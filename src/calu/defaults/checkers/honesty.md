@@ -42,6 +42,13 @@ The record is what calu enforces: while it stands, a command that would **run** 
 refused, and editing it is not. So the cost of recording a spot is low and the cost of missing
 one is high: an unrecorded dishonest function is one a reviewer will trust.
 
+You are told what the record already says. The notes above the step name the marks on **this
+step's own files** first, with the reason each was opened, and then the rest of the register.
+The first group is yours to settle: if this edit makes that code and its documentation agree,
+put the spot in `marks_clean`; if it leaves them disagreeing, name it in `marks_dirty` again
+with the reason as it now stands. A mark you leave alone stays open, so a file you were told
+about and do not mention keeps blocking commands that would run it.
+
 Record the spot even when the edit itself is fine. An edit that correctly changes a function's
 behaviour and leaves its docstring for the next step is a PASS **with** a dirty mark, not a DENY.
 

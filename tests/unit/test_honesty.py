@@ -134,3 +134,40 @@ def test_the_terminal_names_what_cannot_be_run():
 
     cleared = format_event(HonestyUpdate(marks=[], mode="enforce"))
     assert cleared is not None and "clear again" in cleared
+
+
+def test_a_checker_is_told_about_its_own_file_first():
+    """D88: the checker judging a file is the one that can clear its mark."""
+    from calu.honesty import marks_of_step
+
+    mine = mark("src/parser.py", "fields", "the docstring promises a sorted list")
+    other = mark("docs/api.md", reason="it documents a flag that is gone")
+    edit = Step(
+        tool_name="Edit",
+        tool_input={"file_path": "src/parser.py", "old_string": "a", "new_string": "b"},
+        cwd="/project",
+    )
+
+    # The step's own file is found for an edit, and for a command that names it.
+    assert marks_of_step(edit, [mine, other], WORKSPACE) == [mine]
+    assert marks_of_step(bash("pytest src/parser.py"), [mine, other], WORKSPACE) == [mine]
+    assert marks_of_step(bash("make test"), [mine, other], WORKSPACE) == []
+
+    note = register_note([mine, other], marks_of_step(edit, [mine, other], WORKSPACE))
+    # Its own file comes first, with what to do about it, and the rest follows separately.
+    own_at = note.index("src/parser.py:fields")
+    rest_at = note.index("docs/api.md")
+    assert own_at < rest_at
+    assert "This step's own code" in note
+    assert "marks_clean" in note, "the checker has to be told how to clear it"
+    assert "Other code recorded as dishonest" in note
+
+    # A mark is never named twice: a file that is both the step's own and in the register.
+    once = register_note([mine], marks_of_step(edit, [mine], WORKSPACE))
+    assert once.count("src/parser.py:fields") == 1
+    assert "Other code recorded" not in once
+
+    # With nothing of its own, the note is the plain list the command checker needs.
+    plain = register_note([other], marks_of_step(edit, [other], WORKSPACE))
+    assert "This step's own code" not in plain
+    assert "docs/api.md" in plain

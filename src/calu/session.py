@@ -96,7 +96,7 @@ from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unche
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
 from calu.files import command_files
-from calu.honesty import HonestyMark, blocking_marks, register_note
+from calu.honesty import HonestyMark, blocking_marks, marks_of_step, register_note
 from calu.models import resolve_model
 from calu.protocol.messages import (
     AgentInfo,
@@ -2257,7 +2257,9 @@ class Session:
                 )
             # Not blocked deterministically, but the checkers have to know: a command that
             # names no path at all (`make test`) is theirs to judge (§13.4).
-            note = register_note(self.honesty_marks)
+            note = register_note(
+                self.honesty_marks, marks_of_step(step, self.honesty_marks, self.workspace)
+            )
             if note:
                 step = step.model_copy(update={"notes": [*step.notes, note]})
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:

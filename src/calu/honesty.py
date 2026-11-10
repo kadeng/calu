@@ -164,28 +164,83 @@ def blocking_marks(step: Step, marks: Sequence[HonestyMark], workspace: Path) ->
     return [entry for entry in marks if entry.open and entry.path and entry.path in named]
 
 
-def register_note(marks: Sequence[HonestyMark], limit: int = 20) -> str:
-    """Render the open register as a note for a checker (§13.4).
+def marks_of_step(step: Step, marks: Sequence[HonestyMark], workspace: Path) -> list[HonestyMark]:
+    """Return the open marks on the files this step touches (PLAN.md D88).
 
-    The note travels in `Step.notes`, where the rule hints already are, so every checker of the
-    step sees it and can judge whether the call would reach one of the spots -- which is what
-    covers a command that names no path.
+    For an edit or a read that is the file named in the tool input; for a command it is every
+    path the command names. The caller uses this to tell a checker what the register already
+    says about the code in front of it, which is what lets the checker clear a mark.
 
     Args:
-        marks: The marks to show; closed ones are left out.
-        limit: How many are named before the rest are only counted.
+        step: The tool call.
+        marks: The marks to consider; closed ones are ignored.
+        workspace: The project root the marks' paths are relative to.
 
     Returns:
-        One line naming the spots and their reasons, or "" when nothing is open.
+        The open marks on the step's own files, in the order given.
+    """
+    named: set[str] = set()
+    for key in ("file_path", "notebook_path", "path"):
+        value = step.tool_input.get(key)
+        if isinstance(value, str) and value:
+            candidate = Path(value)
+            base = Path(step.cwd) if step.cwd else workspace
+            try:
+                resolved = candidate if candidate.is_absolute() else base / candidate
+                named.add(resolved.resolve().relative_to(workspace.resolve()).as_posix())
+            except ValueError, OSError:
+                continue
+    if step.tool_name == "Bash":
+        named |= command_paths(
+            str(step.tool_input.get("command", "")),
+            Path(step.cwd) if step.cwd else workspace,
+            workspace,
+        )
+    return [entry for entry in marks if entry.open and entry.path in named]
+
+
+def register_note(
+    marks: Sequence[HonestyMark], own: Sequence[HonestyMark] = (), limit: int = 20
+) -> str:
+    """Render the register as a note for a checker (§13.4, D88).
+
+    The note travels in `Step.notes`, where the rule hints already are, so every checker of the
+    step sees it. It has two parts, because the two routes need different things:
+
+    - the marks on **this step's own files** (`own`), named with their reasons, because an edit
+      checker judging that file is the one that can clear them;
+    - the rest, counted and named up to `limit`, because a command that names no path at all
+      (`make test`) can still reach them and only the checker can tell.
+
+    Args:
+        marks: Every open mark of the project; closed ones are left out.
+        own: The marks on the files this step touches (`marks_of_step`), which are named first.
+        limit: How many of the rest are named before they are only counted.
+
+    Returns:
+        The note, or "" when nothing is open.
     """
     standing = [entry for entry in marks if entry.open]
     if not standing:
         return ""
-    shown = standing[:limit]
-    spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in shown)
-    rest = f" and {len(standing) - len(shown)} more" if len(standing) > len(shown) else ""
-    return (
-        "Code recorded as dishonest, which must not be run until it is fixed: "
-        f"{spots}{rest}. A step that would run one of these is a DENY; editing them to make "
-        "the code and its documentation agree is what clears the record."
-    )
+    mine = [entry for entry in own if entry.open]
+    keys = {entry.mark().key() for entry in mine}
+    others = [entry for entry in standing if entry.mark().key() not in keys]
+    parts: list[str] = []
+    if mine:
+        spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in mine)
+        parts.append(
+            "This step's own code is recorded as dishonest: "
+            f"{spots}. If this step makes the code and its documentation agree, say so in "
+            "`marks_clean`; if it leaves them disagreeing, keep the mark in `marks_dirty`."
+        )
+    if others:
+        shown = others[:limit]
+        spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in shown)
+        rest = f" and {len(others) - len(shown)} more" if len(others) > len(shown) else ""
+        parts.append(
+            "Other code recorded as dishonest, which must not be run until it is fixed: "
+            f"{spots}{rest}. A step that would run one of these is a DENY; editing them to "
+            "make the code and its documentation agree is what clears the record."
+        )
+    return " ".join(parts)
