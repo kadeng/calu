@@ -31,7 +31,8 @@ DOCUMENTS = [
     "AGENTS.md",
     "HANDOFF.md",
 ]
-FENCE = re.compile(r"```(?:bash|sh|console)?\n(.*?)```", re.S)
+FENCE = re.compile(r"^\s*(?:```|~~~)")
+"""The opening or closing line of a fenced code block."""
 DRAWING = re.compile(r"[\u2500-\u257f]")
 """Box-drawing characters: a diagram, not a command."""
 
@@ -39,15 +40,58 @@ PLACEHOLDER = re.compile(r"<[^>]+>")
 """`<session id>` and friends stand for one argument each."""
 
 
+def commands_in(text: str) -> list[str]:
+    """Return the `calu ...` command lines inside the fenced code blocks of one document.
+
+    Args:
+        text: The Markdown source.
+
+    Returns:
+        The command lines in the order they appear, each without its trailing `#` comment and
+        with `<...>` placeholders collapsed to one word. Lines outside a fence, diagram lines,
+        alternatives spelled with `|` and the bare word `calu` are left out.
+    """
+    found: list[str] = []
+    inside = False
+    for raw in text.splitlines():
+        if FENCE.match(raw):
+            inside = not inside
+            continue
+        if not inside:
+            continue
+        line = raw.strip()
+        if not line.startswith("calu ") or "|" in line:
+            continue
+        if DRAWING.search(line):
+            continue
+        command = PLACEHOLDER.sub("PLACEHOLDER", line.split("#", 1)[0].strip())
+        if command.strip() != "calu":
+            found.append(command)
+    return found
+
+
+def test_a_block_in_another_language_does_not_swallow_the_blocks_after_it() -> None:
+    """The bug this collector had: ```json paired as a closing fence and inverted the rest.
+
+    The symptom was invisible -- 14 command lines silently left the suite -- so the scanner is
+    checked here against a document shaped like the one that broke it.
+    """
+    document = (
+        "```bash\ncalu run\n```\n"
+        "text\n"
+        '```json\n{ "args": ["acp"] }\n```\n'
+        "```bash\ncalu sessions <project>\n```\n"
+        "prose: calu doctor is not a command line here\n"
+        "~~~console\ncalu doctor\n~~~\n"
+    )
+    assert commands_in(document) == ["calu run", "calu sessions PLACEHOLDER", "calu doctor"]
+
+
 def documented_commands() -> list[tuple[str, str]]:
     """Collect the `calu ...` command lines of the documentation.
 
-    Only lines inside fenced code blocks count: prose mentions calu by name in sentences, and
-    those are not commands. Three kinds of line inside a block are not invocations either and
-    are left out: one with `|`, which spells alternatives (`calu token list|revoke`); one drawn
-    with box characters, because the README's architecture diagram has a box labelled "calu
-    session process"; and the word "calu" alone. A placeholder in angle brackets becomes one
-    word, so that `<session id>` is the single argument it stands for rather than two.
+    `commands_in` does the work for one document; this adds the document each line came
+    from, so a failure names the file to fix.
 
     Returns:
         (document, command line) pairs, with the trailing `#` comment removed and the
@@ -56,17 +100,7 @@ def documented_commands() -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for name in DOCUMENTS:
         text = (ROOT / name).read_text(encoding="utf-8")
-        for block in FENCE.findall(text):
-            for raw in block.splitlines():
-                line = raw.strip()
-                if not line.startswith("calu ") or "|" in line:
-                    continue
-                if DRAWING.search(line):
-                    continue
-                command = line.split("#", 1)[0].strip()
-                command = PLACEHOLDER.sub("PLACEHOLDER", command)
-                if command.strip() != "calu":
-                    found.append((name, command))
+        found.extend((name, command) for command in commands_in(text))
     return found
 
 
