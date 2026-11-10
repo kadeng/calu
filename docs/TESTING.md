@@ -5,7 +5,7 @@ does. The default run needs nothing but the repository.
 
 | Layer | Marker | Needs | How long |
 |---|---|---|---|
-| Unit | none | nothing | ~10 s |
+| Unit | none | nothing (a few spawn `python -m calu` or a stub `docker`) | ~15 s |
 | Database | `db` | PostgreSQL (`docker compose up -d caludb --wait`) | ~20 s |
 | Browser | `browser` (and `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
@@ -23,6 +23,12 @@ order, with the virtual environment outside the checkout
 (`UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`), which matters on a Windows host where the
 repository lives on a mounted drive. The default `addopts` deselect `live`, `db` and `browser`,
 so a plain `uv run pytest` is the fast layer.
+
+Two unit tests run a real process instead of a mock, because that is the only way to check
+them: `tests/unit/test_acp_process.py` spawns `python -m calu acp` and speaks ACP to its pipes
+(so coverage does not see `calu/acp/serve.py`, although it is exercised end to end), and
+`tests/unit/test_local_db.py` puts a stub `docker` on PATH and checks what `calu db up` would
+run. Neither needs Docker or a database.
 
 Sync with `uv sync --all-extras`: the web interface is an optional extra (`web`), and the tests
 that need it skip without it with a message saying so, rather than failing to collect.
