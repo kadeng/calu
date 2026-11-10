@@ -20,6 +20,7 @@ Each case runs in a fresh temporary directory that holds the case's `files`, wit
 instructions of the project being evaluated.
 """
 
+import statistics
 import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -33,6 +34,18 @@ from calu.evals.cases import CheckerName, EvalCase
 
 APPROVALS = (Decision.PASS, Decision.ALLOW)
 """Decisions that let the step run; a case that expects one of them accepts the other."""
+
+
+def median_int(values: list[int]) -> int:
+    """Return the median of `values` as a whole number.
+
+    Args:
+        values: The measurements; may be empty.
+
+    Returns:
+        The median rounded to an integer, or 0 for an empty list.
+    """
+    return int(statistics.median(values)) if values else 0
 
 
 def acceptable(case: EvalCase, decision: Decision) -> bool:
@@ -59,6 +72,14 @@ class CaseResult:
     decision: CheckDecision | None
     error: str = ""
     """The checker's failure, if it failed (then `decision` is None)."""
+    input_tokens: int = 0
+    """Input tokens the run used, cached ones included (0 when the model reports no usage)."""
+    output_tokens: int = 0
+    """Output tokens the run used."""
+    cache_read_tokens: int = 0
+    """Input tokens the provider served from its cache."""
+    duration_ms: int = 0
+    """How long the run took."""
 
     @property
     def ok(self) -> bool:
@@ -135,6 +156,12 @@ class Report:
             ),
             "escalation_share": sum(r.actual == "ESCALATE" for r in self.results) / n,
             "unwanted_comments": sum(r.unwanted_comment for r in self.results),
+            # What the run cost: `calu evals` is the only command that spends tokens on
+            # purpose, and a case set times `--repeat` is a bill worth seeing (PLAN.md D66).
+            "input_tokens": sum(r.input_tokens for r in self.results),
+            "output_tokens": sum(r.output_tokens for r in self.results),
+            "cache_read_tokens": sum(r.cache_read_tokens for r in self.results),
+            "median_ms": median_int([r.duration_ms for r in self.results if r.duration_ms]),
         }
 
     def confusion(self) -> Counter[tuple[str, str]]:
@@ -161,6 +188,13 @@ class Report:
                 f"escalation share {s['escalation_share']:.0%}, errors {s['errors']}, "
                 f"unwanted comments {s['unwanted_comments']}"
             )
+            if s["input_tokens"]:
+                share = s["cache_read_tokens"] / s["input_tokens"]
+                lines.append(
+                    f"  cost: {s['input_tokens']} input tokens "
+                    f"({share:.0%} of them from the provider's cache), "
+                    f"{s['output_tokens']} output tokens, ~{s['median_ms']} ms per case"
+                )
             columns = [*(d.value for d in Decision), "ERROR"]
             confusion = self.confusion()
             lines.append("  expected \\ actual " + " ".join(f"{d:>9}" for d in columns))
@@ -232,7 +266,9 @@ async def run_cases(
                 step = Step(tool_name=case.tool_name, tool_input=tool_input, cwd=str(workspace))
                 agent = Checker(checker, instructions, model, workspace)
                 try:
-                    decision = await agent.check(
+                    # `run`, not `check`: the outcome carries what the call cost, which the
+                    # report adds up (D66).
+                    outcome = await agent.run(
                         step, CheckContext(prefix=case.context), raise_errors=True
                     )
                 except Exception as exc:
@@ -240,7 +276,16 @@ async def run_cases(
                         CaseResult(case=case, decision=None, error=f"{type(exc).__name__}: {exc}")
                     )
                     return
-        report.results.append(CaseResult(case=case, decision=decision))
+        report.results.append(
+            CaseResult(
+                case=case,
+                decision=outcome.decision,
+                input_tokens=outcome.input_tokens or 0,
+                output_tokens=outcome.output_tokens or 0,
+                cache_read_tokens=outcome.cache_read_tokens or 0,
+                duration_ms=outcome.duration_ms or 0,
+            )
+        )
 
     async with anyio.create_task_group() as tg:
         for case in selected:

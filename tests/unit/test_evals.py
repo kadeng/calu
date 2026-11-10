@@ -27,7 +27,15 @@ def case(**changes: object) -> EvalCase:
     return EvalCase.model_validate(fields)
 
 
-def result(expected: list[Decision], decision: Decision | None, **extra: object) -> CaseResult:
+def result(
+    expected: list[Decision],
+    decision: Decision | None,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cached: int = 0,
+    duration_ms: int = 0,
+    **extra: object,
+) -> CaseResult:
     """Return a case result for the metrics tests."""
     made = (
         None
@@ -43,6 +51,10 @@ def result(expected: list[Decision], decision: Decision | None, **extra: object)
         case=case(expected=expected, no_comment=bool(extra.get("no_comment"))),
         decision=made,
         error="boom" if decision is None else "",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cached,
+        duration_ms=duration_ms,
     )
 
 
@@ -138,6 +150,30 @@ async def test_a_run_with_the_rule_based_model_reports_every_case():
     assert [r.ok for r in report.results] == [True, False, True]
     assert report.summary()["critical_misses"] == 1
     assert report.model == "rule-based-checker"
+
+
+async def test_the_report_says_what_the_run_cost():
+    """D66: `calu evals` is the command that spends tokens, so the report adds them up."""
+    report = Report(
+        checker="command",
+        model="test",
+        results=[
+            result([Decision.PASS], Decision.PASS, input_tokens=1000, output_tokens=20, cached=900),
+            result([Decision.PASS], Decision.PASS, input_tokens=1000, output_tokens=30, cached=900),
+        ],
+    )
+    summary = report.summary()
+    assert summary["input_tokens"] == 2000
+    assert summary["output_tokens"] == 50
+    assert summary["cache_read_tokens"] == 1800
+    text = report.render()
+    assert "cost: 2000 input tokens (90% of them from the provider's cache)" in text
+    assert "50 output tokens" in text
+
+    # A model that reports no usage says nothing about cost rather than "0 tokens".
+    free = Report(checker="command", model="test", results=[result([Decision.PASS], Decision.PASS)])
+    assert free.summary()["input_tokens"] == 0
+    assert "cost:" not in free.render()
 
 
 async def test_an_edit_case_runs_in_a_temporary_workspace():
