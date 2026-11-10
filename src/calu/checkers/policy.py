@@ -59,6 +59,25 @@ READ_ONLY_TOOLS = frozenset(
         "EnterPlanMode",
     }
 )
+"""Tools that run without a check.
+
+Most of them read. The four that do not are deliberate, and each is safe for the same reason --
+whatever they set in motion is itself checked:
+
+* `TodoWrite`, `TaskCreate`, `TaskUpdate` write Claude Code's own plan and task state, which
+  never reaches the project or the shell.
+* `Agent` (and its older name `Task`) starts a subagent. Every tool call that subagent makes
+  goes through the same gate, and what it hands back is reviewed by the subagent result checker,
+  so starting one buys no unchecked work.
+* `SendMessage` is how the main agent relays a client's message to one of its subagents
+  (`calu.protocol.messages`, `chat.send {to: <agent id>}`), so checking it would put a checker
+  call and a possible denial in the way of calu's own relay. It reaches the session's own
+  subagents, whose calls are checked, and not anything outside this session.
+* `Skill` loads instructions. The tool calls the skill then asks for are checked like any other.
+
+Everything that leaves the machine (`WebFetch`, `WebSearch`) or that calu does not know is
+deliberately absent: it falls to `ToolPolicy.default`, which is the command checker.
+"""
 
 
 class ToolPolicy(BaseModel):

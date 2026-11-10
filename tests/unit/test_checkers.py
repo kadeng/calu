@@ -48,6 +48,37 @@ class TestPolicy:
         assert policy.route("Read") is Route.ESCALATE
         assert policy.route("WebFetch") is Route.ESCALATE
 
+    def test_a_tool_calu_does_not_know_is_checked_rather_than_allowed(self):
+        """The gate must fail towards a check: a new Claude Code tool is not a free pass."""
+        policy = ToolPolicy()
+        for tool in (
+            "WebFetch",  # leaves the machine
+            "WebSearch",
+            "KillShell",  # tools that exist today but are not in the table
+            "BashOutput",
+            "mcp__github__create_pull_request",
+            "SomethingClaudeCodeAddsNextYear",
+        ):
+            assert policy.route(tool) is Route.COMMAND, f"{tool} would run unchecked"
+
+    def test_nothing_that_writes_or_runs_is_on_the_allow_list(self):
+        """The allow list is read-only work plus four documented exceptions."""
+        from calu.checkers.policy import READ_ONLY_TOOLS
+
+        allowed_to_write = {
+            "TodoWrite",
+            "TaskCreate",
+            "TaskUpdate",
+            "Agent",
+            "Task",
+            "SendMessage",
+            "Skill",
+        }
+        for tool in READ_ONLY_TOOLS - allowed_to_write:
+            assert not any(
+                word in tool for word in ("Write", "Edit", "Bash", "Fetch", "Execute", "Run")
+            ), f"{tool} looks like it changes something but runs without a check"
+
 
 class TestRender:
     def test_bash(self, workspace: Path):
