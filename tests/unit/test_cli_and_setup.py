@@ -1,6 +1,7 @@
 import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -207,3 +208,79 @@ def test_watching_a_herd_prefers_the_operator_credential(
     for argv in (["config", "get"], ["checker", "list"], ["rules", "list"], ["project", "list"]):
         assert run_cli(monkeypatch, store, argv, "") == 1
         assert "no credential 'admin'" in capsys.readouterr().err
+
+
+def test_run_maps_every_flag_onto_the_session_options(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, tmp_path: Path
+) -> None:
+    """A flag that reaches the wrong field is silent, so every one of them is checked here."""
+    recorded: list[Any] = []
+
+    async def fake_run_session(url: bytearray, options: Any) -> int:
+        """Record the options and the credential instead of starting a session.
+
+        Args:
+            url: The session credential as the command decrypted it.
+            options: The `RunOptions` the command built.
+
+        Returns:
+            0, as a session that ended cleanly does.
+        """
+        recorded.append((bytes(url), options))
+        return 0
+
+    monkeypatch.setattr(cli, "run_session", fake_run_session)
+    monkeypatch.setattr(
+        cli, "load_credential", lambda *_args, **_kwargs: bytearray(b"postgresql://session@db")
+    )
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("  from a file  \n", encoding="utf-8")
+
+    assert (
+        run_cli(
+            monkeypatch,
+            store,
+            [
+                "run",
+                str(tmp_path),
+                "--prompt-file",
+                str(prompt_file),
+                "--project",
+                "demo",
+                "--resume",
+                "claude-9",
+                "--fork-before-turn",
+                "3",
+                "--model",
+                "opus",
+                "--effort",
+                "high",
+                "--batch",
+                "--thinking",
+            ],
+            "",
+        )
+        == 0
+    )
+    assert len(recorded) == 1
+    url, options = recorded[0]
+    assert url == b"postgresql://session@db"
+    assert options.workspace == tmp_path.resolve()
+    assert options.prompt == "from a file"  # read from the file and stripped
+    assert options.project == "demo"
+    assert options.resume_id == "claude-9"
+    assert options.fork_before_turn == 3
+    assert options.model == "opus"
+    assert options.effort == "high"
+    assert options.interactive is False  # --batch
+    assert options.show_thinking is True  # --thinking
+    assert options.socket_path is None  # no --socket: a TCP port
+
+
+def test_run_refuses_a_prompt_file_it_cannot_read(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The file is read before the password is asked, so a typo costs nothing."""
+    assert run_cli(monkeypatch, store, ["run", "--prompt-file", "/no/such/file"], "") == 1
+    said = capsys.readouterr().err
+    assert "cannot read /no/such/file" in said
