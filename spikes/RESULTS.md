@@ -501,3 +501,49 @@ says plainly that it does not touch the files.
 
 **Re-run when** the SDK or the CLI changes what checkpointing tracks; one line of the table is
 enough to tell.
+
+## Row-level security instead of a role per session (Q3, 2026-11-10)
+
+**Question.** Q3 asks whether every session should get its own database role. One
+`calu_session` login can read and write every session's rows today
+(`GRANT SELECT, INSERT, UPDATE ON hosts, sessions, turns, steps, chat_summaries`, migration
+0001). A role per session would need the owner credential at session start and a reaper for the
+roles of sessions that are gone, so the recommendation was the cheaper shape: row-level security
+on the one login, keyed on a session id the connection sets once. This spike builds that shape
+and measures it.
+
+**Setup** (`spikes/spike_session_rls.py`, PostgreSQL 18). A throwaway database with `calu setup`
+run in it, two session rows, and the candidate policies (the SQL is in the spike file): RLS on
+`sessions`, `turns`, `steps`, `escalations`, `checker_runs` and `chat_summaries`, each policy
+`USING (session_id = current_setting('calu.session_id', true)::uuid)` with the same `WITH
+CHECK`, plus a permissive SELECT policy for `calu_operator`, because only a superuser can grant
+`BYPASSRLS`. Three `calu_session` connections -- two with an id set, one that never sets one --
+and one operator connection.
+
+**Observations.** All eight checks pass:
+
+| | |
+|---|---|
+| a session writes and reads its own rows | yes |
+| it cannot see the other session's rows | yes |
+| it cannot update the other session's rows (`rowcount` 0) | yes |
+| it cannot insert a row for the other session (`InsufficientPrivilege`) | yes |
+| its own escalation can still be cancelled (`calu_cancel_escalation`, SECURITY DEFINER) | yes |
+| a connection that never set the id sees nothing | yes |
+| ... and cannot write either | yes |
+| `calu_operator` still sees every session's rows | yes |
+
+Two details worth keeping: the SECURITY DEFINER functions are unaffected, because they run as
+the owner, for whom the policies do not apply; and the failure mode of forgetting the setting is
+**immediate and total** -- the session cannot write its first step -- rather than subtle, which
+is better than I assumed when I recommended deferring it.
+
+**What follows.** The shape is sound and is one migration plus one `set_config` after connecting
+away from being real. Enabling it is the owner's call, because it is what Q3 asks about: it
+changes the threat model (a compromised session process can no longer rewrite another session's
+history) and adds a precondition to every path that connects as `calu_session`, the test
+fixtures included. What it does **not** buy: a session can still write nonsense about itself,
+which no role separation prevents, because a compromised session process *is* that session.
+
+**Re-run when** the schema gains a table a session writes, which would need a policy of its own
+(the spike's SQL is the place to add it).

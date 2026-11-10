@@ -354,9 +354,12 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
   adapter -- any ACP editor drives a calu session with no extension of its own, and what ACP
   does not carry (checker verdicts as structure, the herd view) lives in the web interface. What
   is left is whether sitl keeps living for VSCode users, which ACP does not reach yet.
-- **Q3** A database role per session. Recommendation in PLAN: not yet, and not as a role per
-  session -- row-level security keyed on a session id the connection sets is the cheaper shape,
-  and it should come after the first real unsupervised runs.
+- **Q3** A database role per session: measured and ready, needs your word to switch on. Not a
+  role per session but row-level security on the one `calu_session` login, keyed on
+  `calu.session_id`; `spikes/spike_session_rls.py` builds the policies and all eight checks
+  pass (a session sees only its own rows, the SECURITY DEFINER functions still work, the
+  operator still sees everything, and a connection that forgets the id fails at once). Cost:
+  one migration, one `set_config` after connecting, and the same in the test fixtures.
 - **Q4** Closed. The transport half is loopback plus an SSH tunnel, documented in the README's
   "From another machine"; the operator half is built (D48): `calu credential new operator`, and
   the read-and-resolve commands prefer that credential over `admin`.
