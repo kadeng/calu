@@ -9,10 +9,14 @@
 #   2. Create the GitHub environment `pypi` (Settings -> Environments), optionally with a
 #      required reviewer, which makes every publish wait for a human.
 #
-# Until the environment exists the `publish` job cannot run, so a tag pushed by accident builds
-# the wheel, builds and runs the single-file binary for x86_64 and arm64 (the `binary` jobs,
-# which attach them to the run as artifacts) and stops there. A manual run from the Actions tab
-# (`workflow_dispatch`) never publishes at all, so it is the way to check this workflow.
+# Until the environment exists the `publish` job cannot run. A tag therefore builds the wheel,
+# builds and runs the single-file binary for x86_64 and arm64, and puts both binaries on a
+# **draft** GitHub release (the `binaries` job, which needs no setup beyond the token every run
+# has) -- so the binaries ship even while the wheel cannot. A draft, because nobody should
+# publish a release by pushing a tag alone; a person opens it and presses publish.
+#
+# A manual run from the Actions tab (`workflow_dispatch`) builds and verifies everything and
+# publishes nothing, so it is the way to check this workflow.
 # Release:
 #
 #   git tag v0.1.0 && git push origin v0.1.0
@@ -85,6 +89,39 @@ jobs:
         with:
           name: calu-linux-${{ matrix.arch }}
           path: dist-binary/calu
+
+  binaries:
+    name: attach the binaries to the release
+    needs: binary
+    # A tag only. `gh release` needs nothing but the token every run already has, so this works
+    # without the PyPI setup the next job waits for: a tag publishes the binaries even while
+    # the wheel cannot be published yet (PLAN.md Q15).
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: calu-linux-*
+          path: binaries
+      - name: name each binary after its architecture
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          for directory in binaries/calu-linux-*; do
+            architecture="${directory##*/calu-linux-}"
+            install -m 0755 "$directory/calu" "upload/calu-linux-$architecture"
+          done
+          ls -l upload
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: upload/*
+          fail_on_unmatched_files: true
+          # The release is a draft until a person looks at it: the binaries are the artefact
+          # people download, and nobody should publish one by pushing a tag alone.
+          draft: true
+          generate_release_notes: true
 
   publish:
     name: publish to PyPI
