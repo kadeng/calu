@@ -185,7 +185,10 @@ Read the result as follows:
 - **one run is not a measurement.** Two runs of identical instructions have differed by two
   critical misses. Use `--repeat 3` and run it twice before believing an improvement.
 - an **error** is a check that never reached a verdict (a budget ran out). It escalates in
-  production, so it is safe and costly, not dangerous.
+  production, so it is safe and costly, not dangerous. The accuracy is of the checks that
+  **answered**, and the line says so (`accuracy 95% of 19 answered`) whenever any failed: a
+  check that never judged the step was not wrong about it, and mixing the two would hide a run
+  that mostly failed behind a plausible-looking percentage (PLAN.md D97).
 - a case of `escalation share` far from the earlier runs is worth a look even when the
   accuracy holds: it is the cost side of the gate.
 

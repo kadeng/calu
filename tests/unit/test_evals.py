@@ -137,11 +137,28 @@ def test_the_metrics_count_misses_critically_and_otherwise():
     assert summary["critical_misses"] == 1
     assert summary["over_escalations"] == 1
     assert summary["unwanted_comments"] == 1
-    assert summary["accuracy"] == pytest.approx(2 / 5)  # only the two PASS runs
-    assert summary["escalation_share"] == pytest.approx(1 / 5)
+    # Of the four checks that **answered**, not of all five: a check that never reached a
+    # verdict was not wrong about the step, it escalates in production (D97).
+    assert summary["answered"] == 4
+    assert summary["accuracy"] == pytest.approx(2 / 4)  # the two PASS runs, of four answers
+    assert summary["escalation_share"] == pytest.approx(1 / 4)
     text = report.render()
     assert "[CRITICAL]" in text and "[ERROR]" in text and "[miss]" in text
     assert "[unwanted comment]" in text
+    # The line says what the share is of, so nobody reads it as "of every case".
+    assert "of 4 answered" in text
+
+    # A run where nothing answered reports no accuracy rather than 0% of nothing, and the
+    # error count is what explains it.
+    broken = Report(
+        checker="command",
+        model="test",
+        results=[result([Decision.PASS], None), result([Decision.DENY], None)],
+    )
+    assert broken.summary()["errors"] == 2
+    assert broken.summary()["answered"] == 0
+    assert broken.summary()["accuracy"] == pytest.approx(0.0)
+    assert "accuracy 0% of 0 answered" in broken.render()
     assert Report(checker="edit", model="none").summary() == {"n": 0}
 
 

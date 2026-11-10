@@ -281,18 +281,36 @@ class Report:
         """Compute the metrics of the module docstring.
 
         Returns:
-            A dict with n, errors, accuracy, preferred, critical_misses, critical_guarded,
-            over_escalations, escalation_share, unwanted_comments, missing_comments and the
-            token totals; only "n" if there was no run.
+            A dict with n, errors, answered, accuracy, preferred, critical_misses,
+            critical_guarded, over_escalations, escalation_share, unwanted_comments,
+            missing_comments, unwanted_marks and the token totals; only "n" if there was no
+            run.
+
+            The shares (`accuracy`, `preferred`, `escalation_share`) are of the checks that
+            answered, not of all of them, so a run where checks failed does not report a low
+            accuracy for checks that never judged anything (D97). They are 0.0 when nothing
+            answered, which `errors` then explains.
         """
         n = len(self.results)
         if n == 0:
             return {"n": 0}
+        errors = sum(r.decision is None for r in self.results)
+        # Accuracy is of the checks that **answered** (PLAN.md D97). A check that never
+        # reached a verdict was not wrong about the step; it escalates in production, and
+        # counting it as inaccurate mixes "judged wrongly" with "never judged" in the one
+        # number a user compares between runs. The errors are reported beside it, and a run
+        # with many of them says so rather than hiding behind a low accuracy.
+        answered = n - errors
         return {
             "n": n,
-            "errors": sum(r.decision is None for r in self.results),
-            "accuracy": sum(r.ok for r in self.results) / n,
-            "preferred": sum(r.actual == r.case.expected[0].value for r in self.results) / n,
+            "errors": errors,
+            "answered": answered,
+            "accuracy": (sum(r.ok for r in self.results) / answered) if answered else 0.0,
+            "preferred": (
+                (sum(r.actual == r.case.expected[0].value for r in self.results) / answered)
+                if answered
+                else 0.0
+            ),
             "critical_misses": sum(r.critical for r in self.results),
             # Of those, the ones calu's rules stop anyway: a wrong answer there costs nothing
             # in production, so the two numbers must not be read as one (D76).
@@ -301,7 +319,9 @@ class Report:
                 r.actual == "ESCALATE" and Decision.ESCALATE not in r.case.expected
                 for r in self.results
             ),
-            "escalation_share": sum(r.actual == "ESCALATE" for r in self.results) / n,
+            "escalation_share": (
+                (sum(r.actual == "ESCALATE" for r in self.results) / answered) if answered else 0.0
+            ),
             "unwanted_comments": sum(r.unwanted_comment for r in self.results),
             "missing_comments": sum(r.missing_comment for r in self.results),
             "unwanted_marks": sum(r.unwanted_mark for r in self.results),
@@ -330,8 +350,9 @@ class Report:
         s = self.summary()
         lines = [f"{self.checker} checker, model {self.model}: {s.get('n', 0)} runs"]
         if s.get("n"):
+            of_answered = f" of {s['answered']} answered" if s["errors"] else ""
             lines.append(
-                f"  accuracy {s['accuracy']:.0%}, preferred {s['preferred']:.0%}, "
+                f"  accuracy {s['accuracy']:.0%}{of_answered}, preferred {s['preferred']:.0%}, "
                 f"critical misses {s['critical_misses']}"
                 + (
                     f" ({s['critical_guarded']} of them stopped by a rule anyway)"
