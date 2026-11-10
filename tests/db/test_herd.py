@@ -490,3 +490,83 @@ async def test_checker_token_totals_show_whether_the_cache_is_working(db_url: st
         assert "from cache" not in none.line() and " in / " not in none.line()
     finally:
         await owner.close()
+
+
+async def test_step_stats_say_how_many_steps_were_free_and_how_long_the_gate_took(
+    db_url: str,
+) -> None:
+    """D64: the paths through the gate and its delay, read from the record."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+
+        # An empty database answers without a special case.
+        empty = await herd.step_stats(db)
+        assert empty.steps == 0 and empty.free_share is None and empty.lines() == []
+
+        async def step(seq: int, rules: str | None, checked: bool) -> int:
+            step_id = await store.add_step(
+                StepRow(seq=seq, tool_name="Bash", tool_input={"command": "x"})
+            )
+            await store.decide_step(
+                step_id, StepDecision(decision="allow", rules_outcome=rules, reason="r")
+            )
+            if checked:
+                await store.add_checker_run(
+                    step_id,
+                    CheckerRun(
+                        checker_name="command",
+                        checker_version=1,
+                        model="test:model",
+                        decision="pass",
+                    ),
+                )
+            return step_id
+
+        await step(1, "allow", checked=False)  # allow-listed: free
+        await step(2, "allow", checked=False)
+        await step(3, None, checked=False)  # a tool the lists do not cover
+        await step(4, "deny", checked=False)  # a rule denied it: also no model call
+        escalated = await step(5, "unlisted", checked=True)
+        await step(6, "unlisted", checked=True)
+
+        stats = await herd.step_stats(db)
+        assert stats.steps == 6
+        assert (stats.rules_allowed, stats.rules_denied, stats.rules_unlisted) == (2, 1, 2)
+        assert stats.rules_silent == 1
+        assert stats.checked == 2
+        assert stats.free_share == pytest.approx(4 / 6)
+        assert stats.median_gate_ms is not None and stats.median_gate_ms >= 0
+        assert stats.slowest_gate_ms is not None
+        assert stats.median_wait_s is None, "nothing was escalated yet"
+        assert stats.resolved == 0
+
+        first, delay = stats.lines()  # nothing to say about people yet, so no third line
+        assert "6 step(s): 2 went to a checker, 4 (67%) did not" in first
+        assert "2 allow-listed, 1 denied by a rule" in first
+        assert "calu's own delay per step" in delay
+        assert "no human waiting time" in delay
+
+        # An answered escalation adds the human's waiting time, and takes its step out of the
+        # delay measurement: that step waited for a person, not for calu.
+        escalation = await store.open_escalation("why", {}, escalated)
+        assert await herd.resolve(db, escalation, "allow") is True
+        await db.execute(
+            "UPDATE escalations SET created_at = now() - interval '90 seconds' WHERE id = %s",
+            (escalation,),
+        )
+        answered = await herd.step_stats(db)
+        assert answered.resolved == 1
+        assert answered.median_wait_s == 90
+        assert any("after ~90 s of waiting for a person" in line for line in answered.lines())
+
+        # A window that excludes everything reports zeroes rather than failing.
+        await db.execute("UPDATE steps SET created_at = now() - interval '30 days'")
+        await db.execute("UPDATE escalations SET resolved_at = now() - interval '30 days'")
+        old = await herd.step_stats(db, since_days=7)
+        assert old.steps == 0 and old.resolved == 0 and old.median_gate_ms is None
+    finally:
+        await owner.close()

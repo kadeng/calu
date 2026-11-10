@@ -11,6 +11,9 @@
   marked share means each check pays for the whole prefix again. That is not always calu's
   doing &mdash; some providers do not cache, and a hybrid-SSM model such as Nemotron reuses a
   cache only for an identical prompt.</p>
+{% if steps.lines() %}
+<p class="muted">{% for line in steps.lines() %}{{ line }}<br>{% endfor %}</p>
+{% endif %}
 <table>
   <thead><tr><th>Name</th><th>Route</th><th>Model</th><th>Version</th><th>State</th>
     <th>Decided</th><th>Humans disagreed</th><th>Tokens</th><th></th></tr></thead>

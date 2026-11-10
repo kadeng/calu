@@ -1304,8 +1304,16 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
             if not stats:
                 return "no checker has run yet"
             window = f" in the last {args.days} day(s)" if args.days else ""
+            # How many steps reached a checker at all, and what the gate costs in time: the
+            # rules settle a step without a model call, so that share is the free one (D64).
+            steps = await herd.step_stats(db, args.days)
             return "\n".join(
-                [f"what the checkers decided{window}:", *(row.line() for row in stats)]
+                [
+                    f"what the checkers decided{window}:",
+                    *(row.line() for row in stats),
+                    *([""] if steps.lines() else []),
+                    *steps.lines(),
+                ]
             )
         if args.action == "show":
             return await admin.instructions(db, args.name)

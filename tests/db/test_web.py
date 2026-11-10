@@ -712,6 +712,8 @@ async def test_the_checkers_page_shows_what_they_cost(db_url: str) -> None:
             await check(1, 19_000)
             await check(2, 19_000)
             warm = (await client.get("/checkers")).text
+            # The same page says how many steps reached a checker at all (D64).
+            assert "2 step(s): 2 went to a checker, 0 (0%) did not" in warm
             assert "40k in / 100 out" in warm
             assert "95% of the input from cache" in warm
             assert "decision deny" not in warm, "a working cache must not be flagged"

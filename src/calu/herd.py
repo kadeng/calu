@@ -907,6 +907,134 @@ class CheckerStats:
         )
 
 
+@dataclass(frozen=True)
+class StepStats:
+    """How many steps calu decided, by which path, and how long they waited (PLAN.md D64)."""
+
+    steps: int
+    """Steps recorded in the window."""
+    rules_allowed: int
+    """Steps every part of which was allow-listed, so no checker ran: the free path."""
+    rules_denied: int
+    """Steps a deny rule matched, so no checker ran either."""
+    rules_unlisted: int
+    """Steps the lists cover but did not settle, which is what a checker is for."""
+    rules_silent: int
+    """Steps of a tool the lists do not cover at all (`_rules_outcome` returns None)."""
+    checked: int
+    """Steps at least one checker ran on, which are the only ones that cost tokens."""
+    median_gate_ms: int | None
+    """Median time from recording a step to deciding it, over steps nobody was asked about.
+    This is what calu adds to a step that runs through: the rules, the checkers and the
+    database, without any human waiting time. None when nothing was decided yet."""
+    slowest_gate_ms: int | None
+    """The same measurement's maximum, which is the delay a user actually notices."""
+    median_wait_s: int | None
+    """Median time a resolved escalation waited for its answer, in seconds. This is a measure
+    of the people, not of calu. None when no escalation was resolved in the window."""
+    resolved: int
+    """Escalations resolved in the window (allowed, denied or cancelled)."""
+
+    @property
+    def free_share(self) -> float | None:
+        """Share of the steps that no checker ran on.
+
+        Returns:
+            A value between 0 and 1, or None when no step was recorded. The rules settle these
+            steps without a model call, so the share is what keeps the token bill down.
+        """
+        if self.steps <= 0:
+            return None
+        return (self.steps - self.checked) / self.steps
+
+    def lines(self) -> list[str]:
+        """Render the step record as a few terminal lines.
+
+        Returns:
+            One line about the paths through the gate and, when there is something to say,
+            one about the delay and one about the waiting for people. An empty list when no
+            step was recorded.
+        """
+        if not self.steps:
+            return []
+        share = self.free_share
+        assert share is not None  # self.steps > 0 here
+        out = [
+            f"{self.steps} step(s): {self.checked} went to a checker, "
+            f"{self.steps - self.checked} ({share * 100:.0f}%) did not -- "
+            f"{self.rules_allowed} allow-listed, {self.rules_denied} denied by a rule, "
+            f"{self.rules_silent} of a tool the lists do not cover"
+        ]
+        if self.median_gate_ms is not None:
+            out.append(
+                f"calu's own delay per step: ~{self.median_gate_ms} ms, "
+                f"worst {self.slowest_gate_ms} ms (no human waiting time in this)"
+            )
+        if self.median_wait_s is not None:
+            out.append(
+                f"{self.resolved} escalation(s) answered, after ~{self.median_wait_s} s of "
+                "waiting for a person"
+            )
+        return out
+
+
+async def step_stats(db: Db, since_days: int | None = None) -> StepStats:
+    """Summarise which path the steps took through the gate and how long they waited.
+
+    This is the other half of `checker_stats`: that one says what the checkers did with the
+    steps they saw, this one says how many steps reached them at all. Both read the record and
+    cost nothing. The point of the first number is that the allow and deny lists settle a step
+    without a model call (`calu rules`), so the share of steps no checker ran on is the share
+    that is free; the point of the second is that everything calu does sits between Claude Code
+    asking to run a tool and the tool running, so it is measurable as a delay.
+
+    Args:
+        db: A connection that may read `steps`, `checker_runs` and `escalations`.
+        since_days: Only count steps and escalations of the last N days; None counts
+            everything.
+
+    Returns:
+        The counts and the two timings. All counts are 0 and all timings None on an empty
+        database, so a caller can print `StepStats.lines()` without a special case.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    window = "(%s::int IS NULL OR {col} > now() - make_interval(days => %s::int))"
+    row = await db.one(
+        "WITH s AS ("
+        "  SELECT st.rules_outcome,"
+        "   EXISTS (SELECT 1 FROM checker_runs c WHERE c.step_id = st.id) AS checked,"
+        "   EXISTS (SELECT 1 FROM escalations e WHERE e.step_id = st.id) AS escalated,"
+        "   (extract(epoch FROM (st.decided_at - st.created_at)) * 1000)::int AS gate_ms"
+        "  FROM steps st"
+        f"  WHERE {window.format(col='st.created_at')}"
+        ")"
+        "SELECT count(*)::int,"
+        " count(*) FILTER (WHERE rules_outcome = 'allow')::int,"
+        " count(*) FILTER (WHERE rules_outcome = 'deny')::int,"
+        " count(*) FILTER (WHERE rules_outcome = 'unlisted')::int,"
+        " count(*) FILTER (WHERE rules_outcome IS NULL)::int,"
+        " count(*) FILTER (WHERE checked)::int,"
+        # The delay is measured on steps nobody was asked about: with an escalation it would
+        # measure how fast the person answered, which the next query reports separately.
+        " percentile_disc(0.5) WITHIN GROUP (ORDER BY gate_ms) FILTER (WHERE NOT escalated),"
+        " max(gate_ms) FILTER (WHERE NOT escalated)"
+        " FROM s",
+        (since_days, since_days),
+    )
+    assert row is not None  # an aggregate over no rows is still one row
+    waits = await db.one(
+        "SELECT percentile_disc(0.5) WITHIN GROUP ("
+        "  ORDER BY extract(epoch FROM (resolved_at - created_at))::int),"
+        " count(*)::int"
+        " FROM escalations WHERE resolved_at IS NOT NULL AND " + window.format(col="resolved_at"),
+        (since_days, since_days),
+    )
+    assert waits is not None  # as above
+    return StepStats(*row, median_wait_s=waits[0], resolved=waits[1])
+
+
 async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerStats]:
     """Summarise what the checkers decided and how often a human disagreed.
 

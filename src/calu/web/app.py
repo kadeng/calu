@@ -844,6 +844,8 @@ async def checkers(request: Request, state: _State) -> Response:
             # And the rows behind the counts, because this is the page where the instructions
             # are edited: the case to fix them against is one click away (D62).
             "misses": await herd.checker_misses(state.db, limit=10),
+            # How many steps reached a checker at all, and what the gate costs in time (D64).
+            "steps": await herd.step_stats(state.db),
         },
     )
 
