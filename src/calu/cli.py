@@ -1236,7 +1236,10 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
-    """List, show or change the checker definitions.
+    """List, show or change the checker definitions, or report how they have decided.
+
+    `stats` reads what the checkers already decided and what humans did with it, so it costs
+    nothing and describes this project's real steps rather than the eval set (PLAN.md D61).
 
     `set --instructions-file` reads the new instructions from a file, or from stdin for "-";
     `edit` opens them in `$EDITOR` and stores them when the editor closes.
@@ -1252,7 +1255,7 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
-    if args.action != "list" and not args.name:
+    if args.action not in ("list", "stats") and not args.name:
         raise CliError(f"checker {args.action} needs a NAME")
     if args.action == "edit":
         _edit_checker(args, store)
@@ -1280,6 +1283,16 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         if args.action == "list":
             rows = await admin.checkers(db)
             return "\n".join(row.line() for row in rows) or "no checkers"
+        if args.action == "stats":
+            # From the record, not by running anything: free, and about this project's real
+            # steps rather than the eval set (PLAN.md D61).
+            stats = await herd.checker_stats(db, args.days)
+            if not stats:
+                return "no checker has run yet"
+            window = f" in the last {args.days} day(s)" if args.days else ""
+            return "\n".join(
+                [f"what the checkers decided{window}:", *(row.line() for row in stats)]
+            )
         if args.action == "show":
             return await admin.instructions(db, args.name)
         enabled = True if args.enable else (False if args.disable else None)
@@ -1675,7 +1688,7 @@ def build_parser() -> argparse.ArgumentParser:
     config.set_defaults(handler=cmd_config)
 
     checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
-    checker.add_argument("action", choices=["list", "show", "set", "edit"])
+    checker.add_argument("action", choices=["list", "show", "set", "edit", "stats"])
     checker.add_argument("name", nargs="?", help="checker name, e.g. command")
     checker.add_argument(
         "--instructions-file", help="read new instructions from this file ('-' for stdin)"
@@ -1687,6 +1700,11 @@ def build_parser() -> argparse.ArgumentParser:
     checker.add_argument("--request-limit", type=int)
     checker.add_argument("--output-tokens-limit", type=int)
     checker.add_argument("--max-tokens", type=int)
+    checker.add_argument(
+        "--days",
+        type=int,
+        help="for `stats`: only count the checks of the last N days (default: all of them)",
+    )
     checker.set_defaults(handler=cmd_checker)
 
     rules = sub.add_parser(

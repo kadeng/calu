@@ -3,8 +3,12 @@
 {% block body %}
 <h1>{{ checkers | length }} checker definition{{ '' if checkers | length == 1 else 's' }}</h1>
 <p class="muted">The instructions live in the database, out of the agent's reach. A running session picks a change up at its next step.</p>
+<p class="muted">The last two columns are the record, not a measurement: an escalation a human
+  allowed cost an interruption for nothing, and a step a checker approved that a human then
+  denied is a miss. <code>calu evals</code> measures the checkers against a case set instead.</p>
 <table>
-  <thead><tr><th>Name</th><th>Route</th><th>Model</th><th>Version</th><th>State</th><th></th></tr></thead>
+  <thead><tr><th>Name</th><th>Route</th><th>Model</th><th>Version</th><th>State</th>
+    <th>Decided</th><th>Humans disagreed</th><th></th></tr></thead>
   <tbody>
   {% for c in checkers %}
     <tr>
@@ -13,6 +17,14 @@
       <td class="mono">{{ c.model }}</td>
       <td class="muted">{{ c.version }}</td>
       <td class="muted">{{ "enabled" if c.enabled else "disabled" }}</td>
+      {% set s = stats.get(c.name) %}
+      <td class="muted">{% if s %}{{ s.runs }} run(s): {{ s.passed }} pass,
+        {{ s.escalated }} escalate{% else %}–{% endif %}</td>
+      <td class="muted">{% if s and (s.escalated_then_allowed or s.passed_then_denied) %}
+        {% if s.escalated_then_allowed %}{{ s.escalated_then_allowed }} escalation(s) allowed{% endif %}
+        {% if s.passed_then_denied %}<span class="decision deny">{{ s.passed_then_denied }}
+          approved then denied</span>{% endif %}
+        {% elif s %}no{% else %}–{% endif %}</td>
       <td><a href="{{ url_for('checker', name=c.name) }}">edit</a></td>
     </tr>
   {% endfor %}

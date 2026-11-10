@@ -383,3 +383,21 @@ async def test_cancelling_an_escalation_says_no_decision_was_recorded(prepared, 
     assert "no open escalations" in capsys.readouterr().out
     assert await run(["resolve", str(escalation), "cancel"]) == 1
     assert "not open" in capsys.readouterr().err
+
+
+async def test_the_checkers_record_is_readable_from_the_command_line(prepared, capsys) -> None:
+    """`calu checker stats` answers "are my checkers any good?" for free (PLAN.md D61)."""
+    db, _session_id, _escalation = prepared
+    assert await run(["checker", "stats"]) == 0
+    said = capsys.readouterr().out
+    # The fixture recorded one escalating check of the command checker.
+    assert "what the checkers decided" in said
+    assert "command" in said and "1 run(s)" in said
+    assert "1 escalate" in said
+
+    # A window is named in the heading, and an empty one says so rather than printing zeroes.
+    assert await run(["checker", "stats", "--days", "7"]) == 0
+    assert "in the last 7 day(s)" in capsys.readouterr().out
+    await db.execute("UPDATE checker_runs SET created_at = now() - interval '90 days'")
+    assert await run(["checker", "stats", "--days", "7"]) == 0
+    assert "no checker has run yet" in capsys.readouterr().out

@@ -780,6 +780,91 @@ async def checker_runs(db: Db, session_id: str, limit: int = 200) -> dict[int, l
     return found
 
 
+@dataclass(frozen=True)
+class CheckerStats:
+    """How one checker has decided so far, and how often a human disagreed (PLAN.md D61)."""
+
+    checker_name: str
+    runs: int
+    passed: int
+    escalated: int
+    allowed: int
+    denied: int
+    escalated_then_allowed: int
+    """Escalations it caused that a human allowed: caution that cost an interruption."""
+    escalated_then_denied: int
+    """Escalations it caused that a human denied: the caution was right."""
+    passed_then_denied: int
+    """Steps it approved that a human then denied, because an auto-escalation category held
+    them anyway (D42): the misses, which are the error that matters (D50)."""
+    median_ms: int | None
+    """Median duration of one check, or None when nothing was timed."""
+
+    def line(self) -> str:
+        """Render the checker's record as one terminal line.
+
+        Returns:
+            The counts, and the human's verdicts on what it escalated and what it passed.
+        """
+        timing = f"  ~{self.median_ms} ms" if self.median_ms is not None else ""
+        judged = self.escalated_then_allowed + self.escalated_then_denied
+        agreed = (
+            f"  humans: {self.escalated_then_denied}/{judged} agreed with its escalations"
+            if judged
+            else ""
+        )
+        missed = (
+            f", {self.passed_then_denied} it approved were denied"
+            if self.passed_then_denied
+            else ""
+        )
+        return (
+            f"{self.checker_name}  {self.runs} run(s): {self.passed} pass, "
+            f"{self.escalated} escalate, {self.allowed} allow, {self.denied} deny{timing}"
+            f"{agreed}{missed}"
+        )
+
+
+async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerStats]:
+    """Summarise what the checkers decided and how often a human disagreed.
+
+    This is the free half of `calu evals`: it reads what already happened instead of running
+    the checkers again, so it costs nothing and says something the eval set cannot -- how they
+    behave on this project's real steps. Two numbers matter most. An escalation a human
+    **allowed** cost an interruption for nothing; a step a checker **passed** that a human then
+    denied is a miss, which only exists in the record when an auto-escalation category made the
+    human look (D42, D50).
+
+    Args:
+        db: A connection that may read `checker_runs`, `steps` and `escalations`.
+        since_days: Only count runs of the last N days; None counts everything.
+
+    Returns:
+        One entry per checker that has run, most runs first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT c.checker_name,"
+        " count(*)::int,"
+        " count(*) FILTER (WHERE c.decision = 'pass')::int,"
+        " count(*) FILTER (WHERE c.decision = 'escalate')::int,"
+        " count(*) FILTER (WHERE c.decision = 'allow')::int,"
+        " count(*) FILTER (WHERE c.decision = 'deny')::int,"
+        " count(*) FILTER (WHERE c.decision = 'escalate' AND e.state = 'allowed')::int,"
+        " count(*) FILTER (WHERE c.decision = 'escalate' AND e.state = 'denied')::int,"
+        " count(*) FILTER (WHERE c.decision = 'pass' AND e.state = 'denied')::int,"
+        " percentile_disc(0.5) WITHIN GROUP (ORDER BY c.duration_ms)"
+        " FROM checker_runs c"
+        " LEFT JOIN escalations e ON e.step_id = c.step_id"
+        " WHERE (%s::int IS NULL OR c.created_at > now() - make_interval(days => %s::int))"
+        " GROUP BY c.checker_name ORDER BY count(*) DESC, c.checker_name",
+        (since_days, since_days),
+    )
+    return [CheckerStats(*row) for row in rows]
+
+
 async def project_of(db: Db, session_id: str) -> tuple[str, str] | None:
     """Read the project a session belongs to.
 

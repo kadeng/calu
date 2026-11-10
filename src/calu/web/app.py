@@ -831,9 +831,18 @@ async def checkers(request: Request, state: _State) -> Response:
         state: The shared state.
 
     Returns:
-        The checkers page.
+        The checkers page, with each checker's record beside its definition.
     """
-    return _render(request, "checkers.html", {"checkers": await admin.checkers(state.db)})
+    return _render(
+        request,
+        "checkers.html",
+        {
+            "checkers": await admin.checkers(state.db),
+            # What they decided and where a human disagreed, read from the record rather than
+            # measured by running them again (D61).
+            "stats": {row.checker_name: row for row in await herd.checker_stats(state.db)},
+        },
+    )
 
 
 async def checker_page(request: Request, state: _State) -> Response:

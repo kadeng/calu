@@ -300,3 +300,70 @@ async def test_an_escalation_nobody_waits_for_can_be_cancelled(db_url: str) -> N
             await herd.resolve(db, escalation, "maybe")
     finally:
         await owner.close()
+
+
+async def test_the_checkers_record_says_where_a_human_disagreed(db_url: str) -> None:
+    """The free half of the evals: what already happened, per checker (PLAN.md D61)."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+
+        seq = {"n": 0}
+
+        async def judged(decision: str, outcome: str | None, ms: int = 100) -> None:
+            """Record one step, its check and the human's verdict.
+
+            Args:
+                decision: What the checker decided.
+                outcome: What the human decided ("allowed"/"denied"), or None for no
+                    escalation at all.
+                ms: How long the check took.
+            """
+            seq["n"] += 1
+            step = await store.add_step(
+                StepRow(seq=seq["n"], tool_name="Bash", tool_input={"command": "x"})
+            )
+            await store.add_checker_run(
+                step,
+                CheckerRun(
+                    checker_name="command",
+                    checker_version=1,
+                    model="test:model",
+                    decision=decision,
+                    duration_ms=ms,
+                ),
+            )
+            if outcome is not None:
+                escalation = await store.open_escalation("why", {}, step)
+                await db.execute(
+                    "UPDATE escalations SET state = %s WHERE id = %s", (outcome, escalation)
+                )
+
+        await judged("pass", None, ms=50)
+        await judged("pass", None, ms=150)
+        await judged("escalate", "denied", ms=100)  # the caution was right
+        await judged("escalate", "allowed", ms=100)  # an interruption for nothing
+        await judged("pass", "denied", ms=100)  # a miss: approved, then denied by a human
+
+        (stats,) = await herd.checker_stats(db)
+        assert stats.checker_name == "command"
+        assert (stats.runs, stats.passed, stats.escalated) == (5, 3, 2)
+        assert stats.escalated_then_denied == 1
+        assert stats.escalated_then_allowed == 1
+        assert stats.passed_then_denied == 1, "a miss has to be countable"
+        assert stats.median_ms == 100
+
+        line = stats.line()
+        assert "5 run(s)" in line and "3 pass" in line
+        assert "1/2 agreed with its escalations" in line
+        assert "1 it approved were denied" in line
+
+        # A window that excludes everything reports nothing rather than zeroes.
+        await db.execute("UPDATE checker_runs SET created_at = now() - interval '30 days'")
+        assert await herd.checker_stats(db, since_days=7) == []
+        assert await herd.checker_stats(db, since_days=60) != []
+    finally:
+        await owner.close()
