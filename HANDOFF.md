@@ -291,6 +291,13 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    `site-packages` with that data resolving correctly (D41). `calu doctor` exits non-zero there,
    which is right: that environment has no session credential.
 
+12. Re-run after the changes of 2026-11-10 (D42-D47): `smoke_session.py` with a prompt that
+   runs `ls` and writes a file. The allow-listed `ls` ran with no model call
+   (`rules_outcome = allow`), the `Write` went to the edit checker and passed with a
+   `checker_runs` row, the turn and the answer were stored, and the session went
+   idle -> stopped cleanly. So the gate, the hook, the rules, the edit route and the turn
+   storage all still work with the real CLI after the session, store and schema changes.
+
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
 `project add`, `checker list|show|set|edit`, `config set|get`, a refused value, `rules
