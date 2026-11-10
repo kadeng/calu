@@ -14,6 +14,7 @@
     calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
     calu escalation ID             everything needed to decide it, from the database
     calu summary ID [--edit]       the conversation the checkers read, folded
+    calu doctor [--db]             what is in place, and what a session would miss
     calu token mint SESSION        client token for an editor or a remote interface
     calu web                       the herd overview in a browser (127.0.0.1 only)
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
@@ -50,7 +51,7 @@ from pathlib import Path
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from calu import __version__, admin, herd
+from calu import __version__, admin, doctor, herd
 from calu.acp import serve_acp
 from calu.attach import attach
 from calu.config import EMPTY_CHAT_SUMMARY
@@ -583,6 +584,38 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
         return "\n".join(parts)
 
     _admin_command(store, work)
+
+
+def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Report what is in place and what a session would miss.
+
+    Everything that needs no password is checked first: the programs calu starts, the credential
+    store, the checker keys, the runtime directories and, if a directory was named, the
+    workspace. With `--db` the `admin` credential is used to ask whether the database answers
+    and whether its schema is current. Nothing is changed.
+
+    Args:
+        args: Parsed arguments (`db`, `directory`).
+        store: The credential store.
+
+    Raises:
+        CliError: If something a session cannot run without is missing, after the whole report
+            was printed — so the reader sees everything, not only the first problem.
+        CredentialError: On a wrong password (only with `--db`).
+    """
+    findings = doctor.local_findings(store)
+    if args.directory:
+        findings += doctor.workspace_findings(Path(args.directory).resolve())
+    if args.db:
+        url = load_credential(store, "admin", "Admin password: ")
+        try:
+            findings += asyncio.run(doctor.database_findings(url.decode()))
+        finally:
+            wipe(url)
+    # Flushed, so the report is on screen before the error line that may follow on stderr.
+    print(doctor.report(findings), flush=True)
+    if doctor.essential_missing(findings):
+        raise CliError("something a session cannot run without is missing (see above)")
 
 
 def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1356,6 +1389,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("session", nargs="?", help="only escalations of this session id")
     p.add_argument("--rendered", action="store_true", help="also print the rendered step")
     p.set_defaults(handler=cmd_escalations)
+
+    p = sub.add_parser("doctor", help="report what is in place and what a session would miss")
+    p.add_argument("directory", nargs="?", help="also check this workspace")
+    p.add_argument("--db", action="store_true", help="also ask the database (needs the password)")
+    p.set_defaults(handler=cmd_doctor)
 
     p = sub.add_parser("summary", help="show or correct the chat summary the checkers read")
     p.add_argument("session", help="id of the session (`calu sessions`)")

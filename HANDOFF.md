@@ -224,6 +224,11 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   sandbox exports a filtering proxy as `HTTPS_PROXY` and raw TCP is blocked whatever the policy
   says. The start-up warnings say when a session may reach every domain. Open (Q5): the default
   for new projects, still "full".
+- **`calu doctor`**: one command that says what is in place before anything runs — `claude` and
+  its version, bwrap and socat, git, the two credentials, which provider keys the checkers
+  could use, the socket and snapshot directories, optionally a workspace, and with `--db` that
+  the database answers and whether its schema is current. It exits 1 when something a session
+  cannot run without is missing, and names it.
 - **Sandbox** (D15): `SandboxConfig` passed to Claude Code as a `--settings` document;
   `calu.preflight` warns about missing `bwrap`/`socat`, a disabled sandbox and missing checker
   API keys at every start.

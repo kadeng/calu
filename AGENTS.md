@@ -42,6 +42,7 @@ phases.
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys, write-set settings |
+| `src/calu/doctor.py` | `calu doctor`: what is in place and what a session would miss, before anything runs |
 | `src/calu/clock.py` | Watches calu's own clock: a backward jump breaks the attribution of file changes to steps (D32) |
 | `src/calu/changes.py` | Git snapshots of the project directory: what a command wrote, as a patch, and how to undo it (D31, optional) |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |

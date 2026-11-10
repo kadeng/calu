@@ -106,19 +106,20 @@ throwaway directory.
 
 Before a release, or after changing the runner, the gate or the sandbox:
 
-1. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
-2. `spikes/spike_hook_timeout.py` — the gate fails closed.
-3. `smoke_session.py --sandbox` with a prompt that runs a command, and read the probe output of
+1. `calu doctor --db` on the machine — nothing essential missing.
+2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
+3. `spikes/spike_hook_timeout.py` — the gate fails closed.
+4. `smoke_session.py --sandbox` with a prompt that runs a command, and read the probe output of
    `spikes/probe.sh` from inside the sandbox (own PID namespace, no `claude` process,
    credentials unreadable, network blocked, no leftover process).
-4. `smoke_session.py --changes` with a command that writes a file whose content carries the
+5. `smoke_session.py --changes` with a command that writes a file whose content carries the
    fake checker's deny marker: the change must be reverted and Claude must be told.
-5. A deny-list escalation resolved from the database alone: `calu escalations`,
+6. A deny-list escalation resolved from the database alone: `calu escalations`,
    `calu escalation <id>`, `calu resolve <id> deny --note ...` — the session continues within a
    second.
-6. `calu web`: the fleet, a session at all four levels of detail, the triage queue, the settings
+7. `calu web`: the fleet, a session at all four levels of detail, the triage queue, the settings
    page, Ctrl+K.
-7. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
+8. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
    `bwrap --unshare-user ...` — the `dev` service needs `security_opt: [seccomp:unconfined]`,
    because Docker's default seccomp profile blocks user namespaces.
 

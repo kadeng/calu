@@ -247,6 +247,7 @@ Not published yet; from a clone of this repository, `uv run calu ...` runs the c
 
 ```bash
 uv tool install calu      # not published yet
+calu doctor               # what is in place, and what is still missing
 calu db up                # local PostgreSQL in Docker; asks for a new admin password
 calu setup                # default checkers and rules; asks for a new session password
 calu run -p "fix the failing test"   # start a session in the current directory
