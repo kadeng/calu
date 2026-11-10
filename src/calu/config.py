@@ -57,7 +57,11 @@ class CheckerConfig(ConfigModel):
 
     model: str = "mistral:mistral-small-2603"  # Mistral Small 4
     """Pydantic AI model string of this checker, e.g. "mistral:mistral-small-2603",
-    "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or "bedrock:eu.anthropic...."."""
+    "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or "bedrock:eu.anthropic....".
+    `claude:<alias>` ("claude:haiku", "claude:sonnet") is special: the check then runs through
+    the `claude` CLI on this machine's own Claude Code account, which is the only way a
+    claude.ai subscription can answer a check and needs no API key (PLAN.md D117). That model
+    type has **no tools**, so such a checker cannot read files, glob or grep."""
     effort: CheckerEffort | None = None
     """Thinking effort: "off" for none, "low" to "max", or None for the model's default.
     More effort buys accuracy with latency and tokens."""

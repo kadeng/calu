@@ -9,6 +9,7 @@ import os
 import shutil
 from collections.abc import Collection, Mapping
 
+from calu.claude_model import is_cli_model
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.herd import STALE_AFTER_S
 
@@ -237,6 +238,32 @@ def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str
     return []
 
 
+def cli_model_warnings(config: Config) -> list[str]:
+    """Report the roles that run on the machine's Claude Code account (PLAN.md D117).
+
+    A `claude:` model is not an API client: each call runs the `claude` CLI, which calu starts
+    with `--tools ""`. Such a checker therefore cannot read a file, glob or grep, however its
+    instructions are written -- and that is invisible in the configuration, so it is said at
+    every start. It is one warning for all of them, because a user who chose this chose it on
+    purpose and does not need it repeated per role.
+
+    Args:
+        config: The session configuration.
+
+    Returns:
+        One warning naming the roles, or [].
+    """
+    roles = sorted(role for role, model in configured_models(config).items() if is_cli_model(model))
+    if not roles:
+        return []
+    return [
+        f"{', '.join(roles)} run on this machine's Claude Code account (a `claude:` model), "
+        "which needs no API key -- and gets no tools: such a checker cannot read files, glob or "
+        "grep, so instructions that tell it to go and look will not work. Each check also "
+        "starts the CLI once, which costs a second or two."
+    ]
+
+
 def warnings(
     config: Config, environ: Mapping[str, str] | None = None, checkers: Collection[str] = ()
 ) -> list[str]:
@@ -250,7 +277,8 @@ def warnings(
 
     Returns:
         The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
-        `network_warnings`, `heartbeat_warnings` and `honesty_warnings`.
+        `network_warnings`, `heartbeat_warnings`, `honesty_warnings` and
+        `cli_model_warnings`.
     """
     return (
         sandbox_warnings(config)
@@ -259,4 +287,5 @@ def warnings(
         + network_warnings(config)
         + heartbeat_warnings(config)
         + honesty_warnings(config, checkers)
+        + cli_model_warnings(config)
     )

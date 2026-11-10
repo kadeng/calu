@@ -207,3 +207,25 @@ def test_honesty_switched_on_by_halves_is_warned_about():
 
     # And it reaches the start-up warnings, which is where a user sees it.
     assert said in preflight.warnings(enforcing, {}, ["command", "edit"])
+
+
+def test_a_checker_on_the_machine_s_claude_account_is_reported_once():
+    """D117: `claude:` needs no key and gets no tools, and neither is visible in the config."""
+    assert preflight.cli_model_warnings(Config()) == []
+
+    one = Config(command_checker=CheckerConfig(model="claude:haiku"))
+    (said,) = preflight.cli_model_warnings(one)
+    assert "command checker" in said
+    assert "needs no API key" in said and "cannot read files" in said
+    assert said in preflight.warnings(one, {"MISTRAL_API_KEY": "k"})
+
+    # Several roles, one warning: the choice was deliberate and does not need repeating.
+    both = Config(
+        command_checker=CheckerConfig(model="claude:haiku"),
+        edit_checker=CheckerConfig(model="claude:sonnet"),
+    )
+    (together,) = preflight.cli_model_warnings(both)
+    assert "command checker, edit checker" in together
+
+    # And it costs no key warning, because the account is not an API provider.
+    assert preflight.key_warnings(Config().with_model("claude:haiku"), environ={}) == []

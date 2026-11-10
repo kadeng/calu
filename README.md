@@ -112,7 +112,9 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   Console API, AWS Bedrock, Fireworks, Mistral, a local model, or anything else
   [Pydantic AI supports](https://pydantic.dev/docs/ai/models/overview/) — and Claude Code never
   sees it. Providers that offer zero data retention, in a variety of cloud regions including the
-  EU, work too; that guarantee is theirs, not calu's.
+  EU, work too; that guarantee is theirs, not calu's. With **no API key at all**, a checker can
+  run on the machine's own Claude Code account (`claude:haiku`), at the price of having no tools
+  and a process start per check.
 - **The checkers are read-only by design**: five tools, all reads (open a file, find, grep, and
   which files changed when). No shell, no writes, no network — the worst a broken checker can do
   is answer wrongly, and the dangerous steps are settled by the deny lists before any model is

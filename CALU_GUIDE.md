@@ -309,6 +309,24 @@ calu config set edit_checker.model bedrock:eu.anthropic.claude-haiku-4-5-2025100
 calu config set command_checker.effort low      # or "off" for no thinking at all
 ```
 
+**With a subscription and no API key at all**, a checker can run on the machine's own Claude
+Code account instead. A `claude:` model is not an API client: each check starts the `claude` CLI
+once in headless mode and reads its structured answer (PLAN.md D117).
+
+```bash
+calu setup --checker-model claude:haiku        # a new project, no checker key needed
+calu config set command_checker.model claude:haiku
+```
+
+What it costs: such a checker gets **no tools**, because the CLI runs with `--tools ""`, so it
+cannot read a file, glob or grep and judges only what the context gives it -- instructions that
+tell it to go and look will not work. Each check also starts a process (a second or two), and
+Claude Code's own system prompt is part of every call, so the token counts are larger than an
+API checker's for the same context. calu says all of this at every start. The checks run in an
+empty temporary directory, never in the project: the working directory's `CLAUDE.md` would
+otherwise let the project under review write instructions into the prompt of the agent
+reviewing it.
+
 Keys belong in `~/.config/calu/.env`, and Claude Code never sees them: calu blanks every
 provider key in the environment it hands to Claude Code. So the main conversation can run on a
 subscription while the checkers bill an API — including an Anthropic Ultra subscription, which

@@ -10,3 +10,8 @@ __pycache__/
 .ruff_cache/
 .venv/
 dist/
+
+# Coverage, when it is measured ad hoc (docs/TESTING.md); never part of the repository.
+.coverage
+.coverage.*
+htmlcov/

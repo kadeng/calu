@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**686 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**693 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 212 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -505,7 +505,13 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    auto-escalation switches, which are session-local and audited (D42, D43). Editing a single
    list entry is done: `calu config add|remove <key> <entry>` (D44).
 
-5. **The ergonomics of auth** were the owner's complaint of 2026-11-10 ("if I need to worry
+5. **A checker on the machine's Claude Code account** (D117) completes REQUIREMENTS 22: with
+   `calu config set command_checker.model claude:haiku` a checker needs no API key at all. What
+   is left for a person to decide is whether to use it, because it costs the checker's tools
+   (the CLI runs with `--tools ""`) and a process start per check; `calu evals` measures what
+   that does to the decisions on your own cases, and the start-up warning says it every time.
+
+6. **The ergonomics of auth** were the owner's complaint of 2026-11-10 ("if I need to worry
    about auth and token passing for every single command, it's not easy") and are answered in
    two halves: `calu credential set operator --no-password` takes the password prompt off the
    read-and-resolve commands (D104), and `calu attach` / `calu acp` with no arguments find the
@@ -513,7 +519,7 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    whether the terminal or the browser is meant to be the interactive tool -- no longer blocks
    anything, because both now work without a prompt.
 
-6. **Honesty enforcement is built and switched off** (§13, D81-D86). What is left needs a
+7. **Honesty enforcement is built and switched off** (§13, D81-D86). What is left needs a
    person rather than more code: a capable checker model for it (Q17), the choice between one
    combined checker and several (Q18), and what a mark should mean after a branch switch (Q19).
    To try it on a real project: `calu checker set honesty --enable` and
