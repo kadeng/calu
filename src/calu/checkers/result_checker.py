@@ -6,7 +6,7 @@ Request layout (cache points as for the step checkers):
     user prompt    = [context prefix, CachePoint, recent turns, CachePoint,
                       subagent task (Claude's prompt) + subagent result]
 
-See README "Checking subagent results" for the failure case it addresses (scope expansion
+See CALU_GUIDE.md "Checking subagent results" for the failure case it addresses (scope expansion
 through reviewer subagents).
 """
 

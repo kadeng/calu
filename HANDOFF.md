@@ -59,7 +59,7 @@ there.
   (caution for nothing) and steps it approved that were then denied (misses). Read from the
   record, no model called. `calu checker misses [NAME]` lists the rows behind those counts,
   with the escalation id, so the instructions can be fixed against a real case (D62).
-- **Docs**: `README.md` for users, `docs/CONFIGURATION.md` (generated from `calu.config` by
+- **Docs**: `README.md` for users and `CALU_GUIDE.md` as their reference documentation, `docs/CONFIGURATION.md` (generated from `calu.config` by
   `calu.configdoc`; `tests/unit/test_configdoc.py` fails when the file and the model
   disagree, or a field has no docstring), `docs/TESTING.md` for the four layers and the
   manual checklist, `PLAN.md` for the decisions, `AGENTS.md` for the rules.

@@ -555,7 +555,7 @@ def build_config(
     configuration wins**, because that is the layer a project overrides: the definition's
     values come first as the default, and the global and then the project settings are merged on
     top. Before 2026-11-10 it was the other way round, which made `calu config set
-    command_checker.model` -- documented in the README and offered by the web interface's
+    command_checker.model` -- documented in CALU_GUIDE.md and offered by the web interface's
     settings form -- silently do nothing.
 
     Args:

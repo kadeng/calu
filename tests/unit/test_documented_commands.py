@@ -2,13 +2,13 @@
 
 Three bugs of this shape have already been found by hand: a hint that printed a command the
 parser refused, a documented `calu config set` that silently did nothing, and a `/help` line
-that left out the command an escalation is decided with. A command line in the README is a
-promise, so this test holds the parser to it: it takes every `calu ...` line out of the
+that left out the command an escalation is decided with. A command line in the documentation
+is a promise, so this test holds the parser to it: it takes every `calu ...` line out of the
 Markdown code blocks and parses it with the real parser.
 
 It checks that the line **parses**, not that it works -- running it would need a database and
 credentials -- so it catches a renamed flag, a wrong order of positional arguments and a
-command that no longer exists, which is what goes stale in a README.
+command that no longer exists, which is what goes stale in documentation.
 """
 
 import argparse
@@ -23,7 +23,14 @@ import pytest
 from calu.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[2]
-DOCUMENTS = ["README.md", "docs/TESTING.md", "docs/CONFIGURATION.md", "AGENTS.md", "HANDOFF.md"]
+DOCUMENTS = [
+    "README.md",
+    "CALU_GUIDE.md",
+    "docs/TESTING.md",
+    "docs/CONFIGURATION.md",
+    "AGENTS.md",
+    "HANDOFF.md",
+]
 FENCE = re.compile(r"```(?:bash|sh|console)?\n(.*?)```", re.S)
 DRAWING = re.compile(r"[\u2500-\u257f]")
 """Box-drawing characters: a diagram, not a command."""
@@ -67,8 +74,9 @@ def test_the_documentation_has_commands_to_check() -> None:
     """A regular expression that matches nothing would make this suite silently useless."""
     commands = documented_commands()
     assert len(commands) > 20, f"only {len(commands)} documented commands found"
-    # The README is where most of them live.
-    assert sum(1 for document, _ in commands if document == "README.md") > 15
+    # `CALU_GUIDE.md` is the reference documentation and therefore where most of them live;
+    # the README only shows the commands that get a first session running.
+    assert sum(1 for document, _ in commands if document == "CALU_GUIDE.md") > 15
 
 
 @pytest.mark.parametrize(("document", "command"), documented_commands(), ids=str)
@@ -109,7 +117,7 @@ def test_every_command_is_documented_somewhere() -> None:
     assert len(commands) > 15, f"only {len(commands)} commands found"
     documentation = "\n".join(
         (ROOT / name).read_text(encoding="utf-8")
-        for name in ("README.md", "docs/TESTING.md", "AGENTS.md")
+        for name in ("README.md", "CALU_GUIDE.md", "docs/TESTING.md", "AGENTS.md")
     )
     undocumented = [name for name in commands if f"calu {name}" not in documentation]
     assert undocumented == [], f"not documented: {', '.join(undocumented)}"

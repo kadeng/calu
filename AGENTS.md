@@ -14,6 +14,7 @@ phases.
 | File | Content |
 |---|---|
 | `README.md` | Description for end users, getting started |
+| `CALU_GUIDE.md` | The user documentation: commands, credentials, sandbox, remote access, web interface, ACP, checkers |
 | `REQUIREMENTS.md` | The owner's requirements and priorities, only as stated by the owner. Do not add derived requirements; those belong in `PLAN.md`. |
 | `PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
 | `HANDOFF.md` | State of the work and next steps, for the next session |
