@@ -49,6 +49,7 @@ from calu.protocol.messages import (
     EscalationRequest,
     EscalationResolved,
     Event,
+    HonestyUpdate,
     Log,
     SessionState,
     ToolResult,
@@ -160,6 +161,13 @@ def format_event(event: Event) -> str | None:
             return f"*** escalation {event.escalation_id}: {event.decision}"
         case TurnResult():
             return f"[turn ended: {event.subtype}]"
+        case HonestyUpdate():
+            if not event.marks:
+                return "*** the honesty register is clear again"
+            spots = ", ".join(mark.label() for mark in event.marks[:5])
+            rest = f" and {len(event.marks) - 5} more" if len(event.marks) > 5 else ""
+            verb = "cannot be run" if event.mode == "enforce" else "are recorded (not blocked)"
+            return f"*** dishonest code that {verb}: {spots}{rest}"
         case AutoEscalateChanged():
             on = [name for name, held in event.settings.model_dump().items() if held]
             waits = ", ".join(on) if on else "nothing beyond what the checkers escalate"

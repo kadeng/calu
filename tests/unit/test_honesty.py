@@ -105,3 +105,27 @@ def test_a_mark_renders_its_spot_and_its_branch():
     assert mark("src/p.py", "fields").label() == "src/p.py:fields"
     assert "[feature/x]" in mark("src/p.py", git_branch="feature/x").line()
     assert mark("src/p.py", "fields").mark().key() == ("src/p.py", "fields")
+
+
+def test_the_terminal_names_what_cannot_be_run():
+    """D86: a client has to be able to say why a step was refused."""
+    from calu.protocol.messages import HonestyMarkInfo, HonestyUpdate
+    from calu.run import format_event
+
+    enforced = format_event(
+        HonestyUpdate(
+            marks=[HonestyMarkInfo(id=1, path="src/parser.py", symbol="fields", reason="r")],
+            mode="enforce",
+        )
+    )
+    assert enforced is not None
+    assert "src/parser.py:fields" in enforced
+    assert "cannot be run" in enforced
+
+    tracked = format_event(
+        HonestyUpdate(marks=[HonestyMarkInfo(id=1, path="src/parser.py", reason="r")], mode="track")
+    )
+    assert tracked is not None and "not blocked" in tracked
+
+    cleared = format_event(HonestyUpdate(marks=[], mode="enforce"))
+    assert cleared is not None and "clear again" in cleared

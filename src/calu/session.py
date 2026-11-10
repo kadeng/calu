@@ -115,6 +115,8 @@ from calu.protocol.messages import (
     EscalationRequest,
     EscalationResolved,
     Event,
+    HonestyMarkInfo,
+    HonestyUpdate,
     InitializeResult,
     Log,
     QueuedMessage,
@@ -1221,6 +1223,8 @@ class Session:
             ],
             queue=[message for message, _ in self._queue],
             auto_escalate=self.config.auto_escalate,
+            honesty_mode=self.config.honesty.mode,
+            honesty_marks=[_mark_info(mark) for mark in self.honesty_marks],
         )
 
     async def recent_sessions(self, limit: int = 20) -> list[SessionSummary]:
@@ -3051,6 +3055,12 @@ class Session:
             parts.append(f"{len(clean) - closed} clean mark(s) matched nothing recorded")
         if parts:
             await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
+        await self._emit_safely(
+            HonestyUpdate(
+                marks=[_mark_info(mark) for mark in self.honesty_marks],
+                mode=self.config.honesty.mode,
+            )
+        )
 
     async def _git_branch(self) -> str | None:
         """Return the branch of the workspace's git HEAD, cached like `_git_head`.
@@ -3167,6 +3177,24 @@ class Session:
                 "a foreground subagent blocks the main agent until it finishes"
             )
         return agent
+
+
+def _mark_info(mark: HonestyMark) -> HonestyMarkInfo:
+    """Return an honesty mark as the protocol carries it (PLAN.md D86).
+
+    Args:
+        mark: The mark as the register holds it.
+
+    Returns:
+        The same spot and reason, without the opened/closed bookkeeping a client does not need.
+    """
+    return HonestyMarkInfo(
+        id=mark.id,
+        path=mark.path,
+        symbol=mark.symbol,
+        reason=mark.reason,
+        git_branch=mark.git_branch,
+    )
 
 
 def workspace_relative_input(tool_input: dict[str, Any], workspace: Path) -> dict[str, Any]:

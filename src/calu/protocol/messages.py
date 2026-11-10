@@ -323,6 +323,29 @@ class RecordedEvent(BaseModel):
     time: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class HonestyMarkInfo(BaseModel):
+    """One open entry of the honesty register, for a client (PLAN.md D86).
+
+    While `honesty.mode` is "enforce" an open mark stops every command that would run that
+    code, so a client that shows a session has to be able to say what is recorded and why --
+    otherwise a refused step looks arbitrary. `symbol` is empty when the whole file is meant.
+    """
+
+    id: int
+    path: str
+    symbol: str = ""
+    reason: str
+    git_branch: str | None = None
+
+    def label(self) -> str:
+        """Render the marked spot.
+
+        Returns:
+            `path:symbol`, or the path alone when no symbol is named.
+        """
+        return f"{self.path}:{self.symbol}" if self.symbol else self.path
+
+
 class SessionSnapshot(BaseModel):
     """Result of `state.get`: everything a client needs to show the session right now.
 
@@ -343,6 +366,11 @@ class SessionSnapshot(BaseModel):
     escalations: list[EscalationRequest] = Field(default_factory=list)
     queue: list[QueuedMessage] = Field(default_factory=list)
     auto_escalate: AutoEscalate = Field(default_factory=lambda: AutoEscalate())
+    honesty_mode: str = "off"
+    """What calu does with the honesty register: `off`, `track` or `enforce` (D83)."""
+    honesty_marks: list[HonestyMarkInfo] = Field(default_factory=list)
+    """The code recorded as dishonest. A client shows it, because while the mode is `enforce` a
+    command that would run it is refused (D86)."""
 
 
 class CheckerContextResult(BaseModel):
@@ -571,6 +599,15 @@ class AgentInfo(BaseModel):
     status: Literal["running", "completed", "failed", "stopped"] = "running"
 
 
+class HonestyUpdate(Event):
+    """The open honesty register, sent whenever a checker changes it (PLAN.md D86)."""
+
+    method: ClassVar[str] = "honesty.update"
+    marks: list[HonestyMarkInfo]
+    mode: str
+    """`off`, `track` or `enforce`: what calu does with the register (`honesty.mode`)."""
+
+
 class AgentsUpdate(Event):
     """The complete list of subagents of this session, sent whenever it changes."""
 
@@ -683,6 +720,7 @@ EVENTS: list[type[Event]] = [
     EscalationResolved,
     EditDiff,
     AutoEscalateChanged,
+    HonestyUpdate,
     Log,
 ]
 """Every event class, for the JSON Schema export (`calu.protocol.schema`)."""

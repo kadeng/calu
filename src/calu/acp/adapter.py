@@ -523,12 +523,44 @@ class Adapter:
                 await self._on_turn_result(params)
             case "auto_escalate.changed":
                 await self._on_auto_escalate(params)
+            case "honesty.update":
+                await self._on_honesty(params)
             case "log":
                 log.log(
                     _LEVELS.get(str(params.get("level", "info")), logging.INFO),
                     "session: %s",
                     params.get("message", ""),
                 )
+
+    async def _on_honesty(self, params: dict[str, Any]) -> None:
+        """Tell the editor what the honesty register holds (PLAN.md D86).
+
+        ACP has no shape for "this code may not be run", so it goes as a message chunk, the way
+        the "always" hint does: while the register stands, commands that would run that code are
+        refused, and a refusal the editor cannot explain looks arbitrary. Only a change is sent,
+        because the event is only emitted when a checker changed the register.
+
+        Args:
+            params: The `honesty.update` event.
+        """
+        marks = params.get("marks") or []
+        if not isinstance(marks, list):
+            return
+        if not marks:
+            text = "[calu: the honesty register is clear again.]"
+        else:
+            spots = ", ".join(
+                str(mark.get("path", "")) + (f":{mark['symbol']}" if mark.get("symbol") else "")
+                for mark in marks
+                if isinstance(mark, dict)
+            )
+            verb = (
+                "cannot be run until the code and its documentation agree"
+                if params.get("mode") == "enforce"
+                else "is recorded as dishonest (not blocked: honesty.mode is 'track')"
+            )
+            text = f"[calu: {spots} {verb}. `calu honesty list` shows why.]"
+        await self._update(acp.message_chunk("agent_message_chunk", f"{text}\n", None))
 
     async def _on_state(self, params: dict[str, Any]) -> None:
         """Remember the session state and end a waiting prompt if the session ended.
