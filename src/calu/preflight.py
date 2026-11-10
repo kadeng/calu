@@ -98,10 +98,25 @@ def key_warnings(config: Config, environ: Mapping[str, str] | None = None) -> li
         keys = PROVIDER_KEYS_BY_PREFIX[prefix]
         if any(env.get(key) for key in keys):
             continue
+        # What a missing key costs depends on the role: a checker that cannot answer escalates
+        # its step, while a narrator or a summarizer that cannot answer only leaves the
+        # checkers with less context. Saying "every check ... escalates" for all of them was
+        # wrong for two of the six roles.
+        # The roles are already named in the sentence above, so the consequence does not
+        # repeat them; only the two non-checker roles are worth naming by what they produce.
+        produces = {"narrator": "the narration", "summarizer": "the folded summary"}
+        missing = [produces[role] for role in sorted(roles) if role in produces]
+        consequence = []
+        if any(role.endswith("checker") for role in roles):
+            consequence.append("every check of these escalates to you instead of deciding")
+        if missing:
+            subject = " and ".join(missing)
+            verb = "stays" if len(missing) == 1 else "stay"
+            consequence.append(f"{subject} {verb} empty, so the checkers see less context")
         warnings.append(
             f"{' or '.join(keys)} is not set, but {prefix!r} models are configured for: "
             f"{', '.join(sorted(roles))}. Put the key in {user_env_file()} or in calu's "
-            "environment; until then every check of these roles fails and escalates."
+            f"environment; until then {'; '.join(consequence)}."
         )
     return warnings
 
