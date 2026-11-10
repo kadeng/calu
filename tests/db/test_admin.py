@@ -95,7 +95,16 @@ async def test_checker_definitions_are_changed_and_versioned(db_url: str) -> Non
     db, conn = await prepared(db_url)
     try:
         names = [c.name for c in await admin.checkers(db)]
-        assert names == ["changeset", "command", "edit", "narrator", "subagent-result"]
+        # `honesty` is seeded disabled (D85) and is listed like any other definition, so that
+        # `calu checker list` shows what there is to switch on.
+        assert names == [
+            "changeset",
+            "command",
+            "edit",
+            "honesty",
+            "narrator",
+            "subagent-result",
+        ]
         assert (await admin.instructions(db, "command")).startswith("#")
         with pytest.raises(admin.AdminError, match="no checker named"):
             await admin.instructions(db, "nope")
@@ -332,5 +341,38 @@ async def test_a_list_entry_can_be_added_for_one_project_only(db_url: str) -> No
         await admin.add_project(db, "narrow", None, "proxy")
         _, again = await admin.add_to_setting(db, key, "pypi.org", project="narrow")
         assert again is False
+    finally:
+        await conn.close()
+
+
+async def test_the_honesty_checker_is_seeded_off_and_switched_on_in_two_steps(db_url: str) -> None:
+    """D85: enforcement is deliberate, so the feature needs a definition and a mode.
+
+    The checker is seeded with the instructions calu ships but disabled, so a session does not
+    load it until somebody enables it, and it does nothing until `honesty.mode` leaves "off".
+    """
+    db, conn = await prepared(db_url)
+    try:
+        definition = next(c for c in await admin.checkers(db) if c.name == "honesty")
+        assert definition.enabled is False
+        assert definition.route == "edit", "it judges edits, beside the edit checker (D81)"
+        assert "marks_dirty" in await admin.instructions(db, "honesty"), (
+            "its instructions have to tell it how to record a spot"
+        )
+
+        # What a session loads: nothing while the checker is off.
+        settings = await ConfigStore(db, Path("/w")).load()
+        assert "honesty" not in settings.checkers
+        assert settings.config.honesty.mode == "off"
+
+        await admin.set_checker(db, "honesty", enabled=True)
+        await admin.set_setting(db, "honesty.mode", "track")
+        settings = await ConfigStore(db, Path("/w")).load()
+        assert "honesty" in settings.checkers, "now a session runs it on every edit"
+        assert settings.config.honesty.mode == "track"
+
+        # A mode calu does not know is refused rather than silently ignored.
+        with pytest.raises(admin.AdminError):
+            await admin.set_setting(db, "honesty.mode", "nonsense")
     finally:
         await conn.close()

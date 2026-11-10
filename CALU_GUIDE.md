@@ -159,9 +159,17 @@ reason, until the record is clear.
 Editing recorded code is never refused. That is the way out, and it has to stay open: fixing
 the dishonesty is an edit.
 
+Switching it on is two steps, because both halves are deliberate: the checker that judges, and
+what calu does with its judgement. calu ships the checker's instructions but leaves the
+definition disabled.
+
+    calu checker set honesty --enable       # the checker that judges honesty
     calu config set honesty.mode track      # record and report, block nothing
     calu config set honesty.mode enforce    # ... and refuse to run recorded code
     calu config set honesty.mode off        # the default
+
+    calu checker show honesty               # read its instructions
+    calu checker edit honesty               # change them, in $EDITOR
 
 `track` is how to judge the checker on your own project before trusting it to block anything:
 the marks appear, nothing stops. The register belongs to the project, not to one session, so

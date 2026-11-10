@@ -24,16 +24,20 @@ DEFAULT_CHECKER_MODEL = "mistral:mistral-small-2603"
 """Pydantic AI model string of the default checkers (Mistral Small 4)."""
 
 CHECKER_DEFAULTS = (
-    ("command", "command", "checkers/command.md", None),
-    ("edit", "edit", "checkers/edit.md", None),
-    ("subagent-result", "subagent", "checkers/subagent-result.md", None),
+    ("command", "command", "checkers/command.md", None, True),
+    ("edit", "edit", "checkers/edit.md", None, True),
+    ("subagent-result", "subagent", "checkers/subagent-result.md", None, True),
     # More requests than a step checker: judging a whole change means reading files around the
     # diff, and with the common budget one check in four ran out before deciding (PLAN.md D75).
-    ("changeset", "changeset", "checkers/changeset.md", 8),
-    ("narrator", "narrator", "checkers/narrator.md", None),
+    ("changeset", "changeset", "checkers/changeset.md", 8, True),
+    ("narrator", "narrator", "checkers/narrator.md", None, True),
+    # Seeded but **off**: honesty enforcement is a feature a user switches on deliberately, its
+    # judgement needs a capable model (Q17), and it is a second checker on the edit route (D81).
+    # `calu checker set honesty --enable` and `calu config set honesty.mode track` start it.
+    ("honesty", "edit", "checkers/honesty.md", None, False),
 )
-"""(checker name, route, default instructions file, request limit) of the built-in checker
-types. A request limit of None takes the column default of `checker_types`."""
+"""(checker name, route, default instructions file, request limit, enabled) of the built-in
+checker types. A request limit of None takes the column default of `checker_types`."""
 
 RULE_LISTS = (
     "command-allow",
@@ -129,10 +133,11 @@ async def seed_defaults(
     base = resources.files("calu.defaults")
     checkers = 0
     async with conn.transaction():
-        for name, route, path, request_limit in CHECKER_DEFAULTS:
+        for name, route, path, request_limit, enabled in CHECKER_DEFAULTS:
             cur = await conn.execute(
-                "INSERT INTO checker_types (name, route, instructions, model, request_limit)"
-                " VALUES (%s, %s, %s, %s, coalesce(%s, %s)) ON CONFLICT (name) DO NOTHING",
+                "INSERT INTO checker_types"
+                " (name, route, instructions, model, request_limit, enabled)"
+                " VALUES (%s, %s, %s, %s, coalesce(%s, %s), %s) ON CONFLICT (name) DO NOTHING",
                 (
                     name,
                     route,
@@ -140,6 +145,7 @@ async def seed_defaults(
                     model,
                     request_limit,
                     CheckerConfig.model_fields["request_limit"].default,
+                    enabled,
                 ),
             )
             checkers += cur.rowcount

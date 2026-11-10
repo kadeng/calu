@@ -27,13 +27,18 @@ async def test_setup_seeds_defaults_once_and_creates_session_login(db_url: str) 
     conn = await connect(db_url)
     try:
         _, session_url = await setup(conn, db_url, "test:model")
-        cur = await conn.execute("SELECT name, model, version FROM checker_types ORDER BY name")
+        cur = await conn.execute(
+            "SELECT name, model, version, enabled FROM checker_types ORDER BY name"
+        )
+        # The honesty checker is seeded **off**: it is a feature a user switches on, and its
+        # judgement needs a capable model (PLAN.md D85, Q17).
         assert await cur.fetchall() == [
-            ("changeset", "test:model", 1),
-            ("command", "test:model", 1),
-            ("edit", "test:model", 1),
-            ("narrator", "test:model", 1),
-            ("subagent-result", "test:model", 1),
+            ("changeset", "test:model", 1, True),
+            ("command", "test:model", 1, True),
+            ("edit", "test:model", 1, True),
+            ("honesty", "test:model", 1, False),
+            ("narrator", "test:model", 1, True),
+            ("subagent-result", "test:model", 1, True),
         ]
         cur = await conn.execute("SELECT count(*) FROM rules")
         row = await cur.fetchone()

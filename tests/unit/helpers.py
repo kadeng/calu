@@ -67,7 +67,10 @@ def default_settings(
             max_tokens=CheckerConfig.model_fields["max_tokens"].default,
             version=1,
         )
-        for name, route, _, request_limit in CHECKER_DEFAULTS
+        for name, route, _, request_limit, enabled in CHECKER_DEFAULTS
+        # Only the enabled ones: that is what `ConfigStore.load` returns, and the
+        # honesty checker is seeded off (PLAN.md D85).
+        if enabled
     }
     return ProjectSettings(
         config=config or Config(),
