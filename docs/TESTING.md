@@ -135,7 +135,11 @@ Before a release, or after changing the runner, the gate or the sandbox:
    second.
 7. `calu web`: the fleet, a session at all four levels of detail, the triage queue, the settings
    page, Ctrl+K.
-8. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
+8. The session mode from a client (D42): with a session running, set `auto_escalate.edits` on
+   the settings page and watch an attached `calu attach` report it; then the session page must
+   list the change with who asked for it (D43). With an ACP editor, the same through its own
+   agent-mode picker.
+9. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
    `bwrap --unshare-user ...` — the `dev` service needs `security_opt: [seccomp:unconfined]`,
    because Docker's default seccomp profile blocks user namespaces.
 

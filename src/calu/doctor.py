@@ -206,6 +206,33 @@ def directory_findings() -> list[Finding]:
     ]
 
 
+def extra_findings() -> list[Finding]:
+    """Check the optional dependencies of the commands that need them.
+
+    The web interface is the `web` extra, so an installation made without it has every other
+    command but fails on `calu web`. That is worth saying here rather than only when the command
+    is run.
+
+    Returns:
+        One finding for the web interface; never essential, because a session does not need it.
+    """
+    try:
+        import jinja2  # ruff: ignore[unused-import]
+        import starlette  # ruff: ignore[unused-import]
+        import uvicorn  # ruff: ignore[unused-import]
+    except ImportError as missing:
+        return [
+            Finding(
+                "web interface",
+                False,
+                f"the `web` extra is not installed ({missing.name} is missing)",
+                "`uv tool install 'calu[web]'` (or `uv sync --all-extras` in a clone); "
+                "every other command works without it.",
+            )
+        ]
+    return [Finding("web interface", True, "the `web` extra is installed", "")]
+
+
 async def database_findings(url: str) -> list[Finding]:
     """Check that the database answers and that its schema is current.
 
@@ -277,13 +304,14 @@ def local_findings(store: CredentialStore) -> list[Finding]:
         store: The credential store.
 
     Returns:
-        The tool, credential, key and directory findings, in that order.
+        The tool, credential, key, directory and optional-dependency findings, in that order.
     """
     return [
         *tool_findings(),
         *credential_findings(store),
         *key_findings(),
         *directory_findings(),
+        *extra_findings(),
     ]
 
 

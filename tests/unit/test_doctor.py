@@ -87,3 +87,17 @@ async def test_a_database_that_does_not_answer_is_one_finding() -> None:
     assert len(found) == 1
     assert found[0].name == "database" and found[0].ok is False and found[0].essential
     assert "calu db up" in found[0].advice
+
+
+def test_the_web_extra_is_reported_but_never_essential() -> None:
+    """An installation without the `web` extra has every other command (PLAN.md D41)."""
+    findings = doctor.extra_findings()
+    assert [f.name for f in findings] == ["web interface"]
+    assert findings[0].essential is False
+    # This environment has the extra or it does not; both answers must be a sentence that names
+    # the fix when something is missing.
+    if findings[0].ok:
+        assert "installed" in findings[0].detail
+    else:
+        assert "calu[web]" in findings[0].advice
+    assert doctor.essential_missing(findings) is False
