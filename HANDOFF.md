@@ -304,9 +304,12 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 3. **Phase 6 polish**: a web UI feature the research turned up and this version lacks — an
    inbox with unread counts across sessions, sounds, and a jump palette (Orca has ⌘J). The
    escalation queue covers the important half of it.
-4. **Phase 5**: the nested-sandbox case in Docker (Q1, `enableWeakerNestedSandbox` exists and is
-   untested). The network policy is built (D39); only its default for new projects is the
-   owner's to choose (Q5).
+4. **Phase 5**: nothing blocking left. The network policy is built (D39; only its default for a
+   new project is the owner's call, Q5), and the container case is measured (Q1): a default
+   Docker container cannot create a user namespace, so the sandbox needs
+   `security_opt: [seccomp:unconfined]` and socat — calu's own `dev` service and image now have
+   both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested, because it needs
+   a logged-in `claude` inside a container.
 5. Smaller gaps: `calu config set` cannot set a value inside a list (`calu config set
    claude.sandbox.deny_read '[...]'` replaces the whole list, which is the usual way anyway); a
    client of a session still cannot change what steers the checkers through the protocol, by

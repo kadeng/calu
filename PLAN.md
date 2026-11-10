@@ -433,7 +433,7 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
 
 | # | Question |
 |---|---|
-| Q1 | Answered by D15. Still open: the sandbox inside Docker containers (`enableWeakerNestedSandbox`), the network proxy's domain allow list. |
+| Q1 | Answered by D15, and for containers by the measurement in `spikes/RESULTS.md` ("The sandbox inside a Docker container"): a default container cannot create a user namespace, because Docker's seccomp profile blocks it, so bubblewrap and with it the sandbox cannot start; `--security-opt seccomp=unconfined` is the least of the options that work (`--cap-add SYS_ADMIN` and `--privileged` grant more, `apparmor=unconfined` does not help), and socat must be installed too — calu's own dev image now does both. Still untested: what `enableWeakerNestedSandbox` changes, which needs a logged-in `claude` inside a container. The proxy's allow list is answered by D39. |
 | Q2 | Relationship to sitl: does calu replace it (VSCode extension as a calu client) or do both continue? |
 | Q3 | Whether calu uses a per-session database role (the credential location is decided in D12). |
 | Q4 | How clients authenticate **remotely**. The token half is answered by D30 (tokens minted per session, revocable, `calu token`); open are the transport (the endpoint binds 127.0.0.1, so remote access needs an SSH tunnel or a TLS proxy) and whether operators get their own `calu_operator` logins instead of sharing the `admin` credential. |

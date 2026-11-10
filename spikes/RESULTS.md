@@ -434,3 +434,35 @@ probe inside it that prints the proxy environment and tries `https://example.com
 domains, "full" emits `["*"]`, and the deny list is kept in every case. What remains for the
 owner (Q5) is only the **default** for new projects, which stays "full" in the schema while the
 start-up warnings now say plainly when a session can reach every domain.
+
+## The sandbox inside a Docker container (2026-11-10, answers the first half of Q1)
+
+**Why it matters.** calu is meant to run on "WSL2, Docker, remote SSH hosts", and its own
+`docker-compose.yml` has a `dev` system. Claude Code's sandbox needs bubblewrap, which needs an
+unprivileged user namespace — and whether a container may create one was untested.
+
+**Observations** (Docker on WSL2, kernel 6.18).
+
+- A default container **cannot**: `unshare -Ur true` fails with "Operation not permitted", and
+  real bubblewrap says "No permissions to create new namespace, likely because the kernel does
+  not allow non-privileged user namespaces". So the sandbox cannot start there at all, whatever
+  its settings say.
+- It is **seccomp**, not AppArmor: with `--security-opt apparmor=unconfined` it is still
+  blocked, while `--security-opt seccomp=unconfined` lets both `unshare -Ur` and a real
+  `bwrap --unshare-user --unshare-pid --ro-bind / / --proc /proc --dev /dev` run.
+- `--cap-add SYS_ADMIN` and `--privileged` also work, but grant more than is needed.
+- calu's own `docker/dev.Dockerfile` installed bubblewrap but **not socat**, so even with the
+  namespace allowed the sandbox would have refused to start. Both are fixed: socat is installed
+  and the `dev` service carries `security_opt: [seccomp:unconfined]`.
+
+Verified afterwards in calu's own image: `docker compose run --rm --no-deps dev` has bwrap,
+socat, claude and git, and a real `bwrap --unshare-user --unshare-pid ...` runs inside it.
+
+**Conclusion.** Inside a container the sandbox needs `seccomp=unconfined` (plus bubblewrap and
+socat). That is a trade: the container's own seccomp is loosened so that the inner sandbox can
+exist. Where the container is already the boundary, what the inner sandbox still adds is the
+read denial for credentials, the PID namespace that hides the Claude Code process, and the
+cleanup of leftover processes — which is why it is worth having. What remains untested is what
+`sandbox.enableWeakerNestedSandbox` (`claude.sandbox.weaker_nested_sandbox`) changes: that needs
+a logged-in `claude` inside a container, which this machine cannot provide without copying the
+owner's credentials into it.

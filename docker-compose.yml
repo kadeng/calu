@@ -14,6 +14,14 @@ services:
       context: .
       dockerfile: docker/dev.Dockerfile
     working_dir: /work
+    # Docker's default seccomp profile blocks `unshare(CLONE_NEWUSER)`, so bubblewrap — and with
+    # it Claude Code's sandbox — cannot start inside a container without this (measured: PLAN.md
+    # Q1, spikes/RESULTS.md). It loosens the *container's* seccomp, not calu's own isolation, and
+    # it is the least of the options that work: `--cap-add SYS_ADMIN` and `--privileged` grant
+    # more, `apparmor=unconfined` does not help at all. This is the development system; a
+    # production host runs calu directly, where no such trade is needed.
+    security_opt:
+      - seccomp:unconfined
     volumes:
       - .:/work
       - dev-venv:/venv
