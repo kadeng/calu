@@ -454,6 +454,8 @@ class Session:
         self._git_branch_value: str | None = None
         self._git_branch_time = float("-inf")
         self.honesty_marks: list[HonestyMark] = []
+        self._honesty_sent: tuple[tuple[HonestyMarkInfo, ...], str] | None = None
+        """What the last `honesty.update` said, so an unchanged one is not sent again (D113)."""
         """The open marks of the project, reloaded when a checker changes them (PLAN.md D82).
         Empty while `honesty.mode` is "off", which is the default."""
         self.snapshot_root = snapshot_root or default_root()
@@ -683,25 +685,43 @@ class Session:
         Called after a `config_changed` notification, with which `clear_honesty_mark` announces
         itself.
 
-        Side effects: replaces `honesty_marks` and emits `honesty.update` when it changed.
-        Never raises: a failed read is reported by `_store_value` and the register stays as it
-        is, which is the safe direction -- a mark that is already cleared refuses one more step
-        rather than letting a dishonest one run.
+        Side effects: replaces `honesty_marks` and emits `honesty.update` when what a client
+        would see changed -- the marks **or** the mode. Never raises: a failed read is reported
+        by `_store_value` and the register stays as it is, which is the safe direction -- a mark
+        that is already cleared refuses one more step rather than letting a dishonest one run.
+
+        With the mode "off" the register is not read at all, because nothing enforces it; the
+        switch to "off" is still announced, since a client that was told "enforce" with three
+        marks would otherwise go on showing steps as blocked (D113).
         """
         if self.config.honesty.mode == "off":
+            await self._emit_honesty()
             return
         marks = await self._store_value(
             "reading the honesty register", self.store.open_honesty_marks()
         )
         if marks is None:
             return
-        before = {mark.id for mark in self.honesty_marks}
         self.honesty_marks = marks
-        if before == {mark.id for mark in marks}:
+        await self._emit_honesty()
+
+    async def _emit_honesty(self) -> None:
+        """Tell the clients the register and the mode, unless they already have both (D113).
+
+        Comparing the **rendered** state rather than the mark ids is what makes this right in
+        three cases the id comparison got wrong: a mark whose reason a checker refreshed (same
+        id, new text), a mark that moved to another branch, and a change of `honesty.mode`
+        alone, which is what a person does to unblock a session and which reached no client at
+        all.
+
+        Side effects: emits `honesty.update` and remembers what it sent.
+        """
+        payload = tuple(_mark_info(mark) for mark in self.honesty_marks)
+        mode = self.config.honesty.mode
+        if self._honesty_sent == (payload, mode):
             return
-        await self._emit_safely(
-            HonestyUpdate(marks=[_mark_info(mark) for mark in marks], mode=self.config.honesty.mode)
-        )
+        self._honesty_sent = (payload, mode)
+        await self._emit_safely(HonestyUpdate(marks=list(payload), mode=mode))
 
     async def reload_summary(self) -> None:
         """Read the chat summary again, in case an operator corrected it (PLAN.md D40).
@@ -3175,12 +3195,7 @@ class Session:
             parts.append("a write failed, so the register may be missing marks of this step")
         if parts:
             await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
-        await self._emit_safely(
-            HonestyUpdate(
-                marks=[_mark_info(mark) for mark in self.honesty_marks],
-                mode=self.config.honesty.mode,
-            )
-        )
+        await self._emit_honesty()
 
     async def _git_branch(self) -> str | None:
         """Return the branch of the workspace's git HEAD, cached like `_git_head`.

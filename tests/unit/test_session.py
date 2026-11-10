@@ -1554,3 +1554,49 @@ async def test_a_checker_cannot_mark_a_file_outside_the_project(tmp_path: Path):
     assert any("honesty: ignored" in message and "/etc/passwd" in message for message in said), (
         f"a dropped mark has to be visible, not silent: {said}"
     )
+
+
+async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_path: Path):
+    """D113: what a client shows is the marks *and* the mode, so both have to be announced.
+
+    The comparison was over mark ids alone. Switching `honesty.mode` to "off" -- which is what
+    a person does to unblock a session -- therefore reached no client at all: an editor kept
+    showing the marks as blocking. A reason a checker had refreshed went the same way, because
+    the mark keeps its id.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
+    session, rec, store = make_session(tmp_path, [], settings=settings)
+    await store.apply_honesty_marks(
+        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")], [], None
+    )
+    await session.reload_register()
+    first = rec.of(HonestyUpdate)[-1]
+    assert [info.reason for info in first.marks] == ["the docstring lies"]
+    assert first.mode == "enforce"
+
+    # Same mark, new reason: the id is unchanged, so an id comparison would stay silent.
+    await store.apply_honesty_marks(
+        [CodeMark(path="src/parser.py", symbol="fields", reason="and the name says nothing")],
+        [],
+        None,
+    )
+    await session.reload_register()
+    assert [info.reason for info in rec.of(HonestyUpdate)[-1].marks] == [
+        "and the name says nothing"
+    ], "a refreshed reason is what Claude and the reader see; it has to be sent"
+
+    # The mode alone changes: nothing about the marks did.
+    session.config = session.config.model_copy(
+        update={"honesty": session.config.honesty.model_copy(update={"mode": "off"})}
+    )
+    before = len(rec.of(HonestyUpdate))
+    await session.reload_register()
+    after = rec.of(HonestyUpdate)
+    assert len(after) == before + 1, "switching the mode off has to reach the clients"
+    assert after[-1].mode == "off"
+
+    # And it is sent once, not on every reload.
+    await session.reload_register()
+    assert len(rec.of(HonestyUpdate)) == before + 1
