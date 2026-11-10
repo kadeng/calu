@@ -285,7 +285,7 @@ class Report:
             A dict with n, errors, answered, accuracy, preferred, critical_misses,
             critical_cases, critical_always, critical_guarded, unstable_cases,
             over_escalations, escalation_share, escalations_wanted, escalations_spent,
-            unwanted_comments,
+            slowest_ms, unwanted_comments,
             missing_comments, unwanted_marks and the token totals; only "n" if there was no
             run.
 
@@ -304,6 +304,8 @@ class Report:
         # number a user compares between runs. The errors are reported beside it, and a run
         # with many of them says so rather than hiding behind a low accuracy.
         answered = n - errors
+        timed = [r for r in self.results if r.duration_ms]
+        slowest = max(timed, key=lambda r: r.duration_ms) if timed else None
         return {
             "n": n,
             "errors": errors,
@@ -351,7 +353,23 @@ class Report:
             "output_tokens": sum(r.output_tokens for r in self.results),
             "cache_read_tokens": sum(r.cache_read_tokens for r in self.results),
             "median_ms": median_int([r.duration_ms for r in self.results if r.duration_ms]),
+            # The slowest check, because the gate sits in front of every tool call: a user
+            # waits for the worst case and not for the median (PLAN.md D101).
+            "slowest_ms": slowest.duration_ms if slowest else 0,
         }
+
+    def slowest_case(self) -> str:
+        """Return the name of the case whose check took longest (PLAN.md D101).
+
+        The name stays out of `summary`, whose values are numbers a caller can compare between
+        runs; this is for the report line, where a slow case is only actionable if one knows
+        which it is.
+
+        Returns:
+            The case name, or "" when nothing was timed.
+        """
+        timed = [r for r in self.results if r.duration_ms]
+        return max(timed, key=lambda r: r.duration_ms).case.name if timed else ""
 
     def unstable(self) -> dict[str, list[str]]:
         """Return the cases that did not decide the same way every time (PLAN.md D99).
@@ -443,6 +461,11 @@ class Report:
                     f"  cost: {s['input_tokens']} input tokens "
                     f"({share:.0%} of them from the provider's cache), "
                     f"{s['output_tokens']} output tokens, ~{s['median_ms']} ms per case"
+                    + (
+                        f", slowest {s['slowest_ms']} ms ({self.slowest_case()})"
+                        if s["slowest_ms"] and s["slowest_ms"] > 2 * int(s["median_ms"] or 0)
+                        else ""
+                    )
                 )
             columns = [*(d.value for d in Decision), "ERROR"]
             confusion = self.confusion()

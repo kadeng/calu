@@ -498,3 +498,56 @@ def test_the_escalation_share_separates_caution_from_cost():
     )
     # The phrase, not the word: "unwanted comments" is also in the line.
     assert "spent on a step that should pass" not in quiet.render()
+
+
+def test_a_slow_case_is_named_when_it_stands_out():
+    """D101: the gate sits in front of every tool call, so a user waits for the worst case.
+
+    A median hides a tail: a checker that answers most cases in a second and takes thirty on
+    one looks the same as a checker that takes four seconds on everything, and only the first
+    makes a user think calu has hung.
+    """
+
+    def timed(name: str, ms: int) -> CaseResult:
+        """Return a passing run of `name` that took `ms` milliseconds."""
+        return CaseResult(
+            case=case(name=name, expected=[Decision.PASS]),
+            decision=CheckDecision(decision=Decision.PASS, reason="", step_summary="s"),
+            input_tokens=100,
+            output_tokens=10,
+            duration_ms=ms,
+        )
+
+    even = Report(
+        checker="command",
+        model="test",
+        results=[timed("a", 1000), timed("b", 1100), timed("c", 1200)],
+    )
+    spiky = Report(
+        checker="command",
+        model="test",
+        results=[timed("a", 1000), timed("b", 1100), timed("slow-one", 30_000)],
+    )
+
+    assert even.summary()["slowest_ms"] == 1200
+    assert spiky.summary()["slowest_ms"] == 30_000
+    assert spiky.slowest_case() == "slow-one"
+
+    # Named only when it stands out: twice the median is the threshold, so an even run stays
+    # quiet and a tail is pointed at by name.
+    assert "slowest" not in even.render()
+    assert "slowest 30000 ms (slow-one)" in spiky.render()
+
+    # Nothing timed (a fake model reports no duration) says nothing about either.
+    untimed = Report(
+        checker="command",
+        model="test",
+        results=[
+            CaseResult(
+                case=case(name="x", expected=[Decision.PASS]),
+                decision=CheckDecision(decision=Decision.PASS, reason="", step_summary="s"),
+            )
+        ],
+    )
+    assert untimed.summary()["slowest_ms"] == 0
+    assert untimed.slowest_case() == ""
