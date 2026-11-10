@@ -171,3 +171,24 @@ def test_a_checker_is_told_about_its_own_file_first():
     plain = register_note([other], marks_of_step(edit, [other], WORKSPACE))
     assert "This step's own code" not in plain
     assert "docs/api.md" in plain
+
+
+def test_the_paths_of_a_diff_are_read_from_its_headers():
+    """D88: a commit names no file, so the changeset checker is told from the diff."""
+    from calu.honesty import diff_paths
+
+    diff = """diff --git a/src/parser.py b/src/parser.py
+--- a/src/parser.py
++++ b/src/parser.py
+@@ -1,2 +1,2 @@
+-old
++new
+diff --git a/docs/old.md b/docs/new.md
+similarity index 90%
+rename from docs/old.md
+rename to docs/new.md
+"""
+    # The `b/` side: the file as it will be after the commit, so a rename gives the new name.
+    assert diff_paths(diff) == {"src/parser.py", "docs/new.md"}
+    assert diff_paths("") == set()
+    assert diff_paths("(no diff: the repository has no commit yet)") == set()

@@ -96,7 +96,13 @@ from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unche
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
 from calu.files import command_files
-from calu.honesty import HonestyMark, blocking_marks, marks_of_step, register_note
+from calu.honesty import (
+    HonestyMark,
+    blocking_marks,
+    diff_paths,
+    marks_of_step,
+    register_note,
+)
 from calu.models import resolve_model
 from calu.protocol.messages import (
     AgentInfo,
@@ -2255,13 +2261,8 @@ class Session:
                     source="honesty",
                     rules=rules,
                 )
-            # Not blocked deterministically, but the checkers have to know: a command that
-            # names no path at all (`make test`) is theirs to judge (§13.4).
-            note = register_note(
-                self.honesty_marks, marks_of_step(step, self.honesty_marks, self.workspace)
-            )
-            if note:
-                step = step.model_copy(update={"notes": [*step.notes, note]})
+            # The note itself is attached after the route is final, because a commit names no
+            # file in its command and has to be told about the files in its diff (D88).
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
             route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
         if route is Route.ALLOW and step.tool_name == "SendMessage" and not self._own_agent(step):
@@ -2304,6 +2305,22 @@ class Session:
                 diff = await self._changeset(command)
                 if step.tool_use_id:
                     self._changesets[step.tool_use_id] = diff
+        if self.config.honesty.mode != "off" and self.honesty_marks:
+            # Not blocked deterministically, but the checkers have to know: a command that
+            # names no path at all (`make test`) is theirs to judge, and a commit has to be
+            # told which of the files it records are dishonest (§13.4, D88).
+            own = marks_of_step(step, self.honesty_marks, self.workspace)
+            if diff:
+                touched = diff_paths(diff)
+                seen = {mark.mark().key() for mark in own}
+                own = own + [
+                    mark
+                    for mark in self.honesty_marks
+                    if mark.open and mark.path in touched and mark.mark().key() not in seen
+                ]
+            note = register_note(self.honesty_marks, own)
+            if note:
+                step = step.model_copy(update={"notes": [*step.notes, note]})
         if route is Route.EDIT:
             await self._emit_edit_diff(step)
         if pending is not None:

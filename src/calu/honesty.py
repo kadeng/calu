@@ -199,6 +199,31 @@ def marks_of_step(step: Step, marks: Sequence[HonestyMark], workspace: Path) -> 
     return [entry for entry in marks if entry.open and entry.path in named]
 
 
+def diff_paths(diff: str) -> set[str]:
+    """Return the project-relative paths a `git diff` text touches (PLAN.md D88).
+
+    A commit names no file in its command, so this is how the changeset checker is told which
+    of the files it is about to record are in the register. Only the `diff --git a/x b/x`
+    headers are read, and the `b/` side is taken, because that is the file as it will be after
+    the commit (a rename's `a/` side no longer exists).
+
+    Args:
+        diff: The diff as `git diff` prints it; may be empty or a placeholder.
+
+    Returns:
+        The paths, project-relative with forward slashes. Empty when the text has no diff
+        headers.
+    """
+    found: set[str] = set()
+    for line in diff.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split(" b/", 1)
+        if len(parts) == 2 and parts[1].strip():
+            found.add(parts[1].strip())
+    return found
+
+
 def register_note(
     marks: Sequence[HonestyMark], own: Sequence[HonestyMark] = (), limit: int = 20
 ) -> str:
