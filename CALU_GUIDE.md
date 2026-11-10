@@ -233,10 +233,22 @@ and keeps everything that makes it work:
 
 - its models, its tools, its own permission rules and settings files;
 - its skills, its subagents, its slash commands;
-- its **plugins and MCP servers** — calu runs the real Claude Code and loads the project's
-  settings, so what works in your `claude` session works in a calu session
-  (`claude.setting_sources` decides which setting sources are loaded);
+- its **plugins and MCP servers** — calu runs the real Claude Code, so what the project
+  configures works in a calu session;
 - its sandbox for Bash commands, which calu switches on and tightens rather than replaces.
+
+**Which settings files are read** is worth knowing exactly, because the default is narrower
+than an interactive `claude`: `claude.setting_sources` is `["project"]`, so calu reads the
+project's `.claude/settings.json` and **not** your personal `~/.claude/settings.json` or
+`.claude/settings.local.json`. Two reasons. A herd runs the same project on several machines and
+should behave the same on all of them; and a permission rule in a personal settings file would
+widen what Claude Code approves by itself, which is the decision a checker's PASS defers to —
+so a file calu cannot see cannot weaken the pair. If you want your own settings in the session,
+say so:
+
+```bash
+calu config set claude.setting_sources '["user", "project", "local"]'
+```
 
 calu changes none of those rules and does not even set the permission mode: Claude Code's own
 default is the auto mode, and calu leaves that choice with you. It only adds a layer in front of

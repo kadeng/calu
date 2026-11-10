@@ -5,9 +5,10 @@
 ## A coding agent that wraps Claude Code and checks every step while it runs
 
 calu starts Claude Code for you and puts a second opinion in front of every command it runs and
-every file it edits. It is a layer on top of Claude Code, not a replacement: everything Claude
-Code does — its tools, its permission rules, its plugins, its MCP servers — keeps working
-([details in the guide](CALU_GUIDE.md#calu-does-not-replace-claude-code)).
+every file it edits. It is a layer on top of Claude Code, not a replacement: its tools, its
+permission rules, its plugins, its MCP servers, its skills and subagents all keep working, as
+the project configures them ([which settings files are read, and
+why](CALU_GUIDE.md#calu-does-not-replace-claude-code)).
 
 That second opinion comes from **checker agents**: LLMs that you steer with your own
 instructions. Each checker answers one of four things:
