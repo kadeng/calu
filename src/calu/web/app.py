@@ -642,6 +642,9 @@ async def escalation_page(request: Request, state: _State) -> Response:
             "recent": str(context.get("recent") or ""),
             "files": context.get("files") or {},
             "changeset": str(context.get("changeset") or ""),
+            # What each checker decided, which the escalation's own reason does not say when a
+            # category held the step back (D42, D53).
+            "runs": await herd.escalation_runs(state.db, escalation_id),
         },
     )
 

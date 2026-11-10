@@ -95,7 +95,7 @@ async def main(args: argparse.Namespace) -> int:
     url = make_conninfo("", **params)
     settings = {
         "claude": {
-            "sandbox": {"enabled": args.sandbox},
+            "sandbox": {"enabled": args.sandbox, "allowed_domains": list(args.allow)},
             "model": args.model,
             "stream_partial": False,
         },
@@ -153,6 +153,14 @@ parser.add_argument(
 )
 parser.add_argument("--resolve", choices=["allow", "deny"], help="play the operator")
 parser.add_argument("--sandbox", action="store_true", help="switch the sandbox on (needs socat)")
+parser.add_argument(
+    "--allow",
+    action="append",
+    default=[],
+    metavar="DOMAIN",
+    help="a domain the sandboxed commands may reach (repeatable); with --sandbox this is the"
+    " allow list of the 'proxy' network policy, so everything else is blocked",
+)
 parser.add_argument(
     "--changes",
     action="store_true",

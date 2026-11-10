@@ -206,6 +206,23 @@ async def test_an_escalation_can_be_resolved_from_the_page(db_url: str) -> None:
 
             detail = (await client.get(f"/escalations/{escalation}")).text
             assert "## Step" in detail and "## Turn 1" in detail
+            # A rules escalation has no checker run, so the page says nothing about checkers
+            # rather than showing an empty table.
+            assert "What the checkers decided" not in detail
+
+            # Once a checker has judged the step -- which is the normal case, and the only
+            # source of truth when a category held an approved step back (D42, D53) -- the page
+            # shows what it decided and why.
+            await db.execute(
+                "INSERT INTO checker_runs"
+                " (step_id, checker_name, checker_version, model, decision, reason)"
+                " SELECT e.step_id, 'command', 2, 'test:model', 'pass', 'nothing to object to'"
+                " FROM escalations e WHERE e.id = %s",
+                (escalation,),
+            )
+            judged = (await client.get(f"/escalations/{escalation}")).text
+            assert "What the checkers decided" in judged
+            assert "command v2" in judged and "nothing to object to" in judged
 
             answered = await client.post(
                 f"/escalations/{escalation}/resolve", data={"decision": "deny", "note": "no"}

@@ -21,6 +21,23 @@
   <button class="danger" name="decision" value="deny">Deny</button>
 </form>
 {% endif %}
+{% if runs %}
+<h2>What the checkers decided</h2>
+<table>
+  <thead><tr><th>Checker</th><th>Model</th><th>Decision</th><th>Reason</th></tr></thead>
+  <tbody>
+  {% for run in runs %}
+    <tr>
+      <td class="mono">{{ run.checker_name }} v{{ run.checker_version }}</td>
+      <td class="muted mono">{{ run.model }}</td>
+      <td><span class="decision {{ run.decision }}">{{ run.decision }}</span></td>
+      <td>{{ run.reason }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <h2>The step, as the checker saw it</h2>
 <pre>{{ rendered }}</pre>
 {% if changeset %}<h2>The change that would be committed</h2><pre>{{ changeset }}</pre>{% endif %}
