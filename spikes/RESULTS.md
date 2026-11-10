@@ -605,8 +605,19 @@ files will break it silently at build time. So the recipe and the CI job now exi
 the choice of whether to publish the binary beside the wheel is the owner's, with the numbers in
 hand instead of my guess.
 
-**Re-run when** a dependency is added or pydantic-ai is updated -- that is what the `binary` job
-of `release.yml` does on every tag.
+**Verified in CI on both architectures** (2026-11-10, a manual run of `release.yml`): the
+`binary` jobs build **and run** the result on `ubuntu-latest` and on `ubuntu-24.04-arm` --
+65 MiB in 73 s for x86_64, 68 MiB in 91 s for arm64 -- and the `publish` job is skipped, because
+only a tag publishes. REQUIREMENTS 3 is Linux, so those two are the architectures that matter; a
+binary cannot be cross-built here, since the script runs what it builds.
+
+The first manual run failed on both runners with "Permission denied": `core.fileMode` is false
+in the maintainer's checkout, so `chmod +x` never reached git. `scripts/get-browser.sh` had the
+same problem since it was added, and `docs/TESTING.md` tells people to run it directly.
+
+**Re-run when** a dependency is added or pydantic-ai is updated -- that is what the `binary`
+jobs of `release.yml` do on every tag. A manual run from the Actions tab checks the whole
+workflow without releasing anything.
 
 ## What `claude sandbox status` can and cannot answer (Q1, 2026-11-10)
 

@@ -373,7 +373,8 @@ Everything else is either built or recommended with its reasons. These need a pe
   (`calu config add claude.sandbox.allowed_domains <domain> --project <p>`).
 - **Q15 — publishing the binary** (D41, built): `scripts/build-binary.sh` makes a 70 MiB
   one-file `calu` and `release.yml` builds and runs it on every tag. To decide: whether a
-  release publishes it beside the wheel, and for which platforms (each is its own runner).
+  release publishes them beside the wheel. Both Linux architectures are built and run in CI
+  already (x86_64 65 MiB, arm64 68 MiB), verified by a manual run of the workflow.
 - **Publishing at all**: the PyPI project with a trusted publisher and the `pypi` GitHub
   environment, both of which only you can create (next step 2).
 - **Q9 — a training mode**: recommended **against**. Every resolved escalation is already a
