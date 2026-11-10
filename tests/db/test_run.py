@@ -5,6 +5,9 @@ from pathlib import Path
 
 import anyio
 import pytest
+from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.models import Model
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from calu.claude import FakeRunner, FakeScript
 from calu.config import SETTINGS_KEY
@@ -13,7 +16,7 @@ from calu.db import connect as connect_db
 from calu.protocol.client import connect as connect_client
 from calu.run import RunOptions, run_session
 from calu.setup import setup
-from calu.testing import fake_models
+from calu.testing import _last_prompt, _rule_based, fake_models
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -230,3 +233,122 @@ async def test_the_session_credential_is_wiped_before_claude_starts(
         assert (await cur.fetchone()) == (1,)
     finally:
         await owner.close()
+
+
+def one_turn(command: str) -> FakeScript:
+    """Return a script with a single turn that runs `command`.
+
+    Args:
+        command: What the fake Claude runs in that turn.
+
+    Returns:
+        The script; one run of `calu run --print` consumes one turn.
+    """
+    return FakeScript(
+        turns=[
+            [
+                {"text": f"Running {command}."},
+                {"tool": "Bash", "input": {"command": command}, "result": "ok"},
+            ]
+        ]
+    )
+
+
+async def test_the_checkers_still_see_the_conversation_after_two_resumes(
+    db_url: str, tmp_path: Path
+) -> None:
+    """D65 end to end: four runs of one conversation, the last reading the second's fold.
+
+    The shape that used to lose everything older is a resume that folds nothing: the third run
+    leaves a session with turns and no summary behind, and the fourth run read that session
+    alone -- so the summary came back empty and the turns before it were never read again.
+    """
+    session_url = await prepare(db_url, tmp_path)
+
+    async def configure(fold_every: int) -> None:
+        """Set how many unfolded turns trigger a fold."""
+        owner = await connect(db_url)
+        try:
+            await owner.execute(
+                "UPDATE config SET value = %s WHERE key = %s",
+                (
+                    json.dumps(
+                        {
+                            "claude": {"sandbox": {"enabled": False}},
+                            "context": {"fold_every": fold_every, "fold_count": 1},
+                        }
+                    ),
+                    SETTINGS_KEY,
+                ),
+            )
+        finally:
+            await owner.close()
+
+    prompts: list[str] = []
+
+    def recording_models() -> dict[str, str | Model]:
+        """Fake models whose command checker keeps every prompt it was given."""
+
+        def record(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            """Record the prompt, then decide as the rule-based checker would.
+
+            Args:
+                messages: The message history.
+                info: Agent information, passed on.
+
+            Returns:
+                The rule-based checker's response.
+            """
+            prompts.append(_last_prompt(messages))
+            return _rule_based(messages, info)
+
+        models = fake_models()
+        models["command"] = FunctionModel(record, model_name="recording-checker")
+        return models
+
+    async def run(command: str, resume: bool) -> int:
+        """Run one session of the conversation, which runs `command` in its single turn."""
+        return await run_session(
+            session_url,
+            RunOptions(
+                workspace=tmp_path,
+                prompt="go on",
+                interactive=False,
+                resume_id="fake-session" if resume else None,
+            ),
+            runner_factory=lambda workspace, _c, _h: FakeRunner(one_turn(command), workspace),
+            checker_models=recording_models(),
+        )
+
+    async def stored_summary() -> tuple[str, int]:
+        """Return the newest stored summary and the turn number it covers."""
+        owner = await connect(db_url)
+        try:
+            cur = await owner.execute(
+                "SELECT summary, covered_turns FROM chat_summaries ORDER BY covered_turns DESC"
+            )
+            rows = await cur.fetchall()
+        finally:
+            await owner.close()
+        return (rows[0][0], rows[0][1]) if rows else ("", 0)
+
+    # Two turns, one per run, and a fold as soon as two are unfolded: the second run folds the
+    # first turn into the summary.
+    await configure(fold_every=2)
+    assert await run("deploy one", resume=False) == 0
+    assert await run("deploy two", resume=True) == 0
+    summary_text, covered = await stored_summary()
+    assert covered == 1, "the second run was supposed to fold the first turn"
+
+    # From here on nothing folds, which is the normal case (the default is every 30 turns), so
+    # the third run leaves turns without a summary behind.
+    await configure(fold_every=30)
+    assert await run("deploy three", resume=True) == 0
+    prompts.clear()
+    assert await run("deploy four", resume=True) == 0
+
+    assert prompts, "the checker never ran in the fourth session"
+    seen = "\n".join(prompts)
+    assert summary_text in seen, "the summary of the fold two sessions ago was lost"
+    assert "deploy two" in seen, "the turn recorded by the second session was lost"
+    assert "deploy three" in seen, "the turn recorded by the third session was lost"

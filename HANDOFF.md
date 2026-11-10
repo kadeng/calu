@@ -45,8 +45,8 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**592 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 151 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
+**593 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 152 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 16 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -354,6 +354,12 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    time in this)` and `1 escalation(s) answered, after ~45 s of waiting for a person`. The
    escalated step is counted as checked but left out of the delay, which is the point of
    measuring the two separately.
+17. **A resumed conversation end to end** (D65, D67): four runs of one conversation against the
+   test database with a fake Claude and a recording checker (`tests/db/test_run.py`), the fold
+   happening in the second run and nothing folding afterwards. Without the fix the fourth run's
+   checker prompt said "No turns have been folded into this summary yet" -- the summary and the
+   two turns before it were gone; with it the prompt carries the real summary and both turns.
+   The same runs showed the heartbeat failing at every session start, which D67 fixes.
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,

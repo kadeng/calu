@@ -926,6 +926,16 @@ async def test_the_session_beats_until_it_is_cancelled(tmp_path: Path) -> None:
         await session.beat(0)
     assert store.heartbeats == before
 
+    # The first beat waits one interval: `calu run` starts the loop before the session row
+    # exists, and beating at once made every session report a failed heartbeat.
+    fresh, _rec, store = make_session(tmp_path, [])
+    with anyio.move_on_after(1):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(fresh.beat, 5.0)
+            await anyio.sleep(0.05)
+            assert store.heartbeats == 0, "the heartbeat ran before the session row existed"
+            tg.cancel_scope.cancel()
+
 
 async def test_a_failing_heartbeat_is_reported_and_the_loop_goes_on(tmp_path: Path) -> None:
     """Losing the stamp is not a reason to stop a session that is otherwise fine."""

@@ -942,6 +942,13 @@ class Session:
         Runs until cancelled; a failed heartbeat is logged and the loop goes on, because losing
         the stamp is not a reason to stop a session that is otherwise fine.
 
+        The first heartbeat is due one interval after the start, not at once: `calu run` starts
+        this loop before the session row exists (the row is created by `start`, which needs the
+        connection the loop would be using), and `sessions.last_seen` is stamped when the row
+        is inserted, so there is nothing to refresh yet. Beating straight away instead made
+        every single session log an error and tell the user its heartbeat had failed, which was
+        both wrong and alarming.
+
         Args:
             interval_s: Seconds between heartbeats; a value of 0 or less returns at once, which
                 switches the heartbeat off with `clock.check_interval_s = 0`.
@@ -952,6 +959,7 @@ class Session:
         if interval_s <= 0:
             return
         while True:
+            await anyio.sleep(interval_s)
             try:
                 await self.store.heartbeat()
             except Exception:
@@ -962,7 +970,6 @@ class Session:
                         message="the heartbeat failed; the fleet view may call this session stale",
                     )
                 )
-            await anyio.sleep(interval_s)
 
     async def clock_jumped(self, jump: ClockJump) -> None:
         """React to a move of the wall clock that `calu.clock.ClockWatch` detected (D32).
