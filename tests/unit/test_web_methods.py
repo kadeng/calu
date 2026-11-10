@@ -75,3 +75,35 @@ def test_every_protocol_method_is_either_offered_to_a_browser_or_withheld_on_pur
     assert not (set(WITHHELD) & LIVE_METHODS), "a method cannot be both withheld and offered"
     stale = sorted(set(WITHHELD) - dispatched_methods())
     assert stale == [], f"WITHHELD names methods the protocol no longer has: {stale}"
+
+
+def test_calu_web_refuses_a_reachable_address_before_asking_for_a_password(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one wiring of `calu web` worth a test: which interface it binds (D121).
+
+    The web interface has no login, so binding a reachable address hands everything the `admin`
+    credential can do to whoever finds the port. The refusal has to come **before** the
+    credential is read, or a user who mistyped `--host` is first asked for a password and then
+    refused -- and `calu web` was the only command no test ran at all.
+    """
+    from calu import cli
+    from calu.credentials import CredentialStore
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", "postgresql://admin@localhost/calu", None)
+    asked: list[str] = []
+    monkeypatch.setattr(cli, "read_password", lambda *a, **k: asked.append("asked") or bytearray())
+
+    for host in ("0.0.0.0", "192.168.1.10", "::", "example.com"):
+        code = cli.main(["web", "--host", host], store_factory=lambda: store)
+        said = capsys.readouterr().err
+        assert code == 1, f"{host} was accepted"
+        assert "127.0.0.1" in said or "not an IP address" in said, said
+    assert asked == [], "the address is checked before a password is asked for"
+
+    # A loopback address passes the check; it is not served here, because that would block.
+    from calu.web.app import check_host
+
+    check_host("127.0.0.1")
+    check_host("::1")
