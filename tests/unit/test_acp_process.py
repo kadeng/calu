@@ -255,20 +255,28 @@ async def test_calu_acp_carries_a_denial_and_replays_a_loaded_session(tmp_path: 
                 )
                 loaded = await editor.read_until(lambda m: m.get("id") == fourth)
                 assert "error" not in loaded, loaded
+                # Compared by position, not by identity: a replayed chunk is often
+                # byte-identical to the one sent during the prompt, so `list.index` would find
+                # the earlier copy and compare the wrong thing.
+                tail = list(enumerate(editor.lines))[before:]
+                result_at = next(
+                    position for position, message in tail if message.get("id") == fourth
+                )
                 replayed = [
-                    message
-                    for message in editor.lines[before:]
+                    (position, message)
+                    for position, message in tail
                     if message.get("method") == "session/update"
                 ]
                 assert replayed, "session/load sent no history"
                 # The replay carries the conversation: the user's own message and Claude's
                 # answer, in the shapes an editor renders as chat.
-                shapes = {message["params"]["update"].get("sessionUpdate") for message in replayed}
+                shapes = {
+                    message["params"]["update"].get("sessionUpdate") for _p, message in replayed
+                }
                 assert {"user_message_chunk", "agent_message_chunk"} <= shapes, shapes
-                text = json.dumps(replayed)
+                text = json.dumps([message for _p, message in replayed])
                 assert "deploy it" in text, "the user's own message belongs in the replay"
-                index_of_result = editor.lines.index(loaded)
-                assert all(editor.lines.index(message) < index_of_result for message in replayed), (
+                assert all(position < result_at for position, _m in replayed), (
                     "the specification requires the replay before the result"
                 )
         finally:
