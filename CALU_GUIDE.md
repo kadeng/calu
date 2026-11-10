@@ -205,6 +205,13 @@ no reason. So:
 - no marks at all after a week of real work: either the codebase is honest, which is worth
   knowing, or the checker is not running (`calu checker list` shows whether it is enabled).
 
+A mark can also go stale, and the listing says so: `<stale: the file is gone>` when nothing
+can run that code any more, and `<stale: made on feature/x, now on main>` when the mark comes
+from another branch, where the file may be a different file. Neither is acted on -- an open
+mark still blocks -- because clearing somebody's mark on a guess is worse than naming it. Both
+are checked against the machine the command runs on, so running it elsewhere flags nothing
+rather than flagging the wrong thing.
+
 `calu honesty list --all` names the checker that opened each mark, which matters once more
 than one checker writes to the register -- honesty, security and an over-engineering checker can
 all run on the same edit (see the note on several checkers per route in PLAN.md §13.5).

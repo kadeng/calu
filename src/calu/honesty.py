@@ -69,18 +69,57 @@ class HonestyMark:
         """
         return f"{self.path}:{self.symbol}" if self.symbol else self.path
 
-    def line(self) -> str:
+    def stale(self, workspace: Path | None = None, branch: str | None = None) -> str:
+        """Say why this mark looks stale, if it does (PLAN.md D91).
+
+        An open mark blocks every command that would run its code, so a mark that cannot be
+        right any more is pure obstruction. Two cases are recognisable without a model:
+
+        - the **file is gone**: nothing can run it, so the mark only blocks commands that
+          mention the path, and the checker that would clear it will never see that file again;
+        - the mark was made on **another branch**: the file there may be a different file, which
+          is the half of Q19 that does not need the owner's decision -- it is reported, not
+          acted on.
+
+        Args:
+            workspace: The project root, to look for the file; None skips that check.
+            branch: The branch the project is on now; None skips that check.
+
+        Returns:
+            A short phrase for the report, or "" when nothing looks wrong. A closed mark is
+            never stale: it blocks nothing.
+        """
+        if not self.open:
+            return ""
+        reasons: list[str] = []
+        if workspace is not None and not (workspace / self.path).exists():
+            reasons.append("the file is gone")
+        if branch and self.git_branch and branch != self.git_branch:
+            reasons.append(f"made on {self.git_branch}, now on {branch}")
+        return "; ".join(reasons)
+
+    def line(self, workspace: Path | None = None, branch: str | None = None) -> str:
         """Render the mark as one terminal line.
+
+        Args:
+            workspace: The project root, so that a mark whose file is gone can be flagged;
+                None leaves that unchecked.
+            branch: The branch the project is on now, so that a mark from another branch can
+                be flagged; None leaves that unchecked.
 
         Returns:
             The spot, the branch, which checker opened it, the reason and -- for a closed mark
             -- who closed it. The author is named because several checkers may write to the
             register (PLAN.md D87), so "which of them thinks this" is part of reading a mark.
+            A mark that looks stale says why (`stale`), because an open mark that cannot be
+            right any more only costs the user steps (D91).
         """
         state = "" if self.open else f"  (closed by {self.closed_by or 'somebody'})"
-        branch = f"  [{self.git_branch}]" if self.git_branch else ""
+        branch_part = f"  [{self.git_branch}]" if self.git_branch else ""
         author = f"  ({self.opened_by})" if self.opened_by else ""
-        return f"{self.label()}{branch}{author}: {self.reason}{state}"
+        why = self.stale(workspace, branch)
+        flag = f"  <stale: {why}>" if why else ""
+        return f"{self.label()}{branch_part}{author}: {self.reason}{state}{flag}"
 
     def mark(self) -> CodeMark:
         """Return this entry as the mark a checker would have written.

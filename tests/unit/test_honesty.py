@@ -257,3 +257,35 @@ def test_a_module_that_is_dirty_blocks_the_command(tmp_path: Path):
         tool_name="Bash", tool_input={"command": "python -m something_else"}, cwd=str(tmp_path)
     )
     assert blocking_marks(other, marks, tmp_path) == []
+
+
+def test_a_mark_that_cannot_be_right_any_more_is_flagged(tmp_path: Path):
+    """D91: an open mark blocks commands, so a stale one only costs the user steps."""
+    root = workspace(tmp_path)
+
+    # A mark on a file that is there, on this branch: nothing to say.
+    here = mark("src/parser.py", "fields", git_branch="main")
+    assert here.stale(root, "main") == ""
+    assert "<stale" not in here.line(root, "main")
+
+    # The file is gone: nothing can run it, and no checker will see it again to clear it.
+    gone = mark("src/deleted.py", reason="the docstring lies", git_branch="main")
+    assert gone.stale(root, "main") == "the file is gone"
+    assert "<stale: the file is gone>" in gone.line(root, "main")
+
+    # Made on another branch: the file here may be a different file (Q19).
+    elsewhere = mark("src/parser.py", git_branch="feature/x")
+    assert "made on feature/x, now on main" in elsewhere.stale(root, "main")
+
+    # Both at once, in one phrase.
+    both = mark("src/deleted.py", git_branch="feature/x")
+    assert both.stale(root, "main") == "the file is gone; made on feature/x, now on main"
+
+    # Not knowable is not reported: no workspace, no branch, or a mark without a branch.
+    assert gone.stale(None, "main") == ""
+    assert elsewhere.stale(root, None) == ""
+    assert mark("src/parser.py").stale(root, "main") == ""
+
+    # A closed mark blocks nothing, so it is never stale however old it is.
+    closed = mark("src/deleted.py", closed_at=NOW, closed_by="kai", git_branch="feature/x")
+    assert closed.stale(root, "main") == ""

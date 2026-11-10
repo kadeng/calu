@@ -1462,6 +1462,30 @@ def _edit_rule_list(args: argparse.Namespace, store: CredentialStore) -> None:
         wipe(url)
 
 
+def _git_branch(workspace: Path) -> str | None:
+    """Return the branch the workspace is on, for flagging a mark from another branch (D91).
+
+    Args:
+        workspace: The directory to ask about.
+
+    Returns:
+        The branch name, or None if this is not a git repository or git is not there. None
+        means "not knowable", and nothing is flagged on its account.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
+        return None
+    return done.stdout.strip() or None if done.returncode == 0 else None
+
+
 def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
     """List the honesty register, or clear one mark by hand (PLAN.md D82, D83).
 
@@ -1510,7 +1534,20 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
             )
         standing = sum(1 for mark in marks if mark.open)
         head = f"{standing} open mark(s)" + (f" of {len(marks)} listed" if args.all else "")
-        return "\n".join([head, *(f"  {mark.id}  {mark.line()}" for mark in marks)])
+        # The workspace and the branch of *this* machine, so that a mark whose file is gone or
+        # that was made on another branch is flagged as stale (D91). An operator running this
+        # elsewhere sees no flag rather than a wrong one, because then neither is knowable.
+        here = Path.cwd()
+        branch = _git_branch(here)
+        lines = [f"  {mark.id}  {mark.line(here, branch)}" for mark in marks]
+        stale = sum(1 for mark in marks if mark.stale(here, branch))
+        if stale:
+            lines.append(
+                f"{stale} mark(s) look stale: an open mark blocks every command that would run "
+                "its code, so one that cannot be right any more only costs steps. Clear it with "
+                "`calu honesty clear <id>` once you agree."
+            )
+        return "\n".join([head, *lines])
 
     if args.action == "clear":
         if args.target is None:
