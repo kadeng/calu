@@ -57,16 +57,29 @@ there.
   `calu.configdoc`; `tests/unit/test_configdoc.py` fails when the file and the model
   disagree, or a field has no docstring), `docs/TESTING.md` for the four layers and the
   manual checklist, `PLAN.md` for the decisions, `AGENTS.md` for the rules.
-- **CLI** (`src/calu/cli.py`): `db up|down|migrate`, `setup`, `credential list|set|remove|new`,
-  `run`, `attach`, `protocol`, `sessions`, `escalations`, `resolve`, `evals`, `project`,
-  `config`, `checker`, `rules`. Passwords via getpass, or one line each from stdin when stdin is
-  not a terminal (tests use that).
+- **CLI** (`src/calu/cli.py`), 20 commands: `db up|down|migrate`, `setup`,
+  `credential list|set|remove|new`, `run`, `attach`, `acp`, `web`, `protocol`, `sessions`,
+  `escalations`, `escalation`, `resolve`, `token`, `summary`, `doctor`, `evals`, `project`,
+  `config get|set|unset|add|remove`, `checker`, `rules`. Passwords via getpass, or one line
+  each from stdin when stdin is not a terminal (tests use that). The read-and-resolve commands
+  prefer the `operator` credential and fall back to `admin` (D48); everything that changes the
+  configuration needs `admin`. Every `calu ...` line in the documentation is parsed by a test
+  (`tests/unit/test_documented_commands.py`), and every command is documented.
 - **`calu run [DIR]`** (`src/calu/run.py`): password → decrypt the `session` credential → two
   connections (queries, notifications) → wipe the credential → load the settings → create the
-  `sessions` row → start Claude Code → serve the protocol and print the address and a client
-  token. `-p/--prompt`, `--batch` (ends when Claude is done **and** no client is attached),
+  `sessions` row through `calu_start_session` and take it over with `calu.session_id` (D49) →
+  start Claude Code → serve the protocol and print the address and a client token. `-p/--prompt`, `--batch` (ends when Claude is done **and** no client is attached),
   `--resume`, `--model`, `--effort`, `--project`, `--thinking`. Reloads the configuration on
   `config_changed`; continues at once on `escalation_resolved`.
+- **Isolation of a session's rows** (migration 0015, D49): the `calu_session` login reads and
+  writes only the rows that carry its own session id, with three owner-side functions for what
+  a policy cannot do (`calu_start_session`, `calu_recent_sessions`, `calu_conversation_sessions`
+  plus `calu_same_conversation` for a resumed or forked conversation). The owner is unaffected;
+  `calu_operator` reads everything.
+- **Packaging**: the wheel (`uv tool install`), and `scripts/build-binary.sh` for a single-file
+  binary that `release.yml` builds and runs on x86_64 and arm64 for every tag (D41, Q15).
+- **CI**: `.github/workflows/checks.yml` (lint, types, unit + database, browser, the installed
+  wheel) and `release.yml` (wheel, both binaries, and a publish step that only a tag reaches).
 - **Session** (`src/calu/session.py`, ported from sitl): tool gate, escalations, narration, chat
   queue, comments, subagent result review, login hint, states of `PLAN.md` §3.1 derived from
   what runs. `apply_settings` applies a reloaded configuration from the next step on.
