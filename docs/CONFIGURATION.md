@@ -14,7 +14,11 @@ calu config unset claude.model                   # back to the default below
 calu config set claude.model opus --project demo # the project's scope instead of the global one
 ```
 
-A project's scope overrides the global one, and both override the defaults listed here. The web
+A project's scope overrides the global one, and both override the defaults listed here. The
+four `*_checker` groups have one more source below them: the checker definition
+(`calu checker set <name> --model ...`) provides the model and the limits, and a value set here
+overrides it -- so `calu config set command_checker.model` wins over the definition's own
+model, per checker field. The web
 interface has the same settings as a form (`calu web`, "Settings"). A running session applies a
 change at its next step; what Claude Code reads when it starts -- its model, effort and
 permission mode -- applies to the next session.

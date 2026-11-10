@@ -528,11 +528,19 @@ def build_config(
 ) -> Config:
     """Build the configuration from database values.
 
+    A checker definition carries a model and limits of its own (`calu checker set --model`),
+    and so does the configuration (`calu config set command_checker.model`). **The
+    configuration wins**, because that is the layer a project overrides: the definition's
+    values come first as the default, and the global and then the project settings are merged on
+    top. Before 2026-11-10 it was the other way round, which made `calu config set
+    command_checker.model` -- documented in the README and offered by the web interface's
+    settings form -- silently do nothing.
+
     Args:
         layers: Partial configurations in increasing precedence (global, then project).
         checker_rows: (name, model, request_limit, output_tokens_limit, max_tokens) of the
-            enabled checker types. "command", "edit" and "subagent-result" set the checker
-            fields of `Config`; "narrator" sets `context.narrator_model`; other names are
+            enabled checker types. "command", "edit" and "subagent-result" fill the checker
+            fields of `Config`; "narrator" fills `context.narrator_model`; other names are
             ignored here.
 
     Returns:
@@ -542,8 +550,6 @@ def build_config(
         pydantic.ValidationError: If the merged values do not match `Config`.
     """
     merged: dict[str, Any] = {}
-    for layer in layers:
-        merged = merge_settings(merged, layer)
     for name, model, request_limit, output_tokens_limit, max_tokens in checker_rows:
         if name in CHECKER_FIELDS:
             merged = merge_settings(
@@ -559,6 +565,8 @@ def build_config(
             )
         elif name == "narrator":
             merged = merge_settings(merged, {"context": {"narrator_model": model}})
+    for layer in layers:
+        merged = merge_settings(merged, layer)
     return Config.model_validate(merged)
 
 
