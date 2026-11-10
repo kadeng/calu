@@ -21,6 +21,34 @@ pytestmark = pytest.mark.anyio
 TIMEOUT_S = 40
 
 
+async def _wait_until_connectable(address: str) -> None:
+    """Wait until the session's address really accepts a connection.
+
+    `SessionServer.ready` is set once the socket is bound, which should be enough -- but this
+    test failed once in CI with an empty stdout, the symptom of a child whose connect was
+    refused, and a flaky test is worth less than no test. Connecting from here first turns any
+    remaining window into a wait instead of a failure, and if the port never accepts, the
+    message says so about the harness rather than about `calu attach`.
+
+    Args:
+        address: The `ws://host:port` address the session recorded.
+
+    Raises:
+        AssertionError: If the port does not accept within ten seconds.
+    """
+    host, _, port = address.removeprefix("ws://").partition(":")
+    with anyio.move_on_after(10):
+        while True:
+            try:
+                stream = await anyio.connect_tcp(host, int(port))
+            except OSError:
+                await anyio.sleep(0.05)
+                continue
+            await stream.aclose()
+            return
+    pytest.fail(f"the session's own address {address} never accepted a connection")
+
+
 async def _read_until(
     process: object, wanted: str, collected: list[str], errors: Path | None = None
 ) -> str:
@@ -66,6 +94,7 @@ async def test_attach_prints_the_state_takes_a_prompt_and_detaches(tmp_path: Pat
     async with served(tmp_path, turns) as run:
         environment = dict(os.environ)
         environment["PYTHONUNBUFFERED"] = "1"
+        await _wait_until_connectable(run.address)
         errors = tmp_path / "attach-stderr.log"
         with errors.open("wb") as log:
             process = await anyio.open_process(

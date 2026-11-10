@@ -175,6 +175,12 @@ items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network 
 - Database tests take the `db_url` fixture, which creates a database per test.
 - Browser tests take the `page` fixture of `tests/browser/conftest.py` and serve the application
   with `serve(...)` on a free port in the same event loop.
+- **A test that spawns a process waits for what the child needs.** Both process-level tests
+  connect to the session's port themselves before spawning the child: `SessionServer.ready` is
+  set once the socket is bound, which should be enough, but one CI run failed with an empty
+  stdout -- the symptom of a refused connect -- and a flaky test is worth less than no test.
+  They also capture the child's stderr into the failure message, because a process that dies
+  before printing says why only there.
 - **Do not assert an exit code that depends on the machine.** `calu doctor` exits 1 when
   anything a session needs is missing, so a runner without `claude` gives 1 where a developer's
   machine gives 0 -- one such assertion turned CI red after passing locally. Assert the lines

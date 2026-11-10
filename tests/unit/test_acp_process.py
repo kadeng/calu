@@ -105,6 +105,18 @@ async def test_calu_acp_answers_an_editor_and_keeps_stdout_clean(tmp_path: Path)
     async with served(tmp_path, turns) as run:
         environment = dict(os.environ)
         environment["PYTHONUNBUFFERED"] = "1"
+        # The same guard as in `test_attach_process.py`: the child's connect must not race the
+        # session's socket, which cost one flaky CI run there.
+        host, _, port = run.address.removeprefix("ws://").partition(":")
+        with anyio.move_on_after(10):
+            while True:
+                try:
+                    probe = await anyio.connect_tcp(host, int(port))
+                except OSError:
+                    await anyio.sleep(0.05)
+                    continue
+                await probe.aclose()
+                break
         errors = tmp_path / "stderr.log"
         with errors.open("wb") as log:
             process = await anyio.open_process(
