@@ -1,5 +1,7 @@
 """The web interface against a real database: the pages, resolving, minting, editing."""
 
+from dataclasses import replace
+
 import httpx
 import pytest
 
@@ -766,5 +768,48 @@ async def test_the_rules_page_shows_the_honesty_register_and_clears_a_mark(db_ur
             assert (
                 await client.post(f"/honesty/{mark.id}/clear", follow_redirects=False)
             ).status_code == 404
+    finally:
+        await conn.close()
+
+
+async def test_the_session_page_says_why_a_step_was_refused(db_url: str) -> None:
+    """D86: an operator looking at a blocked session is on the session page, not on /rules."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.add_project(db, "demo", "/w")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(replace(IDENTITY, project="demo"))
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/parser.py"})
+        )
+        await store.apply_honesty_marks(
+            [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
+            [],
+            step,
+        )
+        # A mark of another project must not show up here: the page is about this session's
+        # project, and an unfiltered query would pass the assertions above as well.
+        await admin.add_project(db, "other", "/elsewhere")
+        elsewhere = DatabaseSessionStore(Db(conn))
+        await elsewhere.start(replace(IDENTITY, project="other", directory="/elsewhere"))
+        other_step = await elsewhere.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/other.py"})
+        )
+        await elsewhere.apply_honesty_marks(
+            [CodeMark(path="src/other.py", reason="a mark of another project")],
+            [],
+            other_step,
+        )
+
+        async with await client_for(db) as client:
+            page = (await client.get(f"/sessions/{session_id}")).text
+            assert "Code recorded as dishonest" in page
+            assert "src/parser.py:fields" in page
+            assert "the docstring lies" in page
+            # The way out is named where the operator is, with the clear button at hand.
+            assert "/honesty/" in page
+            assert "src/other.py" not in page, "another project's register is not this one's"
     finally:
         await conn.close()

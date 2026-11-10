@@ -358,7 +358,7 @@ async def fleet(request: Request, state: _State) -> Response:
 
 
 async def session_page(request: Request, state: _State) -> Response:
-    """Show one session: its tool calls, its open escalations and how to attach to it.
+    """Show one session: its steps, its escalations, its honesty register, how to attach.
 
     Args:
         request: The request; its path holds the session id.
@@ -404,6 +404,9 @@ async def session_page(request: Request, state: _State) -> Response:
             "project_url": git.project_url(remote),
             "commit_url": lambda commit: git.commit_url(remote, commit, state.git_url_template),
             "minted": minted,
+            # The honesty register of this session's project: an operator looking at a session
+            # whose step was refused is here, not on the rules page (PLAN.md D84, D86).
+            "marks": await herd.honesty_marks(state.db, project[0] if project else None),
             "connect": _connect(row, minted[1] if minted else ""),
         },
     )

@@ -133,6 +133,33 @@ session shows the real thinking as it streams.</p>
 </table>
 {% endif %}
 
+{% if marks %}
+<h2>Code recorded as dishonest ({{ marks | length }})</h2>
+<p class="muted">A checker found that these say something other than what they do. While
+  <code>honesty.mode</code> is <code>enforce</code>, a command of this session that would run
+  them is refused -- so this is why a step was stopped. Editing them is not refused, because
+  that is how the record clears itself. Clearing a mark is the override
+  (<a href="{{ url_for('rules') }}">rules page</a>).</p>
+<table>
+  <thead><tr><th>#</th><th>Where</th><th>What disagrees</th><th>Branch</th><th></th></tr></thead>
+  <tbody>
+  {% for m in marks %}
+    <tr>
+      <td class="muted">{{ m.id }}</td>
+      <td class="mono">{{ m.label() }}</td>
+      <td>{{ m.reason }}</td>
+      <td class="muted">{{ m.git_branch or '' }}</td>
+      <td>
+        <form method="post" action="{{ url_for('clear_mark', mark_id=m.id) }}">
+          <button type="submit">clear</button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 {% if setting_changes %}
 <h2>Settings changed while the session ran ({{ setting_changes | length }})</h2>
 <p class="muted">What holds a step back lives in the running session, so a client can change it.
