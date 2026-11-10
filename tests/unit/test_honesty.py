@@ -14,6 +14,7 @@ def mark(
     symbol: str = "",
     reason: str = "the docstring lies",
     git_branch: str | None = None,
+    opened_by: str | None = None,
     closed_at: datetime | None = None,
     closed_by: str | None = None,
 ) -> HonestyMark:
@@ -25,6 +26,7 @@ def mark(
         reason=reason,
         opened_at=NOW,
         git_branch=git_branch,
+        opened_by=opened_by,
         closed_at=closed_at,
         closed_by=closed_by,
     )
@@ -100,11 +102,14 @@ def test_the_checker_is_told_what_is_dirty():
     assert "and 22 more" in short
 
 
-def test_a_mark_renders_its_spot_and_its_branch():
+def test_a_mark_renders_its_spot_its_branch_and_its_author():
     assert mark("src/p.py").label() == "src/p.py"
     assert mark("src/p.py", "fields").label() == "src/p.py:fields"
     assert "[feature/x]" in mark("src/p.py", git_branch="feature/x").line()
     assert mark("src/p.py", "fields").mark().key() == ("src/p.py", "fields")
+    # Several checkers may write to the register, so a mark says which one thinks this (D87).
+    assert "(honesty)" in mark("src/p.py", opened_by="honesty").line()
+    assert "(" not in mark("src/p.py").line().split(":")[0], "no empty parentheses"
 
 
 def test_the_terminal_names_what_cannot_be_run():

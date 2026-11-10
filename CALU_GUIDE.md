@@ -185,6 +185,30 @@ marks says so when it starts.
 happened. The judgement needs a capable checker model; give this checker one of its own with
 `calu checker set honesty --model ...`.
 
+### Judging the checker before you let it block
+
+`track` records without blocking, which is what makes the decision measurable instead of a
+guess. Two commands say whether the checker has earned `enforce`:
+
+    calu honesty list --all     # every mark, who opened it, and how it ended
+    calu checker stats          # per checker: marks opened, cleared, overruled by a person
+
+Read the third number first. A mark the checker **cleared itself** is one it opened and closed
+correctly: the code was dishonest for a few steps and then was not. A mark a **person
+overruled** is a refusal nobody agreed with, which under `enforce` would have stopped work for
+no reason. So:
+
+- marks opened, almost all cleared by the checker, none overruled: switch `enforce` on.
+- a steady stream of overruled marks: the checker's judgement does not match yours yet. Change
+  its instructions (`calu checker edit honesty`) or give it a stronger model, and watch the
+  numbers again -- not the other way round.
+- no marks at all after a week of real work: either the codebase is honest, which is worth
+  knowing, or the checker is not running (`calu checker list` shows whether it is enabled).
+
+`calu honesty list --all` names the checker that opened each mark, which matters once more
+than one checker writes to the register -- honesty, security and an over-engineering checker can
+all run on the same edit (see the note on several checkers per route in PLAN.md §13.5).
+
 ## calu does not replace Claude Code
 
 calu is a layer **on top of** Claude Code, not an alternative to it. Claude Code stays the agent

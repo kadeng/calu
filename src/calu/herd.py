@@ -1208,7 +1208,7 @@ async def honesty_marks(
     """
     rows = await db.all(
         "SELECT m.id, m.path, m.symbol, m.reason, m.opened_at, m.git_branch, m.closed_at,"
-        " m.closed_by"
+        " m.closed_by, m.opened_by"
         " FROM honesty_marks m LEFT JOIN projects p ON p.id = m.project_id"
         " WHERE (%s::text IS NULL OR p.name = %s)"
         "   AND (%s::bool OR m.closed_at IS NULL)"
@@ -1226,6 +1226,7 @@ async def honesty_marks(
             git_branch=row[5],
             closed_at=row[6],
             closed_by=row[7],
+            opened_by=row[8],
         )
         for row in rows
     ]
@@ -1253,7 +1254,8 @@ async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> H
     row = await db.one(
         "UPDATE honesty_marks SET closed_at = now(), closed_by = %s"
         " WHERE id = %s AND closed_at IS NULL"
-        " RETURNING id, path, symbol, reason, opened_at, git_branch, closed_at, closed_by",
+        " RETURNING id, path, symbol, reason, opened_at, git_branch, closed_at, closed_by,"
+        " opened_by",
         (by, mark_id),
     )
     if row is None:
@@ -1273,6 +1275,7 @@ async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> H
         git_branch=row[5],
         closed_at=row[6],
         closed_by=row[7],
+        opened_by=row[8],
     )
 
 

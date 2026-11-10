@@ -47,7 +47,7 @@ inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **627 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 179 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
+--wait`. 180 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 20 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -392,6 +392,14 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+24. **The honesty register's two reports, with two checkers writing to it** (D87): seeded a
+   project where `honesty` opened two marks and cleared one itself and `security` opened one
+   that a person overruled, then read both reports with the real CLI.
+   `calu honesty list --all` named each mark's author and how it ended
+   (`(honesty): ... (closed by a checker)`, `(security): ... (closed by kai)`), and
+   `calu checker stats` said `honesty  marks: 2 opened, 1 cleared` and
+   `security  marks: 1 opened, 0 cleared, 1 overruled by a person` -- which is the signal
+   CALU_GUIDE.md tells a user to read before switching `honesty.mode` to `enforce`.
 22. **The subagent-result checker, measured for the first time** (D77, D78), which completes the
    set -- all four checkers are now measurable. Its first result was the worst so far: 67% and
    three critical misses in nine runs, all three the same case, a subagent demanding that a

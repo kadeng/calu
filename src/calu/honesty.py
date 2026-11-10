@@ -73,11 +73,14 @@ class HonestyMark:
         """Render the mark as one terminal line.
 
         Returns:
-            The spot, the reason and -- for a closed mark -- who closed it.
+            The spot, the branch, which checker opened it, the reason and -- for a closed mark
+            -- who closed it. The author is named because several checkers may write to the
+            register (PLAN.md D87), so "which of them thinks this" is part of reading a mark.
         """
         state = "" if self.open else f"  (closed by {self.closed_by or 'somebody'})"
         branch = f"  [{self.git_branch}]" if self.git_branch else ""
-        return f"{self.label()}{branch}: {self.reason}{state}"
+        author = f"  ({self.opened_by})" if self.opened_by else ""
+        return f"{self.label()}{branch}{author}: {self.reason}{state}"
 
     def mark(self) -> CodeMark:
         """Return this entry as the mark a checker would have written.

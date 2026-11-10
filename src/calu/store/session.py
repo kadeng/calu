@@ -689,7 +689,7 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
         """
         rows = await self._db.all(
-            "SELECT id, path, symbol, reason, opened_at, git_branch"
+            "SELECT id, path, symbol, reason, opened_at, git_branch, opened_by"
             " FROM honesty_marks"
             " WHERE closed_at IS NULL AND project_id IS NOT DISTINCT FROM"
             "       (SELECT project_id FROM sessions WHERE id = %s::uuid)"
@@ -704,6 +704,7 @@ class DatabaseSessionStore:
                 reason=row[3],
                 opened_at=row[4],
                 git_branch=row[5],
+                opened_by=row[6],
             )
             for row in rows
         ]
