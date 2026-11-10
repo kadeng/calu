@@ -547,8 +547,11 @@ files), CLI. Knowledge carried over: sitl's spike results on Claude Code's behav
    JSON on stdio. It is a client of a running session, so the session outlives every editor and
    several editors may attach at once. The editor's `fs/*` and `terminal/*` capabilities stay
    unused and its `mcpServers` are not forwarded (§6.1). Tested end to end against a real
-   session over a real WebSocket with a scripted Claude (`tests/unit/test_acp.py`); **not yet
-   driven by a real editor**. The single binary is decided against (D41) and the
+   session over a real WebSocket with a scripted Claude (`tests/unit/test_acp.py`), and as a
+   real process over real pipes for the handshake, a prompt, a **denied** step and
+   `session/load`'s replay (`tests/unit/test_acp_process.py`); **not yet driven by a real
+   editor**, which is the one thing left in this phase and needs an editor this machine does
+   not have. The single binary is decided against (D41) and the
    wheel is the shipping format; the session modes and config options of ACP carry
    `AutoEscalate` (D42). Nothing is open in this phase except what needs a real editor. A port of
    sitl's VSCode extension is only worth it for what ACP cannot carry (the checker verdicts as
