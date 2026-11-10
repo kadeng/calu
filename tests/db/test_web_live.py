@@ -21,7 +21,7 @@ from calu.db import Db, connect
 from calu.protocol.server import SessionServer
 from calu.session import Session
 from calu.setup import setup
-from calu.store import DatabaseSessionStore
+from calu.store import DatabaseSessionStore, SessionIdentity
 from calu.testing import fake_models
 from calu.tokens import new_token, token_hash
 from tests.browser.conftest import serve
@@ -177,5 +177,45 @@ async def test_a_session_without_an_address_says_so(db_url: str, tmp_path: Path)
                 message = json.loads(await socket.recv())
                 assert message["type"] == "closed"
                 assert "serves no clients" in message["message"]
+    finally:
+        await conn.close()
+
+
+async def test_the_live_view_of_a_gone_session_says_the_process_is_gone(
+    db_url: str, tmp_path: Path
+) -> None:
+    """Not "cannot reach the address": the heartbeat already knows why (PLAN.md D56).
+
+    No session runs here: the row carries an address nothing listens on, which is exactly what
+    a process that was killed leaves behind.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(
+            SessionIdentity(hostname="box", os_user="u", directory=str(tmp_path), pid=1)
+        )
+        await store.set_address("ws://127.0.0.1:1")
+        async with serve(create_app(db)) as base:
+            url = base.replace("http://", "ws://") + f"/ws/sessions/{session_id}"
+
+            # While it still beats, an unreachable address is a networking problem.
+            async with ws_connect(url) as socket:
+                first = json.loads(await socket.recv())
+            assert first["type"] == "closed"
+            assert "cannot reach" in first["message"] and "SSH tunnel" in first["message"]
+
+            await db.execute(
+                "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
+                (session_id,),
+            )
+            async with ws_connect(url) as socket:
+                second = json.loads(await socket.recv())
+            assert second["type"] == "closed"
+            assert "stopped saying it is running" in second["message"]
+            assert "SSH tunnel" not in second["message"]
+            assert "cancel" in second["message"]
     finally:
         await conn.close()

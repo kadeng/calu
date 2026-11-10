@@ -505,6 +505,9 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
 
     Side effects: mints and revokes a client token; sends messages to the Claude session.
 
+    A session whose process stopped saying it is there (D56) cannot be reached, and the reader
+    is told that rather than being sent to look for a networking problem.
+
     Args:
         websocket: The browser's connection.
         state: The shared state.
@@ -531,15 +534,20 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
     try:
         await _relay(websocket, row, token)
     except (OSError, RequestFailed, ConnectionError) as exc:
-        await websocket.send_json(
-            {
-                "type": "closed",
-                "message": (
-                    f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}; "
-                    "run `calu web` on that host, or forward the port with an SSH tunnel."
-                ),
-            }
-        )
+        if row.stale:
+            # The heartbeat says the process is gone (D56), so this is not a networking
+            # problem and sending the reader to look for one would waste their time.
+            message = (
+                f"this session stopped saying it is running {row.silent_for_s / 60:.0f} minutes "
+                f"ago, so there is nothing live to reach ({exc}). Its history is still here, "
+                "and an escalation of it can be cleared with `calu resolve <id> cancel`."
+            )
+        else:
+            message = (
+                f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}; "
+                "run `calu web` on that host, or forward the port with an SSH tunnel."
+            )
+        await websocket.send_json({"type": "closed", "message": message})
     finally:
         with suppress(RuntimeError):
             await websocket.close()
