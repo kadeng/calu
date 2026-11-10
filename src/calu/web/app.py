@@ -1078,8 +1078,9 @@ def _connect(row: herd.SessionRow, token: str) -> list[tuple[str, str]]:
     address = row.address or "ws://<the session printed its address>"
     shown = token or "<mint a token above>"
     commands = [
-        ("Terminal client", f"calu attach {address} --token {shown}"),
-        ("ACP editor (Zed, JetBrains Air, Neovim, Goose)", f"calu acp {address} --token {shown}"),
+        # `--token=` so that a token from before D102, which may start with a dash, works too.
+        ("Terminal client", f"calu attach {address} --token={shown}"),
+        ("ACP editor (Zed, JetBrains Air, Neovim, Goose)", f"calu acp {address} --token={shown}"),
         ("Escalations of this session", f"calu escalations {row.id}"),
     ]
     if row.claude_session_id:

@@ -20,10 +20,22 @@ TOKEN_BYTES = 32
 def new_token() -> str:
     """Create a client token.
 
+    The URL-safe alphabet contains `-`, and a token that **begins** with one cannot be passed
+    as `--token <value>`: every argument parser reads it as an option, so `calu attach`
+    refuses it with "expected one argument". That happened to 1.71% of tokens, which is one
+    session in 58 printing a token a user cannot use as instructed (PLAN.md D102). Such a draw
+    is therefore discarded and another taken, which costs about one extra draw in sixty and
+    leaves the token's own entropy untouched -- only the first character is drawn from 63
+    symbols instead of 64, which is 0.02 bits of the 256.
+
     Returns:
-        A URL-safe random string of `TOKEN_BYTES` bytes of entropy.
+        A URL-safe random string of `TOKEN_BYTES` bytes of entropy that does not start with
+        `-`.
     """
-    return secrets.token_urlsafe(TOKEN_BYTES)
+    while True:
+        token = secrets.token_urlsafe(TOKEN_BYTES)
+        if not token.startswith("-"):
+            return token
 
 
 def token_hash(token: str) -> str:

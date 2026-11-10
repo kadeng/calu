@@ -350,3 +350,25 @@ async def test_help_and_an_unknown_command_both_show_the_commands(capsys):
     assert "unknown command /nonsense" in said
     assert "/why" in said  # the help comes with it
     assert client.sent == []
+
+
+def test_a_token_can_always_be_passed_on_a_command_line():
+    """D102: a token starting with `-` is read as an option, not as a value.
+
+    This was found as a flaky process test: `calu attach --token <value>` failed with
+    "expected one argument" for 1.71% of tokens, which is one session in 58 printing a token a
+    user cannot use as instructed. The generator therefore discards such a draw, and the
+    printed hint uses `--token=` so that a token issued before the fix works as well.
+    """
+    from calu.cli import build_parser
+    from calu.tokens import new_token
+
+    assert all(not new_token().startswith("-") for _ in range(2000))
+
+    parser = build_parser()
+    # The form the hint prints works for any token, including one that starts with a dash.
+    args = parser.parse_args(["attach", "ws://127.0.0.1:1/", "--token=-leading-dash"])
+    assert args.token == "-leading-dash"
+    # And the plain form works for every token the generator now makes.
+    token = new_token()
+    assert parser.parse_args(["attach", "ws://127.0.0.1:1/", "--token", token]).token == token

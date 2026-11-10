@@ -205,6 +205,11 @@ Read the result as follows:
   already exited raises `ProcessLookupError` and turns a passing test into a flake. Write
   `if process.returncode is None:` around it. This cost two red runs in one day before the
   three process-level tests were made consistent.
+- A flaky process test may be telling the truth about the product. The ACP and attach tests
+  failed about once in forty full-suite runs and were twice treated as infrastructure; with
+  stderr in the message the next occurrence read `calu attach: error: argument --token:
+  expected one argument`, which was a real defect in 1.71% of tokens (D102). Read the message
+  before blaming the harness.
 - A test that spawns a process must put **stderr into its failure message**. A process-level
   test that fails with "stdout ended" and nothing else cannot be diagnosed, and the occurrence
   is often not reproducible: `test_acp_process.py` failed once in a full suite run on

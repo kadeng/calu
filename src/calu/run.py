@@ -586,7 +586,10 @@ async def _listen(
                 return
             print(f"[clients] {server.address}", flush=True)
             print(
-                f"[clients] attach with: calu attach {server.address} --token {token}", flush=True
+                # `--token=` and not `--token `: a token from before D102 may start with a
+                # dash, which an argument parser would read as an option.
+                f"[clients] attach with: calu attach {server.address} --token={token}",
+                flush=True,
             )
             if store.session_id is not None:
                 try:
