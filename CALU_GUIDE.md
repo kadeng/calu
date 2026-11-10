@@ -623,7 +623,7 @@ them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 calu checker edit edit                        # opens the edit checker's instructions in $EDITOR
 calu summary <session id> --edit              # correct what the checkers read of the old turns
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
-calu config set claude.model opus
+calu config set claude.model opus             # Claude's model -- for the *next* session
 calu checker stats                             # what they decided, what they cost, where a human disagreed
                                                # and how many steps the rules settled for free
 calu checker misses                            # the steps they approved that you then denied
@@ -636,7 +636,10 @@ calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.ya
 `calu checker show NAME` and `calu checker set NAME --instructions-file FILE` do the same
 without an editor, and `calu rules add|list|remove|enable|disable` work on single rules.
 
-A running session picks up such a change within a moment, at its next step.
+A running session picks up the checker instructions, the rules, the chat summary and
+`honesty.mode` within a moment, at its next step. Everything under `claude.` is different:
+Claude Code reads its model, its effort and its permission mode when the session starts, so
+those apply to the next `calu run` (or the next `/start` of an idle session).
 
 ## Forking a conversation
 

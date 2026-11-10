@@ -1118,7 +1118,11 @@ def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
                 The report.
             """
             await admin.set_chat_summary(db, args.session, after)
-            return "the chat summary was replaced; the session applies it at its next check"
+            cleared = not after.strip()
+            what = "cleared" if cleared else "replaced"
+            return f"the chat summary was {what}; the session applies it at its next check" + (
+                ", and the checkers then read no folded turns" if cleared else ""
+            )
 
         try:
             print(asyncio.run(_with_admin(admin_url, write)))
