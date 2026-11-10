@@ -529,6 +529,10 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
     subdirectory of the project. A session that has stopped saying it is running is left out
     (`SessionRow.stale`), and so is one that serves no clients (empty `address`).
 
+    Both sides of the directory comparison are resolved paths: `calu run` resolves the
+    workspace before it writes the row (`cmd_run`), and `Path.cwd()` is resolved, so a symbolic
+    link on the way to the project does not hide its session.
+
     Args:
         rows: The active sessions, as `herd.sessions` returns them.
         hint: A session id or the beginning of one, from `--session`; None means "the one
@@ -567,15 +571,11 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
             "starts one here"
         )
     # The nearest project directory wins: a session of a subproject is meant before the
-    # session of the directory above it.
+    # session of the directory above it. Every candidate contains `here`, so of two candidate
+    # directories one contains the other and the deepest is unique -- what can be left over is
+    # several sessions of that one directory, which is a question for the user.
     deepest = max(len(Path(row.directory).parts) for row in matching)
     nearest = [row for row in matching if len(Path(row.directory).parts) == deepest]
-    if len({row.directory for row in nearest}) > 1:
-        places = ", ".join(sorted({row.directory for row in nearest}))
-        raise CliError(
-            f"{here} is inside more than one project directory ({places}); "
-            "name the session with --session <id> (`calu sessions` lists them)"
-        )
     if len(nearest) > 1:
         lines = "\n".join(
             f"    {row.id}  started {row.started_at:%Y-%m-%d %H:%M:%S}" for row in nearest

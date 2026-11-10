@@ -163,9 +163,11 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
                 "credential protection",
                 not risky,
                 f"{', '.join(unprotected)} stored without a password (file mode only)",
-                f"{', '.join(risky)} can start sessions or change the schema; store "
-                "those with a password (`calu credential set <name>`) and leave only "
-                "'operator' unprotected."
+                f"{', '.join(risky)} is the wrong entry for that: 'admin' owns the "
+                "schema, and 'session' can read any session's rows by claiming its id. "
+                "Store those with a password (`calu credential set <name>`) and leave "
+                "only 'operator' unprotected -- it reads and resolves and can change "
+                "nothing else."
                 if risky
                 else "",
             )

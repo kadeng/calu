@@ -134,3 +134,21 @@ def test_an_address_without_a_token_is_refused_before_connecting() -> None:
         "x",
         None,
     ), "an address given on the command line mints nothing and needs no database"
+
+
+def test_a_session_behind_a_symbolic_link_is_still_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both sides are resolved paths, so a link on the way to the project hides nothing.
+
+    `calu run` resolves the workspace before it writes the row and `Path.cwd()` is resolved,
+    which is what makes the plain string comparison of the two sound. The test enters the
+    project through a link to show that the invariant holds in the one case where it could
+    break.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(project)
+    monkeypatch.chdir(link)
+    assert _pick_session([row(str(project.resolve()))], None).directory == str(project.resolve())
