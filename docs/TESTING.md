@@ -135,8 +135,9 @@ throwaway directory.
 
 Before a release, or after changing the runner, the gate or the sandbox. `HANDOFF.md` records
 what was run and what came out of it, under "Verified by hand with the real CLI"; on 2026-11-10
-items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network measurement in
-`spikes/RESULTS.md`; item 11 was done as an automated test instead (`tests/db/test_run.py`).
+items 1, 2, 5, 6, 7, 9, 10, 12 and 14 were exercised, and item 4 as part of the network
+measurement in `spikes/RESULTS.md`; item 11 was done as an automated test instead
+(`tests/db/test_run.py`), and item 13 needs an editor, which this machine has none of.
 
 1. `calu doctor --db` on the machine — nothing essential missing.
 2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
@@ -168,6 +169,24 @@ items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network 
    repeats; an empty summary there is the defect D65 fixed. `tests/db/test_run.py` covers the
    same path with a fake Claude, so this is only worth running by hand after a change to the
    store or the context builder.
+
+12. A client with no arguments (D105), which is how a session is attached to in practice: with
+   a session running in a project, `cd` into a **subdirectory** of it and run `calu attach`
+   with nothing else. It must find the session, stream it, and leave one revoked row behind in
+   `calu token list` when it ends. Then `calu attach --session <wrong id>` must name what it
+   could not find, and `calu attach` in a directory with no session must say so and point at
+   `calu sessions`. Verified by hand on 2026-11-10 against a throwaway database (the mint and
+   the revoke are also a database test).
+13. The ACP adapter as an editor spawns it (D105, D106): the editor's whole configuration is
+   `{"command": "calu", "args": ["acp"]}` with the project as its working directory. With the
+   operator credential stored `--no-password` it must attach; with a password on it, the
+   adapter must **refuse and say so** rather than read the editor's first request as a
+   password -- the automated test asserts the request is still unread, and by hand the thing to
+   check is that the editor shows a clear message instead of hanging.
+14. The password-free credential (D104): `calu credential set operator --no-password`, then
+   `calu sessions` and `calu escalations` must run without a prompt, `calu credential list`
+   must mark it "file mode only", and `calu doctor` must report it -- as a note for `operator`,
+   as a problem if `admin` or `session` is stored that way. Verified by hand on 2026-11-10.
 
 ## Measuring the checkers
 

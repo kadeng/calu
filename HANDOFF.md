@@ -396,6 +396,18 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+25. **A client with no arguments, from a subdirectory** (D105, D104): a session row with an
+   address in a throwaway database, the operator credential stored `--no-password`, then
+   `calu attach` from a **subdirectory** of the project with no further arguments. It found the
+   session, minted a token labelled "calu attach", tried the address it had published and
+   revoked the token when the connection failed -- `calu token list` then showed
+   `1  revoked  session b1635974-...  ws://127.0.0.1:8765  never used  calu attach`. No
+   password was asked at any point. `calu credential set operator --no-password` printed what
+   the choice costs and named the file, `calu credential list` showed
+   `operator  (file mode only)`, and `calu doctor` reported
+   `ok      credential protection: operator stored without a password (file mode only)`. The
+   store's own modes were as intended (directory 0700, file 0600).
+
 24. **The honesty register's two reports, with two checkers writing to it** (D87): seeded a
    project where `honesty` opened two marks and cleared one itself and `security` opened one
    that a person overruled, then read both reports with the real CLI.
