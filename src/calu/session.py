@@ -3070,9 +3070,11 @@ class Session:
         `honesty.mode` is "off".
 
         Side effects: writes `honesty_marks`, reloads `self.honesty_marks` and emits a `log`
-        event naming what changed. A store failure is logged by `_store_call`, not raised: a
+        event naming what changed. A store failure is logged by `_store_value`, not raised: a
         session whose register cannot be written is still a session, and the next step tries
-        again.
+        again. The register is read back even then, because an earlier checker of the same step
+        may already have written a mark that the enforcement layer has to know about, and it is
+        said in the log that marks of this step may be missing (D111).
 
         Args:
             decided: The verdicts of the step, with the marks their checkers asked for.
@@ -3094,6 +3096,7 @@ class Session:
         clean = [mark for _name, decision in with_marks for mark in decision.marks_clean]
         branch = await self._git_branch()
         opened = closed = 0
+        failed = False
         for name, decision in with_marks:
             # One call per checker, so that each mark records which checker opened it: with
             # several checkers on a route (D81), "12 marks are open" says nothing about any one
@@ -3111,8 +3114,15 @@ class Session:
                     files_before(step, self.workspace),
                 ),
             )
-            if applied is None:  # the write failed and was reported; the next step tries again
-                return
+            if applied is None:
+                # The write failed and `_store_failed` has reported it. Stop writing, but go on
+                # to read the register back: an earlier checker of this very step may already
+                # have opened a mark, and returning here would leave `self.honesty_marks`
+                # without it -- the enforcement layer would then let the step that the register
+                # now forbids through, until some later step happened to produce marks and
+                # reload it (D111).
+                failed = True
+                break
             opened += applied[0]
             closed += applied[1]
         self.honesty_marks = (
@@ -3124,8 +3134,12 @@ class Session:
             parts.append(f"{opened} spot(s) recorded as dishonest")
         if closed:
             parts.append(f"{closed} cleared")
-        if len(clean) > closed:
+        if len(clean) > closed and not failed:
+            # Only meaningful when every mark was written: after a failure the clean marks of
+            # the checkers that were not reached were never offered to the register.
             parts.append(f"{len(clean) - closed} clean mark(s) matched nothing recorded")
+        if failed:
+            parts.append("a write failed, so the register may be missing marks of this step")
         if parts:
             await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
         await self._emit_safely(

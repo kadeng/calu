@@ -7,6 +7,7 @@ import anyio
 import pytest
 
 from calu.checkers import CheckDecision, CodeMark, Decision, Route, Step
+from calu.checkers.checker import Checker, CheckOutcome
 from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
@@ -35,7 +36,12 @@ from calu.protocol.messages import (
     TurnResult,
     UserInput,
 )
-from calu.session import Session, SessionError, combine_decisions
+from calu.session import (
+    Session,
+    SessionError,
+    _Decided,  # the shape `_decide` returns, built directly for one test
+    combine_decisions,
+)
 from calu.store.config import CheckerDefinition
 from calu.testing import fake_models, fixed_checker, marking_checker
 from tests.unit.helpers import default_settings, make_session
@@ -1429,3 +1435,72 @@ async def test_a_cleared_mark_reaches_a_running_session(tmp_path: Path):
     before = len(rec.of(HonestyUpdate))
     await session.reload_register()
     assert len(rec.of(HonestyUpdate)) == before
+
+
+async def test_a_failed_mark_write_still_leaves_the_session_with_the_marks_that_landed(
+    tmp_path: Path,
+):
+    """D111: the register has to be read back even when a write of the same step failed.
+
+    Two checkers of one route both record marks. The first write lands; the second fails. The
+    early return that used to follow left `self.honesty_marks` as it was, so the enforcement
+    layer did not know about the mark the first checker had just opened and let the very step
+    the register forbids through -- until some later step happened to produce marks and reload
+    it. The session now reads the register back anyway and says that marks of this step may be
+    missing.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
+    session, rec, store = make_session(tmp_path, [], settings=settings)
+
+    def checker(name: str) -> Checker:
+        """A checker object; only its name is used here."""
+        return Checker(name=name, instructions="", model="test", workspace=tmp_path)
+
+    def outcome(mark: CodeMark) -> CheckOutcome:
+        """A verdict that records one dirty spot."""
+        return CheckOutcome(
+            decision=CheckDecision(
+                decision=Decision.PASS, reason="", step_summary="edited it", marks_dirty=[mark]
+            )
+        )
+
+    first = CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")
+    second = CodeMark(path="src/parser.py", symbol="rows", reason="the name says nothing")
+    decided = _Decided(
+        route=Route.EDIT,
+        decision=CheckDecision(decision=Decision.PASS, reason="", step_summary="edited it"),
+        source="checker",
+        runs=[(checker("honesty"), outcome(first)), (checker("security"), outcome(second))],
+    )
+
+    real = store.apply_honesty_marks
+    calls = 0
+
+    async def failing(*args, **kwargs):
+        """Let the first write through and fail the second."""
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise RuntimeError("the database went away")
+        return await real(*args, **kwargs)
+
+    store.apply_honesty_marks = failing  # type: ignore[method-assign]
+    step = Step(tool_name="Edit", tool_input={"file_path": "src/parser.py"}, cwd=str(tmp_path))
+    await session._apply_honesty(decided, 1, step)
+    store.apply_honesty_marks = real  # type: ignore[method-assign]
+
+    assert calls == 2, "it stops writing after the failure"
+    assert [mark.symbol for mark in session.honesty_marks] == ["fields"], (
+        "the mark that landed has to reach the running session, or it enforces nothing"
+    )
+    run = Step(tool_name="Bash", tool_input={"command": "python src/parser.py"}, cwd=str(tmp_path))
+    assert blocking_marks(run, session.honesty_marks, tmp_path), "and it blocks the step now"
+
+    said = [entry.message for entry in rec.of(Log)]
+    assert any("recording honesty marks failed" in message for message in said), said
+    assert any("the register may be missing marks of this step" in m for m in said), said
+    # The clean-mark line must not be printed after a failure: the clean marks of the checkers
+    # that were never reached were not offered to the register at all.
+    assert not any("matched nothing recorded" in message for message in said), said
