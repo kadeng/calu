@@ -30,4 +30,24 @@
   {% endfor %}
   </tbody>
 </table>
+
+{% if misses %}
+<h2>Steps a checker approved that a human denied ({{ misses | length }})</h2>
+<p class="muted">The cases to fix the instructions against. Each one happened: the checker
+  approved it, an auto-escalation category made somebody look, and they refused it.</p>
+{% for m in misses %}
+<div class="card">
+  <p class="muted">
+    <a href="{{ url_for('escalation', escalation_id=m.escalation_id) }}">escalation {{ m.escalation_id }}</a>
+    · <span class="mono">{{ m.checker_name }}</span> said
+    <span class="decision {{ m.decision }}">{{ m.decision }}</span>
+    {% if m.at %}· {{ m.at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+  </p>
+  <pre>{{ m.command or m.summary or m.tool_name }}</pre>
+  <p><strong>The checker said:</strong> {{ m.checker_reason or '(no reason)' }}</p>
+  <p><strong>The human denied it:</strong> {{ m.human_note or '(no note)' }}</p>
+  <p><a href="{{ url_for('checker', name=m.checker_name) }}">edit {{ m.checker_name }}'s instructions</a></p>
+</div>
+{% endfor %}
+{% endif %}
 {% endblock %}

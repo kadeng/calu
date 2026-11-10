@@ -841,6 +841,9 @@ async def checkers(request: Request, state: _State) -> Response:
             # What they decided and where a human disagreed, read from the record rather than
             # measured by running them again (D61).
             "stats": {row.checker_name: row for row in await herd.checker_stats(state.db)},
+            # And the rows behind the counts, because this is the page where the instructions
+            # are edited: the case to fix them against is one click away (D62).
+            "misses": await herd.checker_misses(state.db, limit=10),
         },
     )
 

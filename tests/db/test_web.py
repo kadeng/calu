@@ -636,3 +636,44 @@ async def test_the_triage_queue_marks_an_entry_nobody_waits_for(db_url: str) -> 
             assert waiting[0]["unanswerable"] is True
     finally:
         await conn.close()
+
+
+async def test_the_checkers_page_shows_the_cases_to_fix_the_instructions_against(
+    db_url: str,
+) -> None:
+    """The counts and the rows behind them, on the page where the instructions are edited."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        _session_id, escalation = await populate(db)
+        async with await client_for(db) as client:
+            page = (await client.get("/checkers")).text
+            # The fixture's checker escalated once, so there is a record but no miss.
+            assert "Decided" in page and "Humans disagreed" in page
+            assert "approved that a human denied" not in page
+
+            # Make it a miss and the page shows the case, with both one-click destinations.
+            # The fixture's checker run sits on the first step and the escalation on the
+            # second, so the run that approved *this* step is added here.
+            await db.execute(
+                "INSERT INTO checker_runs"
+                " (step_id, checker_name, checker_version, model, decision, reason)"
+                " SELECT e.step_id, 'command', 1, 'test:model', 'pass', 'looked routine'"
+                " FROM escalations e WHERE e.id = %s",
+                (escalation,),
+            )
+            await db.execute(
+                "UPDATE escalations SET state = 'denied', note = 'not that one',"
+                " resolved_at = now() WHERE id = %s",
+                (escalation,),
+            )
+            page = (await client.get("/checkers")).text
+            assert "Steps a checker approved that a human denied (1)" in page
+            assert "looked routine" in page and "not that one" in page
+            assert f"/escalations/{escalation}" in page
+            assert (
+                "edit command&#39;s instructions" in page or "edit command's instructions" in page
+            )
+    finally:
+        await conn.close()
