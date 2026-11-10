@@ -249,14 +249,30 @@ def case_line(case: EvalCase) -> str:
         case: The case.
 
     Returns:
-        Its name, checker, tool, the acceptable decisions and where it came from.
+        Its name, checker, tool, the acceptable decisions, what else it expects and where it
+        came from. The extra expectations are named because they are what the case is **for**:
+        two cases can agree on the decision and differ entirely in what they measure -- a
+        remark, the absence of one, or whether any code is recorded as dishonest (PLAN.md D96).
 
     Example:
         "escalation-12  edit  Write  [DENY, ESCALATE]  escalations".
     """
     expected = ", ".join(decision.value for decision in case.expected)
+    extra = [
+        name
+        for name, held in (
+            ("no comment", case.no_comment),
+            ("wants a comment", case.want_comment),
+            ("no marks", case.expect_no_marks),
+            ("with a diff", bool(case.diff)),
+            ("a subagent result", bool(case.result)),
+            ("with files", bool(case.files)),
+        )
+        if held
+    ]
+    also = f"  +{', '.join(extra)}" if extra else ""
     source = f"  {case.source}" if case.source else ""
-    return f"{case.name}  {case.checker}  {case.tool_name}  [{expected}]{source}"
+    return f"{case.name}  {case.checker}  {case.tool_name}  [{expected}]{also}{source}"
 
 
 async def cases_from_marks(db: Db, limit: int = 200) -> list[EvalCase]:

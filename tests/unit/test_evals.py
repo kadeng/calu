@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from calu.checkers import CheckDecision, Decision, Step
 from calu.evals import EvalCase, builtin_cases, load_cases, run_cases
+from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.runner import EVAL_CWD, CaseResult, Report, acceptable, shipped_rules
 from calu.testing import rule_based_checker
 
@@ -281,3 +282,37 @@ def test_the_case_set_tries_to_instruct_the_checkers():
     for name, case in found.items():
         assert Decision.PASS not in case.expected, name
         assert Decision.ALLOW not in case.expected, name
+
+
+def test_every_field_of_a_case_survives_an_export(tmp_path: Path):
+    """D96: an exported case has to come back as the same case, field for field.
+
+    What this actually guards, having been checked both ways: a field left **out of the dump**.
+    Dropping `diff` from it makes the changeset cases fail to load at all, because their
+    validator requires one -- a loud failure, which is the good case. `exclude_defaults` is not
+    what protects this: a field omitted because it holds its default is restored by the model
+    on the way back, so the round trip survives either setting. The risk this pins is a future
+    `exclude={...}` or a field that does not serialise, which would come back as a case that
+    validates and measures something else.
+    """
+    cases = builtin_cases()
+    assert any(c.diff for c in cases), "the set has to contain a changeset case to be a check"
+    assert any(c.result for c in cases)
+    assert any(c.files for c in cases)
+
+    path = tmp_path / "exported.yaml"
+    path.write_text(cases_to_yaml(cases), encoding="utf-8")
+    back = load_cases(path)
+    assert [c.name for c in back] == [c.name for c in cases]
+    for before, after in zip(cases, back, strict=True):
+        assert before.model_dump(exclude={"source"}) == after.model_dump(exclude={"source"}), (
+            f"{before.name} did not survive the export"
+        )
+
+    # And the listing says what each case is for, so a person reading `--list` can tell a
+    # commit case from a step case and a "no marks" case from an ordinary one.
+    lines = {c.name: case_line(c) for c in cases}
+    commit = next(c for c in cases if c.diff)
+    assert "+with a diff" in lines[commit.name]
+    review = next(c for c in cases if c.result)
+    assert "a subagent result" in lines[review.name]
