@@ -49,6 +49,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+import anyio
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
@@ -59,7 +60,8 @@ from calu.config import DEFAULT_ALLOWED_DOMAINS, DEFAULT_NETWORK_POLICY, EMPTY_C
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
-from calu.evals.cli import run_evals
+from calu.evals.cases import case_line, cases_to_yaml
+from calu.evals.cli import collect_cases, run_evals
 from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
@@ -944,15 +946,51 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
             `directory`, `project`).
         store: The credential store.
 
+    With `--list` or `--export` the cases are only collected: they are printed or written as
+    YAML and no model is called, which is how the labels a herd produced are read, kept and
+    later re-run as a fixed set (PLAN.md D55).
+
     Raises:
         CliError: If neither credential is stored (`operator` or `admin`), a case file cannot
-            be read, or the run found a critical miss (a checker let a step through that it
-            should not have).
+            be read or written, or the run found a critical miss (a checker let a step through
+            that it should not have).
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
     workspace = Path(args.directory).resolve()
     critical = 0
+
+    async def collect(db: Db) -> str:
+        """Collect the cases and print or write them, without calling a model.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The report: the case lines for `--list`, or where the file was written.
+
+        Raises:
+            CliError: If a case file cannot be read or the export cannot be written.
+        """
+        try:
+            cases = await collect_cases(db, args.files, args.from_db, not args.no_builtin)
+        except OSError as exc:
+            raise CliError(f"cannot read a case file: {exc}") from exc
+        if args.export:
+            document = cases_to_yaml(cases)
+            if args.export == "-":
+                return document.rstrip("\n")
+            target = Path(args.export)
+            try:
+                # In a thread: writing a file is blocking, and this runs inside the event loop.
+                await anyio.to_thread.run_sync(
+                    lambda: target.write_text(document, encoding="utf-8")
+                )
+            except OSError as exc:
+                raise CliError(f"cannot write {args.export}: {exc}") from exc
+            return f"wrote {len(cases)} case(s) to {args.export}"
+        lines = [case_line(case) for case in cases]
+        return "\n".join([*lines, f"{len(cases)} case(s)"]) if lines else "no cases"
 
     async def work(db: Db) -> str:
         """Run the evaluation.
@@ -982,6 +1020,11 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
             raise CliError(f"cannot read a case file: {exc}") from exc
         return report
 
+    if args.list_cases or args.export:
+        # Looking at the labels, or keeping them, calls no model and costs nothing: this is the
+        # path that replaces a training mode (PLAN.md D55, Q9).
+        _herd_command(store, collect)
+        return
     _herd_command(store, work)
     if critical:
         raise CliError(f"{critical} critical miss(es): a checker let a step through")
@@ -1584,6 +1627,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-builtin", action="store_true", help="leave out the built-in cases")
     p.add_argument("--model", help="one model for every checker, instead of the configured ones")
     p.add_argument("--repeat", type=int, default=1, help="how often each case runs")
+    p.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_cases",
+        help="print the collected cases instead of running them (no model is called)",
+    )
+    p.add_argument(
+        "--export",
+        metavar="FILE",
+        help="write the collected cases as YAML instead of running them ('-' for stdout);"
+        " `calu evals FILE` runs the result later as a fixed set",
+    )
     p.set_defaults(handler=cmd_evals)
 
     project = sub.add_parser("project", help="register a project in the database")

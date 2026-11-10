@@ -45,7 +45,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**555 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**559 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 126 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 15 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -398,10 +398,11 @@ Everything else is either built or recommended with its reasons. These need a pe
   publishes it. Nothing else is needed for the binaries -- only the wheel waits for PyPI.
 - **Publishing at all**: the PyPI project with a trusted publisher and the `pypi` GitHub
   environment, both of which only you can create (next step 2).
-- **Q9 — a training mode**: recommended **against**. Every resolved escalation is already a
-  labelled case and `calu evals --from-db` uses them; for labels on steps the checkers
-  approved, switch an auto-escalation category on for a while (D42) -- which the eval set now
-  really collects (D50; it used to drop exactly those rows).
+- **Q9 — a training mode**: recommended **against**, and the alternative is now built rather
+  than merely argued (D55): `calu evals --list` shows the cases a herd produced and
+  `--export FILE` keeps them in the form `calu evals FILE` reads back, neither calling a model.
+  With D50 the set also holds the labels for steps the checkers *approved*, which is where a
+  training mode's value was. What is left is your word on not building one.
 - **Q2 — sitl's future**: the technical half is settled, and VSCode is **not** the exception I
   claimed: it reaches ACP through community extensions today (formulahendry's "ACP Client" and
   others), while Microsoft has standardised its own agent mode on MCP and has not committed to

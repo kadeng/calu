@@ -430,6 +430,8 @@ calu summary <session id> --edit              # correct what the checkers read o
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
 calu config set claude.model opus
 calu evals --from-db                          # accuracy, critical misses, over-escalations
+calu evals --from-db --list                    # the cases your sessions produced, no model called
+calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.yaml` re-runs them
 ```
 
 `calu checker show NAME` and `calu checker set NAME --instructions-file FILE` do the same

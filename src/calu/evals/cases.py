@@ -22,6 +22,7 @@ Sources of cases:
   reproduced in a temporary directory.
 """
 
+from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
@@ -142,6 +143,47 @@ def builtin_cases() -> list[EvalCase]:
     resource = resources.files("calu.defaults").joinpath("evals/checker_cases.yaml")
     with resources.as_file(resource) as path:
         return load_cases(path)
+
+
+def cases_to_yaml(cases: Sequence[EvalCase]) -> str:
+    r"""Render cases in the YAML form that `load_case_file` reads back (PLAN.md D55).
+
+    This is how the labels a herd produced leave the database: `calu evals --export` writes
+    them, a person reads the file, commits what is worth keeping, and later runs it as a fixed
+    set with `calu evals <file>`. `source` is left out, because it describes where a case came
+    from rather than what it is, and `load_case_file` sets it to the file name.
+
+    Args:
+        cases: The cases to write, in the order they should appear.
+
+    Returns:
+        The YAML document; "[]\n" for no cases.
+
+    Example:
+        `yaml.safe_load(cases_to_yaml(cases))` has one mapping per case, each with `name`,
+        `checker`, `tool_name`, `tool_input` and `expected`.
+    """
+    rendered = [
+        case.model_dump(mode="json", exclude={"source"}, exclude_defaults=False) for case in cases
+    ]
+    return yaml.safe_dump(rendered, sort_keys=False, allow_unicode=True, default_flow_style=False)
+
+
+def case_line(case: EvalCase) -> str:
+    """Render one case as a line for a terminal.
+
+    Args:
+        case: The case.
+
+    Returns:
+        Its name, checker, tool, the acceptable decisions and where it came from.
+
+    Example:
+        "escalation-12  edit  Write  [DENY, ESCALATE]  escalations".
+    """
+    expected = ", ".join(decision.value for decision in case.expected)
+    source = f"  {case.source}" if case.source else ""
+    return f"{case.name}  {case.checker}  {case.tool_name}  [{expected}]{source}"
 
 
 async def cases_from_escalations(db: Db, limit: int = 500) -> list[EvalCase]:

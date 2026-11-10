@@ -331,3 +331,33 @@ async def test_doctor_checks_the_database_it_is_pointed_at(prepared, capsys) -> 
         assert "calu db up" in failed.out
     finally:
         cli_module.load_credential = original  # type: ignore[assignment]
+
+
+async def test_evals_lists_and_exports_without_calling_a_model(prepared, capsys, tmp_path) -> None:
+    """`calu evals --list` and `--export` are the loop that replaces a training mode (D55)."""
+    _db, _session_id, _escalation = prepared
+    assert await run(["evals", "--list"]) == 0
+    listed = capsys.readouterr().out
+    assert "case(s)" in listed
+    # One line per case, with its checker and the decisions a good checker may give.
+    assert " command " in listed or " edit " in listed
+    assert "PASS" in listed or "ESCALATE" in listed
+
+    target = tmp_path / "kept.yaml"
+    assert await run(["evals", "--export", str(target)]) == 0
+    assert f"to {target}" in capsys.readouterr().out
+    document = target.read_text(encoding="utf-8")
+    assert "- name:" in document and "expected:" in document
+
+    # The file reads back as a case set, which is what makes it worth keeping.
+    assert await run(["evals", "--list", "--no-builtin", str(target)]) == 0
+    again = capsys.readouterr().out
+    assert "kept.yaml" in again
+
+    # `--export -` writes to stdout, for a pipe.
+    assert await run(["evals", "--export", "-"]) == 0
+    assert "- name:" in capsys.readouterr().out
+
+    # A path that cannot be written is reported, not raised.
+    assert await run(["evals", "--export", "/no/such/directory/cases.yaml"]) == 1
+    assert "cannot write" in capsys.readouterr().err

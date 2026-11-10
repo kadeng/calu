@@ -12,6 +12,7 @@ import pytest
 
 from calu import admin
 from calu.db import Db, connect
+from calu.evals.cases import case_line, cases_to_yaml, load_cases
 from calu.evals.cli import collect_cases, run_evals
 from calu.evals.runner import CaseResult, Report
 from calu.setup import setup
@@ -145,3 +146,59 @@ async def test_the_sources_of_the_cases_are_added_in_order(db_url: str, tmp_path
         assert await collect_cases(db, (), from_db=True, builtin=False) == []
     finally:
         await conn.close()
+
+
+async def test_the_collected_cases_can_be_listed_and_kept(db_url: str, tmp_path: Path) -> None:
+    """`--list` and `--export` are the replacement for a training mode (PLAN.md D55, Q9).
+
+    A human already labelled every escalation they resolved. What was missing was a way to see
+    those labels and keep them, so this checks both: the lines name the case, its checker and
+    the acceptable decisions, and the exported YAML reads back as the same cases.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        cases = await collect_cases(db, (), from_db=False, builtin=True)
+        assert cases, "the built-in set must not be empty"
+
+        # The lines are what a person reads.
+        line = case_line(cases[0])
+        assert cases[0].name in line
+        assert cases[0].checker in line
+        assert cases[0].tool_name in line
+        assert cases[0].expected[0].value in line
+
+        # The export reads back as the same cases, so it can be committed and re-run.
+        document = cases_to_yaml(cases)
+        path = tmp_path / "kept.yaml"
+        path.write_text(document, encoding="utf-8")
+        again = load_cases(path)
+        assert [c.name for c in again] == [c.name for c in cases]
+        assert [c.expected for c in again] == [c.expected for c in cases]
+        assert [c.tool_input for c in again] == [c.tool_input for c in cases]
+        # `source` says where a case came from, so the file sets it rather than carrying it.
+        assert "source:" not in document
+        assert {c.source for c in again} == {"kept.yaml"}
+
+        # An empty set is a document that still reads back.
+        assert load_cases_text(cases_to_yaml([])) == []
+    finally:
+        await conn.close()
+
+
+def load_cases_text(document: str) -> list:
+    """Read cases from a YAML string, for the empty case.
+
+    Args:
+        document: The YAML document.
+
+    Returns:
+        The cases it holds.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "cases.yaml"
+        path.write_text(document, encoding="utf-8")
+        return load_cases(path)
