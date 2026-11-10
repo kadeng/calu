@@ -1321,6 +1321,17 @@ async def test_the_honesty_register_blocks_running_dirty_code_but_not_editing_it
     # The edit of the same file is not blocked: that is how the dishonesty gets fixed.
     assert checks["Write"].decision is not Decision.DENY
 
+    # And the text reaches **Claude**, not only the clients: the block is only useful if the
+    # agent learns what to do about it. The `CheckResult` event is what a human sees; the tool
+    # result is what the agent acts on, and the two were never compared before (D120).
+    denied = [r for r in rec.of(ToolResult) if "recorded as dishonest" in r.content]
+    assert denied, [r.content for r in rec.of(ToolResult)]
+    assert "src/parser.py:fields" in denied[0].content
+    assert "the docstring promises a sorted list" in denied[0].content, (
+        "the checker's own reason has to travel with the block, or Claude cannot fix it"
+    )
+    assert "document what it really does" in denied[0].content, "and what to do about it"
+
 
 async def test_tracking_honesty_records_without_blocking(tmp_path: Path):
     """D83: `track` is how a user judges the checker before trusting it to block."""
