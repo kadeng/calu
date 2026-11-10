@@ -101,13 +101,22 @@ def command_paths(command: str, cwd: Path, workspace: Path) -> set[str]:
     first, because they name a place *inside* a file and not another file: pytest's
     `file.py::test_name` and the `file.py:12` of a grep or an editor.
 
+    A **module** argument is read as well (PLAN.md D89): `python -m myapp` and
+    `python -m pkg.module` run project code without naming a file, which is the common way
+    dirty code actually gets executed. The dotted name is turned into the files it could be --
+    `pkg/module.py` and `pkg/module/__init__.py` -- and those are kept when they exist in the
+    project. `-m` is only read after an interpreter (`python`, `python3`, `uv`, `poetry`,
+    `pipenv`), so a `-m` that means something else to another program is ignored.
+
     Args:
         command: The shell command as Claude sent it.
         cwd: The directory the command runs in; a relative word resolves against it.
         workspace: The project root that the register's paths are relative to.
 
     Returns:
-        The paths, project-relative with forward slashes. Empty when the command names none.
+        The paths of files that exist in the project, project-relative with forward slashes.
+        Empty when the command names none. A word that normalizes to a path with no file
+        behind it is left out, because every word of a command normalizes to something.
     """
     try:
         words = shlex.split(command)
@@ -118,7 +127,10 @@ def command_paths(command: str, cwd: Path, workspace: Path) -> set[str]:
     if not base.is_absolute():
         base = root / base
     found: set[str] = set()
-    for word in words:
+    for index, word in enumerate(words):
+        if word == "-m" and index + 1 < len(words) and _after_interpreter(words, index):
+            found |= _module_files(words[index + 1], root)
+            continue
         text = word.split("::", 1)[0]
         text = re.sub(r":\d+(:\d+)?$", "", text)
         if not text or text.startswith("-"):
@@ -127,10 +139,57 @@ def command_paths(command: str, cwd: Path, workspace: Path) -> set[str]:
             resolved = (
                 (base / text).resolve() if not Path(text).is_absolute() else Path(text).resolve()
             )
-            found.add(resolved.relative_to(root).as_posix())
+            relative = resolved.relative_to(root).as_posix()
         except ValueError, OSError:
             continue  # outside the project, or not a usable path
+        # Only a file that is really there: every word of a command normalizes to some path,
+        # so `make test` would otherwise report "make" and "test" as paths of the project. A
+        # mark is always on a file a checker read, so requiring the file loses no true match --
+        # and a mark on a file that has since been deleted cannot be run anyway.
+        if (root / relative).is_file():
+            found.add(relative)
     return found
+
+
+INTERPRETERS = frozenset({"python", "python3", "python3.14", "uv", "poetry", "pipenv", "pdm"})
+"""Programs whose `-m` argument names a Python module (PLAN.md D89). Another program's `-m`
+means something else, so the module is only read after one of these."""
+
+
+def _after_interpreter(words: Sequence[str], index: int) -> bool:
+    """Tell whether the `-m` at `index` belongs to a Python interpreter.
+
+    Args:
+        words: The words of the command.
+        index: Position of the `-m`.
+
+    Returns:
+        True if an earlier word is an interpreter, by its base name, so that `/usr/bin/python3`
+        and `.venv/bin/python` count as well.
+    """
+    return any(Path(word).name in INTERPRETERS for word in words[:index])
+
+
+def _module_files(module: str, root: Path) -> set[str]:
+    """Return the project files a dotted module name could be (PLAN.md D89).
+
+    Args:
+        module: The module as `-m` names it, e.g. `pkg.module`; a `:` suffix is cut, because
+            `python -m pytest tests/x.py::t` puts the node id elsewhere.
+        root: The project root.
+
+    Returns:
+        The project-relative paths of `pkg/module.py` and `pkg/module/__init__.py` that exist,
+        plus the same under a `src/` layout. Empty when the module names nothing in the project
+        -- an installed dependency is not this project's code.
+    """
+    name = module.split(":", 1)[0].strip()
+    if not name or name.startswith("-"):
+        return set()
+    stem = Path(*name.split("."))
+    candidates = [stem.with_suffix(".py"), stem / "__init__.py"]
+    candidates += [Path("src") / candidate for candidate in list(candidates)]
+    return {candidate.as_posix() for candidate in candidates if (root / candidate).is_file()}
 
 
 def blocking_marks(step: Step, marks: Sequence[HonestyMark], workspace: Path) -> list[HonestyMark]:

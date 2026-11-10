@@ -1248,6 +1248,10 @@ async def test_the_honesty_register_blocks_running_dirty_code_but_not_editing_it
     enforcement is deterministic and needs no model call, and the way out stays open: editing
     the dishonest code is never blocked (D83).
     """
+    # The marked file has to exist: a command only counts as running it when the file is
+    # really there, or every word of a command would look like a path (D89).
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("def fields():\n    return []\n", encoding="utf-8")
     settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
     extra = CheckerDefinition(
         name="honesty",
@@ -1395,6 +1399,8 @@ async def test_a_cleared_mark_reaches_a_running_session(tmp_path: Path):
     A running session keeps the register in memory, so without re-reading it the session would
     go on refusing the step and the override would be useless exactly when it is needed.
     """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
     settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
     session, rec, store = make_session(tmp_path, [], settings=settings)
     # As if a checker had recorded it earlier.
