@@ -2199,9 +2199,10 @@ class Session:
                 rules=rules,
             )
         if self.config.honesty.mode != "off" and self.honesty_marks:
-            # Enforcement first, because it needs no model call: a command that would run code
-            # the register calls dishonest is denied, and the reason tells Claude how to clear
-            # it (PLAN.md D83). Editing the dirty code is never blocked.
+            # After the deny lists and before the checkers: a rule the user wrote is a
+            # stronger statement than honesty debt, so a step that matches one escalates with
+            # that reason, and the register is only asked when the lists said nothing. Like
+            # the lists, this needs no model call. Editing dirty code is never blocked (D83).
             blocked = (
                 blocking_marks(step, self.honesty_marks, self.workspace)
                 if self.config.honesty.mode == "enforce"

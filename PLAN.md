@@ -629,7 +629,10 @@ fails.
 
 ### 13.4 Enforcement
 
-Two layers, deterministic first, as everywhere else in calu:
+The register is consulted **after** the allow and deny lists and **before** the checkers: a
+rule the user wrote is a stronger statement than honesty debt, so a step that matches a deny
+rule escalates with that reason instead of being refused for being dishonest. Two layers,
+deterministic first, as everywhere else in calu:
 
 1. **The rules path.** The parts a step touches are already extracted for the allow and deny
    lists (`calu.checkers.rules`). A part that matches an open mark's path is denied without a

@@ -1333,3 +1333,54 @@ async def test_tracking_honesty_records_without_blocking(tmp_path: Path):
     assert [m.label() for m in store.honesty_marks if m.open] == ["src/parser.py"]
     checks = {c.tool_name: c for c in rec.of(CheckResult)}
     assert checks["Bash"].decision is not Decision.DENY, "track records, it does not block"
+
+
+async def test_a_deny_rule_outranks_the_honesty_register(tmp_path: Path):
+    """§13.4: a rule the user wrote is a stronger statement than honesty debt.
+
+    A step can both match a deny rule and touch code the register calls dishonest. It must be
+    reported with the rule, because that is what the user asked for explicitly; being refused
+    for dishonesty would hide the more important reason and send Claude to fix the wrong thing.
+    """
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
+    extra = CheckerDefinition(
+        name="honesty",
+        route="edit",
+        instructions="# Honesty checker",
+        model="test:model",
+        request_limit=5,
+        output_tokens_limit=24_000,
+        max_tokens=8_000,
+        version=1,
+    )
+    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    session, rec, _store = make_session(
+        tmp_path,
+        [
+            [
+                {"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"},
+                # `sudo` is on the shipped deny list, and the command also names the dirty file.
+                {
+                    "tool": "Bash",
+                    "input": {"command": "sudo python src/parser.py"},
+                    "result": "no",
+                },
+            ]
+        ],
+        settings=settings,
+        checker_models={
+            **fake_models(),
+            "honesty": marking_checker(dirty=[("src/parser.py", "fields", "the docstring lies")]),
+        },
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        # The rule escalated it: a human decides, and the reason names the rule rather than
+        # the register.
+        assert "deny rule" in request.reason
+        assert "dishonest" not in request.reason
+        await session.decide_escalation(request.escalation_id, "deny", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
