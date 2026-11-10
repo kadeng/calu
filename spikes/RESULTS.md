@@ -181,6 +181,12 @@ same hook without the sleep.
   So a hook that hangs costs its timeout per attempt, which is the reason to keep the PreToolUse
   timeout close to the checker deadline instead of giving it hours.
 - The control wrote the marker, so the setup does prove the point.
+- **Re-run on 2026-11-10** after a day of changes to the gate (the same CLI 2.1.319): the same
+  verdict, `marker written: False` in 11.1 s with two hook calls, and the control wrote the
+  marker in 5.1 s. Worth re-running after any change to the gate, because it is the one
+  property that cannot be checked from inside calu: an automated test can only show that calu's
+  own hook answers, never that Claude Code would have refused to run the step without an
+  answer.
 
 **Conclusion.** In calu's own wrap the hook is an in-process callback of the Agent SDK, so a
 hook that hangs stops the step. calu additionally bounds the checker call inside the hook
