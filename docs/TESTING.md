@@ -177,12 +177,12 @@ measurement in `spikes/RESULTS.md`; item 11 was done as an automated test instea
    could not find, and `calu attach` in a directory with no session must say so and point at
    `calu sessions`. Verified by hand on 2026-11-10 against a throwaway database (the mint and
    the revoke are also a database test).
-13. The ACP adapter as an editor spawns it (D105, D106): the editor's whole configuration is
-   `{"command": "calu", "args": ["acp"]}` with the project as its working directory. With the
-   operator credential stored `--no-password` it must attach; with a password on it, the
-   adapter must **refuse and say so** rather than read the editor's first request as a
-   password -- the automated test asserts the request is still unread, and by hand the thing to
-   check is that the editor shows a clear message instead of hanging.
+13. The ACP adapter in a **real editor** (D105, D106). The configuration itself is covered by
+   `tests/db/test_acp_discovery.py`, which spawns `python -m calu acp` with no arguments in a
+   project directory and speaks ACP to its pipes, both with and without a password on the
+   credential; what is left for a hand check is what an editor makes of it -- that it shows the
+   refusal instead of hanging, and that its permission dialog, its agent-mode picker and its
+   diff view behave.
 14. The password-free credential (D104): `calu credential set operator --no-password`, then
    `calu sessions` and `calu escalations` must run without a prompt, `calu credential list`
    must mark it "file mode only", and `calu doctor` must report it -- as a note for `operator`,

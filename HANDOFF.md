@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**663 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**665 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 212 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -455,7 +455,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    now `{ "command": "calu", "args": ["acp"] }` -- the adapter finds the session running in the
    editor's project directory and mints its own token (D105), which needs the operator
    credential stored with `calu credential set operator --no-password` (D104), because an editor
-   gives the adapter no terminal to answer a password prompt with. The adapter passes an
+   gives the adapter no terminal to answer a password prompt with. That exact configuration is
+   now driven as a real process over real pipes against a real session
+   (`tests/db/test_acp_discovery.py`): the handshake, `session/new` with the editor's `cwd`, the
+   token minted and revoked, nothing but protocol on stdout, and the refusal when the credential
+   has a password. What a real editor adds is its own dialogs, which is what is left. The adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, and is
    driven as a real process over real pipes for the handshake, a prompt, a **denied** step and
    `session/load`'s replay -- but no editor has driven it yet, so expect small mismatches in
