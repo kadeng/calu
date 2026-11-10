@@ -601,3 +601,44 @@ hand instead of my guess.
 
 **Re-run when** a dependency is added or pydantic-ai is updated -- that is what the `binary` job
 of `release.yml` does on every tag.
+
+## What `claude sandbox status` can and cannot answer (Q1, 2026-11-10)
+
+**Question.** The open half of Q1 is what `enableWeakerNestedSandbox` changes inside a
+container, and the reason it stayed open was that measuring it seemed to need a logged-in
+`claude` in that container. The CLI has `claude sandbox status`, which "prints the effective
+sandbox posture ... as one JSON line" and needs neither a session nor a login, so it looked like
+the cheap way in.
+
+**Setup** (CLI 2.1.319). `claude sandbox status` in a throwaway directory whose
+`.claude/settings.json` switches the sandbox on, with and without
+`enableWeakerNestedSandbox`, on the host and in the `calu-dev-dev` image with default seccomp and
+with `--security-opt seccomp=unconfined` -- four combinations -- plus a direct
+`bwrap --unshare-user --unshare-pid --dev-bind / / true` in the container both ways.
+
+**Observations.**
+
+* The posture is **identical** in all four combinations: `enabled: true`,
+  `unavailableReason: null`, `strictMode: false`, `filesystemPolicy: "strict"`. The flag changes
+  nothing it reports.
+* In the same container, `bwrap --unshare-user` really does fail under default seccomp ("No
+  permissions to create new namespace") and works with `seccomp=unconfined`. So the posture
+  command does **not** probe whether the kernel will allow the namespaces; it reports what the
+  settings say and whether the dependencies are installed.
+* It names a missing dependency only when the settings it reads switch the sandbox on: on the
+  host, where socat is missing, the directory with the sandbox enabled reported "socat not
+  installed", and the same command in calu's own checkout (no sandbox in its settings) reported
+  nothing at all.
+* It reads the **project's** settings files, and there is no `--settings` option, so it cannot
+  be asked what calu's own sandbox settings would amount to.
+
+**What follows.** `enableWeakerNestedSandbox` still needs a real tool call in a container, so
+Q1's last line stays open -- but the cheap route is now a measured dead end instead of an
+untried idea. One thing was worth taking from the command: `policyLocked`, a managed settings
+policy that locks the posture, which would override what calu asks for and is invisible
+otherwise. `calu doctor` now reports that and a reason the CLI gives against building a sandbox,
+and stays quiet when the posture says nothing -- because silence there means nothing, and
+calu's own `bwrap`/`socat` checks are the honest answer to whether the tools are present.
+
+**Re-run when** the CLI gains a way to probe the namespaces (or a `--settings` option for this
+command), which would make it a better preflight than calu's own checks.

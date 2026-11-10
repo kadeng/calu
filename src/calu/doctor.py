@@ -11,6 +11,7 @@ database answer and is its schema current.
 Nothing here changes anything: it reads, and it says what to do about what it finds.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
+from typing import Any
 
 from calu import __version__
 from calu.changes import default_root
@@ -325,6 +327,99 @@ def essential_missing(findings: Sequence[Finding]) -> bool:
     return any(not finding.ok and finding.essential for finding in findings)
 
 
+def sandbox_posture(workspace: Path) -> dict[str, Any] | None:
+    """Ask the Claude Code CLI what sandbox it would build in `workspace`.
+
+    `claude sandbox status` prints one JSON line and needs neither a session nor a login, so it
+    is the authoritative answer to "would the sandbox come up here?" -- it knows which
+    dependencies the installed CLI requires and whether a managed settings policy locks the
+    posture. It reads the settings files of the current directory, so it is run **in** the
+    workspace.
+
+    What it does **not** tell (measured, `spikes/RESULTS.md`): whether the kernel will actually
+    let bubblewrap create the namespaces. Inside a default Docker container, where
+    `bwrap --unshare-user` fails, it still reports the sandbox as enabled with no reason
+    against it.
+
+    Args:
+        workspace: The project directory whose settings should be taken into account.
+
+    Returns:
+        The parsed JSON, or None if the CLI is missing, failed, timed out or printed something
+        that is not JSON. Never raises.
+    """
+    path = shutil.which("claude")
+    if path is None or not workspace.is_dir():
+        return None
+    try:
+        done = subprocess.run(  # a fixed program, no shell
+            [path, "sandbox", "status"],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_TIMEOUT_S,
+            cwd=workspace,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
+        return None
+    for line in done.stdout.splitlines():
+        if line.startswith("{"):
+            try:
+                found = json.loads(line)
+            except json.JSONDecodeError:
+                return None
+            return found if isinstance(found, dict) else None
+    return None
+
+
+def posture_findings(workspace: Path) -> list[Finding]:
+    """Report what the CLI's own sandbox posture says and nothing more.
+
+    The posture is about the **project's** settings, not calu's: calu asks for the sandbox with
+    its own `--settings` when it starts a session. Measured consequences (`spikes/RESULTS.md`):
+    the CLI names a missing dependency only when the project's settings switch the sandbox on,
+    so silence there means nothing, and `calu doctor`'s own `bwrap`/`socat` checks are the
+    honest answer to "are the tools here". What the posture adds that nothing else sees is a
+    **managed settings policy that locks it**, which would override what calu asks for.
+
+    So this reports two things and stays quiet otherwise: a locked policy, and a reason the CLI
+    itself gives against building a sandbox.
+
+    Args:
+        workspace: The project directory a session would run in.
+
+    Returns:
+        A finding per thing worth saying; an empty list when the CLI did not answer or had
+        nothing to report.
+    """
+    posture = sandbox_posture(workspace)
+    if posture is None:
+        return []
+    findings: list[Finding] = []
+    if posture.get("policyLocked"):
+        findings.append(
+            Finding(
+                "sandbox policy",
+                False,
+                "a managed settings policy locks the sandbox posture",
+                "calu's own `--settings` may not win against it; check the managed settings "
+                "before trusting `claude.sandbox` in calu's configuration.",
+            )
+        )
+    reason = str(posture.get("unavailableReason") or "")
+    if reason:
+        findings.append(
+            Finding(
+                "sandbox here",
+                False,
+                reason.split(" · ")[0],
+                "From `claude sandbox status` in the workspace, which knows what the installed "
+                "CLI needs.",
+            )
+        )
+    return findings
+
+
 def workspace_findings(workspace: Path) -> list[Finding]:
     """Check one project directory.
 
@@ -332,8 +427,9 @@ def workspace_findings(workspace: Path) -> list[Finding]:
         workspace: The directory a session would run in.
 
     Returns:
-        Findings for the directory itself and for whether it is a git repository (which the
-        changeset checker and the commit links need).
+        Findings for the directory itself, for whether it is a git repository (which the
+        changeset checker and the commit links need), and for the sandbox the CLI would build
+        here (`posture_findings`).
     """
     return [
         Finding(
@@ -350,4 +446,5 @@ def workspace_findings(workspace: Path) -> list[Finding]:
             "The changeset checker reviews commits, and the write sets name a commit; without "
             "git both simply do less.",
         ),
+        *posture_findings(workspace),
     ]

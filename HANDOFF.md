@@ -45,7 +45,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**443 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**444 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 90 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
 instructions), ~8.9k of tests, 14 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -342,8 +342,13 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    new project is now a proposal to confirm (D45, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs
    `security_opt: [seccomp:unconfined]` and socat — calu's own `dev` service and image now have
-   both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested, because it needs
-   a logged-in `claude` inside a container.
+   both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested: it needs a
+   real tool call in a container, and the cheap route is a measured dead end --
+   `claude sandbox status` needs no login but reports the same posture with and without the
+   flag, and does not probe whether the kernel allows the namespaces (`spikes/RESULTS.md`,
+   "What `claude sandbox status` can and cannot answer"). What came out of it: `calu doctor`
+   now reports a managed policy that locks the sandbox posture, which would override calu's
+   own settings.
 4. Smaller gaps: a client of a session still cannot change what steers the checkers through the
    protocol, by design (the session role may only read it, §12 phase 4) -- except the
    auto-escalation switches, which are session-local and audited (D42, D43). Editing a single

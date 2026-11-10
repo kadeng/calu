@@ -101,3 +101,46 @@ def test_the_web_extra_is_reported_but_never_essential() -> None:
     else:
         assert "calu[web]" in findings[0].advice
     assert doctor.essential_missing(findings) is False
+
+
+def test_the_sandbox_posture_is_only_reported_when_it_says_something(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The CLI's posture is about the project's settings, so silence must stay silent."""
+    # Nothing to report: no finding at all, rather than a claim calu cannot stand behind.
+    monkeypatch.setattr(
+        doctor,
+        "sandbox_posture",
+        lambda _workspace: {"enabled": False, "unavailableReason": None, "policyLocked": False},
+    )
+    assert doctor.posture_findings(tmp_path) == []
+
+    # The CLI could not answer at all (no CLI, a timeout, not JSON).
+    monkeypatch.setattr(doctor, "sandbox_posture", lambda _workspace: None)
+    assert doctor.posture_findings(tmp_path) == []
+
+    # A reason against building one is worth saying, with only its first clause.
+    monkeypatch.setattr(
+        doctor,
+        "sandbox_posture",
+        lambda _workspace: {
+            "unavailableReason": "socat not installed · install missing tools",
+            "policyLocked": False,
+        },
+    )
+    found = doctor.posture_findings(tmp_path)
+    assert [f.name for f in found] == ["sandbox here"]
+    assert found[0].detail == "socat not installed"
+    assert found[0].ok is False
+
+    # A locked managed policy is the one thing nothing else sees.
+    monkeypatch.setattr(
+        doctor,
+        "sandbox_posture",
+        lambda _workspace: {"unavailableReason": None, "policyLocked": True},
+    )
+    found = doctor.posture_findings(tmp_path)
+    assert [f.name for f in found] == ["sandbox policy"]
+    assert "may not win" in found[0].advice
+    # Never essential: a session still starts, it is the isolation that is in doubt.
+    assert doctor.essential_missing(found) is False
