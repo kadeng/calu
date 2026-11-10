@@ -195,6 +195,12 @@ Read the result as follows:
   already exited raises `ProcessLookupError` and turns a passing test into a flake. Write
   `if process.returncode is None:` around it. This cost two red runs in one day before the
   three process-level tests were made consistent.
+- A test that spawns a process must put **stderr into its failure message**. A process-level
+  test that fails with "stdout ended" and nothing else cannot be diagnosed, and the occurrence
+  is often not reproducible: `test_acp_process.py` failed once in a full suite run on
+  2026-11-10 and was then clean for 17 runs (6 of the whole suite, 8 of the process tests
+  alone, 3 earlier), so the message was all there was to go on -- and it said nothing. Both
+  process tests now quote the exit code, how far the protocol got and all of stderr.
 
 - Unit tests use the fake runner (`calu.claude.FakeRunner`, a scripted stand-in for Claude Code)
   and the rule-based fake checkers (`calu.testing`), so they need no API key and no `claude`.

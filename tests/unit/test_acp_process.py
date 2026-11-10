@@ -34,16 +34,36 @@ TIMEOUT_S = 40
 class Editor:
     """An ACP client on the pipes of a subprocess."""
 
-    def __init__(self, process: Any) -> None:
+    def __init__(self, process: Any, errors: Path | None = None) -> None:
         """Wrap the process.
 
         Args:
             process: The running `calu acp` process.
+            errors: The file its stderr was redirected to. Named here so that a failure can
+                quote it: this test failed once in a full suite run and said only "the adapter
+                closed stdout", which told nobody anything. The attach test includes stderr for
+                the same reason (`docs/TESTING.md`).
         """
         self.process = process
+        self.errors = errors
         self.id = 0
         self.buffer = b""
         self.lines: list[dict[str, Any]] = []
+
+    def _diagnosis(self) -> str:
+        """Describe why the process stopped answering, for a failure message.
+
+        Returns:
+            The exit code, the lines read so far and whatever reached stderr.
+        """
+        said = ""
+        if self.errors is not None and self.errors.exists():
+            said = self.errors.read_text(encoding="utf-8", errors="replace")
+        return (
+            f"exit {getattr(self.process, 'returncode', None)}; "
+            f"{len(self.lines)} protocol message(s) read"
+            f"\nstderr was:\n{said or '(empty)'}"
+        )
 
     async def send(self, method: str, params: dict[str, Any]) -> int:
         """Send a request and return its id.
@@ -79,13 +99,15 @@ class Editor:
                 try:
                     message = json.loads(raw)
                 except json.JSONDecodeError:  # pragma: no cover - the failure this guards
-                    pytest.fail(f"stdout carried a line that is not protocol: {raw!r}")
+                    pytest.fail(
+                        f"stdout carried a line that is not protocol: {raw!r}. {self._diagnosis()}"
+                    )
                 self.lines.append(message)
                 if wanted(message):
                     return message
             chunk = await self.process.stdout.receive(4096)
             if not chunk:
-                pytest.fail("the adapter closed stdout before answering")
+                pytest.fail(f"the adapter closed stdout before answering. {self._diagnosis()}")
             self.buffer += chunk
 
     def _take_lines(self) -> list[str]:
@@ -125,7 +147,7 @@ async def test_calu_acp_answers_an_editor_and_keeps_stdout_clean(tmp_path: Path)
                 cwd=str(tmp_path),
                 stderr=log.fileno(),
             )
-        editor = Editor(process)
+        editor = Editor(process, errors)
         try:
             with anyio.fail_after(TIMEOUT_S):
                 first = await editor.send("initialize", {"protocolVersion": 1})
@@ -210,7 +232,7 @@ async def test_calu_acp_carries_a_denial_and_replays_a_loaded_session(tmp_path: 
                 cwd=str(tmp_path),
                 stderr=log.fileno(),
             )
-        editor = Editor(process)
+        editor = Editor(process, errors)
         try:
             with anyio.fail_after(TIMEOUT_S):
                 first = await editor.send("initialize", {"protocolVersion": 1})
