@@ -1,9 +1,12 @@
 """`calu attach`: rendering received events and turning typed lines into requests."""
 
+import ast
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from calu import attach
 from calu.attach import Console, Printer, describe_state, render
 from calu.protocol.client import RequestFailed
 
@@ -336,15 +339,44 @@ async def test_a_message_to_a_subagent_needs_both_an_id_and_a_text(capsys):
         assert "needs a subagent id and a text" in capsys.readouterr().out
 
 
+def console_commands() -> list[str]:
+    """Return every command `Console.line` answers, read out of its own `match` statement.
+
+    The list used to be written out by hand here, and a command missing from `/help` is a
+    command nobody finds -- `/why`, which is what an escalation is decided from, was missing
+    once. A hand-written list cannot catch the next one, so the arms of the `match` are parsed
+    instead: `case "/why":` and `case "/allow" | "/deny":` both contribute their literals.
+
+    Returns:
+        The command words, with the leading slash, in source order.
+
+    Raises:
+        AssertionError: If the parse finds no commands, which would make the check useless.
+    """
+    source = (Path(attach.__file__)).read_text(encoding="utf-8")
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.match_case):
+            continue
+        patterns = (
+            node.pattern.patterns if isinstance(node.pattern, ast.MatchOr) else [node.pattern]
+        )
+        for pattern in patterns:
+            if isinstance(pattern, ast.MatchValue) and isinstance(pattern.value, ast.Constant):
+                value = pattern.value.value
+                if isinstance(value, str) and value.startswith("/"):
+                    found.append(value)
+    assert len(found) > 10, f"the parse found only {found}; the check would prove nothing"
+    return found
+
+
 async def test_help_and_an_unknown_command_both_show_the_commands(capsys):
     """Nobody should have to read the source to find out what `calu attach` takes."""
     con, client = console()
     await con.line("/help")
     helped = capsys.readouterr().out
-    # Every command the console answers has to be in it, `/why` and `/checkers` included --
-    # `/why` is what an escalation is decided from, and it used to be missing.
-    for command in ("/why", "/checkers", "/to", "/allow", "/answer", "/comment", "/history"):
-        assert command in helped, f"{command} is not in the help line"
+    missing = [command for command in console_commands() if command not in helped]
+    assert missing == [], f"the console answers these but `/help` does not name them: {missing}"
     await con.line("/nonsense")
     said = capsys.readouterr().out
     assert "unknown command /nonsense" in said

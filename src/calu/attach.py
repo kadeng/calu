@@ -51,12 +51,17 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 """Event class per method, to turn the received params back into an event for rendering."""
 
 HELP = (
-    "/quit  /stop  /start [resume id]  /interrupt  /why <id>  /allow <id> [note]  "
-    "/deny <id> [note]  /answer <id> <text>  "
+    "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  "
+    "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
     "/checkers  /sessions  /history [id]  /shutdown"
 )
-"""One line listing the commands, printed on connect and for an unknown command."""
+"""One line listing the commands, printed on connect and for an unknown command.
+
+Every command `Console.line` answers belongs here, aliases included: a command that is not in
+this line is a command nobody finds. `tests/unit/test_attach.py` reads the commands out of the
+`match` statement and fails when one is missing, which is how `/help` and the `/exit` alias
+turned out to be absent from it."""
 
 
 def render(method: str, params: dict[str, Any]) -> str | None:
