@@ -50,6 +50,9 @@ class EvalCase(BaseModel):
     context: str = ""
     no_comment: bool = False
     """True if a good checker leaves `comment` empty (e.g. it would contradict the user)."""
+    cwd: str = ""
+    """The working directory the case claims to run in; "" uses `runner.EVAL_CWD`. It is
+    deliberately not the temporary directory the case really runs in (PLAN.md D71)."""
     source: str = ""
     """Where the case came from (file name or "escalations"); set when loading."""
 

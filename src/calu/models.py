@@ -31,8 +31,13 @@ from pydantic_ai.settings import ModelSettings
 MISTRAL_EU_BASE_URL = "https://api.eu.mistral.ai"
 """Mistral's EU endpoint; the default for all "mistral:" models."""
 
-MAX_ANSWER_TOKENS = 4_000
-"""Default cap on the output tokens of one model answer (thinking included on most providers)."""
+MAX_ANSWER_TOKENS = 8_000
+"""Default cap on the output tokens of one model answer (thinking included on most providers).
+
+Measured on a reasoning model: with 4000, a checker judging an obfuscated command reproducibly
+spent the whole cap on thinking and never wrote a decision, which escalates the step with "the
+checker failed" instead of deciding it (PLAN.md D72). `CheckerConfig.max_tokens` overrides it
+per checker."""
 
 log = logging.getLogger(__name__)
 

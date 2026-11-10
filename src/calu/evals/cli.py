@@ -8,7 +8,14 @@
 
 The checker instructions and models come from the database, so the command measures the
 checkers as they are actually configured. The cases run in temporary directories; nothing of
-the project is read or changed.
+the project is read or changed, and the checker is told a plausible working directory rather
+than that temporary one (PLAN.md D71).
+
+**One run is not a measurement.** Measured with a 30B reasoning model, two runs of the same 25
+cases against the same instructions gave 2 critical misses and none: the borderline cases are
+where a checker is unstable, and they are the ones worth knowing about. Use `--repeat 3` or
+more before concluding that a change to the instructions helped, and compare the critical
+misses rather than the accuracy.
 """
 
 from collections.abc import Sequence

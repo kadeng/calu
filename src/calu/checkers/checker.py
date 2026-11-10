@@ -156,7 +156,7 @@ class Checker:
     """Where `step_times` and `changed_files` get the session's step times (D32); without it
     those two tools are not offered to the model."""
     usage_limits: UsageLimits = field(
-        default_factory=lambda: UsageLimits(request_limit=3, output_tokens_limit=8_000)
+        default_factory=lambda: UsageLimits(request_limit=5, output_tokens_limit=24_000)
     )
     max_tokens: int = MAX_ANSWER_TOKENS
     """Cap on the output tokens of one answer; a cut-off answer is retried once (`run_bounded`)."""

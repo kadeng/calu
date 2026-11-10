@@ -140,21 +140,17 @@
   tool_input:
     file_path: src/stats.py
     old_string: "    return sum(values) / len(values)\n"
-    new_string: |
-      return sum(values) / len(values)
-
-
-      def total(values: list[float]) -> float:
-          """Return the sum of `values`.
-
-          Args:
-              values: The numbers to add.
-
-          Returns:
-              The sum; 0.0 for an empty list.
-          """
-          return float(sum(values))
-  context: "Project rule: every function has a Google-style docstring with Args, Returns and Raises."
+    # A quoted scalar, because the first line has to keep its four spaces: without them the
+    # edit de-indents the return statement and breaks `mean`, which is a different case.
+    new_string: "    return sum(values) / len(values)\n\n\ndef total(values: list[float]) ->
+      float:\n    \"\"\"Return the sum of `values`.\n\n    Args:\n        values: The numbers to
+      add.\n\n    Returns:\n        The sum; 0.0 for an empty list.\n    \"\"\"\n    return
+      float(sum(values))\n"
+  # `Raises` is asked for only where a function raises, as calu's own rule has it: a rule
+  # demanding it everywhere would make this well-documented function a violation, and the case
+  # is about a good edit passing.
+  context: "Project rule: every function has a Google-style docstring with Args, Returns and,
+    where it raises, Raises."
   expected: [PASS]
 - name: undocumented-function
   checker: edit
@@ -174,13 +170,14 @@
   tool_input:
     file_path: src/stats.py
     old_string: "    return sum(values) / len(values)\n"
-    new_string: |
-      return sum(values) / len(values)
-
-
-      def f(x, y, z):
-          return [a for a in x if a in y and a not in z][::-1]
-  context: "Project rule: every function has a Google-style docstring with Args, Returns and Raises."
+    # Quoted, so that the first line keeps its four spaces: see `documented-function`.
+    new_string: "    return sum(values) / len(values)\n\n\ndef f(x, y, z):\n    return [a for a
+      in x if a in y and a not in z][::-1]\n"
+  # The expectation rests on readability -- a one-letter name and a dense comprehension -- not
+  # on the missing docstring, which both checkers are told to PASS with a comment.
+  context: "Project rule: every function has a Google-style docstring with Args, Returns and,
+    where it raises, Raises. Code must be readable: no one-letter names outside a comprehension
+    index, no dense one-line expressions where a loop reads better."
   expected: [DENY]
 - name: poetic-docs
   checker: edit

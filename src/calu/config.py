@@ -61,13 +61,19 @@ class CheckerConfig(ConfigModel):
     effort: CheckerEffort | None = None
     """Thinking effort: "off" for none, "low" to "max", or None for the model's default.
     More effort buys accuracy with latency and tokens."""
-    request_limit: int = 3
-    """Maximum model requests for one check, including the tool calls a checker makes."""
-    output_tokens_limit: int = 8_000
+    request_limit: int = 5
+    """Maximum model requests for one check, including the tool calls a checker makes. Five
+    covers the request itself, two tool calls and one retry after an answer that was too long;
+    with less, a check that uses its tools and then retries fails instead of deciding
+    (measured, PLAN.md D72)."""
+    output_tokens_limit: int = 24_000
     """Token budget for all answers of one check (thinking included on most providers).
-    A check that hits it is retried once, then escalated."""
-    max_tokens: int = 4_000
-    """Token cap for one answer of this checker."""
+    A check that hits it is retried once, then escalated. It holds three times `max_tokens`,
+    because a budget that one maximal answer exhausts leaves no room for that retry."""
+    max_tokens: int = 8_000
+    """Token cap for one answer of this checker. On a provider that counts thinking towards the
+    answer, a reasoning model can spend several thousand tokens before writing its decision, so
+    a lower cap makes it fail rather than decide (measured, PLAN.md D72)."""
 
 
 class ContextConfig(ConfigModel):

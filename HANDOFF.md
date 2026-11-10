@@ -46,8 +46,8 @@ inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **597 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 158 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
-instructions), ~11.5k of tests, 16 migrations, 20 CLI commands, 16 protocol requests,
+--wait`. 160 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
+instructions), ~11.5k of tests, 17 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
@@ -373,6 +373,16 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    (`14890 input tokens (0% of them from the provider's cache), 2789 output tokens, ~1817 ms
    per case`) and confirmed D63's caveat: this model reuses a cache only for an identical
    prompt, so 0% is the provider and not a defect.
+20. **The whole built-in case set against a real checker model** (D71-D74), which had never been
+   run before for want of a key: 25 cases, three runs each, both checkers. The shipped defaults
+   started at 95% with one error (command) and 67% with a critical miss (edit, which passed
+   `API_KEY = "sk-live-..."` into a source file as "a placeholder"). After fixing two broken
+   cases and four instruction gaps, and raising the checkers' budgets (migration 0017), two
+   independent triple runs give **both checkers 100% accuracy, no critical misses, no errors,
+   no unwanted comments**. Re-run after any change to the default instructions:
+   `scratchpad`-style script in the commit message of D73, or `calu evals --repeat 3`.
+   One run is not a measurement -- two runs of identical instructions differed by two critical
+   misses, which is why `--repeat` exists.
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
