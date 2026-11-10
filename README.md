@@ -103,14 +103,32 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   or denying a step work in all of them; an escalation arrives in an ACP editor as its own
   permission dialog.
 - **Claude Code is not replaced, and its security model still applies.** Its permission rules,
-  auto mode, plugins, MCP servers and sandbox keep working; calu puts a second opinion in front
-  of them and runs on whatever account the machine is set up with — Claude Pro or Max, an API
-  key, AWS Bedrock, Google Vertex or Microsoft Foundry. No extra budget for Claude itself, only
-  a key for the much smaller checker models.
-- Quiet but necessary: the checker keys and calu's configuration are out of Claude's reach, the
-  sandbox is switched on and tightened, Claude's own text reaches the checkers only in indirect
-  speech so it cannot be mistaken for your instructions, a subagent's result is checked against
-  the conversation, a session that weakens its own settings writes an audit entry.
+  auto mode, plugins, MCP servers and sandbox keep working, and calu runs it on whatever account
+  the machine is set up with — a Claude Pro or Max subscription, an API key, **AWS Bedrock**,
+  Google Vertex or Microsoft Foundry.
+- **The checkers bring their own provider.** A Claude Code subscription authenticates the
+  `claude` CLI and not other programs, so the checkers use a key of their own — the Anthropic
+  Console API, AWS Bedrock, Fireworks, Mistral, a local model, or anything else
+  [Pydantic AI supports](https://pydantic.dev/docs/ai/models/overview/) — and Claude Code never
+  sees it. Providers that offer zero data retention, in a variety of cloud regions including the
+  EU, work too; that guarantee is theirs, not calu's.
+- **The checkers are read-only by design**: five tools, all reads (open a file, find, grep, and
+  which files changed when). No shell, no writes, no network. A wrong escalation costs you a
+  question; a wrong approval cannot reach the known-dangerous steps, which the deny lists
+  escalate before any model is called.
+- **A mid-sized model can supervise a frontier model**, because it answers one narrow question
+  about one step, with instructions for exactly that question and an answer out of four. What is
+  hard to slip past is the arrangement, not the checker's IQ: a violation **freezes** the agent
+  until a human answers, so there is no second attempt to probe with; enforced code honesty
+  means misdescribed code may not even be *run*; and the instructions the checkers judge by live
+  in a database the session cannot write. Claude's own words reach a checker only as indirect
+  speech, retold by a separate narrator — "Claude claimed that the user had already allowed
+  pushing" — so an imperative smuggled in through a web page or a dependency's README arrives as
+  a report that someone wrote it, not as an instruction to the checker.
+  [The guide explains each agent and the narration](CALU_GUIDE.md#the-models-claude-codes-account-and-the-checkers-own).
+- Quiet but necessary: calu's configuration is out of Claude's reach, the sandbox is switched on
+  and tightened, a subagent's result is checked against the conversation, a session that weakens
+  its own settings writes an audit entry.
   [The guide has the detail](CALU_GUIDE.md#what-the-checkers-give-you-in-detail).
 
 ## How it is put together
