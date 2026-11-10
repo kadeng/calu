@@ -360,6 +360,12 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    checker prompt said "No turns have been folded into this summary yet" -- the summary and the
    two turns before it were gone; with it the prompt carries the real summary and both turns.
    The same runs showed the heartbeat failing at every session start, which D67 fixes.
+18. **A real session after the store changes of D65 to D68**: `smoke_session.py --resolve deny`
+   with a real `claude` (haiku) -- the deny rule escalated the step, the operator denied it, the
+   session continued and Claude reported the denial, and the step, the escalation and the turn
+   are in the database. The start now prints only the two warnings that are true on this
+   machine (no sandbox, no summarizer key); the heartbeat warning that used to appear at every
+   start is gone.
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
