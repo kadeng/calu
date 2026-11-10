@@ -759,6 +759,9 @@ async def test_the_rules_page_shows_the_honesty_register_and_clears_a_mark(db_ur
             assert "src/parser.py:fields" in page
             assert "the docstring lies" in page
             assert "feature/x" in page
+            # This page lists every project's marks, so each row says which project it is from
+            # (D126); a bare `src/parser.py` would be the same line for three repositories.
+            assert "/w" in page and "box" in page
 
             (mark,) = await herd.honesty_marks(db)
             # Clearing is the override for a mark nobody agrees with; the row is kept.

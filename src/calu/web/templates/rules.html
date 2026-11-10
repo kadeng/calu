@@ -11,12 +11,17 @@
   editing them is not, because that is how the record clears itself. Clear a mark by hand when
   nobody agrees with it.</p>
 <table>
-  <thead><tr><th>#</th><th>Where</th><th>What disagrees</th><th>Branch</th><th></th></tr></thead>
+  <thead><tr><th>#</th><th>Where</th><th>Project</th><th>What disagrees</th><th>Branch</th>
+    <th></th></tr></thead>
   <tbody>
   {% for m in marks %}
     <tr>
       <td class="muted">{{ m.id }}</td>
       <td class="mono">{{ m.label() }}</td>
+      {# This page lists the marks of every project in the database, so a bare `src/parser.py`
+         says nothing about which one. The session page filters by project and needs no column
+         like this (D126). #}
+      <td class="muted mono">{{ (m.hostname ~ ':' if m.hostname else '') ~ (m.workspace or '?') }}</td>
       <td>{{ m.reason }}</td>
       <td class="muted">{{ m.git_branch or '' }}</td>
       <td>
