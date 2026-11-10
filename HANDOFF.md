@@ -45,7 +45,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**580 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**583 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 126 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 16 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -57,7 +57,8 @@ there.
 - **Checker record** (D61): `calu checker stats [--days N]` and the web checkers page report,
   per checker, what it decided and where a human disagreed -- escalations that were allowed
   (caution for nothing) and steps it approved that were then denied (misses). Read from the
-  record, no model called.
+  record, no model called. `calu checker misses [NAME]` lists the rows behind those counts,
+  with the escalation id, so the instructions can be fixed against a real case (D62).
 - **Docs**: `README.md` for users, `docs/CONFIGURATION.md` (generated from `calu.config` by
   `calu.configdoc`; `tests/unit/test_configdoc.py` fails when the file and the model
   disagree, or a field has no docstring), `docs/TESTING.md` for the four layers and the

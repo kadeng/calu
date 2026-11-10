@@ -7,7 +7,7 @@ from calu.checkers import Decision
 from calu.db import Db, connect
 from calu.evals import cases_from_escalations
 from calu.setup import setup
-from calu.store import CheckerRun, DatabaseSessionStore, SessionIdentity, StepRow
+from calu.store import CheckerRun, DatabaseSessionStore, SessionIdentity, StepDecision, StepRow
 from calu.tokens import token_hash
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -365,5 +365,73 @@ async def test_the_checkers_record_says_where_a_human_disagreed(db_url: str) -> 
         await db.execute("UPDATE checker_runs SET created_at = now() - interval '30 days'")
         assert await herd.checker_stats(db, since_days=7) == []
         assert await herd.checker_stats(db, since_days=60) != []
+    finally:
+        await owner.close()
+
+
+async def test_the_steps_a_checker_approved_and_a_human_denied_are_listable(
+    db_url: str,
+) -> None:
+    """D61's counts point at these rows; D62 lets a person read them."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+
+        # A step the edit checker approved, held back by a category, then denied by a human.
+        approved = await store.add_step(
+            StepRow(seq=1, tool_name="Bash", tool_input={"command": "rm -rf build"})
+        )
+        await store.decide_step(
+            approved, StepDecision(decision="pass", reason="", summary="Deletes the build dir.")
+        )
+        await store.add_checker_run(
+            approved,
+            CheckerRun(
+                checker_name="command",
+                checker_version=1,
+                model="test:model",
+                decision="pass",
+                reason="removing a build directory is routine",
+            ),
+        )
+        escalation = await store.open_escalation("every command waits", {}, approved)
+        assert await herd.resolve(db, escalation, "deny", "not this directory") is True
+
+        # A step it escalated and a human allowed is not a miss: the caution was wrong, not the
+        # approval.
+        cautious = await store.add_step(
+            StepRow(seq=2, tool_name="Bash", tool_input={"command": "ls"})
+        )
+        await store.add_checker_run(
+            cautious,
+            CheckerRun(
+                checker_name="command", checker_version=1, model="test:model", decision="escalate"
+            ),
+        )
+        other = await store.open_escalation("why", {}, cautious)
+        await herd.resolve(db, other, "allow")
+
+        (miss,) = await herd.checker_misses(db)
+        assert miss.escalation_id == escalation
+        assert miss.checker_name == "command" and miss.decision == "pass"
+        assert miss.command == "rm -rf build"
+        assert miss.checker_reason == "removing a build directory is routine"
+        assert miss.human_note == "not this directory"
+        line = miss.line()
+        assert f"escalation {escalation}" in line
+        assert "command said pass" in line
+        assert "rm -rf build" in line
+        assert "human: denied -- not this directory" in line
+
+        # Filtering by checker and by age works, and the counts agree with the stats.
+        assert await herd.checker_misses(db, checker="edit") == []
+        assert len(await herd.checker_misses(db, checker="command")) == 1
+        stats = {row.checker_name: row for row in await herd.checker_stats(db)}
+        assert stats["command"].passed_then_denied == 1
+        await db.execute("UPDATE escalations SET resolved_at = now() - interval '30 days'")
+        assert await herd.checker_misses(db, since_days=7) == []
     finally:
         await owner.close()

@@ -1240,6 +1240,9 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
 
     `stats` reads what the checkers already decided and what humans did with it, so it costs
     nothing and describes this project's real steps rather than the eval set (PLAN.md D61).
+    `misses` lists the rows those counts point at -- a step a checker approved that a human
+    then denied -- with the escalation id, so `calu escalation <id>` shows the whole context
+    and the instructions can be fixed against a real case (D62).
 
     `set --instructions-file` reads the new instructions from a file, or from stdin for "-";
     `edit` opens them in `$EDITOR` and stores them when the editor closes.
@@ -1255,7 +1258,7 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
-    if args.action not in ("list", "stats") and not args.name:
+    if args.action not in ("list", "stats", "misses") and not args.name:
         raise CliError(f"checker {args.action} needs a NAME")
     if args.action == "edit":
         _edit_checker(args, store)
@@ -1283,6 +1286,17 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         if args.action == "list":
             rows = await admin.checkers(db)
             return "\n".join(row.line() for row in rows) or "no checkers"
+        if args.action == "misses":
+            # The rows D61's counts point at: what a checker approved and a human refused.
+            found = await herd.checker_misses(db, args.name, args.days)
+            if not found:
+                scope = f" of {args.name}" if args.name else ""
+                return (
+                    f"no misses{scope}: no step a checker approved was denied by a human. "
+                    "They only appear when an auto-escalation category makes somebody look at "
+                    "an approved step (`calu config set auto_escalate.edits true`)."
+                )
+            return "\n\n".join(row.line() for row in found)
         if args.action == "stats":
             # From the record, not by running anything: free, and about this project's real
             # steps rather than the eval set (PLAN.md D61).
@@ -1688,7 +1702,7 @@ def build_parser() -> argparse.ArgumentParser:
     config.set_defaults(handler=cmd_config)
 
     checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
-    checker.add_argument("action", choices=["list", "show", "set", "edit", "stats"])
+    checker.add_argument("action", choices=["list", "show", "set", "edit", "stats", "misses"])
     checker.add_argument("name", nargs="?", help="checker name, e.g. command")
     checker.add_argument(
         "--instructions-file", help="read new instructions from this file ('-' for stdin)"
@@ -1703,7 +1717,7 @@ def build_parser() -> argparse.ArgumentParser:
     checker.add_argument(
         "--days",
         type=int,
-        help="for `stats`: only count the checks of the last N days (default: all of them)",
+        help="for `stats` and `misses`: only the last N days (default: all of them)",
     )
     checker.set_defaults(handler=cmd_checker)
 

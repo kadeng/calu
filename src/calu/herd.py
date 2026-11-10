@@ -865,6 +865,79 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
     return [CheckerStats(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class CheckerMiss:
+    """A step a checker approved that a human then denied (PLAN.md D62)."""
+
+    escalation_id: int
+    checker_name: str
+    decision: str
+    """What the checker decided -- "pass" or "allow"."""
+    checker_reason: str
+    tool_name: str
+    summary: str
+    """The checker's one-line summary of the step, or "" if it wrote none."""
+    command: str
+    """The command for a Bash step, else "" (the whole input is in the escalation)."""
+    human_note: str
+    """What the human wrote when they denied it; "" if they wrote nothing."""
+    at: datetime
+
+    def line(self) -> str:
+        """Render the miss as two terminal lines.
+
+        Returns:
+            What the checker said and what the human did, with the escalation id so that
+            `calu escalation <id>` shows the whole context.
+        """
+        what = self.command or self.summary or self.tool_name
+        said = " ".join((self.checker_reason or "(no reason)").split())[:160]
+        note = " ".join((self.human_note or "(no note)").split())[:160]
+        return (
+            f"escalation {self.escalation_id}  {self.checker_name} said {self.decision}"
+            f"  {self.at:%Y-%m-%d %H:%M}\n    step: {' '.join(what.split())[:160]}"
+            f"\n    checker: {said}\n    human: denied -- {note}"
+        )
+
+
+async def checker_misses(
+    db: Db, checker: str | None = None, since_days: int | None = None, limit: int = 20
+) -> list[CheckerMiss]:
+    """List the steps a checker approved and a human then denied, newest first.
+
+    These are the rows worth reading when the instructions are tuned: a checker that escalates
+    too much is an annoyance, one that approves what a human refuses is the error calu exists to
+    prevent. They only reach the record because an auto-escalation category made somebody look
+    at an approved step (D42, D50), so this list is as long as that category was switched on.
+
+    Args:
+        db: A connection that may read `checker_runs`, `steps` and `escalations`.
+        checker: Only this checker's misses; None for all of them.
+        since_days: Only the last N days; None for all of them.
+        limit: Maximum number returned, newest first.
+
+    Returns:
+        One entry per miss, newest first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT e.id, c.checker_name, c.decision, coalesce(c.reason, ''), s.tool_name,"
+        " coalesce(s.summary, ''), coalesce(s.tool_input->>'command', ''),"
+        " coalesce(e.note, ''), e.resolved_at"
+        " FROM checker_runs c"
+        " JOIN steps s ON s.id = c.step_id"
+        " JOIN escalations e ON e.step_id = c.step_id"
+        " WHERE c.decision IN ('pass', 'allow') AND e.state = 'denied'"
+        "   AND (%s::text IS NULL OR c.checker_name = %s::text)"
+        "   AND (%s::int IS NULL OR e.resolved_at > now() - make_interval(days => %s::int))"
+        " ORDER BY e.resolved_at DESC NULLS LAST LIMIT %s",
+        (checker, checker, since_days, since_days, limit),
+    )
+    return [CheckerMiss(*row) for row in rows]
+
+
 async def project_of(db: Db, session_id: str) -> tuple[str, str] | None:
     """Read the project a session belongs to.
 

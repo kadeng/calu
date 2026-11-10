@@ -401,3 +401,33 @@ async def test_the_checkers_record_is_readable_from_the_command_line(prepared, c
     await db.execute("UPDATE checker_runs SET created_at = now() - interval '90 days'")
     assert await run(["checker", "stats", "--days", "7"]) == 0
     assert "no checker has run yet" in capsys.readouterr().out
+
+
+async def test_the_misses_are_readable_and_say_so_when_there_are_none(prepared, capsys) -> None:
+    """`calu checker misses` points at the rows worth fixing instructions against (D62)."""
+    db, _session_id, escalation = prepared
+    # The fixture's escalation came from a checker that escalated, so nothing was missed.
+    assert await run(["checker", "misses"]) == 0
+    empty = capsys.readouterr().out
+    assert "no misses" in empty
+    # And it says how such a row comes about, instead of leaving a bare "none".
+    assert "auto_escalate" in empty
+
+    # Make it a miss: the checker approved the step and the human denied it anyway.
+    await db.execute("UPDATE checker_runs SET decision = 'pass', reason = 'looked routine'")
+    assert await run(["resolve", str(escalation), "deny", "not that directory"]) == 0
+    capsys.readouterr()
+
+    assert await run(["checker", "misses"]) == 0
+    said = capsys.readouterr().out
+    assert f"escalation {escalation}" in said
+    assert "command said pass" in said
+    assert "looked routine" in said
+    assert "human: denied -- not that directory" in said
+    # The id is there so the whole context is one command away.
+    assert await run(["escalation", str(escalation)]) == 0
+    assert "rm -rf build" in capsys.readouterr().out
+
+    # A checker with no misses says so by name.
+    assert await run(["checker", "misses", "edit"]) == 0
+    assert "no misses of edit" in capsys.readouterr().out
