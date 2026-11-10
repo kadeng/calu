@@ -64,6 +64,7 @@ from calu.checkers import (
     CheckDecision,
     Checker,
     CheckOutcome,
+    CodeMark,
     Decision,
     ResultChecker,
     ResultOutcome,
@@ -99,6 +100,7 @@ from calu.files import command_files
 from calu.honesty import (
     HonestyMark,
     blocking_marks,
+    checked_marks,
     diff_paths,
     marks_of_step,
     register_note,
@@ -3069,6 +3071,10 @@ class Session:
         have cleaned what was never dirty is worth seeing. Nothing happens while
         `honesty.mode` is "off".
 
+        A mark whose path is absolute, escapes the project, or (for a dirty mark) names a file
+        that does not exist is dropped and reported, because the path is text a model wrote and
+        nothing else checks it (D112).
+
         Side effects: writes `honesty_marks`, reloads `self.honesty_marks` and emits a `log`
         event naming what changed. A store failure is logged by `_store_value`, not raised: a
         session whose register cannot be written is still a session, and the next step tries
@@ -3093,19 +3099,46 @@ class Session:
         ]
         if not with_marks:
             return
-        clean = [mark for _name, decision in with_marks for mark in decision.marks_clean]
+        # The paths come out of a model's structured answer, so they are checked before they
+        # reach the register: an invented path would otherwise sit there until a person cleared
+        # it, or block the commands that run an unrelated file (D112).
+        refused: list[str] = []
+        checked: list[tuple[str, list[CodeMark], list[CodeMark]]] = []
+        # The paths of the step itself count as existing: the gate runs before the tool, so a
+        # mark about the file a `Write` is creating names a file that is not there yet.
+        step_paths = set(files_before(step, self.workspace)) | _step_paths(step, self.workspace)
+        for name, decision in with_marks:
+            dirty, bad_dirty = checked_marks(
+                decision.marks_dirty, self.workspace, step_paths, must_exist=True
+            )
+            clean_marks, bad_clean = checked_marks(
+                decision.marks_clean, self.workspace, must_exist=False
+            )
+            refused += [f"{name}: {message}" for message in bad_dirty + bad_clean]
+            if dirty or clean_marks:
+                checked.append((name, dirty, clean_marks))
+        if refused:
+            await self._emit_safely(
+                Log(
+                    level="warning",
+                    message="honesty: ignored " + "; ".join(refused),
+                )
+            )
+        if not checked:
+            return
+        clean = [mark for _name, _dirty, marks in checked for mark in marks]
         branch = await self._git_branch()
         opened = closed = 0
         failed = False
-        for name, decision in with_marks:
+        for name, dirty, clean_marks in checked:
             # One call per checker, so that each mark records which checker opened it: with
             # several checkers on a route (D81), "12 marks are open" says nothing about any one
             # of them (D87).
             applied = await self._store_value(
                 "recording honesty marks",
                 self.store.apply_honesty_marks(
-                    decision.marks_dirty,
-                    decision.marks_clean,
+                    dirty,
+                    clean_marks,
                     step_id,
                     branch,
                     name,
@@ -3310,6 +3343,33 @@ def workspace_relative_input(tool_input: dict[str, Any], workspace: Path) -> dic
         except ValueError:
             pass
     return result
+
+
+def _step_paths(step: Step, workspace: Path) -> set[str]:
+    """Return the project-relative paths a step is about, however the tool names them.
+
+    `files_before` only returns a file it could read, so a `Write` that creates a file is not in
+    it; a changeset step names its files in its diff. Both are paths a checker may legitimately
+    mark although they do not exist yet (D112).
+
+    Args:
+        step: The tool call.
+        workspace: The project root.
+
+    Returns:
+        The relative paths, empty for a step that names no file.
+    """
+    found: set[str] = set()
+    for key in ("file_path", "notebook_path"):
+        raw = step.tool_input.get(key)
+        if isinstance(raw, str) and raw:
+            relative = workspace_relative_input({key: raw}, workspace)[key]
+            if not Path(relative).is_absolute():
+                found.add(relative)
+    diff = step.tool_input.get("diff")
+    if isinstance(diff, str) and diff:
+        found |= diff_paths(diff)
+    return found
 
 
 def files_before(step: Step, workspace: Path, limit: int = 50_000) -> dict[str, str]:

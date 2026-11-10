@@ -309,9 +309,19 @@ AWS chain.
 A checker agent gets exactly five tools, and every one of them only reads: `read_file`,
 `find_files`, `grep_files`, and — for the changeset checker — `step_times` and `changed_files`.
 There is no write, no shell, no network call and no tool that can reach the session. A checker
-cannot edit your code, run a command or send your source anywhere; the worst a broken or
-compromised checker model can do is answer wrongly, and the two directions of a wrong answer are
-bounded differently:
+cannot edit your code, run a command or send your source anywhere.
+
+The one thing a checker *changes* is calu's own state, and it does so by **answering**, not by
+calling a tool: its structured answer carries the decision, a reason, a one-line summary and —
+for the honesty checker — the spots it found dishonest and the spots it considers honest again.
+Those mark the honesty register in calu's database; they touch no file. Because the paths in
+them are text a model wrote, calu checks each one before it is recorded: a path must be
+relative, must stay inside the project, and must name a file that exists or that the step
+itself is creating. Anything else is dropped and said in the log (PLAN.md D112), so an invented
+path cannot sit in your register or block the commands that run an unrelated file.
+
+With that, the worst a broken or compromised checker model can do is answer wrongly, and the
+two directions of a wrong answer are bounded differently:
 
 - A wrong **escalation** costs you a question you did not need.
 - A wrong **ALLOW** cannot reach the dangerous cases at all: the deny lists are evaluated

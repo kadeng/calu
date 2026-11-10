@@ -1504,3 +1504,53 @@ async def test_a_failed_mark_write_still_leaves_the_session_with_the_marks_that_
     # The clean-mark line must not be printed after a failure: the clean marks of the checkers
     # that were never reached were not offered to the register at all.
     assert not any("matched nothing recorded" in message for message in said), said
+
+
+async def test_a_checker_cannot_mark_a_file_outside_the_project(tmp_path: Path):
+    """D112: the filter has to be in the session's path, not only available to it.
+
+    A mark is a field of the checker's structured answer, so `/etc/passwd` is as easy for a
+    model to write as `src/parser.py`. Such a mark would sit in the register until a person
+    cleared it by hand.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="track")))
+    extra = CheckerDefinition(
+        name="honesty",
+        route="edit",
+        instructions="# Honesty checker",
+        model="test:model",
+        request_limit=5,
+        output_tokens_limit=24_000,
+        max_tokens=8_000,
+        version=1,
+    )
+    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"}]],
+        settings=settings,
+        checker_models={
+            **fake_models(),
+            "honesty": marking_checker(
+                dirty=[
+                    ("/etc/passwd", "", "the file lies about itself"),
+                    ("src/parser.py", "fields", "the docstring lies"),
+                ]
+            ),
+        },
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    assert [m.label() for m in store.honesty_marks if m.open] == ["src/parser.py:fields"], (
+        "only the mark inside the project may be recorded"
+    )
+    said = [entry.message for entry in rec.of(Log)]
+    assert any("honesty: ignored" in message and "/etc/passwd" in message for message in said), (
+        f"a dropped mark has to be visible, not silent: {said}"
+    )

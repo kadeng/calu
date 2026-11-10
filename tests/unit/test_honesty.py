@@ -3,8 +3,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
-from calu.checkers import Step
-from calu.honesty import HonestyMark, blocking_marks, command_paths, register_note
+from calu.checkers import CodeMark, Step
+from calu.honesty import HonestyMark, blocking_marks, checked_marks, command_paths, register_note
 
 NOW = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
 
@@ -289,3 +289,80 @@ def test_a_mark_that_cannot_be_right_any_more_is_flagged(tmp_path: Path):
     # A closed mark blocks nothing, so it is never stale however old it is.
     closed = mark("src/deleted.py", closed_at=NOW, closed_by="kai", git_branch="feature/x")
     assert closed.stale(root, "main") == ""
+
+
+def test_a_mark_path_a_model_invented_does_not_reach_the_register(tmp_path: Path) -> None:
+    """D112: a mark is a field of a model's answer, so its path is text nobody checked.
+
+    Two bad outcomes are filtered here: a path outside the project sits in the register until a
+    person clears it, and a plausible but unrelated project file **blocks every command that
+    runs it** although no checker looked at it.
+    """
+    root = workspace(tmp_path)
+
+    def mark(path: str) -> CodeMark:
+        """A dirty mark on `path`."""
+        return CodeMark(path=path, symbol="", reason="the docstring lies")
+
+    kept, refused = checked_marks(
+        [
+            mark("src/parser.py"),
+            mark("/etc/passwd"),
+            mark("../../secrets.env"),
+            mark("~/notes.md"),
+            mark("src/does_not_exist.py"),
+            mark("   "),
+        ],
+        root,
+        must_exist=True,
+    )
+    assert [m.path for m in kept] == ["src/parser.py"]
+    assert len(refused) == 5
+    assert any("relative to the project" in message for message in refused)
+    assert any("no such file" in message for message in refused)
+    assert any("without a path" in message for message in refused)
+
+
+def test_a_mark_about_the_file_a_step_is_creating_is_kept(tmp_path: Path) -> None:
+    """The gate runs before the tool, so the file of a `Write` does not exist yet.
+
+    Rejecting that would throw away the one judgement the checker was asked for, which would
+    make the whole check pointless for every new file.
+    """
+    kept, refused = checked_marks(
+        [CodeMark(path="src/new.py", symbol="rows", reason="the name says nothing")],
+        workspace(tmp_path),
+        {"src/new.py"},
+        must_exist=True,
+    )
+    assert [m.path for m in kept] == ["src/new.py"] and refused == []
+
+    # Without the step's path it is refused, which is what makes the allowance narrow.
+    _, without = checked_marks(
+        [CodeMark(path="src/new.py", symbol="rows", reason="x")],
+        workspace(tmp_path),
+        must_exist=True,
+    )
+    assert len(without) == 1
+
+
+def test_a_clean_mark_for_a_deleted_file_still_clears_it(tmp_path: Path) -> None:
+    """Deleting dishonest code is a legitimate way to make the register true again.
+
+    If a clean mark had to name an existing file, a mark on a file Claude then deleted could
+    never be cleared by a checker -- only by hand, for ever.
+    """
+    kept, refused = checked_marks(
+        [CodeMark(path="src/gone.py", symbol="", reason="the file is gone")],
+        workspace(tmp_path),
+        must_exist=False,
+    )
+    assert [m.path for m in kept] == ["src/gone.py"] and refused == []
+
+    # The shape is still checked: a clean mark cannot reach outside the project either.
+    _, outside = checked_marks(
+        [CodeMark(path="../elsewhere.py", symbol="", reason="x")],
+        workspace(tmp_path),
+        must_exist=False,
+    )
+    assert len(outside) == 1

@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**678 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**682 tests pass** (plus 8 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 212 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -546,6 +546,10 @@ Everything else is either built or recommended with its reasons. These need a pe
   rather than code; what calu **ships** is the owner's call, with `calu evals` as the evidence.
 - **Q19 — what a dirty mark means after a branch switch**: the register records the branch so
   the question can be answered without a migration. My recommendation is in the question.
+- **Q20 — may a checker mark a file the step did not touch?** The paths are validated now
+  (D112), and the open part is how far a mark may reach from the step that produced it: any
+  existing project file (as built), only the step's own files (the owner's suggestion, which
+  loses cross-file dishonesty), or any file with "not from this step" shown in the register.
 - **Q16 — whether a push, a deploy or a publish should be a deny rule** rather than a
   checker's judgement, which is the same finding from the other side.
 - **Q1's last line**: what `claude.sandbox.weaker_nested_sandbox` changes. Needs a real tool

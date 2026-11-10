@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from calu.checkers import CodeMark, Step
 
@@ -370,3 +370,59 @@ def register_note(
             "make the code and its documentation agree is what clears the record."
         )
     return " ".join(parts)
+
+
+def checked_marks(
+    marks: Sequence[CodeMark],
+    workspace: Path,
+    step_paths: Collection[str] = (),
+    *,
+    must_exist: bool,
+) -> tuple[list[CodeMark], list[str]]:
+    """Keep the marks whose path calu may put in the register, and name the rest (PLAN.md D112).
+
+    A mark is not a tool call: it is a field of the checker's structured answer, so the model
+    writes the path as text and nothing checked it. An invented path has two bad outcomes --
+    `../../etc/passwd` or `/tmp/x` sits in the register forever, because only a person can
+    clear it, and a plausible but unrelated project file **blocks commands that run that file**
+    although no checker ever looked at it. Both are filtered here, at the one place that knows
+    the workspace.
+
+    What is required of a path: relative, no `..` component, not absolute, and -- for a mark
+    that opens a spot -- a file that either exists in the workspace or is one of the paths the
+    step itself is about (`step_paths`). The second half matters because a checker judges a
+    step **before** it runs: a mark about the file a `Write` is creating names a file that is
+    not there yet, and rejecting it would throw away the one judgement the checker was asked
+    for.
+
+    A mark that **clears** a spot is checked for shape only. Deleting a dishonest file is a
+    legitimate way to make the register true again, and the file is then gone.
+
+    Args:
+        marks: The marks as the checker wrote them.
+        workspace: The project root; paths are read relative to it.
+        step_paths: Project-relative paths the step itself touches, which count as existing.
+        must_exist: Whether the file has to exist (True for dirty marks, False for clean ones).
+
+    Returns:
+        (the marks to use, one message per rejected mark saying which mark and why). The
+        messages are for the log and for `calu checker stats`; a rejected mark is dropped, not
+        escalated, because a checker that names a wrong file has not said anything about the
+        step.
+    """
+    kept: list[CodeMark] = []
+    rejected: list[str] = []
+    for mark in marks:
+        path = mark.path.strip()
+        if not path:
+            rejected.append("a mark without a path")
+            continue
+        candidate = PurePosixPath(path)
+        if candidate.is_absolute() or path.startswith("~") or ".." in candidate.parts:
+            rejected.append(f"{mark.label()}: the path must be relative to the project")
+            continue
+        if must_exist and path not in step_paths and not (workspace / path).is_file():
+            rejected.append(f"{mark.label()}: there is no such file in the project")
+            continue
+        kept.append(mark.model_copy(update={"path": str(candidate)}))
+    return kept, rejected
