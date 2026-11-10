@@ -23,6 +23,7 @@ phases.
 | `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
 | `scripts/wsl-test.sh` | Format check, lint, type check and tests in WSL |
 | `.github/workflows/checks.yml` | CI: the same checks, the database and browser layers, and the installed wheel |
+| `.github/workflows/release.yml` | Builds the wheel for a `v*` tag and publishes it to PyPI; needs a one-time PyPI and environment setup, described at the top of the file |
 | `spikes/` | Experiments on Claude Code behaviour, including the question tool (results in `spikes/RESULTS.md`) and `smoke_session.py`, a manual end-to-end run with the real `claude` |
 
 ## Code layout

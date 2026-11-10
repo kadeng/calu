@@ -313,15 +313,18 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    the owner's call.
 2. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
-   editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
-   phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
-   `AutoEscalate` -- those are built now (D42): the three switches are offered as ACP
-   session modes and as boolean config options, and a change anywhere reaches every client.
-3. **Publishing** is the only packaging step left: the wheel is verified (D41 — `uv build`,
-   then `calu --version`, `calu protocol` and `calu doctor` from a throwaway virtual
-   environment, with migrations, default instructions, templates and static files resolving out
-   of `site-packages`; `tests/unit/test_packaging.py` guards it), but nothing is on PyPI, so
-   `uv tool install calu` in the README does not work yet.
+   editor has driven it yet, so expect small mismatches in what a client sends. What the editor
+   can drive is complete: prompts, the replay of `session/load`, permission requests for
+   escalations, and the session mode -- the three auto-escalation switches are offered both as
+   ACP's session modes and as its newer boolean config options, and a change made anywhere
+   reaches every client (D42).
+3. **Publishing** needs two steps only the owner can take. The wheel itself is verified
+   (D41, `tests/unit/test_packaging.py`, and CI installs it on every push), and
+   `.github/workflows/release.yml` builds and publishes it for a `v*` tag — but it stays inert
+   until (a) the PyPI project exists with a trusted publisher for owner `kadeng`, repository
+   `calu`, workflow `release.yml`, environment `pypi`, and (b) that GitHub environment is
+   created. Until then `uv tool install calu` in the README does not work. A tag pushed before
+   the setup builds the wheel and stops, so nothing is published by accident.
 4. **Phase 5**: nothing blocking left. The network policy is built (D39; only its default for a
    new project is the owner's call, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs
