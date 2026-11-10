@@ -103,11 +103,43 @@ class FsCapabilities(AcpModel):
     write_text_file: bool = False
 
 
+class ConfigOptionCapabilities(AcpModel):
+    """Which kinds of session config option the client understands.
+
+    ACP marks support by the *presence* of an empty object, not by a flag, so `boolean` is None
+    when the client said nothing and `{}` when it advertised support. An agent must not send a
+    boolean option to a client that did not advertise it.
+    """
+
+    boolean: dict[str, Any] | None = None
+
+
+class SessionCapabilities(AcpModel):
+    """The client's session capabilities; calu reads only the config options."""
+
+    config_options: ConfigOptionCapabilities | None = None
+
+
 class ClientCapabilities(AcpModel):
     """What the client offers the agent. calu uses none of it."""
 
     fs: FsCapabilities = Field(default_factory=FsCapabilities)
     terminal: bool = False
+    session: SessionCapabilities | None = None
+
+    @property
+    def boolean_config_options(self) -> bool:
+        """Whether the client advertised boolean session config options.
+
+        Returns:
+            True if `session.configOptions.boolean` is present, so that calu may offer its
+            auto-escalation switches as one boolean option each instead of only as a mode.
+        """
+        return (
+            self.session is not None
+            and self.session.config_options is not None
+            and (self.session.config_options.boolean is not None)
+        )
 
 
 class InitializeParams(AcpModel):
@@ -145,6 +177,25 @@ class PromptParams(AcpModel):
 
     session_id: str
     prompt: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SetModeParams(AcpModel):
+    """Params of `session/set_mode`: the session and the mode the client picked."""
+
+    session_id: str
+    mode_id: str
+
+
+class SetConfigOptionParams(AcpModel):
+    """Params of `session/set_config_option`: which option the client set, and to what.
+
+    The request also carries `type` for a boolean option; calu ignores it, because the Python
+    type of `value` already says which option kind arrived.
+    """
+
+    session_id: str
+    config_id: str
+    value: bool | str
 
 
 class SessionIdParams(AcpModel):

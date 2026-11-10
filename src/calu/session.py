@@ -90,7 +90,7 @@ from calu.claude.sdk_runner import AGENT_TOOLS
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
-from calu.config import CHECKER_FIELDS, EMPTY_CHAT_SUMMARY, CheckerConfig, Effort
+from calu.config import CHECKER_FIELDS, EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort
 from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
@@ -101,6 +101,7 @@ from calu.protocol.messages import (
     AgentsUpdate,
     AssistantText,
     AssistantThinking,
+    AutoEscalateChanged,
     ChatQueue,
     ChatSendParams,
     CheckerContextResult,
@@ -512,6 +513,33 @@ class Session:
         await self._emit_safely(
             Log(level="info", message="the chat summary was changed; the checkers see the new one")
         )
+
+    async def set_auto_escalate(self, auto: AutoEscalate) -> None:
+        """Replace the auto-escalation categories and tell every attached client.
+
+        Takes effect from the next check on: a step already waiting for a decision keeps the
+        escalation it has. The change lives in the running session only -- it is not written to
+        the project's settings -- so a restart goes back to what `calu config` holds.
+
+        Args:
+            auto: The categories that must wait for a human whatever the checker decided.
+
+        Side effects:
+            Emits `auto_escalate.changed` (errors of the client sink are logged, not raised).
+        """
+        self.config.auto_escalate = auto
+        await self._emit_safely(AutoEscalateChanged(settings=auto))
+
+    async def announce_auto_escalate(self) -> None:
+        """Emit `auto_escalate.changed` for the categories the session currently uses.
+
+        `apply_settings` is synchronous and cannot emit, so the caller that reloaded the
+        settings calls this when the reload changed the categories.
+
+        Side effects:
+            Emits `auto_escalate.changed` (errors of the client sink are logged, not raised).
+        """
+        await self._emit_safely(AutoEscalateChanged(settings=self.config.auto_escalate))
 
     def apply_settings(self, settings: ProjectSettings) -> None:
         """Replace configuration, rules and checker instructions (after `config_changed`).

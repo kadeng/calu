@@ -485,7 +485,7 @@ class Client:
                 return session.checker_definitions()
             case "auto_escalate.set":
                 assert isinstance(params, AutoEscalateSetParams)
-                session.config.auto_escalate = AutoEscalate(**params.model_dump())
+                await session.set_auto_escalate(AutoEscalate(**params.model_dump()))
                 return {}
             case "interrupt":
                 await session.interrupt()

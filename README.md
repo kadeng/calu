@@ -320,6 +320,20 @@ running session:
 calu acp ws://127.0.0.1:8765 --token ...
 ```
 
+The editor's own agent-mode picker works too. calu offers what waits for a human as an ACP
+session mode and, for an editor that supports the newer config options, as three switches:
+
+```bash
+calu config set auto_escalate.edits true      # every edit waits, even an approved one
+calu config set auto_escalate.commands true   # ... and every command
+calu config set auto_escalate.subagents true  # ... and every subagent's result
+```
+
+The checkers still run and still write down what they decided; the switches only mean that their
+approval is not the last word. Changing one of them anywhere -- in an editor, in the web
+interface, with `calu config set` -- reaches every client of the session, so two editors and a
+browser do not disagree about what the session is doing.
+
 For a client that keeps its token in its own configuration, mint one instead of passing on the
 token `calu run` printed: a minted token outlives the session you made it for, and you can take
 it back.

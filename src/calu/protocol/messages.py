@@ -652,6 +652,20 @@ class Log(Event):
     message: str
 
 
+class AutoEscalateChanged(Event):
+    """The auto-escalation categories of the session changed (`AutoEscalate`).
+
+    Sent when a client calls `auto_escalate.set` and when a reloaded configuration carries other
+    categories than the running session had (`config_changed`, after `calu config set` or the web
+    interface). Several clients may be attached at once, so a client that offers the setting --
+    the ACP adapter maps it to ACP's session modes -- learns from this event that somebody else
+    changed it. Not recorded in the history.
+    """
+
+    method: ClassVar[str] = "auto_escalate.changed"
+    settings: AutoEscalate
+
+
 EVENTS: list[type[Event]] = [
     SessionState,
     AssistantText,
@@ -668,6 +682,7 @@ EVENTS: list[type[Event]] = [
     EscalationRequest,
     EscalationResolved,
     EditDiff,
+    AutoEscalateChanged,
     Log,
 ]
 """Every event class, for the JSON Schema export (`calu.protocol.schema`)."""

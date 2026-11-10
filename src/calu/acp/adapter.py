@@ -35,7 +35,9 @@ from typing import Any, Protocol
 import anyio
 
 from calu.acp import messages as acp
+from calu.acp import modes
 from calu.acp.peer import Peer, RpcError
+from calu.config import AutoEscalate
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +126,10 @@ class Adapter:
         """The ACP session id handed to the client; None before `session/new`."""
         self.state: str = "starting"
         """Last state the calu session reported."""
+        self.auto = AutoEscalate()
+        """Auto-escalation categories of the session, which ACP shows as its session mode."""
+        self.boolean_options = False
+        """Whether the client takes boolean config options (set by `initialize`)."""
         self._peer: Peer | None = None
         self._tasks: anyio.abc.TaskGroup | None = None
         self._turn: Turn | None = None
@@ -171,6 +177,10 @@ class Adapter:
                 return await self._load_session(params)
             case "session/prompt":
                 return await self._prompt(params)
+            case "session/set_mode":
+                return await self._set_mode(params)
+            case "session/set_config_option":
+                return await self._set_config_option(params)
             case "session/cancel":
                 await self._cancel(params)
                 return None
@@ -205,6 +215,7 @@ class Adapter:
                 "ignoring the client's fs and terminal capabilities: Claude Code does its own "
                 "file and command work inside the sandbox"
             )
+        self.boolean_options = offered.boolean_config_options
         return acp.initialize_result(self.name, self.version)
 
     async def _new_session(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -233,7 +244,8 @@ class Adapter:
         snapshot = await self.calu.request("state.get")
         self.state = str(snapshot.get("state", "starting"))
         self.session_id = str(snapshot.get("calu_session_id") or "calu")
-        return {"sessionId": self.session_id}
+        self._read_auto(snapshot)
+        return {"sessionId": self.session_id, **self._mode_fields()}
 
     async def _load_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `session/load` by replaying the recorded conversation.
@@ -258,9 +270,12 @@ class Adapter:
         if self.session_id is not None and request.session_id != self.session_id:
             raise RpcError(acp.UNKNOWN_SESSION, f"calu does not serve {request.session_id}")
         self.session_id = request.session_id
+        snapshot = await self.calu.request("state.get")
+        self.state = str(snapshot.get("state", self.state))
+        self._read_auto(snapshot)
         history = await self.calu.request("session.history", {})
         await self._replay(history)
-        return {}
+        return self._mode_fields()
 
     async def _prompt(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `session/prompt`: send the message to Claude and wait for the turn to end.
@@ -339,6 +354,117 @@ class Adapter:
         if session_id != self.session_id:
             raise RpcError(acp.UNKNOWN_SESSION, f"calu does not serve {session_id}")
 
+    # ------------------------------------------------------------------ session modes
+
+    def _read_auto(self, snapshot: dict[str, Any]) -> None:
+        """Take the auto-escalation categories out of a `state.get` snapshot.
+
+        A snapshot from an older session process may not carry them; the categories then stay
+        as they are, which is the default "the checkers decide".
+
+        Args:
+            snapshot: The result of `state.get`.
+        """
+        found = snapshot.get("auto_escalate")
+        if isinstance(found, dict):
+            self.auto = AutoEscalate.model_validate(found)
+
+    def _mode_fields(self) -> dict[str, Any]:
+        """Build the mode fields of a `session/new` or `session/load` result.
+
+        Both ACP APIs are answered: `configOptions` (which supersedes modes) and `modes` (which
+        older clients use), as the specification asks during the transition.
+
+        Returns:
+            `{"modes": ..., "configOptions": ...}` for the session's current categories.
+        """
+        return {
+            "modes": modes.mode_state(self.auto),
+            "configOptions": modes.config_options(self.auto, self.boolean_options),
+        }
+
+    async def _apply_auto(self, auto: AutoEscalate) -> None:
+        """Send new auto-escalation categories to the calu session.
+
+        The session answers every attached client with `auto_escalate.changed`, and this
+        adapter's own `on_event` turns that into the ACP notifications -- so nothing is
+        notified here, and the editor hears the change the same way another editor does.
+
+        Args:
+            auto: The categories the client asked for.
+
+        Raises:
+            RpcError: If the session refuses the request.
+        """
+        await self.calu.request("auto_escalate.set", auto.model_dump())
+
+    async def _set_mode(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `session/set_mode` (the older of the two APIs).
+
+        Args:
+            params: The `session/set_mode` params.
+
+        Returns:
+            An empty result; the mode change arrives as a notification.
+
+        Raises:
+            RpcError: If the session id is not the one this adapter serves, or the mode is not
+                one calu offers.
+        """
+        request = acp.SetModeParams.model_validate(params)
+        self._require_session(request.session_id)
+        try:
+            auto = modes.settings_for(request.mode_id)
+        except ValueError as error:
+            raise RpcError(acp.INVALID_PARAMS, str(error)) from error
+        await self._apply_auto(auto)
+        return {}
+
+    async def _set_config_option(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `session/set_config_option` (the API that supersedes modes).
+
+        ACP requires the complete option list in the result, not only the option that changed,
+        so that an agent can report options a change pulled along with it.
+
+        Args:
+            params: The `session/set_config_option` params.
+
+        Returns:
+            `{"configOptions": [...]}` with every option and its new value.
+
+        Raises:
+            RpcError: If the session id is not the one this adapter serves, or the option or its
+                value is not one calu offers.
+        """
+        request = acp.SetConfigOptionParams.model_validate(params)
+        self._require_session(request.session_id)
+        try:
+            auto = modes.with_option(self.auto, request.config_id, request.value)
+        except ValueError as error:
+            raise RpcError(acp.INVALID_PARAMS, str(error)) from error
+        await self._apply_auto(auto)
+        # The session's `auto_escalate.changed` event may not have arrived yet, and the result
+        # must already hold the new values, so answer from what was asked for.
+        self.auto = auto
+        return {"configOptions": modes.config_options(auto, self.boolean_options)}
+
+    async def _on_auto_escalate(self, params: dict[str, Any]) -> None:
+        """Mirror a change of the auto-escalation categories to the editor.
+
+        The change may come from this editor, from another client, or from a reloaded
+        configuration; all of them reach every client as `auto_escalate.changed`. Both ACP
+        notifications are sent, because a client may understand only one of the two APIs.
+
+        Args:
+            params: The `auto_escalate.changed` event.
+        """
+        found = params.get("settings")
+        if not isinstance(found, dict):
+            return
+        self.auto = AutoEscalate.model_validate(found)
+        await self._update(modes.mode_update(self.auto))
+        await self._update(modes.config_update(self.auto, self.boolean_options))
+
     # ------------------------------------------------------------------ calu -> ACP
 
     async def on_event(self, method: str, params: dict[str, Any]) -> None:
@@ -384,6 +510,8 @@ class Adapter:
                 await self._on_resolved(params)
             case "turn.result":
                 await self._on_turn_result(params)
+            case "auto_escalate.changed":
+                await self._on_auto_escalate(params)
             case "log":
                 log.log(
                     _LEVELS.get(str(params.get("level", "info")), logging.INFO),

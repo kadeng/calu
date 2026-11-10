@@ -459,3 +459,35 @@ async def test_a_stale_socket_file_is_replaced(tmp_path: Path):
                 await server.ready.wait()
             assert socket_path.is_socket()
             tg.cancel_scope.cancel()
+
+
+async def test_setting_the_auto_escalation_categories_tells_every_client(tmp_path: Path):
+    """`auto_escalate.set` changes the session and announces it to the other clients.
+
+    A client may offer the categories as a setting of its own -- the ACP adapter maps them to
+    ACP's session modes -- so one client changing them must not leave another showing the old
+    state (PLAN.md D42).
+    """
+    async with served(tmp_path) as run:
+        setter_events, watcher_events = Events(), Events()
+        async with client(run, setter_events, "setter") as setter:
+            async with client(run, watcher_events, "watcher") as watcher:
+                assert run.session.config.auto_escalate.commands is False
+                await setter.request(
+                    "auto_escalate.set", {"commands": True, "edits": False, "subagents": True}
+                )
+                announced = (await watcher_events.wait_for("auto_escalate.changed"))[0]
+                assert announced["settings"] == {
+                    "commands": True,
+                    "edits": False,
+                    "subagents": True,
+                }
+                # The running session really uses them, and the setter hears it too.
+                assert run.session.config.auto_escalate.commands is True
+                assert run.session.config.auto_escalate.subagents is True
+                assert (await setter_events.wait_for("auto_escalate.changed"))[0]["settings"] == (
+                    announced["settings"]
+                )
+                # A client that joins afterwards reads them from the snapshot.
+                snapshot = await watcher.request("state.get")
+                assert snapshot["auto_escalate"] == announced["settings"]

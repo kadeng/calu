@@ -8,8 +8,10 @@ from typing import Any
 import anyio
 import pytest
 
+from calu.acp import modes
 from calu.acp.adapter import Adapter
 from calu.acp.peer import Peer
+from calu.config import AutoEscalate
 from calu.protocol.client import connect
 from tests.unit.test_protocol_server import served
 
@@ -182,7 +184,7 @@ async def test_a_session_is_the_running_one_and_only_for_its_own_directory() -> 
         assert wrong["error"]["code"] == -32602
         assert "serves" in wrong["error"]["message"]
         answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
-        assert answer["result"] == {"sessionId": "abc"}
+        assert answer["result"]["sessionId"] == "abc"
         assert h.calu.sent("state.get")
 
     await run_adapter(calu, body)
@@ -521,7 +523,8 @@ async def test_session_load_replays_the_recorded_conversation_before_it_answers(
         answer = await h.editor.call(
             "session/load", {"sessionId": session, "cwd": str(WORKSPACE), "mcpServers": []}
         )
-        assert answer["result"] == {}
+        # The result carries the session's mode, like the result of `session/new`.
+        assert answer["result"]["modes"]["currentModeId"] == "checkers"
         updates = await h.editor.wait_updates(5)
         kinds = [update["sessionUpdate"] for update in updates]
         # Everything was replayed before the response, in conversation order.
@@ -550,7 +553,9 @@ async def test_a_prompt_for_another_session_and_an_unknown_method_are_refused() 
         assert wrong["error"]["code"] == -32002
         empty = await h.editor.call("session/prompt", {"sessionId": "s1", "prompt": []})
         assert empty["error"]["code"] == -32602
-        unknown = await h.editor.call("session/set_mode", {"sessionId": "s1", "modeId": "x"})
+        # `session/set_mode` used to stand here; it is implemented now, so this needs a
+        # method calu really does not have.
+        unknown = await h.editor.call("session/select_model", {"sessionId": "s1", "modelId": "x"})
         assert unknown["error"]["code"] == -32601
 
     await run_adapter(calu, body)
@@ -660,4 +665,286 @@ async def test_the_adapter_serves_a_real_session_over_the_real_protocol(tmp_path
                     assert "ok" in json.dumps(completed[-1]["content"])
                     escalations = run.store.escalations
                     assert [row.state for row in escalations.values()] == ["allowed"]
+                    tasks.cancel_scope.cancel()
+
+
+# ------------------------------------------------------------------ session modes
+
+
+IDLE = {"state": "idle", "calu_session_id": "abc"}
+"""A `state.get` snapshot of an idle session whose categories are all off."""
+
+
+def test_the_mode_ladder_maps_each_rung_to_its_categories() -> None:
+    """Every rung round-trips, and a combination off the ladder is "custom"."""
+    for mode in modes.LADDER:
+        assert modes.mode_of(mode.settings) == mode.id
+        assert modes.settings_for(mode.id) == mode.settings
+    # Each rung is stricter than the one before, which is what makes the list a ladder.
+    for stricter, looser in zip(modes.LADDER[1:], modes.LADDER[:-1], strict=True):
+        for field in ("commands", "edits", "subagents"):
+            if getattr(looser.settings, field):
+                assert getattr(stricter.settings, field), f"{stricter.id} is not stricter"
+    assert modes.mode_of(AutoEscalate(commands=True)) == modes.CUSTOM
+    assert modes.mode_of(AutoEscalate(subagents=True)) == modes.CUSTOM
+
+
+def test_custom_is_offered_only_while_it_is_the_state_and_cannot_be_chosen() -> None:
+    """ACP needs the current mode in the list, but "custom" is not a target."""
+    on_ladder = modes.mode_state(AutoEscalate(edits=True))
+    assert modes.CUSTOM not in [entry["id"] for entry in on_ladder["availableModes"]]
+    off_ladder = modes.mode_state(AutoEscalate(commands=True))
+    assert off_ladder["currentModeId"] == modes.CUSTOM
+    assert modes.CUSTOM in [entry["id"] for entry in off_ladder["availableModes"]]
+    with pytest.raises(ValueError, match="cannot be chosen"):
+        modes.settings_for(modes.CUSTOM)
+    with pytest.raises(ValueError, match="unknown mode"):
+        modes.settings_for("yolo")
+
+
+def test_a_boolean_option_is_offered_only_to_a_client_that_takes_one() -> None:
+    """An agent must not send boolean config options unless the client advertised them."""
+    without = modes.config_options(AutoEscalate(), booleans=False)
+    assert [option["id"] for option in without] == [modes.MODE_OPTION_ID]
+    assert without[0]["type"] == "select"
+    with_booleans = modes.config_options(AutoEscalate(edits=True), booleans=True)
+    kinds = {option["id"]: option["type"] for option in with_booleans}
+    assert kinds == {
+        modes.MODE_OPTION_ID: "select",
+        "auto_escalate_commands": "boolean",
+        "auto_escalate_edits": "boolean",
+        "auto_escalate_subagents": "boolean",
+    }
+    values = {option["id"]: option["currentValue"] for option in with_booleans}
+    assert values["auto_escalate_edits"] is True
+    assert values["auto_escalate_commands"] is False
+    assert values[modes.MODE_OPTION_ID] == "edits"
+
+
+def test_setting_one_option_changes_only_that_switch() -> None:
+    """A boolean option is one switch; the select option replaces all three."""
+    start = AutoEscalate(edits=True)
+    assert modes.with_option(start, "auto_escalate_commands", True) == AutoEscalate(
+        commands=True, edits=True
+    )
+    assert modes.with_option(start, modes.MODE_OPTION_ID, "checkers") == AutoEscalate()
+    assert start == AutoEscalate(edits=True), "the switches were changed in place"
+    with pytest.raises(ValueError, match="unknown config option"):
+        modes.with_option(start, "nonsense", True)
+    with pytest.raises(ValueError, match="takes true or false"):
+        modes.with_option(start, "auto_escalate_edits", "yes")
+    with pytest.raises(ValueError, match="takes a mode id"):
+        modes.with_option(start, modes.MODE_OPTION_ID, True)
+
+
+async def test_a_new_session_reports_the_mode_in_both_apis() -> None:
+    """`session/new` carries `modes` and `configOptions`, as the transition asks."""
+    calu = FakeCalu({"state.get": {**IDLE, "auto_escalate": {"edits": True}}})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientCapabilities": {"session": {"configOptions": {"boolean": {}}}},
+            },
+        )
+        answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        result = answer["result"]
+        assert result["modes"]["currentModeId"] == "edits"
+        assert [entry["id"] for entry in result["modes"]["availableModes"]] == [
+            mode.id for mode in modes.LADDER
+        ]
+        # The client advertised boolean options, so the three switches are offered as such.
+        assert len(result["configOptions"]) == 4
+
+    await run_adapter(calu, body)
+
+
+async def test_a_client_that_is_silent_about_booleans_gets_only_the_mode_select() -> None:
+    """The capability is the presence of an object, so saying nothing means no support."""
+    calu = FakeCalu({"state.get": IDLE})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        options = answer["result"]["configOptions"]
+        assert [option["id"] for option in options] == [modes.MODE_OPTION_ID]
+
+    await run_adapter(calu, body)
+
+
+async def test_set_mode_asks_the_session_and_refuses_an_unknown_mode() -> None:
+    """A mode becomes one `auto_escalate.set`; a bad mode changes nothing."""
+    calu = FakeCalu({"state.get": IDLE})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        answer = await h.editor.call(
+            "session/set_mode", {"sessionId": session, "modeId": "everything"}
+        )
+        assert answer["result"] == {}
+        assert h.calu.sent("auto_escalate.set") == [
+            {"commands": True, "edits": True, "subagents": True}
+        ]
+        refused = await h.editor.call("session/set_mode", {"sessionId": session, "modeId": "nope"})
+        assert refused["error"]["code"] == -32602
+        assert "unknown mode" in refused["error"]["message"]
+        wrong = await h.editor.call("session/set_mode", {"sessionId": "other", "modeId": "edits"})
+        assert wrong["error"]["code"] in (-32002, -32602)
+        # Neither the unknown mode nor the unknown session reached the session.
+        assert len(h.calu.sent("auto_escalate.set")) == 1
+
+    await run_adapter(calu, body)
+
+
+async def test_set_config_option_answers_with_every_option_and_its_new_value() -> None:
+    """ACP wants the complete state back, so a dependent change could be reported."""
+    calu = FakeCalu({"state.get": IDLE})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientCapabilities": {"session": {"configOptions": {"boolean": {}}}},
+            },
+        )
+        answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        session = answer["result"]["sessionId"]
+        set_answer = await h.editor.call(
+            "session/set_config_option",
+            {
+                "sessionId": session,
+                "configId": "auto_escalate_commands",
+                "type": "boolean",
+                "value": True,
+            },
+        )
+        options = set_answer["result"]["configOptions"]
+        assert len(options) == 4
+        values = {option["id"]: option["currentValue"] for option in options}
+        assert values["auto_escalate_commands"] is True
+        # Only commands are on, which is not a rung of the ladder.
+        assert values[modes.MODE_OPTION_ID] == modes.CUSTOM
+        assert h.calu.sent("auto_escalate.set") == [
+            {"commands": True, "edits": False, "subagents": False}
+        ]
+        refused = await h.editor.call(
+            "session/set_config_option",
+            {"sessionId": session, "configId": "auto_escalate_edits", "value": "yes"},
+        )
+        assert refused["error"]["code"] == -32602
+        assert "true or false" in refused["error"]["message"]
+
+    await run_adapter(calu, body)
+
+
+async def test_a_mode_change_by_another_client_reaches_the_editor_in_both_apis() -> None:
+    """The session announces the change, so a second editor is not left showing the old mode."""
+    calu = FakeCalu({"state.get": IDLE})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call(
+            "initialize",
+            {
+                "protocolVersion": 1,
+                "clientCapabilities": {"session": {"configOptions": {"boolean": {}}}},
+            },
+        )
+        await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        await h.adapter.on_event(
+            "auto_escalate.changed",
+            {"settings": {"commands": True, "edits": True, "subagents": False}},
+        )
+        updates = await h.editor.wait_updates(2)
+        mode_update = next(u for u in updates if u["sessionUpdate"] == "current_mode_update")
+        assert mode_update["currentModeId"] == "writes"
+        config = next(u for u in updates if u["sessionUpdate"] == "config_option_update")
+        values = {option["id"]: option["currentValue"] for option in config["configOptions"]}
+        assert values["auto_escalate_commands"] is True
+        assert values["auto_escalate_subagents"] is False
+        assert h.adapter.auto == AutoEscalate(commands=True, edits=True)
+
+    await run_adapter(calu, body)
+
+
+async def test_a_mode_set_in_the_editor_reaches_a_real_session_and_comes_back(
+    tmp_path: Path,
+) -> None:
+    """End to end except for stdio: the mode travels ACP -> calu -> session -> event -> ACP.
+
+    The editor sets a boolean config option. The adapter turns it into `auto_escalate.set` on
+    the real WebSocket protocol, the session applies it and announces `auto_escalate.changed` to
+    all its clients, and the adapter turns that back into both ACP notifications -- so what the
+    editor shows comes from the session, not from the adapter's own hope.
+    """
+    async with served(tmp_path) as run:
+        to_agent_send, to_agent_receive = anyio.create_memory_object_stream[str](100)
+        from_agent_send, from_agent_receive = anyio.create_memory_object_stream[str](100)
+
+        async def read_line() -> str:
+            try:
+                return await to_agent_receive.receive()
+            except anyio.EndOfStream:
+                return ""
+
+        async def write_line(line: str) -> None:
+            await from_agent_send.send(line)
+
+        holder: list[Adapter] = []
+
+        async def on_event(method: str, params: dict[str, Any]) -> None:
+            if holder:
+                await holder[0].on_event(method, params)
+
+        editor = Editor(to_agent_send, from_agent_receive)
+        async with connect(run.address, run.token, "calu acp", on_event) as calu_client:
+            adapter = Adapter(calu_client, tmp_path, name="calu", version="test")
+            holder.append(adapter)
+            peer = Peer(read_line, write_line, adapter.handle)
+            with anyio.fail_after(20):
+                async with anyio.create_task_group() as tasks:
+                    adapter.attach(peer, tasks)
+                    tasks.start_soon(peer.serve)
+                    tasks.start_soon(editor.pump)
+                    await editor.call(
+                        "initialize",
+                        {
+                            "protocolVersion": 1,
+                            "clientCapabilities": {"session": {"configOptions": {"boolean": {}}}},
+                        },
+                    )
+                    created = await editor.call(
+                        "session/new", {"cwd": str(tmp_path), "mcpServers": []}
+                    )
+                    session = created["result"]["sessionId"]
+                    assert created["result"]["modes"]["currentModeId"] == "checkers"
+                    await editor.call(
+                        "session/set_config_option",
+                        {
+                            "sessionId": session,
+                            "configId": "auto_escalate_edits",
+                            "type": "boolean",
+                            "value": True,
+                        },
+                    )
+                    # The session itself now escalates every edit ...
+                    with anyio.fail_after(10):
+                        while not run.session.config.auto_escalate.edits:
+                            await anyio.sleep(0.01)
+                    assert run.session.config.auto_escalate.commands is False
+                    # ... and told the editor so, through the event rather than the response.
+                    with anyio.fail_after(10):
+                        while not any(
+                            update["sessionUpdate"] == "current_mode_update"
+                            for update in editor.updates()
+                        ):
+                            await anyio.sleep(0.01)
+                    mode_update = next(
+                        update
+                        for update in editor.updates()
+                        if update["sessionUpdate"] == "current_mode_update"
+                    )
+                    assert mode_update["currentModeId"] == "edits"
                     tasks.cancel_scope.cancel()
