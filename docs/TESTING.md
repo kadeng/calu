@@ -136,7 +136,7 @@ throwaway directory.
 Before a release, or after changing the runner, the gate or the sandbox. `HANDOFF.md` records
 what was run and what came out of it, under "Verified by hand with the real CLI"; on 2026-11-10
 items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network measurement in
-`spikes/RESULTS.md`.
+`spikes/RESULTS.md`; item 11 was done as an automated test instead (`tests/db/test_run.py`).
 
 1. `calu doctor --db` on the machine — nothing essential missing.
 2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
@@ -162,6 +162,12 @@ items 1, 2, 5, 6, 7, 9 and 10 were exercised, and item 4 as part of the network 
 10. In a container: `docker compose run --rm dev sh -c 'command -v bwrap socat'` and a real
    `bwrap --unshare-user ...` — the `dev` service needs `security_opt: [seccomp:unconfined]`,
    because Docker's default seccomp profile blocks user namespaces.
+11. A conversation resumed twice (D65): `calu run --resume <claude session id>` twice over, with
+   `context.fold_every` low enough that the first session folds a turn. The checkers must still
+   be told the earlier conversation, which `calu summary <session>` shows and the session page
+   repeats; an empty summary there is the defect D65 fixed. `tests/db/test_run.py` covers the
+   same path with a fake Claude, so this is only worth running by hand after a change to the
+   store or the context builder.
 
 ## Writing tests
 
