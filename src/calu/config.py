@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from calu.checkers.model import CheckerEffort
 from calu.checkers.policy import Route
@@ -34,7 +34,19 @@ SETTINGS_KEY = "settings"
 """Key of the `config` rows that hold a partial `Config`."""
 
 
-class CheckerConfig(BaseModel):
+class ConfigModel(BaseModel):
+    """Base of the configuration models: the docstring under a field is its description.
+
+    Pydantic then carries the text into `FieldInfo.description`, which is what the generated
+    reference (`calu.configdoc`, `docs/CONFIGURATION.md`), the JSON schema of the protocol and
+    the web interface's settings form read. A field without a docstring is therefore a field
+    nobody can look up, so every one of them has one.
+    """
+
+    model_config = ConfigDict(use_attribute_docstrings=True)
+
+
+class CheckerConfig(ConfigModel):
     """Model, thinking effort and limits of one checker. `model` is a Pydantic AI model string.
 
     `max_tokens` caps one answer, `output_tokens_limit` all answers of one check (thinking
@@ -44,13 +56,21 @@ class CheckerConfig(BaseModel):
     """
 
     model: str = "mistral:mistral-small-2603"  # Mistral Small 4
+    """Pydantic AI model string of this checker, e.g. "mistral:mistral-small-2603",
+    "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or "bedrock:eu.anthropic...."."""
     effort: CheckerEffort | None = None
+    """Thinking effort: "off" for none, "low" to "max", or None for the model's default.
+    More effort buys accuracy with latency and tokens."""
     request_limit: int = 3
+    """Maximum model requests for one check, including the tool calls a checker makes."""
     output_tokens_limit: int = 8_000
+    """Token budget for all answers of one check (thinking included on most providers).
+    A check that hits it is retried once, then escalated."""
     max_tokens: int = 4_000
+    """Token cap for one answer of this checker."""
 
 
-class ContextConfig(BaseModel):
+class ContextConfig(ConfigModel):
     """Context summary settings (see `calu.context`).
 
     Every `fold_every` unfolded turns, the oldest `fold_count` turns are folded into
@@ -59,16 +79,26 @@ class ContextConfig(BaseModel):
     """
 
     fold_every: int = Field(default=30, ge=2)
+    """Fold the oldest turns into the chat summary once this many turns are unfolded."""
     fold_count: int = Field(default=20, ge=1)
+    """How many of the oldest turns are folded into the chat summary each time."""
     summarizer_model: str = "mistral:ministral-3b-latest"
+    """Model that writes the chat summary when turns are folded."""
     narrate: bool = True
     """Narrate Claude's thinking and text for the checkers (`calu.context.narrator`)."""
     narrator_model: str = "mistral:mistral-small-2603"  # Mistral Small 4
+    """Model that narrates Claude's thinking and text in indirect speech, so that a checker
+    does not read it as an instruction."""
     max_recent_chars: int = Field(default=40_000, ge=1_000)
+    """Upper bound in characters for the unfolded turns in a checker's context."""
     files: list[str] = Field(
         default_factory=lambda: ["AGENTS.md", "CLAUDE.md", "GLOSSARY.md", "MEMORY.md"]
     )
+    """Workspace-relative files included verbatim in the cached context prefix where they
+    exist, so the checkers read the project's own instructions."""
     skill_dirs: list[str] = Field(default_factory=lambda: [".claude/skills"])
+    """Workspace-relative directories whose skills contribute their name and description to
+    the context prefix."""
 
 
 DEFAULT_DENY_READ = (
@@ -152,7 +182,7 @@ policy says. So the three policies are expressed through the proxy's allow list:
 """
 
 
-class SandboxConfig(BaseModel):
+class SandboxConfig(ConfigModel):
     """Isolation of Bash commands by Claude Code's own sandbox (PLAN.md D15).
 
     calu passes these settings with `--settings`, which overrides the project's and the user's
@@ -173,16 +203,33 @@ class SandboxConfig(BaseModel):
     """
 
     enabled: bool = True
+    """Isolate Bash commands with Claude Code's own sandbox. Off removes that isolation and
+    leaves only the checkers and the deny lists."""
     fail_if_unavailable: bool = True
+    """Refuse to start when no sandbox can be built, instead of running commands unsandboxed."""
     allow_unsandboxed_commands: bool = False
+    """Let a call leave the sandbox with `dangerouslyDisableSandbox`. False keeps it in."""
     auto_allow_bash: bool = False
+    """Let Claude Code approve sandboxed Bash calls by itself. Stays False: it would skip
+    auto mode's classifier, which PLAN.md D5 uses as the second opinion next to the
+    checkers."""
     weaker_nested_sandbox: bool = False
     """Weaker sandbox inside unprivileged Docker containers (Linux); reduces the isolation."""
     excluded_commands: list[str] = Field(default_factory=list)
+    """Commands that run outside the sandbox, covered only by the checkers and the deny
+    lists."""
     deny_read: list[str] = Field(default_factory=lambda: list(DEFAULT_DENY_READ))
+    """Paths a sandboxed command must not read (see `DEFAULT_DENY_READ`). Edit single
+    entries with `calu config add|remove claude.sandbox.deny_read <path>`."""
     allowed_domains: list[str] = Field(default_factory=list)
+    """Domains a sandboxed command may reach through the sandbox's HTTP proxy; `["*"]` is
+    every domain and an empty list is none. A project's network policy sets this
+    (PLAN.md D39, D45); raw TCP is blocked whatever it says."""
     denied_domains: list[str] = Field(default_factory=list)
+    """Domains that stay blocked even when `allowed_domains` holds the wildcard, which is how
+    "everything except these" is written."""
     allow_unix_sockets: list[str] = Field(default_factory=list)
+    """Unix sockets a sandboxed command may connect to (e.g. a local database socket)."""
 
     def with_policy(self, policy: NetworkPolicy) -> SandboxConfig:
         """Return a copy whose network settings express `policy` (PLAN.md D39).
@@ -242,7 +289,7 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 """Reasoning effort levels of Claude Code (`--effort`, `/effort`)."""
 
 
-class ClaudeConfig(BaseModel):
+class ClaudeConfig(ConfigModel):
     """Settings for the Claude Code session.
 
     `model`: a Claude Code model alias ("fable", "opus", "sonnet", "haiku": always the latest
@@ -273,23 +320,35 @@ class ClaudeConfig(BaseModel):
     """
 
     use_bedrock: bool = False
+    """Set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, so that it runs on AWS Bedrock with
+    the environment's AWS credentials. False leaves the variable as it is; calu does not
+    otherwise touch how Claude Code authenticates."""
     permission_mode: (
         Literal["default", "auto", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] | None
     ) = None
     """Permission mode for Claude Code; None leaves it to Claude Code (its default is "auto")."""
     stream_partial: bool = True
+    """Stream text and thinking token by token (`assistant.delta`). False delivers completed
+    blocks only."""
     thinking_display: Literal["summarized", "omitted"] = "summarized"
     """How Claude Code returns thinking: "summarized" (readable summaries, shown by front ends
     as `assistant.thinking`) or "omitted" (empty thinking blocks, nothing is shown)."""
     model: str | None = "opus"
+    """Claude Code model alias ("fable", "opus", "sonnet", "haiku": always the latest of that
+    family) or a full model id; None uses Claude Code's default."""
     effort: Effort | None = None
+    """Reasoning effort of the Claude session ("low" to "max"); None uses Claude Code's
+    default. `calu run --effort` overrides it for one session."""
     cli_path: str | None = None
+    """Path to the `claude` executable; None looks it up on PATH."""
     setting_sources: list[str] = Field(default_factory=lambda: ["project"])
+    """Which of Claude Code's own settings files it may read ("user", "project", "local").
+    calu's `--settings` document overrides them for the sandbox either way."""
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     """Isolation of Bash commands (PLAN.md D15, D4)."""
 
 
-class AutoEscalate(BaseModel):
+class AutoEscalate(ConfigModel):
     """Categories whose steps always wait for the human, whatever the checker decided.
 
     `commands`: Bash and other tool calls reviewed by the command checker. `edits`: file edits.
@@ -301,11 +360,14 @@ class AutoEscalate(BaseModel):
     """
 
     commands: bool = False
+    """Every command waits for a human, even one the command checker approved."""
     edits: bool = False
+    """Every file edit waits for a human, even one the edit checker approved."""
     subagents: bool = False
+    """Every subagent's final result waits for a human, even an accepted one."""
 
 
-class WebConfig(BaseModel):
+class WebConfig(ConfigModel):
     """Settings of the web interface (PLAN.md phase 6)."""
 
     git_url_template: str = ""
@@ -315,7 +377,7 @@ class WebConfig(BaseModel):
     does not browse git itself."""
 
 
-class ChangesConfig(BaseModel):
+class ChangesConfig(ConfigModel):
     """Whether calu measures what a command wrote, and how much of it (PLAN.md D31).
 
     Off by default: it costs disk and hashing time in every session, while the attribution of
@@ -338,7 +400,7 @@ class ChangesConfig(BaseModel):
     noticed; they are the ones that matter most and the ones git would otherwise hide."""
 
 
-class ClockConfig(BaseModel):
+class ClockConfig(ConfigModel):
     """How closely calu watches its own clock (PLAN.md D32, `calu.clock`).
 
     A checker attributes a file change to a step by comparing the file's change time with the
@@ -357,15 +419,19 @@ class ClockConfig(BaseModel):
     forward legitimately, so it is not an escalation)."""
 
 
-class Config(BaseModel):
+class Config(ConfigModel):
     """The complete configuration with defaults for every field."""
 
     command_checker: CheckerConfig = Field(default_factory=CheckerConfig)
+    """The checker that reviews Bash commands and every tool call routed to it."""
     edit_checker: CheckerConfig = Field(default_factory=CheckerConfig)
+    """The checker that reviews a file edit before it is written."""
     subagent_checker: CheckerConfig = Field(default_factory=CheckerConfig)
+    """The checker that reviews what a subagent hands back."""
     changeset_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     """The checker that reviews a whole change before a commit (PLAN.md D26)."""
     check_subagent_results: bool = True
+    """Review the final result of every subagent with the subagent checker."""
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)
     """Categories that always wait for the human (see `AutoEscalate`); all off by default."""
     escalation_timeout_s: float = Field(default=8 * 3600, ge=0)
@@ -380,12 +446,21 @@ class Config(BaseModel):
     """Further environment variables (e.g. API keys of other checker providers) that Claude
     Code must not see, in addition to the ones from the env files and `PROVIDER_KEYS`."""
     tool_routes: dict[str, Route] = Field(default_factory=dict)
+    """Route per tool name, overriding the built-in table (`calu.checkers.policy`), e.g.
+    `{"mcp__deploy__ship": "escalate"}`."""
     default_route: Route = Route.COMMAND
+    """Route for a tool the built-in table does not know, including MCP tools and tools a
+    newer Claude Code adds. "command" means such a call is checked rather than allowed."""
     context: ContextConfig = Field(default_factory=ContextConfig)
+    """What the checkers read as context, and how the conversation is folded."""
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
+    """The Claude Code session itself: model, effort, permission mode, sandbox."""
     clock: ClockConfig = Field(default_factory=ClockConfig)
+    """Watching the system clock for tampering (PLAN.md D32)."""
     changes: ChangesConfig = Field(default_factory=ChangesConfig)
+    """Measuring what a command wrote, and reviewing it afterwards (PLAN.md D31)."""
     web: WebConfig = Field(default_factory=WebConfig)
+    """Settings of the web interface."""
 
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.

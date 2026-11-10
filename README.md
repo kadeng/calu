@@ -388,4 +388,6 @@ Forking a conversation before an earlier turn is built (`calu fork`, and the for
 
 GPL-2.0, see [LICENSE](LICENSE).
 
+Every setting with its type, its default and what it does: [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
 Contributing: [AGENTS.md](AGENTS.md) for the layout and the rules, [docs/TESTING.md](docs/TESTING.md) for the test layers and the manual checklist, [PLAN.md](PLAN.md) for the decisions behind all of it.

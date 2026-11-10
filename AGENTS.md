@@ -18,6 +18,7 @@ phases.
 | `PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
 | `HANDOFF.md` | State of the work and next steps, for the next session |
 | `docs/TESTING.md` | The four test layers, the spikes and the manual checklist |
+| `docs/CONFIGURATION.md` | Every setting with its type, default and meaning -- **generated** from `calu.config` by `calu.configdoc`; a test fails when the two disagree |
 | `LICENSE` | GPL-2.0 |
 | `pyproject.toml` | Package, dependencies, ruff, pyright and pytest settings |
 | `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
@@ -74,6 +75,9 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
   (a headless browser; `scripts/get-browser.sh` installs it without root), `uv run pytest -m live`
   (a real `claude` or API keys). `docs/TESTING.md` explains the layers, the spikes and the
   manual checklist.
+- A new configuration field needs a docstring **under** it (`ConfigModel` turns those into
+  descriptions, which the reference, the web settings form and the JSON schema read) and a
+  regenerated `docs/CONFIGURATION.md`; `tests/unit/test_configdoc.py` says how.
 - `uv run ruff format .`, `uv run ruff check .`, `uv run pyright`
 - `scripts/wsl-test.sh [pytest args]`: all of the above
 - Sync with `uv sync --all-extras`: the web interface is the optional `web` extra, and its tests skip without it.
