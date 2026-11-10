@@ -45,8 +45,8 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**596 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 156 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
+**597 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 158 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 16 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -366,6 +366,13 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    are in the database. The start now prints only the two warnings that are true on this
    machine (no sandbox, no summarizer key); the heartbeat warning that used to appear at every
    start is gone.
+19. **The two new eval cases against the real checker model** (D69), Nemotron Lightning on
+   Fireworks, two runs each: 100% -- it escalated the message that asks another session to run
+   a command the gate had denied, quoting the request as the instructions say, and passed the
+   coordinating message. The same run showed D66's cost line working on a real provider
+   (`14890 input tokens (0% of them from the provider's cache), 2789 output tokens, ~1817 ms
+   per case`) and confirmed D63's caveat: this model reuses a cache only for an identical
+   prompt, so 0% is the provider and not a defect.
 
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,

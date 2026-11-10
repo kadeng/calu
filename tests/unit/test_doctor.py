@@ -144,3 +144,23 @@ def test_the_sandbox_posture_is_only_reported_when_it_says_something(
     assert "may not win" in found[0].advice
     # Never essential: a session still starts, it is the isolation that is in doubt.
     assert doctor.essential_missing(found) is False
+
+
+def test_a_key_with_a_stray_carriage_return_is_named() -> None:
+    """D70: the provider answers such a key with a bare "Connection error."."""
+    assert doctor.key_value_findings({"FIREWORKS_API_KEY": "fw_abc"}) == []
+    assert doctor.key_value_findings({}) == []
+
+    (broken,) = doctor.key_value_findings({"FIREWORKS_API_KEY": "fw_abc\r"})
+    assert broken.ok is False
+    assert broken.essential is False, "the session runs; its checks are what fail"
+    assert "carriage return" in broken.detail
+    assert "Connection error." in broken.advice
+    assert "FIREWORKS_API_KEY" in broken.name
+
+    (spaced,) = doctor.key_value_findings({"MISTRAL_API_KEY": " ms_x"})
+    assert "whitespace" in spaced.detail
+
+    # It is part of the local report, which is what `calu doctor` prints.
+    report = doctor.report(doctor.key_value_findings({"MISTRAL_API_KEY": "ms_x\r\n"}))
+    assert "carriage return" in report

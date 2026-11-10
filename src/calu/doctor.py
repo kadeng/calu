@@ -15,7 +15,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -190,6 +190,50 @@ def key_findings(environ: Sequence[str] | None = None) -> list[Finding]:
     ]
 
 
+def key_value_findings(environ: Mapping[str, str] | None = None) -> list[Finding]:
+    r"""Check that no provider key carries leading or trailing whitespace.
+
+    A key with a stray carriage return is what a `.env` written on Windows gives a shell that
+    sources it (`. .env` keeps the `\r`), and what a Windows environment variable can carry.
+    The provider then refuses the request at the HTTP layer, and the error a user sees is
+    "Connection error." with nothing about a carriage return -- measured while writing this
+    check, against Fireworks. calu's own env file is safe (python-dotenv strips the line end);
+    this is about a key handed to calu from the outside.
+
+    Args:
+        environ: Variables to inspect; None uses the environment.
+
+    Returns:
+        One finding per provider key whose value is not stripped, or an empty list when every
+        key is clean (nothing is reported when all is well, because this is a trap and not a
+        setting). The findings are not marked essential: a session with such a key starts and
+        runs, but every check of that provider's checkers fails and escalates.
+    """
+    values = os.environ if environ is None else environ
+    names = [name for names in PROVIDER_KEYS_BY_PREFIX.values() for name in names]
+    found: list[Finding] = []
+    for name in names:
+        value = values.get(name)
+        if value is None or value == value.strip():
+            continue
+        what = (
+            "carries a carriage return"
+            if value.rstrip("\r\n") != value
+            else "carries leading or trailing whitespace"
+        )
+        found.append(
+            Finding(
+                f"{name} value",
+                False,
+                what,
+                f'Every model call will fail with a bare "Connection error.". Set {name} '
+                "without it -- a `.env` written on Windows does this to a shell that sources "
+                "it; `tr -d '\\r' < .env > .env.unix` repairs the file.",
+            )
+        )
+    return found
+
+
 def directory_findings() -> list[Finding]:
     """Check where calu puts its runtime files.
 
@@ -310,6 +354,7 @@ def local_findings(store: CredentialStore) -> list[Finding]:
         *tool_findings(),
         *credential_findings(store),
         *key_findings(),
+        *key_value_findings(),
         *directory_findings(),
         *extra_findings(),
     ]
