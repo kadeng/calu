@@ -16,6 +16,7 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
+from importlib.util import find_spec
 from pathlib import Path
 
 from calu import __version__
@@ -216,16 +217,13 @@ def extra_findings() -> list[Finding]:
     Returns:
         One finding for the web interface; never essential, because a session does not need it.
     """
-    try:
-        import jinja2  # ruff: ignore[unused-import]
-        import starlette  # ruff: ignore[unused-import]
-        import uvicorn  # ruff: ignore[unused-import]
-    except ImportError as missing:
+    missing = [name for name in ("starlette", "jinja2", "uvicorn") if find_spec(name) is None]
+    if missing:
         return [
             Finding(
                 "web interface",
                 False,
-                f"the `web` extra is not installed ({missing.name} is missing)",
+                f"the `web` extra is not installed ({', '.join(missing)} missing)",
                 "`uv tool install 'calu[web]'` (or `uv sync --all-extras` in a clone); "
                 "every other command works without it.",
             )

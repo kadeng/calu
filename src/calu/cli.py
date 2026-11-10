@@ -47,6 +47,7 @@ import sys
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
@@ -998,8 +999,30 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
     _admin_command(store, work)
 
 
+def _value_at(values: dict[str, Any], key: str) -> str:
+    """Render the value a dotted key holds in stored settings, for a report line.
+
+    Args:
+        values: Stored settings, as `calu.admin.settings` returns them.
+        key: A dotted path into them.
+
+    Returns:
+        The value as compact JSON, or "nothing" if the key is not in them.
+    """
+    node: Any = values
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return "nothing"
+        node = node[part]
+    return json.dumps(node, sort_keys=True)
+
+
 def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
     """Read or change configuration values of the global or a project scope.
+
+    `get`, `set` and `unset` work on whole values; `add` and `remove` change one entry of a
+    list setting and keep the others, starting from the list the scope effectively uses
+    (`calu.admin.add_to_setting`).
 
     Args:
         args: Parsed arguments (`action`, `key`, `value`, `project`).
@@ -1010,6 +1033,8 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
+    if args.action in ("set", "add", "remove") and args.value is None:
+        raise CliError(f"config {args.action} needs a KEY and a VALUE")
 
     async def work(db: Db) -> str:
         """Read or change one value.
@@ -1019,9 +1044,6 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
 
         Returns:
             The report.
-
-        Raises:
-            CliError: If `set` was called without a value.
         """
         if args.action == "get":
             values = await admin.settings(db, args.project)
@@ -1029,13 +1051,23 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
                 for part in args.key.split("."):
                     values = values.get(part, {}) if isinstance(values, dict) else {}
             return json.dumps(values, indent=2, sort_keys=True)
+        scope = f"the {args.project or 'global'} scope"
         if args.action == "set":
-            if args.value is None:
-                raise CliError("config set needs a KEY and a VALUE")
             await admin.set_setting(db, args.key, admin.parse_value(args.value), args.project)
-            return f"set {args.key} in the {args.project or 'global'} scope"
+            return f"set {args.key} in {scope}"
+        if args.action in ("add", "remove"):
+            entry = admin.parse_value(args.value)
+            if args.action == "add":
+                merged, added = await admin.add_to_setting(db, args.key, entry, args.project)
+                where = _value_at(merged, args.key)
+                if not added:
+                    return f"{args.key} already has {entry!r} in {scope}; now {where}"
+                return f"added {entry!r} to {args.key} in {scope}; now {where}"
+            merged = await admin.remove_from_setting(db, args.key, entry, args.project)
+            where = _value_at(merged, args.key)
+            return f"removed {entry!r} from {args.key} in {scope}; now {where}"
         await admin.unset_setting(db, args.key, args.project)
-        return f"unset {args.key} in the {args.project or 'global'} scope"
+        return f"unset {args.key} in {scope}"
 
     _admin_command(store, work)
 
@@ -1452,9 +1484,13 @@ def build_parser() -> argparse.ArgumentParser:
     project.set_defaults(handler=cmd_project)
 
     config = sub.add_parser("config", help="configuration values in the database")
-    config.add_argument("action", choices=["get", "set", "unset"])
+    config.add_argument("action", choices=["get", "set", "unset", "add", "remove"])
     config.add_argument("key", nargs="?", default="", help="dotted key, e.g. claude.model")
     config.add_argument("value", nargs="?", help="value (JSON, or plain text)")
+    config.epilog = (
+        "add and remove change one entry of a list setting and keep the others, e.g. "
+        "`calu config add claude.sandbox.deny_read ~/.ssh`; set replaces the whole list."
+    )
     config.add_argument("--project", help="the project's scope instead of the global one")
     config.set_defaults(handler=cmd_config)
 

@@ -266,6 +266,9 @@ and the checkers on an **Anthropic API key** from the Console:
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
 calu config set command_checker.model anthropic:claude-haiku-4-5
 calu config set command_checker.effort low      # or "off" for no thinking at all
+
+calu config add claude.sandbox.deny_read ~/secrets   # one entry, keeping the rest
+calu config remove claude.sandbox.deny_read ~/.npmrc
 ```
 
 AWS Bedrock works the same way for the checkers (`bedrock:...`, credentials from the usual AWS

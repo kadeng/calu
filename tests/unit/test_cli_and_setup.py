@@ -101,6 +101,8 @@ def test_the_configuration_commands_need_the_admin_credential(
         ["project", "list"],
         ["config", "get"],
         ["config", "set", "claude.model", "opus"],
+        ["config", "add", "claude.sandbox.deny_read", "~/x"],
+        ["config", "remove", "claude.sandbox.deny_read", "~/x"],
         ["checker", "list"],
         ["rules", "list"],
     ):
@@ -120,6 +122,10 @@ def test_arguments_are_checked_before_the_password_is_asked(
         == 1
     )
     assert "cannot read /x" in capsys.readouterr().err
+    # `add` and `remove` change one entry, so they need the entry as well as the key.
+    for action in ("add", "remove"):
+        assert run_cli(monkeypatch, store, ["config", action, "claude.sandbox.deny_read"], "") == 1
+        assert f"config {action} needs a KEY and a VALUE" in capsys.readouterr().err
 
 
 def test_rules_arguments_are_interpreted_per_action(

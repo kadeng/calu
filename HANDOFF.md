@@ -40,7 +40,7 @@ in `calu/` only.
 | 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format (D41, no single binary) |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**436 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**438 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 77 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
 instructions), ~8.9k of tests, 13 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
@@ -332,10 +332,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    `security_opt: [seccomp:unconfined]` and socat — calu's own `dev` service and image now have
    both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested, because it needs
    a logged-in `claude` inside a container.
-5. Smaller gaps: `calu config set` cannot set a value inside a list (`calu config set
-   claude.sandbox.deny_read '[...]'` replaces the whole list, which is the usual way anyway); a
-   client of a session still cannot change what steers the checkers through the protocol, by
-   design (the session role may only read it, §12 phase 4).
+5. Smaller gaps: a client of a session still cannot change what steers the checkers through the
+   protocol, by design (the session role may only read it, §12 phase 4) -- except the
+   auto-escalation switches, which are session-local and audited (D42, D43). Editing a single
+   list entry is done: `calu config add|remove <key> <entry>` (D44).
 
 ## Open questions for the owner (`PLAN.md` §11)
 

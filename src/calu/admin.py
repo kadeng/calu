@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from calu.checkers.rules import RULE_LISTS
 from calu.config import SETTINGS_KEY, Config, merge_settings
@@ -390,6 +390,126 @@ async def set_setting(db: Db, key: str, value: Any, project: str | None = None) 
     _validate(merged)
     await _write_settings(db, merged, project)
     return merged
+
+
+def effective_value(current: dict[str, Any], key: str) -> Any:
+    """Return the value a session would use for `key` in a scope.
+
+    This is not the same as what the scope *stores*: a key that was never set is absent from
+    the stored settings but has a default in `Config`. A list is changed relative to what the
+    session really uses, so adding one entry to `claude.sandbox.deny_read` must extend the
+    default list instead of replacing it with a single entry.
+
+    Args:
+        current: The stored settings of the scope, as `settings` returns them.
+        key: A dotted path into the configuration, e.g. "claude.sandbox.deny_read".
+
+    Returns:
+        The value from the stored settings where there is one, else the default of `Config`.
+
+    Raises:
+        AdminError: If the key names nothing in `Config`, or leads through a value that is not
+            a model (e.g. "claude.model.x").
+    """
+    node: Any = Config.model_validate(current)
+    walked: list[str] = []
+    for part in key.split("."):
+        if not part:
+            raise AdminError(f"{key!r} is not a configuration key")
+        walked.append(part)
+        if isinstance(node, BaseModel):
+            if part not in type(node).model_fields:
+                raise AdminError(f"the configuration has no {'.'.join(walked)}")
+            node = getattr(node, part)
+            continue
+        if isinstance(node, dict):
+            node = node.get(part)
+            continue
+        raise AdminError(f"{'.'.join(walked[:-1])} is not a group of settings")
+    return node
+
+
+def _list_at(current: dict[str, Any], key: str) -> list[Any]:
+    """Return the list a scope effectively uses for `key`.
+
+    Args:
+        current: The stored settings of the scope.
+        key: A dotted path into the configuration.
+
+    Returns:
+        A copy of the list, so the caller may change it.
+
+    Raises:
+        AdminError: If the key is unknown or does not hold a list.
+    """
+    found = effective_value(current, key)
+    if not isinstance(found, list):
+        kind = type(found).__name__
+        raise AdminError(
+            f"{key} is not a list but a {kind}; use `calu config set {key} <value>` for it"
+        )
+    return list(found)
+
+
+async def add_to_setting(
+    db: Db, key: str, value: Any, project: str | None = None
+) -> tuple[dict[str, Any], bool]:
+    """Add one entry to a list-valued setting, keeping the entries it already has.
+
+    The entry is appended to the list the scope **effectively** uses, which is the default list
+    of `Config` when the scope stores nothing for the key -- so adding one denied path does not
+    throw the built-in ones away. Adding an entry that is already there changes nothing.
+
+    Args:
+        db: A connection of the database owner.
+        key: A dotted path to a list, e.g. "claude.sandbox.deny_read".
+        value: The entry to add (see `parse_value`).
+        project: The project whose settings to change, or None for the global ones.
+
+    Returns:
+        The stored settings of that scope after the change, and whether anything was added.
+
+    Raises:
+        AdminError: If the key is unknown or not a list, the project is unknown, or the result
+            does not fit `Config`.
+        psycopg.Error: On database errors.
+    """
+    current = await settings(db, project)
+    entries = _list_at(current, key)
+    if value in entries:
+        return current, False
+    entries.append(value)
+    return await set_setting(db, key, entries, project), True
+
+
+async def remove_from_setting(
+    db: Db, key: str, value: Any, project: str | None = None
+) -> dict[str, Any]:
+    """Remove one entry from a list-valued setting, keeping the rest.
+
+    Removing an entry that is only in the default list is allowed: the scope then stores the
+    default list without that entry, which is what "remove it" means to a user.
+
+    Args:
+        db: A connection of the database owner.
+        key: A dotted path to a list, e.g. "claude.sandbox.deny_read".
+        value: The entry to remove (see `parse_value`).
+        project: The project whose settings to change, or None for the global ones.
+
+    Returns:
+        The stored settings of that scope after the change.
+
+    Raises:
+        AdminError: If the key is unknown or not a list, the entry is not in the list, the
+            project is unknown, or the result does not fit `Config`.
+        psycopg.Error: On database errors.
+    """
+    current = await settings(db, project)
+    entries = _list_at(current, key)
+    if value not in entries:
+        raise AdminError(f"{value!r} is not in {key}; it holds {entries!r}")
+    entries.remove(value)
+    return await set_setting(db, key, entries, project)
 
 
 async def unset_setting(db: Db, key: str, project: str | None = None) -> dict[str, Any]:

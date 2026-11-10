@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from calu import admin
@@ -12,7 +13,7 @@ from calu.store import ConfigStore
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 
-async def prepared(db_url: str) -> tuple[Db, object]:
+async def prepared(db_url: str) -> tuple[Db, psycopg.AsyncConnection]:
     """Return an owner connection on a database with the defaults loaded."""
     conn = await connect(db_url)
     await setup(conn, db_url, "test:model")
@@ -35,7 +36,7 @@ async def test_projects_are_registered_and_listed(db_url: str) -> None:
         with pytest.raises(admin.AdminError, match="no project named"):
             await admin.project_id(db, "nope")
     finally:
-        await conn.close()  # type: ignore[attr-defined]
+        await conn.close()
 
 
 async def test_configuration_values_are_merged_validated_and_reloaded(db_url: str, tmp_path):
@@ -68,7 +69,7 @@ async def test_configuration_values_are_merged_validated_and_reloaded(db_url: st
         assert left == {"claude": {"model": "sonnet"}, "context": {"narrate": False}}
         assert await admin.unset_setting(db, "nothing.here") == left
     finally:
-        await conn.close()  # type: ignore[attr-defined]
+        await conn.close()
 
 
 def test_values_are_parsed_as_json_with_a_text_fallback() -> None:
@@ -109,7 +110,7 @@ async def test_checker_definitions_are_changed_and_versioned(db_url: str) -> Non
         assert new.name == "extra" and new.route == "command" and new.model == "test:other"
         assert new.version == 1
     finally:
-        await conn.close()  # type: ignore[attr-defined]
+        await conn.close()
 
 
 async def test_rules_are_added_validated_and_removed(db_url: str, tmp_path) -> None:
@@ -152,7 +153,7 @@ async def test_rules_are_added_validated_and_removed(db_url: str, tmp_path) -> N
         assert await admin.remove_rule(db, rule.id) is True
         assert await admin.remove_rule(db, rule.id) is False
     finally:
-        await conn.close()  # type: ignore[attr-defined]
+        await conn.close()
 
 
 async def test_a_change_announces_itself_to_running_sessions(db_url: str, tmp_path) -> None:
@@ -168,7 +169,7 @@ async def test_a_change_announces_itself_to_running_sessions(db_url: str, tmp_pa
         notify = await asyncio.wait_for(anext(listener.notifies()), timeout=5)
         assert notify.channel == CONFIG_CHANGED
     finally:
-        await conn.close()  # type: ignore[attr-defined]
+        await conn.close()
         await listener.close()
 
 
@@ -219,7 +220,7 @@ async def test_a_whole_rule_list_is_replaced_from_its_file_form(db_url: str, tmp
         patterns = [r.pattern.pattern for r in settings.rules.lists("command-deny")[0]]
         assert "^new-one$" not in patterns and "^old-one$" not in patterns
     finally:
-        await conn.close()  # type: ignore[attr-defined]
+        await conn.close()
 
 
 async def test_a_projects_network_policy_shapes_the_sandbox(db_url: str) -> None:
@@ -258,5 +259,63 @@ async def test_a_projects_network_policy_shapes_the_sandbox(db_url: str) -> None
             await admin.set_network_policy(db, "narrow", "wide-open")
         with pytest.raises(admin.AdminError):
             await admin.set_network_policy(db, "no-such-project", "none")
+    finally:
+        await conn.close()
+
+
+async def test_one_entry_of_a_list_setting_is_added_and_removed(db_url: str, tmp_path) -> None:
+    """`config add` and `config remove` keep the other entries, defaults included."""
+    db, conn = await prepared(db_url)
+    try:
+        key = "claude.sandbox.deny_read"
+        defaults = admin.effective_value(await admin.settings(db), key)
+        assert len(defaults) > 5, "the default deny list should not be nearly empty"
+
+        # Adding one path keeps every default path.
+        merged, added = await admin.add_to_setting(db, key, "~/secrets")
+        assert added is True
+        stored = merged["claude"]["sandbox"]["deny_read"]
+        assert stored == [*defaults, "~/secrets"]
+
+        # Adding it twice changes nothing and says so.
+        merged, added = await admin.add_to_setting(db, key, "~/secrets")
+        assert added is False
+        assert merged["claude"]["sandbox"]["deny_read"] == stored
+
+        # Removing an entry that is only in the defaults is allowed.
+        merged = await admin.remove_from_setting(db, key, defaults[0])
+        after = merged["claude"]["sandbox"]["deny_read"]
+        assert defaults[0] not in after
+        assert "~/secrets" in after and len(after) == len(defaults)
+
+        # A session really uses the result.
+        settings = await ConfigStore(db, tmp_path).load()
+        assert settings.config.claude.sandbox.deny_read == after
+
+        # What cannot work is refused, and nothing is written.
+        with pytest.raises(admin.AdminError, match="is not in"):
+            await admin.remove_from_setting(db, key, "never-there")
+        with pytest.raises(admin.AdminError, match="not a list but a str"):
+            await admin.add_to_setting(db, "claude.model", "opus")
+        with pytest.raises(admin.AdminError, match="has no"):
+            await admin.add_to_setting(db, "claude.nonsense", "x")
+        assert (await admin.settings(db))["claude"]["sandbox"]["deny_read"] == after
+    finally:
+        await conn.close()
+
+
+async def test_a_list_entry_can_be_added_for_one_project_only(db_url: str) -> None:
+    """A project scope starts from the list a session there would use."""
+    db, conn = await prepared(db_url)
+    try:
+        await admin.add_project(db, "demo", "git@example.com:demo.git")
+        key = "claude.sandbox.allowed_domains"
+        merged, added = await admin.add_to_setting(db, key, "pypi.org", project="demo")
+        assert added is True
+        assert merged["claude"]["sandbox"]["allowed_domains"] == ["pypi.org"]
+        # The global scope is untouched.
+        assert "allowed_domains" not in (await admin.settings(db)).get("claude", {}).get(
+            "sandbox", {}
+        )
     finally:
         await conn.close()
