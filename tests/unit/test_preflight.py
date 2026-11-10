@@ -11,6 +11,7 @@ from calu.config import (
     ClockConfig,
     Config,
     ContextConfig,
+    HonestyConfig,
     SandboxConfig,
 )
 from calu.herd import STALE_AFTER_S
@@ -179,3 +180,30 @@ def test_an_interval_that_outlives_the_stale_threshold_is_warned_about():
     assert f"{STALE_AFTER_S:g} s" in said
     # It reaches the start-up warnings, which is where a user sees it.
     assert said in preflight.warnings(too_long, {})
+
+
+def test_honesty_switched_on_by_halves_is_warned_about():
+    """D90: each half without the other is silent, which is the worst misconfiguration."""
+    off = Config()
+    assert preflight.honesty_warnings(off, []) == [], "both off is the default, not a problem"
+    assert preflight.honesty_warnings(off, ["command", "edit"]) == []
+
+    # A mode without the checker: nothing records, so the register stays empty.
+    enforcing = Config(honesty=HonestyConfig(mode="enforce"))
+    (said,) = preflight.honesty_warnings(enforcing, ["command", "edit"])
+    assert "honesty.mode is 'enforce'" in said
+    assert "the honesty checker is disabled" in said
+    assert "calu checker set honesty --enable" in said
+
+    # The checker without a mode: a model call per edit whose answer is thrown away.
+    (wasted,) = preflight.honesty_warnings(off, ["command", "edit", "honesty"])
+    assert "thrown away" in wasted
+    assert "'track'" in wasted
+
+    # The two agreeing is quiet, in both directions.
+    assert preflight.honesty_warnings(enforcing, ["edit", "honesty"]) == []
+    tracking = Config(honesty=HonestyConfig(mode="track"))
+    assert preflight.honesty_warnings(tracking, ["honesty"]) == []
+
+    # And it reaches the start-up warnings, which is where a user sees it.
+    assert said in preflight.warnings(enforcing, {}, ["command", "edit"])

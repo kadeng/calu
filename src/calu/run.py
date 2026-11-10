@@ -388,7 +388,7 @@ async def _run(
         both(bus.publish, both(console, idle)),
         project=options.project,
         checker_models=checker_models,
-        startup_warnings=preflight.warnings(settings.config),
+        startup_warnings=preflight.warnings(settings.config, checkers=settings.checkers),
     )
 
     async def on_settings(new: ProjectSettings) -> None:

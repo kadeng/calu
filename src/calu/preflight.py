@@ -7,7 +7,7 @@ Code fails or a checker escalates every step.
 
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.herd import STALE_AFTER_S
@@ -201,16 +201,56 @@ def heartbeat_warnings(config: Config) -> list[str]:
     ]
 
 
-def warnings(config: Config, environ: Mapping[str, str] | None = None) -> list[str]:
+def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str]:
+    """Warn when the honesty register is switched on by halves (PLAN.md D90).
+
+    The feature needs two things that are set separately on purpose (D85): a checker that
+    records dishonest code, and a mode that says what calu does with the record. Each without
+    the other is silent and useless, which is the worst kind of misconfiguration -- the user
+    believes the feature is on.
+
+    Args:
+        config: The session configuration.
+        checkers: Names of the enabled checker definitions, as `ProjectSettings.checkers`
+            holds them.
+
+    Returns:
+        One warning for each half that is missing, or an empty list when the two agree
+        (including both switched off, which is the default).
+    """
+    mode = config.honesty.mode
+    enabled = "honesty" in set(checkers)
+    if mode != "off" and not enabled:
+        return [
+            f"honesty.mode is '{mode}', but the honesty checker is disabled, so nothing records "
+            "dishonest code and the register stays empty. Switch it on with `calu checker set "
+            "honesty --enable`, or set honesty.mode to 'off'. (If another checker of yours "
+            "records the marks, this warning does not apply.)"
+        ]
+    if mode == "off" and enabled:
+        return [
+            "the honesty checker is enabled but honesty.mode is 'off', so it runs on every "
+            "edit and its marks are thrown away -- a model call per edit for nothing. Set "
+            "honesty.mode to 'track' to keep the marks, or disable the checker with "
+            "`calu checker set honesty --disable`."
+        ]
+    return []
+
+
+def warnings(
+    config: Config, environ: Mapping[str, str] | None = None, checkers: Collection[str] = ()
+) -> list[str]:
     """Return all start-up warnings (sandbox, API keys, write sets, network, heartbeat).
 
     Args:
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
+        checkers: Names of the enabled checker definitions, for the checks that depend on
+            which checkers exist rather than only on the configuration.
 
     Returns:
         The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
-        `network_warnings` and `heartbeat_warnings`.
+        `network_warnings`, `heartbeat_warnings` and `honesty_warnings`.
     """
     return (
         sandbox_warnings(config)
@@ -218,4 +258,5 @@ def warnings(config: Config, environ: Mapping[str, str] | None = None) -> list[s
         + change_warnings(config)
         + network_warnings(config)
         + heartbeat_warnings(config)
+        + honesty_warnings(config, checkers)
     )
