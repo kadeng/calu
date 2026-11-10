@@ -46,6 +46,9 @@ class HonestyMark:
     reason: str
     opened_at: datetime
     git_branch: str | None = None
+    opened_by: str | None = None
+    """Name of the checker whose verdict opened it, or None for a row written before the author
+    was recorded (PLAN.md D87)."""
     closed_at: datetime | None = None
     closed_by: str | None = None
 

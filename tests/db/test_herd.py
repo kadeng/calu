@@ -632,3 +632,61 @@ async def test_the_honesty_register_is_written_read_and_cleared(db_url: str) -> 
         assert await herd.clear_honesty_mark(db, standing[0].id) is None, "already closed"
     finally:
         await owner.close()
+
+
+async def test_the_stats_say_what_a_checker_s_marks_came_to(db_url: str) -> None:
+    """D87: a mark a person had to overrule is what says whether a checker may block."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/a.py"})
+        )
+        await store.add_checker_run(
+            step,
+            CheckerRun(
+                checker_name="honesty",
+                checker_version=1,
+                model="test:model",
+                decision="pass",
+            ),
+        )
+        # Three marks by this checker: one it cleared itself, one a person overruled, one open.
+        await store.apply_honesty_marks(
+            [
+                CodeMark(path="src/a.py", reason="a"),
+                CodeMark(path="src/b.py", reason="b"),
+                CodeMark(path="src/c.py", reason="c"),
+            ],
+            [],
+            step,
+            None,
+            "honesty",
+        )
+        await store.apply_honesty_marks([], [CodeMark(path="src/a.py", reason="fixed")], step)
+        (overruled,) = [m for m in await herd.honesty_marks(db) if m.path == "src/b.py"]
+        await herd.clear_honesty_mark(db, overruled.id, "kai")
+
+        (stats,) = [s for s in await herd.checker_stats(db) if s.checker_name == "honesty"]
+        assert stats.marks_opened == 3
+        assert stats.marks_cleared == 1, "the checker closed that one itself"
+        assert stats.marks_overridden == 1, "a person closed that one"
+        line = stats.line()
+        assert "marks: 3 opened, 1 cleared" in line
+        assert "1 overruled by a person" in line
+
+        # A checker with no marks says nothing about them rather than "0 opened".
+        await store.add_checker_run(
+            step,
+            CheckerRun(
+                checker_name="command", checker_version=1, model="test:model", decision="pass"
+            ),
+        )
+        (command,) = [s for s in await herd.checker_stats(db) if s.checker_name == "command"]
+        assert command.marks_opened == 0
+        assert "marks:" not in command.line()
+    finally:
+        await owner.close()

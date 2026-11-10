@@ -246,6 +246,7 @@ class SessionStore(Protocol):
         clean: Sequence[CodeMark],
         step_id: int | None,
         git_branch: str | None = None,
+        by: str = "",
     ) -> tuple[int, int]:
         """Open and close marks as a checker's verdict asked (PLAN.md D82).
 
@@ -259,6 +260,8 @@ class SessionStore(Protocol):
             clean: Spots that say what they do again.
             step_id: The step whose check produced the marks, for the record; may be None.
             git_branch: The branch the marks were made on (Q19 asks what it should mean).
+            by: Name of the checker whose verdict carried the marks, recorded so that a report
+                can attribute them (D87); "" leaves the author unrecorded.
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -711,6 +714,7 @@ class DatabaseSessionStore:
         clean: Sequence[CodeMark],
         step_id: int | None,
         git_branch: str | None = None,
+        by: str = "",
     ) -> tuple[int, int]:
         """Open and close marks as a checker asked (see `SessionStore`).
 
@@ -720,6 +724,7 @@ class DatabaseSessionStore:
             clean: Spots that say what they do again.
             step_id: The step whose check produced the marks; may be None.
             git_branch: The branch the marks were made on.
+            by: Name of the checker whose verdict carried them (D87).
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -734,12 +739,13 @@ class DatabaseSessionStore:
             # register holds the current explanation rather than the first one.
             await self._db.execute(
                 "INSERT INTO honesty_marks"
-                " (project_id, path, symbol, reason, git_branch, opened_session, opened_step)"
-                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s FROM sessions s"
+                " (project_id, path, symbol, reason, git_branch, opened_session, opened_step,"
+                "  opened_by)"
+                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s, nullif(%s, '') FROM sessions s"
                 " WHERE s.id = %s::uuid"
                 " ON CONFLICT (project_id, path, symbol) WHERE closed_at IS NULL"
-                " DO UPDATE SET reason = excluded.reason",
-                (entry.path, entry.symbol, entry.reason, git_branch, step_id, session),
+                " DO UPDATE SET reason = excluded.reason, opened_by = excluded.opened_by",
+                (entry.path, entry.symbol, entry.reason, git_branch, step_id, by, session),
             )
             opened += 1
         closed = 0

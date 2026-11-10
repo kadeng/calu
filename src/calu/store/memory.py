@@ -161,6 +161,7 @@ class MemorySessionStore:
         clean: Sequence[CodeMark],
         step_id: int | None,
         git_branch: str | None = None,
+        by: str = "",
     ) -> tuple[int, int]:
         """Open and close marks in memory, as the database store does.
 
@@ -169,6 +170,7 @@ class MemorySessionStore:
             clean: Spots that say what they do again; a mark that is not open is ignored.
             step_id: Unused here, kept for the protocol.
             git_branch: Recorded on a new mark.
+            by: Name of the checker whose verdict carried them (D87).
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -192,6 +194,7 @@ class MemorySessionStore:
                         reason=entry.reason,
                         opened_at=datetime.now(UTC),
                         git_branch=git_branch,
+                        opened_by=by or None,
                     )
                 )
             opened += 1

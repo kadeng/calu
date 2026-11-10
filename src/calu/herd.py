@@ -826,6 +826,15 @@ class CheckerStats:
     calu builds the checkers' context so that the long part can be cached (the cached prefix of
     §2.4, `CachePoint`). If this stays near zero while `input_tokens` grows, the caching is not
     working and every check pays for the whole prefix again."""
+    marks_opened: int = 0
+    """Honesty marks this checker opened: code it called dishonest (PLAN.md D87)."""
+    marks_cleared: int = 0
+    """Of those, the ones a checker closed again because the code and its documentation agreed
+    once more. The normal end of a mark."""
+    marks_overridden: int = 0
+    """Of those, the ones a **person** had to close (`calu honesty clear`, the web interface).
+    This is the number that says whether the checker can be trusted to block: a mark somebody
+    overruled was a refusal nobody agreed with."""
 
     @property
     def cached_share(self) -> float | None:
@@ -901,10 +910,16 @@ class CheckerStats:
             if self.passed_then_denied
             else ""
         )
+        marks = ""
+        if self.marks_opened:
+            marks = f"  marks: {self.marks_opened} opened, {self.marks_cleared} cleared"
+            if self.marks_overridden:
+                # The number that says whether it can be trusted to block (D87).
+                marks += f", {self.marks_overridden} overruled by a person"
         return (
             f"{self.checker_name}  {self.runs} run(s): {self.passed} pass, "
             f"{self.escalated} escalate, {self.allowed} allow, {self.denied} deny{timing}"
-            f"{tokens}{cached}{agreed}{missed}"
+            f"{tokens}{cached}{agreed}{missed}{marks}"
         )
 
 
@@ -1060,7 +1075,20 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
     rows = await db.all(
         # The token sums come from their own aggregate, not from the joined rows: a step may
         # have more than one escalation, and the LEFT JOIN would then count its tokens twice.
-        "WITH tokens AS ("
+        # The marks each checker opened and what became of them (D87). `closed_by` is the
+        # checker's own word for a mark it cleared and a person's name otherwise, so the two
+        # ends are told apart without another column.
+        "WITH marks AS ("
+        "  SELECT opened_by,"
+        "   count(*)::int AS opened,"
+        "   count(*) FILTER (WHERE closed_at IS NOT NULL AND closed_by = 'a checker')::int"
+        "     AS cleared,"
+        "   count(*) FILTER (WHERE closed_at IS NOT NULL AND closed_by <> 'a checker')::int"
+        "     AS overridden"
+        "  FROM honesty_marks WHERE opened_by IS NOT NULL"
+        "  GROUP BY opened_by"
+        "),"
+        "tokens AS ("
         "  SELECT checker_name,"
         "   coalesce(sum(input_tokens), 0)::int AS input_tokens,"
         "   coalesce(sum(output_tokens), 0)::int AS output_tokens,"
@@ -1083,15 +1111,42 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
         # were recorded from the first version on and nothing read them before.
         " max(t.input_tokens),"
         " max(t.output_tokens),"
-        " max(t.cache_read_tokens)"
+        " max(t.cache_read_tokens),"
+        # What its honesty marks came to (D87): opened, cleared by a checker, and overruled by
+        # a person -- the last one says whether it can be trusted to block. Its own aggregate
+        # for the same reason as the tokens: the join on escalations would multiply the counts.
+        " max(m.opened), max(m.cleared), max(m.overridden)"
         " FROM checker_runs c"
         " LEFT JOIN escalations e ON e.step_id = c.step_id"
         " JOIN tokens t ON t.checker_name = c.checker_name"
+        " LEFT JOIN marks m ON m.opened_by = c.checker_name"
         " WHERE (%s::int IS NULL OR c.created_at > now() - make_interval(days => %s::int))"
         " GROUP BY c.checker_name ORDER BY count(*) DESC, c.checker_name",
         (since_days, since_days, since_days, since_days),
     )
-    return [CheckerStats(*row) for row in rows]
+    # By keyword, not by position: the row has fifteen columns and a field inserted in the
+    # wrong place would silently shift every later one.
+    return [
+        CheckerStats(
+            checker_name=row[0],
+            runs=row[1],
+            passed=row[2],
+            escalated=row[3],
+            allowed=row[4],
+            denied=row[5],
+            escalated_then_allowed=row[6],
+            escalated_then_denied=row[7],
+            passed_then_denied=row[8],
+            median_ms=row[9],
+            input_tokens=row[10],
+            output_tokens=row[11],
+            cache_read_tokens=row[12],
+            marks_opened=row[13] or 0,
+            marks_cleared=row[14] or 0,
+            marks_overridden=row[15] or 0,
+        )
+        for row in rows
+    ]
 
 
 @dataclass(frozen=True)

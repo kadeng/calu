@@ -3061,22 +3061,34 @@ class Session:
         """
         if self.config.honesty.mode == "off":
             return
-        dirty = [mark for _c, run in decided.runs for mark in run.decision.marks_dirty]
-        clean = [mark for _c, run in decided.runs for mark in run.decision.marks_clean]
-        if not dirty and not clean:
+        with_marks = [
+            (checker.name, run.decision)
+            for checker, run in decided.runs
+            if run.decision.marks_dirty or run.decision.marks_clean
+        ]
+        if not with_marks:
             return
+        clean = [mark for _name, decision in with_marks for mark in decision.marks_clean]
         branch = await self._git_branch()
-        applied = await self._store_value(
-            "recording honesty marks",
-            self.store.apply_honesty_marks(dirty, clean, step_id, branch),
-        )
-        if applied is None:  # the write failed and was reported; the next step tries again
-            return
+        opened = closed = 0
+        for name, decision in with_marks:
+            # One call per checker, so that each mark records which checker opened it: with
+            # several checkers on a route (D81), "12 marks are open" says nothing about any one
+            # of them (D87).
+            applied = await self._store_value(
+                "recording honesty marks",
+                self.store.apply_honesty_marks(
+                    decision.marks_dirty, decision.marks_clean, step_id, branch, name
+                ),
+            )
+            if applied is None:  # the write failed and was reported; the next step tries again
+                return
+            opened += applied[0]
+            closed += applied[1]
         self.honesty_marks = (
             await self._store_value("reading the honesty register", self.store.open_honesty_marks())
             or []
         )
-        opened, closed = applied
         parts: list[str] = []
         if opened:
             parts.append(f"{opened} spot(s) recorded as dishonest")
