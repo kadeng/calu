@@ -55,7 +55,7 @@ from psycopg.conninfo import conninfo_to_dict
 from calu import __version__, admin, doctor, herd
 from calu.acp import serve_acp
 from calu.attach import attach
-from calu.config import EMPTY_CHAT_SUMMARY
+from calu.config import DEFAULT_ALLOWED_DOMAINS, DEFAULT_NETWORK_POLICY, EMPTY_CHAT_SUMMARY
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
@@ -994,7 +994,22 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
                 "session applies it when it next starts"
             )
         row = await admin.add_project(db, name or "", args.git_remote, args.network)
-        return f"added project {row.name!r}; use it with `calu run --project {row.name}`"
+        report = [
+            f"added project {row.name!r}; use it with `calu run --project {row.name}`",
+            f"network policy {row.network_policy}: "
+            + {
+                "none": "its commands reach nothing",
+                "proxy": "its commands reach the domains in claude.sandbox.allowed_domains",
+                "full": "its commands reach every domain through the sandbox's proxy",
+            }[row.network_policy],
+        ]
+        if row.network_policy == "proxy":
+            report.append(
+                f"wrote a starter allow list of {len(DEFAULT_ALLOWED_DOMAINS)} domains "
+                "(package registries, git over HTTPS, OS packages); widen it with "
+                f"`calu config add claude.sandbox.allowed_domains <domain> --project {row.name}`"
+            )
+        return "\n".join(report)
 
     _admin_command(store, work)
 
@@ -1478,8 +1493,11 @@ def build_parser() -> argparse.ArgumentParser:
     project.add_argument(
         "--network",
         choices=list(admin.NETWORK_POLICIES),
-        default="full",
-        help="network policy of the sandbox (default: full)",
+        default=DEFAULT_NETWORK_POLICY,
+        help=(
+            f"network policy of the sandbox (default: {DEFAULT_NETWORK_POLICY}; 'none' reaches "
+            "nothing, 'proxy' the project's allowed_domains, 'full' every domain)"
+        ),
     )
     project.set_defaults(handler=cmd_project)
 

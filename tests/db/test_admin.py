@@ -24,7 +24,17 @@ async def test_projects_are_registered_and_listed(db_url: str) -> None:
     db, conn = await prepared(db_url)
     try:
         row = await admin.add_project(db, "demo", "git@example.com:demo.git")
-        assert row.name == "demo" and row.network_policy == "full"
+        # A new project gets the careful policy and a starter allow list (D45).
+        assert row.name == "demo" and row.network_policy == "proxy"
+        seeded = (await admin.settings(db, "demo"))["claude"]["sandbox"]["allowed_domains"]
+        assert "pypi.org" in seeded and "github.com" in seeded
+        assert "*" not in seeded, "a new project must not reach every domain"
+        # The old behaviour is one flag away, and then nothing is seeded.
+        wide = await admin.add_project(db, "wide", None, "full")
+        assert wide.network_policy == "full"
+        assert "allowed_domains" not in (await admin.settings(db, "wide")).get("claude", {}).get(
+            "sandbox", {}
+        )
         assert "demo" in row.line() and "example.com" in row.line()
         with pytest.raises(admin.AdminError, match="exists already"):
             await admin.add_project(db, "demo")
@@ -32,7 +42,7 @@ async def test_projects_are_registered_and_listed(db_url: str) -> None:
             await admin.add_project(db, "other", network_policy="sometimes")
         with pytest.raises(admin.AdminError, match="needs a name"):
             await admin.add_project(db, "  ")
-        assert [p.name for p in await admin.projects(db)] == ["demo"]
+        assert [p.name for p in await admin.projects(db)] == ["demo", "wide"]
         with pytest.raises(admin.AdminError, match="no project named"):
             await admin.project_id(db, "nope")
     finally:
@@ -308,14 +318,19 @@ async def test_a_list_entry_can_be_added_for_one_project_only(db_url: str) -> No
     """A project scope starts from the list a session there would use."""
     db, conn = await prepared(db_url)
     try:
-        await admin.add_project(db, "demo", "git@example.com:demo.git")
+        # "none" seeds nothing, so this starts from an empty list.
+        await admin.add_project(db, "demo", "git@example.com:demo.git", "none")
         key = "claude.sandbox.allowed_domains"
-        merged, added = await admin.add_to_setting(db, key, "pypi.org", project="demo")
+        merged, added = await admin.add_to_setting(db, key, "docs.example.com", project="demo")
         assert added is True
-        assert merged["claude"]["sandbox"]["allowed_domains"] == ["pypi.org"]
+        assert merged["claude"]["sandbox"]["allowed_domains"] == ["docs.example.com"]
         # The global scope is untouched.
         assert "allowed_domains" not in (await admin.settings(db)).get("claude", {}).get(
             "sandbox", {}
         )
+        # A domain the starter list of a "proxy" project already has is not added twice.
+        await admin.add_project(db, "narrow", None, "proxy")
+        _, again = await admin.add_to_setting(db, key, "pypi.org", project="narrow")
+        assert again is False
     finally:
         await conn.close()

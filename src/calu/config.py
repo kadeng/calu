@@ -93,6 +93,52 @@ Claude Code's own credentials, SSH, cloud and registry credentials. Claude Code'
 defaults additionally deny the container sockets, `/run/dbus` and `/run/user`."""
 
 
+DEFAULT_ALLOWED_DOMAINS = (
+    # Python
+    "pypi.org",
+    "files.pythonhosted.org",
+    # JavaScript
+    "registry.npmjs.org",
+    # Rust
+    "crates.io",
+    "static.crates.io",
+    "index.crates.io",
+    # Go
+    "proxy.golang.org",
+    "sum.golang.org",
+    # git over HTTPS and the archives a checkout or an install pulls
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "gitlab.com",
+    # Debian and Ubuntu packages
+    "deb.debian.org",
+    "archive.ubuntu.com",
+    "security.ubuntu.com",
+)
+"""What a coding task normally has to reach: package registries, git over HTTPS, OS packages.
+
+`calu project add` writes this into a new project's settings as the starter allow list of the
+"proxy" policy (PLAN.md D45), where `calu config add|remove claude.sandbox.allowed_domains ...`
+edits it one entry at a time. It is deliberately **not** the default of
+`SandboxConfig.allowed_domains`: a session whose project says nothing, or that runs without a
+project at all, reaches nothing, and that is the side to err on.
+
+Claude Code itself runs outside the sandbox (D4), so the model API is not in this list; only the
+commands Claude runs are limited by it.
+"""
+
+
+DEFAULT_NETWORK_POLICY = "proxy"
+"""The policy a new project gets (PLAN.md D45, proposed; Q5 asks the owner to confirm it).
+
+"proxy" together with `DEFAULT_ALLOWED_DOMAINS` lets a session install packages and use git
+over HTTPS and reach nothing else. `calu project add --network full` gives a project the old
+behaviour, and `calu project network --name <p> --network <policy>` changes it later.
+"""
+
 NetworkPolicy = Literal["none", "proxy", "full"]
 """What a project's commands may reach (`projects.network_policy`, PLAN.md §7 and D39).
 

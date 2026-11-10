@@ -133,11 +133,21 @@ def network_warnings(config: Config) -> list[str]:
 
     Returns:
         A warning if the commands may reach **every** domain (the wildcard of the "full"
-        policy), because that is a deliberate choice worth seeing at every start; nothing
-        otherwise. A policy that reaches nothing needs no warning: that is the safe end.
+        policy), because that is a deliberate choice worth seeing at every start; one if they
+        can reach nothing, which is the safe end but explains every failing download, so a
+        session that is stuck on an install says why; nothing in between.
     """
     sandbox = config.claude.sandbox
-    if not sandbox.enabled or "*" not in sandbox.allowed_domains:
+    if not sandbox.enabled:
+        return []
+    if not sandbox.allowed_domains:
+        return [
+            "the sandbox blocks every outgoing connection of a command (network policy "
+            '"none", or "proxy" with an empty allow list), so a download or an install will '
+            "fail. Let one through with `calu config add claude.sandbox.allowed_domains "
+            "<domain> [--project <project>]`."
+        ]
+    if "*" not in sandbox.allowed_domains:
         return []
     denied = f", except {', '.join(sandbox.denied_domains)}" if sandbox.denied_domains else ""
     return [

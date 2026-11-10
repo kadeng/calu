@@ -120,10 +120,16 @@ def test_an_open_network_is_reported_at_every_start() -> None:
     assert "every domain" in said[0] and "except x.io" in said[0]
     assert said[0] in preflight.warnings(open_network, {})
 
-    # A narrow policy, and a sandbox that is off, say nothing about the network.
-    assert preflight.network_warnings(Config()) == []
+    # A narrow policy says nothing: it is neither risky nor surprising.
     narrow = Config(claude=ClaudeConfig(sandbox=SandboxConfig(allowed_domains=["pypi.org"])))
     assert preflight.network_warnings(narrow) == []
+
+    # A closed network is the safe end, but it explains every failing download, so it is said
+    # once at the start rather than left to be guessed from a stuck install (D45).
+    closed = preflight.network_warnings(Config())
+    assert len(closed) == 1
+    assert "blocks every outgoing connection" in closed[0]
+    assert "calu config add claude.sandbox.allowed_domains" in closed[0]
     disabled = Config(
         claude=ClaudeConfig(sandbox=SandboxConfig(enabled=False, allowed_domains=["*"]))
     )

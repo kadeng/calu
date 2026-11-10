@@ -22,7 +22,13 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from calu.checkers.rules import RULE_LISTS
-from calu.config import SETTINGS_KEY, Config, merge_settings
+from calu.config import (
+    DEFAULT_ALLOWED_DOMAINS,
+    DEFAULT_NETWORK_POLICY,
+    SETTINGS_KEY,
+    Config,
+    merge_settings,
+)
 from calu.db import Db
 from calu.setup import parse_rule_file
 
@@ -112,12 +118,19 @@ async def add_project(
     db: Db,
     name: str,
     git_remote: str | None = None,
-    network_policy: str = "full",
+    network_policy: str = DEFAULT_NETWORK_POLICY,
 ) -> ProjectRow:
     """Register a project, so that its own configuration and rules can be set.
 
     Nothing is written into the project directory: a project is a row that `calu run --project`
     refers to.
+
+    With the "proxy" policy and no allow list of its own, the project is given
+    `DEFAULT_ALLOWED_DOMAINS` as its starter list (PLAN.md D45). That is written into the
+    project's settings rather than applied silently at load time, so `calu config get --project`
+    shows it and `calu config add|remove claude.sandbox.allowed_domains` edits it. Without it
+    "proxy" would mean the same as "none" -- an empty allow list reaches nothing -- and every
+    package install in a new project would fail.
 
     Args:
         db: A connection of the database owner.
@@ -143,7 +156,15 @@ async def add_project(
     )
     if row is None:
         raise AdminError(f"a project named {name!r} exists already")
-    return ProjectRow(*row)
+    project = ProjectRow(*row)
+    if project.network_policy == "proxy":
+        await set_setting(
+            db,
+            "claude.sandbox.allowed_domains",
+            list(DEFAULT_ALLOWED_DOMAINS),
+            project=project.name,
+        )
+    return project
 
 
 async def chat_summary(db: Db, session_id: str) -> str:

@@ -229,7 +229,7 @@ it, and the more sessions run at once.
 
 **Status: early implementation.** `calu run` starts a checked session, records it in the
 database and waits for human decisions; the network clients, the web interface and the sandbox
-defaults are not finished. The design and the order of work are in [PLAN.md](PLAN.md), the
+are built, and the sandbox's defaults are proposals the owner has still to confirm. The design and the order of work are in [PLAN.md](PLAN.md), the
 current state in [HANDOFF.md](HANDOFF.md). calu is the successor of
 [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop), which does the same checking
 inside VSCode for a single user; calu reuses its core.
@@ -276,6 +276,21 @@ chain), and `claude.use_bedrock` is the separate switch that puts *Claude Code* 
 `bubblewrap` and `socat` a session refuses to start, because the sandbox cannot be built; setting
 `claude.sandbox.enabled` to false in the configuration turns the sandbox off, at the cost of its
 protection.
+
+What a command may reach over the network is a property of the project. A project registered
+with `calu project add` gets the policy `proxy` and a starter allow list — package registries,
+git over HTTPS, OS packages — so a session can install what it needs and reach nothing else:
+
+```bash
+calu project add . --name demo                                   # proxy, with the starter list
+calu config add claude.sandbox.allowed_domains docs.example.com --project demo
+calu project network --name demo --network full                  # every domain, as Claude Code
+calu project network --name demo --network none                  # nothing at all
+```
+
+A session started without `--project` reaches nothing: an empty allow list blocks every
+connection, and the session says so at startup. Raw TCP is blocked whatever the policy says, so
+a program that ignores the proxy variables gets nowhere either.
 
 While a session runs, another terminal — or another machine with access to the database — can
 watch and unblock it:

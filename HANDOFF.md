@@ -42,7 +42,7 @@ in `calu/` only.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **438 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 77 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
-instructions), ~8.9k of tests, 13 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+instructions), ~8.9k of tests, 14 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
 
@@ -326,8 +326,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    `calu`, workflow `release.yml`, environment `pypi`, and (b) that GitHub environment is
    created. Until then `uv tool install calu` in the README does not work. A tag pushed before
    the setup builds the wheel and stops, so nothing is published by accident.
-4. **Phase 5**: nothing blocking left. The network policy is built (D39; only its default for a
-   new project is the owner's call, Q5), and the container case is measured (Q1): a default
+4. **Phase 5**: nothing blocking left. The network policy is built (D39) and its default for a
+   new project is now a proposal to confirm (D45, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs
    `security_opt: [seccomp:unconfined]` and socat — calu's own `dev` service and image now have
    both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested, because it needs
@@ -342,7 +342,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 - **Q2** Relationship to sitl: replace it or keep both?
 - **Q3** A database role per session (would allow row-level security, and narrow D28 further).
 - **Q4** How clients authenticate remotely (tokens, operator accounts, TLS) — see next step 2.
-- **Q5** The sandbox's network policy and its default.
+- **Q5** Answered as a proposal (D45): a new project gets "proxy" with a starter allow list
+  instead of "full". One flag overrules it (`calu project add --network full`); existing
+  projects are untouched. The owner should confirm the list and the trade (a task that needs an
+  unlisted domain stops until someone adds it).
 - **Q9** Where a training mode would belong, if one is wanted at all.
 - **Q14** Whether a fork should rewind the files too (see next step 1).
 - **Q15** The single executable of REQUIREMENTS 21 and soft goal 2. D41 recommends **against**
