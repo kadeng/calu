@@ -906,3 +906,51 @@ async def test_a_reloaded_configuration_records_the_categories_it_changed(tmp_pa
     # A reload that leaves them alone records nothing.
     await session.announce_auto_escalate(session.config.auto_escalate)
     assert len(store.setting_changes) == 1
+
+
+async def test_the_session_beats_until_it_is_cancelled(tmp_path: Path) -> None:
+    """A herd tells a live session from a dead one by this alone (PLAN.md D56)."""
+    session, _rec, store = make_session(tmp_path, [])
+    with anyio.move_on_after(1):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(session.beat, 0.02)
+            with anyio.fail_after(5):
+                while store.heartbeats < 3:
+                    await anyio.sleep(0.01)
+            tg.cancel_scope.cancel()
+    assert store.heartbeats >= 3
+
+    # An interval of 0 switches it off, and the call returns at once.
+    before = store.heartbeats
+    with anyio.fail_after(5):
+        await session.beat(0)
+    assert store.heartbeats == before
+
+
+async def test_a_failing_heartbeat_is_reported_and_the_loop_goes_on(tmp_path: Path) -> None:
+    """Losing the stamp is not a reason to stop a session that is otherwise fine."""
+    session, rec, store = make_session(tmp_path, [])
+    calls = {"n": 0}
+
+    async def failing() -> None:
+        """Fail the first two heartbeats, then work.
+
+        Raises:
+            RuntimeError: For the first two calls.
+        """
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("the database went away")
+        store.heartbeats += 1
+
+    store.heartbeat = failing  # type: ignore[method-assign]
+    with anyio.move_on_after(2):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(session.beat, 0.02)
+            with anyio.fail_after(5):
+                while store.heartbeats < 1:
+                    await anyio.sleep(0.01)
+            tg.cancel_scope.cancel()
+    assert calls["n"] >= 3, "the loop stopped at the first failure"
+    said = [event.message for event in rec.of(Log)]
+    assert any("heartbeat failed" in message for message in said)

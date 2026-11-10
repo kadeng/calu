@@ -929,6 +929,36 @@ class Session:
         template = WRITE_SET_REVERTED if reverted else WRITE_SET_NOT_REVERTED
         return template.format(reason=reason, paths=", ".join(change.paths[:20]))
 
+    async def beat(self, interval_s: float) -> None:
+        """Tell the database every `interval_s` seconds that this process is still running.
+
+        A killed process cannot set its own state, so without this a row stays at its last
+        state for ever and a herd cannot tell a working session from a dead one (PLAN.md D56).
+        Runs until cancelled; a failed heartbeat is logged and the loop goes on, because losing
+        the stamp is not a reason to stop a session that is otherwise fine.
+
+        Args:
+            interval_s: Seconds between heartbeats; a value of 0 or less returns at once, which
+                switches the heartbeat off with `clock.check_interval_s = 0`.
+
+        Side effects:
+            Writes `sessions.last_seen`; emits a `log` event when a heartbeat fails.
+        """
+        if interval_s <= 0:
+            return
+        while True:
+            try:
+                await self.store.heartbeat()
+            except Exception:
+                log.exception("the heartbeat failed")
+                await self._emit_safely(
+                    Log(
+                        level="warning",
+                        message="the heartbeat failed; the fleet view may call this session stale",
+                    )
+                )
+            await anyio.sleep(interval_s)
+
     async def clock_jumped(self, jump: ClockJump) -> None:
         """React to a move of the wall clock that `calu.clock.ClockWatch` detected (D32).
 

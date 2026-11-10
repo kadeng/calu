@@ -25,6 +25,13 @@ from calu.db import Db
 from calu.store.session import turn_record
 from calu.tokens import new_token, token_hash
 
+STALE_AFTER_S = 180.0
+"""Silence after which a session is called stale (PLAN.md D56).
+
+A session stamps `last_seen` every `clock.check_interval_s` seconds, 10 by default, so three
+minutes is many missed beats -- long enough that a slow machine or a paused process is not
+called dead, short enough that an operator watching a herd notices within one coffee."""
+
 
 @dataclass(frozen=True)
 class SessionRow:
@@ -42,19 +49,40 @@ class SessionRow:
     open_escalations: int
     address: str = ""
     """Where the session's process listens for clients (D29); "" if it serves no clients."""
+    last_seen: datetime | None = None
+    """When the process last said it was running (D56); None for a row from before that."""
+    silent_for_s: float = 0.0
+    """Seconds since `last_seen`, measured by the database, so a reader needs no clock of its
+    own and clock differences between hosts do not matter."""
+
+    @property
+    def stale(self) -> bool:
+        """Whether this session looks like a process that is gone.
+
+        A session writes `last_seen` every `clock.check_interval_s` seconds (10 by default), so
+        silence of several minutes means the process is not running any more -- it cannot set
+        its own state when it is killed. A session that **ended** is never stale: it said so.
+
+        Returns:
+            True if the session has not ended and has been silent for longer than
+            `STALE_AFTER_S`.
+        """
+        return self.ended_at is None and self.silent_for_s > STALE_AFTER_S
 
     def line(self) -> str:
         """Return the session as one terminal line.
 
         Returns:
-            Id, state, host and directory, the number of open escalations if there are any, and
-            Claude's session id, which `calu run --resume` takes (D27).
+            Id, state, host and directory, the number of open escalations if there are any,
+            Claude's session id, which `calu run --resume` takes (D27), and a mark when the
+            process has stopped saying it is there (D56).
         """
         waiting = f" ({self.open_escalations} open)" if self.open_escalations else ""
         resume = f"  resume {self.claude_session_id}" if self.claude_session_id else ""
+        silent = f"  SILENT for {self.silent_for_s / 60:.0f} min" if self.stale else ""
         return (
             f"{self.id}  {self.state}{waiting}  {self.hostname}:{self.directory}"
-            f"  since {self.state_since:%Y-%m-%d %H:%M:%S}{resume}"
+            f"  since {self.state_since:%Y-%m-%d %H:%M:%S}{resume}{silent}"
         )
 
 
@@ -132,7 +160,9 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
         " s.started_at, s.ended_at, s.claude_session_id,"
         " (SELECT count(*) FROM escalations e"
         "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
-        " coalesce(s.address, '')"
+        " coalesce(s.address, ''), s.last_seen,"
+        # The database measures the silence, so a reader needs no clock of its own.
+        " extract(epoch FROM (now() - s.last_seen))::float8"
         " FROM sessions s JOIN hosts h ON h.id = s.host_id"
         " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC",
         (active_only,),

@@ -93,6 +93,7 @@ EFFORTS = ("", "low", "medium", "high", "xhigh", "max")
 
 GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("needs_you", "Needs you", frozenset({"escalated"})),
+    ("gone", "Gone (no heartbeat)", frozenset()),
     ("working", "Working", frozenset({"running", "checking", "tool_call", "starting"})),
     ("idle", "Idle", frozenset({"idle"})),
     ("ended", "Ended", frozenset({"stopped", "failed"})),
@@ -103,7 +104,9 @@ Every agent UI that manages many sessions leads with the ones that cannot go on 
 human — Claude Code's agent view groups into "Needs input", "Working", "Completed", Orca into
 "Needs You", "Working", "Done", "Idle". calu's escalations are exactly that, so a session that
 waits comes first, and a session with an open escalation counts as waiting whatever its state
-says.
+says. "Gone" holds the sessions whose process stopped saying it is there (D56): their row still
+claims a state, and nothing an operator does for them has any effect, so they are kept out of
+"needs you" and named for what they are.
 """
 
 DETAIL_LEVELS = {
@@ -957,8 +960,12 @@ def _group_of(row: herd.SessionRow) -> str:
 
     Returns:
         The group's name. A session with an open escalation is in "needs you" whatever its state
-        says, because that is what a human has to act on.
+        says, because that is what a human has to act on -- unless it has stopped saying it is
+        there (D56), in which case it is "gone": answering its escalation would reach nobody,
+        and showing it among the sessions that need a decision would waste the operator's time.
     """
+    if row.stale:
+        return "gone"
     if row.open_escalations:
         return "needs_you"
     for name, _title, states in GROUPS:

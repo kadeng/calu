@@ -563,3 +563,30 @@ async def test_the_session_page_names_who_weakened_the_session(db_url: str) -> N
             assert "edits: True -&gt; False" in page
     finally:
         await conn.close()
+
+
+async def test_a_session_without_a_heartbeat_is_grouped_as_gone(db_url: str) -> None:
+    """Answering the escalation of a dead session reaches nobody, so it leaves "Needs you"."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _escalation = await populate(db)
+        async with await client_for(db) as client:
+            # With a fresh heartbeat the waiting session leads the page.
+            fleet = (await client.get("/")).text
+            assert "Needs you" in fleet
+            assert "no heartbeat" not in fleet
+
+            await db.execute(
+                "UPDATE sessions SET last_seen = now() - interval '30 minutes' WHERE id = %s::uuid",
+                (session_id,),
+            )
+            gone = (await client.get("/")).text
+            assert "Gone (no heartbeat)" in gone
+            assert "no heartbeat for 30 min" in gone
+            # It is not among the sessions that need a decision any more.
+            needs_you = gone.split("Gone (no heartbeat)")[0]
+            assert session_id[:8] not in needs_you
+    finally:
+        await conn.close()

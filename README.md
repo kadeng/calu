@@ -373,6 +373,10 @@ A browser shows every session of every host at once:
 calu web          # http://127.0.0.1:8800, local only: there is no login yet
 ```
 
+A session stamps the database every few seconds, so the fleet separates the sessions that are
+working from the ones whose process is gone — a killed process cannot set its own state, and an
+escalation nobody can answer should not sit among the ones that need you.
+
 Every page shows what needs you and jumps to any session with Ctrl+K. It leads with the
 sessions that cannot go on without you, opens one session's history at four
 levels of detail (from the summary a checker reads to every tool input), attaches to a running

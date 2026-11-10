@@ -171,3 +171,48 @@ async def test_client_tokens_are_minted_checked_and_revoked(db_url: str) -> None
             await herd.mint_token(db, "00000000-0000-0000-0000-000000000000")
     finally:
         await owner.close()
+
+
+async def test_a_session_whose_process_is_gone_is_visible_as_such(db_url: str) -> None:
+    """A killed process cannot set its own state, so the herd needs a heartbeat (D56)."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        await store.set_state("running")
+
+        # A fresh session is not stale, and the silence is measured by the database.
+        rows = await herd.sessions(db)
+        assert [row.id for row in rows] == [session_id]
+        assert rows[0].stale is False
+        assert rows[0].last_seen is not None
+        assert rows[0].silent_for_s < 10
+        assert "SILENT" not in rows[0].line()
+
+        # The heartbeat moves `last_seen`.
+        await db.execute(
+            "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
+            (session_id,),
+        )
+        await store.heartbeat()
+        assert (await herd.sessions(db))[0].stale is False
+
+        # Silence for longer than `STALE_AFTER_S` marks the session, and the line says so.
+        await db.execute(
+            "UPDATE sessions SET last_seen = now() - interval '20 minutes' WHERE id = %s::uuid",
+            (session_id,),
+        )
+        gone = (await herd.sessions(db))[0]
+        assert gone.stale is True
+        assert gone.silent_for_s > herd.STALE_AFTER_S
+        assert "SILENT for 20 min" in gone.line()
+
+        # A session that ended is never stale: it said so itself.
+        await store.end("stopped")
+        ended = (await herd.sessions(db, active_only=False))[0]
+        assert ended.stale is False
+        assert "SILENT" not in ended.line()
+    finally:
+        await owner.close()

@@ -425,6 +425,10 @@ async def _run(
             # Watches calu's own clock: a backward jump breaks the attribution of file changes
             # to steps, so the session escalates its next tool call (D32).
             tg.start_soon(watch.run)
+        # The same interval says "this process is still running", so a herd can tell a working
+        # session from one whose process is gone (D56). It shares the interval because both
+        # answer the same question -- is this session still the one it claims to be?
+        tg.start_soon(session.beat, clock.check_interval_s)
         server: SessionServer | None = None
         try:
             await session.start(tg, options.resume_id, options.model, options.effort, fork)

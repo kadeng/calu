@@ -20,7 +20,8 @@
   <tbody>
   {% for s in rows %}
     <tr>
-      <td><span class="state {{ s.state }}">{{ s.state }}</span></td>
+      <td><span class="state {{ s.state }}">{{ s.state }}</span>{% if s.stale %}
+        <span class="decision deny" title="the process stopped saying it is there">no heartbeat for {{ (s.silent_for_s / 60) | round | int }} min</span>{% endif %}</td>
       <td class="mono">{{ s.hostname }}<span class="muted">/{{ s.os_user }}</span></td>
       <td class="mono">{{ s.directory }}</td>
       <td class="muted">{{ s.started_at.strftime('%Y-%m-%d %H:%M') }}</td>

@@ -243,6 +243,18 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def heartbeat(self) -> None:
+        """Record that this session's process is still running (PLAN.md D56).
+
+        Called on an interval while the session lives. A reader compares `sessions.last_seen`
+        with the current time to tell a working session from one whose process is gone: nothing
+        else distinguishes them, because a killed process cannot set its own state.
+
+        Errors are the caller's to handle; a session whose heartbeat fails is still a session,
+        so `calu run` logs the failure rather than stopping.
+        """
+        ...
+
     async def end(self, state: State) -> None:
         """Record the end of the session.
 
@@ -582,6 +594,16 @@ class DatabaseSessionStore:
             await conn.execute(b"SELECT set_config('calu.session_id', %s, false)", (str(row[0]),))
         self.session_id = str(row[0])
         return self.session_id
+
+    async def heartbeat(self) -> None:
+        """Stamp `last_seen` on this session's row (see `SessionStore.heartbeat`).
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        await self._db.execute(
+            "UPDATE sessions SET last_seen = now() WHERE id = %s", (self._require_session(),)
+        )
 
     async def set_state(self, state: State) -> None:
         """Record the current state (see `SessionStore.set_state`).

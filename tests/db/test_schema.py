@@ -369,6 +369,19 @@ async def test_a_session_reads_and_writes_only_its_own_rows(db_url: str) -> None
         finally:
             await blind.close()
 
+        # The heartbeat (D56) is an UPDATE of the session's own row, so the policy has to let
+        # it through -- and only for its own row.
+        await owner.execute("UPDATE sessions SET last_seen = now() - interval '1 hour'")
+        await one.heartbeat()
+        beats = await (
+            await owner.execute(
+                "SELECT id::text, extract(epoch FROM (now() - last_seen))::int FROM sessions"
+            )
+        ).fetchall()
+        silence = {row[0]: row[1] for row in beats}
+        assert silence[mine] < 10, "a session must be able to say it is alive"
+        assert silence[theirs] > 3000, "and only about itself"
+
         # The owner still sees everything, which the web interface and the herd rely on.
         cur = await owner.execute("SELECT count(*) FROM steps")
         assert (await cur.fetchone()) == (2,)

@@ -71,6 +71,8 @@ class MemorySessionStore:
     write_sets: dict[int, dict[str, Any]] = field(default_factory=dict)
     """What each step wrote, as `record_changes` recorded it (PLAN.md D31)."""
     address: str = ""
+    heartbeats: int = 0
+    """How often `heartbeat` was called (PLAN.md D56)."""
     setting_changes: list[tuple[str, dict[str, Any], dict[str, Any], str]] = field(
         default_factory=list
     )
@@ -135,6 +137,10 @@ class MemorySessionStore:
             actor: Who asked for it.
         """
         self.setting_changes.append((setting, old, new, actor))
+
+    async def heartbeat(self) -> None:
+        """Count a heartbeat in `heartbeats`."""
+        self.heartbeats += 1
 
     async def add_agent(self, agent_id: str, parent_agent_id: str | None = None) -> None:
         """Record a subagent and its parent, keeping the first parent seen.
