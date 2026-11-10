@@ -124,7 +124,8 @@ class Adapter:
 
         Args:
             calu: The connected calu session client.
-            workspace: The session's project directory; `session/new` checks the editor's `cwd`
+            workspace: The session's project directory; `session/new` checks that the editor's
+                `cwd`
                 against it, because this adapter can only serve that one directory.
             name: Name of the agent as the editor shows it.
             version: Version of the adapter.
@@ -233,7 +234,8 @@ class Adapter:
         """Answer `session/new` by attaching to the running calu session.
 
         No Claude session is created here: the adapter serves the session that `calu run`
-        started. The editor's `cwd` must be that session's project directory.
+        started. The editor's `cwd` must be that session's project directory or a directory
+        inside it.
 
         Args:
             params: The `session/new` params.
@@ -242,7 +244,7 @@ class Adapter:
             `{"sessionId": ...}` with the calu session id.
 
         Raises:
-            RpcError: If `cwd` is not the session's project directory.
+            RpcError: If `cwd` is outside the session's project directory.
         """
         request = acp.NewSessionParams.model_validate(params)
         self._check_cwd(request.cwd)
@@ -273,7 +275,8 @@ class Adapter:
             An empty result, after the replay.
 
         Raises:
-            RpcError: If `cwd` is not the session's project directory, or the session id is not
+            RpcError: If `cwd` is outside the session's project directory, or the session id
+                is not
                 the one this adapter serves.
         """
         request = acp.LoadSessionParams.model_validate(params)
@@ -336,19 +339,28 @@ class Adapter:
         await self.calu.request("interrupt", {})
 
     def _check_cwd(self, cwd: str) -> None:
-        """Check that the editor's directory is the one this adapter serves.
+        """Check that the editor's directory is inside the project this adapter serves.
+
+        The session's project directory itself is accepted, and so is a directory below it: an
+        editor opened on one package of a repository is still working inside the project whose
+        rules and checkers the session enforces, and `calu acp` with no address finds that
+        session from a subdirectory for the same reason (PLAN.md D105). A directory **outside**
+        the project is refused, because the editor would then act on files the session does not
+        cover.
 
         Args:
             cwd: The absolute path the editor sent.
 
         Raises:
-            RpcError: If it is not the session's project directory.
+            RpcError: If it is neither the session's project directory nor below it.
         """
-        if Path(cwd).resolve() != self.workspace.resolve():
+        here = Path(cwd).resolve()
+        workspace = self.workspace.resolve()
+        if here != workspace and not here.is_relative_to(workspace):
             raise RpcError(
                 acp.INVALID_PARAMS,
-                f"this calu session serves {self.workspace}, not {cwd}; start a calu session "
-                "in that directory and attach to it",
+                f"this calu session serves {self.workspace}, which does not contain {cwd}; "
+                "start a calu session in that directory and attach to it",
             )
 
     def _require_session(self, session_id: str) -> None:

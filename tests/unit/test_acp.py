@@ -186,6 +186,17 @@ async def test_a_session_is_the_running_one_and_only_for_its_own_directory() -> 
         answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
         assert answer["result"]["sessionId"] == "abc"
         assert h.calu.sent("state.get")
+        # A directory **inside** the project is the same project: an editor opened on one
+        # package of a repository works under the same rules, and `calu acp` with no address
+        # finds the session from there too (D105).
+        inside = await h.editor.call(
+            "session/new", {"cwd": str(WORKSPACE / "src" / "package"), "mcpServers": []}
+        )
+        assert inside["result"]["sessionId"] == "abc"
+        # One above it is not: the editor would act on files the session does not cover.
+        above = await h.editor.call("session/new", {"cwd": str(WORKSPACE.parent), "mcpServers": []})
+        assert above["error"]["code"] == -32602
+        assert "does not contain" in above["error"]["message"]
 
     await run_adapter(calu, body)
 
