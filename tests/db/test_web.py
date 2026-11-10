@@ -615,3 +615,24 @@ async def test_the_pages_say_when_an_answer_can_reach_nobody(db_url: str) -> Non
             assert "process is gone" in detail
     finally:
         await conn.close()
+
+
+async def test_the_triage_queue_marks_an_entry_nobody_waits_for(db_url: str) -> None:
+    """The queue is answered fast, so this has to be in the data the card is built from."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _escalation = await populate(db)
+        async with await client_for(db) as client:
+            waiting = (await client.get("/api/escalations")).json()["escalations"]
+            assert waiting and waiting[0]["unanswerable"] is False
+
+            await db.execute(
+                "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
+                (session_id,),
+            )
+            waiting = (await client.get("/api/escalations")).json()["escalations"]
+            assert waiting[0]["unanswerable"] is True
+    finally:
+        await conn.close()

@@ -753,6 +753,9 @@ async def waiting_json(request: Request, state: _State) -> Response:
             "command": "",
             "questions": [],
             "session_url": str(request.url_for("session", session_id=row.session_id)),
+            # The queue is worked through fast, so the one entry that cannot be acted on has
+            # to say so before a decision is typed (D56, D57).
+            "unanswerable": row.unanswerable,
         }
         if index == 0:
             context = await herd.escalation_context(state.db, row.id)

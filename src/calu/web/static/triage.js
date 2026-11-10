@@ -61,11 +61,22 @@
     where.append(`escalation ${entry.id} · `, link, ` · since ${entry.created_at.slice(11, 19)}`);
     const why = document.createElement("p");
     why.textContent = entry.reason;
+    // The session's process stopped saying it is there, so a decision would be recorded and
+    // never acted on: say so above the buttons, not after one was pressed (D56, D57).
+    let gone = null;
+    if (entry.unanswerable) {
+      gone = document.createElement("p");
+      gone.className = "decision deny";
+      gone.textContent =
+        "The session's process is gone: an answer is recorded for the history, but the step " +
+        "will not run and the session will not continue.";
+    }
+    const parts = gone ? [where, gone, why] : [where, why];
     const rendered = document.createElement("pre");
     rendered.textContent = entry.rendered || "";
     if ((entry.questions || []).length) {
       // A question of the agent: the options are the answer (PLAN.md D35).
-      card.append(where, why);
+      card.append(...parts);
       for (const question of entry.questions) {
         const asked = document.createElement("p");
         asked.textContent = question.question || question.header || "a question";
@@ -112,7 +123,7 @@
     skip.textContent = "Skip (s)";
     skip.onclick = () => { skipped.add(entry.id); shown = null; render(); };
     row.append(note, allow, deny, skip);
-    card.append(where, why, rendered, row);
+    card.append(...parts, rendered, row);
     if (entry.command) {
       const remember = document.createElement("p");
       const box = document.createElement("input");
