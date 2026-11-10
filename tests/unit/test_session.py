@@ -1625,3 +1625,37 @@ async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_p
     # And it is sent once, not on every reload.
     await session.reload_register()
     assert len(rec.of(HonestyUpdate)) == before + 1
+
+
+async def test_a_deny_rule_escalates_before_any_checker_is_asked(tmp_path: Path):
+    """The bound CALU_GUIDE.md claims for a wrong checker verdict (D124).
+
+    "A wrong ALLOW cannot reach the dangerous cases at all: the deny lists are evaluated before
+    any model is called, and a match escalates to a human at once -- the checkers are never
+    asked about it, so no verdict of theirs can overrule it." That sentence is a security claim
+    and was held only by reading the code; the fake checker here would ALLOW everything, so if
+    it were asked, the step would run.
+    """
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "sudo -n ls /root"}, "result": "denied"}]],
+        checker_models={**fake_models(), "command": fixed_checker(Decision.ALLOW, "always yes")},
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "deny rule" in request.reason and "sudo" in request.reason
+        await session.decide_escalation(request.escalation_id, "deny", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    (step,) = list(store.steps.values())
+    assert step.decision is not None and step.decision.rules_outcome == "deny"
+    assert step.decision.decision == "escalate"
+    assert step.checker_runs == [], (
+        "a deny-list match must not reach a checker at all: a checker that answered ALLOW "
+        "would otherwise decide a step the user's own list refused"
+    )
+    # And the step did not run: the escalation was denied, so Claude was told instead.
+    assert [c.decision for c in rec.of(CheckResult)] == [Decision.ESCALATE]
