@@ -1381,7 +1381,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="with --resume: branch the conversation off before turn N instead of continuing it;"
-        " the fork gets its own session id (`calu sessions` and the web interface show the turns)",
+        " the fork gets its own session id (`calu sessions` and the web interface show the"
+        " turns). The working tree is left alone: the files keep what the dropped turn wrote"
+        " (D46)",
     )
     p.add_argument(
         "--socket",

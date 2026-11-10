@@ -99,6 +99,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_fork_session.py` | Can a conversation be forked at an earlier turn? (D36) | the SDK changes |
 | `spike_auto_mode_ask.py` | Does auto mode ask rather than only allow or deny? (D38) | the CLI changes |
 | `spike_calu_fork.py` | Does `calu run --fork-before-turn` branch a conversation calu recorded? | the fork code changes |
+| `spike_rewind_files.py` | What does `rewind_files` put back -- tool edits only, or a command's writes too? (D46) | the SDK or the CLI changes what checkpointing tracks |
 | `smoke_session.py` | A whole calu session against the real `claude` | before a release, and after changes to the runner |
 
 ```bash

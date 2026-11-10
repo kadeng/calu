@@ -306,11 +306,12 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
-1. **Rewind the files of a fork** (Q14, optional): a fork rewinds the conversation but leaves
-   the working tree as it is, so the files still hold what the dropped turn wrote. The SDK has
-   `enable_file_checkpointing` and `ClaudeSDKClient.rewind_files(<user message uuid>)`; whether
-   calu should use it, or leave the tree to the human (D31's snapshots already undo one step), is
-   the owner's call.
+1. **Rewind the files of a fork**: answered and closed (Q14 -> D46). Measured with the real
+   CLI (`spikes/spike_rewind_files.py`): `rewind_files` puts back what the Write tool changed,
+   leaves what a Bash command overwrote, and does not remove what a command created. A fork
+   using it would leave a half-reverted tree that looks consistent and is not, so a fork
+   rewinds the conversation only and both the CLI's help and the web fork card say so. If file
+   rewinding is ever wanted, it belongs on D31's snapshots, which do cover commands.
 2. **Try `calu acp` with a real editor** (Zed or JetBrains Air): the adapter passes an
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. What the editor
@@ -347,7 +348,7 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
   projects are untouched. The owner should confirm the list and the trade (a task that needs an
   unlisted domain stops until someone adds it).
 - **Q9** Where a training mode would belong, if one is wanted at all.
-- **Q14** Whether a fork should rewind the files too (see next step 1).
+- Answered this session: Q5 (D45, as a proposal to confirm), Q14 (D46, measured: no).
 - **Q15** The single executable of REQUIREMENTS 21 and soft goal 2. D41 recommends **against**
   building one and says why; the owner asked for it, so the recommendation needs their word.
   Nothing in the code depends on the answer: `uv tool install` works today and

@@ -65,6 +65,9 @@ session shows the real thinking as it streams.</p>
         turn and drop this one. The fork gets its own session id; this conversation stays as it is.</summary>
       <pre>{{ forks[turn.index].command() }}</pre>
       <p class="muted">Run it on {{ session.hostname }}, in {{ session.directory }}.</p>
+      <p class="muted">The files are left as they are: a fork rewinds the conversation, not the
+        working tree, so whatever the dropped turn wrote is still on disk. Check the tree before
+        you let the fork continue.</p>
     </details>
     {% endif %}
     {% for text in turn.user_inputs %}<p><strong>You:</strong></p><pre>{{ text }}</pre>{% endfor %}

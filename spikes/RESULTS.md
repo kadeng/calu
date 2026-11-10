@@ -466,3 +466,38 @@ cleanup of leftover processes — which is why it is worth having. What remains 
 `sandbox.enableWeakerNestedSandbox` (`claude.sandbox.weaker_nested_sandbox`) changes: that needs
 a logged-in `claude` inside a container, which this machine cannot provide without copying the
 owner's credentials into it.
+
+## What `rewind_files` puts back (Q14, 2026-11-10)
+
+**Question.** A fork rewinds the conversation (D36) but leaves the working tree as the dropped
+turn left it. Should calu also rewind the files with the SDK's file checkpointing?
+
+**Setup** (`spikes/spike_rewind_files.py`, CLI 2.1.319, haiku). A throwaway directory,
+`enable_file_checkpointing=True`, `extra_args={"replay-user-messages": None}`, tools Bash and
+Write, `bypassPermissions`. Two turns, each writing the same two files -- one with the Write
+tool, one with `echo v1 > file` -- plus a third file that only the second turn creates. Then
+`client.rewind_files(<uuid of the second turn's user message>)`, which is the state after turn
+one.
+
+**Observations.**
+
+| file | written by | after turn 2 | after the rewind |
+|---|---|---|---|
+| `tool_file.txt` | the Write tool | `v2` | **`v1`** -- put back |
+| `bash_file.txt` | `echo v2 > …` in Bash | `v2` | `v2` -- **left as it was** |
+| `bash_new.txt` | `echo new > …` in Bash | `new` | `new` -- **left as it was**, not removed |
+
+So "tracked files" means the files Claude Code's own edit tools changed. What a command wrote is
+not tracked, neither an overwrite nor a newly created file, and the rewind reports no error
+about it.
+
+**What follows.** calu does **not** use `rewind_files` for a fork (Q14 answered, D46). It would
+produce a half-reverted tree: the tool edits go back, the command writes stay, and the result
+looks consistent while it is not -- the worst of the three possible states for a human who then
+reviews the fork. calu already has the mechanism that does cover commands, D31's snapshots (a
+git scratch index that measures and reverts everything a step wrote, Bash included), so file
+rewinding belongs there if it is wanted, and only with `changes.enabled` on. Until then a fork
+says plainly that it does not touch the files.
+
+**Re-run when** the SDK or the CLI changes what checkpointing tracks; one line of the table is
+enough to tell.
