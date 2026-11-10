@@ -80,6 +80,22 @@ def join_summary(narrative: str, inputs: str) -> str:
     return text
 
 
+def _count(number: int, noun: str) -> str:
+    """Render a count with its noun in the right number.
+
+    Args:
+        number: How many.
+        noun: The singular noun, e.g. "older turn".
+
+    Returns:
+        "1 older turn", "3 older turns".
+
+    Example:
+        `_count(1, "earlier step")` is "1 earlier step".
+    """
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
 class ContextBuilder:
     """Collects turn records and builds `CheckContext`s. See the module docstring.
 
@@ -263,11 +279,16 @@ class ContextBuilder:
             head, steps = current[0], current[1:]
             kept: list[str] = []
             for piece in reversed(steps):
-                if sum(map(len, kept)) + len(piece) > limit - len(head):
+                # The newest piece is kept whatever it costs: it is the step the checker is
+                # about to judge, and a turn that shows none of its steps while saying that
+                # steps were omitted is worse than one that is too long. This matters when the
+                # head alone is over the limit, which a single long user input does.
+                if kept and sum(map(len, kept)) + len(piece) > limit - len(head):
                     break
                 kept.insert(0, piece)
             omitted = len(steps) - len(kept)
-            current = [head + f"[{omitted} earlier steps of this turn omitted]", *kept]
+            marker = f"[{_count(omitted, 'earlier step')} of this turn omitted]" if omitted else ""
+            current = [head + marker, *kept]
         budget = limit - sum(map(len, current))
         rendered = [t.render() for t in self.turns]
         dropped = 0
@@ -276,7 +297,7 @@ class ContextBuilder:
             dropped += 1
         turns = "\n\n".join(rendered)
         if dropped:
-            turns = f"[{dropped} older turns omitted]" + (f"\n\n{turns}" if turns else "")
+            turns = f"[{_count(dropped, 'older turn')} omitted]" + (f"\n\n{turns}" if turns else "")
         return turns, current
 
     def recent(self) -> str:

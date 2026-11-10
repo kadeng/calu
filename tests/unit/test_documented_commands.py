@@ -96,3 +96,20 @@ def test_a_documented_command_parses(document: str, command: str) -> None:
     assert getattr(parsed, "handler", None) is not None, (
         f"{document} documents `{command}`, which parses but has no command behind it"
     )
+
+
+def test_every_command_is_documented_somewhere() -> None:
+    """The other direction: a command nobody writes about is a command nobody finds."""
+    parser = build_parser()
+    subparsers = [
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    ]
+    assert subparsers, "the parser has no subcommands"
+    commands = sorted(subparsers[0].choices)
+    assert len(commands) > 15, f"only {len(commands)} commands found"
+    documentation = "\n".join(
+        (ROOT / name).read_text(encoding="utf-8")
+        for name in ("README.md", "docs/TESTING.md", "AGENTS.md")
+    )
+    undocumented = [name for name in commands if f"calu {name}" not in documentation]
+    assert undocumented == [], f"not documented: {', '.join(undocumented)}"
