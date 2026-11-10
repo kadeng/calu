@@ -8,6 +8,7 @@ FakeClient cannot reach.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -165,6 +166,70 @@ async def test_attach_reports_a_refused_token_instead_of_a_traceback(tmp_path: P
             assert "calu:" in said, f"no calu error line in:\n{said}"
             assert "Traceback" not in said
             assert process.returncode == 1
+        finally:
+            if process.returncode is None:
+                process.terminate()
+                with anyio.move_on_after(10):
+                    await process.wait()
+
+
+async def test_attach_answers_an_escalation_and_the_session_continues(tmp_path: Path) -> None:
+    """The loop the README showcases, through the real pipes.
+
+    `calu attach` is where an operator answers a step that waits, and the console's commands are
+    covered in process -- but not the loop as a whole: the escalation arriving unasked while the
+    client idles, `/why` fetching what the checker saw, `/allow` resolving it, and Claude going
+    on afterwards. A client that prints the question but cannot answer it would pass every
+    in-process test and be useless.
+    """
+    turns = [
+        [
+            {"text": "I will deploy."},
+            # The marker makes the fake checker escalate the step (`calu.testing`).
+            {"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "shipped"},
+            {"text": "Deployed after you allowed it."},
+        ]
+    ]
+    async with served(tmp_path, turns) as run:
+        environment = dict(os.environ)
+        environment["PYTHONUNBUFFERED"] = "1"
+        await _wait_until_connectable(run.address)
+        errors = tmp_path / "attach-escalation-stderr.log"
+        with errors.open("wb") as log:
+            process = await anyio.open_process(
+                [sys.executable, "-m", "calu", "attach", run.address, "--token", run.token],
+                env=environment,
+                cwd=str(tmp_path),
+                stderr=log.fileno(),
+            )
+        seen: list[str] = []
+        try:
+            with anyio.fail_after(TIMEOUT_S):
+                await _read_until(process, "[attached]", seen, errors)
+                assert process.stdin is not None
+                await process.stdin.send(b"/start\n")
+                await _read_until(process, "[started]", seen, errors)
+                await process.stdin.send(b"deploy it\n")
+
+                # The escalation arrives by itself, with the id to answer and how to answer it.
+                shown = await _read_until(process, "escalation", seen, errors)
+                ids = re.findall(r"escalation (\d+)", shown)
+                assert ids, f"the escalation was printed without an id:\n{shown}"
+                escalation_id = ids[0]
+
+                # `/why` shows what the checker saw, which is what the decision rests on.
+                await process.stdin.send(f"/why {escalation_id}\n".encode())
+                await _read_until(process, "calu:escalate", seen, errors)
+
+                # `/allow` resolves it and Claude goes on: the answer reaches the session, the
+                # step runs, and the turn ends.
+                await process.stdin.send(f"/allow {escalation_id} go ahead\n".encode())
+                await _read_until(process, "Deployed after you allowed it.", seen, errors)
+                await _read_until(process, "turn ended", seen, errors)
+
+                await process.stdin.aclose()
+                await process.wait()
+            assert process.returncode == 0
         finally:
             if process.returncode is None:
                 process.terminate()
