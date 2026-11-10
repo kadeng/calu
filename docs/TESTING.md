@@ -24,11 +24,13 @@ order, with the virtual environment outside the checkout
 repository lives on a mounted drive. The default `addopts` deselect `live`, `db` and `browser`,
 so a plain `uv run pytest` is the fast layer.
 
-Two unit tests run a real process instead of a mock, because that is the only way to check
-them: `tests/unit/test_acp_process.py` spawns `python -m calu acp` and speaks ACP to its pipes
-(so coverage does not see `calu/acp/serve.py`, although it is exercised end to end), and
-`tests/unit/test_local_db.py` puts a stub `docker` on PATH and checks what `calu db up` would
-run. Neither needs Docker or a database.
+Three unit tests run a real process instead of a mock, because that is the only way to check
+them: `tests/unit/test_acp_process.py` spawns `python -m calu acp` and speaks ACP to its pipes,
+`tests/unit/test_attach_process.py` spawns `python -m calu attach` against a real session and
+types at it, and `tests/unit/test_local_db.py` puts a stub `docker` on PATH and checks what
+`calu db up` would run. None of them needs Docker or a database, and coverage does not see the
+code that runs in the child process -- `calu/acp/serve.py` and the input loop of
+`calu/attach.py` are exercised end to end while reporting as uncovered.
 
 Sync with `uv sync --all-extras`: the web interface is an optional extra (`web`), and the tests
 that need it skip without it with a message saying so, rather than failing to collect.
