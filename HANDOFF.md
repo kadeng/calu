@@ -75,7 +75,9 @@ there.
 - **A heartbeat** (migration 0016, D56): `sessions.last_seen`, stamped every
   `clock.check_interval_s` seconds by `Session.beat`. `herd.SessionRow.stale` is silence beyond
   180 s for a session that has not ended; `calu sessions` marks it "SILENT for N min" and the
-  fleet page groups it as "Gone (no heartbeat)", out of "Needs you". The decision path says it too: ,  and the web pages mark an escalation nobody is waiting for.
+  fleet page groups it as "Gone (no heartbeat)", out of "Needs you". The decision path says
+  it too: `calu escalations`, `calu escalation <id>` and the web pages mark an escalation
+  nobody is waiting for -- an answer is recorded, the step does not run.
 - **Isolation of a session's rows** (migration 0015, D49): the `calu_session` login reads and
   writes only the rows that carry its own session id, with three owner-side functions for what
   a policy cannot do (`calu_start_session`, `calu_recent_sessions`, `calu_conversation_sessions`
