@@ -262,3 +262,41 @@ async def test_an_escalation_of_a_gone_session_says_so(db_url: str) -> None:
         assert ended is not None and ended.unanswerable is True
     finally:
         await owner.close()
+
+
+async def test_an_escalation_nobody_waits_for_can_be_cancelled(db_url: str) -> None:
+    """Cancelling records that nothing was decided, which is the truth (PLAN.md D57)."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        escalation = await store.open_escalation("why", {"rendered": "$ deploy"})
+        await db.execute(
+            "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
+            (session_id,),
+        )
+
+        # The hint says what to do with it, instead of offering a decision.
+        one = await herd.escalation(db, escalation)
+        assert one is not None
+        rendered = herd.render_escalation(one, await herd.escalation_context(db, escalation))
+        assert f"calu resolve {escalation} cancel" in rendered
+        assert "allow|deny" not in rendered
+
+        assert await herd.resolve(db, escalation, "cancel", "the session is gone") is True
+        row = await herd.escalation(db, escalation)
+        assert row is not None
+        assert row.state == "cancelled", "a cancellation is not a decision"
+        assert row.note == "the session is gone"
+        # It is out of the queue a human works through.
+        assert await herd.escalations(db) == []
+        # And cancelling it twice changes nothing.
+        assert await herd.resolve(db, escalation, "cancel") is False
+
+        # An unknown verb is still refused.
+        with pytest.raises(ValueError, match="allow, deny, answer or cancel"):
+            await herd.resolve(db, escalation, "maybe")
+    finally:
+        await owner.close()

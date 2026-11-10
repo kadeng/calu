@@ -840,10 +840,14 @@ def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Allow, deny or answer an open escalation; the waiting session continues.
+    """Allow, deny, answer or cancel an open escalation; the waiting session continues.
 
     "answer" belongs to a question Claude asked (`AskUserQuestion`, PLAN.md D35): the note is
     the answer it receives, and the call itself does not run.
+
+    "cancel" is for an escalation nobody can act on any more -- the session's process is gone
+    (D56), which `calu escalations` marks. It records a cancellation rather than a decision, so
+    the history does not claim that somebody allowed or denied a step that never ran (D57).
 
     Args:
         args: Parsed arguments (`id`, `decision`, `text`, `note`). `text` and `--note` are the
@@ -874,6 +878,8 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
         if not await herd.resolve(db, args.id, args.decision, note):
             raise CliError(f"escalation {args.id} is not open (resolved, cancelled or unknown)")
         shown = f": {note}" if note else ""
+        if args.decision == "cancel":
+            return f"escalation {args.id}: cancelled{shown} (no decision was recorded)"
         return f"escalation {args.id}: {args.decision}{shown}"
 
     _herd_command(store, work)
@@ -1598,7 +1604,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("resolve", help="allow, deny or answer an open escalation")
     p.add_argument("id", type=int, help="escalation id")
-    p.add_argument("decision", choices=["allow", "deny", "answer"])
+    p.add_argument("decision", choices=["allow", "deny", "answer", "cancel"])
     p.add_argument(
         "text",
         nargs="?",

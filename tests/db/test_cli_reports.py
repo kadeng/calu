@@ -361,3 +361,25 @@ async def test_evals_lists_and_exports_without_calling_a_model(prepared, capsys,
     # A path that cannot be written is reported, not raised.
     assert await run(["evals", "--export", "/no/such/directory/cases.yaml"]) == 1
     assert "cannot write" in capsys.readouterr().err
+
+
+async def test_cancelling_an_escalation_says_no_decision_was_recorded(prepared, capsys) -> None:
+    """`calu resolve <id> cancel` clears a queue honestly (PLAN.md D57)."""
+    db, session_id, escalation = prepared
+    await db.execute(
+        "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
+        (session_id,),
+    )
+    # The list marks it before anyone spends attention on it.
+    assert await run(["escalations"]) == 0
+    assert "the session is gone" in capsys.readouterr().out
+
+    assert await run(["resolve", str(escalation), "cancel", "the session is gone"]) == 0
+    said = capsys.readouterr().out
+    assert "cancelled" in said and "no decision was recorded" in said
+
+    # It leaves the queue, and a second attempt is refused.
+    assert await run(["escalations"]) == 0
+    assert "no open escalations" in capsys.readouterr().out
+    assert await run(["resolve", str(escalation), "cancel"]) == 1
+    assert "not open" in capsys.readouterr().err

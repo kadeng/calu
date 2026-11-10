@@ -306,6 +306,7 @@ calu escalations          # steps that wait for a decision
 calu escalation 12        # everything needed to decide that one
 calu resolve 12 allow --note "go ahead"
 calu resolve 13 answer "spaces, four of them"   # when Claude asked you something
+calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting for any more
 calu attach ws://127.0.0.1:8765 --token ...     # the full event stream, and a prompt
 ```
 

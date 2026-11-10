@@ -220,29 +220,42 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
 
 
 async def resolve(db: Db, escalation_id: int, decision: str, note: str = "") -> bool:
-    """Allow, deny or answer an open escalation and notify the waiting session.
+    """Allow, deny, answer or cancel an open escalation and notify the waiting session.
 
     "answer" belongs to a question of the agent (PLAN.md D35): `note` is then the answer Claude
     receives as the result of its `AskUserQuestion` call, and the call itself does not run.
+
+    "cancel" is **not** a decision and is recorded as such: it clears an escalation nobody can
+    act on any more -- a session whose process is gone (D56) -- so the queue a human works
+    through holds only entries that still mean something, and the history does not claim that
+    somebody allowed or denied a step that never ran (D57).
 
     Args:
         db: A connection whose role may call `calu_resolve_escalation` (the database owner or
             `calu_operator`).
         escalation_id: Id of the `escalations` row.
-        decision: "allow", "deny" or "answer".
-        note: Text for Claude and for the record; the answer itself for "answer".
+        decision: "allow", "deny", "answer" or "cancel".
+        note: Text for Claude and for the record; the answer itself for "answer"; the reason
+            for "cancel".
 
     Returns:
-        True if the escalation was open and is now resolved; False if it was already resolved,
-        cancelled or does not exist.
+        True if the escalation was open and is now resolved or cancelled; False if it was
+        already resolved, cancelled or does not exist.
 
     Raises:
-        ValueError: If `decision` is none of "allow", "deny" and "answer".
+        ValueError: If `decision` is none of "allow", "deny", "answer" and "cancel".
         psycopg.Error: On database errors, including a role that may not resolve.
     """
+    if decision == "cancel":
+        # Not a decision: the step never ran and nobody acted on it. A separate function,
+        # because `calu_resolve_escalation` only writes the three states a human chose
+        # (PLAN.md D57).
+        return bool(
+            await db.scalar("SELECT calu_cancel_escalation(%s, %s)", (escalation_id, note or None))
+        )
     states = {"allow": "allowed", "deny": "denied", "answer": "answered"}
     if decision not in states:
-        raise ValueError(f"decision must be allow, deny or answer, not {decision!r}")
+        raise ValueError(f"decision must be allow, deny, answer or cancel, not {decision!r}")
     state = states[decision]
     return bool(
         await db.scalar(
@@ -711,11 +724,14 @@ def render_escalation(
     )
     parts.append(section("The folded summary", str(context.get("chat_summary") or "")))
     if row.state == "open":
-        answer = (
-            f'calu resolve {row.id} answer "your answer"'
-            if questions
-            else f"calu resolve {row.id} allow|deny [--note ...]"
-        )
+        if row.unanswerable:
+            # Nobody is waiting, so the useful command is the one that clears the queue
+            # honestly rather than one that records a decision nothing acted on (D57).
+            answer = f'calu resolve {row.id} cancel "the session is gone"'
+        elif questions:
+            answer = f'calu resolve {row.id} answer "your answer"'
+        else:
+            answer = f"calu resolve {row.id} allow|deny [--note ...]"
         parts.append(f"\nanswer it with: {answer}\n")
     return "\n".join(part for part in parts if part)
 

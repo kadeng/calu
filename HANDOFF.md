@@ -45,7 +45,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**566 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**568 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 126 commits, ~24k lines of Python in `src` (~26k with the SQL, templates and default
 instructions), ~11.5k of tests, 16 migrations, 20 CLI commands, 16 protocol requests,
 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -77,7 +77,9 @@ there.
   180 s for a session that has not ended; `calu sessions` marks it "SILENT for N min" and the
   fleet page groups it as "Gone (no heartbeat)", out of "Needs you". The decision path says
   it too: `calu escalations`, `calu escalation <id>` and the web pages mark an escalation
-  nobody is waiting for -- an answer is recorded, the step does not run.
+  nobody is waiting for -- an answer is recorded, the step does not run -- and
+  `calu resolve <id> cancel [note]` clears such an entry as a cancellation rather than as
+  a decision nothing acted on (D57).
 - **Isolation of a session's rows** (migration 0015, D49): the `calu_session` login reads and
   writes only the rows that carry its own session id, with three owner-side functions for what
   a policy cannot do (`calu_start_session`, `calu_recent_sessions`, `calu_conversation_sessions`
