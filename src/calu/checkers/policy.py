@@ -71,12 +71,19 @@ whatever they set in motion is itself checked:
   so starting one buys no unchecked work.
 * `SendMessage` is how the main agent relays a client's message to one of its subagents
   (`calu.protocol.messages`, `chat.send {to: <agent id>}`), so checking it would put a checker
-  call and a possible denial in the way of calu's own relay. It reaches the session's own
-  subagents, whose calls are checked, and not anything outside this session.
+  call and a possible denial in the way of calu's own relay. The free route holds **only while
+  the message stays inside the session**: Claude Code's `SendMessage` also reaches other
+  sessions on the machine, whose steps no checker of this session sees. The session therefore
+  compares the `to` value with its own subagents and sends a message to anything else to the
+  command checker (`Session._own_agent`, PLAN.md D69). calu's own relay always matches,
+  because the id it tells the main agent to use comes from that same registry.
 * `Skill` loads instructions. The tool calls the skill then asks for are checked like any other.
 
 Everything that leaves the machine (`WebFetch`, `WebSearch`) or that calu does not know is
-deliberately absent: it falls to `ToolPolicy.default`, which is the command checker.
+deliberately absent: it falls to `ToolPolicy.default`, which is the command checker. A route of
+this table is a ceiling, not a promise: the session may still send a call to a checker that the
+table would let through, which is what it does for a read outside the allow list and for a
+`SendMessage` that leaves the session.
 """
 
 

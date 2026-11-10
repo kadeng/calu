@@ -2011,6 +2011,11 @@ class Session:
             )
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
             route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
+        if route is Route.ALLOW and step.tool_name == "SendMessage" and not self._own_agent(step):
+            # Unchecked only while it stays inside this session (PLAN.md D69). Claude Code's
+            # SendMessage also reaches other sessions on the machine, which the checkers never
+            # see, so a message out of the session is decided like any other unknown action.
+            route = Route.COMMAND
         if outcome.notes:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
         if route is Route.COMMAND and step.tool_name == "Bash" and outcome.allowed:
@@ -2809,6 +2814,36 @@ class Session:
         if self.state in ("stopped", "failed", "starting") or self.runner is None:
             raise SessionError("no Claude session is running (send session.start first)")
         return self.runner
+
+    def _own_agent(self, step: Step) -> bool:
+        """Tell whether a `SendMessage` call addresses a subagent of this session (D69).
+
+        `SendMessage` is unchecked because it is how calu relays a client's message to one of
+        the session's own subagents (`chat.send {to: <agent id>}`), whose every tool call is
+        checked anyway. Claude Code's tool can also reach other sessions on this machine, and
+        their steps are outside this gate, so only a message to a known subagent keeps the
+        free route. calu's own relay always matches: the id it tells the main agent to use
+        comes from this registry.
+
+        A call without a target counts as foreign: a message that names nobody calu knows is
+        not a relay.
+
+        Args:
+            step: The tool call; its `tool_input` is expected to carry `to`.
+
+        Returns:
+            True if `to` is the protocol id, the SDK id or the description of a subagent of
+            this session; False for anything else, including when no session runs.
+        """
+        target = str(step.tool_input.get("to", "")).strip()
+        if not target or self.runner is None:
+            return False
+        known: set[str] = set()
+        for agent in self.runner.agents.values():
+            known.update(
+                value for value in (agent.agent_id, agent.sdk_agent_id, agent.description) if value
+            )
+        return target in known
 
     def _find_agent(self, agent_id: str) -> AgentInfo:
         """Return the running background subagent `agent_id`.

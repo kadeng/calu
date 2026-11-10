@@ -703,3 +703,22 @@ command tries the network (the empty case is "nothing reachable" by configuratio
 
 **Re-run when** the CLI changes how the sandbox handles an unlisted domain -- the table's second
 line is the one that matters.
+
+## What `SendMessage` can reach, and why calu no longer needs to know
+
+**Not measured.** The question is whether a headless session (`claude -p` through the Agent SDK,
+which is how calu runs it) can deliver a `SendMessage` to another Claude Code session on the same
+machine. The CLI documentation says the tool addresses teammates, subagents **and other local
+sessions**, with the controls `crossSessionInbound = accept|hold|refuse`, deny rules for
+`SendMessage` and `ListAgents`, and `isolatePeerMachines`; the relay spike only showed delivery to
+a background subagent of the same session (`relay`, above).
+
+Measuring it needs two sessions and a peer discovery that may behave differently under `-p`. It is
+worth doing, but the gate no longer rests on the answer: calu routes a `SendMessage` whose target
+is not one of the session's own subagents to the command checker (PLAN.md D69), so delivery to
+another session is a judged step either way. Before that, the tool was unchecked on the stated
+grounds that it "cannot reach anything outside this session", which the documentation contradicts.
+
+**Re-run when** the CLI changes how sessions discover each other, or if a user reports a message
+arriving in another session unasked -- and then check `tests/unit/test_session.py`
+(`test_a_message_out_of_the_session_is_checked_but_a_relay_is_not`) still describes what happens.

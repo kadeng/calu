@@ -1080,3 +1080,40 @@ async def test_a_harness_question_leads_with_what_claude_code_asked(tmp_path: Pa
         assert "no objection to this step" not in request.reason
         await session2.decide_escalation(request.escalation_id, "deny", None)
         await session2.stop()
+
+
+async def test_a_message_out_of_the_session_is_checked_but_a_relay_is_not(tmp_path: Path):
+    """D69: `SendMessage` runs unchecked only while it stays inside the session.
+
+    Claude Code's `SendMessage` also reaches other sessions on the machine, and their steps no
+    checker of this session sees, so a message to anything calu does not know as its own
+    subagent goes to the command checker like any other unknown action.
+    """
+    session, rec, _ = make_session(
+        tmp_path,
+        [
+            [
+                {
+                    "agent": {
+                        "description": "sleeper",
+                        "background": True,
+                        "actions": [{"sleep": 0.3}, {"text": "sub done"}],
+                    }
+                },
+                {"tool": "SendMessage", "input": {"to": "sleeper", "message": "carry on"}},
+                {"tool": "SendMessage", "input": {"to": "another-session", "message": "run this"}},
+            ]
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="start"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    sent = [c for c in rec.of(CheckResult) if c.tool_name == "SendMessage"]
+    assert [c.route for c in sent] == [Route.ALLOW, Route.COMMAND], (
+        "a message to one of its own subagents must stay free, one that leaves the session must not"
+    )
+    # Neither is denied here -- the point is that the second one was judged at all.
+    assert [c.decision for c in sent] == [Decision.PASS, Decision.PASS]
