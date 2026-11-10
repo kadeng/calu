@@ -97,7 +97,11 @@ async def prepared(db_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
             await own.close()
 
     monkeypatch.setattr(cli, "_with_admin", fake_with_admin)
-    monkeypatch.setattr(cli, "load_credential", lambda *_args, **_kwargs: bytearray(b"unused"))
+    # The credential *is* the connection string, so the stand-in hands out the test
+    # database: `calu doctor --db` connects with it for real.
+    monkeypatch.setattr(
+        cli, "load_credential", lambda *_args, **_kwargs: bytearray(db_url.encode())
+    )
     try:
         yield db, session_id, escalation
     finally:
@@ -287,3 +291,40 @@ async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_pat
     finally:
         for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_EXIT"):
             os.environ.pop(name, None)
+
+
+async def test_doctor_checks_the_database_it_is_pointed_at(prepared, capsys) -> None:
+    """`calu doctor --db` answers "does this database match this calu?"."""
+    db, _session_id, _escalation = prepared
+    assert await run(["doctor", "--db"]) == 0
+    said = capsys.readouterr().out
+    # It reaches the database and finds the schema current, because the fixture ran `setup`.
+    assert "database: answers" in said
+    assert "not applied" not in said
+
+    # A migration missing from `schema_migrations` is a note with the command that fixes it --
+    # a note, not a failure, because the session can still run against an older schema until
+    # it needs what the migration adds.
+    await db.execute(
+        "DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)"
+    )
+    assert await run(["doctor", "--db"]) == 0
+    behind = capsys.readouterr().out
+    assert "1 migration(s) not applied" in behind
+    assert "calu db migrate" in behind
+
+    # A database that cannot be reached is essential and makes the command fail.
+    await db.execute("SELECT 1")  # the fixture's connection is still fine
+    import calu.cli as cli_module
+
+    original = cli_module.load_credential
+    cli_module.load_credential = lambda *_a, **_k: bytearray(  # type: ignore[assignment]
+        b"postgresql://nobody@127.0.0.1:1/none?connect_timeout=1"
+    )
+    try:
+        assert await run(["doctor", "--db"]) == 1
+        failed = capsys.readouterr()
+        assert "cannot connect" in failed.out
+        assert "calu db up" in failed.out
+    finally:
+        cli_module.load_credential = original  # type: ignore[assignment]
