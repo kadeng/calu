@@ -45,6 +45,18 @@ it hard is not knowing what to say but being there to say it, every few steps, f
 pull Claude back on your behalf, and they stop and ask you only where a human really has to
 decide.
 
+Two things can only be had this way, at the step itself:
+
+- **Security.** A command that exfiltrates a secret or rewrites history has done it by the time
+  a reviewer reads the diff. The decision has to happen before the step runs, which is also the
+  only place where a prompt injection can be caught before it takes effect.
+- **Code honesty.** A name or a docstring that no longer matches the code is a lie the next
+  reader believes, and a review after the fact cannot enforce it: during an incremental change
+  the code *is* temporarily out of step with its documentation, and that is normal. What can be
+  enforced is that it does not stay that way. calu's honesty checker records which files are out
+  of step, and Claude may not run the code it marked until the names and the documentation line
+  up again — which takes a watcher present at every step, holding the record.
+
 Claude Code already asks you before it does something risky, and its auto mode can make that
 decision on its own. Other harnesses work the same way. calu replaces none of it: it keeps that
 judgment and puts a second, independent one that **you** own in front of it. A PASS leaves the
@@ -57,16 +69,12 @@ they fail differently: a prompt injection that talks one of them into approving 
 to get past the other, which reads different instructions and sees the step through a different
 lens.
 
-The second difference is *when* the judgment happens. Review after the fact catches a bad diff
-once it exists, after Claude has built on it for twenty more steps. A checker sees each step
-before it takes effect, so it can stop a direction instead of having to unwind it.
-
 Rules a checker can hold Claude to are the ones a linter cannot see: writing that sounds like a
 language model, over-engineering while it happens, scope creep, rules that come from law or from
-a contract, scientific standards in prose, and above all **code honesty** — every function says
-what it does, in its name and in its documentation, so that a reviewer can judge a call site
-without reading the implementation. The guide explains each of them: [what you can enforce with
-a checker](CALU_GUIDE.md#what-you-can-enforce-with-a-checker) and [code honesty
+a contract, scientific standards in prose, and code honesty — every function says what it does,
+in its name and in its documentation, so that a reviewer can judge a call site without reading
+the implementation. The guide explains each of them: [what you can enforce with a
+checker](CALU_GUIDE.md#what-you-can-enforce-with-a-checker) and [code honesty
 enforcement](CALU_GUIDE.md#code-honesty-enforcement).
 
 ### What you get
