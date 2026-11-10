@@ -1,5 +1,7 @@
 # calu
 
+[![checks](https://github.com/kadeng/calu/actions/workflows/checks.yml/badge.svg)](https://github.com/kadeng/calu/actions/workflows/checks.yml)
+
 ## A coding agent that wraps Claude Code and checks every step while it runs
 
 calu starts Claude Code for you and puts a second opinion in front of every command it runs and

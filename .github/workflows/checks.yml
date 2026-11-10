@@ -1,0 +1,111 @@
+# The checks of docs/TESTING.md, run on every push and pull request.
+#
+# Layer 1 (unit) and layer 2 (database) run here, with the formatter, the linter and the type
+# checker. Layer 3 (browser) runs in its own job, because it needs a headless Chromium. Layer 4
+# (live: a real `claude` CLI and real model API keys) does not run in CI at all -- it would need
+# the maintainer's credentials and it costs money, so it stays a local and manual check.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A new push supersedes a run that is still going for the same branch.
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The same database the development compose file provides, so `-m 'not live'` runs whole.
+  CALU_TEST_DSN: postgresql://calu_owner:calu-dev@127.0.0.1:5432/calu
+
+jobs:
+  checks:
+    name: format, lint, types, unit and database tests
+    runs-on: ubuntu-latest
+    services:
+      caludb:
+        image: postgres:18
+        env:
+          POSTGRES_USER: calu_owner
+          POSTGRES_PASSWORD: calu-dev
+          POSTGRES_DB: calu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U calu_owner -d calu"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      # The web interface is an optional extra, and the database tests exercise it.
+      - run: uv sync --all-extras --locked
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright
+      - name: unit and database tests
+        run: uv run pytest -m 'not live and not browser' -q
+
+  browser:
+    name: browser tests
+    runs-on: ubuntu-latest
+    services:
+      caludb:
+        image: postgres:18
+        env:
+          POSTGRES_USER: calu_owner
+          POSTGRES_PASSWORD: calu-dev
+          POSTGRES_DB: calu
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U calu_owner -d calu"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --all-extras --locked
+      # A runner has root, so Playwright's own installer does what scripts/get-browser.sh does
+      # without it.
+      - run: uv run playwright install --with-deps chromium
+      - name: browser tests
+        run: uv run pytest -m browser -q
+
+  package:
+    name: the wheel ships what calu reads at runtime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv build --out-dir dist
+      # D41: no single binary, so the installed wheel is the shipping format and has to be
+      # checked as one -- the package data must resolve from site-packages, not only from a
+      # checkout.
+      - name: install the wheel and run it
+        run: |
+          set -euo pipefail
+          uv venv /tmp/installed
+          uv pip install --python /tmp/installed/bin/python "$(echo dist/*.whl)[web]"
+          /tmp/installed/bin/calu --version
+          /tmp/installed/bin/calu protocol --out /tmp/protocol.json
+          /tmp/installed/bin/python -c "
+          from calu.db.connection import migrations
+          from calu.defaults import default_instructions
+          assert migrations(), 'no migration in the wheel'
+          assert default_instructions('command'), 'no default instructions in the wheel'
+          print(len(migrations()), 'migrations, instructions ok')
+          "

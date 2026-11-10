@@ -24,6 +24,22 @@ order, with the virtual environment outside the checkout
 repository lives on a mounted drive. The default `addopts` deselect `live`, `db` and `browser`,
 so a plain `uv run pytest` is the fast layer.
 
+Sync with `uv sync --all-extras`: the web interface is an optional extra (`web`), and the tests
+that need it skip without it with a message saying so, rather than failing to collect.
+
+## Continuous integration
+
+`.github/workflows/checks.yml` runs on every push to `main` and on every pull request:
+
+| Job | What it runs |
+|---|---|
+| `checks` | `ruff format --check`, `ruff check`, `pyright`, then `pytest -m 'not live and not browser'` against a `postgres:18` service -- the unit and database layers |
+| `browser` | `playwright install --with-deps chromium` (a runner has root, so it needs no `scripts/get-browser.sh`), then `pytest -m browser` |
+| `package` | `uv build`, then installs the wheel into a throwaway environment and runs `calu --version`, `calu protocol` and an import of the package data out of `site-packages` -- the check that D41 traded the single binary for |
+
+The live layer does not run in CI: it needs a logged-in `claude` and real model API keys, and it
+costs money, so it stays a local and manual check (see below).
+
 ## The database layer
 
 ```bash

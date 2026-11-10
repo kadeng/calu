@@ -24,9 +24,16 @@ from calu.setup import setup
 from calu.store import DatabaseSessionStore
 from calu.testing import fake_models
 from calu.tokens import new_token, token_hash
-from calu.web.app import create_app
 from tests.browser.conftest import serve
 from tests.unit.helpers import default_settings
+
+# The web interface is an optional extra, so a checkout synced without it skips these
+# tests instead of failing to collect them (`uv sync --all-extras`, docs/TESTING.md).
+WEB_EXTRA = "the web interface needs the `web` extra: uv sync --all-extras"
+pytest.importorskip("starlette", reason=WEB_EXTRA)
+pytest.importorskip("jinja2", reason=WEB_EXTRA)
+
+from calu.web.app import create_app  # ruff: ignore[module-import-not-at-top-of-file] (imported after the guard above)
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 

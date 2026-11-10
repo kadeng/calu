@@ -14,7 +14,14 @@ from calu.store import (
     StepDecision,
     StepRow,
 )
-from calu.web.app import NotLocal, check_host, create_app
+
+# The web interface is an optional extra, so a checkout synced without it skips these
+# tests instead of failing to collect them (`uv sync --all-extras`, docs/TESTING.md).
+WEB_EXTRA = "the web interface needs the `web` extra: uv sync --all-extras"
+pytest.importorskip("starlette", reason=WEB_EXTRA)
+pytest.importorskip("jinja2", reason=WEB_EXTRA)
+
+from calu.web.app import NotLocal, check_host, create_app  # ruff: ignore[module-import-not-at-top-of-file] (imported after the guard above)
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 

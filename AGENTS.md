@@ -22,6 +22,7 @@ phases.
 | `pyproject.toml` | Package, dependencies, ruff, pyright and pytest settings |
 | `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
 | `scripts/wsl-test.sh` | Format check, lint, type check and tests in WSL |
+| `.github/workflows/checks.yml` | CI: the same checks, the database and browser layers, and the installed wheel |
 | `spikes/` | Experiments on Claude Code behaviour, including the question tool (results in `spikes/RESULTS.md`) and `smoke_session.py`, a manual end-to-end run with the real `claude` |
 
 ## Code layout
@@ -74,6 +75,8 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
   manual checklist.
 - `uv run ruff format .`, `uv run ruff check .`, `uv run pyright`
 - `scripts/wsl-test.sh [pytest args]`: all of the above
+- Sync with `uv sync --all-extras`: the web interface is the optional `web` extra, and its tests skip without it.
+- CI runs the same checks on every push and pull request, plus the browser layer and the installed wheel (`.github/workflows/checks.yml`). The live layer never runs in CI.
 
 ## Coding rules (from sitl, PLAN.md D11)
 

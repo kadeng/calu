@@ -37,12 +37,14 @@ in `calu/` only.
 | 4 Bus and clients | Done (event bus, JSON-RPC over WebSocket for several clients, `calu attach`, comments) |
 | 5 Sandboxing | Settings done (D15); open: network policy per project (Q5), nested sandbox in Docker (Q1). `calu evals` done. |
 | 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
-| 7 Third-party UIs, packaging | `calu acp` done (not yet driven by a real editor); the wheel is the shipping format and the single binary is decided against (D41); open: ACP session modes |
+| 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format (D41, no single binary) |
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**417 tests pass** (plus 6 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 56 commits, ~20k lines of source, ~7k of tests, 10 migrations, 16 CLI commands,
-16 protocol requests.
+**428 tests pass** (plus 7 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 77 commits, ~23k lines of Python in `src` (~25k with the SQL, templates and default
+instructions), ~8.7k of tests, 12 migrations, 20 CLI commands, 16 protocol requests, 17 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+browser layers and the installed wheel on every push and pull request; the live layer never runs
+there.
 
 ### What exists
 
@@ -313,7 +315,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    end-to-end test against a real session over a real WebSocket with a scripted Claude, but no
    editor has driven it yet, so expect small mismatches in what a client sends. Open inside the
    phase: ACP's session modes (`availableModes`, `session/set_mode`), which would carry
-   `AutoEscalate`.
+   `AutoEscalate` -- those are built now (D42): the three switches are offered as ACP
+   session modes and as boolean config options, and a change anywhere reaches every client.
 3. **Publishing** is the only packaging step left: the wheel is verified (D41 — `uv build`,
    then `calu --version`, `calu protocol` and `calu doctor` from a throwaway virtual
    environment, with migrations, default instructions, templates and static files resolving out
