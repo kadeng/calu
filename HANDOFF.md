@@ -318,7 +318,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    escalations, and the session mode -- the three auto-escalation switches are offered both as
    ACP's session modes and as its newer boolean config options, and a change made anywhere
    reaches every client (D42).
-3. **Publishing** needs two steps only the owner can take. The wheel itself is verified
+3. **Publishing** needs two steps only the owner can take (and Q15 asks whether a single
+   executable should ship beside the wheel). The wheel itself is verified
    (D41, `tests/unit/test_packaging.py`, and CI installs it on every push), and
    `.github/workflows/release.yml` builds and publishes it for a `v*` tag — but it stays inert
    until (a) the PyPI project exists with a trusted publisher for owner `kadeng`, repository
@@ -343,6 +344,11 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 - **Q4** How clients authenticate remotely (tokens, operator accounts, TLS) — see next step 2.
 - **Q5** The sandbox's network policy and its default.
 - **Q9** Where a training mode would belong, if one is wanted at all.
+- **Q14** Whether a fork should rewind the files too (see next step 1).
+- **Q15** The single executable of REQUIREMENTS 21 and soft goal 2. D41 recommends **against**
+  building one and says why; the owner asked for it, so the recommendation needs their word.
+  Nothing in the code depends on the answer: `uv tool install` works today and
+  `tests/unit/test_packaging.py` pins what a binary would have to carry.
 - Answered this session: Q6 (D27), Q8 (D28), Q10 (no plugin mode), Q11 (D23).
 
 ## Environment notes (owner's machine)
