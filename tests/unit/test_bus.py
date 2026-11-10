@@ -99,3 +99,52 @@ async def test_the_bus_reports_when_the_last_client_detaches():
     assert not bus.no_clients.is_set()  # one client is still attached
     second.close()
     assert bus.no_clients.is_set()
+
+
+async def test_a_waiter_is_woken_even_when_a_client_joined_while_it_waited():
+    """`calu run` awaits the event object it captured, which a later subscribe must not orphan.
+
+    It ends a finished run when the last client detaches (`run._wait_for_clients`), and it awaits
+    `bus.no_clients` -- the object as it was when the wait began. A second client joining after
+    that must not leave the waiter behind, or the session process never exits.
+    """
+    bus = Bus()
+    first = bus.subscribe()
+    waiting = bus.no_clients  # captured, as the caller does
+    woken = anyio.Event()
+
+    async def wait() -> None:
+        """Wait for the last client to leave, then report it."""
+        await waiting.wait()
+        woken.set()
+
+    with anyio.fail_after(2):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(wait)
+            await anyio.sleep(0.05)
+            second = bus.subscribe()  # joins while the waiter waits
+            first.close()
+            assert not woken.is_set(), "one client is still attached"
+            second.close()
+            with anyio.fail_after(1):
+                await woken.wait()
+
+
+async def test_a_sequence_number_beyond_the_stream_is_not_called_complete():
+    """A client of an earlier process asks with a number this one has never reached.
+
+    Sequence numbers count from 1 per calu process, so a client that reached 500 before a
+    restart asks for everything after 500 and the new process has nothing after it. Answering
+    "complete, no events" would leave the client believing it is up to date while it has seen
+    none of the new session.
+    """
+    bus = Bus()
+    for i in range(3):
+        await bus.publish(log(str(i)))
+
+    # Up to date: nothing to send, and nothing missing.
+    assert bus.replay(3) == ([], True)
+    # Beyond the stream: the position cannot come from this process.
+    events, complete = bus.replay(500)
+    assert events == []
+    assert not complete, "the client has seen nothing of this session and must resubscribe"

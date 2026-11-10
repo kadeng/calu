@@ -101,7 +101,8 @@ class Bus:
         self._clients: list[Subscription] = []
         self.no_clients = anyio.Event()
         """Set while no client is subscribed; `calu run` waits for it before it ends a run that
-        a client is watching."""
+        a client is watching. The object is replaced when the first client subscribes and never
+        while clients are attached, so a caller may hold on to it across a subscribe (D80)."""
         self.no_clients.set()
 
     async def publish(self, event: Event) -> None:
@@ -128,8 +129,13 @@ class Bus:
             Its subscription; the caller iterates `events()` and calls `close()` at the end.
         """
         subscription = Subscription(bus=self)
+        if not self._clients:
+            # Only the first client replaces the event, and only because an `anyio.Event`
+            # cannot be cleared. Replacing it on every subscribe orphaned a waiter that had
+            # captured the old object -- `calu run` awaits `bus.no_clients` while a client is
+            # attached, so a second client joining left the run waiting for ever (PLAN.md D80).
+            self.no_clients = anyio.Event()
         self._clients.append(subscription)
-        self.no_clients = anyio.Event()
         return subscription
 
     def unsubscribe(self, subscription: Subscription) -> None:
@@ -165,7 +171,15 @@ class Bus:
             its view from them alone and should take a fresh snapshot. A client that asks with
             0 on a long-running session therefore gets False, which is correct: the buffer no
             longer holds the start of the session.
+
+            A number **beyond** the stream also gives False, with no events. Sequence numbers
+            count from 1 per calu process, so a client that reached 500 before a restart asks
+            this process for everything after 500 while this process has only reached 3.
+            Calling that "complete" would leave the client believing it is up to date although
+            it has seen nothing of this session (D80).
         """
+        if after_seq > self.last_seq:
+            return [], False
         events = [recorded for seq, recorded in self._recent if seq > after_seq]
         complete = not self._recent or after_seq + 1 >= self._recent[0][0]
         return events, complete
