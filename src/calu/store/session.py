@@ -305,7 +305,12 @@ class SessionStore(Protocol):
         ...
 
     async def end(self, state: State) -> None:
-        """Record the end of the session.
+        """Record the end of the session and revoke the client tokens it accepted.
+
+        Every client token belongs to one session (`client_tokens.session_id`), so when the
+        session ends none of them can ever authenticate anything again. Marking them revoked
+        keeps `calu token list` truthful: a row that says "valid" for a session whose process
+        is gone invites a user to hand that token out (PLAN.md D108).
 
         Args:
             state: The final state, "stopped" or "failed".
@@ -873,7 +878,7 @@ class DatabaseSessionStore:
                 )
 
     async def end(self, state: State) -> None:
-        """Record the end of the session (see `SessionStore.end`).
+        """Record the end of the session and revoke its client tokens (see `SessionStore.end`).
 
         Args:
             state: The final state.
@@ -881,10 +886,14 @@ class DatabaseSessionStore:
         Raises:
             psycopg.Error: On database errors.
         """
+        session_id = self._require_session()
         await self._db.execute(
             "UPDATE sessions SET state = %s, state_since = now(), ended_at = now() WHERE id = %s",
-            (state, self._require_session()),
+            (state, session_id),
         )
+        # Through the function, because the session role has no UPDATE on `client_tokens`:
+        # it must not be able to un-revoke what an operator revoked (D30, migration 0022).
+        await self._db.execute("SELECT calu_revoke_session_tokens(%s)", (session_id,))
 
     async def add_step(self, step: StepRow) -> int:
         """Record a tool call (see `SessionStore.add_step`).

@@ -778,6 +778,35 @@ async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: st
         await owner.close()
 
 
+async def test_the_client_tokens_of_an_ended_session_are_revoked(db_url: str) -> None:
+    """D108: a token of a session whose process is gone can never work again, so it says so.
+
+    `calu attach` mints a token per client now (D105), and a client that is killed leaves its
+    row behind. A row that reads "valid" for a dead session invites a user to hand that token
+    out, so ending the session revokes them.
+    """
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        await store.set_address("ws://127.0.0.1:8765")
+        await store.add_client_token(token_hash("printed-by-calu-run"), "ws://127.0.0.1:8765")
+        _, minted = await herd.mint_token(db, session_id, "an editor")
+        assert await store.client_token_ok(token_hash(minted)) is True
+
+        await store.end("stopped")
+
+        rows = await herd.list_tokens(db, session_id)
+        assert len(rows) == 2
+        assert all(row.revoked for row in rows), "both the printed and the minted one"
+        assert await store.client_token_ok(token_hash(minted)) is False
+        assert await store.client_token_ok(token_hash("printed-by-calu-run")) is False
+    finally:
+        await owner.close()
+
+
 async def test_a_client_with_no_address_finds_the_session_and_mints_its_own_token(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

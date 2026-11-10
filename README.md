@@ -219,6 +219,14 @@ Every setting with its type and default is in [docs/CONFIGURATION.md](docs/CONFI
 
 ## License
 
-GPL-2.0, see [LICENSE](LICENSE).
+GPL-2.0 ([LICENSE](LICENSE)). That applies to **calu itself**: it is free software and stays
+free software, and a fork or modified version you distribute stays GPL-2.0 too.
+
+It says nothing about the software you develop with calu. calu is a tool you run, like a
+compiler or a test runner: your repository can be closed source, commercial, or under any open
+source licence, and code written with calu's help is yours under whatever terms you choose. Your
+checker instructions and rules are your own text, and what calu produces as it runs — verdicts,
+comments, summaries — carries no licence condition either. [LICENSE.md](LICENSE.md) says this at
+greater length.
 
 Contributing: [AGENTS.md](AGENTS.md) for the layout and the rules, [docs/TESTING.md](docs/TESTING.md) for the test layers and the manual checklist, [PLAN.md](PLAN.md) for the decisions behind all of it.

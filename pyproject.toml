@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Runs Claude Code sessions unsupervised for long stretches, checked by LLM checker agents and humans."
 readme = "README.md"
 license = "GPL-2.0-only"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "LICENSE.md"]
 requires-python = ">=3.14"
 keywords = ["claude-code", "coding-agent", "code-review", "llm", "supervision", "sandbox"]
 classifiers = [
