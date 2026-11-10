@@ -296,7 +296,9 @@ async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_pat
 async def test_doctor_checks_the_database_it_is_pointed_at(prepared, capsys) -> None:
     """`calu doctor --db` answers "does this database match this calu?"."""
     db, _session_id, _escalation = prepared
-    assert await run(["doctor", "--db"]) == 0
+    # The exit code says whether *anything* a session needs is missing, which depends on the
+    # machine (a CI runner has no `claude`), so only the database's own lines are asserted.
+    await run(["doctor", "--db"])
     said = capsys.readouterr().out
     # It reaches the database and finds the schema current, because the fixture ran `setup`.
     assert "database: answers" in said
@@ -308,12 +310,13 @@ async def test_doctor_checks_the_database_it_is_pointed_at(prepared, capsys) -> 
     await db.execute(
         "DELETE FROM schema_migrations WHERE version = (SELECT max(version) FROM schema_migrations)"
     )
-    assert await run(["doctor", "--db"]) == 0
+    await run(["doctor", "--db"])
     behind = capsys.readouterr().out
     assert "1 migration(s) not applied" in behind
     assert "calu db migrate" in behind
 
-    # A database that cannot be reached is essential and makes the command fail.
+    # A database that cannot be reached is essential, so it fails whatever else the machine
+    # has -- and it names the command that starts one.
     await db.execute("SELECT 1")  # the fixture's connection is still fine
     import calu.cli as cli_module
 
