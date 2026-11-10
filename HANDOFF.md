@@ -384,19 +384,22 @@ Everything else is either built or recommended with its reasons. These need a pe
   flag overrules it (`calu project add --network full`) and existing projects are untouched.
   The trade to confirm: a task that needs an unlisted domain stops until someone adds it
   (`calu config add claude.sandbox.allowed_domains <domain> --project <p>`).
-- **Q15 — publishing the binary** (D41, built): `scripts/build-binary.sh` makes a 70 MiB
-  one-file `calu` and `release.yml` builds and runs it on every tag. To decide: whether a
-  release publishes them beside the wheel. Both Linux architectures are built and run in CI
-  already (x86_64 65 MiB, arm64 68 MiB), verified by a manual run of the workflow.
+- **Q15 — pressing publish**: a `v*` tag builds both Linux binaries, runs them, and attaches
+  them to a **draft** GitHub release (verified with a throwaway tag, which was deleted; the
+  draft held `calu-linux-x86_64` and `calu-linux-arm64`). A person opens the draft and
+  publishes it. Nothing else is needed for the binaries -- only the wheel waits for PyPI.
 - **Publishing at all**: the PyPI project with a trusted publisher and the `pypi` GitHub
   environment, both of which only you can create (next step 2).
 - **Q9 — a training mode**: recommended **against**. Every resolved escalation is already a
   labelled case and `calu evals --from-db` uses them; for labels on steps the checkers
   approved, switch an auto-escalation category on for a while (D42) -- which the eval set now
   really collects (D50; it used to drop exactly those rows).
-- **Q2 — sitl's future**: the technical half is settled (any ACP editor drives a calu session
-  with no extension of its own, and what ACP does not carry lives in the web interface). What
-  is left is whether sitl keeps living for VSCode users, which ACP does not reach yet.
+- **Q2 — sitl's future**: the technical half is settled, and VSCode is **not** the exception I
+  claimed: it reaches ACP through community extensions today (formulahendry's "ACP Client" and
+  others), while Microsoft has standardised its own agent mode on MCP and has not committed to
+  native ACP (microsoft/vscode#265496). So a VSCode user can drive calu now through somebody
+  else's extension; whether that is good enough, or sitl keeps its own panel for what ACP
+  cannot carry, is a product call.
 - **Q1's last line**: what `claude.sandbox.weaker_nested_sandbox` changes. Needs a real tool
   call inside a container, so it needs Claude Code credentials there; the cheap route is a
   measured dead end (next step 3).
