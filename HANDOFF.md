@@ -396,6 +396,13 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+28. **`calu web` served for real** (D125): a throwaway database, the admin credential stored
+   without a password, then `calu web --port ...` as its own process. Every page answered 200
+   (`/`, `/checkers`, `/escalations`, `/rules`, `/triage`, `/settings`) and the title was
+   `Sessions · calu`. What it found: with stdout redirected to a log, the address line never
+   appeared, because it was not flushed -- the one line a user needs, invisible in exactly the
+   setup a server uses. Fixed and re-checked: the log now holds it.
+
 27. **A checker on the machine's Claude Code account, measured through calu** (D117, D118):
    a throwaway database, `calu setup --checker-model claude:haiku`, and three of the built-in
    command cases through `calu evals`. The first run failed with "Unknown model: claude:haiku"
