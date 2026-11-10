@@ -285,6 +285,13 @@ async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None
             assert 'name="claude.sandbox.deny_read"' in page  # a list, one per line
             assert 'name="clock.max_backward_s"' in page
 
+            # Each control carries what the setting does, from the field's own docstring
+            # (D47): the form has rendered `info.description` all along, and until the
+            # configuration documented itself every one of them was empty.
+            assert "Reasoning effort of the Claude session" in page
+            assert "Set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code" in page
+            assert "Paths a sandboxed command must not read" in page
+
             saved = await client.post(
                 "/settings",
                 data={
