@@ -338,7 +338,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Open questions for the owner (`PLAN.md` §11)
 
-- **Q2** Relationship to sitl: replace it or keep both?
+- **Q2** Relationship to sitl: replace it or keep both? The technical half is settled by the ACP
+  adapter -- any ACP editor drives a calu session with no extension of its own, and what ACP
+  does not carry (checker verdicts as structure, the herd view) lives in the web interface. What
+  is left is whether sitl keeps living for VSCode users, which ACP does not reach yet.
 - **Q3** A database role per session. Recommendation in PLAN: not yet, and not as a role per
   session -- row-level security keyed on a session id the connection sets is the cheaper shape,
   and it should come after the first real unsupervised runs.
@@ -350,7 +353,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
   instead of "full". One flag overrules it (`calu project add --network full`); existing
   projects are untouched. The owner should confirm the list and the trade (a task that needs an
   unlisted domain stops until someone adds it).
-- **Q9** Where a training mode would belong, if one is wanted at all.
+- **Q9** A training mode: recommended **against**. Every resolved escalation is already a
+  labelled case and `calu evals --from-db` uses them; if more labels are wanted, switching an
+  auto-escalation category on for a while produces them for the steps the checkers approved,
+  with no new tables.
 - Answered this session: Q5 (D45, as a proposal to confirm), Q14 (D46, measured: no).
 - **Q15** The single executable of REQUIREMENTS 21 and soft goal 2. D41 recommends **against**
   building one and says why; the owner asked for it, so the recommendation needs their word.
