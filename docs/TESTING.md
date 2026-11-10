@@ -172,6 +172,11 @@ Before a release, or after changing the runner, the gate or the sandbox:
 - Database tests take the `db_url` fixture, which creates a database per test.
 - Browser tests take the `page` fixture of `tests/browser/conftest.py` and serve the application
   with `serve(...)` on a free port in the same event loop.
+- **Do not assert an exit code that depends on the machine.** `calu doctor` exits 1 when
+  anything a session needs is missing, so a runner without `claude` gives 1 where a developer's
+  machine gives 0 -- one such assertion turned CI red after passing locally. Assert the lines
+  the command printed about the thing under test, and keep exit-code assertions for cases that
+  hold everywhere (a database that cannot be reached, a refused argument).
 - `tests/unit/test_docstrings.py` checks that every public function documents its arguments,
   return value and the exceptions callers must handle; ruff's `D` and `DOC` rules enforce the
   style. A new function without a contract fails the suite, which is the point.
