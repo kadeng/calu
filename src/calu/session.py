@@ -731,6 +731,13 @@ class Session:
         (`calu summary --edit`, or the web interface). Called with `apply_settings` after a
         `config_changed` notification; a changed summary reaches the next check.
 
+        An **emptied** summary counts as a correction like any other. Deleting a summary that
+        is wrong is the obvious thing to do with one, and `calu summary --edit` stores the empty
+        text and prints "the session applies it at its next check" -- which was not true: this
+        method treated "" as "nothing to apply" and the checkers went on reading the old
+        summary (D114). The session falls back to `EMPTY_CHAT_SUMMARY`, the same placeholder it
+        starts with, and says that it was cleared rather than changed.
+
         Side effects: replaces `context.summary` and emits a `log` event when it changed.
         Never raises: a failed read is logged and the summary stays as it is.
         """
@@ -739,12 +746,16 @@ class Session:
         except Exception as exc:
             log.warning("could not read the chat summary again: %s", exc)
             return
-        if not stored or stored == self.context.summary:
+        wanted = stored or EMPTY_CHAT_SUMMARY
+        if wanted == self.context.summary:
             return
-        self.context.summary = stored
-        await self._emit_safely(
-            Log(level="info", message="the chat summary was changed; the checkers see the new one")
+        self.context.summary = wanted
+        message = (
+            "the chat summary was changed; the checkers see the new one"
+            if stored
+            else "the chat summary was cleared; the checkers no longer read folded turns"
         )
+        await self._emit_safely(Log(level="info", message=message))
 
     async def set_auto_escalate(self, auto: AutoEscalate, client: str = "unknown") -> None:
         """Replace the auto-escalation categories, record who did it, tell every client.

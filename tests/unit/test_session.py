@@ -12,6 +12,7 @@ from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
 from calu.config import (
+    EMPTY_CHAT_SUMMARY,
     AutoEscalate,
     ChangesConfig,
     ClaudeConfig,
@@ -875,6 +876,19 @@ async def test_a_corrected_chat_summary_reaches_the_checkers(tmp_path: Path):
         # Reading it again without a change says nothing more.
         await session.reload_summary()
         assert len([e for e in rec.of(Log) if "chat summary was changed" in e.message]) == len(said)
+
+        # D114: deleting a wrong summary is the obvious thing to do with one, and
+        # `calu summary --edit` stores the empty text and promises that the session applies it.
+        # An emptied summary therefore has to reach the checkers as the placeholder; treating
+        # "" as "nothing to apply" left them reading the summary the person had just deleted.
+        store.summaries.append(("", 20))
+        await session.reload_summary()
+        assert session.context.summary == EMPTY_CHAT_SUMMARY
+        assert "must not delete anything" not in session.context.prefix()
+        cleared = [e for e in rec.of(Log) if "chat summary was cleared" in e.message]
+        assert cleared, "and it says it was cleared, not changed"
+        await session.reload_summary()
+        assert len([e for e in rec.of(Log) if "cleared" in e.message]) == len(cleared)
         await session.stop()
         tg.cancel_scope.cancel()
 
