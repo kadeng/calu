@@ -490,6 +490,29 @@ class Session:
             model=resolve_model(self._models.get("narrator") or self.config.context.narrator_model),
         )
 
+    async def reload_summary(self) -> None:
+        """Read the chat summary again, in case an operator corrected it (PLAN.md D40).
+
+        The summary is part of what steers the checkers — it is the conversation they read for
+        everything older than the unfolded turns — so a wrong one is worth correcting by hand
+        (`calu summary --edit`, or the web interface). Called with `apply_settings` after a
+        `config_changed` notification; a changed summary reaches the next check.
+
+        Side effects: replaces `context.summary` and emits a `log` event when it changed.
+        Never raises: a failed read is logged and the summary stays as it is.
+        """
+        try:
+            stored = await self.store.load_summary()
+        except Exception as exc:
+            log.warning("could not read the chat summary again: %s", exc)
+            return
+        if not stored or stored == self.context.summary:
+            return
+        self.context.summary = stored
+        await self._emit_safely(
+            Log(level="info", message="the chat summary was changed; the checkers see the new one")
+        )
+
     def apply_settings(self, settings: ProjectSettings) -> None:
         """Replace configuration, rules and checker instructions (after `config_changed`).
 

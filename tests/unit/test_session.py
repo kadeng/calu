@@ -834,3 +834,26 @@ async def test_a_question_answered_in_the_database_reaches_the_session(tmp_path:
         assert results and "The user answered your question: Spaces" in results[0].content
         await session.stop()
         tg.cancel_scope.cancel()
+
+
+async def test_a_corrected_chat_summary_reaches_the_checkers(tmp_path: Path):
+    """D40: the summary is what the checkers read of the folded turns, so it must be correctable."""
+    session, rec, store = make_session(tmp_path, [])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        # The summarizer wrote one; an operator corrects it in the database.
+        await store.save_summary("## Chat summary\n\nClaude agreed to delete the backups.", 20)
+        await session.reload_summary()
+        assert "delete the backups" in session.context.summary
+        assert "delete the backups" in session.context.prefix()
+
+        store.summaries.append(("## Chat summary\n\nNo, it must not delete anything.", 20))
+        await session.reload_summary()
+        assert "must not delete anything" in session.context.summary
+        said = [event for event in rec.of(Log) if "chat summary was changed" in event.message]
+        assert said
+        # Reading it again without a change says nothing more.
+        await session.reload_summary()
+        assert len([e for e in rec.of(Log) if "chat summary was changed" in e.message]) == len(said)
+        await session.stop()
+        tg.cancel_scope.cancel()

@@ -191,6 +191,11 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 - **Process identity and agent tree** (D29): `sessions` carries host, OS user, directory, pid
   and `address`; the `agents` table holds one row per subagent with `parent_agent_id` (NULL =
   the main agent).
+- **The folded conversation** (D40): `calu summary <session> [--edit]` and
+  `/sessions/{id}/summary` show and correct the chat summary the checkers read for everything
+  older than the unfolded turns. An empty text is refused, and the session re-reads the summary
+  on the `config_changed` notification (`Session.reload_summary`), so a correction reaches the
+  next check.
 - **Configuration commands** (`src/calu/admin.py`): `calu project add|list`, `calu config
   get|set|unset KEY` (dotted keys, values as JSON, validated against `Config` before the write),
   `calu checker list|show|set|edit`, `calu rules list|add|edit|remove|enable|disable`. `edit`
@@ -302,8 +307,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 4. **Phase 5**: the nested-sandbox case in Docker (Q1, `enableWeakerNestedSandbox` exists and is
    untested). The network policy is built (D39); only its default for new projects is the
    owner's to choose (Q5).
-5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
-   read, not edited, through a client.
+5. Smaller gaps: `calu config set` cannot set a value inside a list (`calu config set
+   claude.sandbox.deny_read '[...]'` replaces the whole list, which is the usual way anyway); a
+   client of a session still cannot change what steers the checkers through the protocol, by
+   design (the session role may only read it, §12 phase 4).
 
 ## Open questions for the owner (`PLAN.md` §11)
 

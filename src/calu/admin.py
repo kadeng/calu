@@ -146,6 +146,61 @@ async def add_project(
     return ProjectRow(*row)
 
 
+async def chat_summary(db: Db, session_id: str) -> str:
+    """Read the chat summary of one session (PLAN.md D40).
+
+    Args:
+        db: The connection.
+        session_id: Id of the `sessions` row.
+
+    Returns:
+        The stored summary, or "" if that session has none yet (it is written when the first
+        turns are folded).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    row = await db.one(
+        "SELECT summary FROM chat_summaries WHERE session_id = %s::uuid", (session_id,)
+    )
+    return str(row[0]) if row and row[0] else ""
+
+
+async def set_chat_summary(db: Db, session_id: str, summary: str) -> None:
+    """Replace the chat summary of one session and tell its session process (PLAN.md D40).
+
+    The summary is the conversation the checkers read for everything older than the unfolded
+    turns, so correcting it changes what they are told — which is the point. The session picks
+    it up through the `config_changed` notification this function sends, and applies it at its
+    next check; the number of covered turns is left as it is, so the next folding continues
+    where the summarizer left off.
+
+    Args:
+        db: A connection with write access to `chat_summaries` (the owner).
+        session_id: Id of the `sessions` row.
+        summary: The new text.
+
+    Raises:
+        AdminError: If no session has that id, or the text is empty — a summary of nothing would
+            silently hide the folded turns from the checkers.
+        psycopg.Error: On database errors.
+    """
+    if not summary.strip():
+        raise AdminError("the chat summary may not be empty")
+    row = await db.one(
+        "INSERT INTO chat_summaries (session_id, summary, covered_turns)"
+        " SELECT s.id, %s, 0 FROM sessions s WHERE s.id = %s::uuid"
+        " ON CONFLICT (session_id) DO UPDATE SET summary = excluded.summary,"
+        " updated_at = now() RETURNING session_id",
+        (summary, session_id),
+    )
+    if row is None:
+        raise AdminError(f"no session {session_id}")
+    await db.execute(
+        "SELECT pg_notify('config_changed', json_build_object('table', 'chat_summaries')::text)"
+    )
+
+
 async def set_network_policy(db: Db, name: str, network_policy: str) -> ProjectRow:
     """Change what a project's sandboxed commands may reach (PLAN.md D39).
 

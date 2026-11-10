@@ -461,3 +461,36 @@ async def test_a_fork_point_spans_the_runs_of_one_conversation(db_url: str) -> N
         assert [p.turn for p in await herd.fork_points(db, second_id)] == [2]
     finally:
         await conn.close()
+
+
+async def test_the_chat_summary_can_be_read_and_corrected(db_url: str) -> None:
+    """D40: what the checkers read of the folded turns is editable, and the session is told."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        async with await client_for(db) as client:
+            empty = await client.get(f"/sessions/{session_id}/summary")
+            assert "no summary yet" in empty.text
+
+            await store.save_summary("## Chat summary\n\nClaude deleted the backups.", 20)
+            page = (await client.get(f"/sessions/{session_id}/summary")).text
+            assert "Claude deleted the backups." in page
+
+            saved = await client.post(
+                f"/sessions/{session_id}/summary",
+                data={"summary": "## Chat summary\n\nIt did not delete anything."},
+            )
+            assert saved.status_code == 200
+            assert "It did not delete anything." in saved.text
+            # The session reads it back through the store, which is what `reload_summary` does.
+            assert await store.load_summary() == "## Chat summary\n\nIt did not delete anything."
+
+            # An empty summary would silently hide the folded turns from the checkers.
+            refused = await client.post(f"/sessions/{session_id}/summary", data={"summary": "   "})
+            assert refused.status_code == 400
+            assert (await client.get("/sessions/does-not-exist/summary")).status_code == 404
+    finally:
+        await conn.close()

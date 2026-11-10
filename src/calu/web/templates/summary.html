@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Chat summary · calu{% endblock %}
+{% block body %}
+<h1>The conversation the checkers read</h1>
+<p class="muted">
+  <a href="{{ url_for('session', session_id=session.id) }}">{{ session.hostname }}:{{ session.directory }}</a>
+  · everything older than the unfolded turns, as the summarizer wrote it
+  {% if saved %}· <strong class="state running">saved</strong>{% endif %}
+</p>
+<p class="muted">
+  Correct it if it says something wrong: every later check reads this, and a running session
+  picks the change up at its next step. The number of folded turns stays as it is, so the next
+  folding continues where the summarizer left off.
+</p>
+{% if summary %}
+<form method="post" action="{{ url_for('summary', session_id=session.id) }}" id="edit">
+  <textarea name="summary" spellcheck="false">{{ summary }}</textarea>
+  <p class="row"><button class="primary" type="submit">Save</button>
+  <span class="muted">or Ctrl+S / Cmd+S</span></p>
+</form>
+<script>
+addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+    event.preventDefault();
+    document.getElementById('edit').submit();
+  }
+});
+</script>
+{% else %}
+<p class="empty">This session has no summary yet: none of its turns are folded. It appears once
+  the conversation is long enough (<code>context.fold_every</code> turns).</p>
+{% endif %}
+{% endblock %}

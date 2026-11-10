@@ -381,6 +381,9 @@ async def _run(
             new: The newly loaded settings.
         """
         session.apply_settings(new)
+        # The chat summary is a row like the rules and the instructions, and an operator may
+        # have corrected it (D40), so the same notification re-reads it.
+        await session.reload_summary()
         await console(Log(level="info", message="configuration reloaded"))
 
     notifier = Notifier(listener)

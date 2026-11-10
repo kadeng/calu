@@ -212,6 +212,14 @@ class MemorySessionStore:
         """
         self.summaries.append((summary, covered_turns))
 
+    async def load_summary(self) -> str:
+        """Return the last stored summary (see `SessionStore.load_summary`).
+
+        Returns:
+            The text of the newest entry of `summaries`, or "" if nothing was stored.
+        """
+        return self.summaries[-1][0] if self.summaries else ""
+
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
         """Return the prepared context of a resumed session.
 

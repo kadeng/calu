@@ -14,6 +14,7 @@ Pages:
     /                     every session of every host, newest first, with its open escalations
     /sessions/{id}        one session: its turns and tool calls, and how to attach to it
     /sessions/{id}/live   the live view: the stream, the queue, stop, steer, the subagents
+    /sessions/{id}/summary  the folded conversation the checkers read, editable
     /escalations          what waits for a human, with allow and deny
     /triage               one escalation at a time, with the queue behind it
     /escalations/{id}     what the checker saw when it escalated the step
@@ -176,6 +177,12 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         Route("/sessions/{session_id}", _page(session_page, state), name="session"),
         Route("/sessions/{session_id}/token", _page(mint, state), methods=["POST"], name="mint"),
         Route("/sessions/{session_id}/live", _page(live_page, state), name="live"),
+        Route(
+            "/sessions/{session_id}/summary",
+            _page(summary_page, state),
+            methods=["GET", "POST"],
+            name="summary",
+        ),
         WebSocketRoute("/ws/sessions/{session_id}", _socket(live_socket, state), name="live_ws"),
         Route("/escalations", _page(escalations, state), name="escalations"),
         Route("/triage", _page(triage, state), name="triage"),
@@ -412,6 +419,43 @@ async def mint(request: Request, state: _State) -> Response:
         return HTMLResponse(_not_found(session_id), status_code=404)
     state.minted[session_id] = (token_id, token)
     return RedirectResponse(request.url_for("session", session_id=session_id), 303)
+
+
+async def summary_page(request: Request, state: _State) -> Response:
+    """Show and correct the chat summary a session's checkers read (PLAN.md D40).
+
+    The summary is what the checkers see of everything older than the unfolded turns, so a wrong
+    one misleads every later check. A running session re-reads it at its next check.
+
+    Args:
+        request: The request; its path holds the session id. A POST holds the new `summary`.
+        state: The shared state.
+
+    Returns:
+        The page, a redirect after a save, a 400 page if the text is empty, or a 404 page if no
+        session has that id.
+    """
+    session_id = str(request.path_params["session_id"])
+    row = await herd.session(state.db, session_id)
+    if row is None:
+        return HTMLResponse(_not_found(session_id), status_code=404)
+    if request.method == "POST":
+        form = await request.form()
+        try:
+            await admin.set_chat_summary(state.db, session_id, str(form.get("summary") or ""))
+        except admin.AdminError as exc:
+            return HTMLResponse(_bad(str(exc)), status_code=400)
+        url = request.url_for("summary", session_id=session_id).include_query_params(saved="1")
+        return RedirectResponse(url, 303)
+    return _render(
+        request,
+        "summary.html",
+        {
+            "session": row,
+            "summary": await admin.chat_summary(state.db, session_id),
+            "saved": request.query_params.get("saved") == "1",
+        },
+    )
 
 
 async def live_page(request: Request, state: _State) -> Response:

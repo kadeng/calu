@@ -333,6 +333,7 @@ checkers follow them:
 
 ```bash
 calu checker edit edit                        # opens the edit checker's instructions in $EDITOR
+calu summary <session id> --edit              # correct what the checkers read of the old turns
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
 calu config set claude.model opus
 calu evals --from-db                          # accuracy, critical misses, over-escalations

@@ -13,6 +13,7 @@
     calu attach ADDRESS --token T  terminal client for a running session
     calu acp ADDRESS --token T     serve the session to an ACP editor (stdin/stdout)
     calu escalation ID             everything needed to decide it, from the database
+    calu summary ID [--edit]       the conversation the checkers read, folded
     calu token mint SESSION        client token for an editor or a remote interface
     calu web                       the herd overview in a browser (127.0.0.1 only)
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
@@ -52,6 +53,7 @@ from psycopg.conninfo import conninfo_to_dict
 from calu import __version__, admin, herd
 from calu.acp import serve_acp
 from calu.attach import attach
+from calu.config import EMPTY_CHAT_SUMMARY
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
@@ -581,6 +583,88 @@ def cmd_escalations(args: argparse.Namespace, store: CredentialStore) -> None:
         return "\n".join(parts)
 
     _admin_command(store, work)
+
+
+def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Show or correct the chat summary a session's checkers read (PLAN.md D40).
+
+    The summary is the conversation the checkers see for everything older than the unfolded
+    turns, written by the summarizer model. A wrong one misleads every later check, so it is
+    worth correcting by hand; a running session applies the change at its next check, because
+    the same `config_changed` notification that reloads the rules re-reads this.
+
+    With `--edit` the password is asked once: the summary is read, the editor runs outside the
+    database connection, and the result is stored with a second one. If storing fails, the
+    temporary file stays and its path is printed, so no work is lost.
+
+    Args:
+        args: Parsed arguments (`session`, `edit`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential or no editor is available.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the session is unknown or the edited summary is empty; `main`
+            reports it as one line, and the temporary file keeps the text.
+        psycopg.Error: On database errors.
+    """
+    if not args.edit:
+
+        async def show(db: Db) -> str:
+            """Read the summary.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The summary, or a line saying there is none yet.
+            """
+            found = await admin.chat_summary(db, args.session)
+            return found or "no chat summary yet: none of this session's turns are folded"
+
+        _admin_command(store, show)
+        return
+
+    url = load_credential(store, "admin", "Admin password: ")
+    try:
+        admin_url = url.decode()
+
+        async def read(db: Db) -> str:
+            """Read the summary to edit.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The stored summary, or the empty-summary placeholder.
+            """
+            return await admin.chat_summary(db, args.session) or EMPTY_CHAT_SUMMARY
+
+        before = asyncio.run(_with_admin(admin_url, read))
+        after, path = edit_in_editor(before, "chat-summary.md")
+        if after == before:
+            print("unchanged; nothing was stored")
+            return
+
+        async def write(db: Db) -> str:
+            """Store the edited summary and notify the session.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The report.
+            """
+            await admin.set_chat_summary(db, args.session, after)
+            return "the chat summary was replaced; the session applies it at its next check"
+
+        try:
+            print(asyncio.run(_with_admin(admin_url, write)))
+        except admin.AdminError, psycopg.Error:
+            print(f"the edited summary is kept in {path}", file=sys.stderr)
+            raise
+    finally:
+        wipe(url)
 
 
 def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1272,6 +1356,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("session", nargs="?", help="only escalations of this session id")
     p.add_argument("--rendered", action="store_true", help="also print the rendered step")
     p.set_defaults(handler=cmd_escalations)
+
+    p = sub.add_parser("summary", help="show or correct the chat summary the checkers read")
+    p.add_argument("session", help="id of the session (`calu sessions`)")
+    p.add_argument("--edit", action="store_true", help="edit it in $EDITOR and store it")
+    p.set_defaults(handler=cmd_summary)
 
     p = sub.add_parser("escalation", help="show one escalation with everything needed to decide it")
     p.add_argument("id", type=int)

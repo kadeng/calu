@@ -315,6 +315,17 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def load_summary(self) -> str:
+        """Read the chat summary of this session back from the database.
+
+        A session reads it again after a `config_changed` notification, because an operator may
+        have corrected it (PLAN.md D40): the summary is part of what steers the checkers.
+
+        Returns:
+            The stored summary, or "" if this session has none.
+        """
+        ...
+
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
         """Load the context of an earlier calu session that ran the same Claude session.
 
@@ -850,6 +861,21 @@ class DatabaseSessionStore:
             " updated_at = now()",
             (self._require_session(), summary, covered_turns),
         )
+
+    async def load_summary(self) -> str:
+        """Read this session's chat summary (see `SessionStore.load_summary`).
+
+        Returns:
+            The stored summary, or "" if there is none.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        row = await self._db.one(
+            "SELECT summary FROM chat_summaries WHERE session_id = %s::uuid",
+            (self._require_session(),),
+        )
+        return str(row[0]) if row and row[0] else ""
 
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
         """Load turns and summary of the last session of a Claude session (see `SessionStore`).
