@@ -179,6 +179,11 @@ async def test_a_session_page_offers_the_commands_to_connect_with(db_url: str) -
             assert "calu acp ws://127.0.0.1:8765" in page
             assert "calu run --resume claude-abc" in page
             assert "mint a token above" in page
+            # On the session's own machine neither the address nor a token is needed (D105),
+            # and that is the form offered first, with the directory it has to be run in.
+            assert "<pre>calu attach</pre>" in page
+            assert "<pre>calu acp</pre>" in page
+            assert "in /w on box" in page, "the directory and host the short form needs"
 
             # Minting shows the token once and records only its hash.
             after = await client.post(f"/sessions/{session_id}/token", data={"label": "zed"})
