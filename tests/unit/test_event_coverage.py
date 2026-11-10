@@ -12,7 +12,9 @@ an event therefore forces a decision instead of allowing silence.
 import inspect
 
 from calu import run
+from calu import session as session_module
 from calu.acp import adapter
+from calu.protocol import server as server_module
 from calu.protocol.messages import EVENTS
 
 SILENT_IN_THE_TERMINAL = {
@@ -82,3 +84,32 @@ def test_a_mode_change_is_printed_with_what_waits() -> None:
     # All off is worth a line too: it says the checkers decide again.
     off = run.format_event(AutoEscalateChanged(settings=AutoEscalate()))
     assert off is not None and "checkers" in off
+
+
+def test_every_advertised_request_has_a_handler() -> None:
+    """The JSON schema advertises these methods, so each one has to do something.
+
+    A request model with no handler is worse than a missing one: `calu protocol` exports it, a
+    client written against the schema calls it, and the session answers "unhandled method".
+    """
+    from calu.protocol.messages import REQUESTS
+
+    dispatch = ""
+    for member in vars(server_module).values():
+        if inspect.isclass(member):
+            for name in ("_dispatch", "handle", "_handle"):
+                found = getattr(member, name, None)
+                if found is not None and callable(found):
+                    dispatch += inspect.getsource(found)
+    assert dispatch, "no dispatch found in calu.protocol.server"
+    unhandled = [method for method in REQUESTS if f'"{method}"' not in dispatch]
+    assert unhandled == [], f"advertised but not implemented: {', '.join(unhandled)}"
+
+
+def test_every_route_is_handled_by_the_session() -> None:
+    """A route the session does not act on would send a step nowhere."""
+    from calu.checkers.policy import Route
+
+    source = inspect.getsource(session_module)
+    unused = [route.value for route in Route if f"Route.{route.name}" not in source]
+    assert unused == [], f"routes the session never acts on: {', '.join(unused)}"
