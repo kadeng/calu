@@ -50,10 +50,10 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 """Event class per method, to turn the received params back into an event for rendering."""
 
 HELP = (
-    "/quit  /stop  /start [resume id]  /interrupt  /allow <id> [note]  /deny <id> [note]  "
-    "/answer <id> <text>  "
+    "/quit  /stop  /start [resume id]  /interrupt  /why <id>  /allow <id> [note]  "
+    "/deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
-    "/sessions  /history [id]  /shutdown"
+    "/checkers  /sessions  /history [id]  /shutdown"
 )
 """One line listing the commands, printed on connect and for an unknown command."""
 

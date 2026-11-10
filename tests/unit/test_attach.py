@@ -201,3 +201,152 @@ async def test_history_prints_the_recorded_conversation(capsys):
     assert "[history] 1 turn(s), 1 step(s) of claude-old" in out
     await con.line("/history")
     assert client.sent[-1] == ("session.history", {})
+
+
+async def test_why_prints_everything_a_decision_needs(capsys):
+    """`/why` is how an escalation is decided from the terminal, so it shows the whole context."""
+    con, client = console(
+        {
+            "escalation.context": {
+                "escalation_id": 7,
+                "state": "open",
+                "reason": "deletes a directory",
+                "checker_runs": [
+                    {
+                        "checker_name": "command",
+                        "checker_version": 3,
+                        "model": "test:model",
+                        "decision": "escalate",
+                        "reason": "rm -rf is\nnot reversible",
+                    }
+                ],
+                "rendered": "$ rm -rf build",
+                "files": {"a.py": "x = 1"},
+                "recent": "## Turn 1",
+            }
+        }
+    )
+    await con.line("/why 7")
+    said = capsys.readouterr().out
+    assert client.sent == [("escalation.context", {"escalation_id": "7"})]
+    assert "escalation 7 (open)" in said
+    assert "deletes a directory" in said
+    # The checker's own verdict, its version and its model, on one line.
+    assert "[command v3, test:model] escalate: rm -rf is not reversible" in said
+    assert "$ rm -rf build" in said
+    assert "a.py before the change" in said and "x = 1" in said
+    assert "the conversation the checker saw" in said and "## Turn 1" in said
+
+
+async def test_why_without_an_id_asks_rather_than_requests(capsys):
+    """A missing id must not reach the session as a request for escalation ''."""
+    con, client = console()
+    await con.line("/why")
+    assert client.sent == []
+    assert "needs an escalation id" in capsys.readouterr().out
+
+
+async def test_the_read_commands_format_what_they_get(capsys):
+    """`/checkers`, `/sessions`, `/history` and `/context` are what an operator reads."""
+    con, client = console(
+        {
+            "checkers.get": {
+                "checkers": [
+                    {
+                        "name": "command",
+                        "route": "command",
+                        "model": "test:model",
+                        "version": 2,
+                        "instructions": "x" * 1234,
+                    }
+                ]
+            },
+            "session.list": {
+                "sessions": [
+                    {
+                        "claude_session_id": "c1",
+                        "state": "stopped",
+                        "started_at": "2026-11-10T00:00:00Z",
+                        "first_input": "fix the test",
+                    },
+                    {
+                        "claude_session_id": None,
+                        "state": "running",
+                        "started_at": "2026-11-10T01:00:00Z",
+                        "first_input": "",
+                    },
+                ]
+            },
+            "session.history": {
+                "claude_session_id": "c1",
+                "turns": [
+                    {
+                        "user_inputs": ["fix the test"],
+                        "steps": [{"tool_name": "Bash", "decision": "pass", "summary": "Runs it."}],
+                        "answer_narration": "Claude said it\npassed",
+                    },
+                    {"user_inputs": ["and again"], "steps": [{"tool_name": "Write"}]},
+                ],
+                "steps": [{}, {}],
+            },
+            "context.get": {"chat_summary": "## Folded", "recent": "## Turn 2"},
+        }
+    )
+    await con.line("/checkers")
+    said = capsys.readouterr().out
+    assert "command  route command  test:model  v2  1234 chars of instructions" in said
+
+    await con.line("/sessions")
+    said = capsys.readouterr().out
+    assert "c1  stopped  2026-11-10T00:00:00Z  fix the test" in said
+    assert "(no id)  running" in said  # a session that has not reported its id yet
+
+    await con.line("/history")
+    said = capsys.readouterr().out
+    assert "> fix the test" in said
+    assert "  [Bash, pass] Runs it." in said
+    assert "  [Write, ?]" in said  # a step with no decision yet
+    assert "Claude said it passed" in said  # narration, on one line
+    assert "[history] 2 turn(s), 2 step(s) of c1" in said
+
+    await con.line("/context")
+    said = capsys.readouterr().out
+    assert "## Folded" in said and "## Turn 2" in said
+
+    # `/history <id>` asks for another conversation; `/sessions` and `/checkers` take nothing.
+    client.sent.clear()
+    await con.line("/history other-id")
+    assert client.sent == [("session.history", {"claude_session_id": "other-id"})]
+
+
+async def test_a_message_to_a_subagent_needs_both_an_id_and_a_text(capsys):
+    """`/to` is the one command with two arguments, and it injects rather than queues."""
+    con, client = console()
+    await con.line("/to agent-1 look at the failing test")
+    assert client.sent == [
+        (
+            "chat.send",
+            {"text": "look at the failing test", "to": "agent-1", "delivery": "inject"},
+        )
+    ]
+    client.sent.clear()
+    for line in ("/to", "/to agent-1", "/to agent-1    "):
+        await con.line(line)
+        assert client.sent == []
+        assert "needs a subagent id and a text" in capsys.readouterr().out
+
+
+async def test_help_and_an_unknown_command_both_show_the_commands(capsys):
+    """Nobody should have to read the source to find out what `calu attach` takes."""
+    con, client = console()
+    await con.line("/help")
+    helped = capsys.readouterr().out
+    # Every command the console answers has to be in it, `/why` and `/checkers` included --
+    # `/why` is what an escalation is decided from, and it used to be missing.
+    for command in ("/why", "/checkers", "/to", "/allow", "/answer", "/comment", "/history"):
+        assert command in helped, f"{command} is not in the help line"
+    await con.line("/nonsense")
+    said = capsys.readouterr().out
+    assert "unknown command /nonsense" in said
+    assert "/why" in said  # the help comes with it
+    assert client.sent == []

@@ -313,6 +313,17 @@ the file before an edit, and the conversation as the checkers see it. The waitin
 your answer up within a second. What is *not* in the database is the live stream: the text as it
 is written, the thinking, the tool results as they arrive. That is what attaching is for.
 
+Attached, you type at the session: a plain line is a message for Claude, and the commands are
+one line of `/help`. The ones that matter while a step waits:
+
+```
+/why 7            everything the checker saw: its verdict, the step as it rendered it,
+                  the file before the change, the conversation as the checkers read it
+/allow 7 go ahead   /deny 7 not like that   /answer 7 four spaces
+/inject <text>    reaches Claude inside the running turn instead of queueing
+/to <agent> ...   the same, to one of its subagents
+```
+
 ### From another machine
 
 Nothing calu runs binds a public interface, and that is deliberate: there is no login in front
