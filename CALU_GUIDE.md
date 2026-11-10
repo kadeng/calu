@@ -508,7 +508,9 @@ The ACP adapter has not yet been driven by a real editor, only by its own end-to
 ## Checker instructions, rules and evaluations
 
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the
-checkers follow them:
+checkers follow them. The instructions calu ships are a starting point you are meant to
+rewrite, and they are in the public domain rather than under calu's licence: what you make of
+them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 
 ```bash
 calu checker edit edit                        # opens the edit checker's instructions in $EDITOR

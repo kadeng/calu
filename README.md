@@ -226,7 +226,15 @@ It says nothing about the software you develop with calu. calu is a tool you run
 compiler or a test runner: your repository can be closed source, commercial, or under any open
 source licence, and code written with calu's help is yours under whatever terms you choose. Your
 checker instructions and rules are your own text, and what calu produces as it runs — verdicts,
-comments, summaries — carries no licence condition either. [LICENSE.md](LICENSE.md) says this at
-greater length.
+comments, summaries — carries no licence condition either.
+
+calu comes with **no warranty and no guarantees of any kind, and is provided as is, free of
+charge** — and a checker is a language model reading a step, not a promise that nothing bad
+gets through.
+
+The checker instructions **shipped with calu** are not under the GPL at all: they are prompts,
+written to be copied and rewritten, and they are placed in the public domain as far as
+applicable law allows. Copy one, change it, license the result however you like — nothing
+limits that and there is no attribution to carry. [LICENSE.md](LICENSE.md) has the wording.
 
 Contributing: [AGENTS.md](AGENTS.md) for the layout and the rules, [docs/TESTING.md](docs/TESTING.md) for the test layers and the manual checklist, [PLAN.md](PLAN.md) for the decisions behind all of it.
