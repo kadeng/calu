@@ -1000,6 +1000,12 @@ class DatabaseSessionStore:
         later session stays unmarked in the session that recorded it, so the flag alone is not
         enough.
 
+        Side effect: a non-empty summary is copied into this session's own `chat_summaries`
+        row, with the number of turns it covers, unless the session already has one. That makes
+        the row this session reads (`load_summary`) and the row an operator corrects
+        (`calu summary --edit`, D40) the same one, and the correction then survives the next
+        resume because a tie on `covered_turns` goes to the newer session.
+
         Args:
             claude_session_id: The Claude session id that is resumed.
 
@@ -1023,6 +1029,16 @@ class DatabaseSessionStore:
                 return [], ""
             summary, covered = await self._conversation_summary(conn, others)
             turns = await self._conversation_turns(conn, others, above=covered)
+            if summary:
+                # Adopt it: from here on this session's own row is the summary it uses, which
+                # is the row `load_summary` reads and `calu summary --edit` writes (D40). A
+                # correction would otherwise be stored with `covered_turns = 0` and lose
+                # against the row it was copied from at the next resume.
+                await conn.execute(
+                    b"INSERT INTO chat_summaries (session_id, summary, covered_turns)"
+                    b" VALUES (%s, %s, %s) ON CONFLICT (session_id) DO NOTHING",
+                    (self.session_id, summary, covered),
+                )
         return turns, summary
 
     @staticmethod
@@ -1047,8 +1063,12 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
         """
         cur = await conn.execute(
-            b"SELECT summary, covered_turns FROM chat_summaries"
-            b" WHERE session_id = ANY(%s) ORDER BY covered_turns DESC LIMIT 1",
+            b"SELECT c.summary, c.covered_turns FROM chat_summaries c"
+            b" JOIN sessions s ON s.id = c.session_id"
+            b" WHERE c.session_id = ANY(%s)"
+            # The newest session wins a tie, so that the row a resuming session adopts -- and
+            # an operator's correction of it (D40) -- beats the one it was copied from.
+            b" ORDER BY c.covered_turns DESC, s.started_at DESC LIMIT 1",
             (sessions,),
         )
         row = await cur.fetchone()

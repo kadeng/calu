@@ -643,3 +643,44 @@ async def test_a_replay_covers_the_conversation_but_keeps_one_session_of_steps(
         assert [s.seq for s in history.steps] == [1]
     finally:
         await conn.close()
+
+
+async def test_a_corrected_summary_survives_the_next_resume(db_url: str) -> None:
+    """D40 through D65: the row the session reads is the row an operator corrects.
+
+    A resuming session adopts the summary it inherited into its own row. Without that, an
+    operator's correction was stored for the running session with `covered_turns = 0` and lost
+    against the row it was copied from as soon as the session was resumed again.
+    """
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-6")
+        for i in (1, 2):
+            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+        await store.save_summary("the summarizer's version", 1)
+        await store.mark_folded(1)
+
+        second = DatabaseSessionStore(Db(conn))
+        await second.start(IDENTITY)
+        await second.set_claude_session("claude-6")
+        _, summary = await second.load_previous("claude-6")
+        assert summary == "the summarizer's version"
+        # Adopted, so the session's own read finds it: before, this was "" and an operator
+        # looking at the running session saw no summary at all.
+        assert await second.load_summary() == "the summarizer's version"
+
+        # The operator corrects it, as `calu summary --edit` does.
+        await conn.execute(
+            "UPDATE chat_summaries SET summary = %s WHERE session_id = %s",
+            ("the corrected version", second.session_id),
+        )
+        assert await second.load_summary() == "the corrected version"
+
+        third = DatabaseSessionStore(Db(conn))
+        await third.start(IDENTITY)
+        await third.set_claude_session("claude-6")
+        _, summary = await third.load_previous("claude-6")
+        assert summary == "the corrected version", "the correction was lost on the next resume"
+    finally:
+        await conn.close()
