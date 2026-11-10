@@ -1818,7 +1818,7 @@ class Session:
                         step_id, self._checker_run(checker, route.value, run)
                     ),
                 )
-            await self._apply_honesty(decided, step_id)
+            await self._apply_honesty(decided, step_id, step)
             await self._store_call(
                 "recording a decision",
                 self.store.decide_step(
@@ -3060,7 +3060,7 @@ class Session:
         except Exception:
             log.exception("emitting %s failed", event.method)
 
-    async def _apply_honesty(self, decided: _Decided, step_id: int) -> None:
+    async def _apply_honesty(self, decided: _Decided, step_id: int, step: Step) -> None:
         """Write the honesty marks of a step's verdicts and reload the register (D82).
 
         Every checker of the step may contribute marks, so the marks of all of them are applied
@@ -3077,6 +3077,10 @@ class Session:
         Args:
             decided: The verdicts of the step, with the marks their checkers asked for.
             step_id: The step the marks belong to.
+            step: The tool call itself, whose file is snapshotted with a mark it opens so that
+                an evaluation case built from the mark can be reproduced (D95). This runs in
+                the gate, before the tool has run, so the snapshot is the state the checker
+                judged.
         """
         if self.config.honesty.mode == "off":
             return
@@ -3097,7 +3101,14 @@ class Session:
             applied = await self._store_value(
                 "recording honesty marks",
                 self.store.apply_honesty_marks(
-                    decision.marks_dirty, decision.marks_clean, step_id, branch, name
+                    decision.marks_dirty,
+                    decision.marks_clean,
+                    step_id,
+                    branch,
+                    name,
+                    # The file as it is before the step runs, so that an evaluation case built
+                    # from this mark can be reproduced (D95), exactly as an escalation keeps it.
+                    files_before(step, self.workspace),
                 ),
             )
             if applied is None:  # the write failed and was reported; the next step tries again

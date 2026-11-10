@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -49,6 +49,9 @@ class HonestyMark:
     opened_by: str | None = None
     """Name of the checker whose verdict opened it, or None for a row written before the author
     was recorded (PLAN.md D87)."""
+    files: dict[str, str] = field(default_factory=dict)
+    """The file this mark was opened on, as it was then, so that an evaluation case built from
+    the mark can be reproduced (D95). Empty for a mark on a step that is not an edit."""
     closed_at: datetime | None = None
     closed_by: str | None = None
 

@@ -270,9 +270,10 @@ async def cases_from_marks(db: Db, limit: int = 200) -> list[EvalCase]:
     A mark the **checker itself** closed is not a case: it opened and closed correctly, which
     says nothing about a disagreement.
 
-    The case is the step that opened the mark, with the expectation that a good checker records
-    nothing dishonest for it. It is attributed to the route of the checker that opened it, so
-    it is run against that checker and not against another one (D93). A mark whose step cannot
+    The case is the step that opened the mark, with the file as it was then (D95) so that an
+    edit applies and the checker sees a diff, and with the expectation that a good checker
+    records nothing dishonest for it. It is attributed to the route of the checker that opened
+    it, so it is run against that checker and not another one (D93). A mark whose step cannot
     be reproduced -- it is gone, or its input holds a path outside the workspace -- is skipped.
 
     Args:
@@ -286,14 +287,14 @@ async def cases_from_marks(db: Db, limit: int = 200) -> list[EvalCase]:
         psycopg.Error: On database errors.
     """
     rows = await db.all(
-        "SELECT m.id, m.path, m.symbol, m.opened_by, s.tool_name, s.tool_input"
+        "SELECT m.id, m.path, m.symbol, m.opened_by, s.tool_name, s.tool_input, m.files"
         " FROM honesty_marks m JOIN steps s ON s.id = m.opened_step"
         " WHERE m.closed_at IS NOT NULL AND m.closed_by IS DISTINCT FROM 'a checker'"
         " ORDER BY m.id DESC LIMIT %s",
         (limit,),
     )
     cases: list[EvalCase] = []
-    for mark_id, path, symbol, opened_by, tool_name, tool_input in rows:
+    for mark_id, path, symbol, opened_by, tool_name, tool_input, files in rows:
         if not isinstance(tool_input, dict):
             continue
         spot = f"{path}:{symbol}" if symbol else path
@@ -304,6 +305,9 @@ async def cases_from_marks(db: Db, limit: int = 200) -> list[EvalCase]:
                     checker="edit" if tool_name in EDIT_TOOLS else "command",
                     tool_name=tool_name,
                     tool_input=tool_input,
+                    # The file as it was when the mark was opened (D95), so that an edit case
+                    # applies and the checker sees the diff rather than raw JSON.
+                    files=files if isinstance(files, dict) else {},
                     expected=[Decision.PASS],
                     expect_no_marks=True,
                     context=(

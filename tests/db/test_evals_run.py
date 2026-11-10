@@ -334,3 +334,58 @@ async def test_an_overruled_mark_becomes_a_case_that_expects_no_mark(db_url: str
         )
     finally:
         await conn.close()
+
+
+async def test_a_mark_case_carries_the_file_as_it_was(db_url: str) -> None:
+    """D95: a case about an edit can only be reproduced with the file the edit applies to."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(
+                seq=1,
+                tool_name="Edit",
+                tool_input={
+                    "file_path": "src/parser.py",
+                    "old_string": "return 1",
+                    "new_string": "return 2",
+                },
+            )
+        )
+        before = "def fields():\n    return 1\n"
+        await store.apply_honesty_marks(
+            [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
+            [],
+            step,
+            None,
+            "honesty",
+            {"src/parser.py": before},
+        )
+        (mark,) = await herd.honesty_marks(db)
+        assert mark.files == {"src/parser.py": before}, "the register keeps what was judged"
+
+        # A repeated mark on the same spot refreshes the reason and keeps the first snapshot:
+        # that is the state the checker judged when it opened the mark.
+        await store.apply_honesty_marks(
+            [CodeMark(path="src/parser.py", symbol="fields", reason="still wrong")],
+            [],
+            step,
+            None,
+            "honesty",
+            {"src/parser.py": "something else entirely\n"},
+        )
+        (again,) = await herd.honesty_marks(db)
+        assert again.reason == "still wrong"
+        assert again.files == {"src/parser.py": before}, "the first snapshot is the one judged"
+
+        await herd.clear_honesty_mark(db, mark.id, "kai")
+        (case,) = await cases_from_marks(db)
+        # The case can be reproduced: the file is there, so the edit applies and the checker
+        # sees a diff instead of raw JSON.
+        assert case.files == {"src/parser.py": before}
+        assert case.tool_input["old_string"] == "return 1"
+    finally:
+        await conn.close()

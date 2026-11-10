@@ -30,7 +30,7 @@ interrupted, or nobody answered in time.
 """
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -247,6 +247,7 @@ class SessionStore(Protocol):
         step_id: int | None,
         git_branch: str | None = None,
         by: str = "",
+        files: Mapping[str, str] | None = None,
     ) -> tuple[int, int]:
         """Open and close marks as a checker's verdict asked (PLAN.md D82).
 
@@ -262,6 +263,9 @@ class SessionStore(Protocol):
             git_branch: The branch the marks were made on (Q19 asks what it should mean).
             by: Name of the checker whose verdict carried the marks, recorded so that a report
                 can attribute them (D87); "" leaves the author unrecorded.
+            files: Workspace-relative path -> content of the file the step edits, as it is now,
+                so that an evaluation case built from the mark can be reproduced (D95). Kept
+                only when the mark is opened; a repeated mark leaves the first snapshot.
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -716,6 +720,7 @@ class DatabaseSessionStore:
         step_id: int | None,
         git_branch: str | None = None,
         by: str = "",
+        files: Mapping[str, str] | None = None,
     ) -> tuple[int, int]:
         """Open and close marks as a checker asked (see `SessionStore`).
 
@@ -726,6 +731,7 @@ class DatabaseSessionStore:
             step_id: The step whose check produced the marks; may be None.
             git_branch: The branch the marks were made on.
             by: Name of the checker whose verdict carried them (D87).
+            files: The file the step edits, as it is now (D95).
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -741,12 +747,23 @@ class DatabaseSessionStore:
             await self._db.execute(
                 "INSERT INTO honesty_marks"
                 " (project_id, path, symbol, reason, git_branch, opened_session, opened_step,"
-                "  opened_by)"
-                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s, nullif(%s, '') FROM sessions s"
-                " WHERE s.id = %s::uuid"
+                "  opened_by, files)"
+                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s, nullif(%s, ''), %s"
+                " FROM sessions s WHERE s.id = %s::uuid"
                 " ON CONFLICT (project_id, path, symbol) WHERE closed_at IS NULL"
+                # The reason and the author are refreshed, the snapshot is not: the content
+                # the checker first judged is what a case has to reproduce (D95).
                 " DO UPDATE SET reason = excluded.reason, opened_by = excluded.opened_by",
-                (entry.path, entry.symbol, entry.reason, git_branch, step_id, by, session),
+                (
+                    entry.path,
+                    entry.symbol,
+                    entry.reason,
+                    git_branch,
+                    step_id,
+                    by,
+                    json.dumps(dict(files or {})),
+                    session,
+                ),
             )
             opened += 1
         closed = 0

@@ -6,7 +6,7 @@ which stands for the operator's `calu_resolve_escalation`.
 """
 
 import itertools
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -162,6 +162,7 @@ class MemorySessionStore:
         step_id: int | None,
         git_branch: str | None = None,
         by: str = "",
+        files: Mapping[str, str] | None = None,
     ) -> tuple[int, int]:
         """Open and close marks in memory, as the database store does.
 
@@ -171,6 +172,7 @@ class MemorySessionStore:
             step_id: Unused here, kept for the protocol.
             git_branch: Recorded on a new mark.
             by: Name of the checker whose verdict carried them (D87).
+            files: The file the step edits (D95); kept on the mark it opens.
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -195,6 +197,7 @@ class MemorySessionStore:
                         opened_at=datetime.now(UTC),
                         git_branch=git_branch,
                         opened_by=by or None,
+                        files=dict(files or {}),
                     )
                 )
             opened += 1
