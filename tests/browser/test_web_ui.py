@@ -3,11 +3,12 @@
 import pytest
 
 from calu import herd
+from calu.checkers import CodeMark
 from calu.db import Db, connect
 from calu.setup import setup
 from calu.store import DatabaseSessionStore, StepRow
 from tests.browser.conftest import serve
-from tests.db.test_web import populate
+from tests.db.test_web import IDENTITY, populate
 
 # The web interface is an optional extra, so a checkout synced without it skips these
 # tests instead of failing to collect them (`uv sync --all-extras`, docs/TESTING.md).
@@ -176,5 +177,51 @@ async def test_the_badge_and_the_jump_palette_work_on_every_page(db_url: str, pa
             await page.wait_for_selector("#palette input")
             await page.keyboard.press("Escape")
             await page.wait_for_function("!document.getElementById('palette')")
+    finally:
+        await conn.close()
+
+
+async def test_the_clear_button_closes_an_honesty_mark(db_url: str, page) -> None:
+    """D84: the override has to work by clicking, not only by posting to the URL.
+
+    The database test posts to `/honesty/<id>/clear` directly, which proves the handler. It does
+    not prove the **button**: a form with the wrong method or action renders fine and does
+    nothing, and this is the one way out when a checker marks code nobody agrees is dishonest.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/parser.py"})
+        )
+        await store.apply_honesty_marks(
+            [
+                CodeMark(
+                    path="src/parser.py",
+                    symbol="fields",
+                    reason="the docstring promises a sorted list",
+                )
+            ],
+            [],
+            step,
+            "feature/parser",
+        )
+        async with serve(create_app(db)) as base:
+            await page.goto(f"{base}/rules")
+            shown = await page.inner_text("main")
+            assert "Code recorded as dishonest" in shown
+            assert "src/parser.py:fields" in shown
+            assert "the docstring promises a sorted list" in shown
+
+            async with page.expect_navigation():
+                await page.get_by_role("button", name="clear").first.click()
+            # The register is empty, so the section is gone and the code may run again.
+            assert "Code recorded as dishonest" not in await page.inner_text("main")
+            assert await herd.honesty_marks(db) == []
+            (kept,) = await herd.honesty_marks(db, closed=True)
+            assert kept.closed_by == "the web interface", "the row records who closed it"
     finally:
         await conn.close()
