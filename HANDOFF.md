@@ -324,6 +324,12 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    INSERT for the other is refused, a connection that never set the id sees and writes nothing,
    and the owner still sees everything.
 
+14. **The network default** (D45) and **a harness confirmation** (D38) together, with the
+   sandbox on: with `--allow pypi.org`, the curl to pypi.org ran unasked, and the curl to
+   `example.net` made Claude Code ask for a confirmation (`SandboxNetworkAccess`) although the
+   command checker had passed it -- calu escalated it, the operator allowed it and it ran. So an
+   unlisted domain asks rather than failing (`spikes/RESULTS.md`).
+
 The configuration commands were also exercised by hand against the test database with a
 throwaway credential store (`XDG_CONFIG_HOME` pointed into a scratch directory): `setup`,
 `project add`, `checker list|show|set|edit`, `config set|get`, a refused value, `rules
@@ -382,8 +388,9 @@ Everything else is either built or recommended with its reasons. These need a pe
 - **Q5 — the network default of a new project** (D45, implemented as a proposal): "proxy" with a
   starter allow list (package registries, git over HTTPS, OS packages) instead of "full". One
   flag overrules it (`calu project add --network full`) and existing projects are untouched.
-  The trade to confirm: a task that needs an unlisted domain stops until someone adds it
-  (`calu config add claude.sandbox.allowed_domains <domain> --project <p>`).
+  The trade to confirm, now measured: an unlisted domain does not stop the task, it **asks** --
+  Claude Code wants a confirmation, calu escalates it (D38) and a person allows it in one
+  command. So the default costs an interruption, not a failure.
 - **Q15 — pressing publish**: a `v*` tag builds both Linux binaries, runs them, and attaches
   them to a **draft** GitHub release (verified with a throwaway tag, which was deleted; the
   draft held `calu-linux-x86_64` and `calu-linux-arm64`). A person opens the draft and

@@ -659,3 +659,40 @@ calu's own `bwrap`/`socat` checks are the honest answer to whether the tools are
 
 **Re-run when** the CLI gains a way to probe the namespaces (or a `--settings` option for this
 command), which would make it a better preflight than calu's own checks.
+
+## An unlisted domain asks rather than fails (Q5/D45, 2026-11-10)
+
+**Question.** D45 made "proxy" with a starter allow list the default for a new project, and
+stated its cost as "a task that needs an unlisted domain stops until someone adds it". That was
+never measured, and the cost is the whole argument against the default.
+
+**Setup** (`spikes/smoke_session.py <dir> --sandbox --allow pypi.org --resolve allow`, CLI
+2.1.319, haiku, fake checkers, socat from `get-socat.sh`). The allow list holds `pypi.org` and
+nothing else. Claude is asked to run two bounded curls and report their output: one to
+`pypi.org/simple/`, one to `example.net`.
+
+**Observations.**
+
+| command | checkers | Claude Code's approval | result |
+|---|---|---|---|
+| `curl https://pypi.org/simple/` (listed) | PASS | nothing asked | ran, `200` |
+| `curl https://example.net/` (**not** listed) | PASS | **asked for a confirmation**, reason `SandboxNetworkAccess` | escalated by calu; allowed by the operator; then ran, `200` |
+
+So an unlisted domain does not fail: Claude Code asks, and because calu turns a confirmation
+the harness asks for into an escalation whatever the checkers said (D38), a **human** decides
+it. The second line is also D38 verified end to end through calu with the sandbox on, which
+only the CLI-level spike had shown before.
+
+**What follows.** The cost of the "proxy" default is smaller than D45 claimed, and the
+protection is better than a failure would be: the allow list is a **don't-ask** list, not a
+wall. A session that needs a domain nobody listed stops and says which domain it wants, a
+person allows it in one command, and the task goes on -- no configuration change, no restart.
+The allow list still matters, because without it every package install would wait for a human.
+
+**Not measured**: whether an allowed confirmation is remembered for later requests to the same
+domain within a session, and what the sandbox does when `allowed_domains` is empty and a
+command tries the network (the empty case is "nothing reachable" by configuration, which
+`calu.preflight` warns about).
+
+**Re-run when** the CLI changes how the sandbox handles an unlisted domain -- the table's second
+line is the one that matters.

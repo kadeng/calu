@@ -289,6 +289,10 @@ calu project network --name demo --network full                  # every domain,
 calu project network --name demo --network none                  # nothing at all
 ```
 
+The list is a *don't-ask* list rather than a wall: a command that wants a domain nobody listed
+makes Claude Code ask, and calu turns that into an escalation, so the session stops and tells
+you which domain it wants instead of failing. You allow it once, or add it for good.
+
 A session started without `--project` reaches nothing: an empty allow list blocks every
 connection, and the session says so at startup. Raw TCP is blocked whatever the policy says, so
 a program that ignores the proxy variables gets nowhere either.
