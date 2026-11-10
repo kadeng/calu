@@ -205,6 +205,16 @@ no reason. So:
 - no marks at all after a week of real work: either the codebase is honest, which is worth
   knowing, or the checker is not running (`calu checker list` shows whether it is enabled).
 
+Every mark you overrule also becomes an evaluation case, so the disagreements accumulate into a
+measurement instead of being lost:
+
+    calu evals --from-db        # the built-in cases plus what your own sessions produced
+
+An overruled mark becomes a case that expects the checker to record **nothing** for that step,
+and a checker that marks it again is counted as an "unwanted mark". That is the honesty
+equivalent of a critical miss, and it comes from your project rather than from examples
+somebody invented.
+
 A mark can also go stale, and the listing says so: `<stale: the file is gone>` when nothing
 can run that code any more, and `<stale: made on feature/x, now on main>` when the mark comes
 from another branch, where the file may be a different file. Neither is acted on -- an open

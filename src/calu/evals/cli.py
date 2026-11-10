@@ -25,7 +25,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from calu.db import Db
-from calu.evals.cases import CheckerName, EvalCase, builtin_cases, cases_from_escalations
+from calu.evals.cases import (
+    CheckerName,
+    EvalCase,
+    builtin_cases,
+    cases_from_escalations,
+    cases_from_marks,
+)
 from calu.evals.cases import load_cases as load_case_file
 from calu.evals.runner import Report, run_cases
 from calu.store import ConfigStore
@@ -104,7 +110,10 @@ async def collect_cases(
     for name in files:
         cases += load_case_file(Path(name))
     if from_db:
+        # Two kinds of label from real work: an escalation a human decided, and a mark a
+        # person overruled (D50, D94).
         cases += await cases_from_escalations(db)
+        cases += await cases_from_marks(db)
     return cases
 
 
@@ -125,7 +134,7 @@ async def run_evals(
         workspace: The project directory whose settings apply (for the rules and the models).
         project: Name of the project row whose settings apply, or None for the global ones.
         files: YAML case files to add to the built-in set.
-        from_db: Also use the resolved escalations as cases.
+        from_db: Also use the resolved escalations and the overruled honesty marks as cases.
         builtin: Include the built-in case set.
         model: One model for every checker, instead of the configured ones.
         repeat: How often each case is run.

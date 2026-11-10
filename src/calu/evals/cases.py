@@ -11,6 +11,7 @@ A case is one tool call with the decision(s) a good checker would make:
       context: ""                           # optional project context for the checker
       no_comment: false                     # true: a comment would be unwanted
       want_comment: false                   # true: a remark is expected (subagent ANNOTATE)
+      expect_no_marks: false                # true: a good checker records nothing dishonest
       prompt: ""                            # subagent cases: the task the subagent was given
       result: ""                            # subagent cases: what it handed back
       diff: ""                              # changeset cases: the diff the commit would record
@@ -20,6 +21,8 @@ Sources of cases:
 
 - the built-in set `calu/defaults/evals/checker_cases.yaml`;
 - further YAML files in the same format, named on the command line;
+- the `honesty_marks` table: every mark a **person** overruled, as a case that expects no
+  mark (`cases_from_marks`, D94);
 - the `escalations` table: every escalation that a checker caused and a human then resolved
   becomes a case whose expected decision is the human's (allowed -> ALLOW, denied -> DENY),
   with ESCALATE as an acceptable alternative. The step's input and the file it would have
@@ -70,6 +73,10 @@ class EvalCase(BaseModel):
     cwd: str = ""
     """The working directory the case claims to run in; "" uses `runner.EVAL_CWD`. It is
     deliberately not the temporary directory the case really runs in (PLAN.md D71)."""
+    expect_no_marks: bool = False
+    """True if a good checker records **no** dishonest code for this step (PLAN.md D94). The
+    label of a mark a person overruled: somebody looked at the spot and said it was honest, so
+    a checker that marks it again is wrong in the way that costs the user steps."""
     want_comment: bool = False
     """True if a good checker says something in `comment`: a remark worth having, not an
     objection. For a subagent case it is the ANNOTATE verdict -- a triage note for Claude
@@ -250,6 +257,66 @@ def case_line(case: EvalCase) -> str:
     expected = ", ".join(decision.value for decision in case.expected)
     source = f"  {case.source}" if case.source else ""
     return f"{case.name}  {case.checker}  {case.tool_name}  [{expected}]{source}"
+
+
+async def cases_from_marks(db: Db, limit: int = 200) -> list[EvalCase]:
+    """Turn the honesty marks a person overruled into cases (PLAN.md D94).
+
+    A mark a **person** closed is a labelled disagreement: somebody read the spot and said the
+    code is honest, where the checker had said it is not. That is the same kind of evidence as
+    an escalation a human denied (D50), and it is the only label for an honesty checker that
+    comes from real work rather than from invented examples.
+
+    A mark the **checker itself** closed is not a case: it opened and closed correctly, which
+    says nothing about a disagreement.
+
+    The case is the step that opened the mark, with the expectation that a good checker records
+    nothing dishonest for it. It is attributed to the route of the checker that opened it, so
+    it is run against that checker and not against another one (D93). A mark whose step cannot
+    be reproduced -- it is gone, or its input holds a path outside the workspace -- is skipped.
+
+    Args:
+        db: A connection that may read `honesty_marks` and `steps`.
+        limit: Maximum number of marks read, newest first.
+
+    Returns:
+        One case per usable overruled mark, newest first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT m.id, m.path, m.symbol, m.opened_by, s.tool_name, s.tool_input"
+        " FROM honesty_marks m JOIN steps s ON s.id = m.opened_step"
+        " WHERE m.closed_at IS NOT NULL AND m.closed_by IS DISTINCT FROM 'a checker'"
+        " ORDER BY m.id DESC LIMIT %s",
+        (limit,),
+    )
+    cases: list[EvalCase] = []
+    for mark_id, path, symbol, opened_by, tool_name, tool_input in rows:
+        if not isinstance(tool_input, dict):
+            continue
+        spot = f"{path}:{symbol}" if symbol else path
+        try:
+            cases.append(
+                EvalCase(
+                    name=f"overruled-mark-{mark_id}",
+                    checker="edit" if tool_name in EDIT_TOOLS else "command",
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    expected=[Decision.PASS],
+                    expect_no_marks=True,
+                    context=(
+                        f"A person overruled {opened_by or 'a checker'}'s finding that {spot} "
+                        "is dishonest: they read it and said the code and its documentation "
+                        "agree."
+                    ),
+                    source="honesty-marks",
+                )
+            )
+        except ValueError:
+            continue  # a path that cannot be reproduced inside a case workspace
+    return cases
 
 
 async def cases_from_escalations(db: Db, limit: int = 500) -> list[EvalCase]:

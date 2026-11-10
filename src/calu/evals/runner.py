@@ -213,6 +213,21 @@ class CaseResult:
         return "ERROR" if self.decision is None else self.decision.decision.value
 
     @property
+    def unwanted_mark(self) -> bool:
+        """Whether the checker recorded dishonest code where the case says there is none.
+
+        Returns:
+            True for a non-empty `marks_dirty` on an `expect_no_marks` case (PLAN.md D94). An
+            open mark refuses every command that would run that code, so a wrong mark is not a
+            matter of taste: it stops work until somebody overrules it.
+        """
+        return (
+            self.case.expect_no_marks
+            and self.decision is not None
+            and bool(self.decision.marks_dirty)
+        )
+
+    @property
     def missing_comment(self) -> bool:
         """Whether the checker said nothing although the case expects a remark.
 
@@ -289,6 +304,7 @@ class Report:
             "escalation_share": sum(r.actual == "ESCALATE" for r in self.results) / n,
             "unwanted_comments": sum(r.unwanted_comment for r in self.results),
             "missing_comments": sum(r.missing_comment for r in self.results),
+            "unwanted_marks": sum(r.unwanted_mark for r in self.results),
             # What the run cost: `calu evals` is the only command that spends tokens on
             # purpose, and a case set times `--repeat` is a bill worth seeing (PLAN.md D66).
             "input_tokens": sum(r.input_tokens for r in self.results),
@@ -327,6 +343,7 @@ class Report:
                 f"escalation share {s['escalation_share']:.0%}, errors {s['errors']}, "
                 f"unwanted comments {s['unwanted_comments']}"
                 + (f", missing comments {s['missing_comments']}" if s["missing_comments"] else "")
+                + (f", unwanted marks {s['unwanted_marks']}" if s["unwanted_marks"] else "")
             )
             if s["input_tokens"]:
                 share = s["cache_read_tokens"] / s["input_tokens"]
@@ -360,6 +377,13 @@ class Report:
                 assert r.decision is not None
                 lines.append(
                     f"  [unwanted comment] {r.case.name} ({r.case.source}): {r.decision.comment}"
+                )
+            elif r.unwanted_mark:
+                assert r.decision is not None
+                spots = ", ".join(mark.label() for mark in r.decision.marks_dirty)
+                lines.append(
+                    f"  [unwanted mark] {r.case.name} ({r.case.source}): recorded {spots} as "
+                    "dishonest, which a person had already said it is not"
                 )
             elif r.missing_comment:
                 lines.append(
