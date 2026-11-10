@@ -55,9 +55,11 @@ async def test_an_operator_can_work_through_a_session_in_the_browser(db_url: str
             shown = await page.inner_text(".token")
             assert "shown once" in shown
             token = shown.split("shown once:")[1].split()[0]
-            assert f"calu attach ws://127.0.0.1:8765 --token {token}" in await page.inner_text(
-                "main"
-            )
+            shown_main = await page.inner_text("main")
+            # `--token=`, not `--token `: a token may start with a dash (D102).
+            assert f"calu attach ws://127.0.0.1:8765 --token={token}" in shown_main
+            # And the form for a client on that machine, which needs neither (D105).
+            assert "calu attach\n" in shown_main or shown_main.endswith("calu attach")
 
             # The escalation is answered from the session page, and the page comes back without it.
             await page.fill("input[name=note]", "not today")

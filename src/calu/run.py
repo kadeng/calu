@@ -585,10 +585,13 @@ async def _listen(
                 print("calu: the protocol server did not start", flush=True)
                 return
             print(f"[clients] {server.address}", flush=True)
+            # The short form first, because it is the one a user here will use (D105); the
+            # explicit one is for a client on another machine and needs no database. Written
+            # `--token=` and not `--token `, so that a token from before D102, which may start
+            # with a dash, is not read as an option.
+            print("[clients] attach from this directory with: calu attach", flush=True)
             print(
-                # `--token=` and not `--token `: a token from before D102 may start with a
-                # dash, which an argument parser would read as an option.
-                f"[clients] attach with: calu attach {server.address} --token={token}",
+                f"[clients] from another machine: calu attach {server.address} --token={token}",
                 flush=True,
             )
             if store.session_id is not None:

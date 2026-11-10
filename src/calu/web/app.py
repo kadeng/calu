@@ -1072,15 +1072,21 @@ def _connect(row: herd.SessionRow, token: str) -> list[tuple[str, str]]:
         token: A freshly minted token, or "" if none was minted in this request.
 
     Returns:
-        (label, command) pairs: a terminal client, an ACP editor, and the herd commands that
-        need no token. A placeholder stands in for the token until one is minted.
+        (label, command) pairs: the two clients as they are started **on** the session's own
+        machine, where they need neither the address nor a token (D105), the same two for a
+        client elsewhere, and the herd commands that need no token at all. A placeholder stands
+        in for the token until one is minted.
     """
     address = row.address or "ws://<the session printed its address>"
     shown = token or "<mint a token above>"
     commands = [
-        # `--token=` so that a token from before D102, which may start with a dash, works too.
-        ("Terminal client", f"calu attach {address} --token={shown}"),
-        ("ACP editor (Zed, JetBrains Air, Neovim, Goose)", f"calu acp {address} --token={shown}"),
+        # On that machine neither the address nor a token is needed (D105); the explicit forms
+        # below are for a client elsewhere, through a tunnel. `--token=` and not `--token `,
+        # so that a token from before D102, which may start with a dash, works too.
+        (f"Terminal client, in {row.directory} on {row.hostname}", "calu attach"),
+        ("ACP editor there (Zed, JetBrains Air, Neovim, Goose)", "calu acp"),
+        ("Terminal client from elsewhere", f"calu attach {address} --token={shown}"),
+        ("ACP editor from elsewhere", f"calu acp {address} --token={shown}"),
         ("Escalations of this session", f"calu escalations {row.id}"),
     ]
     if row.claude_session_id:

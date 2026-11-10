@@ -27,7 +27,23 @@ The pause matters: Claude cannot retry, rephrase or probe the system while it wa
 denial cannot be worked around. You answer from any attached client or from the database
 itself, which does not require access to the machine the session runs on.
 
-### The problem it solves
+### Which problem does it solve?
+
+Even the best model available today needs constant supervision to stay on track. Steering a car
+is the same: you make small corrections all the time, and you do not notice making them. Stop
+for twenty seconds and you are not slightly off the lane, you are somewhere else entirely. An
+agent that runs for an hour without a correction does the same thing — it keeps working, it
+keeps sounding reasonable, and it arrives somewhere you did not want to go, by a route that cost
+many times what the trip should have cost. This is not a theoretical worry about future systems:
+it is what long-running coding agents do today when nobody watches them often enough.
+
+The correction itself is usually tiny — "not in that file", "you are reimplementing something
+that exists", "that name does not say what it does". It is cheap when it happens at the step
+that introduced the problem and expensive once twenty steps are built on top of it. What makes
+it hard is not knowing what to say but being there to say it, every few steps, for an hour.
+**calu makes those micro-corrections happen automatically**: checker agents watch every step and
+pull Claude back on your behalf, and they stop and ask you only where a human really has to
+decide.
 
 Claude Code already asks you before it does something risky, and its auto mode can make that
 decision on its own. Other harnesses work the same way. calu replaces none of it: it keeps that
