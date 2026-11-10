@@ -603,3 +603,43 @@ async def test_a_second_resume_keeps_the_summary_and_the_turns_between(db_url: s
         assert [t.index for t in turns] == [5], "a folded turn came back verbatim as well"
     finally:
         await conn.close()
+
+
+async def test_a_replay_covers_the_conversation_but_keeps_one_session_of_steps(
+    db_url: str,
+) -> None:
+    """D65: `session/load` must replay the whole conversation, which a resume splits.
+
+    The steps deliberately stay those of the session being loaded: a step's `seq` starts again
+    at 1 in every session, and `seq` is how a client identifies a step, so merging them would
+    hand it two different steps under one number.
+    """
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-8")
+        for i in (1, 2):
+            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+        first_step = await store.add_step(
+            StepRow(seq=1, tool_name="Bash", tool_input={"command": "first"})
+        )
+        await store.decide_step(first_step, StepDecision(decision="allow", reason="r"))
+        await store.save_summary("covers 1", 1)
+        await store.mark_folded(1)
+
+        resumed = DatabaseSessionStore(Db(conn))
+        await resumed.start(IDENTITY)
+        await resumed.set_claude_session("claude-8")
+        await resumed.save_turn(TurnRecord(index=3, user_inputs=["turn 3"]))
+        await resumed.add_step(StepRow(seq=1, tool_name="Bash", tool_input={"command": "again"}))
+
+        history = await resumed.load_history("claude-8")
+        # The replay is for a person, so it shows the folded turn as well, and the summary of
+        # the fold that the other session wrote.
+        assert [t.index for t in history.turns] == [1, 2, 3]
+        assert history.chat_summary == "covers 1"
+        # One step per seq, from the session that is being loaded.
+        assert [s.tool_input["command"] for s in history.steps] == ["again"]
+        assert [s.seq for s in history.steps] == [1]
+    finally:
+        await conn.close()

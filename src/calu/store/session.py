@@ -1021,24 +1021,74 @@ class DatabaseSessionStore:
             others = [row[0] for row in await cur.fetchall()]
             if not others:
                 return [], ""
-            cur = await conn.execute(
-                b"SELECT summary, covered_turns FROM chat_summaries"
-                b" WHERE session_id = ANY(%s) ORDER BY covered_turns DESC LIMIT 1",
-                (others,),
-            )
-            row = await cur.fetchone()
-            summary, covered = (row[0], row[1]) if row else ("", 0)
-            cur = await conn.execute(
-                b"SELECT DISTINCT ON (t.number)"
-                b" t.number, t.user_inputs, t.steps, t.answer, t.narrated_answer, t.narrated,"
-                b" t.started_at, t.ended_at"
-                b" FROM turns t JOIN sessions s ON s.id = t.session_id"
-                b" WHERE t.session_id = ANY(%s) AND NOT t.folded AND t.number > %s"
-                b" ORDER BY t.number, s.started_at DESC",
-                (others, covered),
-            )
-            turns = [turn_record(row) for row in await cur.fetchall()]
+            summary, covered = await self._conversation_summary(conn, others)
+            turns = await self._conversation_turns(conn, others, above=covered)
         return turns, summary
+
+    @staticmethod
+    async def _conversation_summary(
+        conn: psycopg.AsyncConnection, sessions: list[Any]
+    ) -> tuple[str, int]:
+        """Read the newest chat summary of a conversation and how far it reaches.
+
+        The newest fold is the one with the highest `covered_turns`, whichever session of the
+        conversation performed it (PLAN.md D65): a resumed session writes a summary row only
+        when it folds, so the row may belong to any of them.
+
+        Args:
+            conn: The connection to use (the caller holds the lock).
+            sessions: Ids of the conversation's sessions.
+
+        Returns:
+            The summary text and the number of the newest turn it covers; `("", 0)` when
+            nothing was folded yet.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        cur = await conn.execute(
+            b"SELECT summary, covered_turns FROM chat_summaries"
+            b" WHERE session_id = ANY(%s) ORDER BY covered_turns DESC LIMIT 1",
+            (sessions,),
+        )
+        row = await cur.fetchone()
+        return (row[0], row[1]) if row else ("", 0)
+
+    @staticmethod
+    async def _conversation_turns(
+        conn: psycopg.AsyncConnection,
+        sessions: list[Any],
+        above: int | None = None,
+    ) -> list[TurnRecord]:
+        """Read the turns of a conversation, one row per turn number.
+
+        Turn numbers continue across a resume while the rows are spread over the sessions that
+        recorded them, so a turn is looked up in all of them. Where two rows carry the same
+        number -- a fork continues from the numbers it inherited -- the newest session wins.
+
+        Args:
+            conn: The connection to use (the caller holds the lock).
+            sessions: Ids of the conversation's sessions.
+            above: Return only unfolded turns above this number, for the checkers' context,
+                where everything up to it is in the summary instead. None returns every turn,
+                for a replay to a person (`load_history`).
+
+        Returns:
+            The turns, oldest first.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        condition = b"" if above is None else b" AND NOT t.folded AND t.number > %s"
+        cur = await conn.execute(
+            b"SELECT DISTINCT ON (t.number)"
+            b" t.number, t.user_inputs, t.steps, t.answer, t.narrated_answer, t.narrated,"
+            b" t.started_at, t.ended_at"
+            b" FROM turns t JOIN sessions s ON s.id = t.session_id"
+            b" WHERE t.session_id = ANY(%s)" + condition + b" ORDER BY t.number, s.started_at DESC",
+            (sessions,) if above is None else (sessions, above),
+        )
+        return [turn_record(row) for row in await cur.fetchall()]
 
     async def recent_sessions(self, directory: str, limit: int = 20) -> list[SessionSummary]:
         """List the stored sessions of one directory (see `SessionStore.recent_sessions`).
@@ -1107,10 +1157,18 @@ class DatabaseSessionStore:
     async def load_history(
         self, claude_session_id: str | None = None, limit: int = 500
     ) -> SessionHistoryResult:
-        """Read the recorded conversation of a session (see `SessionStore.load_history`).
+        """Read the recorded conversation for a replay (see `SessionStore.load_history`).
+
+        The turns and the chat summary are those of the whole conversation, the steps are those
+        of its newest session (PLAN.md D65). The reason for the split is that turn numbers
+        continue across a resume while a step's `seq` starts again at 1 in every session, so
+        merging steps would hand a client two different steps under one number -- and `seq` is
+        what a client identifies a step by (`events.subscribe {after_seq}`). A replay therefore
+        shows the conversation as a person wrote it, with the tool calls of the run that is
+        being loaded.
 
         Args:
-            claude_session_id: Which session; None is this one.
+            claude_session_id: Which conversation; None is this session's own.
             limit: Maximum number of steps returned.
 
         Returns:
@@ -1137,12 +1195,15 @@ class DatabaseSessionStore:
             )
             row = await cur.fetchone()
             claude_id = row[0] if row else None
-            cur = await conn.execute(
-                b"SELECT number, user_inputs, steps, answer, narrated_answer, narrated,"
-                b" started_at, ended_at FROM turns WHERE session_id = %s::uuid ORDER BY number",
-                (session_id,),
-            )
-            turns = [turn_record(row) for row in await cur.fetchall()]
+            # Every session of the conversation, so that a resume does not cut the replay
+            # short: the turns before it were recorded by another session row (D65).
+            conversation = [session_id]
+            if claude_id is not None:
+                cur = await conn.execute(
+                    b"SELECT id FROM calu_conversation_sessions(%s)", (claude_id,)
+                )
+                conversation = [row[0] for row in await cur.fetchall()] or conversation
+            turns = await self._conversation_turns(conn, conversation)
             cur = await conn.execute(
                 b"SELECT seq, turn, agent_id, tool_use_id, tool_name, tool_input, decision,"
                 b" reason, summary, result_summary, created_at FROM steps"
@@ -1165,14 +1226,11 @@ class DatabaseSessionStore:
                 )
                 for row in reversed(await cur.fetchall())
             ]
-            cur = await conn.execute(
-                b"SELECT summary FROM chat_summaries WHERE session_id = %s::uuid", (session_id,)
-            )
-            row = await cur.fetchone()
+            summary, _ = await self._conversation_summary(conn, conversation)
         return SessionHistoryResult(
             calu_session_id=session_id,
             claude_session_id=claude_id,
-            chat_summary=row[0] if row else "",
+            chat_summary=summary,
             turns=turns,
             steps=steps,
         )
