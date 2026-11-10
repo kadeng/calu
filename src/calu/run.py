@@ -43,6 +43,7 @@ from calu.db import CONFIG_CHANGED, ESCALATION_RESOLVED, Db, Dirty, Notifier, co
 from calu.protocol.messages import (
     AssistantText,
     AssistantThinking,
+    AutoEscalateChanged,
     ChatSendParams,
     CheckResult,
     EscalationRequest,
@@ -115,8 +116,12 @@ def format_event(event: Event) -> str | None:
         event: The event.
 
     Returns:
-        The line, or None for events that the terminal does not show (token deltas, file
-        links, subagent lists).
+        The line, or None for events the terminal deliberately does not show: the token
+        deltas (`assistant.delta`, whose completed block follows), the files and the diff of a
+        step (`tool.files`, `edit.diff`), the message queue (`chat.queue`) and the subagent
+        list (`agents.update`) -- a graphical client shows those better.
+        `tests/unit/test_event_coverage.py` keeps the list honest: a new event is either
+        shown here or named there.
     """
     match event:
         case SessionState():
@@ -155,6 +160,10 @@ def format_event(event: Event) -> str | None:
             return f"*** escalation {event.escalation_id}: {event.decision}"
         case TurnResult():
             return f"[turn ended: {event.subtype}]"
+        case AutoEscalateChanged():
+            on = [name for name, held in event.settings.model_dump().items() if held]
+            waits = ", ".join(on) if on else "nothing beyond what the checkers escalate"
+            return f"*** what waits for a human: {waits}"
         case Log():
             return f"[{event.level}] {event.message}"
         case _:
