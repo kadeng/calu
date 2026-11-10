@@ -63,6 +63,17 @@ intent in the note, because a rule row needs the admin credential, which a sessi
 not have (§6.2). The note is part of the audit trail, so the choice is not lost.
 """
 
+ALWAYS_HINT = (
+    "[calu allowed this step only. Your choice to remember it is recorded with the escalation, "
+    "but a standing rule is a database row that needs the admin credential, which an editor "
+    "does not have: add it with `calu rules add command-allow '<pattern>'`.]"
+)
+"""What the editor is told after an "always" choice, because calu answered it like "once".
+
+A person who presses a button labelled "remember" and is asked the same thing again next time
+would reasonably think calu is broken. Saying it at the moment of the choice costs one line.
+"""
+
 
 class CaluSession(Protocol):
     """The part of `calu.protocol.client.ProtocolClient` that the adapter uses."""
@@ -736,6 +747,12 @@ class Adapter:
             )
         except Exception as error:  # the session refuses a decided or cancelled escalation
             log.warning("calu refused the decision for %s: %s", escalation_id, error)
+            return
+        if note:
+            # "Always" was answered like "once" (see `DECISIONS`). The person clicked a button
+            # that says "remember", so they are told what really happened, in the editor, at
+            # the moment they chose -- otherwise they find out by being asked again.
+            await self._update(acp.message_chunk("agent_message_chunk", f"{ALWAYS_HINT}\n", None))
 
     async def _ask_client(self, call_id: str, content: list[dict[str, Any]]) -> Any:
         """Send the `session/request_permission` request to the editor.

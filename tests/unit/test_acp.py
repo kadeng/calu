@@ -948,3 +948,59 @@ async def test_a_mode_set_in_the_editor_reaches_a_real_session_and_comes_back(
                     )
                     assert mode_update["currentModeId"] == "edits"
                     tasks.cancel_scope.cancel()
+
+
+async def test_an_always_choice_is_answered_once_and_the_editor_is_told(tmp_path: Path) -> None:
+    """A button labelled "remember" that silently forgets would look like a bug.
+
+    calu answers "always" like "once", because a standing rule is a database row and a session
+    client has no admin credential (§6.2). The person who pressed the button learns that at
+    once, in the editor, instead of by being asked again.
+    """
+    calu = FakeCalu({"state.get": {**IDLE, "workspace": str(WORKSPACE)}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        await h.adapter.on_event(
+            "escalation.request",
+            {
+                "escalation_id": "7",
+                "reason": "deletes a directory",
+                "rendered": "$ rm -rf build",
+                "tool_use_id": "call-1",
+                "tool_name": "Bash",
+                "tool_input": {"command": "rm -rf build"},
+            },
+        )
+        question = await h.editor.expect("session/request_permission")
+        assert question["params"]["sessionId"] == session
+        # The editor is offered the four ACP options, including the two "always" ones.
+        kinds = [option["kind"] for option in question["params"]["options"]]
+        assert kinds == ["allow_once", "allow_always", "reject_once", "reject_always"]
+
+        await h.editor.send(
+            {
+                "jsonrpc": "2.0",
+                "id": question["id"],
+                "result": {"outcome": {"outcome": "selected", "optionId": "allow-always"}},
+            }
+        )
+        with anyio.fail_after(10):
+            while not h.calu.sent("escalation.decide"):
+                await anyio.sleep(0.005)
+        decided = h.calu.sent("escalation.decide")[0]
+        # Allowed once, with the intent in the note for the audit trail.
+        assert decided["decision"] == "allow"
+        assert "allow always" in decided["note"]
+
+        # And the editor is told, in its own stream, what calu did with the choice.
+        updates = await h.editor.wait_updates(1)
+        texts = [
+            update["content"]["text"]
+            for update in updates
+            if update["sessionUpdate"] == "agent_message_chunk"
+        ]
+        assert any("allowed this step only" in text for text in texts), f"not said: {texts}"
+        assert any("calu rules add" in text for text in texts)
+
+    await run_adapter(calu, body)
