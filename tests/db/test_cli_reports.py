@@ -299,6 +299,21 @@ async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_pat
         assert await admin.chat_summary(db, session_id) == (
             "## Folded\n\nThe user asked for a rewrite.\n"
         )
+
+        # Emptying it is refused, and the refusal says what to write instead (D114). The
+        # reason is not caution about typos: the text covers turns that have left the recent
+        # window, so an empty summary hides them from the checkers rather than summarizing
+        # them -- the one outcome nobody would notice.
+        os.environ["EDITOR_EXIT"] = "0"
+        os.environ["EDITOR_WRITES"] = "   \n"
+        assert await run(["summary", session_id, "--edit"]) == 1
+        refused = capsys.readouterr()
+        said = refused.out + refused.err
+        assert "may not be empty" in said and "hide them from the checkers" in said
+        assert "No turns have been folded yet." in said, "it has to say what to write instead"
+        assert await admin.chat_summary(db, session_id) == (
+            "## Folded\n\nThe user asked for a rewrite.\n"
+        ), "and the summary that was there is untouched"
     finally:
         for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_EXIT"):
             os.environ.pop(name, None)

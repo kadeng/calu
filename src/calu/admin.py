@@ -202,12 +202,18 @@ async def set_chat_summary(db: Db, session_id: str, summary: str) -> None:
         summary: The new text.
 
     Raises:
-        AdminError: If no session has that id, or the text is empty — a summary of nothing would
-            silently hide the folded turns from the checkers.
+        AdminError: If no session has that id, or the text is empty — a summary of nothing
+            would silently hide the folded turns from the checkers, which is why the message
+            says what to write instead (PLAN.md D114).
         psycopg.Error: On database errors.
     """
     if not summary.strip():
-        raise AdminError("the chat summary may not be empty")
+        raise AdminError(
+            "the chat summary may not be empty: it covers turns that are no longer in the "
+            "recent window, so an empty text would hide them from the checkers instead of "
+            "summarizing them. Replace it with what the checkers should know -- or with "
+            '"No turns have been folded yet." if the answer is nothing'
+        )
     row = await db.one(
         "INSERT INTO chat_summaries (session_id, summary, covered_turns)"
         " SELECT s.id, %s, 0 FROM sessions s WHERE s.id = %s::uuid"

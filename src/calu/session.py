@@ -731,12 +731,12 @@ class Session:
         (`calu summary --edit`, or the web interface). Called with `apply_settings` after a
         `config_changed` notification; a changed summary reaches the next check.
 
-        An **emptied** summary counts as a correction like any other. Deleting a summary that
-        is wrong is the obvious thing to do with one, and `calu summary --edit` stores the empty
-        text and prints "the session applies it at its next check" -- which was not true: this
-        method treated "" as "nothing to apply" and the checkers went on reading the old
-        summary (D114). The session falls back to `EMPTY_CHAT_SUMMARY`, the same placeholder it
-        starts with, and says that it was cleared rather than changed.
+        An empty answer from the store means "this session has no summary row", and the session
+        then holds the placeholder it started with rather than an older text: a row deleted out
+        of band must not leave the checkers reading a summary that is gone (D114). Emptying a
+        summary **through calu** is refused on purpose (`calu.admin.set_chat_summary`), because
+        the text covers turns that have left the recent window and an empty one would hide them
+        rather than summarize them.
 
         Side effects: replaces `context.summary` and emits a `log` event when it changed.
         Never raises: a failed read is logged and the summary stays as it is.

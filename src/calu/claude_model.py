@@ -126,9 +126,10 @@ def _usage_of(answer: dict[str, Any]) -> RequestUsage:
     Returns:
         The usage, with zeros for anything the CLI did not report, so that `checker_runs` holds
         the same four numbers as for an API checker. `input_tokens` is the **whole** prompt,
-        cached parts included, which is calu's convention and not the CLI's. The CLI also reports `total_cost_usd`,
-        which is **not** carried over: `RequestUsage.details` takes integers, and calu's reports
-        price tokens themselves rather than trusting a per-call figure.
+        cached parts included, which is calu's convention and not the CLI's. The CLI also
+        reports `total_cost_usd`, which is **not** carried over: `RequestUsage.details` takes
+        integers, and calu's reports price tokens themselves rather than trusting a per-call
+        figure.
     """
     usage = answer.get("usage") or {}
     cache_read = int(usage.get("cache_read_input_tokens") or 0)

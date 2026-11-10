@@ -54,7 +54,7 @@ async def test_calu_setup_fills_an_empty_database_and_stores_the_session_credent
         # `--checker-model` reached every checker row, which is what the flag is for.
         assert settings.config.command_checker.model == "claude:haiku"
         assert settings.config.edit_checker.model == "claude:haiku"
-        assert [row.name for row in await herd.list_tokens(db)] == [], "no clients yet"
+        assert [row.label for row in await herd.list_tokens(db)] == [], "no clients yet"
         assert settings.rules, "the default rule lists are in"
         assert "command" in settings.checkers and "edit" in settings.checkers
     finally:

@@ -287,13 +287,12 @@ def test_the_guide_names_every_tool_a_checker_has(tmp_path: Path) -> None:
     command or send your source anywhere" -- so it must not be able to go stale quietly. Adding
     a tool to `calu.checkers.tools` fails this test until the guide says so.
     """
-    from calu.checkers.tools import CodeTools
-    from calu.context.turns import StepRecord
+    from calu.checkers.tools import CodeTools, StepTime
 
     guide = (Path(__file__).resolve().parents[2] / "CALU_GUIDE.md").read_text(encoding="utf-8")
 
     plain = CodeTools(tmp_path).toolset()
-    with_times = CodeTools(tmp_path, times=lambda: [StepRecord(tool_name="Bash")]).toolset()
+    with_times = CodeTools(tmp_path, times=lambda: [StepTime(seq=1, tool_name="Bash")]).toolset()
     read_only = {"read_file", "find_files", "grep_files"}
     extra = {"step_times", "changed_files"}
 
