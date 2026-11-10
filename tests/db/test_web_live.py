@@ -219,3 +219,49 @@ async def test_the_live_view_of_a_gone_session_says_the_process_is_gone(
             assert "cancel" in second["message"]
     finally:
         await conn.close()
+
+
+async def test_a_revoked_live_token_is_replaced_instead_of_reported_as_unreachable(
+    db_url: str, tmp_path: Path
+) -> None:
+    """The live view caches one token per session; a revoked one must be minted again.
+
+    `live_tokens` promised exactly this ("the next live view then mints a fresh one") and the
+    code did not do it: the cached token was kept for the life of the server, and the refusal
+    came back as "cannot reach <address>", which sends the reader after a networking problem
+    that is not there. The token can be revoked by hand (D30) or by the session ending (D108).
+    """
+    from calu import herd
+
+    turns = [[{"text": "Hello."}]]
+    async with running(db_url, tmp_path, turns) as (base, session_id, _session):
+        url = base.replace("http://", "ws://") + f"/ws/sessions/{session_id}"
+        async with ws_connect(url) as socket:
+            assert json.loads(await socket.recv())["type"] == "snapshot"
+
+        watcher = await connect(db_url)
+        try:
+            db = Db(watcher)
+            live = [
+                row
+                for row in await herd.list_tokens(db, session_id)
+                if row.label == "calu web (live view)"
+            ]
+            assert len(live) == 1, "one token for the server, not one per browser"
+            assert await herd.revoke_token(db, live[0].id) is True
+
+            # Second browser, same web server: the cached token is now refused.
+            async with ws_connect(url) as socket:
+                message = json.loads(await socket.recv())
+                assert message["type"] == "snapshot", message
+                assert message["snapshot"]["workspace"] == str(tmp_path)
+
+            after = [
+                row
+                for row in await herd.list_tokens(db, session_id)
+                if row.label == "calu web (live view)"
+            ]
+            assert len(after) == 2, "a fresh token was minted"
+            assert sorted(row.revoked for row in after) == [False, True]
+        finally:
+            await watcher.close()

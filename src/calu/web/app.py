@@ -247,7 +247,8 @@ class _State:
         in a cancelled teardown path, which is exactly what D19 says not to do (a statement
         cancelled halfway leaves the connection unusable for everything else). The token is
         labelled "calu web (live view)", so `calu token list` shows it and an operator can revoke
-        it; the next live view then mints a fresh one.
+        it. A refusal is not an error for the reader: `live_socket` then drops the cached
+        token, mints a fresh one and connects again (D110).
         """
 
 
@@ -506,8 +507,9 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
 
     The server mints a client token for the session (D30), connects to the address the session
     recorded (D29), forwards every event to the browser and every command of the browser to the
-    session. The token is reused for the lifetime of this server and is revocable by hand
-    (`live_tokens`).
+    session. The token is reused for the lifetime of this server (`live_tokens`); if the session
+    refuses it, because it was revoked meanwhile, the cached token is dropped, a fresh one is
+    minted and the connection is tried once more (D110).
 
     Only the requests of `LIVE_METHODS` are forwarded. `shutdown` is not among them: a browser
     should not be able to end the calu process by accident.
@@ -536,30 +538,60 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
         )
         await websocket.close()
         return
-    token = state.live_tokens.get(session_id)
-    if token is None:
-        _id, token = await herd.mint_token(state.db, session_id, "calu web (live view)")
-        state.live_tokens[session_id] = token
-    try:
-        await _relay(websocket, row, token)
-    except (OSError, RequestFailed, ConnectionError) as exc:
-        if row.stale:
-            # The heartbeat says the process is gone (D56), so this is not a networking
-            # problem and sending the reader to look for one would waste their time.
-            message = (
-                f"this session stopped saying it is running {row.silent_for_s / 60:.0f} minutes "
-                f"ago, so there is nothing live to reach ({exc}). Its history is still here, "
-                "and an escalation of it can be cleared with `calu resolve <id> cancel`."
+    for last_attempt in (False, True):
+        token = state.live_tokens.get(session_id)
+        if token is None:
+            _id, token = await herd.mint_token(state.db, session_id, "calu web (live view)")
+            state.live_tokens[session_id] = token
+        try:
+            await _relay(websocket, row, token)
+        except RequestFailed as exc:
+            # The token was refused, which is not a networking problem: it was revoked since
+            # this server minted it -- by hand (D30) or because the session it belonged to
+            # ended (D108). The cached one is dropped and a fresh one minted, which is what
+            # `live_tokens` promised; only a second refusal is reported.
+            state.live_tokens.pop(session_id, None)
+            if not last_attempt:
+                continue
+            await websocket.send_json(
+                {
+                    "type": "closed",
+                    "message": (
+                        f"the session refused this server's client token ({exc}). A fresh one "
+                        "was minted and refused as well, so the session is not accepting "
+                        "clients; `calu token list` shows its tokens."
+                    ),
+                }
             )
-        else:
-            message = (
-                f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}; "
-                "run `calu web` on that host, or forward the port with an SSH tunnel."
-            )
-        await websocket.send_json({"type": "closed", "message": message})
-    finally:
-        with suppress(RuntimeError):
-            await websocket.close()
+        except (OSError, ConnectionError) as exc:
+            await websocket.send_json({"type": "closed", "message": _unreachable_message(row, exc)})
+        break
+    with suppress(RuntimeError):
+        await websocket.close()
+
+
+def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
+    """Explain why a session's own address could not be reached.
+
+    Args:
+        row: The session.
+        exc: What the connection attempt raised.
+
+    Returns:
+        The line for the browser.
+    """
+    if row.stale:
+        # The heartbeat says the process is gone (D56), so this is not a networking problem
+        # and sending the reader to look for one would waste their time.
+        return (
+            f"this session stopped saying it is running {row.silent_for_s / 60:.0f} minutes "
+            f"ago, so there is nothing live to reach ({exc}). Its history is still here, "
+            "and an escalation of it can be cleared with `calu resolve <id> cancel`."
+        )
+    return (
+        f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}; "
+        "run `calu web` on that host, or forward the port with an SSH tunnel."
+    )
 
 
 async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None:
