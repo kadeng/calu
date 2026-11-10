@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Any
 
 from calu.context.turns import TurnRecord
-from calu.db import Db
+from calu.db import HONESTY_CHANGED, Db
 from calu.honesty import HonestyMark
 from calu.store.session import turn_record
 from calu.tokens import new_token, token_hash
@@ -1260,11 +1260,11 @@ async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> H
     )
     if row is None:
         return None
-    # The same notification the configuration uses: a running session re-reads the register
-    # and stops refusing the code this mark covered (D84). Without it the override would only
-    # reach the next session.
+    # On the register's own channel: a running session re-reads the register and stops
+    # refusing the code this mark covered (D84, D92). Without it the override would only reach
+    # the next session.
     await db.execute(
-        "SELECT pg_notify('config_changed', json_build_object('table', 'honesty_marks')::text)"
+        "SELECT pg_notify(%s, json_build_object('session_id', '')::text)", (HONESTY_CHANGED,)
     )
     return HonestyMark(
         id=row[0],

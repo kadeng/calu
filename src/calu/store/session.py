@@ -39,7 +39,7 @@ import psycopg
 from calu.checkers import CodeMark
 from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
-from calu.db import Db
+from calu.db import HONESTY_CHANGED, Db
 from calu.honesty import HonestyMark
 from calu.protocol.messages import (
     AgentInfo,
@@ -761,6 +761,14 @@ class DatabaseSessionStore:
                 (session, step_id, entry.path, entry.symbol, session),
             )
             closed += 1 if row is not None else 0
+        if opened or closed:
+            # The register is shared by every session of the project (D82), so the others have
+            # to hear about it -- on its own channel, because a mark is written on an edit and
+            # the configuration channel would make every session reload everything (D92).
+            await self._db.execute(
+                "SELECT pg_notify(%s, json_build_object('session_id', %s::text)::text)",
+                (HONESTY_CHANGED, session),
+            )
         return opened, closed
 
     async def note_setting_change(

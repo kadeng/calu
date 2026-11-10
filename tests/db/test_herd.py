@@ -1,10 +1,11 @@
 """Herd management on the database alone: list sessions, list and resolve escalations."""
 
+import anyio
 import pytest
 
 from calu import herd
 from calu.checkers import CodeMark, Decision
-from calu.db import Db, connect
+from calu.db import HONESTY_CHANGED, Db, connect, listen
 from calu.evals import cases_from_escalations
 from calu.setup import setup
 from calu.store import CheckerRun, DatabaseSessionStore, SessionIdentity, StepDecision, StepRow
@@ -689,4 +690,89 @@ async def test_the_stats_say_what_a_checker_s_marks_came_to(db_url: str) -> None
         assert command.marks_opened == 0
         assert "marks:" not in command.line()
     finally:
+        await owner.close()
+
+
+async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: str) -> None:
+    """D92: the register is shared by a project, so a mark has to reach the other sessions.
+
+    Without the notification a second session would run code the first has just recorded as
+    dishonest, because each session keeps the register in memory. The channel is the register's
+    own, not the configuration's: a mark is written on every edit, and announcing marks on
+    `config_changed` would make every session of the database reload all of its settings that
+    often.
+    """
+    owner = await connect(db_url)
+    listener = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        await listen(listener, [HONESTY_CHANGED])
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        step = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/a.py"})
+        )
+
+        async def heard() -> list[tuple[str, str]]:
+            """Collect the notifications that arrived, with their payloads."""
+            found: list[tuple[str, str]] = []
+            with anyio.move_on_after(5):
+                async for note in listener.notifies():
+                    found.append((note.channel, note.payload))
+                    break
+            return found
+
+        # Opening a mark announces itself, and the payload names the session that wrote it so
+        # that this very session can skip its own.
+        async with anyio.create_task_group() as tg:
+            notes: list[list[tuple[str, str]]] = []
+
+            async def collect() -> None:
+                """Wait for one notification."""
+                notes.append(await heard())
+
+            tg.start_soon(collect)
+            await anyio.sleep(0.2)
+            await store.apply_honesty_marks(
+                [CodeMark(path="src/a.py", reason="the docstring lies")], [], step, None, "honesty"
+            )
+        (arrived,) = notes
+        assert arrived, "opening a mark announced nothing"
+        channel, payload = arrived[0]
+        assert channel == HONESTY_CHANGED
+        assert session_id in payload, "the payload has to name the writer, to skip its own"
+
+        # Clearing one announces itself on the same channel, with no session of its own.
+        (mark,) = await herd.honesty_marks(db)
+        async with anyio.create_task_group() as tg:
+            cleared: list[list[tuple[str, str]]] = []
+
+            async def collect_clear() -> None:
+                """Wait for the notification of the override."""
+                cleared.append(await heard())
+
+            tg.start_soon(collect_clear)
+            await anyio.sleep(0.2)
+            await herd.clear_honesty_mark(db, mark.id, "kai")
+        (after,) = cleared
+        assert after and after[0][0] == HONESTY_CHANGED
+
+        # A call that changes nothing stays quiet, so an edit without marks is not a broadcast.
+        async with anyio.create_task_group() as tg:
+            quiet: list[list[tuple[str, str]]] = []
+
+            async def collect_quiet() -> None:
+                """Wait, and expect nothing."""
+                with anyio.move_on_after(1):
+                    async for note in listener.notifies():
+                        quiet.append([(note.channel, note.payload)])
+                        break
+
+            tg.start_soon(collect_quiet)
+            await anyio.sleep(0.2)
+            await store.apply_honesty_marks([], [], step, None, "honesty")
+        assert quiet == [], "a call that changed nothing must not wake every session"
+    finally:
+        await listener.close()
         await owner.close()

@@ -1,11 +1,18 @@
 """Notification channels of the calu schema (PLAN.md §7).
 
-PostgreSQL announces two kinds of change with `pg_notify`:
+PostgreSQL announces three kinds of change with `pg_notify`:
 
 | Channel | Sent when | Payload |
 |---|---|---|
 | `config_changed` | a row of `config`, `rules` or `checker_types` changed | `{"table": "<name>"}` |
 | `escalation_resolved` | an operator resolved an escalation | `{"id", "session_id", "state"}` |
+| `honesty_changed` | a mark of the honesty register was opened or closed | `{"session_id"}` |
+
+The register has a channel of its own rather than using `config_changed`, because a mark is
+written on an **edit** and a configuration change is rare: announcing marks on the
+configuration channel would make every session of the database reload all of its settings on
+every edit of every session (PLAN.md D92). The payload names the session that wrote it, so a
+session can skip its own.
 
 A connection that waits for notifications cannot run queries at the same time, so a session
 uses one connection for its queries and a second one for listening.
@@ -27,6 +34,9 @@ CONFIG_CHANGED = "config_changed"
 
 ESCALATION_RESOLVED = "escalation_resolved"
 """Channel of escalations resolved by an operator."""
+
+HONESTY_CHANGED = "honesty_changed"
+"""Channel of the honesty register: a mark was opened or closed (PLAN.md D92)."""
 
 
 async def listen(conn: psycopg.AsyncConnection, channels: Iterable[str]) -> None:
