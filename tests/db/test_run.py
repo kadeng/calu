@@ -181,3 +181,52 @@ async def test_a_client_attaches_to_a_running_session(db_url: str, tmp_path: Pat
         assert await cur.fetchall() == [("stopped",)]
     finally:
         await owner.close()
+
+
+async def test_the_session_credential_is_wiped_before_claude_starts(
+    db_url: str, tmp_path: Path
+) -> None:
+    """REQUIREMENTS 16: the credential that reaches the database is gone before Claude runs.
+
+    `run_session` wipes it after it has opened its two connections, which no test exercised --
+    the other tests pass the connection string as a `str`, where there is nothing to wipe. Here
+    it arrives as the `bytearray` that `calu run` really hands over, and the runner checks the
+    buffer at the moment it is asked to start Claude: that is the instant the guarantee is
+    about.
+    """
+    session_url = await prepare(db_url, tmp_path)
+    credential = bytearray(session_url.encode())
+    seen: list[bytes] = []
+
+    def runner_factory(workspace: Path, _config: object, _hidden: object) -> FakeRunner:
+        """Record the credential's bytes when the runner is built.
+
+        Args:
+            workspace: The session's workspace.
+            _config: The Claude configuration (unused).
+            _hidden: The hidden environment names (unused).
+
+        Returns:
+            The fake runner.
+        """
+        seen.append(bytes(credential))
+        return FakeRunner(CHAT_SCRIPT, workspace)
+
+    code = await run_session(
+        credential,
+        RunOptions(workspace=tmp_path, prompt="have a look", interactive=False),
+        runner_factory=runner_factory,
+        checker_models=fake_models(),
+    )
+    assert code == 0
+    assert seen, "the runner was never built, so the test proves nothing"
+    assert seen[0] == bytes(len(session_url)), "the credential was still readable"
+    # And it stays wiped afterwards, so nothing in the process holds it.
+    assert bytes(credential) == bytes(len(session_url))
+    # The session really ran with that credential: its row is in the database.
+    owner = await connect(db_url)
+    try:
+        cur = await owner.execute("SELECT count(*) FROM sessions")
+        assert (await cur.fetchone()) == (1,)
+    finally:
+        await owner.close()
