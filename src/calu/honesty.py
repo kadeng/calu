@@ -54,6 +54,32 @@ class HonestyMark:
     the mark can be reproduced (D95). Empty for a mark on a step that is not an edit."""
     closed_at: datetime | None = None
     closed_by: str | None = None
+    workspace: str | None = None
+    """Project directory of the session that opened the mark, or None for a row whose session
+    is gone. `judged_here` uses it: whether a marked file still exists can only be answered
+    where that project is (PLAN.md D126)."""
+    hostname: str | None = None
+    """Host of that session, for the same reason: the same path on another machine is another
+    file."""
+
+    def judged_here(self, workspace: Path, hostname: str) -> bool:
+        """Tell whether this mark's file can be looked at from here.
+
+        An operator reads the register from wherever they are, usually not from the machine the
+        session ran on. "Is the marked file still there?" is then unanswerable, and answering it
+        from the current directory says "the file is gone" about every mark of every other
+        project -- which invites clearing marks that are perfectly valid (D126).
+
+        Args:
+            workspace: The directory the command is being run in.
+            hostname: The host it is being run on.
+
+        Returns:
+            True only when this mark was opened for that directory on that host.
+        """
+        if not self.workspace or not self.hostname:
+            return False
+        return self.hostname == hostname and Path(self.workspace) == workspace
 
     @property
     def open(self) -> bool:
@@ -85,7 +111,8 @@ class HonestyMark:
           acted on.
 
         Args:
-            workspace: The project root, to look for the file; None skips that check.
+            workspace: The project root, to look for the file; None skips that check, which is
+                the right answer away from the project itself (`judged_here`).
             branch: The branch the project is on now; None skips that check.
 
         Returns:

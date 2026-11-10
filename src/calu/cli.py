@@ -1885,13 +1885,18 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
             )
         standing = sum(1 for mark in marks if mark.open)
         head = f"{standing} open mark(s)" + (f" of {len(marks)} listed" if args.all else "")
-        # The workspace and the branch of *this* machine, so that a mark whose file is gone or
-        # that was made on another branch is flagged as stale (D91). An operator running this
-        # elsewhere sees no flag rather than a wrong one, because then neither is knowable.
+        # A mark whose file is gone, or that was made on another branch, is flagged as stale
+        # (D91) -- but only for a mark of **this** project on **this** host, because nowhere
+        # else is the question answerable. Judged per mark, since one listing can hold marks of
+        # several projects (D126).
         here = Path.cwd()
+        host = socket.gethostname()
         branch = _git_branch(here)
-        lines = [f"  {mark.id}  {mark.line(here, branch)}" for mark in marks]
-        stale = sum(1 for mark in marks if mark.stale(here, branch))
+        where = [(mark, here if mark.judged_here(here, host) else None) for mark in marks]
+        lines = [
+            f"  {mark.id}  {mark.line(root, branch if root else None)}" for mark, root in where
+        ]
+        stale = sum(1 for mark, root in where if mark.stale(root, branch if root else None))
         if stale:
             lines.append(
                 f"{stale} mark(s) look stale: an open mark blocks every command that would run "

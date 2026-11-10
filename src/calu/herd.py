@@ -1208,8 +1208,10 @@ async def honesty_marks(
     """
     rows = await db.all(
         "SELECT m.id, m.path, m.symbol, m.reason, m.opened_at, m.git_branch, m.closed_at,"
-        " m.closed_by, m.opened_by, m.files"
+        " m.closed_by, m.opened_by, m.files, s.directory, h.hostname"
         " FROM honesty_marks m LEFT JOIN projects p ON p.id = m.project_id"
+        " LEFT JOIN sessions s ON s.id = m.opened_session"
+        " LEFT JOIN hosts h ON h.id = s.host_id"
         " WHERE (%s::text IS NULL OR p.name = %s)"
         "   AND (%s::bool OR m.closed_at IS NULL)"
         " ORDER BY m.closed_at IS NOT NULL, m.opened_at, m.id"
@@ -1228,6 +1230,8 @@ async def honesty_marks(
             closed_by=row[7],
             opened_by=row[8],
             files=dict(row[9] or {}),
+            workspace=row[10],
+            hostname=row[11],
         )
         for row in rows
     ]

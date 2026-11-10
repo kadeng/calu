@@ -1,5 +1,7 @@
 """Herd management on the database alone: list sessions, list and resolve escalations."""
 
+from pathlib import Path
+
 import anyio
 import pytest
 
@@ -775,6 +777,41 @@ async def test_the_register_is_announced_so_a_second_session_hears_it(db_url: st
         assert quiet == [], "a call that changed nothing must not wake every session"
     finally:
         await listener.close()
+        await owner.close()
+
+
+async def test_a_mark_says_where_it_was_made(db_url: str) -> None:
+    """D126: the register has to carry the project and the host, or staleness is guesswork.
+
+    `calu honesty list` judges whether a marked file still exists. That is only answerable in
+    the project the mark was made for, on the machine it ran on, so the row has to say which
+    those were -- it used to be judged against whatever directory the operator happened to be
+    in, which called every mark of every other project gone.
+    """
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step_id = await store.add_step(
+            StepRow(seq=1, tool_name="Write", tool_input={"file_path": "src/parser.py"})
+        )
+        await store.apply_honesty_marks(
+            [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
+            [],
+            step_id,
+            "main",
+            "honesty",
+            {},
+        )
+        (mark,) = await herd.honesty_marks(db)
+        assert mark.workspace == IDENTITY.directory
+        assert mark.hostname == IDENTITY.hostname
+        assert mark.judged_here(Path(IDENTITY.directory), IDENTITY.hostname) is True
+        assert mark.judged_here(Path("/somewhere/else"), IDENTITY.hostname) is False
+        assert mark.judged_here(Path(IDENTITY.directory), "another-host") is False
+    finally:
         await owner.close()
 
 

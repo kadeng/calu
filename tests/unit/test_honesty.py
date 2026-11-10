@@ -17,6 +17,8 @@ def mark(
     opened_by: str | None = None,
     closed_at: datetime | None = None,
     closed_by: str | None = None,
+    workspace: str | None = None,
+    hostname: str | None = None,
 ) -> HonestyMark:
     """Return a mark on `path`, open unless `closed_at` is given."""
     return HonestyMark(
@@ -29,6 +31,8 @@ def mark(
         opened_by=opened_by,
         closed_at=closed_at,
         closed_by=closed_by,
+        workspace=workspace,
+        hostname=hostname,
     )
 
 
@@ -366,3 +370,30 @@ def test_a_clean_mark_for_a_deleted_file_still_clears_it(tmp_path: Path) -> None
         must_exist=False,
     )
     assert len(outside) == 1
+
+
+def test_a_mark_is_only_judged_where_its_file_can_be_looked_at(tmp_path: Path) -> None:
+    """D126: "the file is gone" must not be said about a project nobody is standing in.
+
+    An operator reads the register from wherever they are, usually not from the machine the
+    session ran on. Judging the file against the current directory said "the file is gone"
+    about every mark of every other project -- and the report invites clearing those marks, so
+    a herd watched from a laptop would have its register emptied of perfectly valid entries.
+    """
+    (tmp_path / "src").mkdir(exist_ok=True)
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
+    mine = mark("src/parser.py", workspace=str(tmp_path), hostname="box", git_branch="main")
+    assert mine.judged_here(tmp_path, "box") is True
+    assert mine.judged_here(tmp_path, "another-host") is False
+    assert mine.judged_here(tmp_path / "src", "box") is False
+
+    # A row whose session is gone cannot be placed at all, so it is never judged.
+    nowhere = mark("src/parser.py")
+    assert nowhere.judged_here(tmp_path, "box") is False
+
+    # And the judgement itself still works where it is answerable.
+    assert mine.stale(tmp_path, "main") == ""
+    assert "the file is gone" in mark(
+        "src/vanished.py", workspace=str(tmp_path), hostname="box"
+    ).stale(tmp_path, None)
+    assert mine.stale(None, None) == "", "nothing is claimed without a place to look"
