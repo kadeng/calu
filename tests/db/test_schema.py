@@ -5,6 +5,7 @@ import psycopg
 import pytest
 
 from calu import herd
+from calu.checkers import CodeMark
 from calu.db import Db, connect, migrate, migrations
 from calu.setup import enable_operator_login, setup
 from calu.store import DatabaseSessionStore, SessionIdentity, StepRow
@@ -386,6 +387,35 @@ async def test_a_session_reads_and_writes_only_its_own_rows(db_url: str) -> None
         silence = {row[0]: row[1] for row in beats}
         assert silence[mine] < 10, "a session must be able to say it is alive"
         assert silence[theirs] > 3000, "and only about itself"
+
+        # The honesty register is the one table a session may read across sessions, because
+        # the debt belongs to the project and not to whoever incurred it (D82, migration 0019).
+        await one.apply_honesty_marks(
+            [CodeMark(path="src/mine.py", reason="mine")], [], None, None, "honesty"
+        )
+        await two.apply_honesty_marks(
+            [CodeMark(path="src/theirs.py", reason="theirs")], [], None, None, "honesty"
+        )
+        seen = {row.path for row in await one.open_honesty_marks()}
+        assert seen == {"src/mine.py", "src/theirs.py"}, (
+            "a session has to see the project's debt, including what another session recorded"
+        )
+
+        # Writing is still its own: closing a sibling's mark is refused by the policy, so one
+        # session cannot clear another's finding and run the code.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await first.execute(
+                "UPDATE honesty_marks SET closed_at = now(), closed_by = 'forged'"
+                " WHERE path = 'src/theirs.py'"
+            )
+        remaining = await (
+            await owner.execute("SELECT count(*) FROM honesty_marks WHERE closed_at IS NULL")
+        ).fetchone()
+        assert remaining == (2,), "neither mark was closed"
+
+        # Its own it may close, which is how a checker clears a mark it opened.
+        await one.apply_honesty_marks([], [CodeMark(path="src/mine.py", reason="fixed")], None)
+        assert {row.path for row in await one.open_honesty_marks()} == {"src/theirs.py"}
 
         # The owner still sees everything, which the web interface and the herd rely on.
         cur = await owner.execute("SELECT count(*) FROM steps")
