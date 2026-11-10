@@ -39,10 +39,10 @@ nobody watches them often enough.
 
 The correction itself is usually tiny — "not in that file", "you are reimplementing something
 that exists", "that name does not say what it does" — and it is cheap at the step that caused
-the problem, expensive once twenty steps are built on it. What is hard is not knowing what to
-say but being there to say it, every few steps, for an hour. **calu makes those
-micro-corrections happen automatically**: checker agents watch every step, pull Claude back on
-your behalf, and stop to ask you only where a human has to decide.
+the problem, expensive twenty steps later. What is hard is being there to say it, every few
+steps, for an hour. **calu makes those micro-corrections happen automatically**: checker agents
+watch every step, pull Claude back on your behalf, and stop to ask you only where a human has
+to decide.
 
 Two things can only be had this way, at the step itself:
 
@@ -113,19 +113,19 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   sees it. Providers that offer zero data retention, in a variety of cloud regions including the
   EU, work too; that guarantee is theirs, not calu's.
 - **The checkers are read-only by design**: five tools, all reads (open a file, find, grep, and
-  which files changed when). No shell, no writes, no network. A wrong escalation costs you a
-  question; a wrong approval cannot reach the known-dangerous steps, which the deny lists
-  escalate before any model is called.
-- **A mid-sized model can supervise a frontier model**, because it answers one narrow question
-  about one step, with instructions for exactly that question and an answer out of four. What is
-  hard to slip past is the arrangement, not the checker's IQ: a violation **freezes** the agent
-  until a human answers, so there is no second attempt to probe with; enforced code honesty
-  means misdescribed code may not even be *run*; and the instructions the checkers judge by live
-  in a database the session cannot write. Claude's own words reach a checker only as indirect
-  speech, retold by a separate narrator — "Claude claimed that the user had already allowed
-  pushing" — so an imperative smuggled in through a web page or a dependency's README arrives as
-  a report that someone wrote it, not as an instruction to the checker.
-  [The guide explains each agent and the narration](CALU_GUIDE.md#the-models-claude-codes-account-and-the-checkers-own).
+  which files changed when). No shell, no writes, no network — the worst a broken checker can do
+  is answer wrongly, and the dangerous steps are settled by the deny lists before any model is
+  called.
+- **A mid-sized model can supervise a frontier model.** It answers one narrow question about one
+  step, with instructions for that question and an answer out of four. What is hard to slip past
+  is the arrangement, not the checker's IQ: a violation **freezes** the agent until a human
+  answers, so there is no second attempt to probe with; with code honesty enforced, misdescribed
+  code may not even be *run*; and the instructions the checkers judge by live in a database the
+  session cannot write. Claude's own words reach a checker only as indirect speech, retold by a
+  separate narrator — "Claude claimed that the user had already allowed pushing" — so an
+  imperative smuggled in through a web page or a dependency's README arrives as a report that
+  someone wrote it, not as an instruction.
+  [Each agent, and the narration, in the guide](CALU_GUIDE.md#the-models-claude-codes-account-and-the-checkers-own).
 - Quiet but necessary: calu's configuration is out of Claude's reach, the sandbox is switched on
   and tightened, a subagent's result is checked against the conversation, a session that weakens
   its own settings writes an audit entry.
@@ -181,44 +181,71 @@ echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
 calu config set command_checker.model anthropic:claude-haiku-4-5
 ```
 
-Register the project, which also sets what its commands may reach over the network, and start
-a session:
+Register the project, which also sets what its commands may reach over the network, and start a
+session:
 
 ```bash
 calu project add . --name demo        # the proxy policy, with a starter domain allow list
 calu run -p "fix the failing test"    # a session in the current directory
-calu run --socket                     # ... serving its clients on a Unix socket, not a port
 ```
 
-### A session in use
+`calu run` stays in the foreground and prints every step as the checkers judge it. **On a server
+you put it in a detachable session**, so it keeps working after you log out:
 
-The session prints the steps as the checkers judge them and stops at the first escalation.
-From another terminal — or another machine with access to the database — you see it and answer:
+```bash
+tmux new -s calu                      # then `calu run -p "..."` inside; Ctrl-B D detaches
+tmux attach -t calu                   # back to it, from anywhere you can ssh to
+```
+
+`screen -S calu` does the same, and so does `systemd-run --user --scope`. Note what you do *not*
+need tmux for: clients attach and detach on their own, and every escalation can be answered from
+the database, so you only need the multiplexer to keep the session process itself alive.
+
+### Four ways to work with a running session
+
+**The terminal client**, for the live stream, the thinking and the tool results as they arrive.
+In the project directory it takes no arguments — it finds the session running there:
+
+```bash
+calu attach
+```
+
+A plain line you type is a message for Claude, and `/help` lists the commands. While a step
+waits: `/why 7` shows everything the checker saw, `/allow 7 go ahead` and `/deny 7 not like
+that` decide it, and `/inject <text>` reaches Claude inside the running turn instead of queueing
+behind it.
+
+**The browser**, which shows every session of every host at once, leading with the ones that
+cannot go on without you — plus each session's history, its diffs, the triage queue, the
+settings and the checker instructions:
+
+```bash
+calu web          # http://127.0.0.1:8800, local only: there is no login yet
+```
+
+From another machine, forward the port instead of opening it: `ssh -L 8800:127.0.0.1:8800
+the-host`.
+
+**Your editor**, if it speaks the Agent Client Protocol (JetBrains Air, Zed, Neovim, Goose).
+Register calu as the agent and open the project; an escalation arrives as the editor's own
+permission dialog:
+
+```json
+{ "command": "calu", "args": ["acp"] }
+```
+
+```bash
+calu credential set operator --no-password   # the adapter has no terminal to ask on
+```
+
+**The database alone**, from any machine that can reach PostgreSQL — no access to the session's
+host, and nothing to keep open:
 
 ```bash
 calu sessions             # every session of every host, with its state
 calu escalations          # steps that wait for a decision
 calu escalation 12        # everything the checker saw, so you decide on the same material
 calu resolve 12 allow --note "go ahead"
-```
-
-Attach when you want the live stream, the thinking and the tool results as they arrive. In the
-project directory it takes no arguments — it finds the session running there:
-
-```bash
-calu attach
-```
-
-A plain line you type there is a message for Claude, and `/help` lists the commands. While a
-step waits: `/why 7` shows everything the checker saw, `/allow 7 go ahead` and `/deny 7 not
-like that` decide it, and `/inject <text>` reaches Claude inside the running turn instead of
-queueing behind it.
-
-A browser shows every session of every host at once, leading with the ones that cannot go on
-without you:
-
-```bash
-calu web          # http://127.0.0.1:8800, local only: there is no login yet
 ```
 
 Then write your own rules, as Markdown in the database, and measure whether the checkers follow

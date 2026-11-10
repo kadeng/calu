@@ -218,6 +218,25 @@ Read the result as follows:
   pass** is what a user pays for. A third of answers being escalations is fine when none of
   them is waste.
 
+## What coverage says, measured once
+
+There is no coverage tool in the project's dependencies on purpose -- the tests are written to
+falsify behaviour, not to reach lines -- but the number is worth knowing. Measured on
+2026-11-10 with `uv run --with coverage python -m coverage run --source=src/calu -m pytest -m
+'not live and not browser'` (ephemeral, nothing added to `pyproject.toml`): **89%** of 8987
+statements, 29 modules complete.
+
+What the gaps are, so nobody chases them again:
+
+- `src/calu/cli.py` (69%) and `src/calu/acp/serve.py` (40%) are **run in subprocesses** by the
+  process-level tests, which coverage in this process cannot see. They are exercised end to
+  end; the number is wrong, not the testing.
+- `src/calu/claude/sdk_runner.py` (71%) needs a real `claude`, so the `live` tests cover what
+  the fakes cannot.
+- The rest is error handling and cancellation paths -- a failing database call, an interrupted
+  turn, a model that cannot answer. Worth a test when a specific one is in doubt, not as a
+  sweep.
+
 ## Writing tests
 
 - A test that spawns a process must guard its teardown: `terminate()` on a process that has
