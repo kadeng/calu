@@ -8,10 +8,12 @@ from calu.config import (
     ChangesConfig,
     CheckerConfig,
     ClaudeConfig,
+    ClockConfig,
     Config,
     ContextConfig,
     SandboxConfig,
 )
+from calu.herd import STALE_AFTER_S
 
 
 def test_sandbox_settings_document_matches_the_spike():
@@ -163,3 +165,17 @@ def test_a_missing_key_says_what_it_costs_per_role() -> None:
 
     # With the key set there is no warning at all.
     assert preflight.key_warnings(Config(), {"MISTRAL_API_KEY": "k"}) == []
+
+
+def test_an_interval_that_outlives_the_stale_threshold_is_warned_about():
+    """D67: the heartbeat shares the clock interval, and a herd judges staleness by it."""
+    assert preflight.heartbeat_warnings(Config()) == []
+    # Switched off on purpose: the row keeps the stamp of its insert, so nothing is claimed.
+    assert preflight.heartbeat_warnings(Config(clock=ClockConfig(check_interval_s=0))) == []
+
+    too_long = Config(clock=ClockConfig(check_interval_s=STALE_AFTER_S))
+    (said,) = preflight.heartbeat_warnings(too_long)
+    assert "will call this session stale although it is running" in said
+    assert f"{STALE_AFTER_S:g} s" in said
+    # It reaches the start-up warnings, which is where a user sees it.
+    assert said in preflight.warnings(too_long, {})

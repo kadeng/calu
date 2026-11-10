@@ -10,6 +10,7 @@ import shutil
 from collections.abc import Mapping
 
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
+from calu.herd import STALE_AFTER_S
 
 SANDBOX_TOOLS = ("bwrap", "socat")
 """Programs that Claude Code's Linux sandbox needs (`spikes/RESULTS.md`, Q1a)."""
@@ -172,20 +173,49 @@ def network_warnings(config: Config) -> list[str]:
     ]
 
 
+def heartbeat_warnings(config: Config) -> list[str]:
+    """Warn when the heartbeat interval is too long for a herd to trust the session's state.
+
+    `clock.check_interval_s` is also the heartbeat interval (PLAN.md D56): the session stamps
+    `sessions.last_seen` that often, and a herd calls a session stale after
+    `herd.STALE_AFTER_S` seconds of silence. Setting the interval near or above that threshold
+    makes every live session look dead in `calu sessions` and in the fleet view, which is worse
+    than a slow clock check, so it is said at the start rather than discovered later.
+
+    Args:
+        config: The session configuration.
+
+    Returns:
+        One warning, or an empty list while the interval leaves room (it must stay under half
+        the threshold). Switching the watch off (0) is not warned about: that is a deliberate
+        choice and the row keeps the stamp of its insert.
+    """
+    interval = config.clock.check_interval_s
+    if interval <= 0 or interval < STALE_AFTER_S / 2:
+        return []
+    return [
+        f"clock.check_interval_s is {interval:g} s, and a session counts as stale after "
+        f"{STALE_AFTER_S:g} s without a sign of life, so `calu sessions` and the fleet view "
+        "will call this session stale although it is running. Lower the interval, or keep it "
+        "under half of that."
+    ]
+
+
 def warnings(config: Config, environ: Mapping[str, str] | None = None) -> list[str]:
-    """Return all start-up warnings (sandbox, API keys, write sets, network).
+    """Return all start-up warnings (sandbox, API keys, write sets, network, heartbeat).
 
     Args:
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
 
     Returns:
-        The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings` and
-        `network_warnings`.
+        The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
+        `network_warnings` and `heartbeat_warnings`.
     """
     return (
         sandbox_warnings(config)
         + key_warnings(config, environ)
         + change_warnings(config)
         + network_warnings(config)
+        + heartbeat_warnings(config)
     )
