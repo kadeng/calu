@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
-from websockets.asyncio.client import ClientConnection
+from websockets.asyncio.client import ClientConnection, unix_connect
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
@@ -181,6 +181,31 @@ def _single(group: BaseExceptionGroup[BaseException]) -> BaseException:
     return _single(inner) if isinstance(inner, BaseExceptionGroup) else inner
 
 
+UNIX_PREFIX = "unix:"
+"""How a Unix socket address is written: `unix:/run/user/1000/calu/<id>.sock` (PLAN.md §6)."""
+
+
+@asynccontextmanager
+async def _open(address: str) -> AsyncGenerator[ClientConnection]:
+    """Open a connection to a TCP or a Unix socket address.
+
+    Args:
+        address: `ws://host:port` or `unix:<path>`.
+
+    Yields:
+        The open connection.
+
+    Raises:
+        OSError: If the address cannot be reached.
+    """
+    if address.startswith(UNIX_PREFIX):
+        async with unix_connect(address[len(UNIX_PREFIX) :], "ws://localhost/") as connection:
+            yield connection
+        return
+    async with ws_connect(address) as connection:
+        yield connection
+
+
 @asynccontextmanager
 async def connect(
     address: str,
@@ -197,7 +222,8 @@ async def connect(
     On exit the connection is closed.
 
     Args:
-        address: The WebSocket address that `calu run` printed, e.g. "ws://127.0.0.1:8765".
+        address: The address that `calu run` printed: `ws://127.0.0.1:8765`, or `unix:<path>`
+            for a session that serves a Unix socket (PLAN.md §6).
         token: The client token that `calu run` printed.
         client: Name of this client, for the session's log.
         on_event: Called with `(method, params)` for every event.
@@ -212,7 +238,7 @@ async def connect(
         RequestFailed: If the token is refused.
         ConnectionError: If the session closes the connection during the handshake.
     """
-    async with ws_connect(address) as connection:
+    async with _open(address) as connection:
         protocol = ProtocolClient(connection, on_event)
         try:
             async with anyio.create_task_group() as tg:

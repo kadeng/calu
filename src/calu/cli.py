@@ -58,7 +58,8 @@ from calu.db import local as local_db
 from calu.evals.cli import run_evals
 from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
-from calu.run import RunOptions, run_session
+from calu.protocol.server import check_socket_path
+from calu.run import RunOptions, default_socket_path, run_session
 from calu.setup import DEFAULT_CHECKER_MODEL, setup
 
 
@@ -321,6 +322,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         prompt=prompt,
         resume_id=args.resume,
         fork_before_turn=args.fork_before_turn,
+        socket_path=_socket_path(args.socket),
         model=args.model,
         effort=args.effort,
         interactive=not args.batch,
@@ -374,6 +376,29 @@ def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]])
         print(asyncio.run(_with_admin(url.decode(), work)))
     finally:
         wipe(url)
+
+
+def _socket_path(chosen: str | None) -> Path | None:
+    """Turn the `--socket` argument into a path.
+
+    Args:
+        chosen: None if the flag was absent, "" if it was given without a path, else the path.
+
+    Returns:
+        The socket path, or None to bind a TCP port as before.
+
+    Raises:
+        CliError: If the path is too long for a Unix socket; better to say so now than to let
+            the session fail when it binds.
+    """
+    if chosen is None:
+        return None
+    path = Path(chosen) if chosen else default_socket_path()
+    try:
+        check_socket_path(path)
+    except OSError as exc:
+        raise CliError(str(exc)) from exc
+    return path
 
 
 def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1181,6 +1206,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="with --resume: branch the conversation off before turn N instead of continuing it;"
         " the fork gets its own session id (`calu sessions` and the web interface show the turns)",
+    )
+    p.add_argument(
+        "--socket",
+        nargs="?",
+        const="",
+        metavar="PATH",
+        help="serve the clients on a Unix socket instead of a local TCP port; without a PATH,"
+        " $XDG_RUNTIME_DIR/calu/<pid>.sock. The file system then decides who may connect",
     )
     p.add_argument("--model", help="Claude model alias or id (overrides the configuration)")
     p.add_argument(

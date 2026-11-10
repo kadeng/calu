@@ -44,7 +44,7 @@ from calu.testing import fake_models
 
 TEST_SERVER = "postgresql://calu_owner:calu-dev@127.0.0.1:55432/calu"
 REPORT = (
-    "SELECT state, model, claude_session_id FROM sessions",
+    "SELECT state, model, claude_session_id, address FROM sessions",
     "SELECT seq, tool_name, decision, rules_outcome, left(reason, 60) FROM steps ORDER BY seq",
     "SELECT checker_name, checker_version, decision, duration_ms IS NOT NULL FROM checker_runs"
     " ORDER BY id",
@@ -123,6 +123,7 @@ async def main(args: argparse.Namespace) -> int:
                         workspace=Path(args.directory).resolve(),
                         prompt=args.prompt,
                         interactive=False,
+                        socket_path=Path(args.socket) if args.socket else None,
                     ),
                     checker_models=fake_models(),
                 )
@@ -158,5 +159,8 @@ parser.add_argument(
     help="measure and review what a command writes (PLAN.md D31): snapshot and review on",
 )
 parser.add_argument("--model", default="haiku")
+parser.add_argument(
+    "--socket", metavar="PATH", help="serve the clients on a Unix socket at PATH (PLAN.md §6)"
+)
 parser.add_argument("--timeout", type=float, default=240, help="how long the operator waits")
 sys.exit(anyio.run(main, parser.parse_args()))

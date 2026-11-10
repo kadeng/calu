@@ -108,6 +108,13 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
   reloads on `config_changed`), `DatabaseSessionStore` (session, steps, checker runs, turns,
   chat summary, escalations, comments, client tokens, address, agents, history),
   `MemorySessionStore` for unit tests.
+- **Unix socket** (§6, D20): `calu run --socket [PATH]` serves the clients on a Unix socket
+  (mode 0600, `$XDG_RUNTIME_DIR/calu/<pid>.sock` by default) instead of a loopback port, which
+  every process on the machine can reach. The address is recorded as `unix:<path>`, and
+  `calu attach`, `calu acp` and the web interface all take it. Two things the first real run
+  taught: a path over ~100 bytes is refused with its length (the kernel's limit is 108), and a
+  directory that already exists keeps its own mode — chmodding `/tmp` is neither possible nor
+  calu's business.
 - **Bus and protocol** (phase 4): `calu.bus` numbers every event and keeps the last 5000 for
   replay; `calu.protocol.server` serves JSON-RPC over WebSocket to several clients (one token
   per session, `calu.tokens`); `calu.protocol.client`; `calu attach ADDRESS --token T` with
@@ -286,8 +293,7 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    escalation queue covers the important half of it.
 4. **Phase 5**: the network policy per project (Q5), the nested-sandbox case in Docker (Q1).
 5. Smaller gaps: `calu config set` cannot set a value inside a list; the chat summary can only be
-   read, not edited, through a client; the protocol server binds TCP only (a Unix socket is
-   mentioned in §6 and `sessions.address` already allows for one).
+   read, not edited, through a client.
 
 ## Open questions for the owner (`PLAN.md` §11)
 

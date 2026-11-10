@@ -250,6 +250,7 @@ uv tool install calu      # not published yet
 calu db up                # local PostgreSQL in Docker; asks for a new admin password
 calu setup                # default checkers and rules; asks for a new session password
 calu run -p "fix the failing test"   # start a session in the current directory
+calu run --socket                    # ... serving its clients on a Unix socket, not a port
 ```
 
 Checker API keys belong in `~/.config/calu/.env`; Claude Code never sees them — calu blanks

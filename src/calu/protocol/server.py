@@ -23,12 +23,14 @@ and -32001 not authenticated (no valid `initialize` yet).
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import anyio
+import anyio.to_thread
 from anyio.abc import TaskGroup
 from pydantic import BaseModel, ValidationError
-from websockets.asyncio.server import ServerConnection, serve
+from websockets.asyncio.server import ServerConnection, serve, unix_serve
 from websockets.exceptions import ConnectionClosed
 
 from calu.bus import Bus, Subscription
@@ -67,6 +69,67 @@ UNAUTHENTICATED = -32001
 GRACE_S = 0.1
 """How long `listen` keeps the connections open after a `shutdown` request, so that the events
 and responses already written reach the clients."""
+
+
+MAX_SOCKET_PATH = 100
+"""Bytes a Unix socket path may have. The kernel's limit is 108 including the terminating zero
+(`sun_path`), and a few bytes of margin keep the message friendlier than `AF_UNIX path too
+long`."""
+
+
+def check_socket_path(socket_path: Path) -> None:
+    """Refuse a Unix socket path the kernel cannot bind.
+
+    Args:
+        socket_path: The path to check.
+
+    Raises:
+        OSError: If the path is longer than `MAX_SOCKET_PATH` bytes. The message names the
+            length and suggests `$XDG_RUNTIME_DIR`, because the usual cause is a socket under a
+            deeply nested directory.
+    """
+    length = len(str(socket_path).encode())
+    if length > MAX_SOCKET_PATH:
+        raise OSError(
+            f"the socket path is {length} bytes, and a Unix socket allows about "
+            f"{MAX_SOCKET_PATH}: put it somewhere shorter, for example under $XDG_RUNTIME_DIR "
+            f"({socket_path})"
+        )
+
+
+def _prepare_socket(socket_path: Path) -> None:
+    """Make the directory of a Unix socket and clear a stale socket file.
+
+    A directory that has to be created gets mode 0700; one that already exists is not touched,
+    because it may be a shared directory such as `/tmp` whose mode is neither calu's business
+    nor changeable. Runs in a worker thread, because it touches the file system.
+
+    Args:
+        socket_path: Where the server will bind.
+
+    Raises:
+        OSError: If the path is too long for a Unix socket, the directory cannot be created, or
+            the stale socket cannot be removed.
+    """
+    check_socket_path(socket_path)
+    if not socket_path.parent.exists():
+        # A directory calu makes is calu's own, so it gets 0700. One that already exists is left
+        # alone: it may be `/tmp`, whose mode cannot be changed and is none of calu's business.
+        # What protects the socket either way is its own mode, set once it is bound.
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        socket_path.parent.chmod(0o700)
+    if socket_path.exists():
+        log.info("replacing the stale socket %s", socket_path)
+        socket_path.unlink()
+
+
+def _remove_socket(socket_path: Path) -> None:
+    """Remove a Unix socket file, ignoring one that is already gone.
+
+    Args:
+        socket_path: The socket to remove.
+    """
+    socket_path.unlink(missing_ok=True)
 
 
 def encode_event(event: Event) -> str:
@@ -135,19 +198,32 @@ class SessionServer:
         self.address = ""
         """The WebSocket address clients connect to, set by `listen`."""
 
-    async def listen(self, host: str = "127.0.0.1", port: int = 0) -> None:
+    async def listen(
+        self, host: str = "127.0.0.1", port: int = 0, socket_path: Path | None = None
+    ) -> None:
         """Accept clients until `shutdown` is set or the caller is cancelled.
 
-        Side effects: sets `address` to the WebSocket URL once the socket is bound (with the
-        port the operating system chose, if `port` was 0) and then sets `ready`.
+        With `socket_path` the server binds a **Unix socket** instead of a TCP port (PLAN.md
+        §6): the file system then decides who may connect, instead of every process on the
+        machine being able to reach a loopback port. Its directory is created with mode 0700 and
+        the socket itself with 0600, so only this user can reach it; a stale socket from a
+        process that died is replaced.
+
+        Side effects: sets `address` once the socket is bound (the port the operating system
+        chose if `port` was 0, or `unix:<path>`) and then sets `ready`; with `socket_path`,
+        creates the directory and the socket file and removes the socket when it stops.
 
         Args:
             host: Interface to bind; the default accepts only local clients (PLAN.md §6).
             port: TCP port, or 0 to let the operating system choose a free one.
+            socket_path: Path of a Unix socket to bind instead; None binds TCP.
 
         Raises:
             OSError: If the address cannot be bound.
         """
+        if socket_path is not None:
+            await self._listen_unix(socket_path)
+            return
         async with await serve(self._handle, host, port) as server:
             bound = server.sockets[0].getsockname()
             self.address = f"ws://{bound[0]}:{bound[1]}"
@@ -155,6 +231,33 @@ class SessionServer:
             log.info("protocol server listening on %s", self.address)
             await self.shutdown.wait()
             await anyio.sleep(GRACE_S)  # let the other clients' last events go out
+
+    async def _listen_unix(self, socket_path: Path) -> None:
+        """Accept clients on a Unix socket until `shutdown` or cancellation.
+
+        Side effects: creates the socket's directory (0700), replaces a stale socket file, sets
+        `address` to `unix:<path>` and `ready`, and removes the socket when it stops.
+
+        Args:
+            socket_path: Where to bind.
+
+        Raises:
+            OSError: If the directory or the socket cannot be created.
+        """
+        await anyio.to_thread.run_sync(_prepare_socket, socket_path)
+        try:
+            async with await unix_serve(self._handle, str(socket_path)):
+                await anyio.to_thread.run_sync(socket_path.chmod, 0o600)
+                self.address = f"unix:{socket_path}"
+                self.ready.set()
+                log.info("protocol server listening on %s", self.address)
+                await self.shutdown.wait()
+                await anyio.sleep(GRACE_S)  # let the other clients' last events go out
+        finally:
+            # Shielded: this also runs when the task group is cancelled, and a cancelled
+            # worker-thread call would leave the socket file behind.
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(_remove_socket, socket_path)
 
     async def _handle(self, connection: ServerConnection) -> None:
         """Serve one WebSocket connection until it closes. Never raises.

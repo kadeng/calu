@@ -1,5 +1,6 @@
 """The protocol server and client over a real WebSocket: tokens, requests, events, replay."""
 
+import stat
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -398,3 +399,63 @@ async def test_a_minted_token_of_the_session_is_accepted_too(tmp_path: Path):
             async with connect(run.address, "guessed", "intruder", events):
                 pass
         assert refused.value.code == -32001
+
+
+async def test_a_session_can_serve_a_unix_socket_instead_of_a_port(tmp_path: Path):
+    """§6: the file system decides who may connect, not every local process via a port."""
+    store = MemorySessionStore()
+    bus = Bus()
+    session = Session(
+        tmp_path,
+        default_settings(tmp_path),
+        store,
+        lambda: FakeRunner(FakeScript(turns=[[{"text": "hello"}]]), tmp_path),
+        bus.publish,
+        checker_models=fake_models(),
+        snapshot_root=tmp_path.parent / f"{tmp_path.name}-snapshots",
+    )
+    token = new_token()
+    socket_path = tmp_path / "run" / "session.sock"
+    async with anyio.create_task_group() as tg:
+        server = SessionServer(session, bus, token_hash(token), tg)
+        tg.start_soon(server.listen, "127.0.0.1", 0, socket_path)
+        with anyio.fail_after(10):
+            await server.ready.wait()
+        try:
+            # The recorded address names the socket, which is what `sessions.address` keeps (D29).
+            assert server.address == f"unix:{socket_path}"
+            assert socket_path.is_socket()
+            # Only this user can reach it: 0700 on the directory, 0600 on the socket.
+            assert stat.S_IMODE(socket_path.parent.stat().st_mode) == 0o700
+            assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
+
+            events = Events()
+            async with connect(server.address, token, "over the socket", events) as protocol:
+                snapshot = await protocol.request("state.get")
+                assert snapshot["workspace"] == str(tmp_path)
+
+            # The token is still required, socket or not.
+            with pytest.raises(RequestFailed) as refused:
+                async with connect(server.address, "wrong", "intruder", events):
+                    pass
+            assert refused.value.code == -32001
+        finally:
+            await session.stop()
+            tg.cancel_scope.cancel()
+    # The socket file goes with the server, so a later run does not trip over it.
+    assert not socket_path.exists()
+
+
+async def test_a_stale_socket_file_is_replaced(tmp_path: Path):
+    """A process that died leaves its socket behind; binding must not fail because of it."""
+    socket_path = tmp_path / "run" / "stale.sock"
+    socket_path.parent.mkdir(parents=True)
+    socket_path.write_text("not a socket any more", encoding="utf-8")
+    async with served(tmp_path) as run:
+        async with anyio.create_task_group() as tg:
+            server = SessionServer(run.session, Bus(), token_hash(new_token()), tg)
+            tg.start_soon(server.listen, "127.0.0.1", 0, socket_path)
+            with anyio.fail_after(10):
+                await server.ready.wait()
+            assert socket_path.is_socket()
+            tg.cancel_scope.cancel()

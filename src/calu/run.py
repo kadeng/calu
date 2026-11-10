@@ -19,7 +19,9 @@ session can also be watched where it was started.
 """
 
 import logging
+import os
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +97,9 @@ class RunOptions:
     effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
     interactive: bool = True
     show_thinking: bool = False
+    socket_path: Path | None = None
+    """Serve a Unix socket at this path instead of a TCP port (PLAN.md §6): the file system then
+    decides who may connect, and `sessions.address` records it as `unix:<path>` (D29)."""
     host: str = "127.0.0.1"
     """Interface the protocol server binds; the default accepts only local clients."""
     port: int = 0
@@ -485,6 +490,20 @@ async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | N
     return Fork(resume_at=point.resume_at, drops_turn=point.drops_turn)
 
 
+def default_socket_path() -> Path:
+    """Return where a session puts its Unix socket when `--socket` is given without a path.
+
+    `$XDG_RUNTIME_DIR` is the right place for a socket: it belongs to this user, is cleaned up
+    at logout, and is usually a tmpfs. Without it, the temporary directory has to do.
+
+    Returns:
+        `<runtime dir>/calu/<pid>.sock`. The pid makes it unique per session process, and
+        `sessions.address` records the path, so clients and `calu sessions` find it (D29).
+    """
+    base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+    return Path(base) / "calu" / f"{os.getpid()}.sock"
+
+
 async def _listen(
     server: SessionServer,
     options: RunOptions,
@@ -506,7 +525,7 @@ async def _listen(
     """
     try:
         async with anyio.create_task_group() as tg:
-            tg.start_soon(server.listen, options.host, options.port)
+            tg.start_soon(server.listen, options.host, options.port, options.socket_path)
             with anyio.move_on_after(START_TIMEOUT_S):
                 await server.ready.wait()
             if not server.ready.is_set():
