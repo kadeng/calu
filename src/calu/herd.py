@@ -103,16 +103,37 @@ class EscalationRow:
     client made (D28). Empty while it is open."""
     note: str = ""
     """What the human said when they answered ("" if nothing or still open)."""
+    session_silent_for_s: float = 0.0
+    """Seconds since the session's process last said it was running (D56)."""
+    session_ended: bool = False
+    """Whether the session has ended; then the silence means nothing."""
+
+    @property
+    def unanswerable(self) -> bool:
+        """Whether nobody is waiting for this answer any more.
+
+        A decision reaches the session through a notification, and a process that is gone
+        cannot act on it (D56): the escalation can still be recorded for the history, but the
+        step will never run and the session will never continue. An operator working through a
+        list should know which entries are in that state before spending attention on them.
+
+        Returns:
+            True if the session has ended or has been silent beyond `STALE_AFTER_S`.
+        """
+        return self.session_ended or self.session_silent_for_s > STALE_AFTER_S
 
     def line(self) -> str:
         """Return the escalation as one terminal line.
 
         Returns:
-            Id, session, host and directory, age and reason.
+            Id, session, host and directory, age and reason, and a mark when answering it
+            cannot reach anybody (D56).
         """
+        gone = "  [the session is gone: answering changes nothing]" if self.unanswerable else ""
         return (
             f"{self.id}  session {self.session_id}  {self.hostname}:{self.directory}"
-            f"  {self.created_at:%Y-%m-%d %H:%M:%S}\n    {' '.join(self.reason.split())[:300]}"
+            f"  {self.created_at:%Y-%m-%d %H:%M:%S}{gone}"
+            f"\n    {' '.join(self.reason.split())[:300]}"
         )
 
 
@@ -186,7 +207,9 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
     rows = await db.all(
         "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
         " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"
-        " coalesce(e.resolved_by, ''), coalesce(e.note, '')"
+        " coalesce(e.resolved_by, ''), coalesce(e.note, ''),"
+        # The database measures the silence, as for a session row (D56).
+        " extract(epoch FROM (now() - s.last_seen))::float8, s.ended_at IS NOT NULL"
         " FROM escalations e JOIN sessions s ON s.id = e.session_id"
         " JOIN hosts h ON h.id = s.host_id"
         " WHERE e.state = 'open' AND (%s::uuid IS NULL OR e.session_id = %s::uuid)"
@@ -536,7 +559,8 @@ async def escalation(db: Db, escalation_id: int) -> EscalationRow | None:
     found = await db.all(
         "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
         " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"
-        " coalesce(e.resolved_by, ''), coalesce(e.note, '')"
+        " coalesce(e.resolved_by, ''), coalesce(e.note, ''),"
+        " extract(epoch FROM (now() - s.last_seen))::float8, s.ended_at IS NOT NULL"
         " FROM escalations e JOIN sessions s ON s.id = e.session_id"
         " JOIN hosts h ON h.id = s.host_id WHERE e.id = %s",
         (escalation_id,),
@@ -652,6 +676,12 @@ def render_escalation(
     ]
     if row.resolved_by:
         parts.append(f"\nanswered by {row.resolved_by}: {row.note or '(no note)'}")
+    elif row.unanswerable:
+        # The decision would be recorded and never acted on, because the process is gone (D56).
+        parts.append(
+            "\nthe session's process is gone: an answer is recorded for the history, but the"
+            " step will not run and the session will not continue"
+        )
     if questions:
         asked = []
         for question in questions if isinstance(questions, list) else []:

@@ -21,6 +21,11 @@
   <button class="danger" name="decision" value="deny">Deny</button>
 </form>
 {% endif %}
+{% if escalation.unanswerable %}
+<p class="muted">The session's process is gone (no heartbeat). Answering is recorded for the
+  history, but the step will not run and the session will not continue.</p>
+{% endif %}
+
 {% if runs %}
 <h2>What the checkers decided</h2>
 <table>

@@ -590,3 +590,28 @@ async def test_a_session_without_a_heartbeat_is_grouped_as_gone(db_url: str) -> 
             assert session_id[:8] not in needs_you
     finally:
         await conn.close()
+
+
+async def test_the_pages_say_when_an_answer_can_reach_nobody(db_url: str) -> None:
+    """An operator should know before deciding, not after (D56)."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, escalation = await populate(db)
+        async with await client_for(db) as client:
+            listing = (await client.get("/escalations")).text
+            detail = (await client.get(f"/escalations/{escalation}")).text
+            assert "process is gone" not in listing and "process is gone" not in detail
+
+            await db.execute(
+                "UPDATE sessions SET last_seen = now() - interval '10 minutes' WHERE id = %s::uuid",
+                (session_id,),
+            )
+            listing = (await client.get("/escalations")).text
+            detail = (await client.get(f"/escalations/{escalation}")).text
+            assert "process is gone" in listing
+            assert "will not run" in listing
+            assert "process is gone" in detail
+    finally:
+        await conn.close()

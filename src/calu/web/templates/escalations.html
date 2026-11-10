@@ -10,6 +10,10 @@
     escalation {{ e.id }} · <a href="{{ url_for('session', session_id=e.session_id) }}">{{ e.hostname }}:{{ e.directory }}</a>
     · since {{ e.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
   </p>
+  {% if e.unanswerable %}
+  <p class="muted">The session's process is gone (no heartbeat): an answer is recorded for the
+    history, but the step will not run and the session will not continue.</p>
+  {% endif %}
   <p>{{ e.reason }}</p>
   {% if e.rendered %}<pre>{{ e.rendered }}</pre>{% endif %}
   <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=e.id) }}">

@@ -37,7 +37,10 @@ async def test_sessions_escalations_and_resolution(db_url: str) -> None:
         assert [r.id for r in open_rows] == [first, second]
         assert open_rows[0].rendered == "`rm -rf /`"
         assert "needs a decision" in open_rows[0].line()
-        assert await herd.escalations(db, session_id) == open_rows
+        # Filtering by session gives the same escalations. Compared by id, not by row: a row
+        # carries how long the session has been silent (D56), which the database measures
+        # afresh on every read.
+        assert [r.id for r in await herd.escalations(db, session_id)] == [r.id for r in open_rows]
 
         assert await herd.resolve(db, first, "allow", "go ahead") is True
         assert await herd.resolve(db, first, "deny") is False  # already resolved
@@ -214,5 +217,48 @@ async def test_a_session_whose_process_is_gone_is_visible_as_such(db_url: str) -
         ended = (await herd.sessions(db, active_only=False))[0]
         assert ended.stale is False
         assert "SILENT" not in ended.line()
+    finally:
+        await owner.close()
+
+
+async def test_an_escalation_of_a_gone_session_says_so(db_url: str) -> None:
+    """Answering it is recorded and reaches nobody, so the list has to say which ones (D56)."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        await store.set_state("escalated")
+        escalation = await store.open_escalation("why", {"rendered": "$ rm -rf build"})
+
+        # While the session beats, the escalation is an ordinary one.
+        live = (await herd.escalations(db))[0]
+        assert live.unanswerable is False
+        assert "the session is gone" not in live.line()
+        rendered = herd.render_escalation(live, await herd.escalation_context(db, escalation))
+        assert "process is gone" not in rendered
+
+        # Once the process stops saying it is there, every view says so.
+        await db.execute(
+            "UPDATE sessions SET last_seen = now() - interval '10 minutes' WHERE id = %s::uuid",
+            (session_id,),
+        )
+        gone = (await herd.escalations(db))[0]
+        assert gone.unanswerable is True
+        assert "the session is gone: answering changes nothing" in gone.line()
+        one = await herd.escalation(db, escalation)
+        assert one is not None and one.unanswerable is True
+        rendered = herd.render_escalation(one, await herd.escalation_context(db, escalation))
+        assert "the session's process is gone" in rendered
+        assert "will not run" in rendered
+
+        # A session that ended counts the same way: nobody is waiting either.
+        await db.execute(
+            "UPDATE sessions SET last_seen = now(), ended_at = now() WHERE id = %s::uuid",
+            (session_id,),
+        )
+        ended = await herd.escalation(db, escalation)
+        assert ended is not None and ended.unanswerable is True
     finally:
         await owner.close()
