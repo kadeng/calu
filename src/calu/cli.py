@@ -262,8 +262,7 @@ def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str |
     """
     if requested and requested != "auto":
         return requested, effort, "as given"
-    load_secrets()
-    choice = detect_model(os.environ)
+    choice = detect_model(os.environ)  # `main` has loaded calu's env file into it
     if choice is None:
         raise CliError(
             "no model provider found: no AWS credentials that STS accepts, and none of "
@@ -1108,11 +1107,13 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Everything that needs no password is checked first: the programs calu starts, the credential
     store, the checker keys, the runtime directories and, if a directory was named, the
-    workspace. With `--db` the `admin` credential is used to ask whether the database answers
-    and whether its schema is current. Nothing is changed.
+    workspace. With `--keys` each checker key that is set is shown to its own provider's free
+    model list, so an expired or revoked key is found before it escalates every step (D131).
+    With `--db` the `admin` credential is used to ask whether the database answers and whether
+    its schema is current. Nothing is changed.
 
     Args:
-        args: Parsed arguments (`db`, `directory`).
+        args: Parsed arguments (`db`, `keys`, `directory`).
         store: The credential store.
 
     Raises:
@@ -1123,6 +1124,8 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
     findings = doctor.local_findings(store)
     if args.directory:
         findings += doctor.workspace_findings(Path(args.directory).resolve())
+    if args.keys:
+        findings += doctor.key_validity_findings()
     if args.db:
         url = load_credential(store, "admin", "Admin password: ")
         try:
@@ -2294,6 +2297,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="report what is in place and what a session would miss")
     p.add_argument("directory", nargs="?", help="also check this workspace")
     p.add_argument("--db", action="store_true", help="also ask the database (needs the password)")
+    p.add_argument(
+        "--keys",
+        action="store_true",
+        help="also ask each provider whether its key is accepted (a free model-list request)",
+    )
     p.set_defaults(handler=cmd_doctor)
 
     p = sub.add_parser("summary", help="show or correct the chat summary the checkers read")
@@ -2467,11 +2475,19 @@ def main(
         argv: Arguments without the program name; None uses `sys.argv[1:]`.
         store_factory: Creates the credential store (tests pass a store in a temporary dir).
 
+    Side effects: loads calu's own env file (`~/.config/calu/.env`) into the process
+    environment before any command runs, without overwriting what is already set. Every command
+    then sees the same checker keys a session sees: only `calu run` used to read the file, so
+    `calu doctor` reported "none of the known providers has a key" with a key in it, and
+    `calu evals` ran its checkers without one (PLAN.md D131). The keys stay hidden from Claude
+    Code, which only `calu run` starts and which removes them (`SdkRunner.hidden_env`).
+
     Returns:
         The exit code: 0 on success, 1 on a reported error.
     """
     args = build_parser().parse_args(argv)
     try:
+        load_secrets()
         args.handler(args, store_factory())
     except (
         CliError,

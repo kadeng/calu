@@ -15,7 +15,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -518,3 +518,120 @@ def workspace_findings(workspace: Path) -> list[Finding]:
         ),
         *posture_findings(workspace),
     ]
+
+
+KEY_PROBES: dict[str, tuple[str, str, Callable[[str], dict[str, str]]]] = {
+    "anthropic": (
+        "ANTHROPIC_API_KEY",
+        "https://api.anthropic.com/v1/models",
+        lambda key: {"x-api-key": key, "anthropic-version": "2023-06-01"},
+    ),
+    "fireworks": (
+        "FIREWORKS_API_KEY",
+        "https://api.fireworks.ai/inference/v1/models",
+        lambda key: {"Authorization": f"Bearer {key}"},
+    ),
+    "mistral": (
+        "MISTRAL_API_KEY",
+        "{mistral}/v1/models",
+        lambda key: {"Authorization": f"Bearer {key}"},
+    ),
+    "openai": (
+        "OPENAI_API_KEY",
+        "https://api.openai.com/v1/models",
+        lambda key: {"Authorization": f"Bearer {key}"},
+    ),
+}
+"""Provider -> (key variable, a model-list URL, the headers that carry the key).
+
+A model list is the cheapest call that proves a key: it generates nothing and costs nothing,
+and a rejected key answers it with the provider's own reason ("Your API key expired on ...").
+Each key is sent only to the provider it belongs to."""
+
+
+def key_validity_findings(
+    environ: Mapping[str, str] | None = None, client: Any = None
+) -> list[Finding]:
+    """Ask each provider whether the key calu holds for it is accepted (PLAN.md D131).
+
+    `key_findings` only sees that a key is **set**. A key that is set and expired passes it,
+    and every check on that provider then fails and escalates the step -- which is how an
+    expired Mistral key went unnoticed on the development machine. This makes one request per
+    key that is set, to the provider it belongs to.
+
+    Args:
+        environ: The environment to read the keys from; None uses `os.environ`, into which the
+            CLI has loaded calu's env file.
+        client: An `httpx.Client` to send the requests with; None makes one with a 10 s
+            timeout. Tests pass one with a mock transport.
+
+    Returns:
+        One finding per key that is set: accepted, rejected with the provider's reason, or not
+        reachable (which is not called a bad key, since it may be the network). Providers whose
+        key is not set are left out; `key_findings` reports those.
+    """
+    import httpx
+
+    values = os.environ if environ is None else environ
+    own = client is None
+    http = client or httpx.Client(timeout=10.0)
+    mistral = (values.get("MISTRAL_BASE_URL") or "https://api.eu.mistral.ai").rstrip("/")
+    found: list[Finding] = []
+    try:
+        for provider, (variable, url, headers) in KEY_PROBES.items():
+            key = (values.get(variable) or "").strip()
+            if not key:
+                continue
+            name = f"{provider} key"
+            try:
+                answer = http.get(url.format(mistral=mistral), headers=headers(key))
+            except httpx.HTTPError as exc:
+                found.append(
+                    Finding(
+                        name,
+                        True,
+                        f"not checked: {type(exc).__name__} reaching the provider",
+                        "The network decides this one, not the key.",
+                    )
+                )
+                continue
+            if answer.status_code == 200:
+                found.append(Finding(name, True, f"{variable} is accepted"))
+                continue
+            found.append(
+                Finding(
+                    name,
+                    False,
+                    f"{variable} is refused ({answer.status_code}): {_reason(answer)}",
+                    f"Every check on {provider} fails and escalates until it is replaced. "
+                    f"Renew it in {user_env_file()}, or move the checkers to another provider "
+                    "with `calu config models auto`.",
+                )
+            )
+    finally:
+        if own:
+            http.close()
+    return found
+
+
+def _reason(answer: Any) -> str:
+    """Pull the provider's own explanation out of a refusal.
+
+    Args:
+        answer: The HTTP response.
+
+    Returns:
+        The message the provider gave, shortened, or the status text.
+    """
+    try:
+        body = answer.json()
+    except ValueError:
+        return (answer.text or answer.reason_phrase or "").strip()[:200]
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])[:200]
+        for field in ("detail", "message", "error"):
+            if isinstance(body.get(field), str):
+                return str(body[field])[:200]
+    return str(body)[:200]

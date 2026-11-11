@@ -353,6 +353,10 @@ was last measured there, Pydantic AI could not force the structured answer with 
 For EU data residency, check the profile's destination regions yourself (AWS advises against
 relying on the `eu.` prefix alone: `aws bedrock get-inference-profile`).
 
+`calu doctor --keys` shows each key that is set to its own provider's free model list and
+says which are accepted -- an expired key otherwise passes unnoticed until it escalates every
+step.
+
 Keys belong in `~/.config/calu/.env`, and Claude Code never sees them: calu blanks every
 provider key in the environment it hands to Claude Code. So the main conversation can run on a
 subscription while the checkers bill an API — including an Anthropic Ultra subscription, which

@@ -337,3 +337,27 @@ def test_the_session_credential_cannot_be_stored_without_a_password(
         == 0
     )
     assert store.needs_password("operator") is False
+
+
+def test_every_command_sees_the_keys_in_calu_s_own_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D131: `calu doctor` said "none of the known providers has a key" with one in the file.
+
+    `~/.config/calu/.env` is where the guide tells a user to put the checker keys, and only
+    `calu run` read it -- so `calu doctor` contradicted itself (it listed the file as found two
+    lines below) and `calu evals` ran its checkers without the key. The CLI now loads the file
+    before any command.
+    """
+    for name in ("ANTHROPIC_API_KEY", "FIREWORKS_API_KEY", "MISTRAL_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)  # restored, or removed again, after the test
+    (tmp_path / "calu").mkdir()
+    (tmp_path / "calu" / ".env").write_text("FIREWORKS_API_KEY=fw-not-a-real-key\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+    run_cli(monkeypatch, store, ["doctor"], "")  # the exit code depends on the machine
+    said = capsys.readouterr().out
+    assert "checker keys: fireworks" in said, said

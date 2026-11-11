@@ -188,3 +188,43 @@ def test_a_key_with_a_stray_carriage_return_is_named() -> None:
     # It is part of the local report, which is what `calu doctor` prints.
     report = doctor.report(doctor.key_value_findings({"MISTRAL_API_KEY": "ms_x\r\n"}))
     assert "carriage return" in report
+
+
+def test_a_key_that_is_set_but_refused_is_found_before_it_escalates_every_step() -> None:
+    """D131: presence is not validity -- an expired Mistral key passed the old check."""
+    import httpx
+
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.host, dict(request.headers)))
+        if request.url.host == "api.eu.mistral.ai":
+            return httpx.Response(401, json={"detail": "Your API key expired on 2026-11-08."})
+        if request.url.host == "api.fireworks.ai":
+            raise httpx.ConnectError("no route to host")
+        return httpx.Response(200, json={"data": []})
+
+    client = httpx.Client(transport=httpx.MockTransport(provider))
+    environ = {
+        "ANTHROPIC_API_KEY": "sk-ant-good",
+        "FIREWORKS_API_KEY": "fw-unreachable",
+        "MISTRAL_API_KEY": "m-expired",
+    }
+    found = {f.name: f for f in doctor.key_validity_findings(environ, client)}
+
+    assert found["anthropic key"].ok and "accepted" in found["anthropic key"].detail
+    mistral = found["mistral key"]
+    assert not mistral.ok
+    assert "expired on 2026-11-08" in mistral.detail, "the provider's own reason is shown"
+    assert "calu config models auto" in mistral.advice
+    # Unreachable is not called a bad key: the network decides that one.
+    assert found["fireworks key"].ok and "not checked" in found["fireworks key"].detail
+    assert "openai key" not in found, "a provider without a key is not asked at all"
+
+    # Each key went to its own provider and nowhere else.
+    for host, headers in seen:
+        carried = headers.get("x-api-key", "") + headers.get("authorization", "")
+        if host == "api.anthropic.com":
+            assert "sk-ant-good" in carried and "m-expired" not in carried
+        if host == "api.eu.mistral.ai":
+            assert "m-expired" in carried and "sk-ant-good" not in carried
