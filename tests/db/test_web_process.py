@@ -8,6 +8,7 @@ network.
 """
 
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -80,7 +81,11 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
     assert "ssh -L" in refusal
 
     # On loopback it serves the fleet page.
-    port = 8897
+    # A free port, not a fixed one: with 8897 the test once read the answers of another
+    # `calu web` that happened to hold that port, and failed on content it never served.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
     server = await anyio.open_process(
         [sys.executable, "-m", "calu", "web", "--port", str(port)],
         env=environment,
