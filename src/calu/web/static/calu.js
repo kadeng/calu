@@ -121,3 +121,38 @@
   poll();
   setInterval(poll, 4000);
 })();
+
+// The theme switch in the header: the system's theme, then light, then dark, then the system's
+// again. The choice lives in this browser only (localStorage); the inline script in base.html
+// applies it before the stylesheet, so a reload never flashes the other theme.
+(() => {
+  const button = document.getElementById("theme-switch");
+  if (!button) return;
+  const order = ["system", "light", "dark"];
+  const labels = { system: "Theme: system", light: "Theme: light", dark: "Theme: dark" };
+  const read = () => {
+    try {
+      const stored = localStorage.getItem("calu-theme");
+      return order.includes(stored) ? stored : "system";
+    } catch (e) {
+      return "system";
+    }
+  };
+  const apply = (theme) => {
+    if (theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+    button.textContent = labels[theme];
+    try {
+      if (theme === "system") localStorage.removeItem("calu-theme");
+      else localStorage.setItem("calu-theme", theme);
+    } catch (e) { /* storage blocked: the choice lasts for this page only */ }
+  };
+  // Kept here rather than re-read on each click: with storage blocked, re-reading would answer
+  // "system" every time and the switch would never get past "light".
+  let current = read();
+  apply(current);
+  button.addEventListener("click", () => {
+    current = order[(order.indexOf(current) + 1) % order.length];
+    apply(current);
+  });
+})();

@@ -17,7 +17,7 @@
 <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=escalation.id) }}">
   <input type="hidden" name="back" value="{{ url_for('escalation', escalation_id=escalation.id) }}">
   <input type="text" name="note" placeholder="note for Claude (optional)">
-  <button class="primary" name="decision" value="allow">Allow</button>
+  <button class="allow" name="decision" value="allow">Allow</button>
   <button class="danger" name="decision" value="deny">Deny</button>
 </form>
 {% endif %}

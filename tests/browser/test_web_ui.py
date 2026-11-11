@@ -228,3 +228,48 @@ async def test_the_clear_button_closes_an_honesty_mark(db_url: str, page) -> Non
             assert kept.closed_by == "the web interface", "the row records who closed it"
     finally:
         await conn.close()
+
+
+async def test_the_theme_switch_cycles_and_survives_a_reload(db_url: str, page) -> None:
+    """The header switch: the system's theme, light, dark, and back -- remembered per browser.
+
+    A dark interface that forgets the choice on every reload is one nobody keeps using, and a
+    switch that flashes the other theme before the page settles is the usual way it fails, so
+    the choice is applied by an inline script before the stylesheet loads.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        async with serve(create_app(db)) as base:
+            await page.goto(base + "/")
+            switch = page.locator("#theme-switch")
+            theme = "document.documentElement.dataset.theme || 'system'"
+            assert await switch.inner_text() == "Theme: system"
+            assert await page.evaluate(theme) == "system"
+
+            await switch.click()
+            assert await page.evaluate(theme) == "light"
+            await switch.click()
+            assert await page.evaluate(theme) == "dark"
+            background = await page.evaluate("getComputedStyle(document.body).backgroundColor")
+            assert background == "rgb(11, 13, 18)", "the dark tokens apply"
+
+            # Remembered: a reload comes back dark, already set before the first paint.
+            await page.reload()
+            assert await page.evaluate(theme) == "dark"
+            assert await switch.inner_text() == "Theme: dark"
+
+            # And the cycle closes: back to following the system.
+            await switch.click()
+            assert await page.evaluate(theme) == "system"
+            await page.reload()
+            assert await page.evaluate(theme) == "system"
+
+            # The page being shown is marked in the navigation.
+            current = page.locator("header nav a[aria-current=page]")
+            assert await current.inner_text() == "Sessions"
+            await page.goto(base + "/rules")
+            assert await current.inner_text() == "Rules"
+    finally:
+        await conn.close()

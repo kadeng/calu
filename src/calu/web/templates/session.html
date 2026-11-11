@@ -22,7 +22,7 @@
   <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=e.id) }}">
     <input type="hidden" name="back" value="{{ url_for('session', session_id=session.id) }}?detail={{ detail }}">
     <input type="text" name="note" placeholder="note for Claude (optional)">
-    <button class="primary" name="decision" value="allow">Allow</button>
+    <button class="allow" name="decision" value="allow">Allow</button>
     <button class="danger" name="decision" value="deny">Deny</button>
   </form>
   <p class="muted"><a href="{{ url_for('escalation', escalation_id=e.id) }}">what the checker saw</a></p>

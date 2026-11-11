@@ -66,7 +66,7 @@
           choices.className = "row";
           for (const option of question.options || []) {
             const button = document.createElement("button");
-            button.className = "primary";
+            button.className = "option";
             button.textContent = option.label;
             button.title = option.description || "";
             button.onclick = () => {
@@ -97,7 +97,7 @@
       note.type = "text";
       note.placeholder = "note for Claude (optional)";
       const allow = document.createElement("button");
-      allow.className = "primary";
+      allow.className = "allow";
       allow.textContent = "Allow";
       const deny = document.createElement("button");
       deny.className = "danger";

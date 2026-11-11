@@ -3,25 +3,39 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>{% block title %}calu{% endblock %}</title>
+{# Before the stylesheet, so a page switched to dark or light never flashes the other one. #}
+<script>
+  try {
+    const theme = localStorage.getItem("calu-theme");
+    if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  } catch (e) { /* storage blocked: follow the system */ }
+</script>
 <link rel="stylesheet" href="{{ url_for('static', path='/calu.css') }}">
 <script src="{{ url_for('static', path='/calu.js') }}" defer></script>
 </head>
 <body data-sessions-api="{{ url_for('sessions_json') }}" data-triage-url="{{ url_for('triage') }}">
+{% macro nav(route, label) -%}
+  {%- set path = url_for(route).path -%}
+  {%- set here = request.url.path -%}
+  <a href="{{ path }}"{% if here == path or (path != '/' and here.startswith(path)) %} aria-current="page"{% endif %}>{{ label }}</a>
+{%- endmacro %}
 <header>
   <span class="name"><a href="{{ url_for('fleet') }}">calu</a></span>
   <nav>
-    <a href="{{ url_for('fleet') }}">Sessions</a>
-    <a href="{{ url_for('escalations') }}">Escalations</a>
-    <a href="{{ url_for('triage') }}">Triage</a>
-    <a href="{{ url_for('checkers') }}">Checkers</a>
-    <a href="{{ url_for('rules') }}">Rules</a>
-    <a href="{{ url_for('settings') }}">Settings</a>
+    {{ nav('fleet', 'Sessions') }}
+    {{ nav('escalations', 'Escalations') }}
+    {{ nav('triage', 'Triage') }}
+    {{ nav('checkers', 'Checkers') }}
+    {{ nav('rules', 'Rules') }}
+    {{ nav('settings', 'Settings') }}
   </nav>
   {% block header_extra %}{% endblock %}
   <span class="count" id="attention"></span>
-  <span class="hint">Ctrl+K</span>
+  <span class="hint"><kbd>Ctrl</kbd> <kbd>K</kbd></span>
   <span class="version">calu {{ version }} · local only</span>
+  <button type="button" class="theme-switch" id="theme-switch" title="Switch between the system's theme, light and dark">Theme</button>
 </header>
 <main>
 {% block body %}{% endblock %}
