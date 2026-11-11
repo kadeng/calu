@@ -59,6 +59,11 @@ phases.
 | `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |
 | `src/calu/comments/` | User comments on selections in diffs and files |
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
+| `src/calu/model_choice.py` | Which model the checkers get when none is named: the first provider whose credentials are found (D129) |
+| `src/calu/claude_model.py` | The `claude:` model type: a check answered by the `claude` CLI on this machine's own account, no tools (D117) |
+| `src/calu/honesty.py` | The honesty register as the gate uses it: marks, which commands would run a marked file, path checks (§13) |
+| `src/calu/configdoc.py` | Walks `calu.config.Config` for `docs/CONFIGURATION.md` and `calu config list` |
+| `src/calu/markdown.py` | Code fences that the quoted text cannot close (commands, diffs, file excerpts) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |
 | `src/calu/testing.py` | Rule-based fake checkers for tests without model calls |
 | `src/calu/db/` | Connections (`Db`: one connection, several tasks), migrations (`migrations/NNNN_*.sql`), notifications (`notify.py`), local Docker database (`local.py`, `local-compose.yml`) |

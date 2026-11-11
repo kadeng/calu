@@ -85,3 +85,23 @@ def test_the_check_would_notice_a_dead_anchor() -> None:
     assert "the-models-claude-codes-account-and-the-checkers-own" in anchors
     assert "calu" in anchors
     assert "the-models" not in anchors
+
+
+def test_every_module_is_in_the_contributors_table() -> None:
+    """AGENTS.md lists what each module of `src/calu` is for; a module it omits is one nobody finds.
+
+    Five were missing when this was first checked on 2026-11-11 -- among them `honesty.py`,
+    the whole honesty register, two days after it was written. A table that rots silently is
+    the same kind of untruth as a stale count, so it is checked the same way.
+    """
+    table = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    package = ROOT / "src" / "calu"
+    missing = []
+    for entry in sorted(package.iterdir()):
+        if entry.name.startswith(("_", ".")) or entry.name == "py.typed":
+            continue
+        key = f"`src/calu/{entry.name}/`" if entry.is_dir() else f"`src/calu/{entry.name}`"
+        if entry.is_dir() or entry.suffix == ".py":
+            if key not in table:
+                missing.append(key)
+    assert missing == [], f"AGENTS.md does not say what these are for: {', '.join(missing)}"
