@@ -1768,6 +1768,7 @@ async def test_a_slow_rule_check_does_not_stop_the_event_loop(
 
     monkeypatch.setattr(session.rules, "evaluate", slow)
     ticks = 0
+    elapsed = 0.0
 
     async def ticker() -> None:
         nonlocal ticks
