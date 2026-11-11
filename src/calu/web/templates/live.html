@@ -7,7 +7,7 @@
 </h1>
 <p class="muted">
   <a href="{{ url_for('session', session_id=session.id) }}">recorded history</a>
-  · <span class="mono">{{ session.address }}</span>
+  {% if session.address %}· <span class="mono">{{ session.address }}</span>{% endif %}
   · <span id="note">attaching…</span>
 </p>
 

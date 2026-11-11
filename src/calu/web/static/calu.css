@@ -417,6 +417,9 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
   border-radius: var(--radius);
   padding: .4rem .9rem;
 }
+#stream:empty { padding: 1.2rem .9rem; }
+#stream:empty::before { content: "Nothing has arrived yet."; color: var(--muted); font-family: var(--sans); }
+#text { min-height: 6rem; font-family: var(--sans); font-size: .95rem; background: var(--surface); }
 #stream .line {
   padding: .3rem 0;
   white-space: pre-wrap;
