@@ -38,6 +38,12 @@ class Route(StrEnum):
 
 EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 
+SHELL_TOOLS = frozenset({"Bash", "Monitor"})
+"""Tools whose `command` input is a shell command. `Monitor` (CLI 2.1.319) runs its script "in
+the same shell environment as Bash", so the deny lists, the honesty register and the command
+checker treat it like Bash (PLAN.md D156); a Monitor without `command` (a WebSocket) names no
+command and goes to the checker."""
+
 READ_ONLY_TOOLS = frozenset(
     {
         "Read",
@@ -108,7 +114,7 @@ class ToolPolicy(BaseModel):
         """
         if tool_name in self.overrides:
             return self.overrides[tool_name]
-        if tool_name == "Bash":
+        if tool_name in SHELL_TOOLS:
             return Route.COMMAND
         if tool_name in EDIT_TOOLS:
             return Route.EDIT
@@ -120,7 +126,10 @@ class ToolPolicy(BaseModel):
 
 
 KNOWN_TOOLS = (
-    frozenset({"Bash", "AskUserQuestion", "WebFetch", "WebSearch"}) | EDIT_TOOLS | (READ_ONLY_TOOLS)
+    frozenset({"AskUserQuestion", "WebFetch", "WebSearch"})
+    | SHELL_TOOLS
+    | EDIT_TOOLS
+    | READ_ONLY_TOOLS
 )
 """Tools whose route was chosen on purpose. `WebFetch` and `WebSearch` are here although they
 fall to the default route, because that is deliberate; every other tool reaches the default

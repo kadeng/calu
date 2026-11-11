@@ -254,6 +254,19 @@ def render_step(step: Step, workspace: Path) -> str:
         lines.append("Command:\n" + fence(_truncate(str(inp.get("command", ""))), "bash"))
         return "\n".join(lines)
 
+    if step.tool_name == "Monitor" and inp.get("command"):
+        # A shell command like Bash's, kept running in the background; each line it prints
+        # becomes a message to Claude (D156).
+        if inp.get("description"):
+            lines.append(f"Claude's description: {inp['description']}")
+        lines.append(
+            "Runs in the background as a monitor, for up to "
+            f"{int(inp.get('timeout_ms') or 300000) // 1000} s; every line it prints is "
+            "passed to Claude."
+        )
+        lines.append("Command:\n" + fence(_truncate(str(inp.get("command", ""))), "bash"))
+        return "\n".join(lines)
+
     file_path = inp.get("file_path") or inp.get("notebook_path")
     if file_path and step.tool_name in ("Edit", "Write", "MultiEdit"):
         label = _display_path(str(file_path), workspace)

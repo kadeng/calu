@@ -450,3 +450,29 @@ def test_a_worktree_is_judged_like_the_project_it_checks_out(tmp_path: Path) -> 
     assert write(tmp_path / ".claude" / "worktrees" / "x.txt").ask
     assert write(tmp_path / ".claude" / "worktrees" / "not-a-tree" / "a.py").ask
     assert write(tmp_path / ".claude" / "settings.json").ask
+
+
+def test_a_monitor_command_meets_the_same_rules_as_bash(tmp_path: Path) -> None:
+    """D156: `Monitor` runs its `command` in the same shell as Bash (CLI 2.1.319), but the
+    rules only looked at tools named Bash -- `Monitor(command="sudo ...")` skipped them."""
+    from calu.checkers.policy import Route, ToolPolicy
+
+    (tmp_path / ".env").write_text("K=1\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+
+    def monitor(command: str) -> Step:
+        return Step(
+            tool_name="Monitor",
+            tool_input={"command": command, "description": "d", "timeout_ms": 1000},
+            cwd=str(tmp_path),
+        )
+
+    assert rules.evaluate(monitor("X=1 sudo ls /root")).ask
+    assert rules.evaluate(monitor("tail -f .env")).ask
+    assert not rules.evaluate(monitor("ls")).ask
+    websocket = Step(
+        tool_name="Monitor", tool_input={"ws": {"url": "wss://x"}, "description": "d"}, cwd=""
+    )
+    assert not rules.evaluate(websocket).allowed, "no command: the checker decides"
+    # Routed to the command checker on purpose, even when unknown tools are allowed.
+    assert ToolPolicy(default=Route.ALLOW).route("Monitor") is Route.COMMAND

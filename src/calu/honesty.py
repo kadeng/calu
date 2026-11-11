@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from calu.checkers import CodeMark, Step
+from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.shell import parse_command
 
 
@@ -314,7 +315,7 @@ def blocking_marks(step: Step, marks: Sequence[HonestyMark], workspace: Path) ->
         The open marks the command names, in the order given; empty for every tool other than
         `Bash` and for a command that names none of them.
     """
-    if step.tool_name != "Bash":
+    if step.tool_name not in SHELL_TOOLS:
         return []
     command = str(step.tool_input.get("command", ""))
     if not command:
@@ -349,7 +350,7 @@ def marks_of_step(step: Step, marks: Sequence[HonestyMark], workspace: Path) -> 
                 named.add(resolved.resolve().relative_to(workspace.resolve()).as_posix())
             except ValueError, OSError:
                 continue
-    if step.tool_name == "Bash":
+    if step.tool_name in SHELL_TOOLS:
         named |= command_paths(
             str(step.tool_input.get("command", "")),
             Path(step.cwd) if step.cwd else workspace,
@@ -430,9 +431,7 @@ def register_note(
     return " ".join(parts)
 
 
-def in_force(
-    marks: Sequence[HonestyMark], scope: str, branch: str | None
-) -> list[HonestyMark]:
+def in_force(marks: Sequence[HonestyMark], scope: str, branch: str | None) -> list[HonestyMark]:
     """Return the marks that apply on the current branch under `honesty.scope` (D142, Q19).
 
     Args:

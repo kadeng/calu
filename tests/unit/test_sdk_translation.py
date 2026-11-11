@@ -268,12 +268,12 @@ def test_tools_without_a_route_are_named_once(tmp_path: Path) -> None:
         "RemoteTrigger",
         "Artifact",
         "mcp__x__y",
-        "Monitor",
+        "CronCreate",
     ]
     first = sdk._translate(SystemMessage(subtype="init", data={"session_id": "c", "tools": tools}))
     (warning,) = first
     assert isinstance(warning, Log) and warning.level == "warning"
-    assert "Monitor, RemoteTrigger" in warning.message, "sorted, routed and MCP tools left out"
+    assert "CronCreate, RemoteTrigger" in warning.message, "sorted, routed and MCP tools left out"
     assert "Artifact" not in warning.message and "mcp__" not in warning.message
     again = sdk._translate(SystemMessage(subtype="init", data={"session_id": "c", "tools": tools}))
     assert again == [], "once per session, not per turn"

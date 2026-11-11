@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from calu.checkers.model import Step
+from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.search import searched_files
 from calu.checkers.shell import ShellPath, command_variants, parse_command
 
@@ -221,7 +222,7 @@ class Rules:
         """
         outcome = RuleOutcome()
         tool = step.tool_name
-        if tool != "Bash" and tool not in READ_PATH_TOOLS and tool not in WRITE_PATH_TOOLS:
+        if tool not in SHELL_TOOLS and tool not in READ_PATH_TOOLS and tool not in WRITE_PATH_TOOLS:
             return outcome
         for name in [*RULE_LISTS, "unknown"]:
             for error in self.lists(name)[1]:
@@ -231,7 +232,7 @@ class Rules:
             cwd = self.workspace / cwd
         all_allowed = True
         parts = 0
-        if tool == "Bash":
+        if tool in SHELL_TOOLS:
             command = str(step.tool_input.get("command", ""))
             parsed = parse_command(command, cwd)
             if parsed.error is not None:
