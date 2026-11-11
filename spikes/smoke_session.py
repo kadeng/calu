@@ -31,6 +31,7 @@ checker. See `HANDOFF.md`.
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -41,8 +42,9 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from calu import herd
-from calu.config import SETTINGS_KEY
+from calu.config import SETTINGS_KEY, load_secrets
 from calu.db import Db, connect
+from calu.model_choice import detect_model
 from calu.run import RunOptions, run_session
 from calu.setup import setup
 from calu.testing import fake_models
@@ -113,7 +115,23 @@ async def main(args: argparse.Namespace) -> int:
     try:
         owner = await connect(url)
         try:
-            _, session_url = await setup(owner, url, "test:model")
+            checker_model = "test:model"
+            if args.checker_model:
+                # Real checkers: the model calu would choose itself, or the one given (D129).
+                load_secrets()
+                if args.checker_model == "auto":
+                    choice = detect_model(os.environ)
+                    if choice is None:
+                        raise SystemExit("--checker-model auto found no provider credentials")
+                    checker_model, effort = choice.model, choice.effort
+                    print(f"=== checkers on {checker_model} ({choice.provider}: {choice.reason})")
+                else:
+                    checker_model, effort = args.checker_model, None
+                for role in ("command_checker", "edit_checker", "changeset_checker"):
+                    settings[role] = {"model": checker_model}
+                    if effort:
+                        settings[role]["effort"] = effort
+            _, session_url = await setup(owner, url, checker_model)
             await owner.execute(
                 "INSERT INTO config (scope, scope_id, key, value) VALUES ('global', '', %s, %s)",
                 (SETTINGS_KEY, json.dumps(settings)),
@@ -133,7 +151,7 @@ async def main(args: argparse.Namespace) -> int:
                         interactive=False,
                         socket_path=Path(args.socket) if args.socket else None,
                     ),
-                    checker_models=fake_models(),
+                    checker_models=None if args.checker_model else fake_models(),
                 )
             )
 
@@ -175,6 +193,12 @@ parser.add_argument(
     help="measure and review what a command writes (PLAN.md D31): snapshot and review on",
 )
 parser.add_argument("--model", default="haiku")
+parser.add_argument(
+    "--checker-model",
+    metavar="MODEL|auto",
+    help="real checkers instead of the rule-based fakes: a model string, or `auto` for the one "
+    "calu would choose from the credentials found (D129). Costs real model calls.",
+)
 parser.add_argument(
     "--socket", metavar="PATH", help="serve the clients on a Unix socket at PATH (PLAN.md §6)"
 )
