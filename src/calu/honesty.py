@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from calu.checkers import CodeMark, Step
+from calu.checkers.shell import parse_command
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,9 @@ def command_paths(command: str, cwd: Path, workspace: Path) -> set[str]:
     project. `-m` is only read after an interpreter (`python`, `python3`, `uv`, `poetry`,
     `pipenv`), so a `-m` that means something else to another program is ignored.
 
+    The paths the shell splitter resolves are added as well, so a `cd` earlier in the command
+    and a glob are followed (D150).
+
     Args:
         command: The shell command as Claude sent it.
         cwd: The directory the command runs in; a relative word resolves against it.
@@ -232,6 +236,18 @@ def command_paths(command: str, cwd: Path, workspace: Path) -> set[str]:
         # and a mark on a file that has since been deleted cannot be run anyway.
         if (root / relative).is_file():
             found.add(relative)
+    # The shell splitter follows `cd` and expands globs, which a word-by-word reading cannot:
+    # `cd src && python parser.py` and `python src/pars*.py` run src/parser.py too (D150).
+    for used in parse_command(command, base).paths:
+        for path in used.paths:
+            if path is None:
+                continue
+            try:
+                relative = path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            if (root / relative).is_file():
+                found.add(relative)
     return found
 
 

@@ -428,3 +428,21 @@ def test_with_branch_scope_only_the_marks_of_this_branch_apply() -> None:
     assert [m.id for m in in_force(marks, "branch", "main")] == [1, 3]
     assert [m.id for m in in_force(marks, "branch", None)] == [1, 2, 3], "unknown: all apply"
     assert [m.id for m in in_force(marks, "project", "main")] == [1, 2, 3]
+
+
+def test_a_command_that_reaches_a_marked_file_through_cd_or_a_glob_names_it(
+    tmp_path: Path,
+) -> None:
+    """D150: every word was resolved against the starting directory, so `cd src && python
+    parser.py` and `python src/pars*.py` ran a marked file without naming it."""
+    from calu.honesty import command_paths
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
+    for command in (
+        "cd src && python parser.py",
+        "python src/pars*.py",
+        "(cd src; python parser.py)",
+    ):
+        assert command_paths(command, tmp_path, tmp_path) == {"src/parser.py"}, command
+    assert command_paths("make test", tmp_path, tmp_path) == set()
