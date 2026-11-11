@@ -589,6 +589,10 @@ class TurnResult(Event):
     result: str = ""
     cost_usd: float | None = None
     num_turns: int = 0
+    background_tasks: int = 0
+    """Background tasks still running when the turn ended (background commands, Monitors,
+    workflows, background subagents). Claude Code starts another turn by itself when they
+    finish (measured, CLI 2.1.319), so a client that waits for "done" waits for 0 (D158)."""
 
 
 class AgentInfo(BaseModel):

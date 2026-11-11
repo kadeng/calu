@@ -88,6 +88,26 @@ async def test_the_idle_signal_waits_until_the_session_worked():
         await idle.wait()
 
 
+async def test_an_unattended_run_waits_for_claude_codes_background_tasks():
+    """D158: a turn may end while a background command, Monitor or Workflow still runs; Claude
+    Code starts another turn when they finish (measured). Ending the run at the first idle
+    stopped the session under them, with their steps still to be checked."""
+    idle = IdleSignal()
+    await idle(SessionState(state="running"))
+    await idle(TurnResult(background_tasks=2))
+    await idle(SessionState(state="idle"))
+    with anyio.move_on_after(0.05):
+        await idle.wait()
+        raise AssertionError("the run ended while background tasks were running")
+    # Claude Code's own follow-up turn, after the tasks finished.
+    await idle(SessionState(state="running"))
+    await idle(TurnResult(background_tasks=0))
+    await idle(SessionState(state="idle"))
+    with anyio.fail_after(1):
+        await idle.wait()
+    assert "2 background task(s) still running" in str(format_event(TurnResult(background_tasks=2)))
+
+
 async def test_a_failed_session_also_ends_the_wait():
     idle = IdleSignal()
     await idle(SessionState(state="failed"))

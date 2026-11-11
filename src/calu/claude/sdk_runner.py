@@ -192,6 +192,8 @@ class SdkRunner:
         self._skills = SkillContentFilter()  # skill text after Skill calls is no user input
         self.agents: dict[str, AgentInfo] = {}  # by Agent tool call id
         self._task_to_tool_use: dict[str, str] = {}  # SDK task/agent id -> tool call id
+        self.background_tasks = 0
+        """Claude Code's background tasks now running, from `background_tasks_changed` (D158)."""
         self.session_id: str | None = None
 
     # ------------------------------------------------------------------ ClaudeRunner interface
@@ -416,12 +418,24 @@ class SdkRunner:
             """
             agent_id = self._agent_id(input_data.get("agent_id"))
             info = self.agents.get(agent_id or "")
+            last = str(input_data.get("last_assistant_message") or "")
             if info is None:
-                log.warning("SubagentStop for unknown subagent %r; result not reviewed", agent_id)
+                # Not started by the Agent tool -- a Workflow script's `agent()` starts its
+                # subagents directly. Their steps pass the gate like any other (verified), and
+                # their results are reviewed too; the task comes from their transcript (D157).
+                kind = str(input_data.get("agent_type") or "subagent")
+                result = SubagentResult(
+                    agent_id=agent_id,
+                    description=f"{kind}, started without the Agent tool (e.g. by a Workflow)",
+                    prompt=first_prompt(input_data.get("agent_transcript_path")),
+                    result=last[:SUBAGENT_RESULT_CHARS],
+                    background=True,
+                )
+                note = await gate.review_subagent_result(result)
+                await self._send_note(note)
                 return {}
             if not info.background:
                 return {}
-            last = str(input_data.get("last_assistant_message") or "")
             result = SubagentResult(
                 agent_id=agent_id,
                 description=info.description,
@@ -721,8 +735,12 @@ class SdkRunner:
                         result=msg.result or "",
                         cost_usd=msg.total_cost_usd,
                         num_turns=msg.num_turns,
+                        background_tasks=self.background_tasks,
                     )
                 )
+            case SystemMessage() if msg.subtype == "background_tasks_changed":
+                tasks = msg.data.get("tasks")
+                self.background_tasks = len(tasks) if isinstance(tasks, list) else 0
             case SystemMessage() if msg.subtype == "init":
                 self.session_id = msg.data.get("session_id", self.session_id)
                 events += self._unknown_tools_warning(msg.data.get("tools"))
@@ -839,3 +857,45 @@ class SdkRunner:
         if status == "completed":
             info.status = "completed"
         return [self._agents_update()]
+
+
+def first_prompt(transcript_path: Any, limit: int = 20_000) -> str:
+    """Return the first user message of a subagent's transcript: the task it was given (D157).
+
+    A subagent the Agent tool started has its task in that tool call; one a Workflow script
+    started does not, but Claude Code's SubagentStop hook names its transcript, whose first
+    `user` line holds the prompt.
+
+    Args:
+        transcript_path: `agent_transcript_path` of the hook input; anything that is not an
+            existing file gives "".
+        limit: Most characters returned.
+
+    Returns:
+        The prompt text, or "" when it cannot be read.
+    """
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return ""
+    try:
+        with open(transcript_path, encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict) or entry.get("type") != "user":
+                    continue
+                content = (entry.get("message") or {}).get("content")
+                if isinstance(content, str):
+                    return content[:limit]
+                if isinstance(content, list):
+                    texts = [
+                        str(block.get("text", ""))
+                        for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    ]
+                    if texts:
+                        return "\n".join(texts)[:limit]
+    except OSError:
+        return ""
+    return ""

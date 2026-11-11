@@ -277,3 +277,31 @@ def test_tools_without_a_route_are_named_once(tmp_path: Path) -> None:
     assert "Artifact" not in warning.message and "mcp__" not in warning.message
     again = sdk._translate(SystemMessage(subtype="init", data={"session_id": "c", "tools": tools}))
     assert again == [], "once per session, not per turn"
+
+
+def test_the_turn_result_carries_the_running_background_tasks(tmp_path: Path) -> None:
+    """D158: `background_tasks_changed` lists Claude Code's running background tasks."""
+    from claude_agent_sdk import ResultMessage
+
+    sdk = runner(tmp_path)
+    tasks = [{"task_id": "b1", "task_type": "local_bash"}, {"task_id": "w1"}]
+    assert (
+        sdk._translate(SystemMessage(subtype="background_tasks_changed", data={"tasks": tasks}))
+        == []
+    )
+
+    def result() -> ResultMessage:
+        return ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s",
+        )
+
+    (turn,) = sdk._translate(result())
+    assert isinstance(turn, TurnResult) and turn.background_tasks == 2
+    sdk._translate(SystemMessage(subtype="background_tasks_changed", data={"tasks": []}))
+    (turn,) = sdk._translate(result())
+    assert isinstance(turn, TurnResult) and turn.background_tasks == 0

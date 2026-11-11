@@ -169,7 +169,13 @@ def format_event(event: Event) -> str | None:
         case EscalationResolved():
             return f"*** escalation {event.escalation_id}: {event.decision}"
         case TurnResult():
-            return f"[turn ended: {event.subtype}]"
+            waiting = (
+                f"; {event.background_tasks} background task(s) still running, Claude Code"
+                " continues when they finish"
+                if event.background_tasks
+                else ""
+            )
+            return f"[turn ended: {event.subtype}{waiting}]"
         case HonestyUpdate():
             if not event.marks:
                 return "*** the honesty register is clear again"
@@ -241,7 +247,11 @@ class IdleSignal:
     """Event sink that reports when the session has nothing left to do.
 
     Used for unattended runs (`calu run -p "..."` without `--interactive`): the run ends when
-    the session is idle again after it has worked, or when it stopped or failed.
+    the session is idle again after it has worked, or when it stopped or failed. A turn that
+    ends while Claude Code still has background tasks running (a background command, a
+    Monitor, a Workflow, a background subagent) does not count: Claude Code starts another
+    turn by itself when they finish, and their steps still pass the gate -- ending the run
+    there stopped the session under them (D158).
     """
 
     WORKING = ("running", "checking", "tool_call", "escalated")
@@ -251,6 +261,7 @@ class IdleSignal:
         """Create a signal that is not set."""
         self._event = anyio.Event()
         self._worked = False
+        self._background = 0
 
     async def __call__(self, event: Event) -> None:
         """Set the signal when the session becomes idle after having worked.
@@ -258,11 +269,16 @@ class IdleSignal:
         Args:
             event: The session event.
         """
+        if isinstance(event, TurnResult):
+            self._background = event.background_tasks
+            return
         if not isinstance(event, SessionState):
             return
         if event.state in self.WORKING:
             self._worked = True
-        elif event.state in ("stopped", "failed") or (self._worked and event.state == "idle"):
+        elif event.state in ("stopped", "failed") or (
+            self._worked and event.state == "idle" and not self._background
+        ):
             self._event.set()
 
     async def wait(self) -> None:

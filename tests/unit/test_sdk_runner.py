@@ -203,3 +203,45 @@ def test_the_hook_timeouts_match_what_each_hook_waits_for(tmp_path: Path):
     assert HOOK_TIMEOUT_S > CHECKER_DEADLINE_S
     for event in ("PostToolUse", "SubagentStop"):
         assert hooks[event][0].timeout == REVIEW_HOOK_TIMEOUT_S
+
+
+@pytest.mark.anyio
+async def test_a_workflow_agents_result_is_reviewed_with_its_task(tmp_path: Path):
+    """D157: a Workflow script's `agent()` starts subagents without the Agent tool. Their steps
+    pass the gate (verified in a real session), but SubagentStop called them unknown and their
+    results went unreviewed. The task now comes from the subagent's transcript."""
+    import json
+
+    transcript = tmp_path / "agent-a1.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "system"})
+        + "\n"
+        + json.dumps({"type": "user", "message": {"content": "Find the flaky tests"}})
+        + "\n",
+        encoding="utf-8",
+    )
+    reviewed = []
+
+    class Recording(AllowAll):
+        async def review_subagent_result(self, result):
+            reviewed.append(result)
+            return ""
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    hooks = runner._options(Recording(), None).hooks  # type: ignore[arg-type]
+    assert hooks is not None
+    stop: Any = hooks["SubagentStop"][0].hooks[0]  # called with plain dicts, as the CLI does
+    await stop(
+        {
+            "agent_id": "a1",
+            "agent_type": "workflow-subagent",
+            "agent_transcript_path": str(transcript),
+            "last_assistant_message": "tests/test_x.py is flaky",
+        },
+        None,
+        None,
+    )
+    (result,) = reviewed
+    assert result.prompt == "Find the flaky tests"
+    assert result.result == "tests/test_x.py is flaky"
+    assert "workflow-subagent" in result.description and "Workflow" in result.description
