@@ -219,6 +219,12 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
             "/rules/{rule_list}", _page(save_rule_list, state), methods=["POST"], name="save_rules"
         ),
         Route(
+            "/rule-sets/{name}",
+            _page(add_rule_set, state),
+            methods=["POST"],
+            name="add_rule_set",
+        ),
+        Route(
             "/honesty/{mark_id:int}/clear",
             _page(clear_mark, state),
             methods=["POST"],
@@ -1118,6 +1124,12 @@ async def _rules_page(
             "projects": await admin.projects(state.db),
             "saved": None if failed else request.query_params.get("saved"),
             "error": error,
+            # Ready-made sets that are not in the default lists (D143), offered under the list
+            # they would be added to.
+            "rule_sets": [
+                (name, rule_list, what) for name, (rule_list, what) in admin.RULE_SETS.items()
+            ],
+            "set_added": request.query_params.get("set_added"),
             # The honesty register blocks steps as the deny lists do, so it belongs on the page
             # about what blocks a step (PLAN.md D82). Clearing one is the override for a mark
             # nobody agrees with (D83).
@@ -1167,6 +1179,33 @@ async def save_rule_list(request: Request, state: _State) -> Response:
     except admin.AdminError as exc:
         return await _rules_page(request, state, failed=(rule_list, text, str(exc)))
     query = f"?project={project}&saved={rule_list}" if project else f"?saved={rule_list}"
+    return RedirectResponse(
+        str(request.url_for("rules")) + query + f"#{rule_list}", status_code=303
+    )
+
+
+async def add_rule_set(request: Request, state: _State) -> Response:
+    """Append a ready-made rule set to its list in one scope (PLAN.md D143).
+
+    The same as `calu rules add-set NAME`, through `calu.admin.add_rule_set`: patterns the list
+    already has, disabled ones included, are skipped, so pressing the button twice adds nothing.
+
+    Args:
+        request: The request; its path names the set, `?project=` the scope.
+        state: The shared state.
+
+    Returns:
+        A redirect back to the page at that list, with `set_added=<count>`; 404 for an unknown
+        set or project.
+    """
+    name = str(request.path_params["name"])
+    project = request.query_params.get("project") or None
+    try:
+        added, _skipped = await admin.add_rule_set(state.db, name, project)
+    except admin.AdminError as exc:
+        return HTMLResponse(_not_found(str(exc)), status_code=404)
+    rule_list = admin.RULE_SETS[name][0]
+    query = f"?set_added={len(added)}" + (f"&project={project}" if project else "")
     return RedirectResponse(
         str(request.url_for("rules")) + query + f"#{rule_list}", status_code=303
     )

@@ -44,7 +44,17 @@
   </form>
   {% endfor %}
 </div>
+{% for set_name, set_list, set_what in rule_sets if set_list == kind ~ '-deny' %}
+<form class="rule-set" method="post"
+      action="{{ url_for('add_rule_set', name=set_name) }}{% if project %}?project={{ project }}{% endif %}">
+  <span class="muted">Ready-made set <strong>{{ set_name }}</strong>: {{ set_what }} -- not in the
+    default list. Adding it appends the patterns this list does not have yet; remove any you do not want.</span>
+  <button type="submit">Add {{ set_name }} to {{ set_list }}</button>
+  {% if set_added is not none %}<span class="saved" role="status">{{ set_added }} rule(s) added from the set.</span>{% endif %}
+</form>
 {% endfor %}
+{% endfor %}
+
 
 {% if marks %}
 <h2 id="honesty">Code recorded as dishonest <span class="muted">({{ marks | length }})</span></h2>

@@ -294,6 +294,29 @@ async def test_the_rules_page_groups_the_lists(db_url: str) -> None:
         await conn.close()
 
 
+async def test_the_publishing_set_is_offered_and_added_from_the_rules_page(db_url: str) -> None:
+    """D143: the set is offered under command-deny, added once, and then part of the text."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        async with await client_for(Db(conn)) as client:
+            page = (await client.get("/rules")).text
+            assert "Add publishing to command-deny" in page
+            assert "push( |$)" not in page.split('id="command-deny"')[1].split("</textarea>")[0]
+
+            first = await client.post("/rule-sets/publishing", follow_redirects=True)
+            assert first.status_code == 200
+            assert "rule(s) added from the set" in first.text
+            deny_text = first.text.split('id="command-deny"')[1].split("</textarea>")[0]
+            assert "^git( -[Cc] \\S+)* push( |$)" in deny_text
+
+            again = await client.post("/rule-sets/publishing", follow_redirects=True)
+            assert "0 rule(s) added from the set" in again.text, "a second press adds nothing"
+            assert (await client.post("/rule-sets/everything")).status_code == 404
+    finally:
+        await conn.close()
+
+
 async def test_a_rule_list_is_edited_as_text_on_the_rules_page(db_url: str) -> None:
     """D137, the owner's request: each list is one text area of regexes, saved as a whole.
 

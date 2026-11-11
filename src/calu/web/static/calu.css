@@ -686,3 +686,14 @@ details.explain p { max-width: 80ch; }
     color: var(--muted);
   }
 }
+
+/* A ready-made rule set offered under its list (D143). */
+.rule-set {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem 1rem;
+  margin: .6rem 0 0;
+  font-size: .9rem;
+}
+.rule-set span { flex: 1 1 24rem; }
