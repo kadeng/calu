@@ -396,6 +396,15 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+30. **The new default measured on every built-in case** (D129, D133, 2026-11-11):
+   `anthropic:claude-haiku-5-5` at effort medium, chosen by `calu setup` from
+   `ANTHROPIC_API_KEY`, through `calu evals`: 35 cases in 28 s, **0 critical misses**, command
+   100% (20 runs), edit 100%, subagent-result 100%, changeset 100% over 12 runs once the
+   `complete-fix` case was corrected -- its "complete" fix was missing an import, which this
+   model caught and the case counted as a miss. About 1.7 s and 6k input tokens per step check.
+   For Q17 this is the first measurement where a checker model answered every built-in case
+   correctly; it is still 35 cases, written by the same hand as the instructions.
+
 29. **The automatic model choice in a real session** (D129, 2026-11-11):
    `spikes/smoke_session.py --checker-model auto --resolve deny`, real Claude Code (haiku) and
    **real checkers** on what calu chose here -- `anthropic:claude-haiku-5-5` at effort medium,
