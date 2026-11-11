@@ -5,6 +5,8 @@ configuration and may not change it (`PLAN.md` §6.2). Read and change it with t
 credential:
 
 ```bash
+calu config list --changed                       # what is set, where it comes from, defaults
+calu config models auto                          # one model for every role (or a model string)
 calu config get                                  # everything the global scope stores
 calu config get claude.sandbox                   # one subtree
 calu config set claude.model opus                # one value
