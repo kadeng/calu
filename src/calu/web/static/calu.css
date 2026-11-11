@@ -594,8 +594,9 @@ details.explain p { max-width: 80ch; }
 #stream .user { color: var(--accent); font-weight: 600; }
 #stream .assistant { color: var(--fg); }
 #stream .thinking { color: var(--muted); font-style: italic; }
-#stream .tool { color: var(--good); }
-#stream .check { color: var(--warn); }
+#stream .tool { color: var(--fg); }
+#stream .check { color: var(--fg-soft); }
+#stream .line > .tag, #stream .line > .decision { margin-right: .2rem; vertical-align: .05rem; }
 #stream .result, #stream .log, #stream .diff, #stream .turn { color: var(--muted); }
 
 .escalation {

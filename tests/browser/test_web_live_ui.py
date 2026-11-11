@@ -34,6 +34,11 @@ async def test_the_live_view_streams_and_answers_an_escalation(
         await page.wait_for_selector(".escalation")
         card = await page.inner_text(".escalation")
         assert "deploy" in card and "calu:escalate" in card
+        # D140: the tool call shows its command, not its input as JSON, and the verdict is a
+        # badge coloured by the decision -- before, every verdict was orange, a PASS included.
+        assert await page.text_content("#stream .tool .tag") == "Bash"
+        assert '{"command"' not in await page.inner_text("#stream")
+        assert await page.locator("#stream .check .decision.escalate").count() == 1
 
         # Answering from the card resolves it in the session, so the card goes and the turn ends.
         await page.fill(".escalation input[type=text]", "go ahead")

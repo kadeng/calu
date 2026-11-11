@@ -15,10 +15,18 @@
   let explained = false;
   const say = (text) => { el("note").textContent = text; };
 
-  function line(kind, text, extra) {
+  // `tag` is an optional badge in front of the text: the tool's name, or a checker's decision
+  // with the same colours as on the other pages (grey PASS, orange ESCALATE, red DENY).
+  function line(kind, text, extra, tag) {
     const row = document.createElement("div");
     row.className = `line ${kind}`;
-    row.textContent = text;
+    if (tag) {
+      const badge = document.createElement("span");
+      badge.className = tag.className;
+      badge.textContent = tag.text;
+      row.append(badge, " ");
+    }
+    row.append(text);
     if (extra) {
       const more = document.createElement("span");
       more.className = "muted";
@@ -28,6 +36,14 @@
     stream.appendChild(row);
     stream.scrollTop = stream.scrollHeight;
     return row;
+  }
+
+  // The part of a tool's input a person reads first: the command, the path or the pattern.
+  // Anything else is shown as JSON, shortened.
+  const MAIN_FIELD = ["command", "file_path", "path", "pattern", "url", "query", "description", "prompt"];
+  function toolText(input) {
+    const field = MAIN_FIELD.find((key) => typeof (input || {})[key] === "string");
+    return field ? input[field].slice(0, 500) : JSON.stringify(input).slice(0, 300);
   }
 
   // Deltas of one message are appended to the same line, so streaming text reads as text.
@@ -144,10 +160,13 @@
         break;
       case "assistant.thinking": line("thinking", params.text); break;
       case "user.input": line("user", params.text); break;
-      case "tool.use": line("tool", `${params.name} ${JSON.stringify(params.input).slice(0, 300)}`); break;
+      case "tool.use":
+        line("tool", toolText(params.input), "", { className: "tag", text: params.name });
+        break;
       case "check.result":
-        line("check", `${params.route} checker: ${params.decision} ${params.step_summary || ""}`,
-             params.comment || params.reason || "");
+        line("check", `${params.route} checker: ${params.step_summary || ""}`,
+             params.comment || params.reason || "",
+             { className: `decision ${String(params.decision).toLowerCase()}`, text: params.decision });
         break;
       case "tool.result": line("result", (params.content || "").slice(0, 2000)); break;
       case "edit.diff": line("diff", `${params.path}: ${params.before.length} → ${params.after.length} characters`); break;
