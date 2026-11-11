@@ -26,6 +26,7 @@
                                    resolve an escalation; the waiting session continues
     calu evals [FILE ...]          measure how well the configured checkers decide
     calu project add DIR|list      register a project in the database
+    calu config list [--changed]   every setting: effective value, where it comes from, default
     calu config get|set|unset KEY  configuration values (`claude.model`, `context.narrate`, ...)
     calu checker list|show|set|edit
                                    checker definitions; `edit NAME` opens the instructions in
@@ -60,7 +61,14 @@ from psycopg.conninfo import conninfo_to_dict
 from calu import __version__, admin, doctor, herd
 from calu.acp import serve_acp
 from calu.attach import attach
-from calu.config import DEFAULT_ALLOWED_DOMAINS, DEFAULT_NETWORK_POLICY, EMPTY_CHAT_SUMMARY
+from calu.config import (
+    DEFAULT_ALLOWED_DOMAINS,
+    DEFAULT_NETWORK_POLICY,
+    EMPTY_CHAT_SUMMARY,
+    Config,
+    merge_settings,
+)
+from calu.configdoc import setting_rows
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
@@ -1531,15 +1539,128 @@ def _value_at(values: dict[str, Any], key: str) -> str:
     return json.dumps(node, sort_keys=True)
 
 
+def _configuration_table(
+    global_values: dict[str, Any],
+    project_values: dict[str, Any],
+    project: str | None,
+    changed_only: bool = False,
+) -> str:
+    """Render every configuration key with its effective value, its origin and its default.
+
+    `calu config get` prints the **stored** values of one scope, which is `{}` on a fresh
+    installation and says nothing about what a session will actually use. This answers the
+    other question -- "what is set, what could be set, and where does each value come from"
+    (PLAN.md D128). The keys and defaults come from `calu.configdoc`, the same walk the
+    reference document is generated from.
+
+    Args:
+        global_values: The stored global settings (`calu.admin.settings`).
+        project_values: The stored settings of `project`, or {} when no project was named.
+        project: The project whose scope is shown, or None for the global one.
+        changed_only: Leave out the keys that still hold their default.
+
+    Returns:
+        One line per key: the key, the effective value, where it comes from, and the default
+        when it differs. Nested models are headings rather than rows.
+    """
+    effective = Config.model_validate(merge_settings(global_values, project_values))
+    scope = f"project {project}" if project else "global"
+    lines: list[str] = []
+    for key, kind, default, _description in setting_rows():
+        # A row for a nested model is a heading in the reference and has no value of its own.
+        if kind == "object" or default == "see below":
+            continue
+        shown = _shown(_node_at(effective.model_dump(mode="json"), key))
+        where = (
+            f"{scope} (set)"
+            if _is_set(project_values if project else global_values, key)
+            else "global (set)"
+            if project and _is_set(global_values, key)
+            else "default"
+        )
+        if changed_only and where == "default":
+            continue
+        tail = "" if where == "default" else f"   default: {default.strip('`')}"
+        lines.append(f"{key:<42}  {shown:<30}  {where}{tail}")
+    if not lines:
+        return (
+            f"every setting of the {scope} scope holds its default "
+            "(`calu config list` without --changed shows them all)"
+        )
+    head = f"{len(lines)} setting(s), scope: {scope}"
+    return "\n".join(
+        [head, *lines, "", "What each setting means: docs/CONFIGURATION.md, or the web interface."]
+    )
+
+
+def _node_at(values: dict[str, Any], key: str) -> Any:
+    """Return the value a dotted key holds, or `KeyError`'s stand-in `None`.
+
+    Args:
+        values: A (partial) configuration as a dict.
+        key: The dotted path.
+
+    Returns:
+        The value, or None when the path is not there.
+    """
+    node: Any = values
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _shown(value: Any) -> str:
+    """Render a configuration value for one line of the table.
+
+    A reader compares these with the defaults in the same table, so the rendering has to be
+    the same shape for both: a plain string without JSON quotes, an empty one and an unset
+    optional said in words rather than as `""` and `null`, everything else compact JSON.
+
+    Args:
+        value: The effective value.
+
+    Returns:
+        The text for the line.
+    """
+    if value is None:
+        return "(none)"
+    if isinstance(value, str):
+        return value or "(empty)"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return json.dumps(value, sort_keys=True)
+
+
+def _is_set(values: dict[str, Any], key: str) -> bool:
+    """Tell whether a dotted key is present in a stored settings dict.
+
+    Args:
+        values: A stored (partial) configuration.
+        key: The dotted key.
+
+    Returns:
+        True if every part of the path exists, so the scope really stores this value.
+    """
+    current: Any = values
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
 def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
     """Read or change configuration values of the global or a project scope.
 
-    `get`, `set` and `unset` work on whole values; `add` and `remove` change one entry of a
-    list setting and keep the others, starting from the list the scope effectively uses
+    `list` prints every key with its effective value, where that value comes from and its
+    default; `get`, `set` and `unset` work on whole values; `add` and `remove` change one entry
+    of a list setting and keep the others, starting from the list the scope effectively uses
     (`calu.admin.add_to_setting`).
 
     Args:
-        args: Parsed arguments (`action`, `key`, `value`, `project`).
+        args: Parsed arguments (`action`, `key`, `value`, `project`, `changed`).
         store: The credential store.
 
     Raises:
@@ -1559,6 +1680,13 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
         Returns:
             The report.
         """
+        if args.action == "list":
+            return _configuration_table(
+                await admin.settings(db, None),
+                await admin.settings(db, args.project) if args.project else {},
+                args.project,
+                changed_only=args.changed,
+            )
         if args.action == "get":
             values = await admin.settings(db, args.project)
             if args.key:
@@ -2164,10 +2292,17 @@ def build_parser() -> argparse.ArgumentParser:
     project.set_defaults(handler=cmd_project)
 
     config = sub.add_parser("config", help="configuration values in the database")
-    config.add_argument("action", choices=["get", "set", "unset", "add", "remove"])
+    config.add_argument("action", choices=["list", "get", "set", "unset", "add", "remove"])
     config.add_argument("key", nargs="?", default="", help="dotted key, e.g. claude.model")
     config.add_argument("value", nargs="?", help="value (JSON, or plain text)")
+    config.add_argument(
+        "--changed",
+        action="store_true",
+        help="with list: only the settings that do not hold their default",
+    )
     config.epilog = (
+        "list prints every setting with its effective value, where that value comes from and "
+        "its default; get prints what a scope stores, which is `{}` until something is set. "
         "add and remove change one entry of a list setting and keep the others, e.g. "
         "`calu config add claude.sandbox.deny_read ~/.ssh`; set replaces the whole list."
     )

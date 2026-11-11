@@ -144,6 +144,19 @@ def _rows(model: type[BaseModel], prefix: str) -> list[tuple[str, str, str, str]
     return rows
 
 
+def setting_rows() -> list[tuple[str, str, str, str]]:
+    """Return every configuration key with its type, default and description.
+
+    The same walk the reference document is built from, so `calu config list` and
+    `docs/CONFIGURATION.md` cannot describe different sets of keys (PLAN.md D128).
+
+    Returns:
+        One (dotted key, type, default, description) tuple per field, nested models included
+        and in declaration order. A row for a nested model itself has the type "object".
+    """
+    return _rows(Config, "")
+
+
 def configuration_markdown() -> str:
     """Build the whole reference.
 

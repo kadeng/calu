@@ -171,6 +171,9 @@ async def test_the_fleet_and_the_waiting_steps_are_listed(prepared, capsys) -> N
     said = capsys.readouterr().out
     assert str(escalation) in said
     assert "the command deletes a directory" in said
+    # And what the step **is**, so the queue can be worked through without opening every entry
+    # (D127): a list of reasons alone says why each one stopped, not what it would have done.
+    assert "rm -rf build" in said
 
 
 async def test_one_escalation_shows_what_the_decision_needs(prepared, capsys) -> None:

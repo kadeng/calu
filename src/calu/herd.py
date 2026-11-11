@@ -108,6 +108,10 @@ class EscalationRow:
     """Seconds since the session's process last said it was running (D56)."""
     session_ended: bool = False
     """Whether the session has ended; then the silence means nothing."""
+    about: str = ""
+    """What the step is: the command, the edited path, or the tool's name. A queue of reasons
+    without the steps they are about cannot be triaged -- a reader had to open every entry to
+    see what it was (PLAN.md D127)."""
 
     @property
     def unanswerable(self) -> bool:
@@ -127,13 +131,14 @@ class EscalationRow:
         """Return the escalation as one terminal line.
 
         Returns:
-            Id, session, host and directory, age and reason, and a mark when answering it
-            cannot reach anybody (D56).
+            Id, session, host and directory, age, what the step is, the reason, and a mark when
+            answering it cannot reach anybody (D56).
         """
         gone = "  [the session is gone: answering changes nothing]" if self.unanswerable else ""
+        about = f"\n    {' '.join(self.about.split())[:200]}" if self.about.strip() else ""
         return (
             f"{self.id}  session {self.session_id}  {self.hostname}:{self.directory}"
-            f"  {self.created_at:%Y-%m-%d %H:%M:%S}{gone}"
+            f"  {self.created_at:%Y-%m-%d %H:%M:%S}{gone}{about}"
             f"\n    {' '.join(self.reason.split())[:300]}"
         )
 
@@ -210,7 +215,10 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
         " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"
         " coalesce(e.resolved_by, ''), coalesce(e.note, ''),"
         # The database measures the silence, as for a session row (D56).
-        " extract(epoch FROM (now() - s.last_seen))::float8, s.ended_at IS NOT NULL"
+        " extract(epoch FROM (now() - s.last_seen))::float8, s.ended_at IS NOT NULL,"
+        " coalesce(e.context->'tool_input'->>'command',"
+        "          e.context->'tool_input'->>'file_path',"
+        "          e.context->>'tool_name', '')"
         " FROM escalations e JOIN sessions s ON s.id = e.session_id"
         " JOIN hosts h ON h.id = s.host_id"
         " WHERE e.state = 'open' AND (%s::uuid IS NULL OR e.session_id = %s::uuid)"
@@ -574,7 +582,10 @@ async def escalation(db: Db, escalation_id: int) -> EscalationRow | None:
         "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
         " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"
         " coalesce(e.resolved_by, ''), coalesce(e.note, ''),"
-        " extract(epoch FROM (now() - s.last_seen))::float8, s.ended_at IS NOT NULL"
+        " extract(epoch FROM (now() - s.last_seen))::float8, s.ended_at IS NOT NULL,"
+        " coalesce(e.context->'tool_input'->>'command',"
+        "          e.context->'tool_input'->>'file_path',"
+        "          e.context->>'tool_name', '')"
         " FROM escalations e JOIN sessions s ON s.id = e.session_id"
         " JOIN hosts h ON h.id = s.host_id WHERE e.id = %s",
         (escalation_id,),

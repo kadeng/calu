@@ -654,6 +654,7 @@ them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 calu checker edit edit                        # opens the edit checker's instructions in $EDITOR
 calu summary <session id> --edit              # correct what the checkers read of the old turns
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
+calu config list --changed                     # what is set, where it comes from, the defaults
 calu config set claude.model opus             # Claude's model -- for the *next* session
 calu checker stats                             # what they decided, what they cost, where a human disagreed
                                                # and how many steps the rules settled for free
