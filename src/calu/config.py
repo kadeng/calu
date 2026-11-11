@@ -224,7 +224,11 @@ class SandboxConfig(ConfigModel):
     auto mode's classifier, which PLAN.md D5 uses as the second opinion next to the
     checkers."""
     weaker_nested_sandbox: bool = False
-    """Weaker sandbox inside unprivileged Docker containers (Linux); reduces the isolation."""
+    """Claude Code's `enableWeakerNestedSandbox`. Measured in calu's own container (PLAN.md
+    D134): it does **not** make the sandbox work under Docker's default seccomp profile --
+    bubblewrap still cannot create a user namespace there, so the container needs
+    `seccomp:unconfined` either way -- and where the namespaces do work, calu's probe saw no
+    difference in isolation. There is no known reason to switch it on."""
     excluded_commands: list[str] = Field(default_factory=list)
     """Commands that run outside the sandbox, covered only by the checkers and the deny
     lists."""

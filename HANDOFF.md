@@ -530,13 +530,10 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    new project is now a proposal to confirm (D45, Q5), and the container case is measured (Q1): a default
    Docker container cannot create a user namespace, so the sandbox needs
    `security_opt: [seccomp:unconfined]` and socat — calu's own `dev` service and image now have
-   both. What `claude.sandbox.weaker_nested_sandbox` changes is still untested: it needs a
-   real tool call in a container, and the cheap route is a measured dead end --
-   `claude sandbox status` needs no login but reports the same posture with and without the
-   flag, and does not probe whether the kernel allows the namespaces (`spikes/RESULTS.md`,
-   "What `claude sandbox status` can and cannot answer"). What came out of it: `calu doctor`
-   now reports a managed policy that locks the sandbox posture, which would override calu's
-   own settings.
+   both. What `claude.sandbox.weaker_nested_sandbox` changes is measured now (D134): it does
+   **not** make the sandbox work under Docker's default seccomp, and where the sandbox works it
+   changes nothing calu's probe can see, so it stays off and the container keeps
+   `seccomp:unconfined`. Every failing combination failed closed.
 4. Smaller gaps: a client of a session still cannot change what steers the checkers through the
    protocol, by design (the session role may only read it, §12 phase 4) -- except the
    auto-escalation switches, which are session-local and audited (D42, D43). Editing a single
@@ -613,24 +610,6 @@ Everything else is either built or recommended with its reasons. These need a pe
   loses cross-file dishonesty), or any file with "not from this step" shown in the register.
 - **Q16 — whether a push, a deploy or a publish should be a deny rule** rather than a
   checker's judgement, which is the same finding from the other side.
-- **Q1's last line**: what `claude.sandbox.weaker_nested_sandbox` changes. Needs a real tool
-  call inside a container, so it needs Claude Code credentials there; the cheap route is a
-  measured dead end (next step 3).
-
-Answered and built in this session: **Q3** (D49, row-level security per session, migration
-0015), **Q4** (D48, the operator login), **Q14** (D46, a fork does not rewind files), and the
-ones listed above as proposals. Earlier: Q6 (D27), Q8 (D28), Q10 (no plugin mode), Q11 (D23),
-Q13 (D36).
-
-## Environment notes (owner's machine)
-
-- WSL2 Ubuntu has uv, Docker, bwrap, Node 24 (nvm) and a logged-in `claude` (2.1.319).
-  **`socat` is missing**, so a session with the default `claude.sandbox` settings refuses to
-  start: `apt install socat` fixes it permanently, and `bash spikes/get-socat.sh` extracts it
-  into `/tmp/calu-spike-tools/bin` without root, which is enough to run with the sandbox on.
-  With that done, the sandbox was verified end to end through calu (`spikes/RESULTS.md`, "calu's
-  own sandbox, end to end"): own PID namespace, no `claude` process visible, the credentials
-  unreadable, Claude Code's settings unwritable, the network blocked and no leftover process.
 - **`~/.config/calu/.env` does not exist.** Live checker tests skip and a real run has no checker
   model key. The keys are in sitl's git-ignored `.env` (CRLF). Creating the file was refused in an
   earlier session by a sandbox rule, so the owner should do it:

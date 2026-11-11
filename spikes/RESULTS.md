@@ -625,6 +625,37 @@ same problem since it was added, and `docs/TESTING.md` tells people to run it di
 jobs of `release.yml` do on every tag. A manual run from the Actions tab checks the whole
 workflow without releasing anything.
 
+## What `enableWeakerNestedSandbox` changes in a container (Q1, 2026-11-11)
+
+**Question.** The last open line of Q1. It stayed open because measuring it seemed to need a
+logged-in `claude` inside a container -- but Claude Code also authenticates with
+`ANTHROPIC_API_KEY`, which can be passed in.
+
+**Setup** (`spike_nested_sandbox.sh`, CLI 2.1.319 in the `calu-dev-dev` image, haiku). One real
+sandboxed tool call per combination: Claude Code runs `probe.sh` through its Bash tool with the
+sandbox on, `failIfUnavailable: true` and `allowUnsandboxedCommands: false`, with and without
+`enableWeakerNestedSandbox`, under Docker's default seccomp and under `seccomp=unconfined`.
+
+**Observations.**
+
+| Flag | Seccomp | Result |
+|---|---|---|
+| off | default | sandbox does not start: `bwrap: No permissions to create new namespace`; the command never ran |
+| **on** | default | **the same failure** -- the flag does not get past the missing user namespace |
+| off | unconfined | works: own PID namespace (3 processes visible), no `claude` process visible, `~/.claude`, `.claude/settings.json`, `.git/hooks` and `.git/config` not writable, raw TCP to 1.1.1.1:443 blocked |
+| on | unconfined | **identical** to the row above, process list included |
+
+In both failing combinations the result was **fail-closed**: the probe did not run, nothing ran
+outside the sandbox, and Claude said so and did not look for a way around it.
+
+**What follows.** The flag does not remove the need for `seccomp:unconfined` in a Docker
+container, which is what calu's `dev` service already sets, and where the sandbox works the
+probe cannot tell it on from off. There is no reason calu should set it, and none to keep it
+untested any longer. `claude.sandbox.weaker_nested_sandbox` stays off by default, and its
+documentation now says what was measured instead of promising a sandbox in unprivileged
+containers. What the flag may still be for -- an environment that allows user namespaces but
+blocks something else bubblewrap mounts -- was not reproduced here.
+
 ## What `claude sandbox status` can and cannot answer (Q1, 2026-11-10)
 
 **Question.** The open half of Q1 is what `enableWeakerNestedSandbox` changes inside a
