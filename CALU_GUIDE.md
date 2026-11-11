@@ -539,7 +539,10 @@ one line of `/help`. The ones that matter while a step waits:
 ## From another machine
 
 Nothing calu runs binds a public interface, and that is deliberate: there is no login in front
-of the web interface and no TLS in front of a session's WebSocket. Two ways to work remotely:
+of the web interface and no TLS in front of a session's WebSocket. The web interface does refuse
+what another site could make your browser send to it -- every request must name a loopback
+host, and anything that changes state must come from its own pages -- so a web page you happen
+to have open cannot answer an escalation for you (PLAN.md D136). Two ways to work remotely:
 
 **Through the database.** The five commands above need nothing but a reachable PostgreSQL, so
 an operator anywhere can watch the fleet and answer escalations without touching the machines

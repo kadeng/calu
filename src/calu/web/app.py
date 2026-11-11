@@ -35,12 +35,14 @@ or put a TLS proxy with its own authentication in front of it. Everything the pa
 import ipaddress
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
@@ -222,7 +224,104 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
-    return Starlette(routes=routes)
+    return Starlette(routes=routes, middleware=[Middleware(LocalOnly)])
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
+"""Host names a request to the web interface may carry: it binds loopback only (`check_host`)."""
+
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+"""Methods that change nothing, and are therefore not checked for their origin."""
+
+
+class LocalOnly:
+    """Refuse requests that a page from another site could have caused (PLAN.md D136).
+
+    The interface has no login, because it serves loopback only -- but a browser on this
+    machine will send requests to 127.0.0.1 on behalf of **any** site it has open. Without this,
+    a page anywhere could submit "allow" for escalations 1 to 100 (a form POST is sent
+    cross-site without asking, and the ids are small integers), rewrite the settings or the
+    checker instructions, or open the live WebSocket and decide steps through it; a page whose
+    domain re-resolves to 127.0.0.1 (DNS rebinding) could also read everything shown here.
+
+    Two checks, on every request and WebSocket handshake:
+
+    - The `Host` header must be a loopback name. A rebinding page sends its own domain there.
+    - A request that can change something -- every method but GET, HEAD and OPTIONS, and every
+      WebSocket -- must come from this interface's own pages: `Sec-Fetch-Site` may not say
+      `cross-site` or `same-site` (another port on localhost is "same-site"), and an `Origin`,
+      when sent, must be this server's own. Browsers send both on such requests; a client that
+      sends neither (curl, `calu`'s own tests) is not a browser acting for someone else.
+    """
+
+    def __init__(self, app: Any, extra_hosts: Collection[str] = ()) -> None:
+        """Wrap the application.
+
+        Args:
+            app: The ASGI application.
+            extra_hosts: Further host names to accept, for a test client whose base URL is not
+                a loopback name.
+        """
+        self.app = app
+        self.hosts = LOOPBACK_HOSTS | set(extra_hosts)
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Pass a request on, or refuse it with 403 (HTTP) or close code 1008 (WebSocket).
+
+        Args:
+            scope: The ASGI scope.
+            receive: The ASGI receive channel.
+            send: The ASGI send channel.
+        """
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        refused = self.refusal(scope)
+        if refused is None:
+            await self.app(scope, receive, send)
+            return
+        log.warning("refused a request to %s: %s", scope.get("path"), refused)
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        body = f"refused: {refused}\n".encode()
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    def refusal(self, scope: Any) -> str | None:
+        """Say why a request must be refused, or None when it may pass.
+
+        Args:
+            scope: The ASGI scope of the request.
+
+        Returns:
+            A short reason for the log and the response, or None.
+        """
+        headers = {
+            name.decode("latin-1").lower(): value.decode("latin-1")
+            for name, value in scope.get("headers", [])
+        }
+        host = headers.get("host", "")
+        name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
+        if name not in self.hosts:
+            return f"host {host!r} is not this machine (the interface serves loopback only)"
+        changes = scope["type"] == "websocket" or scope.get("method") not in SAFE_METHODS
+        if not changes:
+            return None
+        if headers.get("sec-fetch-site") in ("cross-site", "same-site"):
+            return "the request came from another site"
+        origin = headers.get("origin")
+        if origin is not None:
+            parsed = urlparse(origin)
+            if origin == "null" or parsed.netloc != host:
+                return f"origin {origin!r} is not this interface"
+        return None
 
 
 class _State:

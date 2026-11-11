@@ -92,7 +92,7 @@ async def client_for(db: Db) -> httpx.AsyncClient:
     """An HTTP client that speaks to the application in this event loop."""
     app = create_app(db, git_url_template="")
     return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test", follow_redirects=True
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1", follow_redirects=True
     )
 
 
@@ -821,3 +821,79 @@ async def test_the_session_page_says_why_a_step_was_refused(db_url: str) -> None
             assert "src/other.py" not in page, "another project's register is not this one's"
     finally:
         await conn.close()
+
+
+async def test_another_site_cannot_answer_an_escalation_or_read_the_interface(
+    db_url: str,
+) -> None:
+    """D136: a page anywhere could submit "allow" for escalation 1, 2, 3 ... while this ran.
+
+    The interface has no login, because it serves loopback only -- but a browser on this
+    machine sends requests to 127.0.0.1 for any site it has open, and a form POST goes
+    cross-site without asking. This was demonstrated against a running `calu web` before the
+    fix: a request with `Origin: https://evil.example` resolved escalation 1.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        _session_id, escalation = await populate(db)
+        async with await client_for(db) as client:
+            forged = {"decision": "allow", "note": "forged"}
+            for headers in (
+                {"Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+                {"Origin": "https://evil.example"},  # an older browser without Sec-Fetch-*
+                {"Sec-Fetch-Site": "same-site"},  # another port on localhost is "same-site"
+                {"Origin": "null"},  # a sandboxed iframe or a file:// page
+            ):
+                refused = await client.post(
+                    f"/escalations/{escalation}/resolve", data=forged, headers=headers
+                )
+                assert refused.status_code == 403, headers
+            still = await herd.escalation(db, escalation)
+            assert still is not None and still.state == "open", "nothing was decided"
+
+            # A page whose domain re-resolves to 127.0.0.1 (DNS rebinding) sends its own name.
+            rebound = await client.get("/settings", headers={"Host": "evil.example:8800"})
+            assert rebound.status_code == 403
+
+            # The interface's own pages still work: same origin, and plain clients without the
+            # browser headers.
+            own = await client.post(
+                f"/escalations/{escalation}/resolve",
+                data={"decision": "deny", "note": "from the page itself"},
+                headers={"Origin": "http://127.0.0.1", "Sec-Fetch-Site": "same-origin"},
+            )
+            assert own.status_code == 200
+            decided = await herd.escalation(db, escalation)
+            assert decided is not None and decided.state == "denied"
+    finally:
+        await conn.close()
+
+
+def test_the_guard_closes_a_websocket_from_another_site() -> None:
+    """The live view's WebSocket can decide steps too, and browsers do not stop it cross-site."""
+    from calu.web.app import LocalOnly
+
+    guard = LocalOnly(app=None)
+
+    def scope(kind: str, **headers: str) -> dict:
+        """An ASGI scope with these headers."""
+        return {
+            "type": kind,
+            "method": "GET",
+            "path": "/ws/sessions/x",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+        }
+
+    assert guard.refusal(scope("websocket", host="127.0.0.1:8800", origin="https://evil.example"))
+    assert (
+        guard.refusal(scope("websocket", host="127.0.0.1:8800", origin="http://127.0.0.1:8800"))
+        is None
+    )
+    assert (
+        guard.refusal(scope("websocket", host="localhost:8800", origin="http://localhost:8800"))
+        is None
+    )
+    assert guard.refusal(scope("http", host="[::1]:8800")) is None, "IPv6 loopback is loopback"
+    assert guard.refusal(scope("http", host="192.168.1.5:8800")), "not this machine's loopback"
