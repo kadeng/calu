@@ -392,3 +392,33 @@ def test_reading_git_config_is_not_a_write(tmp_path: Path) -> None:
     rules = default_rules(tmp_path)
     for command in ("git config --get user.name", "git config --list", "git config user.name"):
         assert not rules.evaluate(bash(command, str(tmp_path))).ask, command
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("grep -r KEY .", True),  # grep reads git-ignored and hidden files
+        ("grep -rn KEY", True),  # no path: the working directory
+        ("grep -r -e KEY", True),
+        ("grep -r KEY src", False),  # names another directory
+        ("grep -r --include=*.py KEY .", False),
+        ("rg KEY", False),  # rg skips what git ignores and hidden files
+        ("rg -uu KEY", True),  # unless told not to
+        ("rg --no-ignore --hidden KEY", True),
+    ],
+)
+def test_a_recursive_search_asks_when_it_would_read_a_protected_file(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
+    """D149: a Bash search reads the files below its directory, as the Grep tool does (D146),
+    and which ones depends on the program and its options."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("KEY=1\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    outcome = default_rules(tmp_path).evaluate(bash(command, str(tmp_path)))
+    assert bool(outcome.ask) is asks, outcome.ask
+    assert not outcome.allowed, "a recursive search is never free: the checker still decides"

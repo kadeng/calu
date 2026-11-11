@@ -36,17 +36,26 @@ class SearchedFiles:
     """False when the listing stopped at `LIMIT` or the glob cannot be interpreted."""
 
 
-def searched_files(directory: Path, glob: str | None = None) -> SearchedFiles:
-    """List the files a Grep of `directory` reads, git-ignored files left out.
+def searched_files(
+    directory: Path, glob: str | None = None, *, git_ignore: bool = True, hidden: bool = True
+) -> SearchedFiles:
+    """List the files a search of `directory` reads.
 
-    Side effects: runs `git ls-files` in `directory` (5 s timeout) and, outside a git work tree
-    or when git fails, walks the directory without following symbolic links.
+    The defaults describe Claude Code's Grep tool. `grep -r` reads git-ignored files too
+    (`git_ignore=False`); `rg` and `ag` skip hidden ones unless told otherwise
+    (`hidden=False`), D149.
+
+    Side effects: runs `git ls-files` in `directory` (5 s timeout) when `git_ignore` is True,
+    and otherwise -- or outside a git work tree, or when git fails -- walks the directory
+    without following symbolic links.
 
     Args:
         directory: An absolute directory. A path that is not a directory lists nothing.
-        glob: The Grep tool's `glob` parameter: a pattern for the base name, or for the path
-            relative to `directory` if it contains "/"; one level of braces is expanded
-            (`*.{ts,tsx}`). A negated glob ("!...") filters nothing.
+        glob: The search's file glob: a pattern for the base name, or for the path relative to
+            `directory` if it contains "/"; one level of braces is expanded (`*.{ts,tsx}`). A
+            negated glob ("!...") filters nothing.
+        git_ignore: Whether the search leaves out what git ignores.
+        hidden: Whether the search reads files whose path has a part starting with ".".
 
     Returns:
         The files, absolute, and whether the listing is complete.
@@ -54,7 +63,7 @@ def searched_files(directory: Path, glob: str | None = None) -> SearchedFiles:
     if not directory.is_dir():
         return SearchedFiles()
     found = SearchedFiles()
-    relative = _git_files(directory)
+    relative = _git_files(directory) if git_ignore else None
     if relative is None:
         relative = []
         for root, dirs, names in os.walk(directory):
@@ -69,6 +78,8 @@ def searched_files(directory: Path, glob: str | None = None) -> SearchedFiles:
     patterns = _expand_braces(glob) if glob and not glob.startswith("!") else []
     for rel in relative[:LIMIT]:
         if patterns and not any(_glob_matches(p, rel) for p in patterns):
+            continue
+        if not hidden and any(part.startswith(".") for part in Path(rel).parts):
             continue
         found.files.append(directory / rel)
     return found

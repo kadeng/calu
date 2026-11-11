@@ -93,6 +93,24 @@ class ShellPath:
     paths: tuple[Path | None, ...]
     kind: Literal["read", "write"]
     via: str
+    search: SearchSpec | None = None
+    """For a recursive search (`grep -r`, `rg`): what it reads below the directory (D149)."""
+
+
+@dataclass(frozen=True)
+class SearchSpec:
+    """How a recursive search command chooses the files below a directory (PLAN.md D149).
+
+    `directories`: the searched directory for each candidate working directory (None where
+    unknown). `git_ignore`: it leaves out what git ignores (rg, ag; not grep). `hidden`: it
+    reads files and directories whose name starts with "." (grep; rg only with `--hidden` or
+    `-uu`). `glob`: the file filter it was given (`--include=`, `-g`), or None.
+    """
+
+    directories: tuple[Path | None, ...]
+    git_ignore: bool
+    hidden: bool
+    glob: str | None = None
 
 
 @dataclass
@@ -377,15 +395,25 @@ class _Walker:
             via = f"argument of {name}"
             if recursive:
                 self.result.paths.append(
-                    ShellPath(value, (None,), "read", f"{via}, searched recursively")
+                    ShellPath(
+                        value,
+                        (None,),
+                        "read",
+                        f"{via}, searched recursively",
+                        _search_spec(name, args, self.resolve(arg)),
+                    )
                 )
             else:
                 self.add_path(arg, "write" if writes else "read", via)
-        if recursive:
+        if recursive and not _names_a_path(values):
             # Without a path argument (`rg x`, `grep -r x`) the working directory is searched.
             self.result.paths.append(
                 ShellPath(
-                    ".", (None,), "read", f"working directory, searched recursively by {name}"
+                    ".",
+                    (None,),
+                    "read",
+                    f"working directory, searched recursively by {name}",
+                    _search_spec(name, args, tuple(self.cwds)),
                 )
             )
 
@@ -588,6 +616,88 @@ def _normalise(path: Path) -> Path:
         return path.resolve()
     except OSError, RuntimeError:
         return plain
+
+
+def _names_a_path(values: list[str]) -> bool:
+    """Tell whether a grep-like command names what it searches, besides its pattern.
+
+    The first argument that is not an option is the pattern, unless `-e`/`--regexp` or
+    `-f`/`--file` gives it; the value after `-e`, `-f`, `-g`, `--glob`, `--include` and similar
+    options is not a path.
+
+    Args:
+        values: The arguments after the program name.
+
+    Returns:
+        True if at least one argument is left for a path.
+    """
+    with_value = {
+        "-e",
+        "--regexp",
+        "-f",
+        "--file",
+        "-g",
+        "--glob",
+        "--iglob",
+        "-m",
+        "-A",
+        "-B",
+        "-C",
+    }
+    plain: list[str] = []
+    pattern_given = False
+    skip = False
+    for value in values:
+        if skip:
+            skip = False
+            continue
+        if value in with_value:
+            skip = True
+            pattern_given = pattern_given or value in ("-e", "--regexp", "-f", "--file")
+            continue
+        if value.startswith(("--regexp=", "--file=")) or (
+            len(value) > 2 and value[:2] in ("-e", "-f")
+        ):
+            pattern_given = True
+            continue
+        if not value.startswith("-"):
+            plain.append(value)
+    return len(plain) > (0 if pattern_given else 1)
+
+
+def _search_spec(
+    name: str, args: list[_Word], directories: tuple[Path | None, ...]
+) -> SearchSpec | None:
+    """Describe which files a recursive search reads, from its own options (D149).
+
+    Args:
+        name: The program: grep, egrep, fgrep, diff, rg or ag.
+        args: Its arguments.
+        directories: The resolved directory for each candidate working directory; None
+            entries are unknown and skipped by the rules.
+
+    Returns:
+        The description, or None when no directory is known.
+    """
+    if not any(d is not None for d in directories):
+        return None
+    values = [a.value for a in args]
+    glob: str | None = None
+    for i, value in enumerate(values):
+        if value.startswith(("--include=", "--glob=")):
+            glob = glob or value.partition("=")[2]
+        elif value in ("-g", "--glob", "--iglob") and i + 1 < len(values):
+            glob = glob or values[i + 1]
+    if name in ("rg", "ag"):
+        unrestricted = max((v.count("u") for v in values if re.fullmatch(r"-u+", v)), default=0)
+        no_ignore = unrestricted >= 1 or any(
+            v in ("--no-ignore", "--no-ignore-vcs", "--skip-vcs-ignores", "-U") for v in values
+        )
+        hidden = unrestricted >= 2 or any(v in ("--hidden", "-.") for v in values)
+        if name == "ag":
+            hidden = hidden or unrestricted >= 1
+        return SearchSpec(directories, git_ignore=not no_ignore, hidden=hidden, glob=glob)
+    return SearchSpec(directories, git_ignore=False, hidden=True, glob=glob)
 
 
 def _option_value(option: str) -> str | None:

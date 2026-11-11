@@ -41,7 +41,7 @@ from pathlib import Path
 
 from calu.checkers.model import Step
 from calu.checkers.search import searched_files
-from calu.checkers.shell import command_variants, parse_command
+from calu.checkers.shell import ShellPath, command_variants, parse_command
 
 RULE_LISTS = (
     "command-allow",
@@ -250,6 +250,8 @@ class Rules:
                     all_allowed = False
             for used in parsed.paths:
                 parts += 1
+                if used.search is not None and not self._recursive_search_allowed(used, outcome):
+                    all_allowed = False
                 for candidate in used.paths:
                     if candidate is None:
                         all_allowed = False
@@ -362,6 +364,35 @@ class Rules:
                 "against the read deny list; decide whether the search may read them."
             )
             return False
+        return True
+
+    def _recursive_search_allowed(self, used: ShellPath, outcome: RuleOutcome) -> bool:
+        """Apply the read deny list to the files a `grep -r` or `rg` reads (PLAN.md D149).
+
+        Args:
+            used: The searched path, with its `search` description.
+            outcome: Collects the `ask` reason.
+
+        Returns:
+            False if a protected file would be read or the listing is incomplete, else True.
+        """
+        spec = used.search
+        assert spec is not None
+        for directory in (d for d in spec.directories if d is not None):
+            listed = searched_files(
+                directory, spec.glob, git_ignore=spec.git_ignore, hidden=spec.hidden
+            )
+            denied = [self.display(p) for p in listed.files if self.read_denied(p)]
+            if denied:
+                shown = ", ".join(f"`{name}`" for name in denied[:5])
+                more = f" and {len(denied) - 5} more" if len(denied) > 5 else ""
+                outcome.ask.append(
+                    f"`{used.raw}` ({used.via}) would read {shown}{more}, which the read deny "
+                    "list protects."
+                )
+                return False
+            if not listed.complete:
+                return False
         return True
 
     def read_denied(self, path: Path) -> bool:
