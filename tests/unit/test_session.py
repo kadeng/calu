@@ -1748,3 +1748,41 @@ async def test_a_deny_rule_escalates_before_any_checker_is_asked(tmp_path: Path)
     )
     # And the step did not run: the escalation was denied, so Claude was told instead.
     assert [c.decision for c in rec.of(CheckResult)] == [Decision.ESCALATE]
+
+
+async def test_a_slow_rule_check_does_not_stop_the_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """D151: the rules list files (D146-D149), which can take a second on a large tree; done on
+    the event loop it froze the stream and the heartbeat of every client meanwhile."""
+    import time
+
+    session, rec, _store = make_session(
+        tmp_path, [[{"tool": "Bash", "input": {"command": "ls"}, "result": "ok"}]]
+    )
+    evaluate = session.rules.evaluate
+
+    def slow(step: Step) -> object:
+        time.sleep(0.4)
+        return evaluate(step)
+
+    monkeypatch.setattr(session.rules, "evaluate", slow)
+    ticks = 0
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while True:
+            await anyio.sleep(0.05)
+            ticks += 1
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        await session.start(tg)
+        started = time.monotonic()
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        elapsed = time.monotonic() - started
+        await session.stop()
+        tg.cancel_scope.cancel()
+    assert elapsed >= 0.4
+    assert ticks >= 5, f"the loop kept running while the rules worked ({ticks} ticks)"

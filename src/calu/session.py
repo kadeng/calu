@@ -2243,7 +2243,10 @@ class Session:
             call. Checker failures already yield ESCALATE decisions.
         """
         route = self.policy.route(step.tool_name)
-        outcome = self.rules.evaluate(step)
+        # In a worker thread: the rules list files (git, a directory walk for `grep -r`, glob
+        # expansion; D146-D149), which takes up to about a second on a large tree and would
+        # otherwise stop the stream and the heartbeat of every client meanwhile (D151).
+        outcome = await anyio.to_thread.run_sync(self.rules.evaluate, step)
         rules = _rules_outcome(step, outcome)
         label = label_for_unchecked(step.tool_name, step.tool_input)
         if self._clock_alarm is not None:
