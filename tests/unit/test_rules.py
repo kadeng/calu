@@ -342,3 +342,25 @@ def test_a_git_ignored_protected_file_does_not_make_a_grep_ask(tmp_path: Path) -
     (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
     outcome = default_rules(tmp_path).evaluate(_grep(tmp_path))
     assert outcome.allowed and not outcome.ask
+
+
+def test_a_glob_that_reaches_a_protected_file_asks(tmp_path: Path) -> None:
+    """D147: `cat .e*` reads `.env` as surely as `cat .env`, and the shell's own expansion says
+    so; `*` does not match a leading dot, so `cat *` stays with the checker."""
+    (tmp_path / ".env").write_text("K=1\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+    for command in ("cat .e*", "cat .en?", "head -n1 ./.e[n]v"):
+        assert rules.evaluate(bash(command, str(tmp_path))).ask, command
+    harmless = rules.evaluate(bash("cat *", str(tmp_path)))
+    assert not harmless.ask
+    assert not harmless.allowed, "a glob is never a known set of files: the checker decides"
+
+
+def test_a_file_from_git_history_counts_as_a_read(tmp_path: Path) -> None:
+    """D147: `git show HEAD:.env` prints the file and was allowed because `git show` is."""
+    rules = default_rules(tmp_path)
+    for command in ("git show HEAD:.env", "git -C . show main:./.env", "git cat-file -p HEAD:.env"):
+        assert rules.evaluate(bash(command, str(tmp_path))).ask, command
+    assert rules.evaluate(bash("git show HEAD", str(tmp_path))).allowed
+    assert rules.evaluate(bash("git show HEAD:src/app.py", str(tmp_path))).allowed

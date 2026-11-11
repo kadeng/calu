@@ -23,6 +23,7 @@ Paths are heuristic and err on the side of "unknown":
   recursively (`grep -r`, `diff -r`, `rg`): the rules cannot tell which files it covers.
 """
 
+import glob
 import os
 import re
 import shlex
@@ -320,6 +321,8 @@ class _Walker:
         if name in ("cd", "pushd"):
             self.change_directory(args)
             return
+        if name == "git":
+            self.git_objects(args)
         in_place = name in IN_PLACE_COMMANDS and any(
             a == "--in-place" or (a.startswith("-i") and not a.startswith("--")) for a in values
         )
@@ -362,6 +365,31 @@ class _Walker:
                     ".", (None,), "read", f"working directory, searched recursively by {name}"
                 )
             )
+
+    def git_objects(self, args: list[_Word]) -> None:
+        """Record the file that `git show REV:PATH` or `git cat-file ... REV:PATH` prints.
+
+        Such a command prints a file's content from git's history, so for the read lists it is
+        a read of PATH (D147); `git show HEAD:.env` was allowed because `git show` is.
+
+        Args:
+            args: The arguments after `git`. Global options before the subcommand (`-C dir`,
+                `-c key=value`, `--no-pager`) are skipped.
+        """
+        values = [a.value for a in args]
+        i = 0
+        while i < len(values) and values[i].startswith("-"):
+            i += 2 if values[i] in ("-C", "-c") else 1
+        if i >= len(values) or values[i] not in ("show", "cat-file"):
+            return
+        for value in values[i + 1 :]:
+            if value.startswith("-") or ":" not in value:
+                continue
+            path = value.split(":", 1)[1].removeprefix("./")
+            if path:
+                self.add_path(
+                    _Word(path, False), "read", f"file in git's history, via git {values[i]}"
+                )
 
     def change_directory(self, args: list[_Word]) -> None:
         """Add the target of `cd`/`pushd` to the directories later relative paths may refer to.
@@ -413,6 +441,32 @@ class _Walker:
         """
         self.result.paths.append(ShellPath(word.value, self.resolve(word), kind, via))
 
+    def expand(self, pattern: str) -> list[Path]:
+        """Return the existing paths a glob matches now, for each known working directory.
+
+        Python's `glob` follows the shell's default: `*` and `?` do not match a leading dot
+        unless the pattern's part starts with one, so `cat *` does not list `.env` and
+        `cat .e*` does. Braces, extended globs and variables are not expanded.
+
+        Args:
+            pattern: The glob as written, quotes removed.
+
+        Returns:
+            Absolute, normalised matches, at most `GLOB_LIMIT`; [] when the pattern holds
+            something this does not expand.
+        """
+        text = _expand_home(pattern, self.home)
+        if any(mark in text for mark in ("$", "`", "{", "(")):
+            return []
+        bases = [None] if Path(text).is_absolute() else [c for c in self.cwds if c is not None]
+        found: list[Path] = []
+        for base in bases:
+            for match in glob.iglob(text, root_dir=base):
+                found.append(_normalise(Path(match) if base is None else base / match))
+                if len(found) >= GLOB_LIMIT:
+                    return found
+        return found
+
     def resolve(self, word: _Word) -> tuple[Path | None, ...]:
         """Return the absolute path of `word` for each candidate working directory.
 
@@ -421,23 +475,42 @@ class _Walker:
 
         Returns:
             One entry per candidate directory (one entry for absolute paths). An entry is None
-            if the word has an unquoted glob, another variable or a command substitution, or if
-            that directory is unknown. Symlinks of existing parts are followed, except below
-            `/dev` and `/proc`.
+            if the word has another variable or a command substitution, or if that directory is
+            unknown. A glob gives what it matches now (`expand`) followed by None. Symlinks of
+            existing parts are followed, except below `/dev` and `/proc`.
         """
         if word.glob:
-            return (None,)
-        text = word.value
-        for prefix in ("${HOME}", "$HOME", "~"):
-            if text == prefix or text.startswith(prefix + "/"):
-                text = str(self.home) + text[len(prefix) :]
-                break
+            # What the glob matches now, so that a deny rule sees `cat .e*` reading `.env`
+            # (D147) -- plus None, because the files may change before the command runs and a
+            # glob therefore never counts as a known set of paths.
+            return (*self.expand(word.value), None)
+        text = _expand_home(word.value, self.home)
         if "$" in text or "`" in text:
             return (None,)
         path = Path(text)
         if path.is_absolute():
             return (_normalise(path),)
         return tuple(None if cwd is None else _normalise(cwd / path) for cwd in self.cwds)
+
+
+GLOB_LIMIT = 1000
+"""Most matches of one glob that `expand` returns."""
+
+
+def _expand_home(text: str, home: Path) -> str:
+    """Replace a leading `~`, `$HOME` or `${HOME}` with the home directory.
+
+    Args:
+        text: A path as written.
+        home: The home directory.
+
+    Returns:
+        The text with the prefix replaced, or unchanged.
+    """
+    for prefix in ("${HOME}", "$HOME", "~"):
+        if text == prefix or text.startswith(prefix + "/"):
+            return str(home) + text[len(prefix) :]
+    return text
 
 
 def _normalise(path: Path) -> Path:
