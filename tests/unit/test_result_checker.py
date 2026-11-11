@@ -163,3 +163,26 @@ async def test_an_interrupt_ends_a_waiting_subagent_review_without_telling_claud
         assert closed, "the row has to be closed, or the fleet shows a dead escalation"
         assert any("interrupted" in (e.note or "") for e in closed)
         await session.stop()
+
+
+def test_the_result_checker_honours_its_effort_like_a_step_checker() -> None:
+    """D135: `subagent_checker.effort` was a documented setting that reached nothing."""
+    assert ResultChecker("i", "test").settings().get("thinking") is None
+    assert ResultChecker("i", "test", effort="high").settings()["thinking"] == "high"
+    assert ResultChecker("i", "test", effort="off").settings()["thinking"] is False
+
+
+async def test_a_reload_gives_the_result_checker_its_new_limits_and_effort(tmp_path: Path):
+    """D135: the reload updated its model and instructions and kept its old limits."""
+    from dataclasses import replace
+
+    from calu.config import CheckerConfig, Config
+    from tests.unit.helpers import default_settings
+
+    session, _rec, _store = make_session(tmp_path, [])
+    assert session.result_checker.effort is None
+    changed = Config(subagent_checker=CheckerConfig(request_limit=9, max_tokens=1234, effort="low"))
+    session.apply_settings(replace(default_settings(tmp_path, changed)))
+    assert session.result_checker.effort == "low"
+    assert session.result_checker.usage_limits.request_limit == 9
+    assert session.result_checker.max_tokens == 1234

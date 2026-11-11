@@ -70,6 +70,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         await admin.set_setting(db, "subagent_checker.model", "stored:subagent")
         asked: list[tuple[str, str, int]] = []
         budgets: dict[str, int | None] = {}
+        efforts: dict[str, Any] = {}
 
         async def fake_run_cases(
             cases: list[Any],
@@ -80,6 +81,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
             repeat: int = 1,
             request_limit: int | None = None,
             rules: Any = None,
+            effort: Any = None,
         ) -> Report:
             """Record what was asked for and answer with one critical miss for "command".
 
@@ -92,12 +94,14 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
                 repeat: How often each case runs.
                 request_limit: The configured request budget of this checker (D75).
                 rules: The project's allow and deny lists, for the guarded misses (D76).
+                effort: The configured thinking effort of this checker (D135).
 
             Returns:
                 A report with one critical miss for the command checker, none otherwise.
             """
             asked.append((str(row_name), str(model), len(cases)))
             budgets[str(row_name)] = request_limit
+            efforts[str(row_name)] = effort
             assert rules is not None, "the report needs the project's rules to mark guarded misses"
             assert instructions, "a checker must be run with its instructions"
             return _report(str(row_name), str(model), critical=1 if checker == "command" else 0)
@@ -120,6 +124,10 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         # because judging a whole change means reading files around the diff (D75).
         assert budgets["command"] == 5
         assert budgets["changeset"] == 8
+        # And with its configured effort, so the measured checker is the one a session runs
+        # (D135); nothing sets one here, so each is the provider's own default.
+        assert set(efforts) == {"command", "edit", "changeset", "subagent-result"}
+        assert set(efforts.values()) == {None}
         # One critical miss, which is both in the report and the exit code.
         assert critical == 1
         assert "critical misses: 1" in text

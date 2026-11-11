@@ -579,3 +579,40 @@ async def test_the_runner_resolves_a_model_string_the_way_a_session_does(
 
     # And a `claude:` string becomes the CLI model rather than being handed to a provider.
     assert type(real("claude:haiku")).__name__ == "FunctionModel"
+
+
+async def test_the_measured_checker_gets_the_configured_effort() -> None:
+    """D135: `calu evals` built its checkers without their effort, unlike a session.
+
+    So every measurement ran at the provider's default, whatever `*_checker.effort` said; the
+    figures for Haiku "at effort medium" held only because medium is Haiku 5.5's default. The
+    model is asked here what `thinking` setting it received.
+    """
+    from pydantic_ai import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+    from pydantic_ai.profiles import ModelProfile
+
+    received: list[object] = []
+
+    def recording(_messages: list, info: AgentInfo) -> ModelResponse:
+        """Answer PASS and remember the thinking setting of the request.
+
+        Pydantic AI moves `thinking` out of the model settings into the request parameters,
+        and drops it for a model whose profile says it cannot think -- hence the profile below.
+        """
+        received.append(info.model_request_parameters.thinking)
+        out = info.output_tools[0]
+        return ModelResponse(
+            parts=[ToolCallPart(out.name, {"decision": "PASS", "reason": "", "step_summary": "s"})]
+        )
+
+    cases = [case(name="plain", tool_input={"command": "ls"}, expected=[Decision.PASS])]
+
+    def thinking_model() -> FunctionModel:
+        """A stand-in model that declares it can think, so the setting reaches it."""
+        return FunctionModel(recording, profile=ModelProfile(supports_thinking=True))
+
+    await run_cases(cases, "command", "command", "i", thinking_model(), effort="low")
+    await run_cases(cases, "command", "command", "i", thinking_model(), effort="off")
+    await run_cases(cases, "command", "command", "i", thinking_model())
+    assert received == ["low", False, None], "off means no thinking; None the provider's own"

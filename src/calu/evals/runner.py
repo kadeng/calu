@@ -33,6 +33,7 @@ from pydantic_ai.models import Model
 
 from calu.checkers import CheckContext, CheckDecision, Checker, Decision, Step
 from calu.checkers.checker import CheckOutcome
+from calu.checkers.model import CheckerEffort
 from calu.checkers.result_checker import (
     ResultChecker,
     ResultVerdict,
@@ -47,7 +48,11 @@ APPROVALS = (Decision.PASS, Decision.ALLOW)
 
 
 async def review_subagent_result(
-    case: EvalCase, instructions: str, model: str | Model, max_requests: int | None
+    case: EvalCase,
+    instructions: str,
+    model: str | Model,
+    max_requests: int | None,
+    effort: CheckerEffort | None = None,
 ) -> CheckOutcome:
     """Run a subagent-result case and return its outcome in the step checkers' vocabulary.
 
@@ -63,6 +68,7 @@ async def review_subagent_result(
         instructions: The checker's instructions.
         model: Pydantic AI model string or instance.
         max_requests: Model requests one review may make; None uses the checker's default.
+        effort: The checker's thinking effort, as configured; None for the provider's default.
 
     Returns:
         The decision with the token counts and the duration of the call.
@@ -73,7 +79,7 @@ async def review_subagent_result(
             as an error rather than as a correct escalation.
         Exception: Whatever else the model call raised; a case counts it as an error.
     """
-    checker = ResultChecker(instructions, resolve_model(model))
+    checker = ResultChecker(instructions, resolve_model(model), effort=effort)
     if max_requests is not None:
         checker.usage_limits = replace(checker.usage_limits, request_limit=max_requests)
     outcome = await checker.run(
@@ -523,6 +529,7 @@ async def run_cases(
     max_concurrency: int = 4,
     request_limit: int | None = None,
     rules: Rules | None = None,
+    effort: CheckerEffort | None = None,
 ) -> Report:
     """Run the checker `checker` on all its cases in `cases` and collect a report.
 
@@ -542,6 +549,8 @@ async def run_cases(
         request_limit: Model requests one check may make; None uses the checker's default.
             The changeset checker needs more than a step checker, because it reads files
             around the diff (PLAN.md D75), and `calu evals` passes what the database holds.
+        effort: The checker's thinking effort, as configured, so that the measurement runs the
+            checker the session runs (D135); None leaves the provider's default.
         rules: The allow and deny lists to compare the cases against, so that the report can
             say which wrong answers the lists stop anyway (D76). None uses the rules calu
             ships; `calu evals` passes the project's own.
@@ -581,7 +590,9 @@ async def run_cases(
                 caught = lists.evaluate(step).ask
                 # Through `resolve_model`, like a session does (D118): a bare string would
                 # miss Mistral's EU endpoint and reject `claude:` outright.
-                agent = Checker(checker, instructions, resolve_model(model), workspace)
+                agent = Checker(
+                    checker, instructions, resolve_model(model), workspace, effort=effort
+                )
                 if request_limit is not None:
                     agent.usage_limits = replace(agent.usage_limits, request_limit=request_limit)
                 try:
@@ -589,7 +600,7 @@ async def run_cases(
                         # A different checker with a different input and three verdicts of its
                         # own, scored in the same vocabulary (D77).
                         outcome = await review_subagent_result(
-                            case, instructions, model, request_limit
+                            case, instructions, model, request_limit, effort
                         )
                     else:
                         # `run`, not `check`: the outcome carries what the call cost, which the

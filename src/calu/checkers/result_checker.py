@@ -19,8 +19,10 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
 from pydantic_ai.capabilities import Caching
 from pydantic_ai.models import Model
+from pydantic_ai.settings import ModelSettings
 
 from calu.checkers.checker import CheckContext, context_parts, elapsed_ms
+from calu.checkers.model import CheckerEffort
 from calu.markdown import fence
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
@@ -123,6 +125,10 @@ class ResultChecker:
     )
     max_tokens: int = MAX_ANSWER_TOKENS
     """Cap on the output tokens of one answer; a cut-off answer is retried once (`run_bounded`)."""
+    effort: CheckerEffort | None = None
+    """How much the model may think, as for a step checker (`Checker.effort`); None leaves the
+    provider's default. It was missing here, so `subagent_checker.effort` was a setting that
+    reached nothing (PLAN.md D135)."""
     _agent: Agent[None, ResultReview] | None = field(default=None, init=False, repr=False)
     _built_for: str | None = field(default=None, init=False, repr=False)
     cache_key: str = field(default_factory=lambda: f"calu-result-{secrets.token_hex(6)}")
@@ -167,6 +173,19 @@ class ResultChecker:
         )
         return parts
 
+    def settings(self) -> ModelSettings:
+        """Build the model settings of one review: the cache routing key and the effort.
+
+        Returns:
+            `cache_settings` for this checker, with `thinking` added when `effort` is set:
+            "off" asks for no thinking, any other level names it -- the same rule as
+            `Checker.settings`, so one setting means one thing for every checker.
+        """
+        settings = cache_settings(self.model, self.cache_key)
+        if self.effort is not None:
+            settings["thinking"] = False if self.effort == "off" else self.effort
+        return settings
+
     async def review(self, result: SubagentResult, context: CheckContext) -> ResultReview:
         """Review `result` (see the class docstring for error handling).
 
@@ -200,7 +219,7 @@ class ResultChecker:
                 self.build_prompt(result, context),
                 model=self.model,
                 usage_limits=self.usage_limits,
-                model_settings=cache_settings(self.model, self.cache_key),
+                model_settings=self.settings(),
                 max_tokens=self.max_tokens,
             )
         except Exception as exc:  # every failure must reach a human

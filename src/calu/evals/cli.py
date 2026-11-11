@@ -182,6 +182,10 @@ async def run_evals(
                 # The project's own lists, so that the report says which wrong answers this
                 # project's rules stop before a checker is asked (D76).
                 rules=settings.rules,
+                # The configured effort, so the measured checker is the one a session runs --
+                # but not under `--model`: an effort chosen for one model must not be applied to
+                # another (D129, D135).
+                effort=None if model else configured.effort,
             )
         )
     text = "\n\n".join(report.render() for report in reports)

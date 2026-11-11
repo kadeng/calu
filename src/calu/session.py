@@ -472,15 +472,7 @@ class Session:
         """The checkers of each step route, in the order they are reported. A route may carry
         several -- honesty, security, over-engineering beside the built-in one -- and a step runs
         all of them (D81)."""
-        self.result_checker = ResultChecker(
-            instructions=self._instructions("subagent-result"),
-            model=resolve_model(self._models.get("subagent") or self.config.subagent_checker.model),
-            usage_limits=UsageLimits(
-                request_limit=self.config.subagent_checker.request_limit,
-                output_tokens_limit=self.config.subagent_checker.output_tokens_limit,
-            ),
-            max_tokens=self.config.subagent_checker.max_tokens,
-        )
+        self.result_checker = self._result_checker()
         self.context = ContextBuilder(
             workspace,
             self.config.context,
@@ -546,6 +538,27 @@ class Session:
         except OSError:
             log.exception("reading the built-in %s instructions failed", name)
             return ""
+
+    def _result_checker(self) -> ResultChecker:
+        """Build the subagent result checker from the configuration as it is now.
+
+        One place for the start and for every reload: before, the reload updated its model and
+        its instructions in place and left its request and token limits as they were at the
+        start, and no path passed its effort at all (PLAN.md D135).
+
+        Returns:
+            The checker.
+        """
+        cfg = self.config.subagent_checker
+        return ResultChecker(
+            instructions=self._instructions("subagent-result"),
+            model=resolve_model(self._models.get("subagent") or cfg.model),
+            usage_limits=UsageLimits(
+                request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
+            ),
+            max_tokens=cfg.max_tokens,
+            effort=cfg.effort,
+        )
 
     def _checker(self, name: str, cfg: CheckerConfig) -> Checker:
         """Create one step checker from its database definition and configuration.
@@ -842,9 +855,9 @@ class Session:
             Route.EDIT: self._route_checkers(Route.EDIT, self.config.edit_checker),
             Route.CHANGESET: self._route_checkers(Route.CHANGESET, self.config.changeset_checker),
         }
-        self.result_checker.instructions = self._instructions("subagent-result")
-        if "subagent" not in self._models:
-            self.result_checker.model = resolve_model(self.config.subagent_checker.model)
+        # Rebuilt like the route checkers above, so that its limits and its effort follow a
+        # changed configuration as its model and its instructions always did (D135).
+        self.result_checker = self._result_checker()
         if self.config.context.narrate:
             if self.narrator is None:
                 self.narrator = self._narrator()
