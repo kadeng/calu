@@ -249,3 +249,32 @@ def test_bedrock_checkers_without_aws_credentials_are_warned_about():
         raise ValueError("unparseable ~/.aws/config")
 
     assert preflight.bedrock_warnings(on_bedrock, credentials=broken)
+
+
+def test_the_users_own_claude_setup_that_a_session_leaves_out_is_named(tmp_path: Path) -> None:
+    """D144 (Q21): hooks, CLAUDE.md, skills and the local settings were left out silently."""
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".claude" / "skills" / "deploy").mkdir(parents=True)
+    (home / ".claude" / "CLAUDE.md").write_text("be brief\n", encoding="utf-8")
+    (home / ".claude" / "settings.json").write_text(
+        '{"hooks": {"PreToolUse": []}, "enabledPlugins": {"x": true}, "theme": "dark"}',
+        encoding="utf-8",
+    )
+    (project / ".claude").mkdir(parents=True)
+    (project / ".claude" / "settings.local.json").write_text("{}", encoding="utf-8")
+
+    (said,) = preflight.setting_source_warnings(Config(), home, project)
+    assert "~/.claude/settings.json (hooks, enabledPlugins)" in said, "theme does not matter"
+    assert "~/.claude/CLAUDE.md" in said and "~/.claude/skills/" in said
+    assert ".claude/settings.local.json" in said
+    assert "calu config add claude.setting_sources user" in said
+
+    everything = Config.model_validate(
+        {"claude": {"setting_sources": ["user", "project", "local"]}}
+    )
+    assert preflight.setting_source_warnings(everything, home, project) == []
+    # Nothing of the user's: nothing to say. A broken settings file is skipped, not fatal.
+    (tmp_path / "empty" / ".claude").mkdir(parents=True)
+    (tmp_path / "empty" / ".claude" / "settings.json").write_text("{broken", encoding="utf-8")
+    assert preflight.setting_source_warnings(Config(), tmp_path / "empty", None) == []

@@ -5,9 +5,11 @@ The warnings are reported to the clients as `log` warnings at every start
 Code fails or a checker escalates every step.
 """
 
+import json
 import os
 import shutil
 from collections.abc import Callable, Collection, Mapping
+from pathlib import Path
 
 from calu.claude_model import is_cli_model
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
@@ -316,8 +318,79 @@ def cli_model_warnings(config: Config) -> list[str]:
     ]
 
 
+USER_SETTINGS_KEYS = ("hooks", "enabledPlugins", "env")
+"""Keys of `~/.claude/settings.json` whose absence changes what Claude does in a session."""
+
+
+def setting_source_warnings(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> list[str]:
+    """Name the user's own Claude Code setup that a calu session leaves out (PLAN.md D144, Q21).
+
+    `claude.setting_sources` defaults to `["project"]` (D116), so Claude Code in a calu session
+    does not read `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `~/.claude/skills/` or the
+    project's `.claude/settings.local.json`. That is deliberate -- a personal permission rule
+    would widen what Claude Code approves by itself -- but it was silent: a user's hooks and
+    skills simply did not run. This says which of them exist, once per start, and how to
+    include them. It reads files only; a file that cannot be read or parsed is skipped.
+
+    Args:
+        config: The session configuration.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory, for `.claude/settings.local.json`; None skips it.
+
+    Returns:
+        One warning listing what is left out and the command that includes it, or [] when
+        nothing is left out.
+    """
+    sources = set(config.claude.setting_sources)
+    home = home if home is not None else Path.home()
+    missing: list[str] = []
+    if "user" not in sources:
+        settings = _json_object(home / ".claude" / "settings.json")
+        keys = [key for key in USER_SETTINGS_KEYS if settings.get(key)]
+        if keys:
+            missing.append(f"~/.claude/settings.json ({', '.join(keys)})")
+        if (home / ".claude" / "CLAUDE.md").is_file():
+            missing.append("~/.claude/CLAUDE.md")
+        skills = home / ".claude" / "skills"
+        if skills.is_dir() and any(skills.iterdir()):
+            missing.append("~/.claude/skills/")
+    local = workspace / ".claude" / "settings.local.json" if workspace is not None else None
+    if "local" not in sources and local is not None and local.is_file():
+        missing.append(".claude/settings.local.json")
+    if not missing:
+        return []
+    return [
+        "Claude Code reads only the settings sources "
+        f"{sorted(sources) or 'none'} in this session (claude.setting_sources), so these of "
+        f"yours are not loaded: {'; '.join(missing)}. To include them: "
+        "`calu config add claude.setting_sources user` (and `local`) -- note that permission "
+        "rules in them then let Claude Code approve steps by itself."
+    ]
+
+
+def _json_object(path: Path) -> dict[str, object]:
+    """Read a JSON object from a file, or return {} if it is missing or not a JSON object.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The object, or {} on any read or parse failure.
+    """
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def warnings(
-    config: Config, environ: Mapping[str, str] | None = None, checkers: Collection[str] = ()
+    config: Config,
+    environ: Mapping[str, str] | None = None,
+    checkers: Collection[str] = (),
+    workspace: Path | None = None,
 ) -> list[str]:
     """Return all start-up warnings (sandbox, API keys, write sets, network, heartbeat).
 
@@ -326,11 +399,13 @@ def warnings(
         environ: The environment to inspect; None uses `os.environ`.
         checkers: Names of the enabled checker definitions, for the checks that depend on
             which checkers exist rather than only on the configuration.
+        workspace: The project directory, for `setting_source_warnings`; None skips the
+            project-local file.
 
     Returns:
         The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
-        `network_warnings`, `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`
-        and `bedrock_warnings`.
+        `network_warnings`, `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`,
+        `bedrock_warnings` and `setting_source_warnings`.
     """
     return (
         sandbox_warnings(config)
@@ -341,4 +416,5 @@ def warnings(
         + honesty_warnings(config, checkers)
         + cli_model_warnings(config)
         + bedrock_warnings(config)
+        + setting_source_warnings(config, workspace=workspace)
     )

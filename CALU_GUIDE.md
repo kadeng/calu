@@ -251,8 +251,10 @@ project's `.claude/settings.json` and **not** your personal `~/.claude/settings.
 `.claude/settings.local.json`. Two reasons. A herd runs the same project on several machines and
 should behave the same on all of them; and a permission rule in a personal settings file would
 widen what Claude Code approves by itself, which is the decision a checker's PASS defers to —
-so a file calu cannot see cannot weaken the pair. If you want your own settings in the session,
-say so:
+so a file calu cannot see cannot weaken the pair. When something of yours is left out this way
+-- hooks or plugins in `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, skills in
+`~/.claude/skills/`, or `.claude/settings.local.json` -- the session says which at its start.
+If you want your own settings in the session, say so:
 
 ```bash
 calu config set claude.setting_sources '["user", "project", "local"]'
