@@ -414,6 +414,27 @@ def register_note(
     return " ".join(parts)
 
 
+def in_force(
+    marks: Sequence[HonestyMark], scope: str, branch: str | None
+) -> list[HonestyMark]:
+    """Return the marks that apply on the current branch under `honesty.scope` (D142, Q19).
+
+    Args:
+        marks: The open marks of the project.
+        scope: "project" applies every mark; "branch" only the marks made on `branch`.
+        branch: The branch the workspace is on, or None when it is unknown (not a git
+            repository, or git failed) -- then every mark applies, because guessing that a
+            mark is from another branch would let dirty code run.
+
+    Returns:
+        The marks to enforce and to tell the checkers about, in their original order. A mark
+        with no recorded branch always applies.
+    """
+    if scope != "branch" or branch is None:
+        return list(marks)
+    return [mark for mark in marks if mark.git_branch in (None, branch)]
+
+
 def beyond_step(path: str, step_paths: Collection[str]) -> bool | None:
     """Tell whether a mark's file lies outside the files of the step that produced it (D141).
 

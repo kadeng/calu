@@ -102,6 +102,7 @@ from calu.honesty import (
     blocking_marks,
     checked_marks,
     diff_paths,
+    in_force,
     marks_of_step,
     register_note,
 )
@@ -2280,13 +2281,14 @@ class Session:
                 source="rules",
                 rules=rules,
             )
-        if self.config.honesty.mode != "off" and self.honesty_marks:
+        marks = await self._marks_in_force()
+        if self.config.honesty.mode != "off" and marks:
             # After the deny lists and before the checkers: a rule the user wrote is a
             # stronger statement than honesty debt, so a step that matches one escalates with
             # that reason, and the register is only asked when the lists said nothing. Like
             # the lists, this needs no model call. Editing dirty code is never blocked (D83).
             blocked = (
-                blocking_marks(step, self.honesty_marks, self.workspace)
+                blocking_marks(step, marks, self.workspace)
                 if self.config.honesty.mode == "enforce"
                 else []
             )
@@ -2351,20 +2353,20 @@ class Session:
                 diff = await self._changeset(command)
                 if step.tool_use_id:
                     self._changesets[step.tool_use_id] = diff
-        if self.config.honesty.mode != "off" and self.honesty_marks:
+        if self.config.honesty.mode != "off" and marks:
             # Not blocked deterministically, but the checkers have to know: a command that
             # names no path at all (`make test`) is theirs to judge, and a commit has to be
             # told which of the files it records are dishonest (§13.4, D88).
-            own = marks_of_step(step, self.honesty_marks, self.workspace)
+            own = marks_of_step(step, marks, self.workspace)
             if diff:
                 touched = diff_paths(diff)
                 seen = {mark.mark().key() for mark in own}
                 own = own + [
                     mark
-                    for mark in self.honesty_marks
+                    for mark in marks
                     if mark.open and mark.path in touched and mark.mark().key() not in seen
                 ]
-            note = register_note(self.honesty_marks, own)
+            note = register_note(marks, own)
             if note:
                 step = step.model_copy(update={"notes": [*step.notes, note]})
         if route is Route.EDIT:
@@ -3223,6 +3225,18 @@ class Session:
         if parts:
             await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
         await self._emit_honesty()
+
+    async def _marks_in_force(self) -> list[HonestyMark]:
+        """Return the open marks that apply to the next step (D142, `honesty.scope`).
+
+        Returns:
+            All of `self.honesty_marks` with scope "project"; with scope "branch" only those
+            made on the current branch (or with no recorded branch). Asks git for the branch
+            only when the scope needs it and there are marks; the answer is cached.
+        """
+        if self.config.honesty.scope != "branch" or not self.honesty_marks:
+            return list(self.honesty_marks)
+        return in_force(self.honesty_marks, "branch", await self._git_branch())
 
     async def _git_branch(self) -> str | None:
         """Return the branch of the workspace's git HEAD, cached like `_git_head`.

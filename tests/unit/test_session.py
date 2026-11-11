@@ -1628,6 +1628,48 @@ async def test_a_mark_on_a_file_the_step_did_not_touch_says_so(tmp_path: Path):
     assert "<not a file of its step>" in readme.line()
 
 
+@pytest.mark.parametrize(("scope", "blocked"), [("project", True), ("branch", False)])
+async def test_honesty_scope_decides_whether_a_mark_of_another_branch_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str, blocked: bool
+):
+    """D142 (Q19 (a) as an option): with scope "branch" a mark only applies where it was made.
+
+    The default "project" keeps today's behaviour: a mark made on `feature/x` blocks running
+    the same path on `main`.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("def fields():\n    return []\n", encoding="utf-8")
+    settings = default_settings(
+        tmp_path,
+        Config(honesty=HonestyConfig(mode="enforce", scope=scope)),  # type: ignore[arg-type]
+    )
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "python src/parser.py"}, "result": "ok"}]],
+        settings=settings,
+    )
+    await store.apply_honesty_marks(
+        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
+        [],
+        None,
+        "feature/x",
+    )
+
+    async def on_main() -> str:
+        return "main"
+
+    monkeypatch.setattr(session, "_git_branch", on_main)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    (check,) = [c for c in rec.of(CheckResult) if c.tool_name == "Bash"]
+    assert (check.decision is Decision.DENY) is blocked, check.reason
+    assert ("recorded as dishonest" in check.reason) is blocked
+
+
 async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_path: Path):
     """D113: what a client shows is the marks *and* the mode, so both have to be announced.
 

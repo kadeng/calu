@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**746 tests pass** (plus 10 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**749 tests pass** (plus 10 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 239 commits, ~28.5k lines of Python in `src` (~31.5k with the SQL, templates and
 default instructions), ~16.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -597,7 +597,9 @@ Everything else is either built or recommended with its reasons. These need a pe
   judgements on the same edit. A route carries a list (D81), so both shapes are configuration
   rather than code; what calu **ships** is the owner's call, with `calu evals` as the evidence.
 - **Q19 — what a dirty mark means after a branch switch**: the register records the branch so
-  the question can be answered without a migration. My recommendation is in the question.
+  the question can be answered without a migration. My recommendation (a) is now an option,
+  `calu config set honesty.scope branch` (D142); the default stays `project`, today's
+  behaviour, until you choose.
 - **The Mistral key on the development machine expired on 2026-11-08** (`calu doctor --keys`
   says so). Mistral is last in the automatic model order (D129), so it only matters where no
   other key is set -- but `mistral:mistral-medium-latest` is unverified until a valid key lists it.

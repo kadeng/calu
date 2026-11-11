@@ -218,7 +218,9 @@ somebody invented.
 A mark can also go stale, and the listing says so: `<stale: the file is gone>` when nothing
 can run that code any more, and `<stale: made on feature/x, now on main>` when the mark comes
 from another branch, where the file may be a different file. Neither is acted on -- an open
-mark still blocks -- because clearing somebody's mark on a guess is worse than naming it. Both
+mark still blocks -- because clearing somebody's mark on a guess is worse than naming it.
+If marks should follow branches instead, `calu config set honesty.scope branch` makes a mark
+apply only on the branch it was made on; on any other branch it is listed but blocks nothing. Both
 are checked against the machine the command runs on, so running it elsewhere flags nothing
 rather than flagging the wrong thing.
 

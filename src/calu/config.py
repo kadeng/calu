@@ -433,6 +433,12 @@ class HonestyConfig(ConfigModel):
     nothing is blocked -- which is how to judge the checker on a real project before trusting
     it. `enforce`: a step that would run dirty code is denied, with the mark's reason. Default
     `off`, because the judgement needs a capable checker model (Q17)."""
+    scope: Literal["project", "branch"] = "project"
+    """Where a mark applies. `project`: on every branch of the project, so a mark made on
+    `feature/x` also blocks the same path on `main`. `branch`: only on the branch it was made on
+    -- a mark from another branch neither blocks nor reaches the checkers, and
+    `calu honesty list` still shows it as stale. A mark without a recorded branch applies
+    everywhere. Default `project` until the owner decides Q19 (PLAN.md D142)."""
 
 
 class ClockConfig(ConfigModel):

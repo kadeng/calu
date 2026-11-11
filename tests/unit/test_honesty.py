@@ -406,3 +406,25 @@ def test_a_mark_records_whether_it_reaches_beyond_its_step() -> None:
     assert beyond_step("README.md", {"src/parser.py"}) is True
     assert beyond_step("src/parser.py", {"src/parser.py"}) is False
     assert beyond_step("src/parser.py", ()) is None
+
+
+def test_with_branch_scope_only_the_marks_of_this_branch_apply() -> None:
+    """D142: other branches' marks drop out; unbranched marks and an unknown branch keep all."""
+    from datetime import UTC, datetime
+
+    from calu.honesty import HonestyMark, in_force
+
+    def mark(i: int, branch: str | None) -> HonestyMark:
+        return HonestyMark(
+            id=i,
+            path=f"f{i}.py",
+            symbol="",
+            reason="r",
+            opened_at=datetime.now(UTC),
+            git_branch=branch,
+        )
+
+    marks = [mark(1, "main"), mark(2, "feature/x"), mark(3, None)]
+    assert [m.id for m in in_force(marks, "branch", "main")] == [1, 3]
+    assert [m.id for m in in_force(marks, "branch", None)] == [1, 2, 3], "unknown: all apply"
+    assert [m.id for m in in_force(marks, "project", "main")] == [1, 2, 3]
