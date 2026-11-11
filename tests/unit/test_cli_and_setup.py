@@ -361,3 +361,20 @@ def test_every_command_sees_the_keys_in_calu_s_own_env_file(
     run_cli(monkeypatch, store, ["doctor"], "")  # the exit code depends on the machine
     said = capsys.readouterr().out
     assert "checker keys: fireworks" in said, said
+
+
+def test_the_web_text_of_a_rule_list_reads_back_to_the_same_rules() -> None:
+    """D137: the rules page edits a list as text, so text -> rules -> text must not drift."""
+    from calu.admin import RuleRow, rule_list_text
+
+    rows = [
+        RuleRow(1, "global", "command-deny", "^sudo( |$)", "", 0, True),
+        RuleRow(
+            2, "global", "command-deny", "^git reset --hard( |$)", "Rewrites history.", 1, True
+        ),
+        RuleRow(3, "global", "command-deny", "^eval( |$)", "", 2, True),
+    ]
+    text = rule_list_text(rows)
+    parsed = parse_rule_file("command-deny", text)
+    assert [(r.pattern, r.comment) for r in parsed] == [(r.pattern, r.comment) for r in rows]
+    assert rule_list_text([]) == ""

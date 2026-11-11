@@ -216,6 +216,9 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         ),
         Route("/rules", _page(rules, state), name="rules"),
         Route(
+            "/rules/{rule_list}", _page(save_rule_list, state), methods=["POST"], name="save_rules"
+        ),
+        Route(
             "/honesty/{mark_id:int}/clear",
             _page(clear_mark, state),
             methods=["POST"],
@@ -1058,20 +1061,114 @@ async def rules(request: Request, state: _State) -> Response:
     Returns:
         The rules page.
     """
-    rows = await admin.rules(state.db)
-    grouped: dict[str, list[admin.RuleRow]] = {}
-    for row in rows:
-        grouped.setdefault(row.list, []).append(row)
-    return _render(
+    return await _rules_page(request, state)
+
+
+RULE_GROUPS = (
+    ("Commands", "command", "a command"),
+    ("File reads", "read", "a path a tool reads"),
+    ("File writes", "write", "a path a tool writes"),
+)
+"""The three kinds of list, each shown as its allow list beside its deny list."""
+
+
+async def _rules_page(
+    request: Request,
+    state: _State,
+    failed: tuple[str, str, str] | None = None,
+) -> Response:
+    """Render the rules page: every list of one scope as a text area (PLAN.md D137).
+
+    Args:
+        request: The request; `?project=` names the scope, `?saved=` a list just stored.
+        state: The shared state.
+        failed: (list, the text that was submitted, why it was refused) after a save that did
+            not go through, so the page shows the error at that list and keeps what was typed.
+
+    Returns:
+        The page; status 400 when `failed` is given.
+    """
+    project = request.query_params.get("project") or None
+    rows = await admin.rules(state.db, project)
+    scope = project or "global"
+    texts: dict[str, str] = {}
+    disabled: dict[str, int] = {}
+    inherited: dict[str, int] = {}
+    for rule_list in admin.RULE_LISTS:
+        own = [r for r in rows if r.list == rule_list and r.scope == scope]
+        texts[rule_list] = admin.rule_list_text([r for r in own if r.enabled])
+        disabled[rule_list] = sum(1 for r in own if not r.enabled)
+        inherited[rule_list] = sum(
+            1 for r in rows if r.list == rule_list and r.scope == "global" and project
+        )
+    error = None
+    if failed is not None:
+        texts[failed[0]] = failed[1]
+        error = {"list": failed[0], "message": failed[2]}
+    page = _render(
         request,
         "rules.html",
         {
-            "grouped": grouped,
+            "groups": RULE_GROUPS,
+            "texts": texts,
+            "counts": {name: _pattern_count(text) for name, text in texts.items()},
+            "disabled": disabled,
+            "inherited": inherited,
+            "project": project,
+            "projects": await admin.projects(state.db),
+            "saved": None if failed else request.query_params.get("saved"),
+            "error": error,
             # The honesty register blocks steps as the deny lists do, so it belongs on the page
             # about what blocks a step (PLAN.md D82). Clearing one is the override for a mark
             # nobody agrees with (D83).
             "marks": await herd.honesty_marks(state.db),
         },
+    )
+    if failed is not None:
+        page.status_code = 400
+    return page
+
+
+def _pattern_count(text: str) -> int:
+    """Count the patterns in the text of a rule list.
+
+    Args:
+        text: The list as edited: patterns, `#` comments and blank lines.
+
+    Returns:
+        The number of pattern lines.
+    """
+    return sum(1 for line in text.splitlines() if line.strip() and not line.strip().startswith("#"))
+
+
+async def save_rule_list(request: Request, state: _State) -> Response:
+    """Replace one rule list of one scope with the text of its form (PLAN.md D137).
+
+    The whole list is replaced, as `calu rules edit` does, through
+    `calu.admin.replace_rule_list`: every pattern is compiled before anything is deleted, so a
+    typo leaves the list as it was -- and the page then shows the error at that list with the
+    text still in it, so nothing typed is lost. Disabled rules are not part of the text and are
+    kept.
+
+    Args:
+        request: The request; its path names the list, `?project=` the scope, and its form
+            holds `text`.
+        state: The shared state.
+
+    Returns:
+        A redirect back to the page with `saved=<list>`, or the page with the error (400).
+    """
+    rule_list = str(request.path_params["rule_list"])
+    project = request.query_params.get("project") or None
+    form = await request.form()
+    text = str(form.get("text") or "").replace("\r\n", "\n")
+    try:
+        await admin.replace_rule_list(state.db, rule_list, text, project)
+    except admin.AdminError as exc:
+        return await _rules_page(request, state, failed=(rule_list, text, str(exc)))
+    query = f"?project={project}&saved={rule_list}" if project else f"?saved={rule_list}"
+    return RedirectResponse(
+        str(request.url_for("rules")) + query + f"#{rule_list}", status_code=303
     )
 
 

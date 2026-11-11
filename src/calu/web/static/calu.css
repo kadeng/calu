@@ -394,6 +394,64 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
 .setting-control textarea { min-height: 5.5rem; }
 .setting-control input[type=checkbox] { margin-top: .25rem; width: 1.15rem; height: 1.15rem; }
 
+/* ---------------------------------------------------------------- rules */
+
+.lead { max-width: 75ch; }
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: .2rem;
+  padding: .25rem;
+  margin: .2rem 0 .6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.segmented a {
+  padding: .3rem .85rem;
+  border-radius: 999px;
+  color: var(--fg-soft);
+  font-size: .88rem;
+  font-weight: 550;
+  text-decoration: none;
+}
+.segmented a:hover { color: var(--fg); background: var(--surface); text-decoration: none; }
+.segmented a[aria-current="page"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-sm); }
+.rule-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+.rule-list { display: flex; flex-direction: column; gap: .7rem; margin: 0; scroll-margin-top: 5rem; }
+.rule-list.allow { border-top: 3px solid var(--good); }
+.rule-list.deny { border-top: 3px solid var(--bad); }
+.rule-head { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+.rule-what { font-weight: 550; }
+.rule-count { margin-left: auto; font-size: .82rem; }
+.rule-list textarea { min-height: 7rem; font-size: .82rem; white-space: pre; overflow-x: auto; }
+.tag {
+  font-family: var(--mono);
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: .15rem .5rem;
+  border-radius: 6px;
+}
+.tag.allow { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
+.tag.deny { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.error {
+  margin: 0;
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent);
+  border-radius: var(--radius-sm);
+  padding: .5rem .7rem;
+  font-size: .88rem;
+}
+.saved {
+  margin: 0;
+  color: var(--good);
+  font-size: .88rem;
+  font-weight: 600;
+}
+
 /* ------------------------------------------------------------ minted token */
 
 .token {
@@ -491,5 +549,6 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
   header .hint, header .version { display: none; }
   main { padding: 1.1rem .9rem 3rem; }
   .setting { grid-template-columns: 1fr; }
+  .rule-pair { grid-template-columns: 1fr; }
   table { display: block; overflow-x: auto; }
 }

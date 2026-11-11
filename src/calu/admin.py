@@ -775,6 +775,30 @@ def render_rule_list(rows: Sequence[RuleRow], rule_list: str, scope: str) -> str
     return "\n".join(blocks)
 
 
+def rule_list_text(rows: Sequence[RuleRow]) -> str:
+    """Render the rules of one list as the text the web interface edits (PLAN.md D137).
+
+    The format of `calu rules edit` (`render_rule_list`) without its explanatory header, which
+    the page states once above all lists: one pattern per line, and a rule's comment as a
+    `# ...` line directly above it. A blank line goes before each comment so that the lists
+    stay readable; `calu.setup.parse_rule_file` reads it back to the same rules.
+
+    Args:
+        rows: The enabled rules of one list in one scope, in order.
+
+    Returns:
+        The text, ending with a newline, or "" for an empty list.
+    """
+    lines: list[str] = []
+    for row in rows:
+        if row.comment:
+            if lines:
+                lines.append("")
+            lines.append(f"# {row.comment}")
+        lines.append(row.pattern)
+    return "\n".join(lines) + "\n" if lines else ""
+
+
 async def replace_rule_list(
     db: Db, rule_list: str, text: str, project: str | None = None
 ) -> tuple[int, int]:

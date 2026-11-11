@@ -292,6 +292,51 @@ async def test_the_rules_page_groups_the_lists(db_url: str) -> None:
         await conn.close()
 
 
+async def test_a_rule_list_is_edited_as_text_on_the_rules_page(db_url: str) -> None:
+    """D137, the owner's request: each list is one text area of regexes, saved as a whole.
+
+    The format is `calu rules edit`'s -- one pattern per line, a `# ...` line directly above a
+    pattern is its comment -- and so is the safety: every pattern is compiled before anything
+    is replaced, so a typo leaves the list as it was, and the page keeps what was typed.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        async with await client_for(db) as client:
+            page = (await client.get("/rules")).text
+            assert page.count("<textarea") == len(admin.RULE_LISTS), "one text area per list"
+            assert "^(sudo|su|doas)( |$)" in page
+
+            text = "# Never deploy from a session.\n^deploy( |$)\n\n^sudo( |$)\n"
+            saved = await client.post("/rules/command-deny", data={"text": text})
+            assert saved.status_code == 200 and "saved=command-deny" in str(saved.url)
+            rows = await admin.rules(db, rule_list="command-deny")
+            assert [(r.pattern, r.comment) for r in rows if r.enabled] == [
+                ("^deploy( |$)", "Never deploy from a session."),
+                ("^sudo( |$)", ""),
+            ]
+            # The page shows the list as it is now, comment above its pattern.
+            assert "# Never deploy from a session.\n^deploy( |$)" in saved.text
+
+            # A pattern that does not compile changes nothing, and what was typed stays.
+            broken = "^deploy( |$)\n^unclosed(\n"
+            refused = await client.post("/rules/command-deny", data={"text": broken})
+            assert refused.status_code == 400
+            assert "Not saved" in refused.text and "^unclosed(" in refused.text
+            rows = await admin.rules(db, rule_list="command-deny")
+            assert [r.pattern for r in rows if r.enabled] == ["^deploy( |$)", "^sudo( |$)"]
+
+            # A project's lists are its own, on top of the global ones.
+            await admin.add_project(db, "demo")
+            await client.post("/rules/command-allow?project=demo", data={"text": "^make( |$)\n"})
+            own = await admin.rules(db, "demo", "command-allow")
+            assert [r.pattern for r in own if r.scope == "demo"] == ["^make( |$)"]
+            assert any(r.scope == "global" for r in own), "the global list is untouched"
+    finally:
+        await conn.close()
+
+
 async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None:
     """The owner's ask: model and effort dropdowns, the checker models, use_bedrock."""
     conn = await connect(db_url)

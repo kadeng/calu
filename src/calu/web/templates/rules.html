@@ -1,11 +1,53 @@
 {% extends "base.html" %}
 {% block title %}Rules · calu{% endblock %}
 {% block body %}
-<h1>Allow and deny lists</h1>
-<p class="muted">Applied before any model call. Change them with <code>calu rules</code>; this page reads them.</p>
+<h1>Rules</h1>
+<p class="muted lead">
+  Checked before any model is asked. A step that matches a <strong>deny</strong> rule waits for
+  you; one that matches an <strong>allow</strong> rule and no deny rule runs without a model
+  call; everything else goes to a checker. One regular expression per line, matched anywhere in
+  the text (anchor with <code>^</code> and <code>$</code>); a <code># comment</code> line directly
+  above a pattern is kept as that rule's comment. Saving replaces the whole list, the same as
+  <code>calu rules edit</code>, and a pattern that does not compile changes nothing.
+</p>
+
+<nav class="segmented" aria-label="Scope">
+  <a href="{{ url_for('rules') }}"{% if not project %} aria-current="page"{% endif %}>global</a>
+  {% for p in projects %}
+    <a href="{{ url_for('rules') }}?project={{ p.name }}"{% if p.name == project %} aria-current="page"{% endif %}>{{ p.name }}</a>
+  {% endfor %}
+</nav>
+{% if project %}
+<p class="muted">The lists of project <strong>{{ project }}</strong> apply <em>in addition to</em> the global ones.</p>
+{% endif %}
+
+{% for title, kind, what in groups %}
+<h2>{{ title }}</h2>
+<div class="rule-pair">
+  {% for side in ('allow', 'deny') %}
+  {% set name = kind ~ '-' ~ side %}
+  <form class="card rule-list {{ side }}" id="{{ name }}" method="post"
+        action="{{ url_for('save_rules', rule_list=name) }}{% if project %}?project={{ project }}{% endif %}">
+    <div class="rule-head">
+      <span class="tag {{ side }}">{{ side }}</span>
+      <span class="rule-what">{% if side == 'allow' %}{{ what }} runs without a model call{% else %}{{ what }} waits for you{% endif %}</span>
+      <span class="muted rule-count">{{ counts[name] }} rule{{ '' if counts[name] == 1 else 's' }}{% if inherited[name] %} · +{{ inherited[name] }} global{% endif %}</span>
+    </div>
+    <textarea name="text" spellcheck="false" autocomplete="off" aria-label="{{ name }}"
+              rows="{{ [[texts[name].count('\n') + 2, 5] | max, 18] | min }}">{{ texts[name] }}</textarea>
+    {% if error and error.list == name %}<p class="error" role="alert">Not saved: {{ error.message }}</p>{% endif %}
+    {% if saved == name %}<p class="saved" role="status">Saved.</p>{% endif %}
+    <div class="row">
+      <button type="submit" class="primary">Save {{ name }}</button>
+      {% if disabled[name] %}<span class="muted">{{ disabled[name] }} disabled rule(s) are kept and not shown (<code>calu rules list</code>)</span>{% endif %}
+    </div>
+  </form>
+  {% endfor %}
+</div>
+{% endfor %}
 
 {% if marks %}
-<h2>Code recorded as dishonest <span class="muted">({{ marks | length }})</span></h2>
+<h2 id="honesty">Code recorded as dishonest <span class="muted">({{ marks | length }})</span></h2>
 <p class="muted">A checker found that these say something other than what they do. While
   <code>honesty.mode</code> is <code>enforce</code>, a command that would run them is refused;
   editing them is not, because that is how the record clears itself. Clear a mark by hand when
@@ -34,20 +76,13 @@
   </tbody>
 </table>
 {% endif %}
-{% for list_name, rows in grouped.items() %}
-<h2>{{ list_name }} <span class="muted">({{ rows | length }})</span></h2>
-<table>
-  <thead><tr><th>#</th><th>Pattern</th><th>Comment</th><th>State</th></tr></thead>
-  <tbody>
-  {% for r in rows %}
-    <tr>
-      <td class="muted">{{ r.id }}</td>
-      <td class="mono">{{ r.pattern }}</td>
-      <td class="muted">{{ r.comment }}</td>
-      <td>{{ 'enabled' if r.enabled else 'disabled' }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endfor %}
+<script>
+  // Ctrl+S / Cmd+S saves the list being edited, as on the checker page.
+  addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+      const form = document.activeElement && document.activeElement.closest("form.rule-list");
+      if (form) { event.preventDefault(); form.requestSubmit(); }
+    }
+  });
+</script>
 {% endblock %}
