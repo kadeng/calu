@@ -2281,8 +2281,9 @@ class Session:
                 source="rules",
                 rules=rules,
             )
-        marks = await self._marks_in_force()
-        if self.config.honesty.mode != "off" and marks:
+        # Asking git for the branch costs a process; with the register off there is no reason to.
+        marks = await self._marks_in_force() if self.config.honesty.mode != "off" else []
+        if marks:
             # After the deny lists and before the checkers: a rule the user wrote is a
             # stronger statement than honesty debt, so a step that matches one escalates with
             # that reason, and the register is only asked when the lists said nothing. Like
@@ -2353,7 +2354,7 @@ class Session:
                 diff = await self._changeset(command)
                 if step.tool_use_id:
                     self._changesets[step.tool_use_id] = diff
-        if self.config.honesty.mode != "off" and marks:
+        if marks:
             # Not blocked deterministically, but the checkers have to know: a command that
             # names no path at all (`make test`) is theirs to judge, and a commit has to be
             # told which of the files it records are dishonest (§13.4, D88).
