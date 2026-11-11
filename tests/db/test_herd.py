@@ -596,8 +596,14 @@ async def test_the_honesty_register_is_written_read_and_cleared(db_url: str) -> 
             [],
             step,
             "feature/parser",
+            step_paths={"src/parser.py"},
         )
         assert (opened, closed) == (2, 0)
+        # D141: the mark on a file the step did not touch says so; the other one does not.
+        reach = {m.label(): m.beyond_step for m in await store.open_honesty_marks()}
+        assert reach == {"src/parser.py:fields": False, "docs/api.md": True}
+        listed = {m.label(): m.reach for m in await herd.honesty_marks(db)}
+        assert listed["docs/api.md"] == "not a file of its step"
         opened, _ = await store.apply_honesty_marks(
             [CodeMark(path="src/parser.py", symbol="fields", reason="it returns insertion order")],
             [],

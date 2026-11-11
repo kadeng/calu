@@ -61,6 +61,19 @@ class HonestyMark:
     hostname: str | None = None
     """Host of that session, for the same reason: the same path on another machine is another
     file."""
+    beyond_step: bool | None = None
+    """True when the mark names a file that the step which opened it did not touch, False when
+    it names one of that step's files, None when the step named no file or the row predates the
+    record (PLAN.md D141, Q20). Only shown, never enforced differently."""
+
+    @property
+    def reach(self) -> str:
+        """Say that the mark reaches beyond its step, if it does.
+
+        Returns:
+            "not a file of its step" for a mark with `beyond_step` True, else "".
+        """
+        return "not a file of its step" if self.beyond_step else ""
 
     def judged_here(self, workspace: Path, hostname: str) -> bool:
         """Tell whether this mark's file can be looked at from here.
@@ -142,14 +155,16 @@ class HonestyMark:
             -- who closed it. The author is named because several checkers may write to the
             register (PLAN.md D87), so "which of them thinks this" is part of reading a mark.
             A mark that looks stale says why (`stale`), because an open mark that cannot be
-            right any more only costs the user steps (D91).
+            right any more only costs the user steps (D91). A mark on a file its step did not
+            touch says so (`reach`, D141).
         """
         state = "" if self.open else f"  (closed by {self.closed_by or 'somebody'})"
         branch_part = f"  [{self.git_branch}]" if self.git_branch else ""
         author = f"  ({self.opened_by})" if self.opened_by else ""
         why = self.stale(workspace, branch)
         flag = f"  <stale: {why}>" if why else ""
-        return f"{self.label()}{branch_part}{author}: {self.reason}{state}{flag}"
+        reach = f"  <{self.reach}>" if self.reach else ""
+        return f"{self.label()}{branch_part}{author}: {self.reason}{state}{reach}{flag}"
 
     def mark(self) -> CodeMark:
         """Return this entry as the mark a checker would have written.
@@ -397,6 +412,30 @@ def register_note(
             "make the code and its documentation agree is what clears the record."
         )
     return " ".join(parts)
+
+
+def beyond_step(path: str, step_paths: Collection[str]) -> bool | None:
+    """Tell whether a mark's file lies outside the files of the step that produced it (D141).
+
+    Q20 asks the owner whether a checker may mark a file the step did not touch. Until that is
+    decided calu allows it (D112) and records the reach, so a person can see it.
+
+    Args:
+        path: The project-relative path of the mark, as `checked_marks` normalised it.
+        step_paths: The project-relative paths the step is about.
+
+    Returns:
+        None when the step names no file, so that nothing can be said; otherwise whether
+        `path` is not one of them.
+
+    Example:
+        beyond_step("README.md", {"src/parser.py"}) is True;
+        beyond_step("src/parser.py", {"src/parser.py"}) is False;
+        beyond_step("src/parser.py", ()) is None.
+    """
+    if not step_paths:
+        return None
+    return path not in step_paths
 
 
 def checked_marks(

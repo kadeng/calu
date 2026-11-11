@@ -225,6 +225,10 @@ rather than flagging the wrong thing.
 `calu honesty list --all` names the checker that opened each mark, which matters once more
 than one checker writes to the register -- honesty, security and an over-engineering checker can
 all run on the same edit (see the note on several checkers per route in PLAN.md §13.5).
+A checker may mark a file other than the one the step edits, because an edit to
+`src/parser.py` can be what makes `README.md` wrong. Such a mark is listed with
+`<not a file of its step>` (and the web interface tags it), so you can see which marks are a
+checker's judgement about code it did not see being changed. It blocks like any other mark.
 
 ## calu does not replace Claude Code
 

@@ -30,7 +30,7 @@ interrupted, or nobody answered in time.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -40,7 +40,7 @@ from calu.checkers import CodeMark
 from calu.comments import Comment
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import HONESTY_CHANGED, Db
-from calu.honesty import HonestyMark
+from calu.honesty import HonestyMark, beyond_step
 from calu.protocol.messages import (
     AgentInfo,
     CheckerRunInfo,
@@ -248,6 +248,7 @@ class SessionStore(Protocol):
         git_branch: str | None = None,
         by: str = "",
         files: Mapping[str, str] | None = None,
+        step_paths: Collection[str] = (),
     ) -> tuple[int, int]:
         """Open and close marks as a checker's verdict asked (PLAN.md D82).
 
@@ -266,6 +267,9 @@ class SessionStore(Protocol):
             files: Workspace-relative path -> content of the file the step edits, as it is now,
                 so that an evaluation case built from the mark can be reproduced (D95). Kept
                 only when the mark is opened; a repeated mark leaves the first snapshot.
+            step_paths: Project-relative paths the step is about. A dirty mark outside them is
+                recorded as reaching beyond its step (D141); an empty collection records
+                "unknown", because a step that names no file says nothing about reach.
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -698,7 +702,7 @@ class DatabaseSessionStore:
             psycopg.Error: On database errors.
         """
         rows = await self._db.all(
-            "SELECT id, path, symbol, reason, opened_at, git_branch, opened_by"
+            "SELECT id, path, symbol, reason, opened_at, git_branch, opened_by, beyond_step"
             " FROM honesty_marks"
             " WHERE closed_at IS NULL AND project_id IS NOT DISTINCT FROM"
             "       (SELECT project_id FROM sessions WHERE id = %s::uuid)"
@@ -714,6 +718,7 @@ class DatabaseSessionStore:
                 opened_at=row[4],
                 git_branch=row[5],
                 opened_by=row[6],
+                beyond_step=row[7],
             )
             for row in rows
         ]
@@ -726,6 +731,7 @@ class DatabaseSessionStore:
         git_branch: str | None = None,
         by: str = "",
         files: Mapping[str, str] | None = None,
+        step_paths: Collection[str] = (),
     ) -> tuple[int, int]:
         """Open and close marks as a checker asked (see `SessionStore`).
 
@@ -737,6 +743,7 @@ class DatabaseSessionStore:
             git_branch: The branch the marks were made on.
             by: Name of the checker whose verdict carried them (D87).
             files: The file the step edits, as it is now (D95).
+            step_paths: The paths the step is about, to record each mark's reach (D141).
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -752,13 +759,15 @@ class DatabaseSessionStore:
             await self._db.execute(
                 "INSERT INTO honesty_marks"
                 " (project_id, path, symbol, reason, git_branch, opened_session, opened_step,"
-                "  opened_by, files)"
-                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s, nullif(%s, ''), %s"
+                "  opened_by, files, beyond_step)"
+                " SELECT s.project_id, %s, %s, %s, %s, s.id, %s, nullif(%s, ''), %s, %s"
                 " FROM sessions s WHERE s.id = %s::uuid"
                 " ON CONFLICT (project_id, path, symbol) WHERE closed_at IS NULL"
                 # The reason and the author are refreshed, the snapshot is not: the content
                 # the checker first judged is what a case has to reproduce (D95).
-                " DO UPDATE SET reason = excluded.reason, opened_by = excluded.opened_by",
+                # The reach is refreshed with them: it describes the latest verdict (D141).
+                " DO UPDATE SET reason = excluded.reason, opened_by = excluded.opened_by,"
+                " beyond_step = excluded.beyond_step",
                 (
                     entry.path,
                     entry.symbol,
@@ -767,6 +776,7 @@ class DatabaseSessionStore:
                     step_id,
                     by,
                     json.dumps(dict(files or {})),
+                    beyond_step(entry.path, step_paths),
                     session,
                 ),
             )

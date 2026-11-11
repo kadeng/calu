@@ -1219,7 +1219,7 @@ async def honesty_marks(
     """
     rows = await db.all(
         "SELECT m.id, m.path, m.symbol, m.reason, m.opened_at, m.git_branch, m.closed_at,"
-        " m.closed_by, m.opened_by, m.files, s.directory, h.hostname"
+        " m.closed_by, m.opened_by, m.files, s.directory, h.hostname, m.beyond_step"
         " FROM honesty_marks m LEFT JOIN projects p ON p.id = m.project_id"
         " LEFT JOIN sessions s ON s.id = m.opened_session"
         " LEFT JOIN hosts h ON h.id = s.host_id"
@@ -1243,6 +1243,7 @@ async def honesty_marks(
             files=dict(row[9] or {}),
             workspace=row[10],
             hostname=row[11],
+            beyond_step=row[12],
         )
         for row in rows
     ]
@@ -1271,7 +1272,7 @@ async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> H
         "UPDATE honesty_marks SET closed_at = now(), closed_by = %s"
         " WHERE id = %s AND closed_at IS NULL"
         " RETURNING id, path, symbol, reason, opened_at, git_branch, closed_at, closed_by,"
-        " opened_by",
+        " opened_by, beyond_step",
         (by, mark_id),
     )
     if row is None:
@@ -1292,6 +1293,7 @@ async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> H
         closed_at=row[6],
         closed_by=row[7],
         opened_by=row[8],
+        beyond_step=row[9],
     )
 
 

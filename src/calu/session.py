@@ -3189,6 +3189,9 @@ class Session:
                     # The file as it is before the step runs, so that an evaluation case built
                     # from this mark can be reproduced (D95), exactly as an escalation keeps it.
                     files_before(step, self.workspace),
+                    # What the step was about, so that the register can show a mark on any
+                    # other file as reaching beyond it (D141, Q20 (c)).
+                    step_paths,
                 ),
             )
             if applied is None:
@@ -3353,6 +3356,7 @@ def _mark_info(mark: HonestyMark) -> HonestyMarkInfo:
         symbol=mark.symbol,
         reason=mark.reason,
         git_branch=mark.git_branch,
+        beyond_step=mark.beyond_step,
     )
 
 

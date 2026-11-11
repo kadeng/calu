@@ -146,7 +146,7 @@ session shows the real thinking as it streams.</p>
   {% for m in marks %}
     <tr>
       <td class="muted">{{ m.id }}</td>
-      <td class="mono">{{ m.label() }}</td>
+      <td class="mono">{{ m.label() }}{% if m.reach %} <span class="tag" title="the checker marked a file the step it judged did not touch (D141)">{{ m.reach }}</span>{% endif %}</td>
       <td>{{ m.reason }}</td>
       <td class="muted">{{ m.git_branch or '' }}</td>
       <td>

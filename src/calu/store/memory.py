@@ -6,7 +6,7 @@ which stands for the operator's `calu_resolve_escalation`.
 """
 
 import itertools
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -14,7 +14,7 @@ from typing import Any
 from calu.checkers import CodeMark
 from calu.comments import Comment
 from calu.context.turns import TurnRecord
-from calu.honesty import HonestyMark
+from calu.honesty import HonestyMark, beyond_step
 from calu.protocol.messages import (
     AgentInfo,
     EscalationContextResult,
@@ -163,6 +163,7 @@ class MemorySessionStore:
         git_branch: str | None = None,
         by: str = "",
         files: Mapping[str, str] | None = None,
+        step_paths: Collection[str] = (),
     ) -> tuple[int, int]:
         """Open and close marks in memory, as the database store does.
 
@@ -173,6 +174,7 @@ class MemorySessionStore:
             git_branch: Recorded on a new mark.
             by: Name of the checker whose verdict carried them (D87).
             files: The file the step edits (D95); kept on the mark it opens.
+            step_paths: The paths the step is about, to record each mark's reach (D141).
 
         Returns:
             How many marks were opened or updated, and how many were closed.
@@ -184,7 +186,9 @@ class MemorySessionStore:
             )
             if existing is not None:
                 self.honesty_marks[self.honesty_marks.index(existing)] = replace(
-                    existing, reason=entry.reason
+                    existing,
+                    reason=entry.reason,
+                    beyond_step=beyond_step(entry.path, step_paths),
                 )
             else:
                 self._mark_id += 1
@@ -198,6 +202,7 @@ class MemorySessionStore:
                         git_branch=git_branch,
                         opened_by=by or None,
                         files=dict(files or {}),
+                        beyond_step=beyond_step(entry.path, step_paths),
                     )
                 )
             opened += 1

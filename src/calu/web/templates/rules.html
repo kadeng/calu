@@ -59,7 +59,7 @@
   {% for m in marks %}
     <tr>
       <td class="muted">{{ m.id }}</td>
-      <td class="mono">{{ m.label() }}</td>
+      <td class="mono">{{ m.label() }}{% if m.reach %} <span class="tag" title="the checker marked a file the step it judged did not touch (D141)">{{ m.reach }}</span>{% endif %}</td>
       {# This page lists the marks of every project in the database, so a bare `src/parser.py`
          says nothing about which one. The session page filters by project and needs no column
          like this (D126). #}

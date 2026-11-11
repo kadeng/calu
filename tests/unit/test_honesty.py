@@ -397,3 +397,12 @@ def test_a_mark_is_only_judged_where_its_file_can_be_looked_at(tmp_path: Path) -
         "src/vanished.py", workspace=str(tmp_path), hostname="box"
     ).stale(tmp_path, None)
     assert mine.stale(None, None) == "", "nothing is claimed without a place to look"
+
+
+def test_a_mark_records_whether_it_reaches_beyond_its_step() -> None:
+    """D141: None when the step named no file, else whether the path is not one of its files."""
+    from calu.honesty import beyond_step
+
+    assert beyond_step("README.md", {"src/parser.py"}) is True
+    assert beyond_step("src/parser.py", {"src/parser.py"}) is False
+    assert beyond_step("src/parser.py", ()) is None

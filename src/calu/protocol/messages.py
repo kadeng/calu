@@ -336,6 +336,9 @@ class HonestyMarkInfo(BaseModel):
     symbol: str = ""
     reason: str
     git_branch: str | None = None
+    beyond_step: bool | None = None
+    """True when the mark names a file the step that opened it did not touch, None when that
+    step named no file (PLAN.md D141). A client may show it; enforcement does not use it."""
 
     def label(self) -> str:
         """Render the marked spot.

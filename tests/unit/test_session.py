@@ -1581,6 +1581,53 @@ async def test_a_checker_cannot_mark_a_file_outside_the_project(tmp_path: Path):
     )
 
 
+async def test_a_mark_on_a_file_the_step_did_not_touch_says_so(tmp_path: Path):
+    """D141 (Q20 (c)): a checker may mark another project file, and the register shows it.
+
+    An edit of `src/parser.py` can make `README.md` lie, so that mark is kept (D112). What a
+    person reviewing the register needs to see is that it reaches beyond the step.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "README.md").write_text("# parser\n", encoding="utf-8")
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="track")))
+    extra = CheckerDefinition(
+        name="honesty",
+        route="edit",
+        instructions="# Honesty checker",
+        model="test:model",
+        request_limit=5,
+        output_tokens_limit=24_000,
+        max_tokens=8_000,
+        version=1,
+    )
+    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"}]],
+        settings=settings,
+        checker_models={
+            **fake_models(),
+            "honesty": marking_checker(
+                dirty=[
+                    ("src/parser.py", "fields", "the docstring lies"),
+                    ("README.md", "", "describes the old fields"),
+                ]
+            ),
+        },
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+    reach = {m.label(): m.beyond_step for m in store.honesty_marks if m.open}
+    assert reach == {"src/parser.py:fields": False, "README.md": True}
+    readme = next(m for m in store.honesty_marks if m.path == "README.md")
+    assert "<not a file of its step>" in readme.line()
+
+
 async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_path: Path):
     """D113: what a client shows is the marks *and* the mode, so both have to be announced.
 
