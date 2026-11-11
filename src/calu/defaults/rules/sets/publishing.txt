@@ -1,0 +1,25 @@
+# The "publishing" rule set for command-deny (PLAN.md Q16, D143): steps that reach outside the
+# machine -- a push, a deploy, a release, a package upload -- always ask you, instead of being
+# left to a checker model. Not in the default lists; add it with
+# `calu rules add-set publishing` and remove single rules you do not want with `calu rules remove`.
+
+# Any git push, not only a forced one (the default list covers forced pushes and deletions).
+^git( -[Cc] \S+)* push( |$)
+# Kubernetes and Helm changes to a cluster.
+^(kubectl|oc)( \S+)* (apply|create|delete|replace|patch|rollout|scale)( |$)
+^helm( \S+)* (install|upgrade|uninstall|rollback)( |$)
+# Infrastructure changes.
+^(terraform|tofu)( \S+)* (apply|destroy|import)( |$)
+# Cloud deployments (gcloud app deploy, aws cloudformation deploy, az ... deploy).
+^(gcloud|aws|az)( \S+)* deploy( |$)
+# Package uploads.
+^(npm|pnpm) publish( |$)
+^yarn( npm)? publish( |$)
+^(uv|poetry|cargo|flit|hatch) publish( |$)
+^twine upload( |$)
+^gem push( |$)
+# Container images.
+^(docker|podman)( \S+)* push( |$)
+# GitHub releases and merges.
+^gh release (create|upload|edit|delete)( |$)
+^gh pr merge( |$)

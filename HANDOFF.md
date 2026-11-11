@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**749 tests pass** (plus 10 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**751 tests pass** (plus 10 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 239 commits, ~28.5k lines of Python in `src` (~31.5k with the SQL, templates and
 default instructions), ~16.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -614,7 +614,9 @@ Everything else is either built or recommended with its reasons. These need a pe
   `calu honesty list`, a tag on the web pages, `beyond_step` in the protocol), because it
   restricts nothing; whether such a mark should also **block** less is still yours to decide.
 - **Q16 — whether a push, a deploy or a publish should be a deny rule** rather than a
-  checker's judgement, which is the same finding from the other side.
+  checker's judgement, which is the same finding from the other side. My recommendation (b)
+  is now one command away, `calu rules add-set publishing` (D143); whether the set goes into
+  the default lists is still yours to decide.
 - **`~/.config/calu/.env` does not exist.** Live checker tests skip and a real run has no checker
   model key. The keys are in sitl's git-ignored `.env` (CRLF). Creating the file was refused in an
   earlier session by a sandbox rule, so the owner should do it:

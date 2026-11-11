@@ -2122,10 +2122,10 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
-    """List the allow and deny lists, or add, remove, enable or disable one rule.
+    """List the allow and deny lists, add, remove, enable or disable a rule, or add a rule set.
 
-    `target` is the list name for `list` and `add`, and the rule id for `remove`, `enable` and
-    `disable`.
+    `target` is the list name for `list` and `add`, the rule id for `remove`, `enable` and
+    `disable`, and the set name for `add-set` (`admin.RULE_SETS`, D143).
 
     Args:
         args: Parsed arguments (`action`, `target`, `pattern`, `comment`, `project`,
@@ -2152,6 +2152,8 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
             raise CliError(f"not a rule id: {args.target!r}") from exc
     if args.action == "add" and not (args.target and args.pattern):
         raise CliError("rules add needs a list name and a pattern")
+    if args.action == "add-set" and not args.target:
+        raise CliError(f"rules add-set needs a set name: {', '.join(admin.RULE_SETS)}")
 
     async def work(db: Db) -> str:
         """Run the requested rules action.
@@ -2173,6 +2175,13 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
                 db, args.target, args.pattern, args.comment or "", args.project, args.position
             )
             return f"added rule {row.id}: {row.line()}"
+        if args.action == "add-set":
+            added, skipped = await admin.add_rule_set(db, args.target, args.project)
+            lines = [f"added rule {row.id}: {row.line()}" for row in added]
+            if skipped:
+                lines.append(f"{len(skipped)} pattern(s) were already in the list")
+            lines.append("remove the ones you do not want with `calu rules remove ID`")
+            return "\n".join(lines)
         assert rule_id is not None
         if args.action == "remove":
             if not await admin.remove_rule(db, rule_id):
@@ -2428,11 +2437,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="the allow and deny lists",
         description=(
             "calu rules list [LIST] | add LIST PATTERN | edit LIST | remove|enable|disable ID"
+            " | add-set NAME (a ready-made set: "
+            + "; ".join(f"{name}: {what}" for name, (_list, what) in admin.RULE_SETS.items())
+            + ")"
         ),
     )
-    rules.add_argument("action", choices=["list", "add", "edit", "remove", "enable", "disable"])
     rules.add_argument(
-        "target", nargs="?", help="list name (list, add) or rule id (remove, enable, disable)"
+        "action", choices=["list", "add", "edit", "remove", "enable", "disable", "add-set"]
+    )
+    rules.add_argument(
+        "target",
+        nargs="?",
+        help="list name (list, add), rule id (remove, enable, disable) or set name (add-set)",
     )
     rules.add_argument("pattern", nargs="?", help="regular expression (for add)")
     rules.add_argument("--comment", help="why the rule exists")

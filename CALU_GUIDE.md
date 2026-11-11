@@ -33,7 +33,9 @@ diff alone. That is all it can do: it cannot write, run commands or talk to the 
 
 - **Allow and deny lists before the models.** Harmless commands (`ls`, `git status`) run without
   a model call; known-dangerous ones (`sudo`, force pushes, remote deletions, reads of your
-  credentials) always ask a human. Everything else goes to a checker.
+  credentials) always ask a human. Everything else goes to a checker. An ordinary `git push`, a
+  deploy or a package upload is left to the checker by default; `calu rules add-set publishing`
+  makes all of them ask you as well.
 - **Checkers with your rules.** One checker reviews commands, one reviews edits. Their
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
   rules you would otherwise have to repeat to Claude every day (see
@@ -694,6 +696,7 @@ calu checker edit edit                        # opens the edit checker's instruc
 calu summary <session id> --edit              # correct what the checkers read of the old turns
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
                                                # (the web interface's Rules page edits the same text)
+calu rules add-set publishing                 # pushes, deploys, releases, uploads: always ask
 calu config list --changed                     # what is set, where it comes from, the defaults
 calu config set claude.model opus             # Claude's model -- for the *next* session
 calu checker stats                             # what they decided, what they cost, where a human disagreed

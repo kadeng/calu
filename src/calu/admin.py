@@ -17,6 +17,7 @@ import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from importlib import resources
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -845,6 +846,84 @@ async def replace_rule_list(
                     (pid, rule_list, rule.pattern, rule.comment, rule.position),
                 )
     return removed, len(parsed)
+
+
+RULE_SETS: dict[str, tuple[str, str]] = {
+    "publishing": (
+        "command-deny",
+        "any git push, cluster and infrastructure changes, cloud deploys, package and image"
+        " uploads, GitHub releases and merges",
+    ),
+}
+"""Ready-made rule sets that are not in the default lists: name -> (list, what it covers).
+
+Each is the file `calu/defaults/rules/sets/<name>.txt`, in the format of the rule files. A set is
+for a decision the owner has not made for everybody (PLAN.md Q16, D143): adding it is one
+command, and afterwards its rules are ordinary rules that can be removed one by one."""
+
+
+def rule_set(name: str) -> tuple[str, list[str], list[str]]:
+    """Read a shipped rule set.
+
+    Args:
+        name: One of `RULE_SETS`.
+
+    Returns:
+        (the list it belongs to, its patterns in file order, the comment of each pattern).
+
+    Raises:
+        AdminError: If there is no set of that name.
+    """
+    if name not in RULE_SETS:
+        raise AdminError(f"no rule set {name!r}; the sets are: {', '.join(RULE_SETS)}")
+    rule_list = RULE_SETS[name][0]
+    text = (
+        resources.files("calu.defaults")
+        .joinpath("rules", "sets", f"{name}.txt")
+        .read_text(encoding="utf-8")
+    )
+    rows = parse_rule_file(rule_list, text)
+    return rule_list, [row.pattern for row in rows], [row.comment for row in rows]
+
+
+async def add_rule_set(
+    db: Db, name: str, project: str | None = None
+) -> tuple[list[RuleRow], list[str]]:
+    """Append a shipped rule set to its list, skipping the patterns the list already has.
+
+    Running it twice adds nothing the second time, and a pattern someone already added by hand
+    is not duplicated. A pattern that was **disabled** counts as present: re-adding it would
+    undo a person's decision to switch it off.
+
+    Args:
+        db: A connection of the database owner.
+        name: One of `RULE_SETS`.
+        project: The project whose list gets the rules, or None for the global list.
+
+    Returns:
+        (the rules added, the patterns skipped because the list already had them).
+
+    Raises:
+        AdminError: If the set or the project is unknown.
+        psycopg.Error: On database errors.
+    """
+    rule_list, patterns, comments = rule_set(name)
+    pid = await project_id(db, project)
+    present = {
+        row[0]
+        for row in await db.all(
+            "SELECT pattern FROM rules WHERE list = %s AND project_id IS NOT DISTINCT FROM %s",
+            (rule_list, pid),
+        )
+    }
+    added: list[RuleRow] = []
+    skipped: list[str] = []
+    for pattern, comment in zip(patterns, comments, strict=True):
+        if pattern in present:
+            skipped.append(pattern)
+            continue
+        added.append(await add_rule(db, rule_list, pattern, comment, project))
+    return added, skipped
 
 
 async def add_rule(

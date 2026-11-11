@@ -376,3 +376,44 @@ async def test_the_honesty_checker_is_seeded_off_and_switched_on_in_two_steps(db
             await admin.set_setting(db, "honesty.mode", "nonsense")
     finally:
         await conn.close()
+
+
+async def test_the_publishing_set_is_added_once_and_respects_a_disabled_rule(
+    db_url: str, tmp_path
+) -> None:
+    """D143 (Q16 (b) as an option): one command puts pushes and deploys on the deny list.
+
+    A second run adds nothing, and a rule a person disabled is not added again beside it.
+    """
+    db, conn = await prepared(db_url)
+    try:
+        await admin.add_project(db, "demo")
+        rule_list, patterns, _comments = admin.rule_set("publishing")
+        assert rule_list == "command-deny" and len(patterns) > 5
+        # Somebody already added and then disabled the plain-push rule for this project.
+        push = await admin.add_rule(db, "command-deny", patterns[0], project="demo")
+        await admin.set_rule(db, push.id, False)
+
+        added, skipped = await admin.add_rule_set(db, "publishing", "demo")
+        assert skipped == [patterns[0]], "a disabled rule counts as present"
+        assert [row.pattern for row in added] == patterns[1:]
+        # The comment above a group of patterns goes with its first pattern (the file format).
+        assert any("Kubernetes" in row.comment for row in added)
+
+        again, skipped_again = await admin.add_rule_set(db, "publishing", "demo")
+        assert again == [] and len(skipped_again) == len(patterns)
+
+        # In force for the project: a deploy now waits for a person, whatever a checker says.
+        settings = await ConfigStore(db, tmp_path, "demo").load()
+        deny = settings.rules.lists("command-deny")[0]
+        assert any(r.pattern.search("kubectl apply -f k8s/production.yaml") for r in deny)
+        global_only = await ConfigStore(db, tmp_path).load()
+        assert not any(
+            r.pattern.search("kubectl apply -f k8s/production.yaml")
+            for r in global_only.rules.lists("command-deny")[0]
+        ), "the set goes where it was asked for, not into the global list"
+
+        with pytest.raises(admin.AdminError, match="no rule set"):
+            admin.rule_set("everything")
+    finally:
+        await conn.close()
