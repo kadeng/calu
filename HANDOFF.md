@@ -593,6 +593,8 @@ Everything else is either built or recommended with its reasons. These need a pe
   accepted, an ordinary `git push` passed as reversible. Rewriting the instructions moved those
   numbers around without fixing them, so they were left as they are. The framework's part is
   done: a model per checker, `calu evals` to report, `calu checker stats` to price it.
+  The shipped default is now chosen from the available keys (D129; Haiku 5.5 at medium
+  effort with an Anthropic key, 35 of 35 built-in cases, D133); what is left is your agreement.
 - **Q18 — one checker or several**: honesty, security and over-engineering are different
   judgements on the same edit. A route carries a list (D81), so both shapes are configuration
   rather than code; what calu **ships** is the owner's call, with `calu evals` as the evidence.
