@@ -229,3 +229,23 @@ def test_a_checker_on_the_machine_s_claude_account_is_reported_once():
 
     # And it costs no key warning, because the account is not an API provider.
     assert preflight.key_warnings(Config().with_model("claude:haiku"), environ={}) == []
+
+
+def test_bedrock_checkers_without_aws_credentials_are_warned_about():
+    """D132: `key_warnings` cannot cover Bedrock, which has no single key variable."""
+    on_bedrock = Config().with_model("bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0")
+
+    (said,) = preflight.bedrock_warnings(on_bedrock, credentials=lambda: None)
+    assert "run on AWS Bedrock" in said and "no AWS credentials were found" in said
+    assert "command checker" in said and "narrator" in said
+    assert "calu doctor --keys" in said and "calu config models auto" in said
+
+    # With credentials nothing is said -- and nothing is said when no role is on Bedrock.
+    assert preflight.bedrock_warnings(on_bedrock, credentials=lambda: object()) == []
+    assert preflight.bedrock_warnings(Config(), credentials=lambda: None) == []
+
+    # A credential chain that raises (a broken profile file) counts as none, not as a crash.
+    def broken() -> object:
+        raise ValueError("unparseable ~/.aws/config")
+
+    assert preflight.bedrock_warnings(on_bedrock, credentials=broken)

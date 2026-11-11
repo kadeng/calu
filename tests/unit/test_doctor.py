@@ -228,3 +228,37 @@ def test_a_key_that_is_set_but_refused_is_found_before_it_escalates_every_step()
             assert "sk-ant-good" in carried and "m-expired" not in carried
         if host == "api.eu.mistral.ai":
             assert "m-expired" in carried and "sk-ant-good" not in carried
+
+
+def test_aws_credentials_are_shown_to_sts_when_boto3_finds_any() -> None:
+    """D132: the Bedrock counterpart of the provider key check."""
+
+    class Client:
+        def __init__(self, refuse: bool) -> None:
+            self.refuse = refuse
+
+        def get_caller_identity(self) -> dict[str, str]:
+            if self.refuse:
+                raise RuntimeError(
+                    "ExpiredToken: The security token included in the request is expired"
+                )
+            return {"Account": "123456789012"}
+
+    class Session:
+        def __init__(self, credentials: bool, refuse: bool = False) -> None:
+            self.credentials, self.refuse = credentials, refuse
+
+        def get_credentials(self) -> object | None:
+            return object() if self.credentials else None
+
+        def client(self, _name: str) -> Client:
+            return Client(self.refuse)
+
+    (ok,) = doctor.aws_findings(lambda: Session(True))
+    assert ok.ok and "...9012" in ok.detail and "123456789012" not in ok.detail
+
+    (refused,) = doctor.aws_findings(lambda: Session(True, refuse=True))
+    assert not refused.ok and "ExpiredToken" in refused.detail
+    assert "aws sso login" in refused.advice
+
+    assert doctor.aws_findings(lambda: Session(False)) == [], "no AWS, no finding"

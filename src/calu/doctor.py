@@ -614,6 +614,48 @@ def key_validity_findings(
     return found
 
 
+def aws_findings(session_factory: Callable[[], Any] | None = None) -> list[Finding]:
+    """Ask AWS STS whether the credentials boto3 finds are accepted (PLAN.md D132).
+
+    The Bedrock counterpart of `key_validity_findings`: Bedrock is first in the order calu
+    chooses models by (D129), and its credentials are not one key that can be shown to a model
+    list. `GetCallerIdentity` needs no permission at all, creates nothing and costs nothing.
+
+    Args:
+        session_factory: Builds a `boto3.session.Session`; None uses boto3. Tests pass a
+            stand-in.
+
+    Returns:
+        One finding when boto3 finds credentials: accepted (with the account's last four
+        digits) or refused with AWS's reason. [] when boto3 is missing or finds none -- not
+        every installation uses AWS, and `calu run` warns when a Bedrock model is configured
+        without them.
+    """
+    try:
+        if session_factory is None:
+            from boto3.session import Session
+
+            session_factory = Session
+        session = session_factory()
+        if session.get_credentials() is None:
+            return []
+    except Exception:  # boto3 missing, or a profile file it cannot read
+        return []
+    try:
+        account = str(session.client("sts").get_caller_identity().get("Account", ""))
+    except Exception as exc:
+        return [
+            Finding(
+                "aws credentials",
+                False,
+                f"found, but STS refuses them: {' '.join(str(exc).split())[:200]}",
+                "Checkers on Bedrock fail and escalate every step until they work. Renew them "
+                "(e.g. `aws sso login`), or move the checkers with `calu config models auto`.",
+            )
+        ]
+    return [Finding("aws credentials", True, f"accepted by STS (account ...{account[-4:]})")]
+
+
 def _reason(answer: Any) -> str:
     """Pull the provider's own explanation out of a refusal.
 

@@ -7,7 +7,7 @@ Code fails or a checker escalates every step.
 
 import os
 import shutil
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 
 from calu.claude_model import is_cli_model
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
@@ -238,6 +238,58 @@ def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str
     return []
 
 
+def bedrock_warnings(
+    config: Config, credentials: Callable[[], object | None] | None = None
+) -> list[str]:
+    """Report Bedrock models configured on a machine where boto3 finds no AWS credentials.
+
+    `key_warnings` cannot cover Bedrock: its credentials come from the environment, `~/.aws`,
+    SSO or an instance role, not from one variable. Leaving it unchecked meant a session whose
+    checkers are on Bedrock started without a word and then escalated every step (PLAN.md
+    D132). This asks boto3's credential chain; whether AWS **accepts** the credentials is
+    `calu doctor --keys`. Measured: 7 ms when credentials are found, and about 2 s when none
+    are, because the chain's last step asks the EC2 metadata service and waits for it -- so the
+    delay is paid only in the misconfiguration this warning exists for. The metadata probe is
+    not switched off, because on EC2 an instance role is a legitimate source and the warning
+    would then be false.
+
+    Args:
+        config: The session configuration.
+        credentials: Returns the credentials boto3 resolves, or None; None as the argument
+            uses boto3 itself. Tests pass a stand-in.
+
+    Returns:
+        One warning naming the roles on Bedrock, or [] when none is, or when credentials exist.
+    """
+    roles = sorted(
+        role for role, model in configured_models(config).items() if model.startswith("bedrock:")
+    )
+    if not roles:
+        return []
+    if credentials is None:
+        try:
+            from boto3.session import Session
+        except ImportError:
+            return [
+                f"{', '.join(roles)} run on AWS Bedrock, and boto3 is not installed, so every "
+                "check of them fails and escalates to you (install the `bedrock` extra of "
+                "pydantic-ai)."
+            ]
+        credentials = lambda: Session().get_credentials()  # ruff: ignore[lambda-assignment]
+    try:
+        found = credentials()
+    except Exception:  # a broken profile file reads as no credentials
+        found = None
+    if found is not None:
+        return []
+    return [
+        f"{', '.join(roles)} run on AWS Bedrock, but no AWS credentials were found "
+        "(environment, ~/.aws, SSO or an instance role): every check of them fails and "
+        "escalates to you. `calu doctor --keys` checks them once they are set up, and "
+        "`calu config models auto` moves the checkers to a provider that has credentials."
+    ]
+
+
 def cli_model_warnings(config: Config) -> list[str]:
     """Report the roles that run on the machine's Claude Code account (PLAN.md D117).
 
@@ -277,8 +329,8 @@ def warnings(
 
     Returns:
         The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
-        `network_warnings`, `heartbeat_warnings`, `honesty_warnings` and
-        `cli_model_warnings`.
+        `network_warnings`, `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`
+        and `bedrock_warnings`.
     """
     return (
         sandbox_warnings(config)
@@ -288,4 +340,5 @@ def warnings(
         + heartbeat_warnings(config)
         + honesty_warnings(config, checkers)
         + cli_model_warnings(config)
+        + bedrock_warnings(config)
     )

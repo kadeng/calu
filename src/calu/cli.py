@@ -1126,6 +1126,7 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
         findings += doctor.workspace_findings(Path(args.directory).resolve())
     if args.keys:
         findings += doctor.key_validity_findings()
+        findings += doctor.aws_findings()
     if args.db:
         url = load_credential(store, "admin", "Admin password: ")
         try:
