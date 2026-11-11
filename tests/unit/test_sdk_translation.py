@@ -251,3 +251,29 @@ def test_the_runner_puts_the_prompt_on_the_step(tmp_path: Path) -> None:
     )
     assert step.asked_about == "Allow network connection to example.net?"
     assert sdk.workspace == tmp_path
+
+
+def test_tools_without_a_route_are_named_once(tmp_path: Path) -> None:
+    """D154: CLI 2.1.319 offers tools calu never routed on purpose (RemoteTrigger, Artifact,
+    ...). They go to the default route; the user hears once which ones they are."""
+    from calu.checkers.policy import Route
+    from calu.protocol.messages import Log
+
+    sdk = SdkRunner(tmp_path, ClaudeConfig(), tool_routes={"Artifact": Route.ESCALATE})
+    tools = [
+        "Bash",
+        "Read",
+        "Edit",
+        "WebFetch",
+        "RemoteTrigger",
+        "Artifact",
+        "mcp__x__y",
+        "Monitor",
+    ]
+    first = sdk._translate(SystemMessage(subtype="init", data={"session_id": "c", "tools": tools}))
+    (warning,) = first
+    assert isinstance(warning, Log) and warning.level == "warning"
+    assert "Monitor, RemoteTrigger" in warning.message, "sorted, routed and MCP tools left out"
+    assert "Artifact" not in warning.message and "mcp__" not in warning.message
+    again = sdk._translate(SystemMessage(subtype="init", data={"session_id": "c", "tools": tools}))
+    assert again == [], "once per session, not per turn"

@@ -42,6 +42,7 @@ from claude_agent_sdk.types import (
 )
 
 from calu.checkers.model import Step
+from calu.checkers.policy import Route, unknown_tools
 from calu.checkers.result_checker import SubagentResult
 from calu.claude.runner import EventSink, Fork, Priority, ToolGate, Verdict
 from calu.config import ClaudeConfig
@@ -58,6 +59,7 @@ from calu.protocol.messages import (
     AssistantText,
     AssistantThinking,
     Event,
+    Log,
     ToolFiles,
     ToolResult,
     ToolUse,
@@ -159,7 +161,11 @@ class SdkRunner:
     """
 
     def __init__(
-        self, workspace: Path, config: ClaudeConfig, hidden_env: set[str] | None = None
+        self,
+        workspace: Path,
+        config: ClaudeConfig,
+        hidden_env: set[str] | None = None,
+        tool_routes: dict[str, Route] | None = None,
     ) -> None:
         """Prepare a runner; nothing is started until `run`.
 
@@ -168,7 +174,11 @@ class SdkRunner:
             config: Claude Code settings (model, CLI path, setting sources).
             hidden_env: Names of environment variables (checker API keys) that Claude Code
                 must not see.
+            tool_routes: The configured routes per tool, so that a tool named there is not
+                reported as unknown (D154).
         """
+        self.tool_routes = dict(tool_routes or {})
+        self._tools_reported = False
         self.hidden_env = set(hidden_env or ())
         self.workspace = workspace
         self._stop_requested = False
@@ -715,9 +725,37 @@ class SdkRunner:
                 )
             case SystemMessage() if msg.subtype == "init":
                 self.session_id = msg.data.get("session_id", self.session_id)
+                events += self._unknown_tools_warning(msg.data.get("tools"))
             case _:
                 pass
         return events
+
+    def _unknown_tools_warning(self, tools: Any) -> list[Event]:
+        """Name, once per runner, the tools of this Claude Code that calu has no route for (D154).
+
+        Args:
+            tools: The `tools` list of the CLI's init message (anything else is ignored).
+
+        Returns:
+            One warning `Log` the first time unknown tools are seen, else [].
+        """
+        if self._tools_reported or not isinstance(tools, list):
+            return []
+        self._tools_reported = True
+        unknown = unknown_tools([str(t) for t in tools], self.tool_routes)
+        if not unknown:
+            return []
+        return [
+            Log(
+                level="warning",
+                message=(
+                    f"This Claude Code offers tools calu has no route for: {', '.join(unknown)}. "
+                    "Each call of them goes to the default route (the command checker unless "
+                    "`default_route` says otherwise). To make one always ask, run "
+                    '`calu config set tool_routes \'{"NAME": "escalate"}\'`.'
+                ),
+            )
+        ]
 
     def _stream_delta(self, event: dict[str, Any], agent: str | None = None) -> list[Event]:
         """Translate a raw API stream event into an `assistant.delta` event, if it has text.

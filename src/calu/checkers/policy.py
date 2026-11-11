@@ -117,3 +117,32 @@ class ToolPolicy(BaseModel):
         if tool_name in READ_ONLY_TOOLS:
             return Route.ALLOW
         return self.default
+
+
+KNOWN_TOOLS = (
+    frozenset({"Bash", "AskUserQuestion", "WebFetch", "WebSearch"}) | EDIT_TOOLS | (READ_ONLY_TOOLS)
+)
+"""Tools whose route was chosen on purpose. `WebFetch` and `WebSearch` are here although they
+fall to the default route, because that is deliberate; every other tool reaches the default
+route only because nobody looked at it (`unknown_tools`, D154)."""
+
+
+def unknown_tools(offered: list[str], configured: dict[str, Route] | None = None) -> list[str]:
+    """Return the tools Claude Code offers that no route was chosen for (PLAN.md D154).
+
+    Claude Code adds tools with its own updates (2.1.319 offers `RemoteTrigger`, `CronCreate`,
+    `Artifact`, `Workflow` and others). Such a tool goes to `default_route` -- the command
+    checker unless configured otherwise -- so it is not unchecked, but some of them reach
+    outside the session (a cloud agent, a published page), and the user should hear that they
+    exist. MCP tools (`mcp__...`) are left out: they are the user's own, and going to the
+    default route is their documented behaviour.
+
+    Args:
+        offered: The tool names of the CLI's init message.
+        configured: `tool_routes`, whose names count as chosen.
+
+    Returns:
+        The unknown names, sorted.
+    """
+    chosen = KNOWN_TOOLS | set(configured or {})
+    return sorted(name for name in offered if name not in chosen and not name.startswith("mcp__"))

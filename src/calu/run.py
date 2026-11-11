@@ -18,6 +18,7 @@ token; several at once. The terminal output of this command shows the same event
 session can also be watched where it was started.
 """
 
+import functools
 import logging
 import os
 import sys
@@ -392,7 +393,9 @@ async def _run(
         options.workspace,
         settings,
         store,
-        lambda: (runner_factory or SdkRunner)(options.workspace, session.config.claude, hidden),
+        lambda: (
+            runner_factory or functools.partial(SdkRunner, tool_routes=session.config.tool_routes)
+        )(options.workspace, session.config.claude, hidden),
         both(bus.publish, both(console, idle)),
         project=options.project,
         checker_models=checker_models,
