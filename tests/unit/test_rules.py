@@ -257,3 +257,53 @@ async def test_a_deny_match_is_recorded_as_the_rules_outcome(tmp_path: Path):
     assert step.decision is not None
     assert step.decision.rules_outcome == "deny" and step.decision.decision == "escalate"
     assert not step.checker_runs  # a deny match asks the human without a model call
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "X=1 sudo rm -rf build",
+        "env sudo ls",
+        "env -u HOME X=1 sudo ls",
+        "command sudo ls",
+        "builtin eval x",
+        "exec sudo ls",
+        "nohup sudo ls",
+        "time -p sudo ls",
+        "nice -n 5 git push --force origin main",
+        "timeout 5 sudo ls",
+        "timeout -s KILL 5s git push -f",
+        "xargs -I {} sudo ls {}",
+        "/usr/bin/sudo ls",
+        "LANG=C nohup /usr/bin/sudo ls",
+        "X=1 bash -c 'ls'",
+    ],
+)
+def test_a_deny_rule_is_not_sidestepped_by_a_prefix(tmp_path: Path, command: str) -> None:
+    """D145: deny rules are anchored, and an assignment, a wrapper or a path took a command
+    past them -- the "always ask" of `sudo` and force pushes did not hold."""
+    outcome = default_rules(tmp_path).evaluate(bash(command))
+    assert outcome.ask, f"{command!r} must wait for a person"
+    assert not outcome.allowed
+
+
+@pytest.mark.parametrize(
+    "command", ["env", "time make test", "nice -n 5 make", "xargs grep -l foo", "X=1 ls"]
+)
+def test_a_wrapper_around_a_harmless_command_is_not_denied(tmp_path: Path, command: str) -> None:
+    """D145: the stripped forms are only for the deny list, and a harmless command stays so."""
+    assert not default_rules(tmp_path).evaluate(bash(command)).ask
+
+
+def test_the_forms_a_deny_rule_sees() -> None:
+    """D145: the documented example of `command_variants`."""
+    from calu.checkers.shell import command_variants
+
+    assert command_variants("X=1 nohup /usr/bin/sudo ls") == [
+        "X=1 nohup /usr/bin/sudo ls",
+        "nohup /usr/bin/sudo ls",
+        "/usr/bin/sudo ls",
+        "sudo ls",
+    ]
+    assert command_variants("ls -l") == ["ls -l"]
+    assert command_variants("echo 'unclosed") == ["echo 'unclosed"]

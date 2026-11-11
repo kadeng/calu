@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from calu.checkers.model import Step
-from calu.checkers.shell import parse_command
+from calu.checkers.shell import command_variants, parse_command
 
 RULE_LISTS = (
     "command-allow",
@@ -271,20 +271,27 @@ class Rules:
         return outcome
 
     def _deny_command(self, command: str, outcome: RuleOutcome) -> bool:
-        """Add an `ask` reason if `command` matches the command deny list.
+        """Add an `ask` reason if `command`, or a form of it, matches the command deny list.
 
         Args:
-            command: One simple command.
+            command: One simple command; `shell.command_variants` gives the forms checked.
             outcome: Collects the reason.
 
         Returns:
             True if a deny rule matched.
         """
-        rule = _first_match(self.lists("command-deny")[0], command)
-        if rule is None:
-            return False
-        outcome.ask.append(f"The command `{command}` matches the deny rule {rule.describe()}.")
-        return True
+        # Also the forms without leading assignments, wrappers (`env`, `nohup`, `timeout 5`)
+        # and a path before the program name: deny rules are anchored at the start (D145).
+        for variant in command_variants(command):
+            rule = _first_match(self.lists("command-deny")[0], variant)
+            if rule is None:
+                continue
+            seen = "" if variant == command else f" (as `{variant}`)"
+            outcome.ask.append(
+                f"The command `{command}`{seen} matches the deny rule {rule.describe()}."
+            )
+            return True
+        return False
 
     def _check_path(self, path: Path, kind: str, via: str, outcome: RuleOutcome) -> bool:
         """Check one path against the read or write lists.

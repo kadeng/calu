@@ -96,6 +96,96 @@ class ParsedCommand:
     error: str | None = None
 
 
+WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
+    # name: (options that take a separate value, positional arguments before the command)
+    "env": (frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}), 0),
+    "command": (frozenset(), 0),
+    "builtin": (frozenset(), 0),
+    "exec": (frozenset({"-a"}), 0),
+    "nohup": (frozenset(), 0),
+    "time": (frozenset({"-f", "--format", "-o", "--output"}), 0),
+    "nice": (frozenset({"-n", "--adjustment"}), 0),
+    "ionice": (frozenset({"-c", "--class", "-n", "--classdata", "-p", "-P", "-u"}), 0),
+    "timeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), 1),
+    "xargs": (
+        frozenset({"-I", "-i", "-n", "-P", "-d", "-E", "-e", "-L", "-l", "-s", "-a"}),
+        0,
+    ),
+    "stdbuf": (frozenset({"-i", "-o", "-e"}), 0),
+    "setsid": (frozenset(), 0),
+    "chrt": (frozenset(), 1),
+    "taskset": (frozenset(), 1),
+    "unbuffer": (frozenset(), 0),
+}
+"""Commands that run the command after them, with how to skip their own arguments (D145)."""
+
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def command_variants(command: str) -> list[str]:
+    """Return a simple command and the forms of it a deny rule must also see (PLAN.md D145).
+
+    Deny rules are anchored at the start of a command (`^(sudo|su|doas)( |$)`), and three
+    ordinary spellings put something else there: a variable assignment (`X=1 sudo ...`), a
+    command that runs the next one (`env`, `nohup`, `timeout 5`, `xargs`, ...) and a path
+    (`/usr/bin/sudo`). Each of them used to take a command past the deny list. This strips them
+    one layer at a time and returns every stage, so a rule written for the plain command matches
+    all of them. It is used for the deny list only: an allow rule must match the command as
+    written, so the extra forms can only make a step wait for a person, never let one through.
+
+    Args:
+        command: One simple command as the splitter recorded it.
+
+    Returns:
+        The command itself first, then each stripped form that differs from the one before,
+        without duplicates. A command shlex cannot split is returned alone.
+
+    Example:
+        command_variants("X=1 nohup /usr/bin/sudo ls") ==
+            ["X=1 nohup /usr/bin/sudo ls", "nohup /usr/bin/sudo ls", "/usr/bin/sudo ls",
+             "sudo ls"]
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return [command]
+    variants = [command]
+
+    def add(tokens: list[str]) -> None:
+        """Append the joined tokens to `variants` unless empty or already there.
+
+        Args:
+            tokens: The words of one stripped form.
+        """
+        text = " ".join(tokens)
+        if tokens and text not in variants:
+            variants.append(text)
+
+    for _ in range(10):  # each round removes at least one word; nesting deeper is not usual
+        before = list(words)
+        while words and _ASSIGNMENT.match(words[0]):
+            words = words[1:]
+        add(words)
+        if words and "/" in words[0]:
+            words = [os.path.basename(words[0]), *words[1:]]
+            add(words)
+        if words and words[0] in WRAPPERS:
+            valued, positional = WRAPPERS[words[0]]
+            rest = words[1:]
+            while rest and (rest[0].startswith("-") or (words[0] == "env" and "=" in rest[0])):
+                option = rest.pop(0)
+                if option == "--":
+                    break
+                if option in valued and rest:
+                    rest.pop(0)
+            rest = rest[positional:]
+            words = rest
+            add(words)
+        if words == before:
+            break
+    return variants
+
+
 def parse_command(command: str, cwd: Path, home: Path | None = None) -> ParsedCommand:
     """Split a Bash command line into simple commands and the paths they read or write.
 

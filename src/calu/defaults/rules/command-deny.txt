@@ -1,6 +1,9 @@
 # Commands that always ask you, whatever the checker would say. Same format as
 # command-allow.txt: one Python regular expression per line, matched with re.search against
 # each simple command (chains, pipes and $(...) are split). Deny rules win over allow rules.
+# A deny rule also sees each command without leading VAR=value assignments, without a wrapper
+# such as env, nohup, nice, timeout 5 or xargs, and with /usr/bin/sudo shortened to sudo, so
+# `^sudo( |$)` catches all of those spellings.
 
 ^(sudo|su|doas)( |$)
 ^git( -[Cc] \S+)* push(?= )(?=.* (--force(-with-lease)?(=\S*)?|-[a-zA-Z]*[fd][a-zA-Z]*|--mirror|--delete|--prune|[+:]\S+)( |$))

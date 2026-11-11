@@ -697,6 +697,8 @@ them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 calu checker edit edit                        # opens the edit checker's instructions in $EDITOR
 calu summary <session id> --edit              # correct what the checkers read of the old turns
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
+                                               # (a deny rule for `sudo` also catches `X=1 sudo`,
+                                               # `env sudo`, `nohup sudo`, `/usr/bin/sudo`)
                                                # (the web interface's Rules page edits the same text)
 calu rules add-set publishing                 # pushes, deploys, releases, uploads: always ask
 calu config list --changed                     # what is set, where it comes from, the defaults
