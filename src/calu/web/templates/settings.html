@@ -27,32 +27,35 @@
   <h2>{{ section.title }}</h2>
   <div class="card">
   {% for s in section.settings %}
+    {# The text on the left, the control in a column of its own, so that a checkbox lines up
+       with every other control. The label points at its control by id, so it stays clickable. #}
+    {%- set field = 'f-' ~ s.path|replace('.', '-') %}
     <div class="setting">
+      <div class="setting-text">
+        <label for="{{ field }}">{{ s.label }}</label>
+        <code class="setting-key">{{ s.path }}</code>
+        {% if s.help %}<p class="setting-help">{{ s.help }}</p>{% endif %}
+      </div>
+      <div class="setting-control">
       {% if s.kind == 'bool' %}
-        <label><input type="checkbox" name="{{ s.path }}" {{ 'checked' if s.value }}> {{ s.label }}</label>
+        <input type="checkbox" id="{{ field }}" name="{{ s.path }}" {{ 'checked' if s.value }}>
       {% elif s.kind == 'choice' %}
-        <label>{{ s.label }}
-          <select name="{{ s.path }}">
-            <option value="" {{ 'selected' if s.value is none }}>(the default)</option>
-            {% for choice in s.choices %}
-              <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
-            {% endfor %}
-          </select>
-        </label>
+        <select id="{{ field }}" name="{{ s.path }}">
+          <option value="" {{ 'selected' if s.value is none }}>(the default)</option>
+          {% for choice in s.choices %}
+            <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
+          {% endfor %}
+        </select>
       {% elif s.kind == 'lines' or s.kind == 'json' %}
-        <label>{{ s.label }}
-          <textarea name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
-        </label>
+        <textarea id="{{ field }}" name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
       {% else %}
-        <label>{{ s.label }}
-          <input type="{{ 'number' if s.kind in ('int', 'number') else 'text' }}"
-                 {% if s.kind == 'number' %}step="any"{% endif %}
-                 name="{{ s.path }}" value="{{ s.text }}"
-                 {% if s.suggestions %}list="claude-models"{% endif %}>
-        </label>
+        <input type="{{ 'number' if s.kind in ('int', 'number') else 'text' }}"
+               id="{{ field }}"
+               {% if s.kind == 'number' %}step="any"{% endif %}
+               name="{{ s.path }}" value="{{ s.text }}"
+               {% if s.suggestions %}list="claude-models"{% endif %}>
       {% endif %}
-      <span class="muted mono">{{ s.path }}</span>
-      {% if s.help %}<span class="muted">{{ s.help }}</span>{% endif %}
+      </div>
     </div>
   {% endfor %}
   </div>

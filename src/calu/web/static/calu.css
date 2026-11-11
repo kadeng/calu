@@ -361,17 +361,38 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
 
 .setting {
   display: grid;
-  grid-template-columns: minmax(18rem, 26rem) auto 1fr;
-  gap: .7rem;
-  align-items: baseline;
-  padding: .55rem 0;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 22rem);
+  gap: .4rem 1.6rem;
+  align-items: start;
+  padding: .9rem 0;
   border-bottom: 1px solid var(--line);
 }
-.setting:last-child { border-bottom: 0; }
-.setting label { display: grid; grid-template-columns: 11rem 1fr; gap: .6rem; align-items: baseline; }
-.setting label input[type=checkbox] { justify-self: start; }
-.setting textarea { min-height: 4.5rem; }
-.setting select, .setting input[type=text], .setting input[type=number] { padding: .32rem .5rem; }
+.setting:first-child { padding-top: .2rem; }
+.setting:last-child { border-bottom: 0; padding-bottom: .2rem; }
+.setting-text { min-width: 0; }
+.setting-text label { font-weight: 600; cursor: pointer; }
+.setting-key {
+  margin-left: .5rem;
+  font-size: .76rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.setting-help {
+  margin: .25rem 0 0;
+  color: var(--muted);
+  font-size: .86rem;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+.setting-control { padding-top: .1rem; }
+.setting-control input[type=text],
+.setting-control input[type=number],
+.setting-control select,
+.setting-control textarea { width: 100%; }
+.setting-control textarea { min-height: 5.5rem; }
+.setting-control input[type=checkbox] { margin-top: .25rem; width: 1.15rem; height: 1.15rem; }
 
 /* ------------------------------------------------------------ minted token */
 
@@ -466,6 +487,6 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
   header { padding: .5rem .9rem; }
   header .hint, header .version { display: none; }
   main { padding: 1.1rem .9rem 3rem; }
-  .setting, .setting label { grid-template-columns: 1fr; }
+  .setting { grid-template-columns: 1fr; }
   table { display: block; overflow-x: auto; }
 }
