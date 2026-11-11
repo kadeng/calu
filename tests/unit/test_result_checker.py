@@ -168,8 +168,8 @@ async def test_an_interrupt_ends_a_waiting_subagent_review_without_telling_claud
 def test_the_result_checker_honours_its_effort_like_a_step_checker() -> None:
     """D135: `subagent_checker.effort` was a documented setting that reached nothing."""
     assert ResultChecker("i", "test").settings().get("thinking") is None
-    assert ResultChecker("i", "test", effort="high").settings()["thinking"] == "high"
-    assert ResultChecker("i", "test", effort="off").settings()["thinking"] is False
+    assert ResultChecker("i", "test", effort="high").settings().get("thinking") == "high"
+    assert ResultChecker("i", "test", effort="off").settings().get("thinking") is False
 
 
 async def test_a_reload_gives_the_result_checker_its_new_limits_and_effort(tmp_path: Path):

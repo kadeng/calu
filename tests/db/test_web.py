@@ -184,6 +184,8 @@ async def test_a_session_page_offers_the_commands_to_connect_with(db_url: str) -
             assert "<pre>calu attach</pre>" in page
             assert "<pre>calu acp</pre>" in page
             assert "in /w on box" in page, "the directory and host the short form needs"
+            # Each command has a Copy button carrying exactly the command (D139).
+            assert 'data-copy="calu attach"' in page
 
             # Minting shows the token once and records only its hash.
             after = await client.post(f"/sessions/{session_id}/token", data={"label": "zed"})

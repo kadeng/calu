@@ -191,13 +191,17 @@ session shows the real thinking as it streams.</p>
     <input type="text" name="label" placeholder="what the token is for, e.g. zed on the laptop">
     <button>Mint a client token</button>
   </form>
-  <table>
-    <tbody>
+  {# One row per command: its label above it, and the command in a block that scrolls
+     sideways rather than wraps -- in a table the command column was squeezed to one character
+     per line on a phone (D139). #}
+  <div class="commands">
     {% for label, command in connect %}
-      <tr><td>{{ label }}</td><td><pre>{{ command }}</pre></td></tr>
+      <div class="command">
+        <div class="command-label">{{ label }}</div>
+        <div class="command-line"><pre>{{ command }}</pre><button type="button" class="copy" data-copy="{{ command }}">Copy</button></div>
+      </div>
     {% endfor %}
-    </tbody>
-  </table>
+  </div>
   {% if tokens %}
   <p class="muted">{{ tokens | length }} token(s) for this session:
     {% for t in tokens %}<span class="mono">{{ t.id }}{{ ' (revoked)' if t.revoked }}</span>{{ ', ' if not loop.last }}{% endfor %}

@@ -15,17 +15,17 @@
 </p>
 {% for title, rows in groups %}
 <h2>{{ title }} <span class="muted">({{ rows | length }})</span></h2>
-<table>
+<table class="stack">
   <thead><tr><th>State</th><th>Host</th><th>Directory</th><th>Started</th><th>Waiting</th><th></th></tr></thead>
   <tbody>
   {% for s in rows %}
     <tr>
       <td><span class="state {{ s.state }}">{{ s.state }}</span>{% if s.stale %}
         <span class="decision deny" title="the process stopped saying it is there">no heartbeat for {{ (s.silent_for_s / 60) | round | int }} min</span>{% endif %}</td>
-      <td class="mono">{{ s.hostname }}<span class="muted">/{{ s.os_user }}</span></td>
-      <td class="mono">{{ s.directory }}</td>
-      <td class="muted">{{ s.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
-      <td>{% if s.open_escalations %}<span class="count">{{ s.open_escalations }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
+      <td class="mono" data-label="Host">{{ s.hostname }}<span class="muted">/{{ s.os_user }}</span></td>
+      <td class="mono" data-label="Directory">{{ s.directory }}</td>
+      <td class="muted" data-label="Started">{{ s.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td data-label="Waiting">{% if s.open_escalations %}<span class="count">{{ s.open_escalations }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
       <td>
         <a href="{{ url_for('session', session_id=s.id) }}">history</a>
         {% if s.address %}· <a href="{{ url_for('live', session_id=s.id) }}">live</a>{% endif %}

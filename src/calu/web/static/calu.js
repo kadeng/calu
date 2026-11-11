@@ -156,3 +156,18 @@
     apply(current);
   });
 })();
+
+// Copy buttons: a command line to paste into a terminal is what the session page offers, so
+// copying it should not depend on selecting a line that scrolls sideways.
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("button.copy[data-copy]");
+  if (!button) return;
+  try {
+    await navigator.clipboard.writeText(button.dataset.copy);
+    button.textContent = "Copied";
+    button.classList.add("done");
+    setTimeout(() => { button.textContent = "Copy"; button.classList.remove("done"); }, 1500);
+  } catch (e) {
+    button.textContent = "Select and copy";
+  }
+});
