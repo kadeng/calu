@@ -512,7 +512,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    end-to-end test against a real session over a real WebSocket with a scripted Claude, and is
    driven as a real process over real pipes for the handshake, a prompt, a **denied** step and
    `session/load`'s replay -- but no editor has driven it yet, so expect small mismatches in
-   what a client sends. What the editor
+   what a client sends (the messages were checked field by field against the published v1
+   schema in D152; one gap, the `session/close` capability, is fixed). What the editor
    can drive is complete: prompts, the replay of `session/load`, permission requests for
    escalations, and the session mode -- the three auto-escalation switches are offered both as
    ACP's session modes and as its newer boolean config options, and a change made anywhere

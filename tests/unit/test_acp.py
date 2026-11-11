@@ -168,6 +168,8 @@ async def test_initialize_reports_the_protocol_version_and_what_calu_can_do() ->
         result = answer["result"]
         assert result["protocolVersion"] == 1
         assert result["agentCapabilities"]["loadSession"] is True
+        # D152: a method the adapter handles has to be offered, or a client never calls it.
+        assert result["agentCapabilities"]["sessionCapabilities"] == {"close": {}}
         assert result["agentCapabilities"]["promptCapabilities"]["image"] is False
         assert result["authMethods"] == []
         assert result["agentInfo"]["name"] == "calu"

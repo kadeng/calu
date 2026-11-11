@@ -233,6 +233,9 @@ def initialize_result(name: str, version: str) -> dict[str, Any]:
             "loadSession": True,
             "promptCapabilities": {"image": False, "audio": False, "embeddedContext": True},
             "mcpCapabilities": {"http": False, "sse": False},
+            # `session/close` is handled; the schema (v1) says a client may only call it when
+            # the agent offers it here (D152).
+            "sessionCapabilities": {"close": {}},
         },
         "agentInfo": {"name": name, "version": version},
         "authMethods": [],
