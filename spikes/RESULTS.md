@@ -759,3 +759,26 @@ grounds that it "cannot reach anything outside this session", which the document
 **Re-run when** the CLI changes how sessions discover each other, or if a user reports a message
 arriving in another session unasked -- and then check `tests/unit/test_session.py`
 (`test_a_message_out_of_the_session_is_checked_but_a_relay_is_not`) still describes what happens.
+
+
+## Which files Claude Code's Grep reads (D146, 2026-11-11)
+
+**Setup:** a scratch directory with `.env`, `server.key` and `.hid/conf`, each holding
+`API_KEY=...`, and `a.py`. `claude -p ... --allowedTools Grep --model haiku` (CLI 2.1.294),
+told to call Grep once with pattern `API_KEY`, `output_mode: content`.
+
+| Case | Grep returned |
+|---|---|
+| no path, no glob, no git repository | `.hid/conf`, `.env`, `server.key` |
+| `glob: ".env*"` | `.env` |
+| git repository, `.gitignore` lists `.env` and `server.key` | `.hid/conf` only |
+
+So the Grep tool searches **hidden** files (unlike plain `rg`, which skips them without
+`--hidden`) and **respects `.gitignore`**. calu checked only the directory a Grep names, so a
+protected file below it that git does not ignore was read with no check. `calu.checkers.search`
+now lists the files the same way (`git ls-files --cached --others --exclude-standard`, or every
+file outside a work tree) and the read deny list is applied to each.
+
+**Re-run when** the CLI changes its Grep tool (a new option such as `--no-ignore`, or hidden files
+dropped), and check `tests/unit/test_rules.py` (`test_a_grep_of_the_project_asks_...`,
+`test_a_git_ignored_protected_file_...`).

@@ -307,3 +307,38 @@ def test_the_forms_a_deny_rule_sees() -> None:
     ]
     assert command_variants("ls -l") == ["ls -l"]
     assert command_variants("echo 'unclosed") == ["echo 'unclosed"]
+
+
+def _grep(cwd: Path, **tool_input: str) -> Step:
+    return Step(tool_name="Grep", tool_input={"pattern": "API_KEY", **tool_input}, cwd=str(cwd))
+
+
+def test_a_grep_of_the_project_asks_when_it_would_read_a_protected_file(tmp_path: Path) -> None:
+    """D146: Claude Code's Grep reads hidden files below the directory it searches (measured),
+    so a check of the directory alone let it read `.env` with no check at all."""
+    (tmp_path / ".env").write_text("API_KEY=secret\n", encoding="utf-8")
+    (tmp_path / "certs").mkdir()
+    (tmp_path / "certs" / "server.key").write_text("k\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+
+    outcome = rules.evaluate(_grep(tmp_path))
+    assert not outcome.allowed
+    assert outcome.ask and "`.env`" in outcome.ask[0] and "`certs/server.key`" in outcome.ask[0]
+    # A glob that reaches the file asks too; one that does not leaves the search free.
+    assert rules.evaluate(_grep(tmp_path, glob=".env*")).ask
+    assert rules.evaluate(_grep(tmp_path, glob="*.{py,ts}")).allowed
+    assert rules.evaluate(_grep(tmp_path, path="app.py")).allowed
+
+
+def test_a_git_ignored_protected_file_does_not_make_a_grep_ask(tmp_path: Path) -> None:
+    """D146: Claude Code's Grep skips git-ignored files (measured), and so does the check --
+    otherwise every search of a project with an ignored `.env` would wait for a person."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("API_KEY=secret\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    outcome = default_rules(tmp_path).evaluate(_grep(tmp_path))
+    assert outcome.allowed and not outcome.ask

@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from calu.checkers.model import Step
+from calu.checkers.search import searched_files
 from calu.checkers.shell import command_variants, parse_command
 
 RULE_LISTS = (
@@ -267,6 +268,12 @@ class Rules:
                 path = (path if path.is_absolute() else cwd / path).resolve()
                 if not self._check_path(path, kind, f"{tool} tool", outcome):
                     all_allowed = False
+                if (
+                    tool == "Grep"
+                    and path.is_dir()
+                    and not self._search_allowed(step, path, outcome)
+                ):
+                    all_allowed = False
         outcome.allowed = parts > 0 and all_allowed and not outcome.ask
         return outcome
 
@@ -322,6 +329,40 @@ class Rules:
             f"covers {'reading' if kind == 'read' else 'writing'} it."
         )
         return False
+
+    def _search_allowed(self, step: Step, directory: Path, outcome: RuleOutcome) -> bool:
+        """Apply the read deny list to every file a Grep of `directory` reads (PLAN.md D146).
+
+        Claude Code's Grep reads every file below the directory that git does not ignore,
+        hidden ones included, so a check of the directory alone let it read `.env` or a `.key`
+        file unchecked. A protected file among them makes the step ask, as a `Read` of it would.
+
+        Args:
+            step: The Grep call; its `glob` narrows the files.
+            directory: The directory it searches, absolute.
+            outcome: Collects the `ask` reason, or a note when the files could not all be listed.
+
+        Returns:
+            False if a protected file would be read or the listing is incomplete, else True.
+        """
+        glob = step.tool_input.get("glob")
+        listed = searched_files(directory, glob if isinstance(glob, str) else None)
+        denied = [self.display(path) for path in listed.files if self.read_denied(path)]
+        if denied:
+            shown = ", ".join(f"`{name}`" for name in denied[:5])
+            more = f" and {len(denied) - 5} more" if len(denied) > 5 else ""
+            outcome.ask.append(
+                f"Searching `{self.display(directory)}` (Grep tool) would read {shown}{more}, "
+                "which the read deny list protects."
+            )
+            return False
+        if not listed.complete:
+            outcome.notes.append(
+                f"Searching `{self.display(directory)}` covers too many files to check each "
+                "against the read deny list; decide whether the search may read them."
+            )
+            return False
+        return True
 
     def read_denied(self, path: Path) -> bool:
         """Tell whether reading `path` matches a read deny rule (built-in or `read-deny`).

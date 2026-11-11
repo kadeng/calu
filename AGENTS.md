@@ -51,7 +51,7 @@ phases.
 | `src/calu/clock.py` | Watches calu's own clock: a backward jump breaks the attribution of file changes to steps (D32) |
 | `src/calu/changes.py` | Git snapshots of the project directory: what a command wrote, as a patch, and how to undo it (D31, optional) |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
-| `src/calu/checkers/` | Rules engine and shell parser, tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the checkers' read-only code tools (`tools.py`) |
+| `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
