@@ -1,74 +1,173 @@
 {% extends "base.html" %}
 {% block title %}Settings · calu{% endblock %}
 {% block body %}
-<h1>Settings{% if project %} of project {{ project }}{% endif %}</h1>
-<p class="muted">
+<h1>Settings{% if project %} <span class="muted">· project {{ project }}</span>{% endif %}</h1>
+<p class="muted lead">
   Every value calu knows, generated from its configuration model, so this form and
-  <code>calu config set</code> take the same names. A session that runs now applies a change at
-  its next step. Writing validates the whole configuration first.
+  <code>calu config set</code> take the same names. A running session applies a change at its next
+  step -- except the <code>claude.*</code> settings, which Claude Code reads when a session starts.
+  Writing validates the whole configuration first.
 </p>
-<p class="row">
-  Scope:
-  {% if project %}<a href="{{ url_for('settings') }}">global</a>{% else %}<strong>global</strong>{% endif %}
+
+<nav class="segmented" aria-label="Scope">
+  <a href="{{ url_for('settings') }}"{% if not project %} aria-current="page"{% endif %}>global</a>
   {% for p in projects %}
-    {% if p.name == project %}<strong>{{ p.name }}</strong>
-    {% else %}<a href="{{ url_for('settings') }}?project={{ p.name }}">{{ p.name }}</a>{% endif %}
+    <a href="{{ url_for('settings') }}?project={{ p.name }}"{% if p.name == project %} aria-current="page"{% endif %}>{{ p.name }}</a>
   {% endfor %}
-</p>
-{% if saved %}<p class="token">{{ saved }} setting(s) saved.</p>{% endif %}
+</nav>
+{% if saved %}<p class="saved" role="status">{{ saved }} setting(s) saved.</p>{% endif %}
 
 <datalist id="claude-models">
   <option value="fable"></option><option value="opus"></option>
   <option value="sonnet"></option><option value="haiku"></option>
 </datalist>
 
-<form method="post" action="{{ url_for('settings') }}{% if project %}?project={{ project }}{% endif %}" id="settings">
-{% for section in sections %}
-  <h2>{{ section.title }}</h2>
-  <div class="card">
-  {% for s in section.settings %}
-    {# The text on the left, the control in a column of its own, so that a checkbox lines up
-       with every other control. The label points at its control by id, so it stays clickable. #}
-    {%- set field = 'f-' ~ s.path|replace('.', '-') %}
-    <div class="setting">
-      <div class="setting-text">
-        <label for="{{ field }}">{{ s.label }}</label>
-        <code class="setting-key">{{ s.path }}</code>
-        {% if s.help %}<p class="setting-help">{{ s.help }}</p>{% endif %}
+<div class="settings-layout">
+  <aside class="settings-index" aria-label="Sections">
+    <input type="search" id="settings-filter" placeholder="Filter settings…" autocomplete="off"
+           aria-label="Filter settings by name, key or description">
+    <label class="only-changed"><input type="checkbox" id="only-changed"> changed only</label>
+    <nav>
+    {% for section in sections %}
+      {% set changed = section.settings | selectattr('changed') | list | length %}
+      <a href="#s-{{ section.name }}" data-section="{{ section.name }}">{{ section.title }}{% if changed %} <span class="dot" title="{{ changed }} changed">{{ changed }}</span>{% endif %}</a>
+    {% endfor %}
+    </nav>
+  </aside>
+
+  <form method="post" action="{{ url_for('settings') }}{% if project %}?project={{ project }}{% endif %}" id="settings">
+  {% for section in sections %}
+    <section class="settings-section" id="s-{{ section.name }}" data-section="{{ section.name }}">
+    <h2>{{ section.title }}</h2>
+    <div class="card">
+    {% for s in section.settings %}
+      {# The text on the left, the control in a column of its own, so that a checkbox lines up
+         with every other control. The label points at its control by id, so it stays clickable. #}
+      {%- set field = 'f-' ~ s.path|replace('.', '-') %}
+      {%- set head, rest = s.help_parts %}
+      <div class="setting{% if s.changed %} is-changed{% endif %}"
+           data-search="{{ (s.label ~ ' ' ~ s.path ~ ' ' ~ s.help) | lower }}">
+        <div class="setting-text">
+          <label for="{{ field }}">{{ s.label }}</label>
+          <code class="setting-key">{{ s.path }}</code>
+          {% if s.changed %}<span class="badge-changed" title="differs from the default">changed · default {{ s.default_text }}</span>{% endif %}
+          {% if head %}
+            {# A div, not a p: a <details> may not sit inside a paragraph, and the browser closed it
+               early, which put "more" on a line of its own. #}
+            <div class="setting-help">{{ head }}
+            {%- if rest %} <details class="more"><summary>more</summary>{{ rest }}</details>{% endif %}</div>
+          {% endif %}
+        </div>
+        <div class="setting-control">
+        {% if s.kind == 'bool' %}
+          <input type="checkbox" id="{{ field }}" name="{{ s.path }}" {{ 'checked' if s.value }}>
+        {% elif s.kind == 'choice' %}
+          <select id="{{ field }}" name="{{ s.path }}">
+            <option value="" {{ 'selected' if s.value is none }}>(the default)</option>
+            {% for choice in s.choices %}
+              <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
+            {% endfor %}
+          </select>
+        {% elif s.kind == 'lines' or s.kind == 'json' %}
+          <textarea id="{{ field }}" name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
+        {% else %}
+          <input type="{{ 'number' if s.kind in ('int', 'number') else 'text' }}"
+                 id="{{ field }}"
+                 {% if s.kind == 'number' %}step="any"{% endif %}
+                 name="{{ s.path }}" value="{{ s.text }}"
+                 {% if s.suggestions %}list="claude-models"{% endif %}>
+        {% endif %}
+        </div>
       </div>
-      <div class="setting-control">
-      {% if s.kind == 'bool' %}
-        <input type="checkbox" id="{{ field }}" name="{{ s.path }}" {{ 'checked' if s.value }}>
-      {% elif s.kind == 'choice' %}
-        <select id="{{ field }}" name="{{ s.path }}">
-          <option value="" {{ 'selected' if s.value is none }}>(the default)</option>
-          {% for choice in s.choices %}
-            <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
-          {% endfor %}
-        </select>
-      {% elif s.kind == 'lines' or s.kind == 'json' %}
-        <textarea id="{{ field }}" name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
-      {% else %}
-        <input type="{{ 'number' if s.kind in ('int', 'number') else 'text' }}"
-               id="{{ field }}"
-               {% if s.kind == 'number' %}step="any"{% endif %}
-               name="{{ s.path }}" value="{{ s.text }}"
-               {% if s.suggestions %}list="claude-models"{% endif %}>
-      {% endif %}
-      </div>
+    {% endfor %}
     </div>
+    </section>
   {% endfor %}
-  </div>
-{% endfor %}
-  <p class="row"><button class="primary" type="submit">Save the changed values</button>
-  <span class="muted">or Ctrl+S / Cmd+S</span></p>
-</form>
+    <p class="empty" id="no-match" hidden>No setting matches the filter.</p>
+
+    <div class="save-bar" id="save-bar" hidden>
+      <span><strong id="dirty-count">0</strong> unsaved change(s)</span>
+      <button type="button" id="discard">Discard</button>
+      <button class="primary" type="submit">Save</button>
+      <span class="muted">Ctrl+S</span>
+    </div>
+  </form>
+</div>
+
 <script>
-addEventListener('keydown', (event) => {
-  if ((event.ctrlKey || event.metaKey) && event.key === 's') {
-    event.preventDefault();
-    document.getElementById('settings').submit();
-  }
-});
+(() => {
+  const form = document.getElementById("settings");
+  const rows = [...document.querySelectorAll(".setting")];
+  const sections = [...document.querySelectorAll(".settings-section")];
+  const links = [...document.querySelectorAll(".settings-index a[data-section]")];
+  const filter = document.getElementById("settings-filter");
+  const onlyChanged = document.getElementById("only-changed");
+  const bar = document.getElementById("save-bar");
+  const count = document.getElementById("dirty-count");
+  const noMatch = document.getElementById("no-match");
+
+  // What each control held when the page loaded, so "unsaved" means "different from that".
+  const initial = new Map();
+  const valueOf = (el) => (el.type === "checkbox" ? String(el.checked) : el.value);
+  for (const el of form.elements) if (el.name) initial.set(el, valueOf(el));
+
+  const refreshDirty = () => {
+    let dirty = 0;
+    for (const [el, value] of initial) {
+      const changed = valueOf(el) !== value;
+      el.closest(".setting")?.classList.toggle("is-dirty", changed);
+      dirty += changed ? 1 : 0;
+    }
+    count.textContent = dirty;
+    bar.hidden = dirty === 0;
+  };
+  form.addEventListener("input", refreshDirty);
+  form.addEventListener("change", refreshDirty);
+  document.getElementById("discard").addEventListener("click", () => {
+    form.reset();
+    refreshDirty();
+  });
+
+  const applyFilter = () => {
+    const words = filter.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    for (const row of rows) {
+      const text = row.dataset.search;
+      const visible = words.every((w) => text.includes(w))
+        && (!onlyChanged.checked || row.classList.contains("is-changed"));
+      row.hidden = !visible;
+      shown += visible ? 1 : 0;
+    }
+    for (const section of sections) {
+      const any = section.querySelector(".setting:not([hidden])");
+      section.hidden = !any;
+      const link = links.find((a) => a.dataset.section === section.dataset.section);
+      if (link) link.classList.toggle("is-empty", !any);
+    }
+    noMatch.hidden = shown !== 0;
+  };
+  filter.addEventListener("input", applyFilter);
+  onlyChanged.addEventListener("change", applyFilter);
+
+  // The section in view is marked in the index.
+  const seen = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      for (const a of links) a.toggleAttribute("aria-current", a.dataset.section === entry.target.dataset.section);
+    }
+  }, { rootMargin: "-20% 0px -70% 0px" });
+  sections.forEach((s) => seen.observe(s));
+
+  addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "s") {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  addEventListener("beforeunload", (event) => {
+    if (!bar.hidden) { event.preventDefault(); event.returnValue = ""; }
+  });
+  form.addEventListener("submit", () => { bar.hidden = true; });
+})();
 </script>
 {% endblock %}

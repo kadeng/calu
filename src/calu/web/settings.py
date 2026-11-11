@@ -19,6 +19,7 @@ that a session would then choke on. Only the fields a human actually changed are
 """
 
 import json
+import re
 import types
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -54,6 +55,57 @@ class Setting:
     choices: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
     help: str = ""
+    default: Any = None
+    """The model's default, so the page can say what a changed value replaced (D138)."""
+    is_set: bool = False
+    """Whether this scope stores the value, rather than inheriting the default."""
+
+    @property
+    def changed(self) -> bool:
+        """Whether the value differs from the default.
+
+        Returns:
+            True when it does; a value stored but equal to the default is not "changed".
+        """
+        return self.value != self.default
+
+    @property
+    def default_text(self) -> str:
+        """Render the default the way the control shows a value.
+
+        Returns:
+            The default as a one-line text: `(empty)` for nothing, lists joined with commas.
+        """
+        if self.default in (None, "", [], {}):
+            return "(empty)"
+        if isinstance(self.default, bool):
+            return "on" if self.default else "off"
+        if isinstance(self.default, (list, tuple)):
+            return ", ".join(str(item) for item in self.default)
+        if isinstance(self.default, dict):
+            return json.dumps(self.default, sort_keys=True)
+        return str(self.default)
+
+    @property
+    def help_parts(self) -> tuple[str, str]:
+        """Split the help into its first sentence and the rest.
+
+        The page shows the first sentence and folds the rest, because most of the descriptions
+        explain a decision in several sentences and a page of 75 settings cannot show them all
+        at once (D138).
+
+        Returns:
+            (first sentence, everything after it, possibly "").
+        """
+        text = " ".join(self.help.split())
+        # Only at a full stop followed by a capital letter: a colon or a semicolon usually
+        # introduces an example (`e.g. ...: ...`), and cutting there left half a code sample.
+        for match in re.finditer(r"\.(\s+)(?=[A-Z])", text):
+            head = text[: match.start() + 1]
+            if head.endswith(("e.g.", "i.e.", "etc.", "vs.")):
+                continue
+            return head, text[match.end() :]
+        return text, ""
 
     @property
     def text(self) -> str:
@@ -220,7 +272,8 @@ def _setting(path: str, name: str, info: Any, current: Any) -> Setting | None:
     kind, choices = _kind_of(info.annotation)
     if kind is None:
         return None
-    value = current if current is not None else _default(info)
+    default = _default(info)
+    value = current if current is not None else default
     return Setting(
         path=path,
         label=_label(name),
@@ -229,6 +282,8 @@ def _setting(path: str, name: str, info: Any, current: Any) -> Setting | None:
         choices=choices,
         suggestions=MODEL_SUGGESTIONS if path == "claude.model" else (),
         help=str(info.description or ""),
+        default=default,
+        is_set=current is not None,
     )
 
 
@@ -319,6 +374,10 @@ def _label(name: str) -> str:
         name: The field name, e.g. "use_bedrock".
 
     Returns:
-        The name with underscores as spaces and the first letter upper case.
+        The name with underscores as spaces and the first letter upper case, and a unit suffix
+        shown as a unit: `escalation_timeout_s` is "Escalation timeout (s)", not "... s".
     """
+    for suffix, unit in (("_ms", "ms"), ("_s", "s"), ("_kb", "kB"), ("_mb", "MB")):
+        if name.endswith(suffix):
+            return f"{name[: -len(suffix)].replace('_', ' ').capitalize()} ({unit})"
     return name.replace("_", " ").capitalize()

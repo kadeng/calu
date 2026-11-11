@@ -359,33 +359,97 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
 
 /* ------------------------------------------------------------- settings */
 
+.settings-layout {
+  display: grid;
+  grid-template-columns: 13.5rem minmax(0, 1fr);
+  gap: 1.6rem;
+  align-items: start;
+  margin-top: .8rem;
+}
+.settings-index {
+  position: sticky;
+  top: 4.4rem;
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  max-height: calc(100vh - 5.5rem);
+  overflow-y: auto;
+}
+.settings-index input[type=search] {
+  width: 100%;
+  font: inherit;
+  font-size: .88rem;
+  padding: .45rem .6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg);
+}
+.only-changed { font-size: .85rem; color: var(--fg-soft); display: flex; gap: .45rem; align-items: center; }
+.settings-index nav { display: flex; flex-direction: column; gap: .1rem; }
+.settings-index nav a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .32rem .6rem;
+  border-radius: 8px;
+  color: var(--fg-soft);
+  font-size: .88rem;
+  text-decoration: none;
+}
+.settings-index nav a:hover { background: var(--surface-2); color: var(--fg); text-decoration: none; }
+.settings-index nav a[aria-current] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.settings-index nav a.is-empty { opacity: .35; }
+.dot {
+  font-size: .7rem;
+  font-weight: 700;
+  min-width: 1.25rem;
+  padding: .05rem .35rem;
+  border-radius: 999px;
+  text-align: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.settings-section { scroll-margin-top: 4.6rem; }
+.settings-section:first-child h2 { margin-top: 0; }
+
 .setting {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(14rem, 22rem);
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 20rem);
   gap: .4rem 1.6rem;
   align-items: start;
-  padding: .9rem 0;
+  padding: .85rem .2rem;
   border-bottom: 1px solid var(--line);
 }
 .setting:first-child { padding-top: .2rem; }
 .setting:last-child { border-bottom: 0; padding-bottom: .2rem; }
+.setting.is-dirty { box-shadow: inset 3px 0 0 var(--accent); padding-left: .8rem; border-radius: 4px; }
 .setting-text { min-width: 0; }
 .setting-text label { font-weight: 600; cursor: pointer; }
 .setting-key {
-  margin-left: .5rem;
-  font-size: .76rem;
+  margin-left: .45rem;
+  font-size: .75rem;
   color: var(--muted);
   background: none;
   border: 0;
   padding: 0;
 }
-.setting-help {
-  margin: .25rem 0 0;
-  color: var(--muted);
-  font-size: .86rem;
-  line-height: 1.5;
-  max-width: 62ch;
+.badge-changed {
+  display: inline-block;
+  margin-left: .45rem;
+  font-size: .72rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: .08rem .5rem;
+  white-space: nowrap;
 }
+.setting-help { margin: .3rem 0 0; color: var(--muted); font-size: .86rem; line-height: 1.5; max-width: 70ch; }
+details.more { display: inline; }
+details.more summary { display: inline; cursor: pointer; color: var(--accent); font-size: .82rem; list-style: none; }
+details.more summary::-webkit-details-marker { display: none; }
+details.more[open] summary { display: none; }
 .setting-control { padding-top: .1rem; }
 .setting-control input[type=text],
 .setting-control input[type=number],
@@ -393,6 +457,23 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
 .setting-control textarea { width: 100%; }
 .setting-control textarea { min-height: 5.5rem; }
 .setting-control input[type=checkbox] { margin-top: .25rem; width: 1.15rem; height: 1.15rem; }
+
+.save-bar {
+  position: sticky;
+  bottom: 1rem;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: .8rem;
+  margin-top: 1rem;
+  padding: .7rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.save-bar[hidden] { display: none; }
+.save-bar > span:first-child { margin-right: auto; }
 
 /* ---------------------------------------------------------------- rules */
 
@@ -549,6 +630,9 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
   header .hint, header .version { display: none; }
   main { padding: 1.1rem .9rem 3rem; }
   .setting { grid-template-columns: 1fr; }
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-index { position: static; max-height: none; }
+  .settings-index nav { flex-direction: row; flex-wrap: wrap; }
   .rule-pair { grid-template-columns: 1fr; }
   table { display: block; overflow-x: auto; }
 }

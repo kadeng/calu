@@ -2,7 +2,7 @@
 
 import pytest
 
-from calu import herd
+from calu import admin, herd
 from calu.checkers import CodeMark
 from calu.db import Db, connect
 from calu.setup import setup
@@ -271,5 +271,45 @@ async def test_the_theme_switch_cycles_and_survives_a_reload(db_url: str, page) 
             assert await current.inner_text() == "Sessions"
             await page.goto(base + "/rules")
             assert await current.inner_text() == "Rules"
+    finally:
+        await conn.close()
+
+
+async def test_the_settings_page_can_be_filtered_and_says_what_is_unsaved(
+    db_url: str, page
+) -> None:
+    """D138: 75 settings on one page need a filter, a "changed only" view and a save bar."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.set_setting(db, "escalation_timeout_s", 3600)
+        async with serve(create_app(db)) as base:
+            await page.goto(base + "/settings")
+            visible = "[...document.querySelectorAll('.setting')].filter(r => !r.hidden).length"
+            everything = await page.evaluate(visible)
+            assert everything > 40
+
+            await page.fill("#settings-filter", "effort")
+            assert 0 < await page.evaluate(visible) < 10
+            await page.fill("#settings-filter", "no setting is called this")
+            assert await page.evaluate(visible) == 0
+            assert await page.is_visible("#no-match")
+            await page.fill("#settings-filter", "")
+
+            # Only what differs from the default -- here the one value set above.
+            await page.check("#only-changed")
+            assert await page.evaluate(visible) == 1
+            assert "default 28800" in await page.inner_text(".setting.is-changed")
+            await page.uncheck("#only-changed")
+
+            # An edit shows the save bar with a count; Discard puts the value back.
+            assert not await page.is_visible("#save-bar")
+            await page.fill("#f-store_failures_before_stop", "4")
+            assert await page.is_visible("#save-bar")
+            assert await page.inner_text("#dirty-count") == "1"
+            await page.click("#discard")
+            assert not await page.is_visible("#save-bar")
+            assert await page.input_value("#f-store_failures_before_stop") == "10"
     finally:
         await conn.close()
