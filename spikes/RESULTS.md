@@ -782,3 +782,11 @@ file outside a work tree) and the read deny list is applied to each.
 **Re-run when** the CLI changes its Grep tool (a new option such as `--no-ignore`, or hidden files
 dropped), and check `tests/unit/test_rules.py` (`test_a_grep_of_the_project_asks_...`,
 `test_a_git_ignored_protected_file_...`).
+
+
+**Update 2026-11-12 (CLI 2.1.319):** the Grep and Glob tools are gone. Neither the `claude` on
+PATH nor the CLI bundled with claude-agent-sdk 0.2.179 lists them, and a session asked to use
+Grep gets "No such tool available: Grep ... search file contents with `grep` via the Bash tool
+instead". Searches therefore reach calu as Bash commands, which D149 checks the same way
+(`grep -rn API_KEY .` in a folder with an un-ignored `.env` escalated in a real session). The
+D146 check stays for older CLIs and for clients that bring their own Grep tool.
