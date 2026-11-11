@@ -27,6 +27,7 @@
     calu evals [FILE ...]          measure how well the configured checkers decide
     calu project add DIR|list      register a project in the database
     calu config list [--changed]   every setting: effective value, where it comes from, default
+    calu config models MODEL|auto  one model for every checker, the narrator and the summarizer
     calu config get|set|unset KEY  configuration values (`claude.model`, `context.narrate`, ...)
     calu checker list|show|set|edit
                                    checker definitions; `edit NAME` opens the instructions in
@@ -66,7 +67,9 @@ from calu.config import (
     DEFAULT_NETWORK_POLICY,
     EMPTY_CHAT_SUMMARY,
     Config,
+    load_secrets,
     merge_settings,
+    user_env_file,
 )
 from calu.configdoc import setting_rows
 from calu.credentials import CredentialError, CredentialStore, wipe
@@ -74,11 +77,12 @@ from calu.db import Db, connect, migrate
 from calu.db import local as local_db
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
+from calu.model_choice import detect_model
 from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, run_session
-from calu.setup import DEFAULT_CHECKER_MODEL, enable_operator_login, setup
+from calu.setup import enable_operator_login, setup
 
 
 class CliError(Exception):
@@ -242,18 +246,70 @@ def cmd_db_migrate(args: argparse.Namespace, store: CredentialStore) -> None:
     print(f"migrations applied: {count}")
 
 
+def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str | None, str]:
+    """Turn `MODEL` or `auto` into a model, an effort and a line saying how it was chosen.
+
+    Args:
+        requested: A Pydantic AI model string, "auto", or None (the same as "auto").
+        effort: An effort the user asked for, which wins over the detected one.
+
+    Returns:
+        (model string, checker effort or None, an explanation for the report).
+
+    Raises:
+        CliError: If "auto" finds no credentials at all; the message says what to add, and that
+            `claude:haiku` needs none.
+    """
+    if requested and requested != "auto":
+        return requested, effort, "as given"
+    load_secrets()
+    choice = detect_model(os.environ)
+    if choice is None:
+        raise CliError(
+            "no model provider found: no AWS credentials that STS accepts, and none of "
+            "ANTHROPIC_API_KEY, FIREWORKS_API_KEY, MISTRAL_API_KEY in the environment or in "
+            f"{user_env_file()}. Add one, or give a model explicitly -- `claude:haiku` runs the "
+            "checks on this machine's own Claude Code account and needs no key"
+        )
+    return choice.model, effort or choice.effort, f"{choice.provider}: {choice.reason}"
+
+
+async def _has_checker_types(db: Db) -> bool:
+    """Tell whether the database already holds checker definitions.
+
+    Args:
+        db: A connection of the database owner.
+
+    Returns:
+        False on a fresh database -- before the first migration the table does not even exist.
+    """
+    exists = await db.one("SELECT to_regclass('checker_types') IS NOT NULL")
+    if not exists or not exists[0]:
+        return False
+    counted = await db.one("SELECT count(*) FROM checker_types")
+    return bool(counted and counted[0])
+
+
 def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
     """Run the first-time setup and store the `session` credential.
+
+    Without `--checker-model` the model is chosen from the credentials this machine has
+    (`calu.model_choice`), and on a fresh database it is set for every checker, the narrator
+    and the summarizer at once; on a database that is already set up the models are left as
+    they are unless `--checker-model` is given.
 
     Args:
         args: Parsed arguments (`checker_model`).
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential or a password is empty or mismatched.
+        CliError: If there is no `admin` credential, a password is empty or mismatched, or no
+            model was given and no provider's credentials were found.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
+    explicit = args.checker_model is not None
+    model, effort, how = _chosen_model(args.checker_model, None)
     url = load_credential(store, "admin", "Admin password: ")
     try:
         admin_url = url.decode()
@@ -266,7 +322,16 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
             """
             conn = await connect(admin_url)
             try:
-                return await setup(conn, admin_url, args.checker_model)
+                db = Db(conn)
+                # Models are set for every role only on a fresh database, or when asked for:
+                # running `calu setup` again must not overwrite models someone chose (D129).
+                fresh = not await _has_checker_types(db)
+                report, session_url = await setup(conn, admin_url, model)
+                if fresh or explicit:
+                    await admin.set_all_models(db, model, effort)
+                    report += "\nmodels of every checker, the narrator and the summarizer: "
+                    report += f"{model}" + (f", effort {effort}" if effort else "") + f" ({how})"
+                return report, session_url
             finally:
                 await conn.close()
 
@@ -1680,6 +1745,15 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
         Returns:
             The report.
         """
+        if args.action == "models":
+            model, effort, how = _chosen_model(args.key or None, args.effort)
+            changes = await admin.set_all_models(db, model, effort, args.project)
+            scope = f"the {args.project} project" if args.project else "the global scope"
+            return "\n".join(
+                [f"every model role of {scope} now uses {model} ({how}):"]
+                + [f"  {line}" for line in changes]
+                + ["A running session picks the new models up at its next check."]
+            )
         if args.action == "list":
             return _configuration_table(
                 await admin.settings(db, None),
@@ -2129,8 +2203,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("setup", help="first-time setup of the database")
     p.add_argument(
         "--checker-model",
-        default=DEFAULT_CHECKER_MODEL,
-        help=f"Pydantic AI model of new checker types (default: {DEFAULT_CHECKER_MODEL})",
+        default=None,
+        help="model of every checker, the narrator and the summarizer; left out, it is chosen "
+        "from the credentials found: AWS Bedrock, then ANTHROPIC_API_KEY, FIREWORKS_API_KEY, "
+        "MISTRAL_API_KEY",
     )
     p.set_defaults(handler=cmd_setup)
 
@@ -2292,7 +2368,9 @@ def build_parser() -> argparse.ArgumentParser:
     project.set_defaults(handler=cmd_project)
 
     config = sub.add_parser("config", help="configuration values in the database")
-    config.add_argument("action", choices=["list", "get", "set", "unset", "add", "remove"])
+    config.add_argument(
+        "action", choices=["list", "get", "set", "unset", "add", "remove", "models"]
+    )
     config.add_argument("key", nargs="?", default="", help="dotted key, e.g. claude.model")
     config.add_argument("value", nargs="?", help="value (JSON, or plain text)")
     config.add_argument(
@@ -2300,9 +2378,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with list: only the settings that do not hold their default",
     )
+    config.add_argument(
+        "--effort",
+        choices=["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+        help="with models: the checkers' thinking effort (left out: the chosen model's own)",
+    )
     config.epilog = (
         "list prints every setting with its effective value, where that value comes from and "
         "its default; get prints what a scope stores, which is `{}` until something is set. "
+        "`models MODEL` points every checker, the narrator and the summarizer at one model; "
+        "`models auto` chooses it from the credentials found. "
         "add and remove change one entry of a list setting and keep the others, e.g. "
         "`calu config add claude.sandbox.deny_read ~/.ssh`; set replaces the whole list."
     )

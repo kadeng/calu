@@ -327,6 +327,32 @@ empty temporary directory, never in the project: the working directory's `CLAUDE
 otherwise let the project under review write instructions into the prompt of the agent
 reviewing it.
 
+**`calu setup` chooses the model for you** from the credentials it finds, in this order, and
+sets it for every checker, the narrator and the summarizer at once:
+
+| Found | Model | Effort |
+|---|---|---|
+| AWS credentials that STS accepts | Claude Haiku on Bedrock, the newest **EU** profile the account lists | provider default (see below) |
+| `ANTHROPIC_API_KEY` | `anthropic:claude-haiku-5-5` | medium |
+| `FIREWORKS_API_KEY` | Nemotron Lightning, as stay-in-the-loop uses | provider default |
+| `MISTRAL_API_KEY` | `mistral:mistral-medium-latest` | provider default |
+
+It does that on a fresh database only; a second `calu setup` leaves the models you chose since.
+To switch later, or to point everything at one model by hand:
+
+```bash
+calu config models auto                     # choose again from the credentials found now
+calu config models claude:haiku             # one model for every role
+calu config models anthropic:claude-haiku-5-5 --effort low
+```
+
+The command sets the model in **both** places it is kept -- the configuration's role keys and
+every checker definition, so an extra checker such as `honesty` follows too -- and removes an
+effort that was set for the previous model. On Bedrock calu leaves thinking off for now: when it
+was last measured there, Pydantic AI could not force the structured answer with thinking on.
+For EU data residency, check the profile's destination regions yourself (AWS advises against
+relying on the `eu.` prefix alone: `aws bedrock get-inference-profile`).
+
 Keys belong in `~/.config/calu/.env`, and Claude Code never sees them: calu blanks every
 provider key in the environment it hands to Claude Code. So the main conversation can run on a
 subscription while the checkers bill an API — including an Anthropic Ultra subscription, which

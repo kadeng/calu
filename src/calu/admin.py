@@ -914,3 +914,70 @@ async def remove_rule(db: Db, rule_id: int) -> bool:
     """
     row = await db.one("DELETE FROM rules WHERE id = %s RETURNING id", (rule_id,))
     return row is not None
+
+
+MODEL_KEYS = (
+    "command_checker.model",
+    "edit_checker.model",
+    "changeset_checker.model",
+    "subagent_checker.model",
+    "context.narrator_model",
+    "context.summarizer_model",
+)
+"""Every configuration key that names a model a session calls (`Config.with_model`)."""
+
+EFFORT_KEYS = (
+    "command_checker.effort",
+    "edit_checker.effort",
+    "changeset_checker.effort",
+    "subagent_checker.effort",
+)
+"""The checkers' effort keys; the narrator and the summarizer take no effort."""
+
+
+async def set_all_models(
+    db: Db, model: str, effort: str | None = None, project: str | None = None
+) -> list[str]:
+    """Point every model role at one model, in one scope (PLAN.md D129).
+
+    Two places hold models, and a model set in only one of them is not what runs: the
+    configuration's role keys (`MODEL_KEYS`, which win over a definition, D51) and the checker
+    **definition** rows, which are the only source for an extra checker on a route such as
+    `honesty` (D81). In the global scope both are changed; a project scope has no definitions of
+    its own, so there only the keys are.
+
+    The effort is set on the checkers when one is given, and **unset** otherwise: a level chosen
+    for one model must not silently carry over to another -- "medium" set for Haiku would reach
+    Nemotron as a thinking setting it does not have.
+
+    Args:
+        db: A connection of the database owner.
+        model: The Pydantic AI model string.
+        effort: The checkers' effort, or None to remove any that is set.
+        project: The project's scope, or None for the global one.
+
+    Returns:
+        One line per change, for the report.
+
+    Raises:
+        AdminError: If the project does not exist or a value is refused.
+        psycopg.Error: On database errors.
+    """
+    changed: list[str] = []
+    for key in MODEL_KEYS:
+        await set_setting(db, key, model, project)
+        changed.append(f"{key} = {model}")
+    for key in EFFORT_KEYS:
+        if effort is None:
+            await unset_setting(db, key, project)
+        else:
+            await set_setting(db, key, effort, project)
+    changed.append(
+        f"checker effort = {effort}" if effort else "checker effort: the provider's default"
+    )
+    if project is None:
+        for row in await checkers(db):
+            if row.model != model:
+                await set_checker(db, row.name, model=model)
+                changed.append(f"checker definition {row.name}: model = {model}")
+    return changed

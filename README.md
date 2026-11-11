@@ -177,11 +177,14 @@ calu db up                # local PostgreSQL in Docker; asks for a new admin pas
 calu setup                # default checkers and rules; asks for a new session password
 ```
 
-The checkers need a key of their own, in `~/.config/calu/.env`. Claude Code never sees it:
+The checkers need credentials of their own -- AWS for Bedrock, or a key in
+`~/.config/calu/.env`, which Claude Code never sees. `calu setup` picks the model from what it
+finds (Bedrock, then Anthropic, Fireworks, Mistral); `calu config models` switches every role at
+once later:
 
 ```bash
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
-calu config set command_checker.model anthropic:claude-haiku-4-5
+calu config models auto
 ```
 
 Register the project, which also sets what its commands may reach over the network, and start a
