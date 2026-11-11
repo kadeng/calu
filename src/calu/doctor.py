@@ -201,7 +201,11 @@ def key_findings(environ: Sequence[str] | None = None) -> list[Finding]:
         Finding(
             "checker keys",
             bool(have),
-            ", ".join(have) if have else "none of the known providers has a key",
+            (
+                f"{', '.join(have)} (present; `calu doctor --keys` asks whether they are accepted)"
+                if have
+                else "none of the known providers has a key"
+            ),
             "Put one in ~/.config/calu/.env, e.g. ANTHROPIC_API_KEY (an Anthropic subscription "
             "with API credits covers it) or MISTRAL_API_KEY. Without a key every check fails "
             "and escalates to you.",

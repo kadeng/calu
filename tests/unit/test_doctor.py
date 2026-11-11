@@ -47,7 +47,9 @@ def test_the_checker_keys_are_reported_by_provider() -> None:
 
     with_keys = doctor.key_findings(["ANTHROPIC_API_KEY", "MISTRAL_API_KEY"])
     assert with_keys[0].ok is True
-    assert with_keys[0].detail == "anthropic, mistral"
+    assert with_keys[0].detail.startswith("anthropic, mistral ")
+    # Present is not accepted (D131): the line says how to find out.
+    assert "calu doctor --keys" in with_keys[0].detail
 
 
 def test_the_credential_store_is_reported_without_decrypting_anything(
