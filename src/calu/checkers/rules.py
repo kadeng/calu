@@ -317,14 +317,15 @@ class Rules:
         shown = self.display(path)
         built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY
         deny = [*built_in, *self.lists(f"{kind}-deny")[0]]
-        rule = _first_match(deny, shown)
+        matched = self.match_form(path)
+        rule = _first_match(deny, matched)
         if rule is not None:
             outcome.ask.append(
                 f"{'Reading' if kind == 'read' else 'Writing'} `{shown}` ({via}) matches the deny "
                 f"rule {rule.describe()}."
             )
             return False
-        if _first_match(self.lists(f"{kind}-allow")[0], shown):
+        if _first_match(self.lists(f"{kind}-allow")[0], matched):
             return True
         outcome.notes.append(
             f"`{shown}` ({via}) is not on the {kind} allowlist: decide whether the user's request "
@@ -405,7 +406,39 @@ class Rules:
             True if a read deny rule matches the path's display form (`display`).
         """
         deny = [*BUILT_IN_READ_DENY, *self.lists("read-deny")[0]]
-        return _first_match(deny, self.display(path)) is not None
+        return _first_match(deny, self.match_form(path)) is not None
+
+    def match_form(self, path: Path) -> str:
+        r"""Return the form of `path` that the path rules are matched against (PLAN.md D155).
+
+        Like `display`, except inside a Claude Code worktree: `EnterWorktree` and subagents with
+        `isolation: worktree` work in `<workspace>/.claude/worktrees/<name>/`, a full checkout of
+        the project. Read relative to the workspace, every file there is below `.claude/`, so the
+        write deny rule for `.claude` refused every edit in it -- while the rules anchored at the
+        project root (`^CLAUDE\.md$`, `^\.git(/|$)`) never matched the worktree's own copies.
+        A path inside a worktree is therefore read relative to the worktree's root, so the
+        worktree is judged like the project it is a checkout of.
+
+        Args:
+            path: An absolute path.
+
+        Returns:
+            The worktree-relative POSIX path for a path inside a worktree ("." for its root),
+            else `display(path)`. Only a directory with a `.git` entry counts as a worktree,
+            the way `git worktree add` leaves one; anything else below `.claude/` -- a file
+            next to the worktrees, a worktree that does not exist yet -- stays as it is and so
+            stays protected.
+        """
+        shown = self.display(path)
+        parts = shown.split("/")
+        if (
+            len(parts) >= 3
+            and parts[0] == ".claude"
+            and parts[1] == "worktrees"
+            and (self.workspace / ".claude" / "worktrees" / parts[2] / ".git").exists()
+        ):
+            return "/".join(parts[3:]) or "."
+        return shown
 
     def display(self, path: Path) -> str:
         """Return the form of `path` that the path rules match.

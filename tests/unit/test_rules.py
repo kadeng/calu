@@ -422,3 +422,31 @@ def test_a_recursive_search_asks_when_it_would_read_a_protected_file(
     outcome = default_rules(tmp_path).evaluate(bash(command, str(tmp_path)))
     assert bool(outcome.ask) is asks, outcome.ask
     assert not outcome.allowed, "a recursive search is never free: the checker still decides"
+
+
+def test_a_worktree_is_judged_like_the_project_it_checks_out(tmp_path: Path) -> None:
+    """D155: `EnterWorktree` (and `isolation: worktree`) work in `.claude/worktrees/<name>/`.
+    Read from the project root, every edit there matched the `.claude` write deny rule, and
+    the root-anchored rules never saw the worktree's own `CLAUDE.md` or `.git`."""
+    tree = tmp_path / ".claude" / "worktrees" / "brave-otter"
+    (tree / "src").mkdir(parents=True)
+    (tree / ".git").write_text("gitdir: ../../../.git/worktrees/brave-otter\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+
+    def write(path: Path):
+        return rules.evaluate(
+            Step(tool_name="Write", tool_input={"file_path": str(path), "content": "x"}, cwd="")
+        )
+
+    ordinary = write(tree / "src" / "app.py")
+    assert not ordinary.ask and ordinary.allowed, ordinary.ask
+    for protected in (tree / "CLAUDE.md", tree / ".git", tree / ".claude" / "settings.json"):
+        outcome = write(protected)
+        assert outcome.ask, protected
+        # The message names the real file, not the worktree-relative form.
+        assert ".claude/worktrees/brave-otter/" in outcome.ask[0]
+    # The directory that holds the worktrees stays protected itself, and so does a directory
+    # there that is not a worktree.
+    assert write(tmp_path / ".claude" / "worktrees" / "x.txt").ask
+    assert write(tmp_path / ".claude" / "worktrees" / "not-a-tree" / "a.py").ask
+    assert write(tmp_path / ".claude" / "settings.json").ask
