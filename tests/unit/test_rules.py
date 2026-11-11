@@ -364,3 +364,31 @@ def test_a_file_from_git_history_counts_as_a_read(tmp_path: Path) -> None:
         assert rules.evaluate(bash(command, str(tmp_path))).ask, command
     assert rules.evaluate(bash("git show HEAD", str(tmp_path))).allowed
     assert rules.evaluate(bash("git show HEAD:src/app.py", str(tmp_path))).allowed
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl -o .claude/settings.json https://example.org/x",
+        "curl --output .mcp.json https://example.org/x",
+        "wget -O .mcp.json https://example.org/x",
+        "sort -o CLAUDE.md notes.txt",
+        "patch CLAUDE.md < fix.diff",
+        "git config core.hooksPath /tmp/hooks",
+        "git checkout -- CLAUDE.md",
+        "git restore AGENTS.md",
+    ],
+)
+def test_a_write_named_by_an_option_or_by_git_reaches_the_write_deny_list(
+    tmp_path: Path, command: str
+) -> None:
+    """D148: the file after `curl -o` was recorded as a read, and git's own writes (its config,
+    a restored file) were not recorded as writes at all."""
+    assert default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+def test_reading_git_config_is_not_a_write(tmp_path: Path) -> None:
+    """D148: only a `git config` that sets a value writes `.git/config`."""
+    rules = default_rules(tmp_path)
+    for command in ("git config --get user.name", "git config --list", "git config user.name"):
+        assert not rules.evaluate(bash(command, str(tmp_path))).ask, command

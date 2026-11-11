@@ -54,9 +54,22 @@ WRITE_COMMANDS = frozenset(
         "chmod",
         "chown",
         "chgrp",
+        "patch",
     }
 )
 """Commands whose path arguments are all treated as writes (sources of `cp`/`mv` included)."""
+
+OUTPUT_OPTIONS: dict[str, frozenset[str]] = {
+    "curl": frozenset({"-o", "--output"}),
+    "wget": frozenset({"-O", "--output-document"}),
+    "sort": frozenset({"-o", "--output"}),
+    "gcc": frozenset({"-o"}),
+    "cc": frozenset({"-o"}),
+    "clang": frozenset({"-o"}),
+    "g++": frozenset({"-o"}),
+}
+"""Options whose separate value is a file the command writes (`curl -o FILE`, D148). The
+attached forms (`--output=FILE`, `-oFILE`) are covered by `_option_value` for every command."""
 
 IN_PLACE_COMMANDS = frozenset({"sed", "perl"})
 """Commands that write their file arguments when called with `-i` / `--in-place`."""
@@ -323,6 +336,7 @@ class _Walker:
             return
         if name == "git":
             self.git_objects(args)
+            self.git_writes(args)
         in_place = name in IN_PLACE_COMMANDS and any(
             a == "--in-place" or (a.startswith("-i") and not a.startswith("--")) for a in values
         )
@@ -333,8 +347,17 @@ class _Walker:
                 _GREP_RECURSIVE.match(a) or a in ("-d", "--directories=recurse") for a in values
             )
         )
+        outputs = OUTPUT_OPTIONS.get(name, frozenset())
+        output_next = False
         for arg in args:
             value = arg.value
+            if output_next:
+                output_next = False
+                self.add_path(arg, "write", f"output file of {name}")
+                continue
+            if value in outputs:
+                output_next = True
+                continue
             if name == "dd" and "=" in value and not value.startswith("-"):
                 key, _, target = value.partition("=")
                 if key in ("if", "of"):
@@ -390,6 +413,42 @@ class _Walker:
                 self.add_path(
                     _Word(path, False), "read", f"file in git's history, via git {values[i]}"
                 )
+
+    def git_writes(self, args: list[_Word]) -> None:
+        """Record the files that git subcommands overwrite without naming them as writes (D148).
+
+        `git config KEY VALUE` writes `.git/config` (or `~/.gitconfig` with `--global`), which
+        decides which hooks and programs git runs; `git checkout -- PATH` and `git restore PATH`
+        overwrite PATH with another version. All other arguments stay reads.
+
+        Args:
+            args: The arguments after `git`.
+        """
+        values = [a.value for a in args]
+        i = 0
+        while i < len(values) and values[i].startswith("-"):
+            i += 2 if values[i] in ("-C", "-c") else 1
+        if i >= len(values):
+            return
+        sub, rest = values[i], args[i + 1 :]
+        options = [a.value for a in rest if a.value.startswith("-")]
+        plain = [a for a in rest if not a.value.startswith("-")]
+        if sub == "config":
+            reading = {"--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin"}
+            if reading & set(options) or len(plain) < 2:
+                return
+            if "--global" in options:
+                target = "~/.gitconfig"
+            elif "--system" in options:
+                target = "/etc/gitconfig"
+            else:
+                target = ".git/config"
+            self.add_path(_Word(target, False), "write", "configuration written by git config")
+        elif sub in ("checkout", "restore") and ("--" in values or sub == "restore"):
+            after = rest[[a.value for a in rest].index("--") + 1 :] if "--" in values else plain
+            for arg in after:
+                if not arg.value.startswith("-"):
+                    self.add_path(arg, "write", f"file overwritten by git {sub}")
 
     def change_directory(self, args: list[_Word]) -> None:
         """Add the target of `cd`/`pushd` to the directories later relative paths may refer to.
