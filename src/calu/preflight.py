@@ -13,6 +13,7 @@ from pathlib import Path
 
 from calu.claude_model import is_cli_model
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
+from calu.credentials import CredentialError, CredentialStore
 from calu.herd import STALE_AFTER_S
 
 SANDBOX_TOOLS = ("bwrap", "socat")
@@ -318,6 +319,45 @@ def cli_model_warnings(config: Config) -> list[str]:
     ]
 
 
+def self_approval_warnings(config: Config, store: CredentialStore | None = None) -> list[str]:
+    """Warn when Claude could decide its own escalations with a one-line script (D162).
+
+    calu runs as the same OS user as Claude. A credential stored without a password (D104) is
+    protected only by the file mode, which does not separate the two. The sandbox makes
+    `~/.config/calu` unreadable to Claude's commands; without it, the rules stop `calu ...`
+    (D160) and reads of the file by Claude's tools, but not an interpreter it runs
+    (`python -c "open(...)"`), which only the checker judges. That combination is named here,
+    with the two ways out.
+
+    Args:
+        config: The session configuration.
+        store: The credential store; None opens the default one. A store that cannot be read
+            gives no warning (`calu doctor` reports it).
+
+    Returns:
+        One warning, or [].
+    """
+    sandbox = config.claude.sandbox
+    working = sandbox.enabled and (
+        sandbox.fail_if_unavailable or all(shutil.which(tool) for tool in SANDBOX_TOOLS)
+    )
+    if working:
+        return []
+    try:
+        store = store if store is not None else CredentialStore()
+        unprotected = sorted(n for n in store.names() if not store.needs_password(n))
+    except (CredentialError, OSError):
+        return []
+    if not unprotected:
+        return []
+    return [
+        f"Without a working sandbox, the credential(s) {', '.join(unprotected)} stored without a "
+        "password can be read by any program Claude runs -- a one-line script could resolve its "
+        "own escalations; only the checker would see it. Switch the sandbox on, or put a "
+        "password back on them (`calu credential set operator`)."
+    ]
+
+
 USER_SETTINGS_KEYS = ("hooks", "enabledPlugins", "env")
 """Keys of `~/.claude/settings.json` whose absence changes what Claude does in a session."""
 
@@ -405,7 +445,7 @@ def warnings(
     Returns:
         The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
         `network_warnings`, `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`,
-        `bedrock_warnings` and `setting_source_warnings`.
+        `bedrock_warnings`, `setting_source_warnings` and `self_approval_warnings`.
     """
     return (
         sandbox_warnings(config)
@@ -417,4 +457,5 @@ def warnings(
         + cli_model_warnings(config)
         + bedrock_warnings(config)
         + setting_source_warnings(config, workspace=workspace)
+        + self_approval_warnings(config)
     )

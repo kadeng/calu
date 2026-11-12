@@ -278,3 +278,23 @@ def test_the_users_own_claude_setup_that_a_session_leaves_out_is_named(tmp_path:
     (tmp_path / "empty" / ".claude").mkdir(parents=True)
     (tmp_path / "empty" / ".claude" / "settings.json").write_text("{broken", encoding="utf-8")
     assert preflight.setting_source_warnings(Config(), tmp_path / "empty", None) == []
+
+
+def test_a_password_free_credential_without_a_sandbox_is_named(tmp_path: Path) -> None:
+    """D162: without a working sandbox, a credential stored without a password is readable by
+    any program Claude runs; a one-line script could resolve its own escalations."""
+    from calu.credentials import CredentialStore, KdfParams
+
+    store = CredentialStore(tmp_path / "credentials.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1))
+    store.save("operator", "postgresql://op@localhost/calu", None)
+    off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
+    (said,) = preflight.self_approval_warnings(off, store)
+    assert "operator" in said and "calu credential set operator" in said
+
+    enforced = Config.model_validate(
+        {"claude": {"sandbox": {"enabled": True, "fail_if_unavailable": True}}}
+    )
+    assert preflight.self_approval_warnings(enforced, store) == [], "a working sandbox: fine"
+
+    store.save("operator", "postgresql://op@localhost/calu", "pw")
+    assert preflight.self_approval_warnings(off, store) == [], "a password: fine"
