@@ -188,7 +188,14 @@
         for (const info of params.agents || []) agents.set(info.agent_id, info);
         renderAgents();
         break;
-      case "turn.result": line("turn", `turn ended: ${params.subtype || "success"}`); break;
+      case "turn.result": {
+        // Background tasks still running: Claude Code continues by itself when they end (D158).
+        const waiting = params.background_tasks
+          ? `; ${params.background_tasks} background task(s) still running, Claude continues when they finish`
+          : "";
+        line("turn", `turn ended: ${params.subtype || "success"}${waiting}`);
+        break;
+      }
       case "log": line("log", `${params.level}: ${params.message}`); break;
       default: break;
     }

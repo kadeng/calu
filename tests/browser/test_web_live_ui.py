@@ -115,3 +115,24 @@ async def test_a_question_of_the_agent_is_answered_by_clicking_an_option(
         # Claude received the answer as the result of the call, which never ran.
         stream = await page.inner_text("#stream")
         assert "The user answered your question: Spaces" in stream
+
+
+async def test_the_live_view_says_when_background_tasks_still_run(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """D158: a turn can end with background tasks running; Claude Code continues by itself."""
+    turns = [
+        [{"text": "Started the build in the background."}, {"background_tasks": 1}],
+        [{"text": "The build finished."}],
+    ]
+    async with running(db_url, tmp_path, turns) as (base, session_id, _session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await page.fill("#text", "build it")
+        await page.get_by_role("button", name="Send (queued)").click()
+        await page.wait_for_function(
+            "document.getElementById('stream').textContent.includes('The build finished.')"
+        )
+        stream = await page.inner_text("#stream")
+        assert "1 background task(s) still running" in stream
+        assert stream.index("still running") < stream.index("The build finished.")

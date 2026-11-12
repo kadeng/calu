@@ -352,3 +352,28 @@ async def test_the_checkers_still_see_the_conversation_after_two_resumes(
     assert summary_text in seen, "the summary of the fold two sessions ago was lost"
     assert "deploy two" in seen, "the turn recorded by the second session was lost"
     assert "deploy three" in seen, "the turn recorded by the third session was lost"
+
+
+async def test_a_batch_run_waits_for_claude_codes_background_tasks(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D158 end to end: the first turn ends with a background task running; the run goes on
+    to Claude Code's own follow-up turn instead of stopping the session under it."""
+    session_url = await prepare(db_url, tmp_path)
+    options = RunOptions(workspace=tmp_path, prompt="build it", interactive=False)
+    script = FakeScript(
+        turns=[
+            [{"text": "Started the build in the background."}, {"background_tasks": 1}],
+            [{"text": "The build finished."}],
+        ]
+    )
+    code = await run_session(
+        session_url,
+        options,
+        runner_factory=lambda workspace, _c, _h: FakeRunner(script, workspace),
+        checker_models=fake_models(),
+    )
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "1 background task(s) still running" in output
+    assert "The build finished." in output

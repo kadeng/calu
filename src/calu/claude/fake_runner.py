@@ -15,6 +15,10 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       then reviewed like a command of the real
                                                       runner (`review_write_set`)
     {"sleep": 0.5}                                    pause (lets tests inject messages)
+    {"background_tasks": 2}                           the turn ends with 2 background tasks
+                                                      running; like Claude Code (D158), the
+                                                      runner then starts the next scripted turn
+                                                      by itself, as if they had finished
     {"agent": {"description": "...", "background": false, "actions": [...]}}
                                                       a subagent runs the nested actions
 
@@ -180,14 +184,19 @@ class FakeRunner:
             await self._actions(actions, None, gate, sink)
         finally:
             self._in_turn = False
+        background = sum(int(a.get("background_tasks", 0)) for a in actions)
         await sink(
             TurnResult(
                 session_id=self.session_id,
                 subtype="interrupted" if self._interrupted else "success",
                 result=next((a["text"] for a in reversed(actions) if "text" in a), ""),
                 num_turns=1,
+                background_tasks=0 if self._interrupted else background,
             )
         )
+        if background and not self._interrupted:
+            # Claude Code continues by itself once its background tasks finished (D158).
+            await self._turn("background tasks finished", gate, sink)
 
     async def _actions(
         self, actions: list[dict[str, Any]], agent: str | None, gate: ToolGate, sink: EventSink
@@ -242,6 +251,8 @@ class FakeRunner:
             await sink(AssistantText(agent_id=agent, text=action["text"], message_id=message_id))
         elif "sleep" in action:
             await anyio.sleep(float(action["sleep"]))
+        elif "background_tasks" in action:
+            pass  # reported with the turn's result (`_turn`)
         elif "tool" in action:
             await self._tool(action, agent, gate, sink)
         elif "agent" in action:
