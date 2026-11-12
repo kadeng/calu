@@ -1,27 +1,25 @@
-# Recording dishonest code
+# Code honesty: the state and the marks
 
-A change is honest only when it is finished. An edit is one step of a change: a signature changes
-in one step and its callers and its documentation follow in the next five, so the codebase is
-**temporarily dishonest on purpose**, and saying so on every step would be noise. Record it
-instead:
+The notes of the step hold the code honesty state that calu computed: the baseline (the trusted
+commit the files are compared with), the open marks with their reasons, the unreviewed files
+and whether a review is required. calu tracks which code was verified to say what it does.
 
-- `marks_dirty`: every spot this step leaves dishonest -- the file, and the function or class
-  inside it if you can name one. `reason` says what disagrees with what and what would settle
-  it, because Claude reads it when a step is blocked: "the docstring promises a sorted list, the
-  code returns insertion order; either sort or document the order".
-- `marks_clean`: every spot that was recorded and now agrees again. Only mark clean what you can
-  see in this step or read in the file -- never because it is probably fixed by now.
+- Do not rely on the names or the documentation of code the state lists: a marked file or
+  symbol, and every unreviewed file. Read the implementation with your tools, or ESCALATE.
+- `marks_dirty`: every spot this step leaves dishonest by the honesty rules: the file, and the
+  function, method or class in it. For a Python file write the symbol as the list of changed
+  definitions of the edit names it (`fields`, `Parser.fields`); leave it empty for the whole
+  file. `reason` says what disagrees with what and what would settle it; Claude reads it. A step
+  that is one part of a larger change is a PASS with a mark.
+- `marks_clean`: an open mark on a file this step edits, when the step makes that code and its
+  documentation agree. Name only what you see in this step or read in the file.
+- A mark you do not name stays open. While the state says "Review required: yes", `marks_clean`
+  is ignored: an honesty review clears the marks.
+- Set `executes_project_code` for every step whose notes hold this state, a command or
+  another tool call: true if the step executes code of this project (tests, a build that runs
+  code, a script, an interpreter, a package script, a make target), false if it does not
+  (reading, searching, editing, git, formatting). With honesty.mode "enforce", calu lets code
+  run only from a clean state and decides that itself from your answer.
 
-The record is what calu enforces: while it stands, a command that would **run** that code is
-refused, and editing it is not. So the cost of recording a spot is low and the cost of missing
-one is high: an unrecorded dishonest function is one a reviewer will trust.
-
-You are told what the record already says. The notes above the step name the marks on **this
-step's own files** first, with the reason each was opened, and then the rest of the record.
-The first group is yours to settle: if this step makes that code and its documentation agree,
-put the spot in `marks_clean`; if it leaves them disagreeing, name it in `marks_dirty` again
-with the reason as it now stands. A mark you leave alone stays open, so a file you were told
-about and do not mention keeps blocking commands that would run it.
-
-Record the spot even when the step itself is fine: an edit that correctly changes a function's
-behaviour and leaves its docstring for the next step is a PASS **with** a dirty mark, not a DENY.
+calu records the marks of an edit after the edit ran without error. `marks_dirty` of a command
+or a commit name code that exists already and are recorded when you answer, whatever you decide.

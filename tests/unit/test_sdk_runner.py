@@ -38,11 +38,14 @@ class AllowAll:
     async def review_write_set(self, step):
         return ""
 
+    async def tool_succeeded(self, step):
+        return None
+
 
 def test_claude_code_authenticates_as_configured(tmp_path: Path):
     """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""
     options = SdkRunner(tmp_path, ClaudeConfig(), {"MISTRAL_API_KEY"})._options(AllowAll(), None)
-    assert options.env == {"MISTRAL_API_KEY": ""}
+    assert options.env == {"MISTRAL_API_KEY": "", "CALU_INSIDE_SESSION": "1"}
     # calu does not set the permission mode: Claude Code takes it from its own settings (D5).
     assert options.permission_mode is None
     chosen = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))._options(AllowAll(), None)
@@ -137,7 +140,11 @@ def test_use_bedrock_sets_the_bedrock_switch_for_claude_code(tmp_path: Path):
     assert "CLAUDE_CODE_USE_BEDROCK" not in plain
     bedrock = SdkRunner(tmp_path, ClaudeConfig(use_bedrock=True), {"MISTRAL_API_KEY"})
     env = bedrock._options(AllowAll(), None).env
-    assert env == {"CLAUDE_CODE_USE_BEDROCK": "1", "MISTRAL_API_KEY": ""}
+    assert env == {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "MISTRAL_API_KEY": "",
+        "CALU_INSIDE_SESSION": "1",
+    }
 
 
 class FixedVerdict(AllowAll):
@@ -245,3 +252,29 @@ async def test_a_workflow_agents_result_is_reviewed_with_its_task(tmp_path: Path
     assert result.prompt == "Find the flaky tests"
     assert result.result == "tests/test_x.py is flaky"
     assert "workflow-subagent" in result.description and "Workflow" in result.description
+
+
+@pytest.mark.anyio
+async def test_a_finished_edit_is_reported_to_the_gate_before_the_agent_goes_on(tmp_path: Path):
+    """The PostToolUse hook of the edit tools calls `ToolGate.tool_succeeded`, so the session
+    applies the edit's marks and verification before it judges the next call."""
+    finished = []
+
+    class Recording(AllowAll):
+        async def tool_succeeded(self, step):
+            finished.append(step)
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    hooks = runner._options(Recording(), None).hooks  # type: ignore[arg-type]
+    assert hooks is not None
+    (matcher,) = [m for m in hooks["PostToolUse"] if m.matcher and "Edit" in m.matcher]
+    assert matcher.matcher == "Edit|Write|MultiEdit|NotebookEdit"
+    post: Any = matcher.hooks[0]  # called with plain dicts, as the CLI does
+    answer = await post(
+        {"tool_name": "Write", "tool_input": {"file_path": "a.py", "content": "x"}, "cwd": "/w"},
+        "toolu_1",
+        None,
+    )
+    assert answer == {}
+    (step,) = finished
+    assert (step.tool_name, step.tool_use_id, step.cwd) == ("Write", "toolu_1", "/w")

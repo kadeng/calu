@@ -5,7 +5,10 @@ A checker's prompt has up to four parts (PLAN.md D181, the owner's answer to Q16
     system/<route>.md       calu's own: role, tools, how to answer        fixed
     <checker>.md            the user's: what to pass, deny, escalate       `calu checker edit`
     honesty-rules.md        the honesty standard (contracts, dishonesty)   `honesty.rules`
-    system/marks.md         how to record dishonest code                   fixed, honesty on
+    system/marks.md         the honesty state and how to record marks      fixed, honesty on
+
+The honesty reviewer (`calu.checkers.honesty_review`) is no checker type: its prompt is the
+fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`).
 
 The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one. The
 honesty rules are a setting, so a project can adapt them to its documentation standards; they
@@ -102,6 +105,20 @@ def honesty_rules() -> str:
     return _read("honesty-rules.md")
 
 
+def review_instructions(rules: str | None = None) -> str:
+    """Put the prompt of the honesty reviewer together (specification section 4).
+
+    Args:
+        rules: The honesty rules to include (`honesty.rules`); None or "" uses the shipped
+            ones.
+
+    Returns:
+        The fixed part `system/honesty-review.md`, followed by the honesty rules.
+    """
+    system = _read("system/honesty-review.md").strip()
+    return system + "\n\n" + (rules if rules else honesty_rules()).strip() + "\n"
+
+
 def compose_instructions(
     route: str, user: str, rules: str | None = None, marks: bool = False
 ) -> str:
@@ -113,7 +130,8 @@ def compose_instructions(
         user: The checker's own instructions, as `checker_types` holds them.
         rules: The honesty rules to include (`honesty.rules`, or None for the shipped ones);
             used only for `HONESTY_ROUTES`.
-        marks: Whether to add the part about recording dishonest code (`honesty.mode` on).
+        marks: Whether to add the part about the code honesty state and the marks
+            (`honesty.mode` is not "off").
 
     Returns:
         The system part, the user's instructions under their own heading, and -- for a

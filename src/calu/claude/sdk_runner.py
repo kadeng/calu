@@ -74,6 +74,7 @@ from calu.context.foreign import (
     user_message_source,
 )
 from calu.files import skill_file
+from calu.paths import INSIDE_SESSION_ENV
 from calu.preflight import settings_file_sandbox_blockers
 from calu.protocol.messages import (
     AgentInfo,
@@ -683,6 +684,33 @@ class SdkRunner:
             await self._send_note(note)
             return {}
 
+        async def post_edit(
+            input_data: Any, tool_use_id: str | None, context: Any
+        ) -> dict[str, Any]:
+            """PostToolUse hook for the edit tools: tell the gate that the edit has run.
+
+            Claude Code calls this hook after a tool call that succeeded, and Claude waits
+            while it runs, so the gate has applied the edit's result before the next call is
+            judged (`ToolGate.tool_succeeded`).
+
+            Args:
+                input_data: Hook input (`tool_name`, `tool_input`, `cwd`).
+                tool_use_id: Id of the edit call.
+                context: SDK hook context (unused).
+
+            Returns:
+                An empty hook output.
+            """
+            step = Step(
+                tool_name=str(input_data.get("tool_name", "Edit")),
+                tool_input=input_data.get("tool_input") or {},
+                tool_use_id=tool_use_id,
+                agent_id=input_data.get("agent_id"),
+                cwd=str(input_data.get("cwd") or self.workspace),
+            )
+            await gate.tool_succeeded(step)
+            return {}
+
         async def subagent_stop(
             input_data: Any, tool_use_id: str | None, context: Any
         ) -> dict[str, Any]:
@@ -802,6 +830,11 @@ class SdkRunner:
                         matcher="Bash",
                         hooks=[post_command],  # type: ignore[list-item]
                         timeout=REVIEW_HOOK_TIMEOUT_S,
+                    ),
+                    HookMatcher(
+                        matcher="Edit|Write|MultiEdit|NotebookEdit",
+                        hooks=[post_edit],  # type: ignore[list-item]
+                        timeout=HOOK_TIMEOUT_S,
                     ),
                 ],
                 "SubagentStop": [
@@ -956,7 +989,9 @@ class SdkRunner:
     def _claude_env(self) -> dict[str, str]:
         """Return the environment overrides for the Claude Code process.
 
-        Checker keys (`hidden_env`) are blanked so that Claude cannot read them. With
+        Checker keys (`hidden_env`) are blanked so that Claude cannot read them.
+        `calu.paths.INSIDE_SESSION_ENV` is set to "1", which tells calu's own command line that
+        it was started from inside a session. With
         `claude.use_bedrock`, `CLAUDE_CODE_USE_BEDROCK` is set to "1". Otherwise Claude Code's own
         authentication settings (claude.ai login, Bedrock, Vertex, Foundry, API key) are left as
         they are configured on this machine.
@@ -965,6 +1000,7 @@ class SdkRunner:
             Variable name -> value ("" means unset for Claude Code).
         """
         env = dict.fromkeys(sorted(self.hidden_env), "")
+        env[INSIDE_SESSION_ENV] = "1"
         if self.config.use_bedrock:
             env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         return env

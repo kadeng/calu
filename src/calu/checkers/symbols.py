@@ -125,6 +125,27 @@ def changed_definitions(before: str, after: str, path: str) -> list[ChangedDefin
     return sorted(found, key=lambda item: item.line)
 
 
+def definition_names(source: str, path: str) -> list[str] | None:
+    """List the dotted names of the functions, methods and classes a Python file defines.
+
+    Args:
+        source: The file's content.
+        path: The file's name; only `.py` and `.pyi` files are read.
+
+    Returns:
+        The names in no particular order, e.g. `["Parser", "Parser.parse", "main"]`. None for
+        another file type, for a file over `MAX_SOURCE_CHARS` and for a file that is not valid
+        Python: then calu knows nothing about its definitions, which is different from knowing
+        that it has none ([]).
+    """
+    if not path.endswith((".py", ".pyi")) or len(source) > MAX_SOURCE_CHARS:
+        return None
+    try:
+        return list(_definitions(ast.parse(source)))
+    except SyntaxError, ValueError, RecursionError:
+        return None
+
+
 def _definitions(tree: ast.AST, prefix: str = "") -> dict[str, Definition]:
     """Collect the definitions of a syntax tree by dotted name.
 

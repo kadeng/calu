@@ -126,6 +126,17 @@ and without narration and with turns that call no tool, must do every turn and t
 That a session which ends, or whose process is gone, leaves no open escalation is covered in
 `tests/db/test_herd.py`.
 
+Code honesty has four unit files, all on real temporary git repositories and without a model:
+`tests/unit/test_honesty_state.py` (the state computation: baseline, verified contents,
+unreviewed files, marks, certification), `tests/unit/test_honesty.py` (marks, the note, the
+gate's decision from a snapshot), `tests/unit/test_honesty_session.py` (a session with the
+scripted fake runner: applying marks after the tool result, enforcement, the commit gate,
+certification, `honesty.trust`) and `tests/unit/test_honesty_review.py` (the honesty review:
+its plan, the reviewer agent with fake models, the triggers, one review at a time, the cap, a
+failed review). The fake reviewer is `calu.testing.fake_reviewer`. `tests/db/test_trust.py` and
+`tests/db/test_honesty_session.py` check the grants and functions of the two trust tables and
+that a session's own writes pass them with the session login.
+
 ## The browser layer
 
 ```bash
@@ -362,6 +373,26 @@ escalation resolved from the database alone.
    transcript); `CALU_GIT_TOOL='git log' calu attach`, `f4`, ctrl+c in the pager (the client
    is still there); `CALU_GIT_TOOL=tig calu attach`; `f4` without lazygit, gitui and tig (the
    notice shows the install command for this machine and runs nothing that needs `sudo`).
+25. Code honesty: in a git repository, `calu config set honesty.mode enforce`, then `calu run`
+   with a prompt that edits a source file and runs the project's tests. Without a trusted
+   commit the test command must wait as an escalation that names `/trust`. In `calu attach`,
+   `/trust` must print the certified commit and a `code honesty (enforce): clean` line; the
+   same test command must then run. Change a file with a shell command (`sed -i`) and run the
+   tests again: the step must wait as an escalation that names the unreviewed file. `/honesty`
+   must print the baseline, the marks and the unreviewed files; `calu honesty trusted` must list
+   the certified commit with its source. A `git commit` made in a clean state must be reported
+   as `certified as trusted`. The honesty panel of the live page of `calu web` must show the
+   same state, and its "Trust HEAD" button must ask before it certifies.
+   The honesty review (needs a key for the model of `honesty.reviewer_model` or the default
+   model): change a docstring with `sed -i` so that it still describes the code, and let
+   Claude run the tests: the terminal must print `honesty: review started`, a `batch ... answered`
+   line and `review finished`, `/honesty` must say `a review is running` in between, and the
+   test command must then run without an escalation. Change a docstring so that it contradicts
+   its function and run the tests again: the command must be denied with the finding of the
+   review. `/honesty-review` in `calu attach` must print `review requested` at once and the
+   answer when the review ended, and further lines must be accepted meanwhile. In a
+   repository without a trusted commit, `/honesty-review` must end with `certified as trusted
+   after the review` when every file was judged honest and the working tree has no changes.
 
 ## Measuring the checkers
 

@@ -22,6 +22,7 @@ from calu.config import (
     PROVIDER_KEYS_BY_PREFIX,
     ClaudeConfig,
     Config,
+    default_model,
     provider_key_variables,
     user_env_file,
 )
@@ -71,8 +72,9 @@ def configured_models(config: Config) -> dict[str, str]:
 
     Returns:
         Role name ("command checker", "edit checker", "changeset checker", "subagent result
-        checker", "narrator", "summarizer") -> Pydantic AI model string. Roles that are switched
-        off are left out.
+        checker", "narrator", "summarizer", "honesty reviewer") -> Pydantic AI model string.
+        Roles that are switched off are left out; the honesty reviewer is one while
+        `honesty.mode` is "off".
     """
     models = {
         "command checker": config.command_checker.model,
@@ -84,6 +86,10 @@ def configured_models(config: Config) -> dict[str, str]:
         models["subagent result checker"] = config.subagent_checker.model
     if config.context.narrate:
         models["narrator"] = config.context.narrator_model
+    if config.honesty.mode != "off":
+        models["honesty reviewer"] = config.honesty.reviewer_model.strip() or default_model(
+            config.claude.use_bedrock
+        )
     return models
 
 
@@ -272,12 +278,12 @@ def heartbeat_warnings(config: Config) -> list[str]:
 
 
 def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str]:
-    """Warn when the honesty register is switched on by halves (PLAN.md D90).
+    """Warn when code honesty is switched on by halves.
 
-    The feature needs two things that are set separately on purpose (D85): a checker that
-    records dishonest code, and a mode that says what calu does with the record. Each without
-    the other is silent and useless, which is the worst kind of misconfiguration -- the user
-    believes the feature is on.
+    The honesty checker (an extra checker of the edit route) and `honesty.mode` are set
+    separately. With the mode on and the checker disabled, the route's own checkers still
+    judge edits and may record marks, but no checker judges honesty alone. With the checker
+    enabled and the mode off, its marks are dropped.
 
     Args:
         config: The session configuration.
@@ -292,8 +298,8 @@ def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str
     enabled = "honesty" in set(checkers)
     if mode != "off" and not enabled:
         return [
-            f"honesty.mode is '{mode}', but the honesty checker is disabled, so nothing records "
-            "dishonest code and the register stays empty. Switch it on with `calu checker set "
+            f"honesty.mode is '{mode}', but the honesty checker is disabled, so no checker "
+            "judges edits for honesty alone. Switch it on with `calu checker set "
             "honesty --enable`, or set honesty.mode to 'off'. (If another checker of yours "
             "records the marks, this warning does not apply.)"
         ]

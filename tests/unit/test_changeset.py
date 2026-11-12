@@ -8,7 +8,7 @@ import anyio
 import pytest
 
 import calu.gate as gate_module
-from calu.checkers import CodeMark, Route, Step
+from calu.checkers import Route, Step
 from calu.checkers.changeset import (
     COMMIT_LONG,
     CommitKind,
@@ -20,7 +20,7 @@ from calu.checkers.changeset import (
     resolve_long_option,
 )
 from calu.claude.runner import Verdict
-from calu.config import AutoEscalate, Config, HonestyConfig
+from calu.config import AutoEscalate, Config
 from calu.protocol.messages import (
     ChatSendParams,
     CheckResult,
@@ -760,53 +760,3 @@ async def test_an_escalated_commit_carries_its_changeset_for_the_operator(tmp_pa
         await session.decide_escalation(request.escalation_id, "deny", "not yet")
         await rec.wait_for(TurnResult)
         await session.stop()
-
-
-async def test_a_commit_is_told_which_of_its_files_are_recorded_as_dishonest(tmp_path: Path):
-    """D88: a commit names no file in its command, so the diff says which ones it records.
-
-    Dishonest code that gets committed ships, and the changeset checker is the one that sees
-    the whole change -- so it has to know that `app.py`, which this commit records, is in the
-    register. The decision stays its own: committing is not blocked deterministically, because
-    judging a commit is what that checker is for (D26).
-    """
-    root = repository(tmp_path)
-    settings = default_settings(root, Config(honesty=HonestyConfig(mode="enforce")))
-    session, rec, _store = make_session(
-        root,
-        [[{"tool": "Bash", "input": {"command": "git commit -m 'second'"}, "result": "ok"}]],
-        settings=settings,
-    )
-    session.register.apply(
-        [
-            CodeMark(path="app.py", symbol="hello", reason="it returns 2, the docstring says 1"),
-            CodeMark(path="elsewhere.py", reason="not in this commit"),
-        ],
-        [],
-        "honesty",
-    )
-
-    seen: list[str] = []
-    (checker,) = session.checkers[Route.CHANGESET]
-    original = checker.build_prompt
-
-    def build_prompt(step, context, extra=""):
-        """Record the notes the changeset checker is given."""
-        seen.extend(step.notes)
-        return original(step, context, extra)
-
-    checker.build_prompt = build_prompt  # type: ignore[method-assign]
-    async with anyio.create_task_group() as tg:
-        await session.start(tg)
-        await session.send_chat(ChatSendParams(text="commit it"))
-        await rec.wait_for(TurnResult)
-        await session.stop()
-
-    note = "\n".join(seen)
-    assert "This step's own code" in note, f"the commit was not told about its own files: {note}"
-    assert "app.py:hello" in note
-    assert "it returns 2, the docstring says 1" in note
-    # The file that is not in this commit is in the other group, not presented as its own.
-    own, _, rest = note.partition("Other code recorded as dishonest")
-    assert "elsewhere.py" not in own
-    assert "elsewhere.py" in rest

@@ -25,6 +25,11 @@ Commands typed instead of a message:
     /answer <id> TEXT     answer a question Claude asked (its options are in the event)
     /inject <text>        send the text so Claude reads it after its running tool calls
     /state                print the state again
+    /honesty              print the code honesty state (baseline, marks, unreviewed files)
+    /trust [REV]          certify a commit or a branch's present head as honest (default HEAD)
+    /trust-file PATH      certify the present content of one file as honest
+    /honesty-review       ask for an honesty review of the unreviewed and marked files
+    /clear-mark <id>      close one open honesty mark by hand
     /context              print the conversation as the checkers see it
     /sessions             list the stored sessions of this project
     /history [CLAUDE ID]  the recorded conversation of a session, from the database
@@ -35,11 +40,13 @@ lines as the terminal that started the session.
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import anyio
+from anyio.abc import TaskGroup
 
 from calu.protocol.client import (
     ProtocolClient,
@@ -48,8 +55,8 @@ from calu.protocol.client import (
     first_set,
     single_error,
 )
-from calu.protocol.messages import EVENTS, Event
-from calu.run import format_event, one_line, read_lines
+from calu.protocol.messages import EVENTS, Event, HonestyInfo
+from calu.run import format_event, honesty_lines, one_line, read_lines
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +67,8 @@ HELP = (
     "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  "
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
-    "/checkers  /sessions  /history [id]  /clear-mark <id>  /shutdown"
+    "/checkers  /sessions  /history [id]  /honesty  /trust [commit-or-branch]  "
+    "/trust-file <path>  /honesty-review  /clear-mark <id>  /shutdown"
 )
 """One line listing the commands, printed on connect and for an unknown command.
 
@@ -127,6 +135,22 @@ def describe_state(snapshot: dict[str, Any]) -> str:
     )
 
 
+def describe_honesty(info: dict[str, Any]) -> str:
+    """Render the code honesty state of a `state.get` result for the terminal.
+
+    Args:
+        info: The `honesty` object of the snapshot (`calu.protocol.messages.HonestyInfo`).
+
+    Returns:
+        The lines `calu.run.honesty_lines` renders for that state; one line saying so if the
+        object cannot be read.
+    """
+    try:
+        return "\n".join(honesty_lines(HonestyInfo.model_validate(info)))
+    except ValueError:
+        return f"[honesty] {info}"
+
+
 class Console:
     """Turns the lines a user types into requests to the session."""
 
@@ -142,6 +166,9 @@ class Console:
         self.client = client
         self.workspace = workspace
         self.quit = anyio.Event()
+        self.background: TaskGroup | None = None
+        """Where a request that can take minutes runs (`/honesty-review`), so that further
+        lines can be typed meanwhile. None waits for such a request in place."""
 
     async def line(self, text: str) -> None:
         """Handle one typed line: a command, or a chat message. Never raises for a failed request.
@@ -153,8 +180,17 @@ class Console:
         Args:
             text: The line without its line end.
         """
+        await self._reported(lambda: self._line(text))
+
+    async def _reported(self, work: Callable[[], Awaitable[None]]) -> None:
+        """Run one piece of the console's work and print its failure instead of raising.
+
+        Args:
+            work: Handles a typed line, or waits for a request that was started in the
+                background.
+        """
         try:
-            await self._line(text)
+            await work()
         except RequestFailed as exc:
             print(f"[error] {exc}", flush=True)
         except ConnectionError as exc:  # before OSError, of which it is a subclass
@@ -167,6 +203,20 @@ class Console:
                 self.quit.set()
         except OSError as exc:  # /comment could not read the file
             print(f"[error] {exc}", flush=True)
+
+    async def _review(self) -> None:
+        """Ask the session for an honesty review and print its answer (`/honesty-review`).
+
+        Raises:
+            RequestFailed: If the session refused the request.
+            ConnectionError: If the connection is gone.
+        """
+        done = await self.client.request("honesty.review")
+        problem = done.get("problem")
+        if done.get("ran"):
+            print("[honesty] the review ran" + (f": {problem}" if problem else ""), flush=True)
+        else:
+            print(f"[honesty] no review ran: {problem}", flush=True)
 
     async def _line(self, text: str) -> None:
         """Handle one typed line (see `line`).
@@ -218,9 +268,36 @@ class Console:
                 await self._answer(rest)
             case "/allow" | "/deny":
                 await self._decide(command.removeprefix("/"), rest)
+            case "/trust":
+                # A person certifies a commit; a branch means the commit it points at now.
+                done = await self.client.request("honesty.trust", {"rev": rest or "HEAD"})
+                state = "certified" if done.get("recorded") else "was already certified"
+                print(f"[honesty] commit {str(done.get('commit_id'))[:12]} {state}", flush=True)
+            case "/trust-file":
+                if not rest:
+                    print("[error] /trust-file needs a path", flush=True)
+                    return
+                done = await self.client.request("honesty.trust", {"path": rest})
+                state = "certified" if done.get("recorded") else "was already certified"
+                print(
+                    f"[honesty] the content of {done.get('path')} "
+                    f"({str(done.get('content_sha256'))[:12]}) {state}",
+                    flush=True,
+                )
+            case "/honesty-review":
+                # A review can take minutes: its progress arrives as events, and its answer
+                # is printed when it comes, while further lines can be typed.
+                if self.background is None:
+                    await self._review()
+                else:
+                    print("[honesty] review requested", flush=True)
+                    self.background.start_soon(self._reported, self._review)
+            case "/honesty":
+                snapshot = await self.client.request("state.get")
+                print(describe_honesty(snapshot.get("honesty") or {}), flush=True)
             case "/clear-mark":
-                # The honesty register is the session's, in memory (D180): clearing a mark is
-                # a request to the session, the override when a checker is wrong (D83).
+                # The marks are in the session's memory: clearing one is a request to the
+                # session, a person's override of a checker.
                 if not rest.strip().isdigit():
                     print("[error] /clear-mark needs a mark id", flush=True)
                 else:
@@ -438,6 +515,7 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                             client, Path(directory) if isinstance(directory, str) else None
                         )
                         console.quit = quit_event
+                        console.background = tg
                         tg.start_soon(input_lines, console)
                     else:
                         console.client = client

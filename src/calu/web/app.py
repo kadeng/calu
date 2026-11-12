@@ -119,6 +119,8 @@ LIVE_METHODS = frozenset(
         "session.list",
         "auto_escalate.set",
         "honesty.clear",
+        "honesty.trust",
+        "honesty.review",
     }
 )
 """What a browser may ask a session to do. `shutdown` is deliberately absent: it would end the

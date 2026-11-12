@@ -1,426 +1,482 @@
-"""The honesty register's own logic: which steps a mark blocks, and what a checker is told."""
+"""Code honesty outside a running session: the marks, the gate's decision, the clients.
+
+`tests/unit/test_honesty_state.py` covers the state computation on git repositories and
+`tests/unit/test_honesty_session.py` the session. This file covers the pieces that need
+neither: the checks of a mark's path, the paths of a diff, the gate's decision from a given
+state (`StepGate`), the fixed instruction part, and how the clients show the state and send
+the requests.
+"""
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from calu.checkers import CodeMark, Step
-from calu.honesty import HonestyMark, blocking_marks, checked_marks, command_paths, register_note
+import anyio
+import pytest
 
-NOW = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+from calu.acp.adapter import Adapter
+from calu.attach import HELP, describe_honesty
+from calu.checkers import CheckDecision, Checker, CheckOutcome, CodeMark, Decision, Route, Step
+from calu.config import Config, HonestyConfig
+from calu.defaults.instructions import compose_instructions
+from calu.gate import COMMITS, EXECUTES, StepGate
+from calu.honesty import (
+    Baseline,
+    HonestyMark,
+    HonestySnapshot,
+    Unreviewed,
+    checked_marks,
+    diff_paths,
+)
+from calu.protocol.messages import (
+    REQUESTS,
+    HonestyInfo,
+    HonestyMarkInfo,
+    HonestyTrustParams,
+    HonestyUpdate,
+)
+from calu.run import format_event, honesty_lines
+from calu.web.app import LIVE_METHODS
+from tests.unit.helpers import make_session
+from tests.unit.test_attach import console
+
+pytestmark = pytest.mark.anyio
+
+BASE = Baseline("a" * 40, "b" * 40, "user")
 
 
-def mark(
-    path: str,
-    symbol: str = "",
-    reason: str = "the docstring lies",
-    git_branch: str | None = None,
-    opened_by: str | None = None,
-    closed_at: datetime | None = None,
-    closed_by: str | None = None,
-    workspace: str | None = None,
-    hostname: str | None = None,
-) -> HonestyMark:
-    """Return a mark on `path`, open unless `closed_at` is given."""
-    return HonestyMark(
-        id=1,
-        path=path,
-        symbol=symbol,
-        reason=reason,
-        opened_at=NOW,
-        git_branch=git_branch,
-        opened_by=opened_by,
-        closed_at=closed_at,
-        closed_by=closed_by,
-        workspace=workspace,
-        hostname=hostname,
-    )
-
-
-def workspace(tmp_path: Path) -> Path:
-    """Create a project with the files the marks in these tests are on.
-
-    The files have to exist, because `command_paths` only reports paths with a file behind
-    them -- otherwise every word of a command would count as a path (D89).
+def open_mark(path: str = "src/parser.py", symbol: str = "fields", number: int = 1) -> HonestyMark:
+    """Build an open mark.
 
     Args:
-        tmp_path: The test's temporary directory.
+        path: The marked file.
+        symbol: The marked symbol.
+        number: The mark's id.
 
     Returns:
-        The project root.
+        The mark, opened by the edit checker.
     """
-    (tmp_path / "src").mkdir(exist_ok=True)
-    (tmp_path / "tests").mkdir(exist_ok=True)
-    (tmp_path / "vendor" / "src").mkdir(parents=True, exist_ok=True)
-    for name in (
-        "src/parser.py",
-        "src/parser_utils.py",
-        "tests/test_parser.py",
-        "vendor/src/parser.py",
-    ):
-        (tmp_path / name).write_text("x = 1\n", encoding="utf-8")
-    return tmp_path
-
-
-def bash(command: str, cwd: str = "") -> Step:
-    """Return a Bash step running `command` in `cwd`."""
-    return Step(tool_name="Bash", tool_input={"command": command}, cwd=cwd)
-
-
-def test_a_mark_blocks_a_command_that_names_it(tmp_path: Path):
-    """§13.4: a word of the command that resolves to the marked file blocks the step."""
-    root = workspace(tmp_path)
-    marks = [mark("src/parser.py", "fields")]
-
-    def blocks(command: str, cwd: Path | None = None) -> list[HonestyMark]:
-        """Return the marks that `command` would run."""
-        return blocking_marks(bash(command, str(cwd or root)), marks, root)
-
-    assert blocks("python src/parser.py --check") == marks
-    assert blocks("pytest ./src/parser.py") == marks, "`./` names the same file"
-    assert blocks(f"pytest {root}/src/parser.py") == marks, "so does the absolute path"
-    assert blocks("pytest src/parser.py::test_fields") == marks, "a pytest node id is the file"
-    assert blocks("sed -n 12p src/parser.py:12") == marks, "so is a file:line reference"
-    assert blocks("python parser.py", cwd=root / "src") == marks, "resolved against the cwd"
-
-    assert blocks("pytest tests/test_parser.py") == [], "a different file"
-    assert blocks("python src/parser_utils.py") == [], "a longer name is another file"
-    assert blocks("python vendor/src/parser.py") == [], "the same tail is not the same path"
-    assert blocks("cat /etc/hosts") == [], "outside the project"
-    # A command that names no marked path is for the checker to judge, not for this layer.
-    assert blocks("make test") == []
-    assert blocks("python -m myapp") == []
-    # An unbalanced quote must not make the layer blind.
-    assert blocks('python src/parser.py --name "unclosed') == marks
-
-
-def test_editing_dirty_code_is_never_blocked(tmp_path: Path):
-    """The way out of a dirty mark is an edit, so blocking edits would deadlock (D83)."""
-    root = workspace(tmp_path)
-    marks = [mark("src/parser.py")]
-    edit = Step(
-        tool_name="Edit",
-        tool_input={"file_path": "src/parser.py", "old_string": "a", "new_string": "b"},
-        cwd=str(root),
-    )
-    read = Step(tool_name="Read", tool_input={"file_path": "src/parser.py"}, cwd=str(root))
-    assert blocking_marks(edit, marks, root) == []
-    assert blocking_marks(read, marks, root) == []
-
-
-def test_a_closed_mark_blocks_nothing(tmp_path: Path):
-    """Clearing the record is what lets the code run again."""
-    root = workspace(tmp_path)
-    closed = mark("src/parser.py", closed_at=NOW, closed_by="the honesty checker")
-    assert not closed.open
-    assert blocking_marks(bash("python src/parser.py", str(root)), [closed], root) == []
-    assert register_note([closed]) == ""
-    assert "closed by the honesty checker" in closed.line()
-
-
-def test_the_checker_is_told_what_is_dirty():
-    """A command that names no path is covered by the checker, so it has to know (§13.4)."""
-    assert register_note([]) == ""
-    note = register_note([mark("src/parser.py", "fields", "the docstring promises a sorted list")])
-    assert "src/parser.py:fields" in note
-    assert "the docstring promises a sorted list" in note
-    assert "DENY" in note, "the checker has to know what to do with it"
-
-    many = [mark(f"src/m{i}.py", reason="r") for i in range(25)]
-    short = register_note(many, limit=3)
-    assert "src/m0.py" in short and "src/m24.py" not in short
-    assert "and 22 more" in short
-
-
-def test_a_mark_renders_its_spot_its_branch_and_its_author():
-    assert mark("src/p.py").label() == "src/p.py"
-    assert mark("src/p.py", "fields").label() == "src/p.py:fields"
-    assert "[feature/x]" in mark("src/p.py", git_branch="feature/x").line()
-    assert mark("src/p.py", "fields").mark().key() == ("src/p.py", "fields")
-    # Several checkers may write to the register, so a mark says which one thinks this (D87).
-    assert "(honesty)" in mark("src/p.py", opened_by="honesty").line()
-    assert "(" not in mark("src/p.py").line().split(":")[0], "no empty parentheses"
-
-
-def test_the_terminal_names_what_cannot_be_run():
-    """D86: a client has to be able to say why a step was refused."""
-    from calu.protocol.messages import HonestyMarkInfo, HonestyUpdate
-    from calu.run import format_event
-
-    enforced = format_event(
-        HonestyUpdate(
-            marks=[HonestyMarkInfo(id=1, path="src/parser.py", symbol="fields", reason="r")],
-            mode="enforce",
-        )
-    )
-    assert enforced is not None
-    assert "src/parser.py:fields" in enforced
-    assert "cannot be run" in enforced
-
-    tracked = format_event(
-        HonestyUpdate(marks=[HonestyMarkInfo(id=1, path="src/parser.py", reason="r")], mode="track")
-    )
-    assert tracked is not None and "not blocked" in tracked
-
-    cleared = format_event(HonestyUpdate(marks=[], mode="enforce"))
-    assert cleared is not None and "clear again" in cleared
-
-
-def test_a_checker_is_told_about_its_own_file_first(tmp_path: Path):
-    """D88: the checker judging a file is the one that can clear its mark."""
-    from calu.honesty import marks_of_step
-
-    root = workspace(tmp_path)
-    mine = mark("src/parser.py", "fields", "the docstring promises a sorted list")
-    other = mark("docs/api.md", reason="it documents a flag that is gone")
-    edit = Step(
-        tool_name="Edit",
-        tool_input={"file_path": "src/parser.py", "old_string": "a", "new_string": "b"},
-        cwd=str(root),
+    return HonestyMark(
+        id=number,
+        path=path,
+        symbol=symbol,
+        reason="the docstring promises a sorted list",
+        opened_at=datetime.now(UTC),
+        opened_by="edit",
     )
 
-    # The step's own file is found for an edit, and for a command that names it.
-    assert marks_of_step(edit, [mine, other], root) == [mine]
-    assert marks_of_step(bash("pytest src/parser.py", str(root)), [mine, other], root) == [mine]
-    assert marks_of_step(bash("make test", str(root)), [mine, other], root) == []
 
-    note = register_note([mine, other], marks_of_step(edit, [mine, other], root))
-    # Its own file comes first, with what to do about it, and the rest follows separately.
-    own_at = note.index("src/parser.py:fields")
-    rest_at = note.index("docs/api.md")
-    assert own_at < rest_at
-    assert "This step's own code" in note
-    assert "marks_clean" in note, "the checker has to be told how to clear it"
-    assert "Other code recorded as dishonest" in note
+def state(
+    *,
+    baseline: Baseline | None = BASE,
+    marks: tuple[HonestyMark, ...] = (),
+    unreviewed: tuple[str, ...] = (),
+    review_required: bool = False,
+) -> HonestySnapshot:
+    """Build an honesty state.
 
-    # A mark is never named twice: a file that is both the step's own and in the register.
-    once = register_note([mine], marks_of_step(edit, [mine], root))
-    assert once.count("src/parser.py:fields") == 1
-    assert "Other code recorded" not in once
+    Args:
+        baseline: The baseline; None for a session without one.
+        marks: The open marks.
+        unreviewed: The unreviewed files.
+        review_required: Whether a review is required.
 
-    # With nothing of its own, the note is the plain list the command checker needs.
-    plain = register_note([other], marks_of_step(edit, [other], root))
-    assert "This step's own code" not in plain
-    assert "docs/api.md" in plain
+    Returns:
+        The snapshot; without a baseline every file counts as unreviewed.
+    """
+    files = Unreviewed(everything=True) if baseline is None else Unreviewed(paths=unreviewed)
+    return HonestySnapshot(baseline, marks, files, review_required)
 
 
-def test_the_paths_of_a_diff_are_read_from_its_headers():
-    """D88: a commit names no file, so the changeset checker is told from the diff."""
-    from calu.honesty import diff_paths
+# ------------------------------------------------------------------ marks and diffs
 
-    diff = """diff --git a/src/parser.py b/src/parser.py
---- a/src/parser.py
-+++ b/src/parser.py
-@@ -1,2 +1,2 @@
--old
-+new
-diff --git a/docs/old.md b/docs/new.md
-similarity index 90%
-rename from docs/old.md
-rename to docs/new.md
-"""
-    # The `b/` side: the file as it will be after the commit, so a rename gives the new name.
-    assert diff_paths(diff) == {"src/parser.py", "docs/new.md"}
+
+def test_a_mark_is_open_until_something_closes_it():
+    mark = open_mark()
+    assert mark.open and mark.label() == "src/parser.py:fields"
+    assert open_mark(symbol="").label() == "src/parser.py"
+
+
+def test_marks_with_a_path_outside_the_project_are_dropped(tmp_path: Path):
+    """A mark's path is text a model wrote: only a relative path inside the project counts."""
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    marks = [
+        CodeMark(path="a.py", reason="r"),
+        CodeMark(path="/etc/passwd", reason="r"),
+        CodeMark(path="../other/a.py", reason="r"),
+        CodeMark(path="~/a.py", reason="r"),
+        CodeMark(path="  ", reason="r"),
+        CodeMark(path="missing.py", reason="r"),
+    ]
+    kept, rejected = checked_marks(marks, tmp_path, must_exist=True)
+    assert [mark.path for mark in kept] == ["a.py"]
+    assert len(rejected) == 5
+    assert "missing.py: there is no such file in the project" in rejected
+    # A clean mark may name a file that was deleted.
+    kept, rejected = checked_marks(marks, tmp_path, must_exist=False)
+    assert [mark.path for mark in kept] == ["a.py", "missing.py"]
+
+
+def test_the_paths_of_a_diff_are_its_new_sides():
+    diff = (
+        "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n"
+        "diff --git a/old.py b/new.py\nsimilarity index 90%\n"
+    )
+    assert diff_paths(diff) == {"src/a.py", "new.py"}
     assert diff_paths("") == set()
-    assert diff_paths("(no diff: the repository has no commit yet)") == set()
 
 
-def test_a_module_argument_is_read_as_the_files_it_runs(tmp_path: Path):
-    """D89: `python -m myapp` runs project code without naming a file."""
-    (tmp_path / "myapp").mkdir()
-    (tmp_path / "myapp" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "tool.py").write_text("", encoding="utf-8")
-
-    def paths(command: str) -> set[str]:
-        """Return the project paths `command` names, as the register sees them."""
-        return command_paths(command, tmp_path, tmp_path)
-
-    # A package and a module under a `src/` layout, both only as modules.
-    assert "myapp/__init__.py" in paths("python -m myapp")
-    assert "src/tool.py" in paths("python3 -m src.tool")
-    assert "myapp/__init__.py" in paths("uv run python -m myapp --verbose")
-    assert "myapp/__init__.py" in paths("/usr/bin/python3 -m myapp")
-
-    # A module that is not this project's code: an installed dependency names nothing here.
-    assert paths("python -m pytest") == set()
-    # And a `-m` that belongs to another program is not a module at all.
-    assert paths("grep -m 1 pattern file.txt") == set()
-    # A node id after `-m pytest` still names its file.
-    assert paths("python -m pytest src/tool.py::test_x") == {"src/tool.py"}
+def test_the_state_is_clean_only_with_a_baseline_and_nothing_open():
+    assert state().clean
+    assert not state(baseline=None).clean
+    assert not state(marks=(open_mark(),)).clean
+    assert not state(unreviewed=("a.py",)).clean
+    assert not state(review_required=True).clean
 
 
-def test_a_module_that_is_dirty_blocks_the_command(tmp_path: Path):
-    """The point of D89: this is how dirty code is usually run."""
-    (tmp_path / "myapp").mkdir()
-    (tmp_path / "myapp" / "__init__.py").write_text("", encoding="utf-8")
-    marks = [mark("myapp/__init__.py", reason="the module docstring lies")]
-    step = Step(tool_name="Bash", tool_input={"command": "python -m myapp"}, cwd=str(tmp_path))
-    assert blocking_marks(step, marks, tmp_path) == marks
-    # A different module is not this one.
-    other = Step(
-        tool_name="Bash", tool_input={"command": "python -m something_else"}, cwd=str(tmp_path)
-    )
-    assert blocking_marks(other, marks, tmp_path) == []
+# ------------------------------------------------------------------ the fixed instruction part
 
 
-def test_a_mark_that_cannot_be_right_any_more_is_flagged(tmp_path: Path):
-    """D91: an open mark blocks commands, so a stale one only costs the user steps."""
-    root = workspace(tmp_path)
-
-    # A mark on a file that is there, on this branch: nothing to say.
-    here = mark("src/parser.py", "fields", git_branch="main")
-    assert here.stale(root, "main") == ""
-    assert "<stale" not in here.line(root, "main")
-
-    # The file is gone: nothing can run it, and no checker will see it again to clear it.
-    gone = mark("src/deleted.py", reason="the docstring lies", git_branch="main")
-    assert gone.stale(root, "main") == "the file is gone"
-    assert "<stale: the file is gone>" in gone.line(root, "main")
-
-    # Made on another branch: the file here may be a different file (Q19).
-    elsewhere = mark("src/parser.py", git_branch="feature/x")
-    assert "made on feature/x, now on main" in elsewhere.stale(root, "main")
-
-    # Both at once, in one phrase.
-    both = mark("src/deleted.py", git_branch="feature/x")
-    assert both.stale(root, "main") == "the file is gone; made on feature/x, now on main"
-
-    # Not knowable is not reported: no workspace, no branch, or a mark without a branch.
-    assert gone.stale(None, "main") == ""
-    assert elsewhere.stale(root, None) == ""
-    assert mark("src/parser.py").stale(root, "main") == ""
-
-    # A closed mark blocks nothing, so it is never stale however old it is.
-    closed = mark("src/deleted.py", closed_at=NOW, closed_by="kai", git_branch="feature/x")
-    assert closed.stale(root, "main") == ""
-
-
-def test_a_mark_path_a_model_invented_does_not_reach_the_register(tmp_path: Path) -> None:
-    """D112: a mark is a field of a model's answer, so its path is text nobody checked.
-
-    Two bad outcomes are filtered here: a path outside the project sits in the register until a
-    person clears it, and a plausible but unrelated project file **blocks every command that
-    runs it** although no checker looked at it.
-    """
-    root = workspace(tmp_path)
-
-    def mark(path: str) -> CodeMark:
-        """A dirty mark on `path`."""
-        return CodeMark(path=path, symbol="", reason="the docstring lies")
-
-    kept, refused = checked_marks(
-        [
-            mark("src/parser.py"),
-            mark("/etc/passwd"),
-            mark("../../secrets.env"),
-            mark("~/notes.md"),
-            mark("src/does_not_exist.py"),
-            mark("   "),
-        ],
-        root,
-        must_exist=True,
-    )
-    assert [m.path for m in kept] == ["src/parser.py"]
-    assert len(refused) == 5
-    assert any("relative to the project" in message for message in refused)
-    assert any("no such file" in message for message in refused)
-    assert any("without a path" in message for message in refused)
-
-
-def test_a_mark_about_the_file_a_step_is_creating_is_kept(tmp_path: Path) -> None:
-    """The gate runs before the tool, so the file of a `Write` does not exist yet.
-
-    Rejecting that would throw away the one judgement the checker was asked for, which would
-    make the whole check pointless for every new file.
-    """
-    kept, refused = checked_marks(
-        [CodeMark(path="src/new.py", symbol="rows", reason="the name says nothing")],
-        workspace(tmp_path),
-        {"src/new.py"},
-        must_exist=True,
-    )
-    assert [m.path for m in kept] == ["src/new.py"] and refused == []
-
-    # Without the step's path it is refused, which is what makes the allowance narrow.
-    _, without = checked_marks(
-        [CodeMark(path="src/new.py", symbol="rows", reason="x")],
-        workspace(tmp_path),
-        must_exist=True,
-    )
-    assert len(without) == 1
-
-
-def test_a_clean_mark_for_a_deleted_file_still_clears_it(tmp_path: Path) -> None:
-    """Deleting dishonest code is a legitimate way to make the register true again.
-
-    If a clean mark had to name an existing file, a mark on a file Claude then deleted could
-    never be cleared by a checker -- only by hand, for ever.
-    """
-    kept, refused = checked_marks(
-        [CodeMark(path="src/gone.py", symbol="", reason="the file is gone")],
-        workspace(tmp_path),
-        must_exist=False,
-    )
-    assert [m.path for m in kept] == ["src/gone.py"] and refused == []
-
-    # The shape is still checked: a clean mark cannot reach outside the project either.
-    _, outside = checked_marks(
-        [CodeMark(path="../elsewhere.py", symbol="", reason="x")],
-        workspace(tmp_path),
-        must_exist=False,
-    )
-    assert len(outside) == 1
-
-
-def test_a_mark_is_only_judged_where_its_file_can_be_looked_at(tmp_path: Path) -> None:
-    """D126: "the file is gone" must not be said about a project nobody is standing in.
-
-    An operator reads the register from wherever they are, usually not from the machine the
-    session ran on. Judging the file against the current directory said "the file is gone"
-    about every mark of every other project -- and the report invites clearing those marks, so
-    a herd watched from a laptop would have its register emptied of perfectly valid entries.
-    """
-    (tmp_path / "src").mkdir(exist_ok=True)
-    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
-    mine = mark("src/parser.py", workspace=str(tmp_path), hostname="box", git_branch="main")
-    assert mine.judged_here(tmp_path, "box") is True
-    assert mine.judged_here(tmp_path, "another-host") is False
-    assert mine.judged_here(tmp_path / "src", "box") is False
-
-    # A row whose session is gone cannot be placed at all, so it is never judged.
-    nowhere = mark("src/parser.py")
-    assert nowhere.judged_here(tmp_path, "box") is False
-
-    # And the judgement itself still works where it is answerable.
-    assert mine.stale(tmp_path, "main") == ""
-    assert "the file is gone" in mark(
-        "src/vanished.py", workspace=str(tmp_path), hostname="box"
-    ).stale(tmp_path, None)
-    assert mine.stale(None, None) == "", "nothing is claimed without a place to look"
-
-
-def test_a_mark_records_whether_it_reaches_beyond_its_step() -> None:
-    """D141: None when the step named no file, else whether the path is not one of its files."""
-    from calu.honesty import beyond_step
-
-    assert beyond_step("README.md", {"src/parser.py"}) is True
-    assert beyond_step("src/parser.py", {"src/parser.py"}) is False
-    assert beyond_step("src/parser.py", ()) is None
-
-
-def test_a_command_that_reaches_a_marked_file_through_cd_or_a_glob_names_it(
-    tmp_path: Path,
-) -> None:
-    """D150: every word was resolved against the starting directory, so `cd src && python
-    parser.py` and `python src/pars*.py` ran a marked file without naming it."""
-    from calu.honesty import command_paths
-
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
-    for command in (
-        "cd src && python parser.py",
-        "python src/pars*.py",
-        "(cd src; python parser.py)",
+def test_the_instruction_part_says_what_the_specification_asks_for():
+    """Section 6: do not rely on listed code; how to record and clear; clean marks ignored
+    while a review is required; the command checker's answer about executing project code."""
+    prompt = compose_instructions("command", "x", marks=True)
+    for text in (
+        "Do not rely on the names or the documentation",
+        "or ESCALATE",
+        "`marks_dirty`",
+        "`marks_clean`",
+        '"Review required: yes"',
+        "`executes_project_code`",
     ):
-        assert command_paths(command, tmp_path, tmp_path) == {"src/parser.py"}, command
-    assert command_paths("make test", tmp_path, tmp_path) == set()
+        assert text in prompt, text
+    assert "executes_project_code" not in compose_instructions("command", "x")
+    assert "executes_project_code" in CheckDecision.model_json_schema()["properties"]
+    plain = CheckDecision(decision=Decision.PASS, reason="", step_summary="s")
+    assert plain.executes_project_code is None
+
+
+# ------------------------------------------------------------------ the gate's decision
+
+
+def gate_of(tmp_path: Path, mode: str = "enforce") -> StepGate:
+    """Build a session's gate without starting anything.
+
+    Args:
+        tmp_path: The workspace.
+        mode: `honesty.mode`.
+
+    Returns:
+        The gate.
+    """
+    config = Config(honesty=HonestyConfig(mode=mode))  # type: ignore[arg-type]
+    session, _rec, _store = make_session(tmp_path, [[]], config=config)
+    return session.gate
+
+
+def answers(gate: StepGate, *executes: bool | None) -> list[tuple[Checker, CheckOutcome]]:
+    """Build the outcomes of command checkers that passed the step.
+
+    Args:
+        gate: The gate, whose first command checker stands for every answer.
+        executes: One `executes_project_code` per checker, the route's own first.
+
+    Returns:
+        The (checker, outcome) pairs as `StepGate.run_checkers` returns them.
+    """
+    checker = gate._checkers()[Route.COMMAND][0]
+    return [
+        (
+            checker,
+            CheckOutcome(
+                decision=CheckDecision(
+                    decision=Decision.PASS,
+                    reason="",
+                    step_summary="s",
+                    executes_project_code=value,
+                ),
+                duration_ms=1,
+            ),
+        )
+        for value in executes
+    ]
+
+
+def test_a_command_counts_as_executing_unless_the_command_checker_says_no(tmp_path: Path):
+    """Section 5, fail closed: only an explicit "no" of the command checker, with no "yes" of
+    another checker of the route, lets a shell command pass an unclean state."""
+    gate = gate_of(tmp_path)
+    assert gate._executes(Route.COMMAND, answers(gate, False), shell=True) is False
+    assert gate._executes(Route.COMMAND, answers(gate, True), shell=True) is True
+    assert gate._executes(Route.COMMAND, answers(gate, None), shell=True) is True
+    assert gate._executes(Route.COMMAND, answers(gate, False, True), shell=True) is True
+    assert gate._executes(Route.COMMAND, answers(gate, False, None), shell=True) is False
+    assert gate._executes(Route.COMMAND, [], shell=True) is True
+
+
+def test_another_tool_counts_as_executing_only_if_a_checker_says_so(tmp_path: Path):
+    """A tool that runs no shell command executes project code only by an explicit answer."""
+    gate = gate_of(tmp_path)
+    assert gate._executes(Route.COMMAND, answers(gate, None), shell=False) is False
+    assert gate._executes(Route.COMMAND, [], shell=False) is False
+    assert gate._executes(Route.COMMAND, answers(gate, False), shell=False) is False
+    assert gate._executes(Route.COMMAND, answers(gate, True), shell=False) is True
+    assert gate._executes(Route.COMMAND, answers(gate, None, True), shell=False) is True
+
+
+async def needs_clean(
+    tmp_path: Path, before: HonestySnapshot, after: HonestySnapshot | None, problem: str = ""
+) -> tuple[CheckDecision | None, list[str]]:
+    """Ask the gate about a step that needs a clean state, with a given state and review.
+
+    Args:
+        tmp_path: The workspace.
+        before: The state when the step reaches the gate.
+        after: The state after the review ran.
+        problem: What the review answers ("" for "it ran").
+
+    Returns:
+        (the gate's decision, None for "no objection"; one entry per review that was asked
+        for).
+    """
+    gate = gate_of(tmp_path)
+    asked: list[str] = []
+
+    async def review(_step: Step, wait_s: float | None) -> str:
+        """Record that the review was asked for, with the time the gate waits for it.
+
+        Returns:
+            `problem`.
+        """
+        asked.append("review" if wait_s is None else f"review within {wait_s:.0f} s")
+        return problem
+
+    async def now() -> HonestySnapshot | None:
+        """Return the state after the review.
+
+        Returns:
+            `after`.
+        """
+        return after
+
+    gate._honesty_review = review
+    gate._honesty = now
+    step = Step(tool_name="Bash", tool_input={"command": "make test"}, cwd=str(tmp_path))
+    decision, _state = await gate._needs_clean(step, before, EXECUTES, "runs the tests")
+    return decision, asked
+
+
+async def test_the_gate_waits_for_the_review_only_within_its_own_time(tmp_path: Path):
+    """The review gets the time the gate has left, less a margin for reading the state."""
+    gate = gate_of(tmp_path)
+    waits: list[float | None] = []
+
+    async def review(_step: Step, wait_s: float | None) -> str:
+        """Record the time the gate waits.
+
+        Returns:
+            The answer of a review that is still running.
+        """
+        waits.append(wait_s)
+        return "The honesty review is still running."
+
+    async def now() -> HonestySnapshot | None:
+        """Return the unchanged state.
+
+        Returns:
+            A state with one unreviewed file.
+        """
+        return state(unreviewed=("a.py",))
+
+    gate._honesty_review = review
+    gate._honesty = now
+    step = Step(tool_name="Bash", tool_input={"command": "make test"}, cwd=str(tmp_path))
+    budget = anyio.CancelScope(deadline=anyio.current_time() + 100)
+    decision, _state = await gate._needs_clean(
+        step, state(unreviewed=("a.py",)), EXECUTES, "runs the tests", budget
+    )
+    assert decision is not None and decision.decision is Decision.ESCALATE
+    assert "The honesty review is still running." in decision.reason
+    assert waits[0] is not None and 70 < waits[0] <= 80
+
+
+async def test_open_marks_deny_without_a_review(tmp_path: Path):
+    decision, asked = await needs_clean(tmp_path, state(marks=(open_mark(),)), None)
+    assert decision is not None and decision.decision is Decision.DENY
+    assert "src/parser.py:fields (the docstring promises a sorted list)" in decision.reason
+    assert EXECUTES in decision.reason and asked == []
+
+
+async def test_no_baseline_escalates_without_a_review(tmp_path: Path):
+    decision, asked = await needs_clean(tmp_path, state(baseline=None), None)
+    assert decision is not None and decision.decision is Decision.ESCALATE
+    assert "`/trust [commit-or-branch]`" in decision.reason and "/honesty-review" in decision.reason
+    assert "certifies nothing" in decision.reason and asked == []
+
+
+async def test_unreviewed_files_run_the_review_and_follow_its_result(tmp_path: Path):
+    unreviewed = state(unreviewed=("a.py",))
+    decision, asked = await needs_clean(tmp_path, unreviewed, state())
+    assert decision is None and asked == ["review"], "clean after the review: the step goes on"
+    decision, _ = await needs_clean(tmp_path, unreviewed, state(marks=(open_mark("a.py", ""),)))
+    assert decision is not None and decision.decision is Decision.DENY and "a.py" in decision.reason
+    decision, _ = await needs_clean(tmp_path, unreviewed, unreviewed, "The review failed.")
+    assert decision is not None and decision.decision is Decision.ESCALATE
+    assert "The review failed." in decision.reason
+    assert "1 unreviewed file(s) (a.py)" in decision.reason
+    decision, _ = await needs_clean(tmp_path, unreviewed, unreviewed)
+    assert decision is not None and decision.decision is Decision.ESCALATE, "still not clean"
+
+
+async def test_a_required_review_runs_the_review_although_marks_are_open(tmp_path: Path):
+    """Section 3: with more marks than allowed, only the review clears them, so the gate asks
+    for it instead of denying a step that no single edit could unblock."""
+    many = tuple(open_mark(f"m{n}.py", "", n) for n in range(4))
+    decision, asked = await needs_clean(tmp_path, state(marks=many, review_required=True), state())
+    assert decision is None and asked == ["review"]
+    decision, _ = await needs_clean(
+        tmp_path,
+        state(marks=many, review_required=True),
+        state(marks=many, review_required=True),
+    )
+    assert decision is not None and decision.decision is Decision.DENY
+    assert "honesty.max_open_marks" in decision.reason
+
+
+async def test_a_failure_to_compute_the_state_escalates_the_step(tmp_path: Path):
+    """Fail closed: under "enforce", a state that cannot be computed is no approval."""
+    gate = gate_of(tmp_path)
+
+    async def broken() -> HonestySnapshot | None:
+        """Stand in for a state that cannot be computed.
+
+        Raises:
+            RuntimeError: Always.
+        """
+        raise RuntimeError("git is gone")
+
+    gate._honesty = broken
+    step = Step(tool_name="Bash", tool_input={"command": "ls"}, cwd=str(tmp_path))
+    decided = await gate.decide(step, None)
+    assert decided.decision.decision is Decision.ESCALATE and decided.source == "internal"
+    assert "git is gone" in decided.decision.reason
+
+
+def test_the_reasons_name_what_the_step_is():
+    assert "executes code" in EXECUTES and "commit" in COMMITS
+
+
+# ------------------------------------------------------------------ the protocol and the clients
+
+
+INFO = HonestyInfo(
+    mode="enforce",
+    marks=[HonestyMarkInfo(id=3, path="src/parser.py", symbol="fields", reason="unsorted")],
+    baseline="a" * 40,
+    baseline_source="user",
+    unreviewed_count=22,
+    unreviewed=[f"f{n}.py" for n in range(20)],
+    review_required=True,
+)
+
+
+def test_the_protocol_has_the_three_honesty_requests():
+    assert {"honesty.clear", "honesty.trust", "honesty.review"} <= set(REQUESTS)
+    assert HonestyTrustParams().rev == "HEAD" and HonestyTrustParams().path is None
+    assert {"honesty.trust", "honesty.review", "honesty.clear"} <= LIVE_METHODS
+
+
+def test_the_update_carries_the_whole_state():
+    update = HonestyUpdate(**INFO.model_dump())
+    assert set(update.model_dump()) >= {
+        "mode",
+        "baseline",
+        "baseline_source",
+        "marks",
+        "unreviewed_all",
+        "unreviewed_count",
+        "unreviewed",
+        "review_required",
+        "review_running",
+        "clean",
+    }
+
+
+def test_the_terminal_prints_a_state_change():
+    lines = honesty_lines(INFO)
+    assert lines[0] == (
+        "*** code honesty (enforce): not clean: baseline aaaaaaaaaaaa (user), 1 open mark(s), "
+        "22 unreviewed file(s), review required"
+    )
+    assert lines[1] == "    mark 3: src/parser.py:fields: unsorted"
+    assert lines[2].startswith("    unreviewed: f0.py, ") and lines[2].endswith(", and 2 more")
+    assert format_event(HonestyUpdate(**INFO.model_dump())) == "\n".join(lines)
+    assert honesty_lines(HonestyInfo()) == ["*** code honesty: off"]
+    nothing = honesty_lines(HonestyInfo(mode="track", unreviewed_all=True))
+    assert "no baseline (certify a commit with /trust)" in nothing[0]
+    assert "every file unreviewed" in nothing[0]
+    assert describe_honesty(INFO.model_dump()) == "\n".join(lines)
+
+
+async def test_attach_sends_the_honesty_commands(capsys: pytest.CaptureFixture[str]):
+    """Section 7 and 8: `/trust`, `/trust-file`, `/honesty-review`, `/honesty`, `/clear-mark`."""
+    for command in ("/trust", "/trust-file", "/honesty-review", "/honesty", "/clear-mark"):
+        assert command in HELP
+    con, client = console(
+        {
+            "honesty.trust": {"commit_id": "c" * 40, "recorded": True},
+            "honesty.review": {"ran": False, "problem": "An honesty review is needed."},
+            "state.get": {"honesty": INFO.model_dump()},
+        }
+    )
+    await con.line("/trust")
+    await con.line("/trust feature/x")
+    await con.line("/honesty-review")
+    await con.line("/honesty")
+    await con.line("/clear-mark 3")
+    await con.line("/trust-file")
+    assert client.sent == [
+        ("honesty.trust", {"rev": "HEAD"}),
+        ("honesty.trust", {"rev": "feature/x"}),
+        ("honesty.review", {}),
+        ("state.get", {}),
+        ("honesty.clear", {"mark_id": 3}),
+    ]
+    out = capsys.readouterr().out
+    assert "[honesty] commit cccccccccccc certified" in out
+    assert "[honesty] no review ran: An honesty review is needed." in out
+    assert "*** code honesty (enforce): not clean" in out
+    assert "/trust-file needs a path" in out
+    con, client = console(
+        {"honesty.trust": {"path": "build/gen.py", "content_sha256": "d" * 64, "recorded": False}}
+    )
+    await con.line("/trust-file build/gen.py")
+    assert client.sent == [("honesty.trust", {"path": "build/gen.py"})]
+    assert "the content of build/gen.py (dddddddddddd) was already certified" in (
+        capsys.readouterr().out
+    )
+
+
+async def test_an_acp_editor_is_told_the_state():
+    """The ACP adapter renders the state as a message chunk, and says nothing while off."""
+    sent: list[Any] = []
+    adapter = Adapter.__new__(Adapter)
+
+    async def update(chunk: Any) -> None:
+        """Collect what the adapter would send to the editor.
+
+        Args:
+            chunk: The session update.
+        """
+        sent.append(chunk)
+
+    adapter._update = update  # type: ignore[method-assign]
+    await adapter._on_honesty(HonestyInfo().model_dump())
+    assert sent == []
+    await adapter._on_honesty(INFO.model_dump())
+    await adapter._on_honesty(HonestyInfo(mode="track", clean=True, baseline="a" * 40).model_dump())
+    first, second = (str(chunk) for chunk in sent)
+    assert "recorded as dishonest: src/parser.py:fields" in first
+    assert "22 unreviewed file(s)" in first and "an honesty review is required" in first
+    assert "Commands that execute project code and commits wait" in first
+    assert "code honesty: clean" in second

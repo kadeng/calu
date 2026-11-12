@@ -32,7 +32,7 @@ interrupted, or nobody answered in time.
 import hashlib
 import json
 import secrets
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -50,6 +50,8 @@ from calu.protocol.messages import (
     State,
     StoredStep,
 )
+from calu.store import trust
+from calu.store.trust import TrustSource
 
 EscalationState = Literal["open", "allowed", "denied", "answered", "cancelled"]
 """States of an `escalations` row. "answered" belongs to a question of the agent: the step
@@ -539,6 +541,104 @@ class SessionStore(Protocol):
         Returns:
             The stored context with the checker runs of the step, or None if no escalation has
             that id.
+        """
+        ...
+
+    async def trusted_among(
+        self, commit_ids: Sequence[str], tree_ids: Sequence[str]
+    ) -> tuple[Mapping[str, TrustSource], Mapping[str, TrustSource]]:
+        """Tell which of some commit ids and tree ids are trusted, and by which source.
+
+        The session passes HEAD and its ancestors to find its baseline
+        (`calu.honesty.find_baseline`), which applies `honesty.sufficient_trust`.
+
+        Args:
+            commit_ids: Commit ids to look up.
+            tree_ids: Tree ids to look up.
+
+        Returns:
+            (commit id -> source for the trusted ones among `commit_ids`; tree id -> the
+            strongest source among the trusted commits that record it, for the ones among
+            `tree_ids`).
+        """
+        ...
+
+    async def certify_commit(
+        self, commit_id: str, tree_id: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a commit as trusted, with the source of the trust.
+
+        This is the only way a session adds a trusted commit. The session decides from its
+        own computed honesty state whether to call it and with which source
+        (`HonestyState.certification`); a model's answer alone is never the reason. A stronger
+        source replaces a weaker one for the same commit, never the other way round.
+
+        Args:
+            commit_id: The full commit id.
+            tree_id: The id of the tree the commit records.
+            method: "check" or "review" for a commit the session made in a clean state (the
+                weakest source among the verifications of its changes), "user" when a person
+                asked for it through a client.
+            by: Who certified it: the client's name for "user", a name of the session
+                otherwise.
+            note: An optional note.
+
+        Returns:
+            True if the commit was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
+        """
+        ...
+
+    async def trusted_file_sources(
+        self, hashes: Sequence[str] | None = None
+    ) -> Mapping[str, TrustSource]:
+        """Read the source of stored file contents (`HonestyState.trusted_hashes`).
+
+        Args:
+            hashes: The SHA-256 values to look up; None reads every stored content.
+
+        Returns:
+            SHA-256 -> source. A file with such a content counts as verified wherever it
+            lies, if the source is sufficient under `honesty.sufficient_trust`.
+        """
+        ...
+
+    async def trust_file(
+        self, content_sha256: str, path: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a verified file content, with the source of the trust.
+
+        The session calls it with "check" for the content an edit check verified, with
+        "review" for a content an honesty review verified, and with "user" when a person asked
+        for it through a client. A stronger source replaces a weaker one for the same content,
+        never the other way round.
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            path: Where the file is, as a hint for people.
+            method: The source of the trust.
+            by: The client's name for "user", a name of the session otherwise.
+            note: An optional note.
+
+        Returns:
+            True if the hash was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
+        """
+        ...
+
+    async def distrust_file(self, content_sha256: str, by: str) -> bool:
+        """Withdraw the stored trust of a file content that was found dishonest.
+
+        The session calls it for the present content of a file on which a checker or an
+        honesty review opened a mark. Only a record of the source "check" or "review" is
+        removed; a person's record stays.
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            by: A name of the session, for the audit log.
+
+        Returns:
+            True if a record was removed; False if there is none or a person recorded it.
         """
         ...
 
@@ -1548,6 +1648,104 @@ class DatabaseSessionStore:
         await self._db.execute(
             "SELECT calu_cancel_escalation(%s, %s)", (escalation_id, note or None)
         )
+
+    async def trusted_among(
+        self, commit_ids: Sequence[str], tree_ids: Sequence[str]
+    ) -> tuple[Mapping[str, TrustSource], Mapping[str, TrustSource]]:
+        """Ask the database which ids are trusted (see `SessionStore.trusted_among`).
+
+        Args:
+            commit_ids: Commit ids to look up.
+            tree_ids: Tree ids to look up.
+
+        Returns:
+            The trusted commit ids and tree ids among them, each with its source.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        return await trust.trusted_among(self._db, commit_ids, tree_ids)
+
+    async def certify_commit(
+        self, commit_id: str, tree_id: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a trusted commit through `calu_certify_commit` (see the protocol).
+
+        The database records this connection's proven session with the row.
+
+        Args:
+            commit_id: The full commit id.
+            tree_id: The id of the tree the commit records.
+            method: "user", "review" or "check".
+            by: Who certified it.
+            note: An optional note.
+
+        Returns:
+            True if the commit was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
+
+        Raises:
+            psycopg.Error: On database errors, and if the ids are malformed or `by` is empty.
+            RuntimeError: If `start` has not run.
+        """
+        self._require_session()
+        return await trust.certify_commit(self._db, commit_id, tree_id, method, by, note)
+
+    async def trusted_file_sources(
+        self, hashes: Sequence[str] | None = None
+    ) -> Mapping[str, TrustSource]:
+        """Read the sources of stored file contents (see `SessionStore.trusted_file_sources`).
+
+        Args:
+            hashes: The SHA-256 values to look up; None reads every stored content.
+
+        Returns:
+            SHA-256 -> source, from `trusted_files`.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        return await trust.trusted_file_sources(self._db, hashes)
+
+    async def trust_file(
+        self, content_sha256: str, path: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a verified file content through `calu_trust_file` (see the protocol).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            path: Where the file is, as a hint for people.
+            method: "user", "review" or "check".
+            by: Who certified it.
+            note: An optional note.
+
+        Returns:
+            True if the hash was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
+
+        Raises:
+            psycopg.Error: On database errors, and if the hash is malformed or `by` is empty.
+            RuntimeError: If `start` has not run.
+        """
+        self._require_session()
+        return await trust.trust_file(self._db, content_sha256, path, method, by, note)
+
+    async def distrust_file(self, content_sha256: str, by: str) -> bool:
+        """Withdraw a stored file content through `calu_distrust_file` (see the protocol).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            by: Who withdrew it.
+
+        Returns:
+            True if a record of the source "check" or "review" was removed.
+
+        Raises:
+            psycopg.Error: On database errors, and if `by` is empty.
+            RuntimeError: If `start` has not run.
+        """
+        self._require_session()
+        return await trust.distrust_file(self._db, content_sha256, by)
 
     # ------------------------------------------------------------------ helpers
 

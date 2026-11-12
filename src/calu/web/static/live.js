@@ -68,17 +68,58 @@
     socket.send(JSON.stringify({ method, params: params || {} }));
   }
 
-  // The honesty register is the session's, in memory (D180): what it holds arrives with the
-  // snapshot and with every `honesty.update`, and a mark is cleared by asking the session.
-  function renderMarks(marks, mode) {
+  // The code honesty state is the session's, in memory: it arrives with the snapshot and with
+  // every `honesty.update`. Certifying HEAD, asking for a review and clearing a mark are
+  // requests to the session.
+  function renderHonesty(info) {
     const box = el("marks");
     box.replaceChildren();
-    if (!marks || !marks.length) return;
+    if (!info || !info.mode || info.mode === "off") return;
+    const marks = info.marks || [];
     const card = document.createElement("div");
     card.className = "card";
+    card.id = "honesty";
     const title = document.createElement("h3");
-    title.textContent = `Recorded as dishonest (${marks.length}) -- honesty.mode ${mode}`;
+    title.textContent = `Code honesty (${info.mode}): ${info.clean ? "clean" : "not clean"}`;
     card.appendChild(title);
+    const state = document.createElement("div");
+    state.className = "row";
+    const summary = document.createElement("span");
+    const baseline = info.baseline
+      ? `baseline ${info.baseline.slice(0, 12)} (${info.baseline_source})`
+      : "no baseline";
+    const unreviewed = info.unreviewed_all
+      ? "every file unreviewed"
+      : `${info.unreviewed_count || 0} unreviewed file(s)`;
+    summary.textContent = [
+      baseline,
+      `${marks.length} open mark(s)`,
+      unreviewed,
+      info.review_required ? "review required" : "",
+      info.review_running ? "a review is running" : "",
+    ].filter(Boolean).join(" · ");
+    const trust = document.createElement("button");
+    trust.textContent = "Trust HEAD";
+    trust.title = "Certify the commit HEAD points at as honest";
+    trust.onclick = () => {
+      if (window.confirm("Certify the commit HEAD points at as honest?")) {
+        send("honesty.trust", { rev: "HEAD" });
+      }
+    };
+    const review = document.createElement("button");
+    review.textContent = "Review now";
+    review.title = "Run an honesty review of the unreviewed and marked files";
+    review.onclick = () => send("honesty.review", {});
+    state.append(summary, trust, review);
+    card.appendChild(state);
+    if ((info.unreviewed || []).length) {
+      const names = document.createElement("div");
+      names.className = "muted";
+      const more = (info.unreviewed_count || 0) - info.unreviewed.length;
+      names.textContent = `unreviewed: ${info.unreviewed.join(", ")}` +
+        (more > 0 ? `, and ${more} more` : "");
+      card.appendChild(names);
+    }
     for (const mark of marks) {
       const row = document.createElement("div");
       row.className = "row";
@@ -204,7 +245,7 @@
         break;
       case "tool.result": line("result", (params.content || "").slice(0, 2000)); break;
       case "edit.diff": line("diff", `${params.path}: ${params.before.length} → ${params.after.length} characters`); break;
-      case "honesty.update": renderMarks(params.marks, params.mode); break;
+      case "honesty.update": renderHonesty(params); break;
       case "escalation.request":
         escalations.set(params.escalation_id, params);
         renderEscalations();
@@ -251,7 +292,7 @@
       reset();
       retryAfter = 1000;
       onState(data.snapshot.state);
-      renderMarks(data.snapshot.honesty_marks, data.snapshot.honesty_mode);
+      renderHonesty(data.snapshot.honesty);
       say("attached");
       for (const request of data.snapshot.escalations || []) {
         escalations.set(request.escalation_id, request);

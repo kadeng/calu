@@ -10,7 +10,7 @@ every decision without a model:
     step text contains "calu:comment"   -> a remark to Claude next to the decision
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.messages import ModelMessage
@@ -149,17 +149,21 @@ def marking_checker(
     dirty: Sequence[tuple[str, str, str]] = (),
     clean: Sequence[tuple[str, str, str]] = (),
     decision: str = "PASS",
+    executes: Sequence[str] | None = None,
 ) -> Model:
-    """Create a checker model that passes the step and writes honesty marks (PLAN.md §13).
+    """Create a checker model that answers with fixed honesty marks.
 
-    Stands in for the honesty checker, whose judgement needs a capable model: the test decides
-    what it finds, so that the register, its enforcement and the reporting can be tested without
+    Stands in for a checker whose judgement needs a capable model: the test decides what it
+    finds, so that the honesty state, its enforcement and the reporting can be tested without
     one.
 
     Args:
         dirty: (path, symbol, reason) of each spot the step leaves dishonest.
         clean: (path, symbol, reason) of each spot that says what it does again.
         decision: What it answers about the step itself; "PASS" leaves the step to the others.
+        executes: None leaves `executes_project_code` out of the answer. Otherwise the answer
+            says true if the "# Step to check" part of the prompt contains one of these
+            texts, and false if it contains none (an empty sequence always says false).
 
     Returns:
         A `FunctionModel` named "marking-checker".
@@ -169,17 +173,22 @@ def marking_checker(
         """Return the fixed decision with the fixed marks.
 
         Args:
-            messages: The message history (unused).
+            messages: The message history; the step is read for `executes`.
             info: Agent information; its first output tool receives the decision.
 
         Returns:
             A response that calls the output tool.
         """
+        step = _last_prompt(messages).rsplit("# Step to check", 1)[-1]
+        extra: dict[str, bool] = {}
+        if executes is not None:
+            extra["executes_project_code"] = any(text in step for text in executes)
         return ModelResponse(
             parts=[
                 ToolCallPart(
                     info.output_tools[0].name,
                     {
+                        **extra,
                         "decision": decision,
                         "reason": "" if decision == "PASS" else "the marking fake checker",
                         "step_summary": "Fixed summary of the step.",
@@ -198,6 +207,58 @@ def marking_checker(
         )
 
     return FunctionModel(answer, model_name="marking-checker")
+
+
+def fake_reviewer(
+    findings: Mapping[str, Sequence[tuple[str, str]]] | None = None,
+    fails: bool = False,
+    seen: list[str] | None = None,
+) -> Model:
+    """Create a model for the honesty reviewer that answers with fixed findings.
+
+    It reads the "## File N: path" headings of the request and answers for each file.
+
+    Args:
+        findings: Path -> (symbol, reason) of each spot the review finds in that file. A file
+            that is not named, or named with no spot, is answered as honest.
+        fails: True answers with no file at all, which is a malformed answer: the review
+            fails.
+        seen: A list that gets the request text of every call, for a test to read.
+
+    Returns:
+        A `FunctionModel` named "fake-reviewer".
+    """
+    found = dict(findings or {})
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return one verdict per file heading of the request.
+
+        Args:
+            messages: The message history; the last one holds the request.
+            info: Agent information; its first output tool receives the answer.
+
+        Returns:
+            A response that calls the output tool.
+        """
+        prompt = _last_prompt(messages)
+        if seen is not None:
+            seen.append(prompt)
+        files: list[dict[str, object]] = []
+        for line in prompt.splitlines():
+            head, _, path = line.partition(": ")
+            if not head.startswith("## File ") or fails:
+                continue
+            spots = found.get(path, ())
+            files.append(
+                {
+                    "file": int(head.removeprefix("## File ")),
+                    "honest": not spots,
+                    "findings": [{"symbol": symbol, "reason": reason} for symbol, reason in spots],
+                }
+            )
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"files": files})])
+
+    return FunctionModel(answer, model_name="fake-reviewer")
 
 
 def fake_summarizer() -> Model:
@@ -274,8 +335,8 @@ def fake_models() -> dict[str, str | Model]:
     """Create checker, summarizer and narrator models for `Session(checker_models=...)`.
 
     Returns:
-        New models under the keys "command", "edit", "changeset", "subagent", "summarizer" and
-        "narrator".
+        New models under the keys "command", "edit", "changeset", "subagent", "summarizer",
+        "narrator" and "honesty-review" (a reviewer that finds every file honest).
     """
     return {
         "command": rule_based_checker(),
@@ -284,4 +345,5 @@ def fake_models() -> dict[str, str | Model]:
         "subagent": fake_result_checker(),
         "summarizer": fake_summarizer(),
         "narrator": fake_narrator(),
+        "honesty-review": fake_reviewer(),
     }

@@ -583,6 +583,12 @@ def honesty_from(raw: dict[str, Any]) -> Honesty:
     if isinstance(count, int) and not isinstance(count, bool):
         state.unreviewed_count = count
     state.unreviewed_count = max(state.unreviewed_count, len(state.unreviewed))
+    # The session sends the baseline's source and "every file is unreviewed" as fields of
+    # their own (`HonestyInfo.baseline_source`, `HonestyInfo.unreviewed_all`).
+    if isinstance(field_of("baseline_source"), str):
+        state.baseline_source = field_of("baseline_source")
+    if field_of("unreviewed_all") is True:
+        state.unreviewed_all = True
     state.review_required = field_of("review_required") is True
     state.review_running = field_of("review_running") is True
     return state
@@ -1135,9 +1141,7 @@ class SessionModel:
         self._set_agents(snapshot.agents)
         self.queue = [Queued(q.id, q.text, q.delivery, q.to) for q in snapshot.queue]
         self.honesty_mode = snapshot.honesty_mode
-        self.marks = [
-            Mark(k.id, k.path, k.symbol, k.reason, k.git_branch) for k in snapshot.honesty_marks
-        ]
+        self.marks = [Mark(k.id, k.path, k.symbol, k.reason, "") for k in snapshot.honesty_marks]
         self.honesty = honesty_from(raw)
         self.usage.limits = self._limits(snapshot.rate_limits)
         listed = {request.escalation_id for request in snapshot.escalations}
@@ -1317,9 +1321,7 @@ class SessionModel:
                         change.blocks_updated.add(call.id)
             case m.HonestyUpdate():
                 self.honesty_mode = event.mode
-                self.marks = [
-                    Mark(k.id, k.path, k.symbol, k.reason, k.git_branch) for k in event.marks
-                ]
+                self.marks = [Mark(k.id, k.path, k.symbol, k.reason, "") for k in event.marks]
                 self.honesty = honesty_from(params)
                 change.honesty = True
             case m.UsageUpdate():

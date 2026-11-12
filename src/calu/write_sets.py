@@ -37,7 +37,7 @@ import logging
 import os
 import shutil
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -179,6 +179,7 @@ class WriteSets:
         ask: Callable[[Step], Awaitable[Asked]],
         run_checkers: RunCheckers,
         check_context: Callable[[], CheckContext],
+        wrote: Callable[[Sequence[str]], None] | None = None,
     ) -> None:
         """Remember the collaborators; no snapshot repository exists before `prepare`.
 
@@ -201,6 +202,9 @@ class WriteSets:
                 before it asks.
             run_checkers: Runs the checkers of a route on a step (`StepGate.run_checkers`).
             check_context: Returns the cached context for the checkers.
+            wrote: Called with the paths of every measured write set that is not empty
+                (relative to the workspace), or None. The session's honesty state watches
+                these files from then on. It must not raise.
         """
         self._workspace = workspace
         self._store = store
@@ -213,6 +217,7 @@ class WriteSets:
         self._ask = ask
         self._run_checkers = run_checkers
         self._check_context = check_context
+        self._wrote = wrote
 
     @property
     def _snapshots(self) -> SnapshotStore | None:
@@ -355,6 +360,8 @@ class WriteSets:
         )
         if not change.changes:
             return measured
+        if self._wrote is not None:
+            self._wrote(change.paths)
         undeclared = () if overlapping else change.undeclared(summary)
         if step_id is not None:
             await self._store_call(

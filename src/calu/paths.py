@@ -15,6 +15,12 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
+INSIDE_SESSION_ENV = "CALU_INSIDE_SESSION"
+"""Environment variable that calu sets to "1" for the Claude Code process of a session, and
+with it for every command that process starts. calu's own commands that certify or remove
+trust (`calu honesty trust | untrust | prune`) do not run while it is set: they are for a
+person at a terminal of their own."""
+
 
 def calu_private_dirs(
     environ: Mapping[str, str] | None = None, home: Path | None = None

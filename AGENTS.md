@@ -49,7 +49,7 @@ phases.
 | `src/calu/recorder.py` | The session's writes to the store (`Recorder`): a failed write is reported and counted, and too many in a row stop the session (D59); the `steps` and `checker_runs` rows; the step times (D32) |
 | `src/calu/steps.py` | Stateless helpers about one tool call: its paths relative to the project directory, the file an edit targets, the summary of its result |
 | `src/calu/run_state.py` | What the session knows about one run (`RunState`) and about one tool call (`PerCall`); a start replaces it, so each run begins from the defaults |
-| `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |
+| `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`), trusted commits and trusted file contents (`trust.py`) |
 | `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve`, `calu token` (database only) |
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
@@ -59,7 +59,7 @@ phases.
 | `src/calu/changes.py` | Git snapshots of the project directory: what a command wrote, as a patch, and how to undo it (D31, optional) |
 | `src/calu/paths.py` | Where calu's own secrets and state are on this machine (the XDG directories); imports nothing from calu, so the configuration and the rules both use it |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
-| `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the checkers' read-only code tools (`tools.py`) |
+| `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the reviewer agent of the honesty review (`honesty_review.py`: batches, bounded concurrency, a failure verifies nothing), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
@@ -69,7 +69,7 @@ phases.
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
 | `src/calu/model_choice.py` | Which model the checkers get when none is named: the first provider whose credentials are found (D129) |
 | `src/calu/claude_model.py` | The `claude:` model type: a check answered by the `claude` CLI on this machine's own account, no tools (D117) |
-| `src/calu/honesty.py` | The honesty register as the gate uses it: marks, which commands would run a marked file, path checks (§13) |
+| `src/calu/honesty.py` | Code honesty: which code was verified to say what it does. Marks and the checks of their paths; the honesty state of a session (`HonestyState`: baseline from the trusted commits, marks, verified contents, unreviewed files, the note for checkers, whether a commit may be certified, the plan of an honesty review). The session applies a step's marks and verifications after its tool result and runs the honesty review; the gate decides from a snapshot |
 | `src/calu/configdoc.py` | Walks `calu.config.Config` for `docs/CONFIGURATION.md` and `calu config list` |
 | `src/calu/markdown.py` | Code fences that the quoted text cannot close (commands, diffs, file excerpts) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |

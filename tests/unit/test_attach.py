@@ -97,6 +97,61 @@ async def test_commands_become_requests():
     assert not con.quit.is_set()
 
 
+async def test_the_honesty_commands_become_requests_and_print_their_answers(capsys):
+    """`/trust`, `/trust-file`, `/honesty-review`, `/honesty` and `/clear-mark`."""
+    con, client = console(
+        {
+            "honesty.trust": {"commit_id": "a" * 40, "recorded": True},
+            "honesty.review": {"ran": True, "problem": ""},
+            "state.get": {"honesty": {"mode": "enforce", "clean": True, "baseline": "a" * 40}},
+        }
+    )
+    await con.line("/trust")
+    await con.line("/trust main")
+    await con.line("/honesty-review")
+    await con.line("/honesty")
+    await con.line("/clear-mark 3")
+    await con.line("/trust-file")
+    client.results["honesty.trust"] = {
+        "content_sha256": "b" * 64,
+        "path": "build/gen.py",
+        "recorded": False,
+    }
+    await con.line("/trust-file build/gen.py")
+    assert client.sent == [
+        ("honesty.trust", {"rev": "HEAD"}),
+        ("honesty.trust", {"rev": "main"}),
+        ("honesty.review", {}),
+        ("state.get", {}),
+        ("honesty.clear", {"mark_id": 3}),
+        ("honesty.trust", {"path": "build/gen.py"}),
+    ]
+    out = capsys.readouterr().out
+    assert out.count("[honesty] commit aaaaaaaaaaaa certified") == 2
+    assert "[honesty] the review ran\n" in out
+    assert "*** code honesty (enforce): clean" in out
+    assert "[error] /trust-file needs a path" in out
+    assert "[honesty] the content of build/gen.py (bbbbbbbbbbbb) was already certified" in out
+
+
+async def test_a_review_is_requested_in_the_background_and_its_answer_printed(capsys):
+    """`/honesty-review` does not hold up the next line: a review can take minutes."""
+    con, client = console({"honesty.review": {"ran": False, "problem": "The model failed."}})
+    async with anyio.create_task_group() as tg:
+        con.background = tg
+        await con.line("/honesty-review")
+        assert client.sent == [], "the request runs in its own task"
+        assert "[honesty] review requested" in capsys.readouterr().out
+    assert client.sent == [("honesty.review", {})]
+    assert "[honesty] no review ran: The model failed." in capsys.readouterr().out
+
+    client.fail = "honesty.review"
+    async with anyio.create_task_group() as tg:
+        con.background = tg
+        await con.line("/honesty-review")
+    assert "[error]" in capsys.readouterr().out
+
+
 async def test_quit_and_shutdown_end_the_client():
     con, client = console()
     await con.line("/quit")

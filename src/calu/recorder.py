@@ -116,8 +116,7 @@ class Recorder:
     async def attempt_value[T](self, what: str, call: Awaitable[T]) -> T | None:
         """Await a store call that has a result, and report its failure; never raises.
 
-        Like `attempt`, but for a read or a write whose return value the caller needs: the
-        honesty register says how many marks it applied, and reading it back gives the marks.
+        Like `attempt`, but for a read or a write whose return value the caller needs.
 
         Args:
             what: What was attempted, for the message.

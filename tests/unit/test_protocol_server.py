@@ -1035,6 +1035,8 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "escalation.decide",
         "auto_escalate.set",
         "honesty.clear",
+        "honesty.trust",
+        "honesty.review",
         "interrupt",
         "side.ask",
         "model.set",

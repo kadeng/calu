@@ -8,6 +8,7 @@ which stands for the operator's `calu_resolve_escalation`.
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from calu.comments import Comment
@@ -28,6 +29,7 @@ from calu.store.session import (
     StepDecision,
     StepRow,
 )
+from calu.store.trust import TRUST_STRENGTH, TrustedCommit, TrustedFile, TrustSource, stronger
 
 
 @dataclass
@@ -89,6 +91,11 @@ class MemorySessionStore:
     """Which agent started which; None means the main agent."""
     history: SessionHistoryResult | None = None
     """What `load_history` returns; None builds it from the stored turns."""
+    trusted_commits: dict[str, TrustedCommit] = field(default_factory=dict)
+    """The trusted commits by commit id, as `certify_commit` recorded them; a test may also
+    fill it to stand for a certification made elsewhere."""
+    trusted_files: dict[str, TrustedFile] = field(default_factory=dict)
+    """The trusted file contents by SHA-256, as `trust_file` recorded them."""
     _ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     async def start(self, identity: SessionIdentity) -> str:
@@ -476,6 +483,135 @@ class MemorySessionStore:
             note=note,
             resolved_by=f"client:{actor or 'unknown'}",
         )
+        return True
+
+    async def trusted_among(
+        self, commit_ids: Sequence[str], tree_ids: Sequence[str]
+    ) -> tuple[dict[str, TrustSource], dict[str, TrustSource]]:
+        """Tell which ids are in `trusted_commits` (see `SessionStore.trusted_among`).
+
+        Args:
+            commit_ids: Commit ids to look up.
+            tree_ids: Tree ids to look up.
+
+        Returns:
+            Commit id -> source for the trusted ones among `commit_ids`, and tree id -> the
+            strongest source among the trusted commits that record it, for the ones among
+            `tree_ids`.
+        """
+        trees: dict[str, TrustSource] = {}
+        for row in self.trusted_commits.values():
+            if row.tree_id in tree_ids:
+                method = row.method
+                trees[row.tree_id] = stronger(trees.get(row.tree_id), method) or method
+        commits: dict[str, TrustSource] = {
+            commit: self.trusted_commits[commit].method
+            for commit in commit_ids
+            if commit in self.trusted_commits
+        }
+        return commits, trees
+
+    async def certify_commit(
+        self, commit_id: str, tree_id: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a trusted commit (see `SessionStore.certify_commit`).
+
+        Args:
+            commit_id: The full commit id.
+            tree_id: The id of the tree the commit records.
+            method: "user", "review" or "check".
+            by: Who certified it.
+            note: An optional note.
+
+        Returns:
+            True if the commit was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
+
+        Raises:
+            ValueError: If `by` is empty or `method` is none of the three, which the database
+                refuses as well.
+        """
+        if not by:
+            raise ValueError("a certification names who certified")
+        if method not in TRUST_STRENGTH:
+            raise ValueError("the method is one of user, review, check")
+        held = self.trusted_commits.get(commit_id)
+        if held is not None and TRUST_STRENGTH[held.method] >= TRUST_STRENGTH[method]:
+            return False
+        self.trusted_commits[commit_id] = TrustedCommit(
+            commit_id, tree_id, datetime.now(UTC), by, method, note
+        )
+        return True
+
+    async def trusted_file_sources(
+        self, hashes: Sequence[str] | None = None
+    ) -> dict[str, TrustSource]:
+        """Return the sources of `trusted_files` (see `SessionStore.trusted_file_sources`).
+
+        Args:
+            hashes: The SHA-256 values to look up; None for all.
+
+        Returns:
+            SHA-256 -> source.
+        """
+        return {
+            sha256: row.method
+            for sha256, row in self.trusted_files.items()
+            if hashes is None or sha256 in hashes
+        }
+
+    async def trust_file(
+        self, content_sha256: str, path: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a verified file content (see `SessionStore.trust_file`).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            path: Where the file is, as a hint for people.
+            method: "user", "review" or "check".
+            by: Who certified it.
+            note: An optional note.
+
+        Returns:
+            True if the hash was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
+
+        Raises:
+            ValueError: If `by` is empty or `method` is none of the three, which the database
+                refuses as well.
+        """
+        if not by:
+            raise ValueError("a certification names who certified")
+        if method not in TRUST_STRENGTH:
+            raise ValueError("the method is one of user, review, check")
+        held = self.trusted_files.get(content_sha256)
+        if held is not None and TRUST_STRENGTH[held.method] >= TRUST_STRENGTH[method]:
+            return False
+        self.trusted_files[content_sha256] = TrustedFile(
+            content_sha256, path, datetime.now(UTC), by, method, note
+        )
+        return True
+
+    async def distrust_file(self, content_sha256: str, by: str) -> bool:
+        """Withdraw a stored file content (see `SessionStore.distrust_file`).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            by: Who withdrew it.
+
+        Returns:
+            True if a record of the source "check" or "review" was removed; False if there is
+            none or a person recorded it.
+
+        Raises:
+            ValueError: If `by` is empty, which the database refuses as well.
+        """
+        if not by:
+            raise ValueError("a withdrawal names who withdrew")
+        held = self.trusted_files.get(content_sha256)
+        if held is None or held.method == "user":
+            return False
+        del self.trusted_files[content_sha256]
         return True
 
     def resolve(

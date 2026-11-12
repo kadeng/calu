@@ -131,6 +131,11 @@ def test_models_without_a_key_variable_are_not_checked():
     config = Config().with_model("bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0")
     assert preflight.key_warnings(config, environ={}) == []
     assert "narrator" in preflight.configured_models(config)
+    assert "honesty reviewer" not in preflight.configured_models(config)
+    tracking = Config(honesty=HonestyConfig(mode="track", reviewer_model="mistral:x"))
+    assert preflight.configured_models(tracking)["honesty reviewer"] == "mistral:x"
+    blank = Config(honesty=HonestyConfig(mode="track"))
+    assert preflight.configured_models(blank)["honesty reviewer"].startswith("anthropic:")
 
 
 def test_a_review_without_a_snapshot_is_reported() -> None:
@@ -522,7 +527,11 @@ def test_a_name_from_hidden_env_is_blanked_for_claude_code(tmp_path: Path) -> No
     """What `calu run` builds: the loaded secrets plus the `hidden_env` setting."""
     config = Config(hidden_env=["OPENROUTER_API_KEY"])
     runner = SdkRunner(tmp_path, config.claude, {"MISTRAL_API_KEY"} | set(config.hidden_env))
-    assert runner._claude_env() == {"MISTRAL_API_KEY": "", "OPENROUTER_API_KEY": ""}
+    assert runner._claude_env() == {
+        "MISTRAL_API_KEY": "",
+        "OPENROUTER_API_KEY": "",
+        "CALU_INSIDE_SESSION": "1",
+    }
 
 
 # ---------------------------------------------------------------- round 2: settings files

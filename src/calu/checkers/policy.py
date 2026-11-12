@@ -43,7 +43,7 @@ EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 
 SHELL_TOOLS = frozenset({"Bash", "Monitor"})
 """Tools whose `command` input is a shell command. `Monitor` (CLI 2.1.319) runs its script "in
-the same shell environment as Bash", so the deny lists, the honesty register and the command
+the same shell environment as Bash", so the deny lists, the commit rules and the command
 checker treat it like Bash (PLAN.md D156); a Monitor without `command` (a WebSocket) names no
 command and goes to the checker."""
 

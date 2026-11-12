@@ -13,6 +13,7 @@ from calu.store.session import (
     StepRow,
     turn_record,
 )
+from calu.store.trust import TrustedCommit, TrustedFile, TrustSource
 
 __all__ = [
     "CheckerDefinition",
@@ -28,6 +29,9 @@ __all__ = [
     "SessionStore",
     "StepDecision",
     "StepRow",
+    "TrustSource",
+    "TrustedCommit",
+    "TrustedFile",
     "UnknownProject",
     "turn_record",
 ]

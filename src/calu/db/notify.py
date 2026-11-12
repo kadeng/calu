@@ -6,13 +6,13 @@ PostgreSQL announces three kinds of change with `pg_notify`:
 |---|---|---|
 | `config_changed` | a row of `config`, `rules` or `checker_types` changed | `{"table": "<name>"}` |
 | `escalation_resolved` | an operator resolved an escalation | `{"id", "session_id", "state"}` |
-| `honesty_changed` | a mark of the honesty register was opened or closed | `{"session_id"}` |
+| `trust_changed` | stored trust changed (see below) | `{"table": "<name>"}` |
 
-The register has a channel of its own rather than using `config_changed`, because a mark is
-written on an **edit** and a configuration change is rare: announcing marks on the
-configuration channel would make every session of the database reload all of its settings on
-every edit of every session (PLAN.md D92). The payload names the session that wrote it, so a
-session can skip its own.
+Trust has a channel of its own rather than using `config_changed`, because a session records a
+trusted commit after a commit of its own: announcing that on the configuration channel would
+make every session of the database reload all of its settings. It is sent when a trusted commit
+is added, strengthened or removed, and when a file content is trusted by a person, removed or
+pruned. A file content that a session's own checks or review verified is not announced.
 
 A connection that waits for notifications cannot run queries at the same time, so a session
 uses one connection for its queries and a second one for listening.
@@ -47,6 +47,9 @@ CONFIG_CHANGED = "config_changed"
 
 ESCALATION_RESOLVED = "escalation_resolved"
 """Channel of escalations resolved by an operator."""
+
+TRUST_CHANGED = "trust_changed"
+"""Channel of changes to the trusted commits and trusted file contents (migration 0029)."""
 
 
 async def listen(conn: psycopg.AsyncConnection, channels: Iterable[str]) -> None:

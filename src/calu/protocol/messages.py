@@ -152,14 +152,66 @@ class AutoEscalateSetParams(AutoEscalate):
     """`auto_escalate.set`: replace the auto-escalation settings of the session. Result: `{}`."""
 
 
-class HonestyClearParams(BaseModel):
-    """`honesty.clear`: close one open mark of the session's register by hand (D83, D180).
+# --- code honesty: requests (kept together; see also `HonestyInfo` and `HonestyUpdate`) ---
 
-    The register is in memory (D180), so this is how a person overrides a checker's mark on a
-    running session. Result: `{}`; an id that names no open mark is an error.
+
+class HonestyClearParams(BaseModel):
+    """`honesty.clear`: close one open mark of the session's honesty state by hand.
+
+    The marks are in the session's memory, so this is how a person overrides a checker's mark
+    on a running session. Whether a review is required does not change. Result: `{}`; an id
+    that names no open mark is an error.
     """
 
     mark_id: int
+
+
+class HonestyTrustParams(BaseModel):
+    """`honesty.trust`: certify a commit, or one file's present content, as honest.
+
+    Without `path`: `rev` is resolved in the session's workspace to the commit it names now (a
+    branch is resolved to its present head; the branch itself is not remembered), and that
+    commit is recorded as trusted with the source "user" and the client's name. With `path`:
+    the SHA-256 of that file's present content is recorded the same way, and `rev` is ignored.
+    The session then looks up its baseline again and sends `honesty.update`. Result:
+    `HonestyTrustResult`; a `rev` that names no commit and a file that cannot be read are
+    errors.
+    """
+
+    rev: str = "HEAD"
+    """A commit id or its prefix, a branch, a tag, or "HEAD"."""
+    path: str | None = None
+    """A file, absolute or relative to the workspace; None certifies a commit."""
+    note: str = ""
+
+
+class HonestyTrustResult(BaseModel):
+    """Result of `honesty.trust`: what was recorded."""
+
+    commit_id: str | None = None
+    """The full id of the certified commit; None when a file was certified."""
+    content_sha256: str | None = None
+    """The SHA-256 of the certified file content; None when a commit was certified."""
+    path: str | None = None
+    """The file as the session names it; None when a commit was certified."""
+    recorded: bool = True
+    """False if a record of the same strength existed already, so nothing was written."""
+
+
+class HonestyReviewResult(BaseModel):
+    """Result of `honesty.review`: whether an honesty review ran.
+
+    The review judges the unreviewed and the marked files against the baseline. It can take
+    minutes; the answer comes when it ended. Meanwhile `honesty.update` says that a review is
+    running and `log` events name its progress. Its effect on the state arrives as
+    `honesty.update`.
+    """
+
+    ran: bool
+    """True if the reviewer judged the files and its result was applied to the state."""
+    problem: str = ""
+    """Why the review did not run or failed; for a review that ran, which files it could not
+    judge and which changed while it ran; "" if it judged every file."""
 
 
 class SideExchange(BaseModel):
@@ -427,21 +479,18 @@ class RecordedEvent(BaseModel):
 
 
 class HonestyMarkInfo(BaseModel):
-    """One open entry of the honesty register, for a client (PLAN.md D86).
+    """One open mark of the session's honesty state, for a client.
 
-    While `honesty.mode` is "enforce" an open mark stops every command that would run that
-    code, so a client that shows a session has to be able to say what is recorded and why --
-    otherwise a refused step looks arbitrary. `symbol` is empty when the whole file is meant.
+    A mark names code a checker or an honesty review found dishonest. `symbol` is empty when
+    the whole file is meant.
     """
 
     id: int
     path: str
     symbol: str = ""
     reason: str
-    git_branch: str | None = None
-    beyond_step: bool | None = None
-    """True when the mark names a file the step that opened it did not touch, None when that
-    step named no file (PLAN.md D141). A client may show it; enforcement does not use it."""
+    opened_by: str | None = None
+    """Name of the checker that opened it, or "the honesty review"."""
 
     def label(self) -> str:
         """Render the marked spot.
@@ -450,6 +499,38 @@ class HonestyMarkInfo(BaseModel):
             `path:symbol`, or the path alone when no symbol is named.
         """
         return f"{self.path}:{self.symbol}" if self.symbol else self.path
+
+
+class HonestyInfo(BaseModel):
+    """The code honesty state of a session as a client shows it (`calu.honesty`).
+
+    With the mode "off" every other field has its default. The state is clean when there is a
+    baseline, no open mark, no unreviewed file and no review is required; with the mode
+    "enforce" a command that executes project code and a commit need a clean state.
+    """
+
+    mode: str = "off"
+    """`off`, `track` or `enforce` (`honesty.mode`)."""
+    marks: list[HonestyMarkInfo] = Field(default_factory=list)
+    """The open marks, oldest first."""
+    baseline: str | None = None
+    """The full id of the trusted commit the files are compared with; None if no ancestor of
+    HEAD is trusted by a sufficient source."""
+    baseline_source: str | None = None
+    """Who established the baseline's trust: "user", "review" or "check"."""
+    unreviewed_all: bool = False
+    """True when every file counts as unreviewed: there is no baseline, or git could not be
+    asked."""
+    unreviewed_count: int = 0
+    """How many files have a content nobody verified; 0 when `unreviewed_all` is set."""
+    unreviewed: list[str] = Field(default_factory=list)
+    """The first 20 of those files, sorted."""
+    review_required: bool = False
+    """True while more marks are open than `honesty.max_open_marks` allowed; an honesty review
+    clears it."""
+    review_running: bool = False
+    """True while an honesty review runs."""
+    clean: bool = False
 
 
 class SessionSnapshot(BaseModel):
@@ -473,10 +554,12 @@ class SessionSnapshot(BaseModel):
     queue: list[QueuedMessage] = Field(default_factory=list)
     auto_escalate: AutoEscalate = Field(default_factory=lambda: AutoEscalate())
     honesty_mode: str = "off"
-    """What calu does with the honesty register: `off`, `track` or `enforce` (D83)."""
+    """`honesty.mode`: `off`, `track` or `enforce`. The same value as `honesty.mode`."""
     honesty_marks: list[HonestyMarkInfo] = Field(default_factory=list)
-    """The code recorded as dishonest. A client shows it, because while the mode is `enforce` a
-    command that would run it is refused (D86)."""
+    """The open marks. The same list as `honesty.marks`."""
+    honesty: HonestyInfo = Field(default_factory=HonestyInfo)
+    """The code honesty state as the session last computed it (it is computed at the start,
+    for every checked step and after every change, and sent as `honesty.update`)."""
     rate_limits: list[RateLimit] = Field(default_factory=list)
     """The newest state of each usage limit Claude Code reported (`usage.update`)."""
 
@@ -510,6 +593,8 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "checkers.get": EmptyParams,
     "auto_escalate.set": AutoEscalateSetParams,
     "honesty.clear": HonestyClearParams,
+    "honesty.trust": HonestyTrustParams,
+    "honesty.review": EmptyParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,
     "side.ask": SideAskParams,
@@ -718,13 +803,10 @@ class AgentInfo(BaseModel):
     status: Literal["running", "completed", "failed", "stopped"] = "running"
 
 
-class HonestyUpdate(Event):
-    """The open honesty register, sent whenever a checker changes it (PLAN.md D86)."""
+class HonestyUpdate(Event, HonestyInfo):
+    """The whole code honesty state of the session, sent whenever it changes (`HonestyInfo`)."""
 
     method: ClassVar[str] = "honesty.update"
-    marks: list[HonestyMarkInfo]
-    mode: str
-    """`off`, `track` or `enforce`: what calu does with the register (`honesty.mode`)."""
 
 
 class AgentsUpdate(Event):
