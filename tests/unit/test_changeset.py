@@ -7,7 +7,7 @@ from pathlib import Path
 import anyio
 import pytest
 
-import calu.session as session_module
+import calu.gate as gate_module
 from calu.checkers import CodeMark, Route, Step
 from calu.checkers.changeset import (
     COMMIT_LONG,
@@ -623,7 +623,7 @@ async def test_a_failing_changeset_reader_escalates_the_commit(
     async def broken(cwd: Path, command: str):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(session_module, "changeset", broken)
+    monkeypatch.setattr(gate_module, "changeset", broken)
     step = Step(
         tool_name="Bash", tool_input={"command": "git commit -m x"}, tool_use_id="t1", cwd=str(root)
     )

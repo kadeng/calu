@@ -377,7 +377,7 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
     Unreadable or missing files do not raise. Malformed tool input can raise, e.g. a MultiEdit
     whose `edits` entries are not objects, a path with a NUL character, or input values that
     are not JSON-serializable. Callers that must not fail catch all exceptions (see
-    `session._render_safely`).
+    `calu.escalations._render_safely`).
 
     Args:
         step: The tool call.

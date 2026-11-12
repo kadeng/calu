@@ -497,14 +497,14 @@ async def test_a_backward_clock_jump_escalates_the_next_step_and_then_clears(tmp
     assert "backwards by 42.0 s" in logs[-1].message
 
     step = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
-    first = await session._decide(step, None)
+    first = await session.gate.judge(step, None)
     assert first.decision.decision is Decision.ESCALATE
     assert first.source == "clock"
     assert "moved" in first.decision.reason and "which step changed which file" in (
         first.decision.reason
     )
     # The answer to that escalation is the answer to the jump, so the next step is normal again.
-    second = await session._decide(step, None)
+    second = await session.gate.judge(step, None)
     assert second.decision.decision is not Decision.ESCALATE or second.source != "clock"
 
 
@@ -514,7 +514,7 @@ async def test_a_forward_clock_jump_is_only_reported(tmp_path: Path):
     logs = [event for event in rec.of(Log) if "clock" in event.message]
     assert logs and logs[-1].level == "warning" and "not an escalation" in logs[-1].message
     step = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
-    decided = await session._decide(step, None)
+    decided = await session.gate.judge(step, None)
     assert decided.source != "clock"
 
 
@@ -1053,12 +1053,12 @@ async def test_a_single_failure_does_not_end_an_overnight_run(tmp_path: Path) ->
 
     store.set_state = flaky  # type: ignore[method-assign]
     for _ in range(8):
-        await session._store_call("setting the state", store.set_state("idle"))
+        await session.recorder.attempt("setting the state", store.set_state("idle"))
     # Eight attempts, four failures, never two in a row: the limit of three is never reached,
     # so nothing says the session is giving up and the counter is back at zero.
     assert calls["n"] == 8
     assert not [m for m in (e.message for e in rec.of(Log)) if "in a row" in m]
-    assert session._store_failures == 0
+    assert session._run_state.store_failures == 0
     # Each failure was still reported, because a silent failure is worse than a noisy one.
     assert len([m for m in (e.message for e in rec.of(Log)) if "a hiccup" in m]) == 4
 
