@@ -691,7 +691,7 @@ def test_a_commit_is_judged_by_what_it_records(repo: Path) -> None:
     target.write_text("# staged earlier\n", encoding="utf-8")
     git(repo, "add", "README.md")
     assert checked_write(state, "README.md", "# edited\n")
-    assert state.snapshot().clean
+    assert state.snapshot().unreviewed.paths == ("README.md",), "the index holds other content"
     git(repo, "commit", "-q", "-m", "records the staged content")
     assert state.uncertified(head(repo).commit_id) == (
         "1 file(s) of the commit are not verified: README.md"
@@ -854,6 +854,8 @@ def test_a_submodule_is_reviewed_only_at_the_commit_the_baseline_records(repo: P
 
     # Back at the recorded commit it is the baseline's again; not checked out, nothing is there.
     git(repo / "lib", "checkout", "-q", "HEAD~1")
+    assert state.snapshot().unreviewed.paths == ("lib",), "the index still holds the move"
+    git(repo, "add", "lib")
     assert state.snapshot().clean
     for name in (".git", "lib.py"):
         target = repo / "lib" / name
@@ -1112,3 +1114,99 @@ def test_the_state_may_be_asked_from_several_threads(repo: Path) -> None:
     assert not failures
     assert len(state.open_marks) == 1 and len(state.marks) == 1
     assert state.snapshot().unreviewed.paths == ()
+
+
+# ------------------------------------------------------------------ the index and withdrawals
+
+
+def test_a_staged_content_is_reviewed_like_the_working_file(repo: Path) -> None:
+    """Section 5: a commit records the index, so a staged content nobody verified makes its
+    path unreviewed, also when the working file is the baseline's again or is deleted."""
+    state = trusted_state(repo)
+    target = repo / "src" / "parser.py"
+    before = target.read_text(encoding="utf-8")
+    target.write_text(before + "\n\nX = 1\n", encoding="utf-8")
+    git(repo, "add", "src/parser.py")
+    target.write_text(before, encoding="utf-8")
+    assert state.snapshot().unreviewed.paths == ("src/parser.py",)
+    target.unlink()
+    assert state.snapshot().unreviewed.paths == ("src/parser.py",)
+    git(repo, "checkout", "-q", "HEAD", "--", "src/parser.py")
+    assert state.snapshot().clean
+
+
+def test_a_content_verified_in_the_session_is_reviewed_in_the_index(repo: Path) -> None:
+    """A verified content that was staged stays reviewed when the file is verified again at
+    another content; a fresh state does not know the staged one."""
+    state = trusted_state(repo)
+    assert checked_write(state, "README.md", "# one\n")
+    git(repo, "add", "README.md")
+    assert checked_write(state, "README.md", "# two\n")
+    assert state.snapshot().clean
+    git(repo, "commit", "-q", "-m", "records the staged content")
+    assert state.certification(head(repo).commit_id) == Certification("", "check")
+
+    fresh = HonestyState(repo)
+    fresh.baseline = state.baseline
+    assert fresh.snapshot().unreviewed.paths == ("README.md",)
+
+
+def test_an_empty_staged_content_is_nothing_to_review(repo: Path) -> None:
+    """A file that git only knows as "to be added" has an empty staged content."""
+    state = trusted_state(repo)
+    assert checked_write(state, "src/new.py", '"""New."""\n')
+    git(repo, "add", "-N", "src/new.py")
+    assert state.snapshot().clean
+
+
+def test_a_mark_names_the_content_whose_stored_trust_is_withdrawn(repo: Path) -> None:
+    """Section 13: opening a mark hands out the SHA-256 of the marked content, drops a stored
+    check or review entry for it and keeps a person's; the content is no verified blob."""
+    state = trusted_state(repo)
+    assert checked_write(state, "README.md", "# one\n")
+    sha256 = state.content_sha256("README.md")
+    assert sha256 is not None
+    state.trusted_hashes = {sha256: "check", "0" * 64: "review"}
+    git(repo, "add", "README.md")
+    changes = state.record([dirty("README.md")], [], "command")
+    assert changes.withdrawn == [sha256]
+    assert state.trusted_hashes == {"0" * 64: "review"}
+    assert state.verified["README.md"].sha256 == sha256, "the fixing edit starts from it"
+    state.clear(state.open_marks[0].id, "tester")
+    assert checked_write(state, "README.md", "# two\n")
+    assert state.snapshot().unreviewed.paths == ("README.md",), "the staged content was marked"
+
+    state.trusted_hashes = {state.content_sha256("src/parser.py") or "": "user"}
+    changes = state.record([dirty("src/parser.py", "run")], [], "command")
+    assert len(changes.withdrawn) == 1
+    assert list(state.trusted_hashes.values()) == ["user"]
+
+
+def test_a_review_with_findings_withdraws_and_one_without_remembers(repo: Path) -> None:
+    """Section 4 and 13: findings withdraw the stored trust of the content the review read."""
+    state = trusted_state(repo)
+    (repo / "README.md").write_text("# changed\n", encoding="utf-8")
+    sha256 = state.content_sha256("README.md") or ""
+    changes = state.apply_review({"README.md": FileReview(sha256, (Finding("", "says more"),))})
+    assert changes.withdrawn == [sha256]
+    changes = state.apply_review({"README.md": FileReview(sha256)})
+    assert changes.withdrawn == []
+    git(repo, "add", "README.md")
+    (repo / "README.md").write_text("# changed again\n", encoding="utf-8")
+    again = state.content_sha256("README.md") or ""
+    assert state.apply_review({"README.md": FileReview(again)}).opened == []
+    assert state.snapshot().clean
+
+
+@pytest.mark.anyio
+async def test_the_memory_store_withdraws_check_and_review_rows_only() -> None:
+    """`distrust_file` removes what calu stored and leaves a person's record."""
+    store = MemorySessionStore()
+    await store.trust_file("a" * 64, "a.py", "check", "calu session")
+    await store.trust_file("b" * 64, "b.py", "user", "tester")
+    assert await store.distrust_file("a" * 64, "calu session") is True
+    assert await store.distrust_file("a" * 64, "calu session") is False
+    assert await store.distrust_file("b" * 64, "calu session") is False
+    assert list(store.trusted_files) == ["b" * 64]
+    with pytest.raises(ValueError, match="names who"):
+        await store.distrust_file("b" * 64, "")

@@ -626,6 +626,22 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def distrust_file(self, content_sha256: str, by: str) -> bool:
+        """Withdraw the stored trust of a file content that was found dishonest.
+
+        The session calls it for the present content of a file on which a checker or an
+        honesty review opened a mark. Only a record of the source "check" or "review" is
+        removed; a person's record stays.
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            by: A name of the session, for the audit log.
+
+        Returns:
+            True if a record was removed; False if there is none or a person recorded it.
+        """
+        ...
+
 
 class DatabaseSessionStore:
     """`SessionStore` on a PostgreSQL connection with the rights of `calu_session`.
@@ -1713,6 +1729,23 @@ class DatabaseSessionStore:
         """
         self._require_session()
         return await trust.trust_file(self._db, content_sha256, path, method, by, note)
+
+    async def distrust_file(self, content_sha256: str, by: str) -> bool:
+        """Withdraw a stored file content through `calu_distrust_file` (see the protocol).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            by: Who withdrew it.
+
+        Returns:
+            True if a record of the source "check" or "review" was removed.
+
+        Raises:
+            psycopg.Error: On database errors, and if `by` is empty.
+            RuntimeError: If `start` has not run.
+        """
+        self._require_session()
+        return await trust.distrust_file(self._db, content_sha256, by)
 
     # ------------------------------------------------------------------ helpers
 

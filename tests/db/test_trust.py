@@ -2,7 +2,8 @@
 
 The tables of migration 0027 hold what was certified as honest, each row with the source of
 its trust (user > review > check). These tests check who may read and change them (a session
-only through the two functions, an operator also removes and prunes), that a stronger source
+only through the functions: it adds, and withdraws a file content it or another session
+verified; an operator also removes and prunes), that a stronger source
 replaces a weaker one and never the reverse, what the store returns, and what the command line
 prints.
 """
@@ -157,6 +158,53 @@ async def test_the_session_role_changes_the_tables_only_through_the_functions(
     finally:
         await unproven.close()
         await proven.close()
+
+
+async def test_a_session_withdraws_a_content_calu_verified_and_never_a_person_s(
+    db_url: str,
+) -> None:
+    """Migration 0028: `calu_distrust_file` removes a check or review row for a proven
+    session, writes the removal to the audit log with that session, and leaves a user row."""
+    session_url, operator_url = await logins(db_url)
+    unproven = await connect(session_url)
+    proven = await connect(session_url)
+    operator = await connect(operator_url)
+    owner = await connect(db_url)
+    try:
+        store = DatabaseSessionStore(Db(proven))
+        session_id = await store.start(IDENTITY)
+        by_review, by_user = "a" * 64, "b" * 64
+        await store.trust_file(SHA, "/w/x", "check", "calu session")
+        await store.trust_file(by_review, "/w/y", "review", "calu session")
+        await store.trust_file(by_user, "/w/z", "user", "kai")
+
+        for conn in (unproven, operator):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await conn.execute(b"SELECT calu_distrust_file(%s, 'calu session')", (SHA,))
+            await conn.rollback()
+        with pytest.raises(psycopg.errors.CheckViolation):
+            await proven.execute(b"SELECT calu_distrust_file(%s, '')", (SHA,))
+        await proven.rollback()
+
+        assert await store.distrust_file(SHA, "calu session") is True
+        assert await store.distrust_file(SHA, "calu session") is False
+        assert await store.distrust_file(by_review, "calu session") is True
+        assert await store.distrust_file(by_user, "calu session") is False
+        assert await store.trusted_file_sources() == {by_user: "user"}
+
+        audit = await (
+            await owner.execute(
+                "SELECT actor, session_id::text, old_row->>'content_sha256' FROM audit_log"
+                " WHERE table_name = 'trusted_files' AND action = 'DELETE' ORDER BY id"
+            )
+        ).fetchall()
+        assert audit == [
+            ("calu session", session_id, SHA),
+            ("calu session", session_id, by_review),
+        ]
+    finally:
+        for conn in (unproven, proven, operator, owner):
+            await conn.close()
 
 
 async def test_an_operator_lists_adds_and_removes(db_url: str) -> None:

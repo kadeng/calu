@@ -169,4 +169,4 @@ async def test_the_live_view_shows_the_honesty_state_and_clears_a_mark(
         await page.wait_for_function(
             "document.getElementById('honesty').textContent.includes('0 open mark(s)')"
         )
-        assert session.honesty_marks == []
+        assert session.honesty.open_marks == []

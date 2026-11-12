@@ -592,6 +592,28 @@ class MemorySessionStore:
         )
         return True
 
+    async def distrust_file(self, content_sha256: str, by: str) -> bool:
+        """Withdraw a stored file content (see `SessionStore.distrust_file`).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            by: Who withdrew it.
+
+        Returns:
+            True if a record of the source "check" or "review" was removed; False if there is
+            none or a person recorded it.
+
+        Raises:
+            ValueError: If `by` is empty, which the database refuses as well.
+        """
+        if not by:
+            raise ValueError("a withdrawal names who withdrew")
+        held = self.trusted_files.get(content_sha256)
+        if held is None or held.method == "user":
+            return False
+        del self.trusted_files[content_sha256]
+        return True
+
     def resolve(
         self, escalation_id: int, state: EscalationState, note: str = "", by: str = "operator"
     ) -> None:

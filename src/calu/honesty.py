@@ -15,6 +15,8 @@ tracks which code is verified:
     HonestyState     per session, in memory: the marks, the verified contents (path ->
                      SHA-256 and source), the stored trust of file contents it was given,
                      the files to watch that git does not list, "review required"
+    staged content   what the index holds for a path, which a commit records; it counts
+                     like the working file (`HonestyState.unreviewed`)
     HonestySnapshot  the state at one moment: baseline, open marks, unreviewed files,
                      review required; `clean` and the note for the checkers are computed
                      from it
@@ -331,6 +333,10 @@ class MarkChanges:
     session logs them and tells the checker."""
     review_required: bool = False
     """Whether a review is required after the call."""
+    withdrawn: list[str] = field(default_factory=list)
+    """SHA-256 of each file content on which a mark was opened. The session withdraws the
+    stored trust of these contents (`SessionStore.distrust_file`), so that a content a checker
+    or a review found dishonest is not verified after a restart, when the marks are gone."""
 
 
 @dataclass(frozen=True)
@@ -896,7 +902,7 @@ class HonestyState:
         apply_review(results)              an honesty review: verified files and findings
         storable(path)                     the verification to store in `trusted_files`
         close_stale() / clear(id, by)      marks calu or a person closes
-        watch(path)                        a file git does not list that the session wrote
+        watch(path) / watch_all(paths)     files git does not list that the session wrote
         snapshot()                         baseline, open marks, unreviewed files, required
         certification(commit)              whether a commit may be certified, and its source
 
@@ -904,8 +910,14 @@ class HonestyState:
     named by its absolute path. A file is **verified** while the SHA-256 of its content is the
     one recorded for its path in this session, or one of `trusted_hashes`, and the source of
     that record is at least `sufficient_trust`. A file is **unreviewed** when it exists,
-    differs from the baseline (or the baseline does not hold it) and is not verified. Every
-    failure to read git or a file counts as unreviewed.
+    differs from the baseline (or the baseline does not hold it) and is not verified, and also
+    when the index holds a content for it that is not reviewed (`unreviewed`). Every failure
+    to read git or a file counts as unreviewed.
+
+    A mark and a verification are separate records. Opening a mark on a file keeps what was
+    verified for its path in this session, so that the edit which settles the mark starts from
+    reviewed content; the open mark alone makes the state not clean. The stored trust of the
+    marked content is withdrawn (`MarkChanges.withdrawn`).
 
     Contents are compared byte for byte with what git stores. In a repository that converts
     line endings or applies content filters on checkout, a converted file differs from the
@@ -915,7 +927,8 @@ class HonestyState:
 
     The public methods read git and files synchronously and may be called from several
     threads: each takes the state's lock for its whole call, so a slow `unreviewed()` makes
-    other callers wait. The attributes may be set by the session between calls.
+    other callers wait. Call them from a worker thread, never from the event loop. The
+    attributes may be set by the session between calls.
     """
 
     def __init__(
@@ -956,6 +969,10 @@ class HonestyState:
         self._object_format: str | None = None
         self._trees: dict[str, dict[str, tuple[str, str]]] = {}
         self._hashed: dict[str, tuple[tuple[int, int, int, int], ContentIds]] = {}
+        self._verified_blobs: dict[str, TrustSource] = {}
+        """git blob id -> source, for every content verified in this session. The index may
+        hold such a content after the working file was edited again. One entry per verified
+        edit or reviewed file; it is empty after a restart."""
 
     # ------------------------------------------------------------------ paths and contents
 
@@ -1142,6 +1159,63 @@ class HonestyState:
             return None
         return base.source if entry is not None and entry[1] == ids.blob else None
 
+    def _blob_source(self, blob: str) -> TrustSource | None:
+        """Tell by which source a content that only git holds counts as reviewed.
+
+        Args:
+            blob: The git blob id of a staged or committed content.
+
+        Returns:
+            The source that verified a content with this blob id in this session, if it is at
+            least `sufficient_trust`; "user" for the empty content, which has no name and no
+            documentation to disagree; None otherwise.
+        """
+        if blob == hash_bytes(b"", self._format()).blob:
+            return "user"
+        source = self._verified_blobs.get(blob)
+        return source if sufficient(source, self.sufficient_trust) else None
+
+    def _remember_verified(self, key: str, record: Verified) -> None:
+        """Remember the blob id of a content that was just verified, for `_blob_source`.
+
+        Nothing is remembered while the file carries an open mark, or when its present content
+        is not the verified one.
+
+        Args:
+            key: The file.
+            record: Its verification.
+        """
+        if key in self.dishonest_files():
+            return
+        ids = self._content(key)
+        if ids is not None and ids.sha256 == record.sha256:
+            self._verified_blobs[ids.blob] = record.source
+
+    def _marked(self, key: str, changes: MarkChanges) -> None:
+        """Withdraw what calu holds about the present content of a file a mark was opened on.
+
+        The content's blob id is no longer a verified one, its entry in `trusted_hashes` is
+        dropped unless a person recorded it, and its SHA-256 is added to `changes.withdrawn`
+        for the session to withdraw the stored row. `verified` keeps its entry (see the class
+        docstring).
+
+        Args:
+            key: The marked file.
+            changes: The changes of the running call.
+        """
+        ids = self._content(key)
+        if ids is None:
+            return
+        self._verified_blobs.pop(ids.blob, None)
+        if self.trusted_hashes.get(ids.sha256) in ("check", "review"):
+            self.trusted_hashes = {
+                sha256: source
+                for sha256, source in self.trusted_hashes.items()
+                if sha256 != ids.sha256
+            }
+        if ids.sha256 not in changes.withdrawn:
+            changes.withdrawn.append(ids.sha256)
+
     @_locked
     def is_reviewed(self, path: str | Path) -> bool:
         """Tell whether a file's present content is one that was reviewed.
@@ -1179,6 +1253,16 @@ class HonestyState:
         key = self.key(path)
         self.watched.add(key)
         return key
+
+    @_locked
+    def watch_all(self, paths: Collection[str | Path]) -> None:
+        """Remember several files as `watch` does, e.g. the files of a measured write set.
+
+        Args:
+            paths: Absolute paths, or paths relative to the workspace.
+        """
+        for path in paths:
+            self.watched.add(self.key(path))
 
     @_locked
     def expect_edit(
@@ -1260,6 +1344,7 @@ class HonestyState:
             return None
         record = Verified(ids.sha256, "check")
         self.verified[key] = record
+        self._remember_verified(key, record)
         return record
 
     @_locked
@@ -1292,16 +1377,18 @@ class HonestyState:
         For every reviewed file: its open marks are closed, the file is recorded as verified
         by the source "review" at the content the review read, and each finding opens a mark.
         A file with findings is dishonest while they are open; `storable` hands out nothing
-        for it. A result without a SHA-256 changes nothing for its file. Afterwards a review
-        is required if more than `max_open_marks` marks are open, and no longer required if
-        none is open. A review that failed must not be passed here: it verifies nothing.
+        for it, and the stored trust of its present content is to be withdrawn
+        (`MarkChanges.withdrawn`). A result without a SHA-256 changes nothing for its file.
+        Afterwards a review is required if more than `max_open_marks` marks are open, and no
+        longer required if none is open. A review that failed must not be passed here: it
+        verifies nothing.
 
         Args:
             results: Path (as `key` names it) -> what the review said about the file.
 
         Returns:
-            The marks closed and opened, findings that could not be recorded, and whether a
-            review is required now.
+            The marks closed and opened, findings that could not be recorded, the contents
+            whose stored trust is to be withdrawn, and whether a review is required now.
         """
         changes = MarkChanges()
         for path, review in results.items():
@@ -1317,6 +1404,10 @@ class HonestyState:
                 changes.opened.append(
                     self._open(key, finding.symbol, finding.reason, "the honesty review")
                 )
+            if review.findings:
+                self._marked(key, changes)
+            else:
+                self._remember_verified(key, self.verified[key])
         if not self.open_marks:
             self.review_required = False
         self._check_threshold()
@@ -1352,7 +1443,11 @@ class HonestyState:
         by: str = "",
         edited: Collection[str] = (),
     ) -> MarkChanges:
-        """Apply the marks of one checker's answer, after its tool call succeeded (section 3).
+        """Apply the marks of one checker's answer (section 3).
+
+        The session calls this after the tool call succeeded; for the dirty marks of a command
+        or a commit it calls it when the checkers answered, because they name code that exists
+        whatever the command does.
 
         Clean marks are applied first, then dirty ones, so a spot that the same answer names
         in both stays open. A clean mark closes an open mark only if no review is required,
@@ -1363,7 +1458,8 @@ class HonestyState:
         symbol that names no definition becomes a mark on the whole file. A dirty mark whose
         path contains a character that is not printable (a line break, a control character) is
         not recorded; a symbol with such a character becomes a mark on the whole file. A dirty
-        mark on a spot that is already open refreshes its reason.
+        mark on a spot that is already open refreshes its reason. For every file a dirty mark
+        is recorded on, the SHA-256 of its present content is returned in `withdrawn`.
 
         Args:
             dirty: The answer's `marks_dirty`.
@@ -1372,8 +1468,9 @@ class HonestyState:
             edited: The workspace-relative paths the step edits; empty for a command.
 
         Returns:
-            What was opened, closed and ignored, and whether a review is required now (it is
-            as soon as more than `max_open_marks` marks are open).
+            What was opened, closed and ignored, the contents whose stored trust is to be
+            withdrawn, and whether a review is required now (it is as soon as more than
+            `max_open_marks` marks are open).
         """
         changes = MarkChanges()
         kept, rejected = checked_marks(clean, self.workspace, must_exist=False)
@@ -1411,6 +1508,7 @@ class HonestyState:
                 )
                 continue
             changes.opened.append(self._open(entry.path, entry.symbol, entry.reason, by))
+            self._marked(entry.path, changes)
         self._check_threshold()
         changes.review_required = self.review_required
         return changes
@@ -1578,11 +1676,25 @@ class HonestyState:
         """Compute the files whose present content nobody verified.
 
         Looked at are the files git lists for the repository (tracked files and untracked
-        files that git does not ignore) and the watched files. A submodule is looked at as one
-        entry: its directory is unreviewed unless it is at the commit the baseline records for
-        it or is not checked out; the files inside it are not looked at. A directory that git
-        names as one entry and the baseline does not record as a submodule is unreviewed. Not
-        looked at: other ignored files, other files outside the repository, deleted files.
+        files that git does not ignore), the contents the index holds for them, and the
+        watched files. A submodule is looked at as one entry: its directory is unreviewed
+        unless it is at the commit the baseline records for it or is not checked out; the
+        files inside it are not looked at. A directory that git names as one entry and the
+        baseline does not record as a submodule is unreviewed. Not looked at: other ignored
+        files, other files outside the repository, deleted files.
+
+        A commit records what the index holds, so a path is also unreviewed when its staged
+        content is not reviewed. A staged content is reviewed when it is
+
+            the baseline's content for the path, or
+            the present content of the working file (which is then judged as that file), or
+            a content verified earlier in this session, or
+            empty.
+
+        Every other staged content makes its path unreviewed: also for a path whose working
+        file is deleted, for a path with a merge conflict, and for a submodule whose staged
+        commit is not the baseline's. After a restart a staged content that differs from the
+        working file is unreviewed until the file is staged again.
 
         Returns:
             The unreviewed files. `everything` is set when there is no baseline that counts,
@@ -1595,10 +1707,29 @@ class HonestyState:
             top = self._repository()
             base = self._tree(base_commit.commit_id)
             output = run_git(top, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+            staged = run_git(top, ["ls-files", "-z", "--stage"])
         except GitError as exc:
             return Unreviewed(everything=True, problem=str(exc))
         found: set[str] = set()
         listed: set[str] = set()
+        for record in staged.split(b"\0"):
+            head, tab, name = record.partition(b"\t")
+            parts = head.split()
+            if not tab or len(parts) != 3:
+                continue
+            inside = os.fsdecode(name)
+            blob, stage = parts[1].decode(), parts[2]
+            entry = base.get(inside)
+            if stage == b"0" and entry is not None and entry[1] == blob:
+                continue
+            key = self.key(top / inside)
+            if stage == b"0" and self._blob_source(blob) is not None:
+                continue
+            ids = self._content(key) if stage == b"0" else None
+            # The working file with the staged content is judged below, with every other
+            # file. Any other staged content is not reviewed.
+            if ids is None or ids.blob != blob:
+                found.add(key)
         for raw in set(output.split(b"\0")) - {b""}:
             inside = os.fsdecode(raw).rstrip("/")
             entry = base.get(inside)
@@ -1656,8 +1787,9 @@ class HonestyState:
         calu certifies a commit by what the commit records, not by the working tree: every
         entry the commit holds must be the one the baseline holds for that path, or a file
         whose committed content is the content of the working file with that content
-        verified. A submodule entry that the baseline does not hold with the same commit id
-        is never verified. Files the commit deletes are not looked at.
+        verified, or a content verified earlier in this session, or empty. A submodule entry
+        that the baseline does not hold with the same commit id is never verified. Files the
+        commit deletes are not looked at.
 
         This looks only at what the commit records. The session additionally requires a clean
         `snapshot()` before the commit ran, because unreviewed files outside the commit do not
@@ -1704,6 +1836,8 @@ class HonestyState:
             source = None
             if ids is not None and ids.blob == object_id:
                 source = self._verified_source(key, ids)
+            if source is None:
+                source = self._blob_source(object_id)
             if source is None:
                 failing.append(key)
             else:

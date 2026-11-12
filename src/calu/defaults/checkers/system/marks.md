@@ -15,10 +15,11 @@ and whether a review is required. calu tracks which code was verified to say wha
   documentation agree. Name only what you see in this step or read in the file.
 - A mark you do not name stays open. While the state says "Review required: yes", `marks_clean`
   is ignored: an honesty review clears the marks.
-- For a command, set `executes_project_code`: true if the command executes code of this project
-  (tests, a build that runs code, a script, an interpreter, a package script, a make target),
-  false if it does not (reading, searching, editing, git, formatting). With honesty.mode
-  "enforce", calu lets code run only from a clean state and decides that itself from your
-  answer.
+- Set `executes_project_code` for every step whose notes hold this state, a command or
+  another tool call: true if the step executes code of this project (tests, a build that runs
+  code, a script, an interpreter, a package script, a make target), false if it does not
+  (reading, searching, editing, git, formatting). With honesty.mode "enforce", calu lets code
+  run only from a clean state and decides that itself from your answer.
 
-calu records marks after the step ran without error.
+calu records the marks of an edit after the edit ran without error. `marks_dirty` of a command
+or a commit name code that exists already and are recorded when you answer, whatever you decide.

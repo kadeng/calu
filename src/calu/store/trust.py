@@ -1,4 +1,4 @@
-"""Trusted commits and trusted file contents in the database (migration 0027).
+"""Trusted commits and trusted file contents in the database (migrations 0027, 0028).
 
     trusted_commits   commit id, tree id, when, by whom, source (user | review | check), note
     trusted_files     SHA-256 of a file content, a path as a hint, when, by whom, source, note
@@ -289,6 +289,27 @@ async def trust_file(
             "SELECT calu_trust_file(%s, %s, %s, %s, %s)", (content_sha256, path, method, by, note)
         )
     )
+
+
+async def distrust_file(db: Db, content_sha256: str, by: str) -> bool:
+    """Withdraw the stored trust of a file content a session found dishonest.
+
+    Calls `calu_distrust_file` (migration 0028), which removes the row only if its method is
+    "check" or "review". A row a person recorded stays.
+
+    Args:
+        db: A connection of a session that has started.
+        content_sha256: SHA-256 of the content.
+        by: Who withdrew it; must not be empty.
+
+    Returns:
+        True if a row was removed; False if there is none or its method is "user".
+
+    Raises:
+        psycopg.Error: On database errors, on an empty `by`, and (`InsufficientPrivilege`) for
+            a connection that has not proven a session.
+    """
+    return bool(await db.scalar("SELECT calu_distrust_file(%s, %s)", (content_sha256, by)))
 
 
 async def trusted_file_sources(

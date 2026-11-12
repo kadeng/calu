@@ -372,7 +372,7 @@ async def test_a_person_clears_a_mark_and_every_client_hears_it(repo: Path):
     """Section 3: `honesty.clear` closes one mark; an unknown id is an error."""
     session, rec, _store = await session_on(repo, [[]])
     mark(session)
-    (open_mark,) = session.honesty_marks
+    (open_mark,) = session.honesty.open_marks
     closed = await session.clear_mark(open_mark.id, client="tester")
     assert closed.closed_by == "tester (by hand)"
     assert rec.of(HonestyUpdate)[-1].marks == []
@@ -877,3 +877,220 @@ async def test_the_review_of_a_write_set_gets_the_state_and_its_marks_are_record
     assert "build/gen.py" in session.honesty.watched
     update = rec.of(HonestyUpdate)[-1]
     assert update.unreviewed == ["build/gen.py", "src/parser.py"]
+
+
+# ------------------------------------------------------------------ corrections after review
+
+
+def tool(name: str, **tool_input: Any) -> dict[str, Any]:
+    """Build a scripted call of a tool that is neither Bash nor an edit.
+
+    Args:
+        name: The tool's name.
+        tool_input: The tool's input.
+
+    Returns:
+        The action for the fake runner's script.
+    """
+    return {"tool": name, "input": tool_input, "result": "ok"}
+
+
+async def test_a_mark_withdraws_the_stored_trust_of_the_marked_content(repo: Path):
+    """Section 13: a content stored as verified and later found dishonest by a command's
+    checker loses its stored row, so a fresh state (a restart) does not count it as verified."""
+    session, rec, store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED)], [bash("make lint")]],
+        models={
+            "command": marking_checker(
+                dirty=[("src/parser.py", "fields", "unsorted")], executes=EXECUTING
+            )
+        },
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult, 1)
+        assert [row.method for row in store.trusted_files.values()] == ["check"]
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult, 2)
+        await session.stop()
+    assert store.trusted_files == {}
+    assert [m.label() for m in session.honesty.open_marks] == ["src/parser.py:fields"]
+    fresh = HonestyState(repo)
+    fresh.baseline = session.honesty.baseline
+    fresh.trusted_hashes = await store.trusted_file_sources()
+    assert fresh.unreviewed().paths == ("src/parser.py",)
+
+
+async def test_a_mark_does_not_withdraw_what_a_person_certified(repo: Path):
+    """Section 13: the session never removes a record of the source "user"."""
+    session, rec, store = await session_on(
+        repo,
+        [[bash("make lint")]],
+        models={"command": marking_checker(dirty=[("src/parser.py", "", "x")], executes=())},
+    )
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    await session.trust(path="src/parser.py", client="tester")
+    await run_turns(session, rec)
+    assert [row.method for row in store.trusted_files.values()] == ["user"]
+    assert len(session.honesty.open_marks) == 1
+
+
+async def test_a_staged_content_nobody_verified_stops_a_commit(repo: Path):
+    """Section 5: a commit records what the index holds. A staged content that is not
+    verified makes the file unreviewed although the working file has the baseline's content."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    git(repo, "add", "src/parser.py")
+    (repo / "src" / "parser.py").write_text(PARSER, encoding="utf-8")
+    session, rec, store = await session_on(repo, [[bash("git commit -m second", run=COMMIT)]])
+    first = git(repo, "rev-parse", "HEAD")
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "this command is a commit" in request.reason
+        assert "src/parser.py" in request.reason
+        await session.decide_escalation(request.escalation_id, "deny", "no")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert git(repo, "rev-parse", "HEAD") == first
+    assert list(store.trusted_commits) == [first]
+    update = rec.of(HonestyUpdate)[-1]
+    assert update.unreviewed == ["src/parser.py"] and not update.clean
+
+
+async def test_a_verified_content_stays_reviewed_in_the_index_after_a_further_edit(repo: Path):
+    """A file that was verified, staged and verified again is not unreviewed because the index
+    still holds the earlier verified content; the commit of that content is certified."""
+    again = CHANGED + "\n\nLIMIT = 3\n"
+    session, rec, store = await session_on(
+        repo,
+        [
+            [
+                write("src/parser.py", CHANGED),
+                bash("git add src/parser.py", run=["git", "add", "src/parser.py"]),
+                write("src/parser.py", again),
+                bash("git commit -m second", run=COMMIT),
+            ]
+        ],
+    )
+    await run_turns(session, rec)
+    assert [c.decision for c in checks(rec)] == [Decision.PASS] * 4
+    head = git(repo, "rev-parse", "HEAD")
+    assert store.trusted_commits[head].method == "check"
+    assert rec.of(HonestyUpdate)[-1].clean
+
+
+async def test_a_checker_s_escalation_is_denied_while_marks_are_open(repo: Path):
+    """Section 5: a shell command without the checker's answer counts as executing also when
+    the checker escalates; with open marks it is denied and nobody is asked."""
+    session, rec, _store = await session_on(
+        repo, [[bash("make test")]], models={"command": marking_checker(decision="ESCALATE")}
+    )
+    mark(session)
+    await run_turns(session, rec)
+    (check,) = checks(rec)
+    assert check.decision is Decision.DENY
+    assert "src/parser.py:fields" in check.reason
+    assert "The checkers also escalated: the marking fake checker" in check.reason
+    assert rec.of(EscalationRequest) == []
+
+
+async def test_a_checker_s_escalation_names_what_is_not_verified(repo: Path):
+    """Section 5: without marks the checker's escalation stands, no review runs, and the
+    person is told what is not verified and that an allow certifies nothing."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    session, rec, _store = await session_on(
+        repo, [[bash("make test")]], models={"command": marking_checker(decision="ESCALATE")}
+    )
+    reviews = await reviewing(session)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert request.reason.startswith("the marking fake checker")
+        assert "1 unreviewed file(s) (src/parser.py)" in request.reason
+        assert "lets it run once and certifies nothing" in request.reason
+        await session.decide_escalation(request.escalation_id, "deny", "no")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert reviews == [], "no review runs for a step a person decides anyway"
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        tool("WebFetch", url="https://example.org/", prompt="read"),
+        tool("WebSearch", query="calu"),
+        tool("mcp__tracker__list_issues", project="calu"),
+        tool("Read", file_path="../notes.txt"),
+    ],
+    ids=["WebFetch", "WebSearch", "mcp", "Read"],
+)
+async def test_a_tool_that_runs_no_command_is_not_stopped_by_open_marks(
+    repo: Path, action: dict[str, Any]
+):
+    """Section 5: the default "no answer means it executes" holds for shell commands only.
+    The Read names a file outside the project, which the command checker judges."""
+    (repo.parent / "notes.txt").write_text("notes\n", encoding="utf-8")
+    session, rec, _store = await session_on(repo, [[action]], models={"command": marking_checker()})
+    mark(session)
+    await run_turns(session, rec)
+    assert [c.decision for c in checks(rec)] == [Decision.PASS]
+
+
+async def test_another_tool_is_stopped_when_its_checker_says_it_executes(repo: Path):
+    """Section 5: an answer "executes" counts for a tool that is not a shell command, except
+    for the tools that only read."""
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                tool("mcp__runner__run_tests", target="all"),
+                tool("WebFetch", url="https://example.org/run_tests", prompt="read"),
+            ]
+        ],
+        models={"command": marking_checker(executes=("run_tests",))},
+    )
+    mark(session)
+    await run_turns(session, rec)
+    mcp, fetch = checks(rec)
+    assert mcp.decision is Decision.DENY and "src/parser.py:fields" in mcp.reason
+    assert fetch.decision is Decision.PASS
+
+
+@pytest.mark.parametrize("outcome", ["denied", "failed"])
+async def test_a_command_checker_s_mark_is_recorded_whatever_becomes_of_the_command(
+    repo: Path, outcome: str
+):
+    """Section 3: the dirty marks of a command's checkers name code that exists, so they are
+    recorded when the checkers answer, also for a command that is denied or fails."""
+    decision = "DENY" if outcome == "denied" else "PASS"
+    session, rec, _store = await session_on(
+        repo,
+        [[bash("make test", fails=outcome == "failed", result="1 failed")]],
+        mode="track",
+        models={
+            "command": marking_checker(
+                dirty=[("src/parser.py", "fields", "unsorted")], decision=decision
+            )
+        },
+    )
+    await run_turns(session, rec)
+    assert checks(rec)[0].decision is Decision[decision]
+    assert [m.label() for m in session.honesty.open_marks] == ["src/parser.py:fields"]
+    assert logs(rec).count("1 spot(s) recorded as dishonest") == 1
+
+
+async def test_files_of_a_write_set_reach_the_state_with_its_next_computation(repo: Path):
+    """Section 12: the session collects the written paths on the event loop and hands them to
+    the state when it is computed next."""
+    session, _rec, _store = await session_on(repo, [[]])
+    (repo / "build").mkdir()
+    (repo / "build" / "gen.py").write_text("x = 1\n", encoding="utf-8")
+    session._watch_written(["build/gen.py"])
+    assert session.honesty.watched == set()
+    state = await session.honesty_snapshot()
+    assert session.honesty.watched == {"build/gen.py"}
+    assert state.unreviewed.paths == ("build/gen.py",)

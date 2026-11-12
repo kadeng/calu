@@ -138,16 +138,16 @@ class CheckDecision(BaseModel):
     executes_project_code: bool | None = Field(
         default=None,
         description=(
-            "Only when the step is a command and its notes hold the code honesty state "
-            "computed by calu: true if the command executes code of this project (tests, a "
-            "build that runs code, a script, an interpreter, a package script, a make "
-            "target), false if it does not (reading, searching, editing, git, formatting). "
-            "Leave empty otherwise."
+            "Whenever the step's notes hold the code honesty state computed by calu, for a "
+            "command and for any other tool call: true if the step executes code of this "
+            "project (tests, a build that runs code, a script, an interpreter, a package "
+            "script, a make target), false if it does not (reading, searching, editing, git, "
+            "formatting). Leave empty otherwise."
         ),
     )
-    """Whether the command executes code of the project. The gate reads it while
-    `honesty.mode` is "enforce" and the honesty state is not clean (`calu.gate`); an answer
-    without it counts as true there."""
+    """Whether the step executes code of the project. The gate reads it while `honesty.mode`
+    is "enforce" and the honesty state is not clean (`calu.gate`): for a shell command an
+    answer without it counts as true there, for another tool as false."""
 
 
 class Step(BaseModel):

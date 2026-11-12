@@ -52,6 +52,8 @@ honesty state (`Session.honesty`) and keeps it up to date:
                                               given to the gate and, as a note, to the checkers
     the checkers answered                     their marks and the edit's expected content are
                                               kept with the call (`_keep_honesty`), not applied
+    the checkers of a command or a commit     their dirty marks are recorded at once
+    answered                                  (`_mark_at_once`): they name existing code
     the tool result arrived without error     they are applied (`_apply_honesty`): marks,
                                               the verification of a checked edit, the
                                               certification of a commit made in a clean state
@@ -108,7 +110,7 @@ import logging
 import os
 import platform
 import socket
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -125,6 +127,7 @@ from calu.checkers import (
     CheckDecision,
     Checker,
     CheckOutcome,
+    CodeMark,
     Decision,
     ResultChecker,
     ResultOutcome,
@@ -390,6 +393,9 @@ class Session:
         self._trust_stale = True
         """True when the baseline and the stored file trust must be read from the database
         again: at the start, after a trust command, after `trust_changed` and after a failure."""
+        self._written: set[str] = set()
+        """Files that measured write sets named and the honesty state does not watch yet
+        (`_watch_written`); the next worker-thread call of the state takes them."""
         self._honesty_head: str | None = None
         """The HEAD the baseline was last looked up for; a different HEAD looks it up again."""
         self._review_running = False
@@ -649,20 +655,12 @@ class Session:
 
     # ------------------------------------------------------------------ code honesty
 
-    @property
-    def honesty_marks(self) -> list[HonestyMark]:
-        """The open marks of this session's honesty state, oldest first.
-
-        Returns:
-            The open marks; the state itself is `self.honesty`.
-        """
-        return self.honesty.open_marks
-
     async def clear_mark(self, mark_id: int, client: str = "unknown") -> HonestyMark:
         """Close one open mark by hand: a person's override of a checker (`honesty.clear`).
 
         Side effects: closes the mark in the honesty state, logs who did it and sends
-        `honesty.update`. Whether a review is required does not change.
+        `honesty.update`. Whether a review is required does not change, and nothing is
+        verified or stored: the file counts as it did without the mark.
 
         Args:
             mark_id: The mark's id, as `honesty.update` reported it.
@@ -674,7 +672,10 @@ class Session:
         Raises:
             SessionError: If no open mark has that id.
         """
-        closed = self.honesty.clear(mark_id, f"{client} (by hand)")
+        async with self._honesty_lock:
+            closed = await anyio.to_thread.run_sync(
+                self.honesty.clear, mark_id, f"{client} (by hand)"
+            )
         if closed is None:
             raise SessionError(f"no open honesty mark {mark_id}")
         await self._emit_safely(
@@ -713,7 +714,7 @@ class Session:
         by = client or "unknown"
         try:
             if path:
-                key = self.honesty.watch(path)
+                key = await anyio.to_thread.run_sync(self.honesty.watch, path)
                 sha256 = await anyio.to_thread.run_sync(self.honesty.content_sha256, key)
                 if sha256 is None:
                     raise SessionError(f"{path} is not a file calu can read")
@@ -825,18 +826,36 @@ class Session:
         """
         async with self._honesty_lock:
             await self._refresh_trust()
-            snapshot = await anyio.to_thread.run_sync(self._settled_snapshot)
+            snapshot = await anyio.to_thread.run_sync(self._settled_snapshot, self._take_written())
         await self._emit_honesty(snapshot)
         return snapshot
 
-    def _settled_snapshot(self) -> HonestySnapshot:
+    def _settled_snapshot(self, written: Collection[str]) -> HonestySnapshot:
         """Close the marks whose code is gone and compute the state (reads git and files).
+
+        For a worker thread: the state's methods wait for one another and read many files.
+
+        Args:
+            written: Files that commands wrote since the last look (`_take_written`); they
+                are watched from now on.
 
         Returns:
             The state after that.
         """
+        self.honesty.watch_all(written)
         self.honesty.close_stale()
         return self.honesty.snapshot()
+
+    def _take_written(self) -> set[str]:
+        """Hand out the files that measured write sets named since the last call.
+
+        Called on the event loop, where `_watch_written` adds to the set.
+
+        Returns:
+            The paths, relative to the workspace; the session's set is empty afterwards.
+        """
+        written, self._written = self._written, set()
+        return written
 
     async def _gate_honesty(self) -> HonestySnapshot | None:
         """Give the gate the honesty state for a step (`StepGate`'s `honesty`).
@@ -949,6 +968,8 @@ class Session:
         Nothing is applied here: the checkers judged a call that has not run. The record is
         applied by `_apply_honesty` after the tool result, and discarded for a call that was
         denied or failed. A denied step, a step without an id and the mode "off" keep nothing.
+        For a step on the command route only the clean marks are kept: its dirty marks are
+        recorded when the checkers answer (`_mark_at_once`).
 
         Args:
             step: The tool call.
@@ -960,10 +981,15 @@ class Session:
             return
         if decided.decision.decision is Decision.DENY:
             return
+        at_once = decided.route is Route.COMMAND  # `_mark_at_once` recorded the dirty marks
         marks = [
-            (checker.name, list(run.decision.marks_dirty), list(run.decision.marks_clean))
+            (
+                checker.name,
+                [] if at_once else list(run.decision.marks_dirty),
+                list(run.decision.marks_clean),
+            )
             for checker, run in decided.runs
-            if run.decision.marks_dirty or run.decision.marks_clean
+            if (run.decision.marks_dirty and not at_once) or run.decision.marks_clean
         ]
         edit_path: str | None = None
         if step.tool_name in EDIT_TOOLS:
@@ -996,20 +1022,38 @@ class Session:
         """
         await self._apply_honesty(step.tool_use_id or "", ok=True)
 
+    async def _mark_at_once(self, step: Step, decided: Decided) -> None:
+        """Record the dirty marks of a command's or a commit's checkers when they answer.
+
+        The checkers of the command route, and the changeset checkers of a commit, mark code
+        that exists in the project whatever the command does. So their `marks_dirty` are
+        recorded for every decision, also for a step that is denied, escalated or fails. The
+        marks of an edit are different: they name what the edit would write, and are applied
+        only after it ran (`_keep_honesty`, `_apply_honesty`).
+
+        Side effects: as `_apply_record`. Never raises.
+
+        Args:
+            step: The tool call.
+            decided: The gate's decision with the checkers' answers.
+        """
+        if self.config.honesty.mode == "off" or decided.route is not Route.COMMAND:
+            return
+        marks = [
+            (checker.name, list(run.decision.marks_dirty), list[CodeMark]())
+            for checker, run in decided.runs
+            if run.decision.marks_dirty
+        ]
+        if marks:
+            await self._apply_record(PendingHonesty(marks=marks))
+
     async def _apply_honesty(self, tool_use_id: str, ok: bool) -> None:
         """Apply or discard what a tool call changes in the honesty state (section 2).
 
-        For a call that succeeded: the edited file is watched; the checkers' marks are
-        recorded; an edit that the edit checkers approved verifies the file at the content
-        they judged, and that verification is stored in the database with the source "check"
-        unless the file carries an open mark; the marks whose code is gone are closed; and a
-        plain commit made in a clean state is certified (`_certify`). For a call that failed
-        or was denied, the record is dropped and nothing changes.
+        For a call that succeeded, the record kept at the gate is applied (`_apply_record`).
+        For a call that failed or was denied, the record is dropped and nothing changes.
 
-        Side effects: changes `self.honesty`, may write to the database, emits a `log` event
-        that names what changed and `honesty.update`. Never raises: if applying fails, a
-        review is required from then on, so that the failure cannot leave the state cleaner
-        than it is.
+        Side effects: as `_apply_record`. Never raises.
 
         Args:
             tool_use_id: Claude's id of the call.
@@ -1020,9 +1064,36 @@ class Session:
         self._run_state.release(tool_use_id)
         if pending is None or not ok or self.config.honesty.mode == "off":
             return
+        await self._apply_record(pending)
+
+    async def _apply_record(self, pending: PendingHonesty) -> None:
+        """Change the honesty state by one record of marks, an edit or a commit.
+
+        In this order: the edited file is watched; the checkers' marks are recorded; the
+        stored trust of every content a mark was opened on is withdrawn
+        (`SessionStore.distrust_file`); an edit that the edit checkers approved verifies the
+        file at the content they judged, and that verification is stored in the database with
+        the source "check" unless the file carries an open mark; the marks whose code is gone
+        are closed; and a plain commit made in a clean state is certified (`_certify`).
+
+        Side effects: changes `self.honesty`, may write to the database, emits a `log` event
+        that names what changed and `honesty.update`. Never raises: if applying fails, a
+        review is required from then on, so that the failure cannot leave the state cleaner
+        than it is.
+
+        Args:
+            pending: What to apply.
+        """
         try:
             async with self._honesty_lock:
-                changes, store = await anyio.to_thread.run_sync(self._record_result, pending)
+                changes, store = await anyio.to_thread.run_sync(
+                    self._record_result, pending, self._take_written()
+                )
+                for sha256 in changes.withdrawn:
+                    await self.recorder.attempt(
+                        "withdrawing the stored trust of a file content",
+                        self.store.distrust_file(sha256, CERTIFIER),
+                    )
                 for sha256, path in store:
                     await self.recorder.attempt(
                         "storing a verified file content",
@@ -1045,7 +1116,7 @@ class Session:
                         )
             await self._report_marks(changes)
         except Exception as exc:
-            log.exception("applying a tool result to the honesty state failed")
+            log.exception("applying a step's result to the honesty state failed")
             self.honesty.review_required = True
             await self._emit_safely(
                 Log(
@@ -1058,17 +1129,23 @@ class Session:
             )
         await self.announce_honesty()
 
-    def _record_result(self, pending: PendingHonesty) -> tuple[MarkChanges, list[tuple[str, str]]]:
-        """Change the honesty state for one succeeded call (reads files; for a worker thread).
+    def _record_result(
+        self, pending: PendingHonesty, written: Collection[str] = ()
+    ) -> tuple[MarkChanges, list[tuple[str, str]]]:
+        """Change the honesty state for one record (reads files; for a worker thread).
 
         Args:
             pending: What the call changes.
+            written: Files that commands wrote since the last look (`_take_written`); they
+                are watched from now on.
 
         Returns:
-            (the marks opened, closed and ignored, over all checkers of the step; the
-            (SHA-256, path) of each verification to store in the database).
+            (the marks opened, closed and ignored and the contents whose stored trust is to
+            be withdrawn, over all checkers of the step; the (SHA-256, path) of each
+            verification to store in the database).
         """
         state = self.honesty
+        state.watch_all(written)
         total = MarkChanges()
         edited: set[str] = set()
         if pending.edit_path is not None:
@@ -1078,6 +1155,7 @@ class Session:
             total.opened += changes.opened
             total.closed += changes.closed
             total.ignored += [f"{name}: {message}" for message in changes.ignored]
+            total.withdrawn += [one for one in changes.withdrawn if one not in total.withdrawn]
         store: list[tuple[str, str]] = []
         if pending.edit_path is not None:
             state.record_edit(
@@ -1152,15 +1230,16 @@ class Session:
         """Watch the files a measured write set names (`WriteSets`' `wrote`).
 
         A file a command wrote is tracked from then on even if git does not list it
-        (specification section 12). Does nothing while `honesty.mode` is "off".
+        (specification section 12). The paths are only collected here, on the event loop; the
+        next computation of the state hands them to it in its worker thread
+        (`_take_written`). Does nothing while `honesty.mode` is "off".
 
         Args:
             paths: The written paths, relative to the workspace.
         """
         if self.config.honesty.mode == "off":
             return
-        for path in paths:
-            self.honesty.watch(path)
+        self._written.update(paths)
 
     async def _review_checkers(
         self,
@@ -1175,8 +1254,9 @@ class Session:
 
         Like `StepGate.run_checkers`, with two additions while `honesty.mode` is not "off":
         the checkers get the note of the honesty state, and the marks of their answers are
-        recorded at once, because the command has already run. A change the checkers deny is
-        undone, so the marks of a DENY are not recorded.
+        recorded at once, because the command has already run (`_apply_record`). A change the
+        checkers deny is undone, so the marks of a DENY, which name that change, are not
+        recorded.
 
         Args:
             route: The route whose checkers run (the changeset route).
@@ -1207,9 +1287,7 @@ class Session:
                 ]
             )
             if pending.marks:
-                async with self._honesty_lock:
-                    changes, _store = await anyio.to_thread.run_sync(self._record_result, pending)
-                await self._report_marks(changes)
+                await self._apply_record(pending)
         return decision, runs
 
     async def reload_summary(self) -> None:
@@ -1981,6 +2059,7 @@ class Session:
         except Exception as exc:
             log.exception("pre_tool_use failed")
             decided = self.gate.failed(step, exc)
+        await self._mark_at_once(step, decided)
         try:
             self._keep_honesty(step, decided, expected)
             if decided.clean_commit and step.tool_use_id:

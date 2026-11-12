@@ -203,18 +203,24 @@ def answers(gate: StepGate, *executes: bool | None) -> list[tuple[Checker, Check
 
 def test_a_command_counts_as_executing_unless_the_command_checker_says_no(tmp_path: Path):
     """Section 5, fail closed: only an explicit "no" of the command checker, with no "yes" of
-    another checker of the route, lets a command pass an unclean state."""
+    another checker of the route, lets a shell command pass an unclean state."""
     gate = gate_of(tmp_path)
-    passed = CheckDecision(decision=Decision.PASS, reason="", step_summary="s")
-    escalated = CheckDecision(decision=Decision.ESCALATE, reason="r", step_summary="s")
-    assert gate._executes(Route.COMMAND, answers(gate, False), passed) is False
-    assert gate._executes(Route.COMMAND, answers(gate, True), passed) is True
-    assert gate._executes(Route.COMMAND, answers(gate, None), passed) is True
-    assert gate._executes(Route.COMMAND, answers(gate, False, True), passed) is True
-    assert gate._executes(Route.COMMAND, answers(gate, False, None), passed) is False
-    assert gate._executes(Route.COMMAND, [], passed) is True
-    # A checker that failed escalates anyway; the honesty state adds nothing to that.
-    assert gate._executes(Route.COMMAND, answers(gate, None), escalated) is False
+    assert gate._executes(Route.COMMAND, answers(gate, False), shell=True) is False
+    assert gate._executes(Route.COMMAND, answers(gate, True), shell=True) is True
+    assert gate._executes(Route.COMMAND, answers(gate, None), shell=True) is True
+    assert gate._executes(Route.COMMAND, answers(gate, False, True), shell=True) is True
+    assert gate._executes(Route.COMMAND, answers(gate, False, None), shell=True) is False
+    assert gate._executes(Route.COMMAND, [], shell=True) is True
+
+
+def test_another_tool_counts_as_executing_only_if_a_checker_says_so(tmp_path: Path):
+    """A tool that runs no shell command executes project code only by an explicit answer."""
+    gate = gate_of(tmp_path)
+    assert gate._executes(Route.COMMAND, answers(gate, None), shell=False) is False
+    assert gate._executes(Route.COMMAND, [], shell=False) is False
+    assert gate._executes(Route.COMMAND, answers(gate, False), shell=False) is False
+    assert gate._executes(Route.COMMAND, answers(gate, True), shell=False) is True
+    assert gate._executes(Route.COMMAND, answers(gate, None, True), shell=False) is True
 
 
 async def needs_clean(

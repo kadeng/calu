@@ -30,8 +30,9 @@ answer Claude Code. `Session.pre_tool_use` is the sequence around it:
       commit also the changeset checkers, with the commit's diff); the verdicts are combined
       (`combine_decisions`)                     -> the combined decision (source "checker")
     `honesty.mode` "enforce", the state is not
-      clean, the command checker answered that
-      the command executes project code         -> DENY / ESCALATE (source "honesty"), see below
+      clean, the step executes project code
+      (the checkers' answer, see below)         -> DENY / ESCALATE (source "honesty"), or the
+                                                   checkers' ESCALATE with the honesty state
     an approval of the last two kinds, where it must not stand alone (`_settle`):
       auto-escalation is on for the route       -> ESCALATE (source "auto")
       an escalation is still open after the
@@ -40,8 +41,7 @@ answer Claude Code. `Session.pre_tool_use` is the sequence around it:
 Code honesty (`calu.honesty`, `honesty.mode`): the session computes the honesty state
 (`HonestySnapshot`) and the gate decides from it. With "off" nothing of this runs. With "track"
 and "enforce" every checker of the step gets the state as a note. With "enforce", a step that
-executes project code (the command checker's answer `executes_project_code`; a missing answer
-counts as yes) and a plain `git commit` need a clean state:
+executes project code and a plain `git commit` need a clean state:
 
     open marks, no review required              -> DENY with the marks and their reasons
     no baseline                                 -> ESCALATE: a person certifies a commit
@@ -49,6 +49,19 @@ counts as yes) and a plain `git commit` need a clean state:
                                                    clean: the step goes on,
                                                    marks: DENY with them,
                                                    the review did not run or failed: ESCALATE
+
+Whether a step on the command route executes project code is the answer
+`executes_project_code` of the route's checkers (`_executes`):
+
+    tool                                        an answer            no answer
+    Bash, Monitor (`SHELL_TOOLS`)               as answered          executes
+    Read, Grep, Glob, LS, NotebookRead,
+      WebFetch, WebSearch (`NEVER_EXECUTES`)    does not execute     does not execute
+    every other tool (e.g. an MCP tool)         as answered          does not execute
+
+If the checkers themselves escalate a step that executes project code, the honesty review does
+not run: open marks give the DENY above, and otherwise the checkers' ESCALATE stands with the
+honesty state added to its reason, so the person who decides sees both.
 
 A step that does not execute project code, and every edit, is not stopped by the honesty state.
 A DENY of the checkers stands before any of this.
@@ -211,6 +224,18 @@ HONESTY_UNREVIEWED = (
 )
 """Reason of the escalation of a step that needs a clean honesty state when the honesty review
 did not make the state clean."""
+
+HONESTY_ALSO = (
+    "calu runs code only after it was verified to say what it does (honesty.mode is enforce), "
+    "and this step executes code of the project. Not verified: {state}. Allowing this step "
+    "lets it run once and certifies nothing."
+)
+"""Addition to the reason of an escalation by the checkers, for a step that executes project
+code while the honesty state is not clean."""
+
+NEVER_EXECUTES = READ_PATH_TOOLS | {"WebFetch", "WebSearch"}
+"""Tools on the command route that read and cannot execute code of the project. The honesty
+state does not stop them, whatever a checker answers."""
 
 EXECUTES = "this command executes code of the project"
 """`what` of the honesty reasons for a command."""
@@ -674,8 +699,9 @@ class StepGate:
         While `honesty.mode` is not "off", the honesty state is computed for a step that a
         checker judges and given to the checkers as a note. With "enforce" and a state that is
         not clean, the allow lists do not let a command skip the command checker, a compound
-        commit line is denied, and a plain commit and a command that executes project code are
-        decided by `_needs_clean` (see the module docstring).
+        commit line is denied, and a plain commit and a step that executes project code are
+        decided by `_needs_clean`, or, where the checkers escalated the step themselves, from
+        the state already computed (see the module docstring).
 
         Side effects: a step that needs a check waits while an escalation is open or being
         opened, before the check and again after an approval (`_hold`, `_settle`). May run the
@@ -882,20 +908,33 @@ class StepGate:
             and route is Route.COMMAND
             and not plain_commit
             and decision.decision is not Decision.DENY
-            and self._executes(route, runs, decision)
+            and step.tool_name not in NEVER_EXECUTES
+            and self._executes(route, runs, shell=step.tool_name in SHELL_TOOLS)
         ):
-            stopped, state = await self._needs_clean(
-                step, state, EXECUTES, decision.step_summary or label
-            )
-            if stopped is not None:
-                if decision.decision is Decision.ESCALATE and decision.reason.strip():
+            summary = decision.step_summary or label
+            if decision.decision is not Decision.ESCALATE:
+                stopped, state = await self._needs_clean(step, state, EXECUTES, summary)
+                if stopped is not None:
+                    decision, source = stopped, "honesty"
+            elif state.marks:
+                # A person is asked about this step anyway, so no review runs for it. Open
+                # marks are for Claude to settle first: the step is denied with them.
+                stopped = self._marks_denial(state, EXECUTES, summary)
+                also = decision.reason.strip()
+                if also:
                     stopped = stopped.model_copy(
                         update={
-                            "reason": f"{stopped.reason}\n\nThe checkers also escalated: "
-                            f"{decision.reason.strip()}"
+                            "reason": f"{stopped.reason}\n\nThe checkers also escalated: {also}"
                         }
                     )
                 decision, source = stopped, "honesty"
+            else:
+                # The checkers' escalation stands; the person who decides is told what an
+                # allow would run.
+                added = HONESTY_ALSO.format(state=_unverified(state))
+                decision = decision.model_copy(
+                    update={"reason": f"{decision.reason.strip()}\n\n{added}".strip()}
+                )
         return await self._settle(
             Decided(
                 route=route,
@@ -912,21 +951,27 @@ class StepGate:
         )
 
     def _executes(
-        self, route: Route, runs: list[tuple[Checker, CheckOutcome]], combined: CheckDecision
+        self, route: Route, runs: list[tuple[Checker, CheckOutcome]], shell: bool
     ) -> bool:
-        """Tell whether a command counts as executing project code, from the checkers' answers.
+        """Tell whether a step counts as executing project code, from the checkers' answers.
 
-        The checkers of the step's own route answer `CheckDecision.executes_project_code`. The
-        command counts as executing project code unless the route's first checker (the command
-        checker) answered False and no other checker of the route answered True. One case is
-        left to the checkers' own decision: the command checker gave no answer and the
-        combined decision is an ESCALATE (a checker that failed or timed out); a person then
-        decides about the step anyway.
+        The checkers of the step's own route answer `CheckDecision.executes_project_code`.
+
+            any of them answered True                        -> executes
+            the route's first checker (the command checker)
+              answered False, none answered True             -> does not execute
+            the first checker gave no answer, or no checker
+              of the route ran                               -> `shell`
+
+        A shell command without an answer counts as executing, whatever the checkers decided:
+        a checker that failed or left the field out must not let project code run from a
+        state that is not clean. Another tool without an answer does not: the field is asked
+        for commands.
 
         Args:
             route: The step's route.
             runs: The checkers that ran, with their outcomes.
-            combined: The combined decision of those checkers.
+            shell: Whether the step's tool runs a shell command (`SHELL_TOOLS`).
 
         Returns:
             True if the step is to be treated as executing project code.
@@ -937,12 +982,10 @@ class StepGate:
             for checker, outcome in runs
             if any(checker is one for one in own)
         ]
-        if not answers:
-            return True
         if True in answers:
             return True
-        if answers[0] is None:
-            return combined.decision is not Decision.ESCALATE
+        if not answers or answers[0] is None:
+            return shell
         return False
 
     async def _needs_clean(
@@ -1217,12 +1260,14 @@ def _unverified(state: HonestySnapshot) -> str:
 
     Returns:
         E.g. "3 unreviewed file(s) (a.py, b.py, c.py); a review is required", naming at most
-        five files.
+        five files; without a baseline it says that every file is unverified.
     """
     parts: list[str] = []
     if state.marks:
         parts.append(f"{len(state.marks)} open mark(s)")
-    if state.unreviewed.everything:
+    if state.baseline is None:
+        parts.append("every file (no ancestor of HEAD is a trusted commit)")
+    elif state.unreviewed.everything:
         parts.append("every file (the files could not be compared with the baseline)")
     elif state.unreviewed.paths:
         paths = state.unreviewed.paths
