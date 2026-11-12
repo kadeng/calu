@@ -112,29 +112,30 @@
   form.addEventListener("change", refresh);
 
   // ---- model fields: a list of known models that fills the text field, which stays free
+  const OTHER = "__other__";
   const syncModel = (select) => {
     const input = document.getElementById(select.dataset.modelFor);
-    const known = [...select.options].some((option) => option.value && option.value === input.value);
-    select.value = known ? input.value : "";
+    const known = [...select.options].some((option) => option.value === input.value);
+    select.value = known ? input.value : OTHER;
     // The text field shows only for a model the list does not have; for a listed one the
-    // string behind the entry is shown instead.
+    // string behind the entry is shown instead (nothing for the default, which has none).
     input.hidden = known;
     const id = select.parentElement.querySelector("[data-model-id]");
     id.textContent = input.value;
-    id.hidden = !known;
+    id.hidden = !known || !input.value;
   };
   const modelSelects = [...root.querySelectorAll("select[data-model-for]")];
   for (const select of modelSelects) {
     const input = document.getElementById(select.dataset.modelFor);
     select.addEventListener("change", () => {
-      if (select.value) {
-        input.value = select.value;
-        syncModel(select);
-      } else {
+      if (select.value === OTHER) {
         input.hidden = false;
         select.parentElement.querySelector("[data-model-id]").hidden = true;
         input.focus();
         input.select();
+      } else {
+        input.value = select.value;
+        syncModel(select);
       }
       refresh();
     });

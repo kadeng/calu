@@ -1033,7 +1033,7 @@ class StepStats:
     rules_unlisted: int
     """Steps the lists cover but did not settle, which is what a checker is for."""
     rules_silent: int
-    """Steps of a tool the lists do not cover at all (`_rules_outcome` returns None)."""
+    """Steps of a tool the lists do not cover at all (`calu.gate._rules_outcome` returns None)."""
     checked: int
     """Steps at least one checker ran on, which are the only ones that cost tokens."""
     median_gate_ms: int | None

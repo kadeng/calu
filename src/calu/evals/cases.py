@@ -24,7 +24,7 @@ Sources of cases:
 - the `escalations` table: every escalation that a checker caused and a human then resolved
   becomes a case whose expected decision is the human's (allowed -> ALLOW, denied -> DENY),
   with ESCALATE as an acceptable alternative. The step's input and the file it would have
-  changed come from the escalation's context (`Session._open_escalation`), so the case can be
+  changed come from the escalation's context (`Session._escalation_row_context`), so the case can be
   reproduced in a temporary directory.
 """
 

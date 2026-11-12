@@ -106,7 +106,13 @@ def test_missing_api_keys_name_the_roles_and_the_env_file():
     config = Config(
         command_checker=CheckerConfig(model="mistral:mistral-small-2603"),
         edit_checker=CheckerConfig(model="fireworks:accounts/x/models/y"),
-        context=ContextConfig(narrate=False, summarizer_model="mistral:ministral-3b-latest"),
+        changeset_checker=CheckerConfig(model="fireworks:accounts/x/models/y"),
+        subagent_checker=CheckerConfig(model="fireworks:accounts/x/models/y"),
+        context=ContextConfig(
+            narrate=False,
+            narrator_model="fireworks:accounts/x/models/y",
+            summarizer_model="mistral:ministral-3b-latest",
+        ),
         check_subagent_results=False,
     )
     warnings = preflight.key_warnings(config, environ={})
@@ -188,25 +194,33 @@ def test_a_missing_key_says_what_it_costs_per_role() -> None:
     for all six roles was wrong for two of them.
     """
     # Checkers, narrator and summarizer all on the same provider: both consequences.
-    both = [w for w in preflight.key_warnings(Config(), {}) if "MISTRAL" in w]
+    everywhere = Config().with_model("mistral:mistral-small-2603")
+    both = [w for w in preflight.key_warnings(everywhere, {}) if "MISTRAL" in w]
     assert len(both) == 1
     assert "every check of these escalates to you" in both[0]
     assert "the narration and the folded summary stay empty" in both[0]
 
     # Only the checkers on that provider: nothing about narration.
-    elsewhere = Config(context=ContextConfig(narrate=False, summarizer_model="anthropic:x"))
+    elsewhere = everywhere.model_copy(
+        update={"context": ContextConfig(narrate=False, summarizer_model="anthropic:x")}
+    )
     checkers = [w for w in preflight.key_warnings(elsewhere, {}) if "MISTRAL" in w]
     assert "every check of these escalates" in checkers[0]
     assert "empty" not in checkers[0]
 
     # One of the two: the verb agrees with it.
-    summary_only = Config(context=ContextConfig(narrate=False))
+    summary_only = Config(
+        context=ContextConfig(narrate=False, summarizer_model="mistral:ministral-3b-latest")
+    )
     one = [w for w in preflight.key_warnings(summary_only, {}) if "MISTRAL" in w]
     assert "the folded summary stays empty" in one[0]
     assert "the narration" not in one[0]
 
-    # With the key set there is no warning at all.
-    assert preflight.key_warnings(Config(), {"MISTRAL_API_KEY": "k"}) == []
+    # With the key set there is no warning at all. The default model needs Anthropic's key.
+    assert preflight.key_warnings(everywhere, {"MISTRAL_API_KEY": "k"}) == []
+    assert preflight.key_warnings(Config(), {"ANTHROPIC_API_KEY": "k"}) == []
+    (missing,) = preflight.key_warnings(Config(), {})
+    assert "ANTHROPIC_API_KEY is not set" in missing
 
 
 def test_no_clock_interval_makes_a_session_look_stale():

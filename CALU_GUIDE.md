@@ -360,8 +360,17 @@ empty temporary directory, never in the project: the working directory's `CLAUDE
 otherwise let the project under review write instructions into the prompt of the agent
 reviewing it.
 
-**`calu setup` chooses the model for you** from the credentials it finds, in this order, and
-sets it for every checker, the narrator and the summarizer at once:
+**The default model is Claude Haiku.** A role whose model is left blank -- every checker, the
+narrator, the summarizer, and after a plain `calu setup` that is all of them -- uses
+`anthropic:claude-haiku-5-5`, which needs `ANTHROPIC_API_KEY`. With `claude.use_bedrock` on, the
+blank roles use Haiku through AWS Bedrock's EU inference profile instead
+(`bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0`, called in `eu-central-1` unless
+`AWS_REGION` names another region), with the AWS credentials of the environment. Switching
+Bedrock mode later moves the blank roles with it; a model you set stays.
+
+**`calu config models auto` chooses a model for you** from the credentials it finds, in this
+order, and sets it for every checker, the narrator and the summarizer at once
+(`calu setup --checker-model auto` does the same during setup):
 
 | Found | Model | Effort |
 |---|---|---|
@@ -370,11 +379,11 @@ sets it for every checker, the narrator and the summarizer at once:
 | `FIREWORKS_API_KEY` | Nemotron Lightning, as stay-in-the-loop uses | provider default |
 | `MISTRAL_API_KEY` | `mistral:mistral-medium-latest` | provider default |
 
-It does that on a fresh database only; a second `calu setup` leaves the models you chose since.
-To switch later, or to point everything at one model by hand:
+To point everything at one model by hand, or back at the default:
 
 ```bash
-calu config models auto                     # choose again from the credentials found now
+calu config models auto                     # choose from the credentials found now
+calu config models default                  # store none: Haiku, by the rule above
 calu config models claude:haiku             # one model for every role
 calu config models anthropic:claude-haiku-5-5 --effort low
 ```

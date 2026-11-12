@@ -65,6 +65,8 @@ from calu import __version__, admin, doctor, herd
 from calu.acp import serve_acp
 from calu.attach import attach
 from calu.config import (
+    ANTHROPIC_HAIKU,
+    BEDROCK_EU_HAIKU,
     DEFAULT_ALLOWED_DOMAINS,
     DEFAULT_NETWORK_POLICY,
     EMPTY_CHAT_SUMMARY,
@@ -254,16 +256,24 @@ def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str |
     """Turn `MODEL` or `auto` into a model, an effort and a line saying how it was chosen.
 
     Args:
-        requested: A Pydantic AI model string, "auto", or None (the same as "auto").
+        requested: A Pydantic AI model string, "auto", None (the same as "auto"), or "default"
+            for no stored model, which makes every role use the default model.
         effort: An effort the user asked for, which wins over the detected one.
 
     Returns:
-        (model string, checker effort or None, an explanation for the report).
+        (model string, "" for "default"; checker effort or None; an explanation for the
+        report).
 
     Raises:
         CliError: If "auto" finds no credentials at all; the message says what to add, and that
             `claude:haiku` needs none.
     """
+    if requested == "default":
+        return (
+            "",
+            effort,
+            "the default model: " + ANTHROPIC_HAIKU + ", or in Bedrock mode " + (BEDROCK_EU_HAIKU),
+        )
     if requested and requested != "auto":
         return requested, effort, "as given"
     choice = detect_model(os.environ)  # `main` has loaded calu's env file into it
@@ -296,23 +306,25 @@ async def _has_checker_types(db: Db) -> bool:
 def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
     """Run the first-time setup and store the `session` credential.
 
-    Without `--checker-model` the model is chosen from the credentials this machine has
-    (`calu.model_choice`), and on a fresh database it is set for every checker, the narrator
-    and the summarizer at once; on a database that is already set up the models are left as
-    they are unless `--checker-model` is given.
+    Without `--checker-model` no model is stored: every checker, the narrator and the
+    summarizer then use the default model (`calu.config.default_model`: Haiku on the Anthropic
+    API, or Haiku through AWS Bedrock in an EU region when `claude.use_bedrock` is on), and a
+    database that is already set up keeps its models. `--checker-model M` sets M for every
+    role; `--checker-model auto` picks one from the credentials this machine has
+    (`calu.model_choice`).
 
     Args:
         args: Parsed arguments (`checker_model`).
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential, a password is empty or mismatched, or no
-            model was given and no provider's credentials were found.
+        CliError: If there is no `admin` credential, a password is empty or mismatched, or
+            `--checker-model auto` finds no provider's credentials.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
     explicit = args.checker_model is not None
-    model, effort, how = _chosen_model(args.checker_model, None)
+    model, effort, how = _chosen_model(args.checker_model, None) if explicit else ("", None, "")
     url = load_credential(store, "admin", "Admin password: ")
     try:
         admin_url = url.decode()
@@ -326,14 +338,21 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
             conn = await connect(admin_url)
             try:
                 db = Db(conn)
-                # Models are set for every role only on a fresh database, or when asked for:
-                # running `calu setup` again must not overwrite models someone chose (D129).
+                # Models are stored only when asked for; otherwise every role uses the default
+                # model (D194), and a second `calu setup` leaves chosen models alone (D129).
                 fresh = not await _has_checker_types(db)
                 report, session_url = await setup(conn, admin_url, model)
-                if fresh or explicit:
+                if explicit:
                     await admin.set_all_models(db, model, effort)
                     report += "\nmodels of every checker, the narrator and the summarizer: "
                     report += f"{model}" + (f", effort {effort}" if effort else "") + f" ({how})"
+                elif fresh:
+                    report += (
+                        "\nmodels: the default for every role -- "
+                        f"{ANTHROPIC_HAIKU} (needs ANTHROPIC_API_KEY in {user_env_file()}), or "
+                        f"{BEDROCK_EU_HAIKU} once `calu config set claude.use_bedrock true` is"
+                        " set. `calu config models M` chooses another one."
+                    )
                 return report, session_url
             finally:
                 await conn.close()
@@ -1798,7 +1817,7 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
             changes = await admin.set_all_models(db, model, effort, args.project)
             scope = f"the {args.project} project" if args.project else "the global scope"
             return "\n".join(
-                [f"every model role of {scope} now uses {model} ({how}):"]
+                [f"every model role of {scope} now uses {model or 'the default model'} ({how}):"]
                 + [f"  {line}" for line in changes]
                 + ["A running session picks the new models up at its next check."]
             )
@@ -2243,9 +2262,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--checker-model",
         default=None,
-        help="model of every checker, the narrator and the summarizer; left out, it is chosen "
-        "from the credentials found: AWS Bedrock, then ANTHROPIC_API_KEY, FIREWORKS_API_KEY, "
-        "MISTRAL_API_KEY",
+        help="model of every checker, the narrator and the summarizer; left out, they use the "
+        "default (Haiku on the Anthropic API, or through AWS Bedrock in Bedrock mode); 'auto' "
+        "chooses from the credentials found: AWS Bedrock, then ANTHROPIC_API_KEY, "
+        "FIREWORKS_API_KEY, MISTRAL_API_KEY",
     )
     p.set_defaults(handler=cmd_setup)
 
@@ -2438,7 +2458,8 @@ def build_parser() -> argparse.ArgumentParser:
         "list prints every setting with its effective value, where that value comes from and "
         "its default; get prints what a scope stores, which is `{}` until something is set. "
         "`models MODEL` points every checker, the narrator and the summarizer at one model; "
-        "`models auto` chooses it from the credentials found. "
+        "`models auto` chooses it from the credentials found, `models default` stores none, so "
+        "that Haiku on the Anthropic API (or through Bedrock in Bedrock mode) is used. "
         "add and remove change one entry of a list setting and keep the others, e.g. "
         "`calu config add claude.sandbox.deny_read ~/.ssh`; set replaces the whole list."
     )

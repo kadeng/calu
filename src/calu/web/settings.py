@@ -525,6 +525,8 @@ async def _save_field(
             result.count += 1
     elif space == "checker":
         name, _, column = rest.partition(":")
+        if new is None and column == "model":
+            new = ""  # no model of its own: the default model
         if new is None:
             raise ValueError("a value is needed")
         if new != item.value:
