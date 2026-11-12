@@ -586,7 +586,7 @@ work for a developer without the owner. In short:
 | 4. Smaller gaps | **done** (by design, or D44) | -- |
 | 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
-| 7. Honesty enforcement | built, off; **under redesign**: it cannot hold for changes made by a command or at scale | the owner's answers to the redesign proposal |
+| 7. Honesty enforcement | **being rebuilt** on `feature/honesty-certification` (D196: trusted commits in the database, computed state, honesty review, enforcement on running and committing) | -- |
 | 8. Splitting `session.py` | **done**: `run_state.py`, `escalations.py` (EscalationDesk), `gate.py` (StepGate), `write_sets.py`, `recorder.py`, `steps.py`; `session.py` holds the lifecycle, runner events and wiring (about 2,500 lines). Still in it: the subagent result review and the honesty bookkeeping | -- |
 | 9. Auto mode by default | **decided** (Q22): calu does not override Claude Code's permission mode | -- |
 
