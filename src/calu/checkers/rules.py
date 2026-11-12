@@ -337,6 +337,18 @@ class Rules:
                 )
                 for line in command.splitlines():
                     self._deny_command(line.strip(), outcome)
+            if re.search(
+                r"(?m)(^|[\s\"'])name:\s*[\"']?calu-db([\"'\s\\]|$)", command
+            ) and re.search(
+                r"(^|[\s;&|(])(docker|podman|nerdctl|docker-compose|podman-compose)\s", command
+            ):
+                # A compose file given on stdin (`docker compose -f - down <<EOF` or a pipe)
+                # that is calu's: the text is in the command (D177).
+                all_allowed = False
+                outcome.ask.append(
+                    f"`{command[:60]}` gives a container tool a compose file for calu's own "
+                    "database (built-in, D171, D177)."
+                )
             for compose_file in re.findall(r"(?:^|\s)COMPOSE_FILE=['\"]?([^\s'\":]+)", command):
                 # `COMPOSE_FILE=local-compose.yml docker compose down -v` (D176)
                 candidate = _absolute(compose_file, cwd)

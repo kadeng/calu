@@ -166,7 +166,9 @@ def switches_branch(command: str) -> bool:
         True if a `git` word is followed, after git's global options and their values, by
         `checkout`, `switch` or `worktree`.
     """
-    words = re.split(r"[\s;&|()]+", command)
+    # Quotes and backticks removed first: `"git" checkout x` and `` `git checkout x` `` switch
+    # branches too (D177).
+    words = re.split(r"[\s;&|()]+", re.sub(r"[\"'`\\]", "", command))
     for index, word in enumerate(words):
         if word != "git" and not word.endswith("/git"):
             continue

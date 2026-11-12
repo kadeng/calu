@@ -1159,3 +1159,29 @@ def test_here_strings_pipes_and_compose_file(tmp_path: Path, command: str, asks:
         "name: calu-db\n", encoding="utf-8"
     )
     assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("docker compose -f - down -v <<EOF\nname: calu-db\nservices: {}\nEOF", True),
+        ("printf 'name: calu-db\\n' | docker compose -f - down -v", True),
+        ("docker compose -f - up <<EOF\nname: shop\nEOF", False),
+        ("cat > notes.md <<EOF\nname: calu-db\nEOF", False),
+    ],
+)
+def test_a_compose_file_on_stdin_for_calus_database_asks(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
+    """D177: `docker compose -f -` reads the compose file from the command itself."""
+    rules = Rules.from_texts(tmp_path, {})
+    assert bool(rules.evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+def test_a_quoted_or_backticked_branch_switch_is_seen() -> None:
+    """D177: `"git" checkout x` and `` `git checkout x` `` switch branches too."""
+    from calu.session import switches_branch
+
+    for command in ('"git" checkout x && python m.py', "`git checkout x`", "git 'checkout' x"):
+        assert switches_branch(command), command
+    assert not switches_branch("git status")
