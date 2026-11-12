@@ -122,15 +122,34 @@ async def test_read_lines_sends_messages_until_quit(monkeypatch):
     async def send(text: str) -> None:
         sent.append(text)
 
-    await read_lines(send)
+    assert await read_lines(send) == "quit"
     assert sent == ["first", "second"]
 
 
 async def test_read_lines_ends_at_end_of_input(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("only\n"))
     sent: list[Event] = []
-    await read_lines(lambda text: _collect(sent, text))
+    # cs5: the caller has to tell a closed stdin from a quit command, because only the
+    # second one means "stop now".
+    assert await read_lines(lambda text: _collect(sent, text)) == "eof"
     assert sent == ["only"]
+
+
+async def test_a_rearmed_idle_signal_waits_for_the_next_turn():
+    """cs5: a message sent after the session was idle is waited for, not the old idleness."""
+    idle = IdleSignal()
+    await idle(SessionState(state="running"))
+    await idle(SessionState(state="idle"))
+    with anyio.fail_after(1):
+        await idle.wait()
+    idle.rearm()
+    with anyio.move_on_after(0.05) as scope:
+        await idle.wait()
+    assert scope.cancelled_caught, "the earlier idleness must not count"
+    await idle(SessionState(state="running"))
+    await idle(SessionState(state="idle"))
+    with anyio.fail_after(1):
+        await idle.wait()
 
 
 async def _collect(sink: list, text: str) -> None:

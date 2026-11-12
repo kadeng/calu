@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import json
+import secrets
 
 import psycopg
 import pytest
@@ -77,19 +79,29 @@ async def test_checker_change_bumps_version_and_is_audited(db_url: str) -> None:
 async def _session_with_escalation(conn: psycopg.AsyncConnection) -> int:
     """Create a session and an open escalation on a `calu_session` connection.
 
-    It goes through `calu_start_session` and sets `calu.session_id`, like
-    `DatabaseSessionStore.start` does, because row-level security (migration 0015) refuses a
-    direct insert of a `sessions` row: the id does not exist until the insert happens.
+    It goes through `calu_start_session` and binds the connection with the session id and the
+    session key, like `DatabaseSessionStore.start` does, because row-level security refuses a
+    direct insert of a `sessions` row (migration 0015) and gives access only to the session
+    whose key the connection holds (migration 0025).
     """
-    cur = await conn.execute("INSERT INTO hosts (hostname) VALUES ('h') RETURNING id")
+    cur = await conn.execute(
+        "INSERT INTO hosts (hostname) VALUES ('h')"
+        " ON CONFLICT (hostname) DO UPDATE SET last_seen = now() RETURNING id"
+    )
     host = await cur.fetchone()
     assert host is not None
+    key = secrets.token_urlsafe(16)
     cur = await conn.execute(
-        "SELECT calu_start_session(NULL, %s, 'u', '/p', NULL, 1, NULL)", (host[0],)
+        "SELECT calu_start_session(NULL, %s, 'u', '/p', NULL, 1, NULL, %s)",
+        (host[0], hashlib.sha256(key.encode()).hexdigest()),
     )
     session = await cur.fetchone()
     assert session is not None
-    await conn.execute("SELECT set_config('calu.session_id', %s, false)", (str(session[0]),))
+    await conn.execute(
+        "SELECT set_config('calu.session_id', %s, false),"
+        " set_config('calu.session_key', %s, false)",
+        (str(session[0]), key),
+    )
     cur = await conn.execute(
         "INSERT INTO escalations (session_id, reason) VALUES (%s, 'why') RETURNING id",
         (session[0],),
@@ -159,23 +171,23 @@ async def test_the_session_role_checks_a_client_token_without_reading_any(db_url
     conn = await connect(db_url)
     try:
         _, session_url = await setup(conn, db_url, "test:model")
-        db = Db(conn)
-        store = DatabaseSessionStore(db)
-        mine = await store.start(
+    finally:
+        await conn.close()
+    owner = await connect(db_url)
+    session = await connect(session_url)
+    unbound = await connect(session_url)
+    try:
+        db = Db(owner)
+        mine = await DatabaseSessionStore(Db(session)).start(
             SessionIdentity(hostname="box", os_user="u", directory="/w", pid=1, os="Linux")
         )
-        other_store = DatabaseSessionStore(db)
-        other = await other_store.start(
+        other = await DatabaseSessionStore(db).start(
             SessionIdentity(hostname="box", os_user="u", directory="/w", pid=2, os="Linux")
         )
         _, token = await herd.mint_token(db, mine, "an editor")
         revoked_id, revoked = await herd.mint_token(db, mine, "an old editor")
         assert await herd.revoke_token(db, revoked_id)
         _, foreign = await herd.mint_token(db, other, "another session")
-    finally:
-        await conn.close()
-    session = await connect(session_url)
-    try:
         for token_value, expected in (
             (token, True),
             (revoked, False),
@@ -186,8 +198,114 @@ async def test_the_session_role_checks_a_client_token_without_reading_any(db_url
                 "SELECT calu_client_token_ok(%s::uuid, %s)", (mine, token_hash(token_value))
             )
             assert await cur.fetchone() == (expected,), token_value
+        # A connection that holds the login but not this session's key learns nothing, not
+        # even about a valid token, and neither does the session about another session's.
+        for conn_, session_id, token_value in ((unbound, mine, token), (session, other, foreign)):
+            cur = await conn_.execute(
+                "SELECT calu_client_token_ok(%s::uuid, %s)", (session_id, token_hash(token_value))
+            )
+            assert await cur.fetchone() == (False,)
     finally:
+        await owner.close()
         await session.close()
+        await unbound.close()
+
+
+async def test_the_session_login_alone_cannot_act_for_another_session(db_url: str) -> None:
+    """sd0: naming a session's id is not enough; the connection must hold that session's key.
+
+    The attacker has the shared `calu_session` login (a second host of the herd, a compromised
+    session process) and knows the victim's session id. Before migration 0025 setting
+    `calu.session_id` gave it the victim's rows, a forged client token and with it an allowed
+    escalation.
+    """
+    conn = await connect(db_url)
+    try:
+        _, session_url = await setup(conn, db_url, "test:model")
+    finally:
+        await conn.close()
+    owner = await connect(db_url)
+    victim_conn = await connect(session_url)
+    attacker = await connect(session_url)
+    try:
+        victim = DatabaseSessionStore(Db(victim_conn))
+        victim_id = await victim.start(
+            SessionIdentity(hostname="box", os_user="u", directory="/w", pid=1, os="Linux")
+        )
+        step = await victim.add_step(StepRow(seq=1, tool_name="Bash", tool_input={}))
+        escalation = await victim.open_escalation("deploy?", {"rendered": "x"}, step)
+        _, real_token = await herd.mint_token(Db(owner), victim_id, "the victim's editor")
+
+        async def refused_everywhere() -> None:
+            cur = await attacker.execute("SELECT count(*) FROM sessions")
+            assert await cur.fetchone() == (0,)
+            cur = await attacker.execute("SELECT count(*) FROM escalations")
+            assert await cur.fetchone() == (0,)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await attacker.execute(
+                    "INSERT INTO client_tokens (session_id, token_sha256, label)"
+                    " VALUES (%s, 'forged', 'me')",
+                    (victim_id,),
+                )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await attacker.execute(
+                    "INSERT INTO steps (session_id, seq, tool_name, tool_input)"
+                    " VALUES (%s, 99, 'Bash', '{}')",
+                    (victim_id,),
+                )
+            # Even with the hash of a token that really belongs to the victim.
+            cur = await attacker.execute(
+                "SELECT calu_client_decision(%s, %s::uuid, %s, 'allowed', 'forged', 'me')",
+                (escalation, victim_id, token_hash(real_token)),
+            )
+            assert await cur.fetchone() == (False,)
+            cur = await attacker.execute("SELECT calu_cancel_escalation(%s, 'x')", (escalation,))
+            assert await cur.fetchone() == (False,)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await attacker.execute(
+                    "SELECT calu_session_setting_change(%s::uuid, 'auto_escalate',"
+                    " '{}'::jsonb, '{}'::jsonb, 'an operator')",
+                    (victim_id,),
+                )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await attacker.execute("SELECT calu_revoke_session_tokens(%s::uuid)", (victim_id,))
+
+        # Without any binding, with the victim's id alone, and with the id plus a wrong key.
+        await refused_everywhere()
+        await attacker.execute("SELECT set_config('calu.session_id', %s, false)", (victim_id,))
+        await refused_everywhere()
+        await attacker.execute("SELECT set_config('calu.session_key', 'guessed', false)")
+        await refused_everywhere()
+        # A session of its own does not help either: it is bound to that one.
+        await attacker.execute("SELECT set_config('calu.session_key', '', false)")
+        own = DatabaseSessionStore(Db(attacker))
+        await own.start(SessionIdentity(hostname="box", os_user="u", directory="/w", pid=2))
+        cur = await attacker.execute(
+            "SELECT calu_client_decision(%s, %s::uuid, %s, 'allowed', 'forged', 'me')",
+            (escalation, victim_id, token_hash(real_token)),
+        )
+        assert await cur.fetchone() == (False,)
+        cur = await attacker.execute("SELECT calu_cancel_escalation(%s, 'x')", (escalation,))
+        assert await cur.fetchone() == (False,)
+        cur = await attacker.execute("SELECT count(*) FROM sessions")
+        assert await cur.fetchone() == (1,)
+
+        # Nothing of it reached the victim: the escalation is open, no token was revoked, and
+        # the hash of the key is not readable by the role.
+        cur = await owner.execute("SELECT state FROM escalations WHERE id = %s", (escalation,))
+        assert await cur.fetchone() == ("open",)
+        cur = await owner.execute("SELECT count(*) FROM client_tokens WHERE revoked")
+        assert await cur.fetchone() == (0,)
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await attacker.execute("SELECT key_sha256 FROM session_keys")
+        # The victim itself still works, including the calls that were refused above.
+        await victim.add_client_token(token_hash("printed"), "ws://127.0.0.1:1")
+        assert await victim.decide_escalation(escalation, True, "ok", "the victim's editor")
+        await victim.end("stopped")  # revokes its own tokens through the same guard
+    finally:
+        await owner.close()
+        await victim_conn.close()
+        await attacker.close()
 
 
 async def test_a_session_records_its_own_setting_changes_and_cannot_forge_others(
@@ -236,8 +354,9 @@ async def test_a_session_records_its_own_setting_changes_and_cannot_forge_others
             await session.execute(
                 b"INSERT INTO audit_log (table_name, action) VALUES ('config', 'INSERT')"
             )
-        # ... and the function refuses a session that does not exist.
-        with pytest.raises(psycopg.errors.RaiseException):
+        # ... and the function refuses every session but its own (migration 0025), which
+        # includes one that does not exist.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
             await session.execute(
                 b"SELECT calu_session_setting_change("
                 b"'00000000-0000-0000-0000-000000000000'::uuid, 'auto_escalate',"

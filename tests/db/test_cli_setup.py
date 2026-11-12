@@ -88,3 +88,44 @@ async def test_a_mismatched_session_password_leaves_the_database_alone(
         assert row == (0,), "the database was not touched"
     finally:
         await conn.close()
+
+
+async def test_project_add_records_the_directory_it_was_given(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ga3: `calu project add DIR` is what lets `calu run` in DIR find its project."""
+    import socket
+
+    from calu.setup import setup
+    from calu.store.projects import project_for_directory
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+    finally:
+        await conn.close()
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, None)
+    project_dir = tmp_path / "demo-src"
+    project_dir.mkdir()
+
+    def add(*argv: str) -> int:
+        return cli.main(
+            ["project", "add", *argv], store_factory=lambda: cast(CredentialStore, store)
+        )
+
+    assert await anyio.to_thread.run_sync(lambda: add(str(project_dir), "--name", "demo")) == 0
+    assert f"`calu run` in {project_dir} or below uses it" in capsys.readouterr().out
+    # A project named without a directory is not tied to wherever the command happened to run.
+    assert await anyio.to_thread.run_sync(lambda: add("--name", "loose")) == 0
+    assert "use it with `calu run --project loose`" in capsys.readouterr().out
+
+    conn = await connect(db_url)
+    try:
+        db = Db(conn)
+        host = socket.gethostname()
+        assert await project_for_directory(db, project_dir / "src", host) == "demo"
+        cur = await conn.execute("SELECT directory FROM projects WHERE name = 'loose'")
+        assert await cur.fetchone() == (None,)
+    finally:
+        await conn.close()

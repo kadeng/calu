@@ -86,6 +86,7 @@ from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, run_session
 from calu.setup import enable_operator_login, setup
+from calu.store.projects import register_directory
 
 
 class CliError(Exception):
@@ -513,6 +514,15 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         raise CliError("--background-timeout needs --batch and a number of seconds above 0")
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print("Type a message for Claude; /quit ends the session.")
+    if "session" in store and not store.needs_password("session"):
+        # REQUIREMENTS 17 on the read path as well (D115 guards the write path): an entry
+        # without a password is unauthenticated, so whatever can write the credential file
+        # could point the session at another database without anybody being asked anything.
+        raise CliError(
+            "the 'session' credential is stored without a password, and starting a session is "
+            "password protected by design (REQUIREMENTS 17); store it again with "
+            "`calu credential set session`"
+        )
     url = load_credential(store, "session", "Session password: ")
     try:
         code = asyncio.run(run_session(url, options))
@@ -1563,11 +1573,12 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
         psycopg.Error: On database errors.
     """
     name = args.name
-    if args.action == "add" and not name:
+    directory: Path | None = None
+    if args.action == "add" and (args.directory or not name):
         directory = Path(args.directory or ".").resolve()
         if not directory.is_dir():
             raise CliError(f"{directory} is not a directory")
-        name = directory.name
+        name = name or directory.name
 
     async def work(db: Db) -> str:
         """Add a project, list them, or change one's network policy.
@@ -1593,8 +1604,15 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
                 "session applies it when it next starts"
             )
         row = await admin.add_project(db, name or "", args.git_remote, args.network)
+        if directory is not None:
+            await register_directory(db, row.name, directory, socket.gethostname())
         report = [
-            f"added project {row.name!r}; use it with `calu run --project {row.name}`",
+            f"added project {row.name!r}; "
+            + (
+                f"`calu run` in {directory} or below uses it, elsewhere `--project {row.name}`"
+                if directory is not None
+                else f"use it with `calu run --project {row.name}`"
+            ),
             f"network policy {row.network_policy}: "
             + {
                 "none": "its commands reach nothing",

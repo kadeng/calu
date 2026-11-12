@@ -1,5 +1,6 @@
 """`calu run` against the test database: one session, with an operator resolving an escalation."""
 
+import functools
 import json
 from pathlib import Path
 
@@ -380,3 +381,476 @@ async def test_a_batch_run_waits_for_claude_codes_background_tasks(
     output = capsys.readouterr().out
     assert "1 background task(s) still running" in output
     assert "The build finished." in output
+
+
+# ------------------------------------------------------------------ lost connections (sd1, cs3)
+
+
+async def test_a_session_survives_the_loss_of_both_database_connections(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sd1/cs3: a restarted database must not end an unattended run.
+
+    Both connections of the session are ended by the server while the session waits for an
+    operator, which is what a restart of PostgreSQL does to every session of a herd. The
+    session reconnects, binds the new connection to its row again, sees the operator's answer
+    and finishes; nothing of its history is missing.
+    """
+    monkeypatch.setattr("calu.db.connection.RECONNECT_FIRST_S", 0.05)
+    monkeypatch.setattr("calu.db.notify.RECONNECT_FIRST_S", 0.05)
+    session_url = await prepare(db_url, tmp_path)
+    codes: list[int] = []
+
+    async def run() -> None:
+        codes.append(
+            await run_session(
+                bytearray(session_url.encode()),
+                RunOptions(workspace=tmp_path, prompt="have a look", interactive=False),
+                runner_factory=lambda workspace, _config, _hidden: FakeRunner(SCRIPT, workspace),
+                checker_models=fake_models(),
+            )
+        )
+
+    async def restart_then_resolve() -> None:
+        owner = await connect(db_url)
+        try:
+            with anyio.fail_after(20):
+                while True:
+                    cur = await owner.execute("SELECT id FROM escalations WHERE state = 'open'")
+                    row = await cur.fetchone()
+                    if row is not None:
+                        break
+                    await anyio.sleep(0.05)
+            cur = await owner.execute(
+                "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
+                " WHERE usename = 'calu_session' AND datname = current_database()"
+            )
+            assert await cur.fetchone() == (2,), "the session holds two connections"
+            await anyio.sleep(0.3)
+            # A rule tightened while the session could not hear about it.
+            await owner.execute(
+                "INSERT INTO config (scope, scope_id, key, value) VALUES ('global', '', %s, %s)"
+                " ON CONFLICT (scope, scope_id, key) DO UPDATE SET value = excluded.value",
+                (
+                    SETTINGS_KEY,
+                    json.dumps(
+                        {
+                            "claude": {"sandbox": {"enabled": False}},
+                            "auto_escalate": {"edits": True},
+                        }
+                    ),
+                ),
+            )
+            await anyio.sleep(1.5)
+            await owner.execute(
+                "SELECT calu_resolve_escalation(%s, 'allowed', 'ship it')", (row[0],)
+            )
+        finally:
+            await owner.close()
+
+    with anyio.fail_after(60):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(restart_then_resolve)
+            tg.start_soon(run)
+    assert codes == [0]
+    output = capsys.readouterr().out
+    assert "the database connection is lost" in output
+    assert "the database connection is back" in output
+    assert "All done." in output
+    # The change made during the outage reached the session without a notification.
+    assert "what waits for a human: edits" in output
+
+    owner = await connect(db_url)
+    try:
+        cur = await owner.execute("SELECT state, ended_at IS NOT NULL FROM sessions")
+        assert await cur.fetchall() == [("stopped", True)]
+        cur = await owner.execute(
+            "SELECT seq, tool_name, decision, result_summary FROM steps ORDER BY seq"
+        )
+        assert await cur.fetchall() == [
+            (1, "Bash", "pass", "a.py"),
+            (2, "Bash", "escalate", "shipped"),
+        ]
+        cur = await owner.execute("SELECT number, answer FROM turns")
+        assert await cur.fetchall() == [(1, "All done.")]
+    finally:
+        await owner.close()
+
+
+def test_the_calu_process_cannot_be_read_by_other_processes_of_the_user() -> None:
+    """cs2: what calu keeps in memory to reconnect is out of reach of same-user processes."""
+    import subprocess
+    import sys
+
+    code = (
+        "import ctypes, os\n"
+        "from calu.run import harden_process\n"
+        "libc = ctypes.CDLL(None)\n"
+        "before = libc.prctl(3, 0, 0, 0, 0)\n"
+        "assert harden_process()\n"
+        "print(before, libc.prctl(3, 0, 0, 0, 0), os.stat('/proc/self/environ').st_uid)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    before, after, owner_uid = done.stdout.split()
+    # PR_GET_DUMPABLE: 1 before, 0 after; the /proc files then belong to root.
+    assert (before, after, owner_uid) == ("1", "0", "0")
+
+
+# ------------------------------------------------------------------ the project (ga3)
+
+
+async def test_an_unknown_project_is_an_error_at_the_start(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ga3: a typo in `--project` must not run the session on the global settings alone."""
+    session_url = await prepare(db_url, tmp_path)
+    owner = await connect(db_url)
+    try:
+        await admin.add_project(Db(owner), "payments")
+    finally:
+        await owner.close()
+    built: list[Path] = []
+
+    def runner_factory(workspace: Path, _config: object, _hidden: object) -> FakeRunner:
+        built.append(workspace)
+        return FakeRunner(CHAT_SCRIPT, workspace)
+
+    code = await run_session(
+        session_url,
+        RunOptions(workspace=tmp_path, project="payment", prompt="go", interactive=False),
+        runner_factory=runner_factory,
+        checker_models=fake_models(),
+    )
+    assert code == 1 and built == []
+    said = capsys.readouterr().err
+    assert "no project named 'payment'" in said and "payments" in said
+    owner = await connect(db_url)
+    try:
+        cur = await owner.execute("SELECT count(*) FROM sessions")
+        assert await cur.fetchone() == (0,)
+    finally:
+        await owner.close()
+
+
+async def test_a_run_in_a_registered_directory_gets_its_project(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ga3: the quick start (`calu project add .`, then `calu run`) runs with the project."""
+    import socket
+
+    from calu.store.projects import register_directory
+
+    session_url = await prepare(db_url, tmp_path)
+    workspace = tmp_path / "backend"
+    workspace.mkdir()
+    owner = await connect(db_url)
+    try:
+        db = Db(owner)
+        await admin.add_project(db, "demo")
+        assert await register_directory(db, "demo", tmp_path, socket.gethostname())
+        # A setting only the project has: every command waits for a human.
+        await admin.set_setting(db, "auto_escalate.commands", True, project="demo")
+    finally:
+        await owner.close()
+
+    codes: list[int] = []
+
+    async def run() -> None:
+        codes.append(
+            await run_session(
+                session_url,
+                RunOptions(workspace=workspace, prompt="go", interactive=False),
+                runner_factory=lambda w, _c, _h: FakeRunner(CHAT_SCRIPT, w),
+                checker_models=fake_models(),
+            )
+        )
+
+    with anyio.fail_after(60):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(resolve_as_operator, db_url, tmp_path)
+            tg.start_soon(run)
+    assert codes == [0]
+    output = capsys.readouterr().out
+    assert "[project] demo (registered for this directory)" in output
+    owner = await connect(db_url)
+    try:
+        cur = await owner.execute(
+            "SELECT p.name FROM sessions s JOIN projects p ON p.id = s.project_id"
+        )
+        assert await cur.fetchall() == [("demo",)]
+        # The project's setting was in force: `ls`, which the checker passes, was escalated.
+        cur = await owner.execute("SELECT count(*) FROM escalations")
+        assert await cur.fetchone() == (1,)
+    finally:
+        await owner.close()
+
+
+async def test_a_run_outside_every_registered_directory_says_that_no_project_applies(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    session_url = await prepare(db_url, tmp_path)
+    code = await run_session(
+        session_url,
+        RunOptions(workspace=tmp_path, prompt="go", interactive=False),
+        runner_factory=lambda w, _c, _h: FakeRunner(CHAT_SCRIPT, w),
+        checker_models=fake_models(),
+    )
+    assert code == 0
+    assert "[project] none" in capsys.readouterr().out
+
+
+async def test_projects_are_found_by_the_nearest_registered_directory(
+    db_url: str, tmp_path: Path
+) -> None:
+    from calu.store.projects import AmbiguousProject, project_for_directory, register_directory
+
+    session_url = await prepare(db_url, tmp_path)
+    owner = await connect(db_url)
+    session = await connect(session_url)
+    try:
+        db = Db(owner)
+        for name in ("shop", "backend", "twin", "elsewhere"):
+            await admin.add_project(db, name)
+        assert await register_directory(db, "shop", Path("/src/shop"), "host-a")
+        assert await register_directory(db, "backend", Path("/src/shop/backend"), "host-a")
+        assert await register_directory(db, "elsewhere", Path("/src/other"), "host-b")
+        assert not await register_directory(db, "missing", Path("/x"), "host-a")
+        # The session role reads the registrations; it needs no more than that.
+        as_session = Db(session)
+        find = project_for_directory
+        assert await find(as_session, Path("/src/shop"), "host-a") == "shop"
+        assert await find(as_session, Path("/src/shop/web/app"), "host-a") == "shop"
+        assert await find(as_session, Path("/src/shop/backend/api"), "host-a") == "backend"
+        assert await find(as_session, Path("/src/shopping"), "host-a") is None
+        assert await find(as_session, Path("/src/other"), "host-a") is None  # another host
+        await register_directory(db, "twin", Path("/src/shop"), "host-a")
+        with pytest.raises(AmbiguousProject, match="shop, twin"):
+            await find(as_session, Path("/src/shop/web"), "host-a")
+        # The nearer registration still wins, unambiguously.
+        assert await find(as_session, Path("/src/shop/backend"), "host-a") == "backend"
+    finally:
+        await owner.close()
+        await session.close()
+
+
+# ------------------------------------------------------------------ fork points (sd3)
+
+
+async def test_the_session_role_finds_a_fork_point(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """sd3: `calu run --resume X --fork-before-turn N` asks on a `calu_session` connection.
+
+    Row-level security hides every row from that connection before its own session exists, so
+    the direct query found nothing and the command the web interface offers always failed.
+    """
+    from calu.context.turns import TurnRecord
+    from calu.run import Console, _fork_point
+    from calu.store import DatabaseSessionStore, SessionIdentity
+
+    session_url = await prepare(db_url, tmp_path)
+    earlier = await connect(session_url)
+    try:
+        store = DatabaseSessionStore(Db(earlier))
+        await store.start(SessionIdentity(hostname="box", os_user="u", directory="/w", pid=1))
+        await store.set_claude_session("claude-xyz")
+        for number, (prompt, last) in enumerate([("p1", "a1"), ("p2", "a2")], start=1):
+            await store.save_turn(
+                TurnRecord(
+                    index=number,
+                    user_inputs=[f"turn {number}"],
+                    answer="ok",
+                    prompt_uuid=prompt,
+                    last_entry_uuid=last,
+                )
+            )
+    finally:
+        await earlier.close()
+
+    fresh = await connect(session_url)
+    try:
+        options = RunOptions(workspace=tmp_path, resume_id="claude-xyz", fork_before_turn=2)
+        fork = await _fork_point(Db(fresh), options, Console())
+        assert fork is not None
+        assert fork.resume_at == "a1" and fork.drops_turn == "p2"
+        # A turn that does not exist is reported with both possible causes.
+        missing = RunOptions(workspace=tmp_path, resume_id="claude-xyz", fork_before_turn=7)
+        assert await _fork_point(Db(fresh), missing, Console()) is None
+        assert "knows no conversation with that Claude session id or no such turn" in (
+            capsys.readouterr().out
+        )
+    finally:
+        await fresh.close()
+
+
+# ------------------------------------------------------------------ end of input (cs5)
+
+
+async def test_a_closed_stdin_does_not_stop_a_session_that_has_work(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cs5: `echo "$PW" | calu run -p "..."` without `--batch` must finish the prompt.
+
+    stdin is at its end as soon as the password was read. The session used to be stopped at
+    that moment, seconds into its first turn, and the command exited 0.
+    """
+    import io
+
+    session_url = await prepare(db_url, tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    codes: list[int] = []
+
+    async def run() -> None:
+        codes.append(
+            await run_session(
+                session_url,
+                RunOptions(workspace=tmp_path, prompt="have a look", interactive=True),
+                runner_factory=lambda w, _c, _h: FakeRunner(SCRIPT, w),
+                checker_models=fake_models(),
+            )
+        )
+
+    with anyio.fail_after(60):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(resolve_as_operator, db_url, tmp_path)
+            tg.start_soon(run)
+    assert codes == [0]
+    captured = capsys.readouterr()
+    assert "stdin closed; waiting for Claude to finish" in captured.err
+    assert "All done." in captured.out
+    owner = await connect(db_url)
+    try:
+        cur = await owner.execute("SELECT seq, decision, result_summary FROM steps ORDER BY seq")
+        assert await cur.fetchall() == [(1, "pass", "a.py"), (2, "escalate", "shipped")]
+    finally:
+        await owner.close()
+
+
+async def test_a_closed_stdin_ends_a_session_that_was_given_nothing(
+    db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ctrl-D in an interactive session without a message still ends it at once."""
+    import io
+
+    session_url = await prepare(db_url, tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    with anyio.fail_after(30):
+        code = await run_session(
+            session_url,
+            RunOptions(workspace=tmp_path, interactive=True, serve=False),
+            runner_factory=lambda w, _c, _h: FakeRunner(CHAT_SCRIPT, w),
+            checker_models=fake_models(),
+        )
+    assert code == 0
+
+
+# ------------------------------------------------------------------ the heartbeat (sd4)
+
+
+async def test_the_heartbeat_does_not_depend_on_the_clock_watch(
+    db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sd4: with the clock watch switched off a live session still says that it is running."""
+    from calu import herd
+
+    session_url = await prepare(db_url, tmp_path)
+    owner = await connect(db_url)
+    await owner.execute(
+        "UPDATE config SET value = value || %s::jsonb WHERE key = %s",
+        (json.dumps({"clock": {"check_interval_s": 0}}), SETTINGS_KEY),
+    )
+    monkeypatch.setattr(herd, "HEARTBEAT_S", 0.1)
+    beats: list[bool] = []
+
+    async def watch_then_resolve() -> None:
+        with anyio.fail_after(20):
+            while True:
+                cur = await owner.execute("SELECT id FROM escalations WHERE state = 'open'")
+                row = await cur.fetchone()
+                if row is not None:
+                    break
+                await anyio.sleep(0.05)
+        await anyio.sleep(0.6)
+        cur = await owner.execute("SELECT last_seen > started_at FROM sessions")
+        stamped = await cur.fetchone()
+        assert stamped is not None
+        beats.append(bool(stamped[0]))
+        await owner.execute("SELECT calu_resolve_escalation(%s, 'allowed', '')", (row[0],))
+
+    try:
+        with anyio.fail_after(60):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(watch_then_resolve)
+                tg.start_soon(
+                    functools.partial(
+                        run_session,
+                        session_url,
+                        RunOptions(workspace=tmp_path, prompt="go", interactive=False),
+                        runner_factory=lambda w, _c, _h: FakeRunner(SCRIPT, w),
+                        checker_models=fake_models(),
+                    )
+                )
+    finally:
+        await owner.close()
+    assert beats == [True]
+    assert herd.STALE_AFTER_S >= 3 * 30.0
+
+
+async def test_settings_that_cannot_be_reloaded_hold_every_checked_step(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sd2: a session that knows its settings are stale waits for a human instead of going on.
+
+    An operator changes the settings while the session runs, and the stored value cannot be
+    applied (here: invalid). The session used to log a warning on its host and keep judging
+    steps by the old settings. Now it says so to its clients and escalates every checked step
+    until a reload succeeds.
+    """
+    monkeypatch.setattr("calu.store.config.RELOAD_RETRY_FIRST_S", 0.05)
+    session_url = await prepare(db_url, tmp_path)
+    codes: list[int] = []
+
+    async def run() -> None:
+        codes.append(
+            await run_session(
+                session_url,
+                RunOptions(workspace=tmp_path, prompt="have a look", interactive=False),
+                runner_factory=lambda workspace, _config, _hidden: FakeRunner(SCRIPT, workspace),
+                checker_models=fake_models(),
+            )
+        )
+
+    async def break_then_repair() -> None:
+        owner = await connect(db_url)
+        try:
+            with anyio.fail_after(20):
+                while True:
+                    cur = await owner.execute("SELECT id FROM escalations WHERE state = 'open'")
+                    row = await cur.fetchone()
+                    if row is not None:
+                        break
+                    await anyio.sleep(0.05)
+            await owner.execute(
+                "UPDATE config SET value = %s WHERE key = %s",
+                (json.dumps({"context": {"fold_every": 0}}), SETTINGS_KEY),
+            )
+            await anyio.sleep(1.0)
+            held = capsys.readouterr().out
+            assert "every checked step waits for a human until a reload succeeds" in held
+            assert "what waits for a human: commands, edits, subagents" in held
+            await owner.execute(
+                "UPDATE config SET value = %s WHERE key = %s",
+                (json.dumps({"claude": {"sandbox": {"enabled": False}}}), SETTINGS_KEY),
+            )
+            await anyio.sleep(1.0)
+            released = capsys.readouterr().out
+            assert "what waits for a human: nothing beyond what the checkers escalate" in released
+            await owner.execute("SELECT calu_resolve_escalation(%s, 'allowed', '')", (row[0],))
+        finally:
+            await owner.close()
+
+    with anyio.fail_after(60):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(break_then_repair)
+            tg.start_soon(run)
+    assert codes == [0]

@@ -28,9 +28,18 @@ from calu.tokens import new_token, token_hash
 STALE_AFTER_S = 180.0
 """Silence after which a session is called stale (PLAN.md D56).
 
-A session stamps `last_seen` every `clock.check_interval_s` seconds, 10 by default, so three
-minutes is many missed beats -- long enough that a slow machine or a paused process is not
-called dead, short enough that an operator watching a herd notices within one coffee."""
+A session stamps `last_seen` every `HEARTBEAT_S` seconds, so three minutes is six missed beats
+-- long enough that a slow machine, a paused process or a short database outage is not called
+dead, short enough that an operator watching a herd notices within one coffee."""
+
+HEARTBEAT_S = 30.0
+"""Seconds between two `last_seen` stamps of a running session.
+
+A constant of its own, not a setting: the staleness threshold above is fixed, so an interval
+that an operator could raise (or switch off, as `clock.check_interval_s` allows for the clock
+watch) would make live sessions look dead and their escalations unanswerable."""
+
+assert HEARTBEAT_S * 3 <= STALE_AFTER_S, "a session must be able to miss two beats"
 
 
 @dataclass(frozen=True)
@@ -59,9 +68,9 @@ class SessionRow:
     def stale(self) -> bool:
         """Whether this session looks like a process that is gone.
 
-        A session writes `last_seen` every `clock.check_interval_s` seconds (10 by default), so
-        silence of several minutes means the process is not running any more -- it cannot set
-        its own state when it is killed. A session that **ended** is never stale: it said so.
+        A session writes `last_seen` every `HEARTBEAT_S` seconds, so silence of several minutes
+        means the process is not running any more (or cannot reach the database) -- it cannot
+        set its own state when it is killed. A session that **ended** is never stale: it said so.
 
         Returns:
             True if the session has not ended and has been silent for longer than
@@ -361,18 +370,12 @@ async def fork_point(db: Db, claude_session_id: str, turn: int) -> ForkPoint | N
     Raises:
         psycopg.Error: On database errors.
     """
-    # One conversation has a `sessions` row per `calu run`, and its turns are spread over them
-    # (a resumed run records only the turns it saw itself), so the lookup spans every row with
-    # this Claude session id instead of joining within one row.
+    # Through `calu_fork_point` (migration 0025), which runs as the owner: `calu run` asks on a
+    # `calu_session` connection before its own session row exists, and row-level security
+    # hides every `sessions` and `turns` row from that connection. Owner and operator use the
+    # same path.
     row = await db.one(
-        "WITH conversation AS (SELECT id FROM sessions WHERE claude_session_id = %s)"
-        " SELECT previous.last_entry_uuid, dropped.prompt_uuid"
-        " FROM turns dropped JOIN turns previous ON previous.number = dropped.number - 1"
-        " WHERE dropped.session_id IN (SELECT id FROM conversation)"
-        "  AND previous.session_id IN (SELECT id FROM conversation)"
-        "  AND dropped.number = %s"
-        "  AND previous.last_entry_uuid IS NOT NULL AND dropped.prompt_uuid IS NOT NULL"
-        " ORDER BY dropped.started_at DESC LIMIT 1",
+        "SELECT last_entry_uuid, prompt_uuid FROM calu_fork_point(%s, %s)",
         (claude_session_id, turn),
     )
     if row is None:

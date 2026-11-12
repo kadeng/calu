@@ -16,6 +16,11 @@ session can skip its own.
 
 A connection that waits for notifications cannot run queries at the same time, so a session
 uses one connection for its queries and a second one for listening.
+
+Notifications are a hint, never the only path: PostgreSQL does not keep them for a listener
+that is not connected. A `Notifier` with a `ConnectionSource` therefore reopens a lost listening
+connection and tells its `on_listening` callbacks each time `LISTEN` is in force again, so that
+the caller re-reads what it may have missed.
 """
 
 import json
@@ -26,6 +31,8 @@ from typing import Any
 import anyio
 import psycopg
 from psycopg import sql
+
+from calu.db.connection import RECONNECT_FIRST_S, RECONNECT_MAX_S, ConnectionSource
 
 log = logging.getLogger(__name__)
 
@@ -61,28 +68,47 @@ class Dirty:
     Several notifications before the worker wakes up count as one: the worker reads the current
     state of the database anyway. A notification that arrives between `wait` returning and the
     worker's read is lost, which is harmless for the same reason.
+
+    The flag has two strengths. `set` says "something changed": the worker must act. `hint`
+    says "something may have changed" (a reconnect, a subscription that just took effect): the
+    worker should look and act only if it finds a difference. `wait` reports which one woke it.
     """
 
     def __init__(self) -> None:
         """Create a flag that is not set."""
         self._event = anyio.Event()
+        self._certain = False
 
     def set(self) -> None:
-        """Set the flag; a waiting worker wakes up."""
+        """Set the flag as "something changed"; a waiting worker wakes up."""
+        self._certain = True
+        self._event.set()
+
+    def hint(self) -> None:
+        """Set the flag as "something may have changed"; a waiting worker wakes up.
+
+        A `set` before the worker wakes up outranks the hint.
+        """
         self._event.set()
 
     def is_set(self) -> bool:
         """Tell whether the flag is set.
 
         Returns:
-            True if `set` was called since the last `wait`.
+            True if `set` or `hint` was called since the last `wait`.
         """
         return self._event.is_set()
 
-    async def wait(self) -> None:
-        """Wait until the flag is set, then clear it."""
+    async def wait(self) -> bool:
+        """Wait until the flag is set, then clear it.
+
+        Returns:
+            True if `set` was called since the last `wait`, False if only `hint` was.
+        """
         await self._event.wait()
+        certain, self._certain = self._certain, False
         self._event = anyio.Event()
+        return certain
 
 
 class Notifier:
@@ -92,16 +118,31 @@ class Notifier:
     Handlers are called in the order they were registered, with the parsed JSON payload; they
     must return at once, because the next notification waits for them. A handler that raises is
     logged, and the other handlers of the channel still run.
+
+    With a `source`, `run` survives the loss of the connection: it reports the loss to the
+    `on_lost` callbacks, reopens the connection with pauses from `RECONNECT_FIRST_S` doubling up
+    to `RECONNECT_MAX_S`, subscribes again and calls the `on_listening` callbacks. Notifications
+    sent while it was not listening are lost; `on_listening` is where a caller makes up for them.
     """
 
-    def __init__(self, conn: psycopg.AsyncConnection) -> None:
+    def __init__(
+        self, conn: psycopg.AsyncConnection, source: ConnectionSource | None = None
+    ) -> None:
         """Create a notifier on a connection that is not used for anything else.
 
         Args:
-            conn: An open connection in autocommit mode (`calu.db.connect`).
+            conn: An open connection in autocommit mode (`calu.db.connect`). With `source` the
+                notifier owns it and its replacements (`aclose`).
+            source: Opens the replacement of a lost connection, or None: `run` then raises
+                when the connection breaks.
         """
         self._conn = conn
+        self._source = source
         self._handlers: dict[str, list[Callable[[Mapping[str, Any]], None]]] = {}
+        self._listening: list[Callable[[], None]] = []
+        self._lost: list[Callable[[BaseException], None]] = []
+        self.listening = False
+        """True while `LISTEN` is in force on a connection that has not failed."""
 
     def on(self, channel: str, handler: Callable[[Mapping[str, Any]], None]) -> None:
         """Register a handler for one channel.
@@ -112,22 +153,118 @@ class Notifier:
         """
         self._handlers.setdefault(channel, []).append(handler)
 
+    def on_listening(self, callback: Callable[[], None]) -> None:
+        """Register a callback for each time the subscriptions are in force.
+
+        That is once shortly after `run` starts and once after every reconnect. A change made
+        before that moment was not announced to this notifier, so a caller that keeps a copy of
+        database state re-reads it here.
+
+        Args:
+            callback: Called without arguments; it must return at once.
+        """
+        self._listening.append(callback)
+
+    def on_lost(self, callback: Callable[[BaseException], None]) -> None:
+        """Register a callback for the loss of the listening connection.
+
+        Args:
+            callback: Called with the error, once per outage; it must return at once. Only a
+                notifier with a `source` calls it (without one, `run` raises the error).
+        """
+        self._lost.append(callback)
+
+    async def aclose(self) -> None:
+        """Close the current listening connection; errors while closing are ignored."""
+        try:
+            await self._conn.close()
+        except psycopg.Error, OSError:
+            log.debug("closing the listening connection failed", exc_info=True)
+
     async def run(self) -> None:
         """Subscribe to the registered channels and dispatch notifications until cancelled.
 
         Raises:
-            psycopg.Error: If `LISTEN` fails or the connection breaks.
+            psycopg.Error: Without a `source`: if `LISTEN` fails or the connection breaks. With
+                a `source` the notifier reconnects instead and this never raises.
+            OSError: Without a `source`: if the network fails below psycopg.
         """
-        await listen(self._conn, self._handlers)
-        async for note in self._conn.notifies():
+        pause = RECONNECT_FIRST_S
+        reported = False
+
+        def subscribed() -> None:
+            """Note that `LISTEN` is in force and tell the `on_listening` callbacks."""
+            nonlocal pause, reported
+            if reported:
+                log.warning("the notification connection is back")
+            pause, reported = RECONNECT_FIRST_S, False
+            self.listening = True
+            self._call(self._listening)
+
+        while True:
             try:
-                payload = json.loads(note.payload) if note.payload else {}
-            except ValueError:
-                payload = {}
-            if not isinstance(payload, dict):
-                payload = {}
-            for handler in self._handlers.get(note.channel, ()):
-                try:
-                    handler(payload)
-                except Exception:
-                    log.exception("a handler of %s failed", note.channel)
+                await self._serve(subscribed)
+            except (psycopg.Error, OSError) as exc:
+                self.listening = False
+                if self._source is None:
+                    raise
+                if not reported:
+                    log.warning("the notification connection is lost: %s", exc)
+                    self._call(self._lost, exc)
+                    reported = True
+                await self.aclose()
+                await anyio.sleep(pause)
+                pause = min(pause * 2, RECONNECT_MAX_S)
+
+    async def _serve(self, subscribed: Callable[[], None]) -> None:
+        """Subscribe on one connection and dispatch its notifications until it fails.
+
+        Side effects: with a `source`, replaces a closed connection by a new one first.
+
+        Args:
+            subscribed: Called once `LISTEN` is in force.
+
+        Raises:
+            psycopg.OperationalError: If the connection cannot be opened, breaks or is closed.
+            psycopg.Error: If `LISTEN` fails.
+            OSError: If the network fails below psycopg.
+        """
+        if self._conn.closed and self._source is not None:
+            self._conn = await self._source.open()
+        await listen(self._conn, self._handlers)
+        subscribed()
+        async for note in self._conn.notifies():
+            self._dispatch(note)
+        raise psycopg.OperationalError("the notification connection was closed")
+
+    def _dispatch(self, note: psycopg.Notify) -> None:
+        """Pass one notification to the handlers of its channel.
+
+        Args:
+            note: The notification; a payload that is not a JSON object is passed as {}.
+        """
+        try:
+            payload = json.loads(note.payload) if note.payload else {}
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        for handler in self._handlers.get(note.channel, ()):
+            try:
+                handler(payload)
+            except Exception:
+                log.exception("a handler of %s failed", note.channel)
+
+    @staticmethod
+    def _call(callbacks: Iterable[Callable[..., None]], *args: object) -> None:
+        """Call every callback; one that raises is logged and the others still run.
+
+        Args:
+            callbacks: The callbacks.
+            *args: Passed to each.
+        """
+        for callback in callbacks:
+            try:
+                callback(*args)
+            except Exception:
+                log.exception("a notifier callback failed")

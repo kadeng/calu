@@ -1,6 +1,14 @@
 """PostgreSQL access (PLAN.md §7, D13): connections, migrations, notifications, local Docker."""
 
-from calu.db.connection import Db, Migration, applied_versions, connect, migrate, migrations
+from calu.db.connection import (
+    ConnectionSource,
+    Db,
+    Migration,
+    applied_versions,
+    connect,
+    migrate,
+    migrations,
+)
 from calu.db.notify import (
     CONFIG_CHANGED,
     ESCALATION_RESOLVED,
@@ -12,6 +20,7 @@ from calu.db.notify import (
 __all__ = [
     "CONFIG_CHANGED",
     "ESCALATION_RESOLVED",
+    "ConnectionSource",
     "Db",
     "Dirty",
     "Migration",

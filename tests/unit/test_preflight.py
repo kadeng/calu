@@ -176,18 +176,12 @@ def test_a_missing_key_says_what_it_costs_per_role() -> None:
     assert preflight.key_warnings(Config(), {"MISTRAL_API_KEY": "k"}) == []
 
 
-def test_an_interval_that_outlives_the_stale_threshold_is_warned_about():
-    """D67: the heartbeat shares the clock interval, and a herd judges staleness by it."""
-    assert preflight.heartbeat_warnings(Config()) == []
-    # Switched off on purpose: the row keeps the stamp of its insert, so nothing is claimed.
-    assert preflight.heartbeat_warnings(Config(clock=ClockConfig(check_interval_s=0))) == []
-
-    too_long = Config(clock=ClockConfig(check_interval_s=STALE_AFTER_S))
-    (said,) = preflight.heartbeat_warnings(too_long)
-    assert "will call this session stale although it is running" in said
-    assert f"{STALE_AFTER_S:g} s" in said
-    # It reaches the start-up warnings, which is where a user sees it.
-    assert said in preflight.warnings(too_long, {})
+def test_no_clock_interval_makes_a_session_look_stale():
+    """sd4: the heartbeat has its own fixed interval, so no clock setting is warned about."""
+    for interval in (0.0, 10.0, STALE_AFTER_S, 10 * STALE_AFTER_S):
+        config = Config(clock=ClockConfig(check_interval_s=interval))
+        assert preflight.heartbeat_warnings(config) == []
+        assert not any("stale" in said for said in preflight.warnings(config, {}))
 
 
 def test_honesty_switched_on_by_halves_is_warned_about():

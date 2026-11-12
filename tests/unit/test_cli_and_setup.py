@@ -75,6 +75,23 @@ def test_run_without_session_credential_is_an_error(
     assert "no credential 'session'" in capsys.readouterr().err
 
 
+def test_run_refuses_a_session_credential_stored_without_a_password(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """cs4: REQUIREMENTS 17 holds on the read path too, not only for `credential set`.
+
+    An entry without a password is not authenticated, so whatever can write the credential
+    file could swap it for a connection string to another database, and the session would
+    start there without anybody being asked for anything.
+    """
+    store.save("session", "postgresql://attacker.example/calu", None)
+    started: list[object] = []
+    monkeypatch.setattr(cli, "run_session", lambda *args, **kwargs: started.append(args))
+    assert run_cli(monkeypatch, store, ["run", "--batch", "-p", "go"], "") == 1
+    assert "stored without a password" in capsys.readouterr().err
+    assert started == []
+
+
 def test_run_rejects_a_directory_that_does_not_exist(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
 ) -> None:

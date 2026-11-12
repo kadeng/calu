@@ -2,25 +2,44 @@
 
     password ──► decrypt the `session` credential ──► two database connections
                  │                                     queries + notifications
-                 └► the password, the key and the connection string are wiped
+                 └► the password, the derived key and the decrypted buffer are wiped;
+                    the connection string stays in one object in this process's memory
+    find the project (`--project`, or the one registered for the directory)
     load configuration, rules and checker instructions (calu.store.ConfigStore)
     create the sessions row, start Claude Code (calu.session.Session, calu.claude.SdkRunner)
     serve the protocol on a WebSocket (calu.protocol.server) and print its address and token
     print events to the terminal, read further messages from stdin
     reload the configuration on `config_changed`, continue on `escalation_resolved`
 
-The Claude Code process never sees calu's secrets: the connection string is wiped before Claude
-starts, the checker API keys are blanked in its environment (`calu.config.load_secrets`,
-`SdkRunner.hidden_env`), and its sandbox hides `~/.config/calu` (PLAN.md D15).
+The Claude Code process never gets calu's secrets: the connection string is in no environment
+variable, command line or file that calu hands to it, the checker API keys are blanked in its
+environment (`calu.config.load_secrets`, `SdkRunner.hidden_env`), and its sandbox hides
+`~/.config/calu` (PLAN.md D15).
+
+What "the credentials are dropped before Claude Code starts" (REQUIREMENTS 16) means here: the
+password, the key derived from it and the buffer the credential was decrypted into are wiped
+before Claude Code starts. The connection string itself is kept, in `ConnectionSource`, inside
+the calu process and nowhere else, because an unattended run has to survive a restarted
+database or a dropped connection:
+
+    connection lost ──► statements wait (tool calls wait in the gate: fail closed)
+                   ──► reconnect with backoff ──► bind the session again, LISTEN again
+                   ──► re-read the configuration ──► continue
+
+`harden_process` makes the memory of the calu process unreadable for other processes of the
+same user, which is what "out of reach of the Claude Code session" (REQUIREMENTS 15) rests on.
 
 Clients (`calu attach`, an IDE, a web interface) connect to the WebSocket address with the
 token; several at once. The terminal output of this command shows the same events, so a
 session can also be watched where it was started.
 """
 
+import ctypes
+import dataclasses
 import functools
 import logging
 import os
+import socket
 import sys
 import tempfile
 import time
@@ -32,6 +51,7 @@ from typing import Literal
 import anyio
 import anyio.to_thread
 import psycopg
+from pydantic import ValidationError
 from pydantic_ai.models import Model
 
 from calu import herd, preflight
@@ -39,15 +59,15 @@ from calu.bus import Bus
 from calu.claude.runner import ClaudeRunner, Fork
 from calu.claude.sdk_runner import SdkRunner
 from calu.clock import ClockWatch
-from calu.config import ClaudeConfig, load_secrets
+from calu.config import AutoEscalate, ClaudeConfig, load_secrets
 from calu.credentials import wipe
 from calu.db import (
     CONFIG_CHANGED,
     ESCALATION_RESOLVED,
+    ConnectionSource,
     Db,
     Dirty,
     Notifier,
-    connect,
 )
 from calu.protocol.messages import (
     AssistantText,
@@ -68,7 +88,9 @@ from calu.protocol.messages import (
 )
 from calu.protocol.server import SessionServer
 from calu.session import Session, SessionError
-from calu.store import ConfigStore, DatabaseSessionStore, ProjectSettings
+from calu.store import ConfigStore, DatabaseSessionStore, ProjectSettings, UnknownProject
+from calu.store.config import RELOAD_DEBOUNCE_S
+from calu.store.projects import AmbiguousProject, project_for_directory
 from calu.tokens import new_token, token_hash
 
 log = logging.getLogger(__name__)
@@ -78,6 +100,23 @@ START_TIMEOUT_S = 10.0
 
 QUIT_COMMANDS = ("/quit", "/exit")
 """Lines that end the session when they are typed instead of a message."""
+
+IDLE_SETTLE_S = 0.2
+"""Pause after an unattended run became idle before it is believed (see `_run`)."""
+
+STOP_RECONNECT_S = 5.0
+"""How long the last writes of an ending session wait for a database that is away."""
+
+HOLD_AFTER_FAILED_RELOADS = 3
+"""Failed configuration reloads in a row after which every checked step waits for a human.
+Stored settings that cannot be applied at all (invalid values, a project row that is gone) hold
+the session at the first failure, because retrying does not repair them."""
+
+HOLD_ALL = AutoEscalate(commands=True, edits=True, subagents=True)
+"""The auto-escalation categories of a session whose configuration is known to be stale."""
+
+PR_SET_DUMPABLE = 4
+"""`prctl` option that sets whether other processes of the same user may read this one."""
 
 RunnerFactory = Callable[[Path, ClaudeConfig, set[str]], ClaudeRunner]
 """Creates the runner of one Claude session from workspace, Claude settings and the names of
@@ -295,6 +334,16 @@ class IdleSignal:
         elif self._worked and event.state == "idle":
             self._idle_with_tasks_since = time.monotonic()
 
+    def rearm(self) -> None:
+        """Forget that the session was idle, because it has been given more to do.
+
+        After this call `wait` returns at the next time the session becomes idle after having
+        worked, not for an idleness that is already over.
+        """
+        self._event = anyio.Event()
+        self._worked = False
+        self._idle_with_tasks_since = None
+
     async def wait(self) -> None:
         """Wait until the session is idle again, stopped or failed.
 
@@ -340,24 +389,54 @@ def both(first: Callable[[Event], Awaitable[None]], second: Callable[[Event], Aw
     return sink
 
 
-async def read_lines(send: Callable[[str], Awaitable[None]]) -> None:
+async def read_lines(send: Callable[[str], Awaitable[None]]) -> Literal["eof", "quit"]:
     """Read lines from stdin and pass them on until end of input or a quit command.
 
     Blank lines are skipped. Reading runs in a worker thread, so it does not block the session.
 
     Args:
         send: Called with each line (without the line end).
+
+    Returns:
+        "quit" if a quit command ended the reading, "eof" if stdin was closed. The caller
+        treats them differently: a quit command means "stop now", a closed stdin only means
+        that no further message will come.
     """
     while True:
         line = await anyio.to_thread.run_sync(sys.stdin.readline, abandon_on_cancel=True)
         if not line:
-            return
+            return "eof"
         text = line.strip()
         if not text:
             continue
         if text in QUIT_COMMANDS:
-            return
+            return "quit"
         await send(text)
+
+
+def harden_process() -> bool:
+    """Make this process unreadable for other processes of the same user (Linux).
+
+    Clears the "dumpable" flag: `/proc/<pid>/mem`, `environ` and `fd` then belong to root, a
+    process of the same user cannot attach with ptrace, and no core dump is written. The calu
+    process holds the database connection string and the session key in memory; an unsandboxed
+    process that Claude Code starts as the same user (a hook, an MCP server) cannot read them
+    out of it this way. The flag is reset by `execve`, so the Claude Code process calu starts
+    is not affected. root can still read the process.
+
+    Returns:
+        True if the flag was cleared, False if the call is not available or failed (a debug
+        message is logged; the session runs either way).
+    """
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        done = libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) == 0
+    except (OSError, AttributeError) as exc:
+        log.debug("prctl(PR_SET_DUMPABLE) is not available: %s", exc)
+        return False
+    if not done:
+        log.debug("prctl(PR_SET_DUMPABLE, 0) failed: errno %d", ctypes.get_errno())
+    return done
 
 
 async def run_session(
@@ -369,9 +448,12 @@ async def run_session(
 ) -> int:
     """Run one session until it ends, and report what happened.
 
-    Side effects: opens two database connections, creates a `sessions` row, starts a Claude
-    Code process, prints events to stdout and, with `options.interactive`, reads messages from
-    stdin. `url` is wiped before Claude Code starts.
+    Side effects: clears the process's "dumpable" flag (`harden_process`), opens two database
+    connections, creates a `sessions` row, starts a Claude Code process, prints events to stdout
+    and, with `options.interactive`, reads messages from stdin. A `bytearray` passed as `url` is
+    wiped before Claude Code starts; a copy of the connection string stays in a
+    `ConnectionSource` inside this process until the function returns, so that a lost
+    connection can be reopened (see the module docstring).
 
     Args:
         url: The `calu_session` connection string (a `bytearray` is wiped by this function).
@@ -384,28 +466,78 @@ async def run_session(
             server listens, in addition to printing them (a supervisor or a test uses it).
 
     Returns:
-        0 if the session ended normally, 1 if it failed (the reason was printed).
+        0 if the session ended normally, 1 if it failed or could not start (the reason was
+        printed): among others an unknown `--project`, or a fork point that does not exist.
 
     Raises:
-        psycopg.Error: If the database cannot be reached or rejects the login.
+        psycopg.Error: If the database cannot be reached at the start or rejects the login.
     """
     hidden = load_secrets()
-    conn = await connect(url)
-    listener = await connect(url)
+    harden_process()
+    source = ConnectionSource(url)
     if isinstance(url, bytearray):
-        wipe(url)  # Claude Code starts below; nothing must still hold the credential
+        # The caller's buffer is not needed any more. The copy in `source` stays in this
+        # process's memory; nothing of it reaches Claude Code, which starts below.
+        wipe(url)
+    db = Db(await source.open(), source=source)
     try:
-        return await _run(
-            conn, listener, hidden, options, runner_factory, checker_models, on_serving
-        )
+        notifier = Notifier(await source.open(), source=source)
+        try:
+            return await _run(
+                db, notifier, hidden, options, runner_factory, checker_models, on_serving
+            )
+        finally:
+            with anyio.CancelScope(shield=True):
+                await notifier.aclose()
     finally:
-        await conn.close()
-        await listener.close()
+        with anyio.CancelScope(shield=True):
+            await db.aclose()
+
+
+async def _project(db: Db, options: RunOptions) -> RunOptions | None:
+    """Decide which project the session belongs to, and say so on stdout.
+
+        --project NAME given ──► NAME (whether the row exists is checked by the first load)
+        no --project         ──► the project registered for the workspace or the nearest
+                                 directory above it on this host, else none
+
+    Side effects: prints one line that names the project or says that only the global settings
+    apply; prints an error to stderr when the lookup is ambiguous.
+
+    Args:
+        db: The session's connection.
+        options: What `calu run` was asked to do.
+
+    Returns:
+        The options with `project` filled in, or None if several projects are registered for
+        the directory (the session must not start under rules picked by chance).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    if options.project is not None:
+        print(f"[project] {options.project}", flush=True)
+        return options
+    try:
+        found = await project_for_directory(db, options.workspace, socket.gethostname())
+    except AmbiguousProject as exc:
+        print(f"calu: {exc}", file=sys.stderr)
+        return None
+    if found is None:
+        print(
+            "[project] none: no project is registered for this directory, so only the global "
+            "settings and rules apply (register one with `calu project add .`, or pass "
+            "--project)",
+            flush=True,
+        )
+        return options
+    print(f"[project] {found} (registered for this directory)", flush=True)
+    return dataclasses.replace(options, project=found)
 
 
 async def _run(
-    conn: psycopg.AsyncConnection,
-    listener: psycopg.AsyncConnection,
+    db: Db,
+    notifier: Notifier,
     hidden: set[str],
     options: RunOptions,
     runner_factory: RunnerFactory | None = None,
@@ -415,8 +547,8 @@ async def _run(
     """Load the settings, start the session and drive it until it ends.
 
     Args:
-        conn: Connection for queries.
-        listener: Connection for notifications only.
+        db: Connection for queries; it reconnects by itself.
+        notifier: Notifier on the connection for notifications; it reconnects by itself.
         hidden: Names of environment variables Claude Code must not see.
         options: What to run.
         runner_factory: Creates the runner; None uses `SdkRunner`.
@@ -424,18 +556,28 @@ async def _run(
         on_serving: Awaited with the address and the token once the server listens, or None.
 
     Returns:
-        0 if the session ended normally, 1 if it failed.
+        0 if the session ended normally, 1 if it failed or could not start.
 
     Raises:
         psycopg.Error: On database errors while loading the settings.
     """
-    db = Db(conn)
+    resolved = await _project(db, options)
+    if resolved is None:
+        return 1
+    options = resolved
     config_store = ConfigStore(db, options.workspace, options.project)
-    settings = await config_store.load()
+    try:
+        settings = await config_store.load()
+    except UnknownProject as exc:
+        # Not a fallback to the global settings: the session would run without the project's
+        # rules and nobody would be told.
+        print(f"calu: {exc}; nothing was started", file=sys.stderr)
+        return 1
     console = Console(options.show_thinking)
     idle = IdleSignal(options.background_timeout_s)
     bus = Bus()
     store = DatabaseSessionStore(db)
+    emit = both(bus.publish, both(console, idle))
     session = Session(
         options.workspace,
         settings,
@@ -443,7 +585,7 @@ async def _run(
         lambda: (
             runner_factory or functools.partial(SdkRunner, tool_routes=session.config.tool_routes)
         )(options.workspace, session.config.claude, hidden | set(session.config.hidden_env)),
-        both(bus.publish, both(console, idle)),
+        emit,
         project=options.project,
         checker_models=checker_models,
         startup_warnings=preflight.warnings(
@@ -462,7 +604,10 @@ async def _run(
         # A client may offer the categories as a setting of its own (the ACP adapter maps them
         # to ACP's session modes), so it has to hear about a change made elsewhere -- and the
         # change belongs in the audit log either way (D43).
-        await session.announce_auto_escalate(before)
+        try:
+            await session.announce_auto_escalate(before)
+        except psycopg.Error, TimeoutError:
+            log.exception("recording the changed auto-escalation failed")
         # The chat summary is a row like the rules and the instructions, and an operator may
         # have corrected it (D40), so the same notification re-reads it.
         await session.reload_summary()
@@ -470,10 +615,51 @@ async def _run(
         await session.announce_honesty()
         await console(Log(level="info", message="configuration reloaded"))
 
-    notifier = Notifier(listener)
+    async def on_reload_error(exc: Exception, failures: int) -> None:
+        """Report a failed reload, and hold the session when its settings cannot be trusted.
+
+        The session keeps the settings it has, which may be laxer than what the database holds
+        now. Invalid stored settings and a vanished project row hold the session at once, any
+        other error after `HOLD_AFTER_FAILED_RELOADS` failures in a row: every checked step
+        then waits for a human until a reload succeeds (fail closed).
+
+        Args:
+            exc: Why the reload failed.
+            failures: How many reloads have failed in a row.
+        """
+        hold = failures >= HOLD_AFTER_FAILED_RELOADS or isinstance(
+            exc, (ValidationError, UnknownProject)
+        )
+        text = one_line(str(exc))
+        if not hold:
+            message = (
+                f"the configuration could not be reloaded ({text}); the session keeps the "
+                "settings it has and tries again"
+            )
+        else:
+            message = (
+                f"the configuration could not be reloaded ({text}); the session may run on "
+                "stale settings, so every checked step waits for a human until a reload succeeds"
+            )
+        if failures == 1 or failures == HOLD_AFTER_FAILED_RELOADS:
+            await emit(Log(level="error", message=message))
+        if not hold or session.config.auto_escalate == HOLD_ALL:
+            return
+        try:
+            await session.set_auto_escalate(HOLD_ALL, "session: configuration reload failed")
+        except Exception:
+            # The audit entry needs the database, which may be the thing that is failing; the
+            # hold must not depend on it.
+            log.exception("recording the hold failed; holding anyway")
+            session.config.auto_escalate = HOLD_ALL
+            await emit(AutoEscalateChanged(settings=HOLD_ALL))
+
     notifier.on(ESCALATION_RESOLVED, lambda payload: _note(session, payload))
     dirty = Dirty()
     notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
+    # A change committed before LISTEN took effect, or while the listening connection was away,
+    # was never announced to this session: look once each time the subscription is in force.
+    notifier.on_listening(dirty.hint)
     failed = False
     # Before anything starts: a fork that cannot be made must not turn into a plain resume,
     # which would continue the conversation instead of branching it (PLAN.md D36).
@@ -489,16 +675,48 @@ async def _run(
         max_forward_s=clock.max_forward_s,
     )
     async with anyio.create_task_group() as tg:
+
+        def report(level: Literal["info", "warning", "error"], message: str) -> None:
+            """Send a `log` event from a callback that cannot await.
+
+            Args:
+                level: The level of the event.
+                message: Its text.
+            """
+            tg.start_soon(emit, Log(level=level, message=message))
+
+        db.on_lost(
+            lambda: report(
+                "error",
+                "the database connection is lost; steps wait until it is back (calu reconnects)",
+            )
+        )
+
+        def restored() -> None:
+            """Report the new connection and have the configuration re-read."""
+            report("info", "the database connection is back")
+            dirty.hint()
+
+        db.on_restored(restored)
+        notifier.on_lost(
+            lambda exc: report(
+                "warning",
+                f"the notification connection is lost ({one_line(str(exc))}); calu reconnects, "
+                "and meanwhile polls for answers to escalations and for configuration changes",
+            )
+        )
         tg.start_soon(notifier.run)
-        tg.start_soon(config_store.reload_loop, dirty, on_settings)
+        tg.start_soon(
+            config_store.reload_loop, dirty, on_settings, RELOAD_DEBOUNCE_S, on_reload_error
+        )
         if clock.check_interval_s > 0:
             # Watches calu's own clock: a backward jump breaks the attribution of file changes
             # to steps, so the session escalates its next tool call (D32).
             tg.start_soon(watch.run)
-        # The same interval says "this process is still running", so a herd can tell a working
-        # session from one whose process is gone (D56). It shares the interval because both
-        # answer the same question -- is this session still the one it claims to be?
-        tg.start_soon(session.beat, clock.check_interval_s)
+        # "This process is still running", so a herd can tell a working session from one whose
+        # process is gone (D56). The interval is a constant of its own: tied to the clock
+        # watch's setting, a long or switched-off watch made live sessions look dead.
+        tg.start_soon(session.beat, herd.HEARTBEAT_S)
         server: SessionServer | None = None
         try:
             await session.start(tg, options.resume_id, options.model, options.effort, fork)
@@ -508,18 +726,54 @@ async def _run(
                 token = new_token()
                 server = SessionServer(session, bus, token_hash(token), tg)
                 tg.start_soon(_listen, server, options, token, store, on_serving)
+            sent = bool(options.prompt)
             if options.prompt:
                 await session.send_chat(ChatSendParams(text=options.prompt))
+            ended = "eof"
             if options.interactive:
-                await read_lines(lambda text: session.send_chat(ChatSendParams(text=text)))
-            elif server is not None:
-                await _until_done(idle, server, bus)
-            else:
-                await idle.wait()
+
+                async def send(text: str) -> None:
+                    """Send one typed line to Claude.
+
+                    Args:
+                        text: The line.
+                    """
+                    nonlocal sent
+                    sent = True
+                    idle.rearm()
+                    await session.send_chat(ChatSendParams(text=text))
+
+                ended = await read_lines(send)
+                if ended == "eof" and sent:
+                    # A closed stdin only means that no further message comes (a password
+                    # piped in, a service unit, nohup). Stopping here ended the session
+                    # seconds into its first turn, with exit code 0.
+                    print(
+                        "calu: stdin closed; waiting for Claude to finish (as with --batch)",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            if not options.interactive or (ended == "eof" and sent):
+                while True:
+                    if server is not None:
+                        await _until_done(idle, server, bus)
+                    else:
+                        await idle.wait()
+                    # A message that was queued behind a running turn starts its own turn
+                    # after the session was idle for a moment; that turn is waited for too.
+                    await anyio.sleep(IDLE_SETTLE_S)
+                    if session.state not in IdleSignal.WORKING or (
+                        server is not None and server.shutdown.is_set()
+                    ):
+                        break
+                    idle.rearm()
         except SessionError as exc:
             print(f"calu: {exc}", file=sys.stderr)
             failed = True
         finally:
+            # The last writes are worth a short wait, but a shutdown must not wait for a
+            # database that stays away.
+            db.limit_reconnect(STOP_RECONNECT_S)
             with anyio.CancelScope(shield=True):
                 await session.stop()
             tg.cancel_scope.cancel()
@@ -563,8 +817,10 @@ async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | N
             Log(
                 level="error",
                 message=(
-                    f"no fork point for turn {turn} of {options.resume_id}: calu records the "
-                    "transcript uuids from migration 0012 on, and only for turns it saw itself"
+                    f"no fork point for turn {turn} of {options.resume_id}: either the database "
+                    "knows no conversation with that Claude session id or no such turn in it, "
+                    "or the turn's transcript uuids were not recorded (calu records them from "
+                    "migration 0012 on, and only for turns it saw itself)"
                 ),
             )
         )
