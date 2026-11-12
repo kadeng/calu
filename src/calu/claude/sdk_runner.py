@@ -24,7 +24,7 @@ spike-results.md`.
 
 import json
 import logging
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -228,6 +228,14 @@ class SdkRunner:
         self._cancel: anyio.CancelScope | None = None
         self._steps: dict[str, Step] = {}
         self._agent_prompts: dict[str, str] = {}  # Agent tool call id -> task prompt
+        self._side_pending = 0  # side questions sent and not answered yet
+        self._side_stops: list[tuple[str, Callable[[], Awaitable[None]]]] = []
+        """Unknown agents that stopped while a side question was open: (last message, review).
+
+        Claude Code answers a side question with a fork of its own and calls the SubagentStop
+        hook for it; `side_question` drops the entry whose message is its answer and runs the
+        review of every other one.
+        """
         self._skills = SkillContentFilter()  # skill text after Skill calls is no user input
         self.agents: dict[str, AgentInfo] = {}  # by Agent tool call id
         self._task_to_tool_use: dict[str, str] = {}  # SDK task/agent id -> tool call id
@@ -461,6 +469,12 @@ class SdkRunner:
         `spikes/side_question.py`). The Agent SDK has no public method for this request, so
         it goes through the SDK's own control channel.
 
+        Claude Code answers with a fork of its own and calls the SubagentStop hook for it.
+        That fork is no subagent of the session: its result is not reviewed and no client
+        sees it as an agent. It is recognised by its last message, which is the answer. Any
+        other agent that was not started with the Agent tool and stopped while this question
+        was open is reviewed when the question ends, as it would have been at once otherwise.
+
         Args:
             question: The question.
             history: Earlier side questions with their answers, oldest first.
@@ -478,17 +492,48 @@ class SdkRunner:
         request: dict[str, Any] = {"subtype": "side_question", "question": question}
         if history:
             request["history"] = [{"question": q, "response": a} for q, a in history]
+        text: object = None
+        self._side_pending += 1
         try:
             answer = await query._send_control_request(request, timeout=SIDE_QUESTION_TIMEOUT_S)
+            text = answer.get("response") if isinstance(answer, dict) else None
         except Exception as exc:
             # The SDK raises bare `Exception` for an error response and for a timeout.
             raise SideQuestionFailed(
                 f"Claude Code did not answer the side question: {exc}"
             ) from exc
-        text = answer.get("response") if isinstance(answer, dict) else None
+        finally:
+            self._side_pending -= 1
+            with anyio.CancelScope(shield=True):  # a cancelled question still owes the reviews
+                await self._settle_side_stops(text if isinstance(text, str) else None)
         if not isinstance(text, str) or not text.strip():
             raise SideQuestionFailed("Claude Code returned no answer to the side question")
         return text
+
+    async def _settle_side_stops(self, answer: str | None) -> None:
+        """Decide about the unknown agents that stopped while a side question was open.
+
+        The one whose last message is `answer` was the fork that answered the question and is
+        dropped. When no side question is open any more, the result of every other one is
+        reviewed, and the checker's note is sent to the main agent. A failed review is logged:
+        it must not replace the side question's own outcome.
+
+        Args:
+            answer: The answer of the side question that just ended; None if it had none.
+        """
+        if answer is not None:
+            for index, (last, _) in enumerate(self._side_stops):
+                if last.strip() == answer.strip():
+                    del self._side_stops[index]
+                    break
+        if self._side_pending:
+            return
+        stops, self._side_stops = self._side_stops, []
+        for _, review in stops:
+            try:
+                await review()
+            except Exception:
+                log.exception("the review of a subagent that stopped beside a side question failed")
 
     async def context_usage(self) -> ContextUsage | None:
         """Ask Claude Code for the fill of the main agent's context window.
@@ -743,8 +788,20 @@ class SdkRunner:
                     result=last[:SUBAGENT_RESULT_CHARS],
                     background=True,
                 )
-                note = await gate.review_subagent_result(result)
-                await self._send_note(note)
+
+                async def review() -> None:
+                    """Review the result and send the checker's note to the main agent."""
+                    await self._send_note(await gate.review_subagent_result(result))
+
+                if self._side_pending and not input_data.get("agent_type"):
+                    # Probably the fork that answers a side question (measured with CLI
+                    # 2.1.321, `spikes/side_question.py`: this hook, an agent id of its own, an
+                    # empty agent type, the answer as last message, before the answer
+                    # arrives). `side_question` decides when it has the answer; waiting for
+                    # it here would hold up that answer.
+                    self._side_stops.append((last, review))
+                    return {}
+                await review()
                 return {}
             if not info.background:
                 return {}

@@ -8,8 +8,8 @@ yet, so this spike sends the control request itself.
 
 Run: `uv run python spikes/side_question.py` (needs a logged-in `claude`; uses Haiku).
 It starts a turn whose Bash command takes 25 seconds, asks a side question while the command runs,
-asks for the context usage as well, and prints when each answer arrived and whether the next
-turn knows about the side question. Results are recorded in `spikes/RESULTS.md`.
+asks for the context usage as well, and prints when each answer arrived, which subagent hooks
+Claude Code called meanwhile, and whether the next turn knows about the side question. Results are recorded in `spikes/RESULTS.md`.
 """
 
 import tempfile
@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 import anyio
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher
 
 
 async def main() -> None:
@@ -33,8 +33,32 @@ async def main() -> None:
         print(f"[{time.monotonic() - started:6.1f}s] {text}", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="calu-spike-") as scratch:
+
+        async def show_hook(input_data: Any, tool_use_id: str | None, context: Any) -> dict:
+            """Print what a subagent hook was called with: does a side question fire one?
+
+            Args:
+                input_data: The hook's input.
+                tool_use_id: Unused.
+                context: Unused.
+
+            Returns:
+                An empty hook output.
+            """
+            shown = {key: str(value)[:120] for key, value in dict(input_data).items()}
+            stamp(f"hook {shown.get('hook_event_name')}: {shown}")
+            return {}
+
+        hooks: Any = {
+            "SubagentStart": [HookMatcher(hooks=[show_hook])],
+            "SubagentStop": [HookMatcher(hooks=[show_hook])],
+        }
         options = ClaudeAgentOptions(
-            model="haiku", cwd=scratch, allowed_tools=["Bash(python3 -c:*)"], max_turns=6
+            model="haiku",
+            cwd=scratch,
+            allowed_tools=["Bash(python3 -c:*)"],
+            max_turns=6,
+            hooks=hooks,
         )
         async with ClaudeSDKClient(options) as client:
             await client.query(

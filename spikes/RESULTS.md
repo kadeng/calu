@@ -895,6 +895,15 @@ asks in the next turn whether a question was asked beside the task.
 - `get_context_usage` answered inside the running turn as well (`totalTokens`, `maxTokens`,
   `percentage`, `model` with the resolved model id).
 - An optional `history` (`[{question, response}]`) is accepted for follow-up questions.
+- **The side question calls the SubagentStop hook** (measured again on 2026-11-12 with CLI
+  2.1.321, after a real session showed a third agent in the full-screen client): Claude Code
+  answers with a fork of its own, and the hook is called for it immediately before the answer
+  comes back, with an `agent_id` of its own, an **empty** `agent_type`, an
+  `agent_transcript_path`, and the answer as `last_assistant_message`. No SubagentStart is
+  called. calu had taken that fork for a subagent started without the Agent tool (D157):
+  the subagent checker judged the answer and every client listed an agent "subagent ...".
+  `SdkRunner` now sets such a stop aside while a side question is open, drops the one whose
+  last message is the answer, and reviews every other one when the question ends.
 
 **Used by:** `SdkRunner.side_question` and `SdkRunner.context_usage`, the requests `side.ask` and
 `usage.get`.

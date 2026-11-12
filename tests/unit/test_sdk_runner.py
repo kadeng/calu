@@ -255,6 +255,72 @@ async def test_a_workflow_agents_result_is_reviewed_with_its_task(tmp_path: Path
 
 
 @pytest.mark.anyio
+async def test_the_fork_that_answers_a_side_question_is_no_subagent(tmp_path: Path):
+    """Claude Code answers a side question with a fork of its own and calls SubagentStop for it
+    (measured, `spikes/side_question.py`). In a real session that fork appeared as a third
+    agent in the client and its answer went to the subagent checker. It is recognised by its
+    last message, which is the answer; any other unknown agent that stops meanwhile is still
+    reviewed, and so is everything when the side question fails."""
+    from calu.claude.runner import SideQuestionFailed
+
+    reviewed: list[str] = []
+
+    class Recording(AllowAll):
+        async def review_subagent_result(self, result):
+            reviewed.append(result.result)
+            return ""
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    hooks = runner._options(Recording(), None).hooks  # type: ignore[arg-type]
+    assert hooks is not None
+    stop: Any = hooks["SubagentStop"][0].hooks[0]
+
+    class Query:
+        """The control channel: the hooks are called before the answer comes back."""
+
+        stops: tuple[dict[str, str], ...] = ()
+        answer: object = {"response": "It edits shapes.py.", "synthetic": False}
+
+        async def _send_control_request(self, request: dict, timeout: float = 60.0) -> object:
+            """Call SubagentStop for each scripted agent, then answer."""
+            for stopped in self.stops:
+                await stop({"agent_id": "f1", **stopped}, None, None)
+                assert reviewed == [], "nothing is reviewed while the question is open"
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return self.answer
+
+    class Client:
+        """Stands in for a connected `ClaudeSDKClient`."""
+
+        _query = Query()
+
+    runner._client = Client()  # type: ignore[assignment]
+    fork = {"agent_type": "", "last_assistant_message": "It edits shapes.py."}
+    other = {"agent_type": "", "last_assistant_message": "I rewrote the build script."}
+
+    Query.stops = (fork,)
+    assert await runner.side_question("What does it do?") == "It edits shapes.py."
+    assert reviewed == []
+
+    Query.stops = (other, fork)
+    await runner.side_question("And now?")
+    assert reviewed == ["I rewrote the build script."]
+
+    reviewed.clear()
+    Query.stops = (fork,)
+    Query.answer = Exception("Side question cancelled")
+    with pytest.raises(SideQuestionFailed):
+        await runner.side_question("Once more?")
+    assert reviewed == ["It edits shapes.py."], "without an answer nothing is taken for the fork"
+
+    # With no side question open, an unknown agent is reviewed at once, as before.
+    reviewed.clear()
+    await stop({"agent_id": "f2", **other}, None, None)
+    assert reviewed == ["I rewrote the build script."]
+
+
+@pytest.mark.anyio
 async def test_a_finished_edit_is_reported_to_the_gate_before_the_agent_goes_on(tmp_path: Path):
     """The PostToolUse hook of the edit tools calls `ToolGate.tool_succeeded`, so the session
     applies the edit's marks and verification before it judges the next call."""
