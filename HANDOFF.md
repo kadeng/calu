@@ -396,6 +396,13 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+34. **The remaining new tools pass the gate** (D154/D165, 2026-11-12, CLI 2.1.319, haiku):
+   `PushNotification`, `CronCreate`, `ListAgents` and a `TaskStop` of a real background task
+   each became a step judged by the command checker (`checker_runs` rows, decision `pass` from
+   the fake checker). A `TaskStop` with an unknown task id left no step: Claude Code refused its
+   input (`<tool_use_error>No task found`) before any hook ran, so nothing was executed.
+   Noticed on the way: `ListAgents` names the **other Claude sessions on the machine**, which
+   `SendMessage` can reach -- D69 already sends a message out of the session to the checker.
 33. **An MCP server's file read meets the read deny list** (D166, 2026-11-12, CLI 2.1.319,
    haiku): a throwaway project with a stdio MCP server (`mcp__fs__read_file(path)`) and a fake
    `.env`. Claude loaded the tool through ToolSearch and called it with the `.env` path; the
