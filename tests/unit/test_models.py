@@ -101,3 +101,16 @@ def test_a_checker_passes_its_effort_to_the_provider() -> None:
 
     # The cache routing key of the model family is still there (one per checker and run).
     assert thinking.settings().get("mistral_prompt_cache_key", "").endswith("-command")
+
+
+def test_importing_the_models_module_switches_the_banner_of_pydantic_ai_off() -> None:
+    """`calu run` prints the checkers' verdicts; an advertisement between them is noise.
+
+    Pydantic AI 2.66 prints a banner at an agent's first run unless this variable is set.
+    """
+    import os
+
+    import calu.models
+
+    assert calu.models.log
+    assert os.environ.get("PYDANTIC_AI_NO_BANNER")

@@ -7,6 +7,8 @@ The checkers are the rule-based fakes (`calu.testing`), so no checker API key is
 
     uv run python spikes/smoke_session.py <project dir> [-p PROMPT] [--resolve allow|deny]
                                           [--sandbox] [--model haiku]
+                                          [--checker-model MODEL|auto]
+                                          [--honesty track|enforce] [--trust-head]
 
 It creates a throwaway database on the test server, runs `calu setup` in it, runs one session
 and prints what the database holds afterwards; the database is dropped at the end -- but a run
@@ -47,6 +49,7 @@ from calu.db import Db, connect
 from calu.model_choice import detect_model
 from calu.run import RunOptions, run_session
 from calu.setup import setup
+from calu.store.trust import certify_commit
 from calu.testing import fake_models
 
 TEST_SERVER = "postgresql://calu_owner:calu-dev@127.0.0.1:55432/calu"
@@ -62,24 +65,48 @@ REPORT = (
     "SELECT seq, tool_name, snapshot_before IS NOT NULL AS snapshotted, wrote FROM steps"
     " WHERE wrote IS NOT NULL ORDER BY seq",
     "SELECT number, user_inputs, left(answer, 60) FROM turns ORDER BY number",
+    # Code honesty (--honesty): what was certified, by which source.
+    "SELECT left(commit_id, 12), method, certified_by, note FROM trusted_commits"
+    " ORDER BY certified_at",
+    "SELECT left(content_sha256, 12), path, method, certified_by FROM trusted_files"
+    " ORDER BY certified_at",
 )
 
 
 async def operator(url: str, decision: str, wait_s: float) -> None:
-    """Wait for the first escalation and resolve it, as `calu resolve` would."""
+    """Wait for the first escalation and resolve it, as `calu resolve` would.
+
+    It returns without resolving anything when no escalation is opened within `wait_s`.
+    """
     owner = await connect(url)
     db = Db(owner)
     try:
-        with anyio.fail_after(wait_s):
-            while True:
+        rows = []
+        with anyio.move_on_after(wait_s):
+            while not rows:
                 rows = await herd.escalations(db)
-                if rows:
-                    break
-                await anyio.sleep(0.2)
-        print(f"\n=== operator: {decision} escalation {rows[0].id}: {rows[0].reason[:120]}")
+                if not rows:
+                    await anyio.sleep(0.2)
+        if not rows:
+            print(f"\n=== operator: no escalation within {wait_s:.0f} s")
+            return
+        print(f"\n=== operator: {decision} escalation {rows[0].id}: {rows[0].reason[:400]}")
         await herd.resolve(db, rows[0].id, decision, f"{decision} by the smoke test")
     finally:
         await owner.close()
+
+
+async def trust_head(db: Db, directory: Path) -> None:
+    """Certify HEAD of the project directory as a person would (`calu honesty trust HEAD`).
+
+    Args:
+        db: The owner's connection to the throwaway database.
+        directory: The project directory, a git repository with at least one commit.
+    """
+    done = await anyio.run_process(["git", "rev-parse", "HEAD", "HEAD^{tree}"], cwd=directory)
+    ids = done.stdout.decode().split()
+    await certify_commit(db, ids[0], ids[1], "user", "smoke test", "certified before the run")
+    print(f"=== trusted commit {ids[0][:12]} (source user)")
 
 
 async def report(url: str) -> None:
@@ -111,6 +138,7 @@ async def main(args: argparse.Namespace) -> int:
         },
         "context": {"narrate": False},
         "changes": {"snapshot": args.changes, "review": args.changes},
+        "honesty": {"mode": args.honesty, "reviewer_model": args.reviewer_model},
     }
     try:
         owner = await connect(url)
@@ -136,6 +164,8 @@ async def main(args: argparse.Namespace) -> int:
                 "INSERT INTO config (scope, scope_id, key, value) VALUES ('global', '', %s, %s)",
                 (SETTINGS_KEY, json.dumps(settings)),
             )
+            if args.trust_head:
+                await trust_head(Db(owner), Path(args.directory).resolve())
         finally:
             await owner.close()
         codes: list[int] = []
@@ -156,9 +186,15 @@ async def main(args: argparse.Namespace) -> int:
             )
 
         async with anyio.create_task_group() as tg:
+
+            async def run_then_stop() -> None:
+                """Run the session, then stop an operator that is still waiting."""
+                await run()
+                tg.cancel_scope.cancel()
+
             if args.resolve:
                 tg.start_soon(operator, url, args.resolve, args.timeout)
-            tg.start_soon(run)
+            tg.start_soon(run_then_stop)
         print(f"\n=== run_session returned {codes[0]}")
         await report(url)
         return codes[0]
@@ -203,4 +239,23 @@ parser.add_argument(
     "--socket", metavar="PATH", help="serve the clients on a Unix socket at PATH (PLAN.md §6)"
 )
 parser.add_argument("--timeout", type=float, default=240, help="how long the operator waits")
+parser.add_argument(
+    "--honesty",
+    choices=["off", "track", "enforce"],
+    default="off",
+    help="honesty.mode of the session (PLAN.md D196); useful with --checker-model only, because"
+    " the rule-based fake checkers never say whether a command executes project code",
+)
+parser.add_argument(
+    "--trust-head",
+    action="store_true",
+    help="certify HEAD of the project directory with the source `user` before the session"
+    " starts, so that the session has a baseline",
+)
+parser.add_argument(
+    "--reviewer-model",
+    default="",
+    metavar="MODEL",
+    help="honesty.reviewer_model; blank is the default model of the checkers' credentials",
+)
 sys.exit(anyio.run(main, parser.parse_args()))

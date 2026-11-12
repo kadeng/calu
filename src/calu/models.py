@@ -18,6 +18,10 @@ Models are created lazily by Pydantic AI only when called, so resolving needs no
 `run_bounded` runs an agent with a cap on the length of each answer and one retry, for all
 models: a model that repeats itself without end, or reasons at great length, would otherwise
 cost time and tokens and end the run with `UsageLimitExceeded`.
+
+Importing this module sets `PYDANTIC_AI_NO_BANNER=1` unless the variable is set already:
+Pydantic AI otherwise prints an advertisement for its observability service into the terminal
+at an agent's first run, between the lines of `calu run`.
 """
 
 import logging
@@ -50,6 +54,8 @@ checker failed" instead of deciding it (PLAN.md D72). `CheckerConfig.max_tokens`
 per checker."""
 
 log = logging.getLogger(__name__)
+
+os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
 
 async def run_bounded[T](
