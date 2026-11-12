@@ -1,9 +1,10 @@
 """A checker on the machine's Claude Code account (`calu.claude_model`, D117).
 
 The CLI itself is not run here: a script stands in for `claude` and records the command line it
-was given, which is what has to be right -- the schema inline, no tools, no session
-persistence, and an empty working directory. One live test (`live`) runs the real CLI, because
-the shape of its JSON is the thing a stand-in cannot verify.
+was given, its standard input and the instructions file, which is what has to be right -- the
+schema inline, no tools, no session persistence, an empty working directory, the content on
+standard input and the instructions as the system prompt. One live test (`live`) runs the real
+CLI, because the shape of its JSON is the thing a stand-in cannot verify.
 """
 
 import json
@@ -34,7 +35,10 @@ def fake_cli(tmp_path: Path, body: str) -> Path:
     script = tmp_path / "fake-claude"
     script.write_text(
         '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$RECORD"\nprintf "%s" "$PWD" > "$CWDFILE"\n'
-        + body,
+        # What arrives on standard input, and the instructions file with its mode, if any.
+        'cat > "$RECORD.stdin"\n'
+        'while [ $# -gt 0 ]; do if [ "$1" = "--system-prompt-file" ]; then '
+        'cp "$2" "$RECORD.system"; stat -c %a "$2" > "$RECORD.mode"; fi; shift; done\n' + body,
         encoding="utf-8",
     )
     script.chmod(script.stat().st_mode | stat.S_IEXEC)
@@ -79,7 +83,11 @@ async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
     monkeypatch.setenv("CWDFILE", str(cwdfile))
     script = fake_cli(tmp_path, f"cat <<'JSON'\n{json.dumps(RESULT)}\nJSON\n")
 
-    agent = Agent(claude_cli_model("claude:haiku", cli_path=str(script)), output_type=CheckDecision)
+    agent = Agent(
+        claude_cli_model("claude:haiku", cli_path=str(script)),
+        output_type=CheckDecision,
+        instructions="You check commands. Never allow deletions.",
+    )
     result = await agent.run("Judge this command: rm -rf /")
     assert result.output.decision is Decision.DENY
     assert "root filesystem" in result.output.reason
@@ -94,7 +102,16 @@ async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
 
     argv = record.read_text(encoding="utf-8").splitlines()
     assert argv[0] == "-p"
-    assert "Judge this command: rm -rf /" in argv[1]
+    # Nothing of the prompt is on the command line (review cc5): the content to judge arrives
+    # on standard input, and the instructions are the system prompt, from a private file.
+    assert not [a for a in argv if "rm -rf" in a or "Never allow" in a]
+    stdin = Path(f"{record}.stdin").read_text(encoding="utf-8")
+    assert stdin == "Judge this command: rm -rf /"
+    assert Path(f"{record}.system").read_text() == "You check commands. Never allow deletions."
+    assert Path(f"{record}.mode").read_text().strip() == "600"
+    system_file = Path(argv[argv.index("--system-prompt-file") + 1])
+    assert not system_file.exists(), "the instructions file is removed with its directory"
+    assert "--strict-mcp-config" in argv and "--disable-slash-commands" in argv
     assert argv[argv.index("--output-format") + 1] == "json"
     assert argv[argv.index("--model") + 1] == "haiku"
     assert "--no-session-persistence" in argv
@@ -109,8 +126,55 @@ async def test_a_check_runs_the_cli_and_returns_its_structured_answer(
     # would otherwise let the reviewed project write instructions into its reviewer's prompt.
     where = Path(cwdfile.read_text(encoding="utf-8"))
     assert where != Path.cwd() and str(tmp_path) not in str(where)
-    assert where.name.startswith("calu-checker-")
-    assert not where.exists(), "and the directory is removed again after the check"
+    assert where.name == "empty" and where.parent.name.startswith("calu-checker-")
+    assert system_file.parent == where.parent and system_file.parent != where
+    assert not where.parent.exists(), "and the directory is removed again after the check"
+
+
+async def test_a_prompt_larger_than_one_argument_may_be_reaches_the_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large commit diff failed with "Argument list too long" (128 KiB per argument)."""
+    record = tmp_path / "argv.txt"
+    monkeypatch.setenv("RECORD", str(record))
+    monkeypatch.setenv("CWDFILE", str(tmp_path / "cwd.txt"))
+    script = fake_cli(tmp_path, f"cat <<'JSON'\n{json.dumps(RESULT)}\nJSON\n")
+    prompt = "# Changeset of this commit\n\n" + "+ä line of a large diff\n" * 12_000
+    assert len(prompt.encode()) > 250_000
+    instructions = ("Rule. " * 30_000).strip()
+    agent = Agent(
+        claude_cli_model("claude:haiku", cli_path=str(script)),
+        output_type=CheckDecision,
+        instructions=instructions,
+    )
+    result = await agent.run(prompt)
+    assert result.output.decision is Decision.DENY
+    assert Path(f"{record}.stdin").read_text(encoding="utf-8") == prompt
+    assert Path(f"{record}.system").read_text(encoding="utf-8") == instructions
+    assert max(len(a) for a in record.read_text(encoding="utf-8").splitlines()) < 10_000
+
+
+def test_instructions_and_content_are_split_by_who_wrote_them() -> None:
+    from types import SimpleNamespace
+
+    from pydantic_ai import CachePoint
+    from pydantic_ai.messages import ModelRequest, SystemPromptPart, UserPromptPart
+
+    from calu.claude_model import split_prompt
+
+    messages = [
+        ModelRequest(
+            parts=[
+                SystemPromptPart("system part"),
+                UserPromptPart(["# Project context", CachePoint(), "# Step to check\n\nrm"]),
+                UserPromptPart("more"),
+            ]
+        )
+    ]
+    info = SimpleNamespace(instructions="the checker's instructions")
+    instructions, content = split_prompt(messages, info)  # type: ignore[arg-type]
+    assert instructions == "the checker's instructions\n\nsystem part"
+    assert content == "# Project context\n\n# Step to check\n\nrm\n\nmore"
 
 
 async def test_a_failing_cli_is_an_error_the_checker_can_escalate(
@@ -149,6 +213,22 @@ async def test_a_failing_cli_is_an_error_the_checker_can_escalate(
     with pytest.raises(ClaudeCliError) as absent:
         await Agent(missing, output_type=CheckDecision).run("judge")
     assert "was not found" in str(absent.value)
+
+    # Any other failure to start the CLI names the cause instead of surfacing as a bare OSError.
+    (tmp_path / "d").mkdir()
+    plain = tmp_path / "d" / "not-executable"
+    plain.write_text("#!/bin/sh\n", encoding="utf-8")
+    unusable = claude_cli_model("claude:haiku", cli_path=str(plain))
+    with pytest.raises(ClaudeCliError) as refused:
+        await Agent(unusable, output_type=CheckDecision).run("judge")
+    assert "could not be run (PermissionError" in str(refused.value)
+
+    (tmp_path / "e").mkdir()
+    listed = fake_cli(tmp_path / "e", "echo '[1, 2]'\n")
+    agent = Agent(claude_cli_model("claude:haiku", cli_path=str(listed)), output_type=CheckDecision)
+    with pytest.raises(ClaudeCliError) as shape:
+        await agent.run("judge")
+    assert "not a JSON object" in str(shape.value)
 
 
 @pytest.mark.live

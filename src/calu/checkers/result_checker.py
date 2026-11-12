@@ -23,6 +23,7 @@ from pydantic_ai.settings import ModelSettings
 
 from calu.checkers.checker import CheckContext, context_parts, elapsed_ms
 from calu.checkers.model import CheckerEffort
+from calu.checkers.render import code
 from calu.markdown import fence
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
@@ -165,7 +166,9 @@ class ResultChecker:
         """
         parts = context_parts(context, "# Project and conversation context")
         kind = "background subagent" if result.background else "subagent"
-        description = result.description or "no description"
+        # Claude wrote the description: one line in a code span, so it cannot add a heading or
+        # a user turn to the prompt (`calu.checkers.render`, rule 1).
+        description = code(result.description, 300) if result.description else "no description"
         parts.append(
             f"# Result to review\n\nA {kind} ({description}) finished.\n\n"
             f"Task Claude gave it:\n{fence(_cut_middle(result.prompt, 10_000))}\n\n"
