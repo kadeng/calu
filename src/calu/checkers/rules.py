@@ -407,6 +407,12 @@ class Rules:
         # Also the forms without leading assignments, wrappers (`env`, `nohup`, `timeout 5`)
         # and a path before the program name: deny rules are anchored at the start (D145).
         for variant in command_variants(command):
+            if CALU_CONTAINER.search(variant):
+                outcome.ask.append(
+                    f"The command `{command}` reaches calu's own database container, which "
+                    "always asks (built-in, D171): it holds the escalations Claude is waiting on."
+                )
+                return True
             if runs_calu(variant):
                 outcome.ask.append(
                     f"The command `{command}` runs calu itself, which always asks (built-in, "
@@ -796,6 +802,12 @@ def inline_code_paths(command: str) -> list[str]:
                     found.append(literal)
     return found
 
+
+CALU_CONTAINER = re.compile(r"^(docker|podman|nerdctl)( |$)(?=.*(^|[\s:=/])calu-db([-_:\s/]|$))")
+"""A container command that names calu's database container or compose project (`calu-db`,
+`calu.db.local.PROJECT`), D171. Docker access is root-equivalent, so this narrows the way
+around D163 -- `docker exec calu-db-postgres-1 psql` -- and does not close it: a script that
+looks the container up by id first is still the checker's."""
 
 LAUNCHERS = frozenset({"uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "pixi", "conda"})
 """Programs that start another program named later on their command line (D168)."""

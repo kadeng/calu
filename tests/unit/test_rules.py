@@ -705,3 +705,24 @@ def test_a_diff_that_changes_a_protected_file_asks_when_applied(tmp_path: Path) 
         assert rules.evaluate(bash(command, str(tmp_path))).ask, command
     assert not rules.evaluate(bash("git apply fine.diff", str(tmp_path))).ask
     assert not rules.evaluate(bash("patch -p1 < missing.diff", str(tmp_path))).ask
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("docker exec calu-db-postgres-1 psql -U calu_owner calu", True),
+        ("docker compose -p calu-db exec postgres psql", True),
+        ("docker cp calu-db-postgres-1:/var/lib/postgresql /tmp/x", True),
+        ("docker volume rm calu-db_data", True),
+        ("docker ps", False),
+        ("docker exec web-1 ls", False),
+        ("docker run my-calu-dbtool", False),
+    ],
+)
+def test_a_container_command_on_calus_database_asks(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
+    """D171: `docker exec` into calu's container skipped every credential (D163 closes the
+    password-free path; Docker itself stays root-equivalent, so this narrows the rest)."""
+    rules = Rules.from_texts(tmp_path, {})  # built in: no rule list needed
+    assert bool(rules.evaluate(bash(command, str(tmp_path))).ask) is asks
