@@ -523,13 +523,15 @@ def settings_file_sandbox_findings(
     has precedence over the settings files (PLAN.md D15). The files of the loaded sources
     (`claude.setting_sources`: `~/.claude/settings.json`, `<workspace>/.claude/settings.json`,
     `<workspace>/.claude/settings.local.json`) may still hold a `sandbox` object. This reads
-    those files and compares; it changes nothing. A file that is missing, unreadable or not a
-    JSON object holds no entries.
+    those files and compares; it changes nothing. A missing file holds no entries. A file that
+    exists and that calu cannot read as a JSON object is itself a finding, because calu cannot
+    say what it sets; so is a `sandbox` key calu does not know.
 
     Args:
         config: The session configuration, or its `claude` part alone (which is all a runner
             has), with the project's network policy applied.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `Path.home()`, or `$CLAUDE_CONFIG_DIR` for the
+            user's file when that variable is set (Claude Code reads it from there then).
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -546,23 +548,35 @@ def settings_file_sandbox_findings(
     if not sandbox.enabled:
         return []
     sources = set(claude.setting_sources)
-    home = home if home is not None else Path.home()
     files: list[tuple[str, Path]] = []
     if "user" in sources:
-        files.append(("~/.claude/settings.json", home / ".claude" / "settings.json"))
+        files.append(user_settings_file(home))
     if workspace is not None and "project" in sources:
         files.append((".claude/settings.json", workspace / ".claude" / "settings.json"))
     if workspace is not None and "local" in sources:
         files.append((".claude/settings.local.json", workspace / ".claude" / "settings.local.json"))
     findings: list[tuple[str, list[str]]] = []
     for label, path in files:
-        found = _json_object(path).get("sandbox")
+        document = _json_document(path)
+        if document is None:
+            # calu cannot say what the file sets, so it does not count as holding nothing.
+            findings.append((label, ["the file exists but calu cannot read it as a JSON object"]))
+            continue
+        found = document.get("sandbox")
+        if found is None:
+            continue
         if not isinstance(found, dict):
+            findings.append((label, [f"sandbox: {json.dumps(found)[:80]} (not an object)"]))
             continue
         beyond: list[str] = []
+        for name in _unknown_sandbox_keys(found):
+            beyond.append(f"{name}: {json.dumps(_nested(found, tuple(name.split('.'))))[:80]}")
         for name, keys, field in SANDBOX_LIST_KEYS:
             value = _nested(found, keys)
+            if value is None:
+                continue
             if not isinstance(value, list):
+                beyond.append(f"{name}: {json.dumps(value)[:80]} (not a list)")
                 continue
             own = set(getattr(sandbox, field)) if field else set()
             if name == "network.allowedDomains" and "*" in own:
@@ -572,8 +586,10 @@ def settings_file_sandbox_findings(
                 beyond.append(f"{name}: {', '.join(extra)}")
         for name, keys, weak, field in SANDBOX_SWITCH_KEYS:
             own_value = getattr(sandbox, field) if field else not weak
-            if _nested(found, keys) is weak and own_value is not weak:
-                beyond.append(f"{name}: {json.dumps(weak)}")
+            value = _nested(found, keys)
+            # Anything but the strengthening value counts: `0` or "no" may be read as off.
+            if value is not None and value is not (not weak) and own_value is not weak:
+                beyond.append(f"{name}: {json.dumps(value)[:80]}")
         for name, keys in SANDBOX_VALUE_KEYS:
             value = _nested(found, keys)
             if value is not None:
@@ -775,6 +791,66 @@ def _nested(document: dict[str, object], keys: tuple[str, ...]) -> object:
             return None
         value = value.get(key)
     return value
+
+
+def user_settings_file(home: Path | None = None) -> tuple[str, Path]:
+    """Locate the user's Claude Code settings file.
+
+    Args:
+        home: The home directory to look in; None follows Claude Code: `$CLAUDE_CONFIG_DIR` if
+            set, else `~/.claude`.
+
+    Returns:
+        (the file as a message names it, its path).
+    """
+    if home is not None:
+        return "~/.claude/settings.json", home / ".claude" / "settings.json"
+    relocated = os.environ.get("CLAUDE_CONFIG_DIR")
+    if relocated:
+        return "$CLAUDE_CONFIG_DIR/settings.json", Path(relocated) / "settings.json"
+    return "~/.claude/settings.json", Path.home() / ".claude" / "settings.json"
+
+
+def _unknown_sandbox_keys(found: dict[str, object]) -> list[str]:
+    """List the keys of a settings file's `sandbox` object that calu's tables do not know.
+
+    Args:
+        found: The `sandbox` object.
+
+    Returns:
+        Dotted names, e.g. "network.someKey", in the file's order. A key calu does not know
+        may change the sandbox in a way calu cannot judge, so the caller reports it.
+    """
+    known = {keys for _name, keys, *_rest in (*SANDBOX_LIST_KEYS, *SANDBOX_SWITCH_KEYS)}
+    known |= {keys for _name, keys in SANDBOX_VALUE_KEYS}
+    known |= {("filesystem", "denyRead"), ("filesystem", "denyWrite"), ("network", "deniedDomains")}
+    groups = {keys[0] for keys in known if len(keys) > 1}
+    unknown: list[str] = []
+    for key, value in found.items():
+        if key in groups and isinstance(value, dict):
+            unknown += [f"{key}.{inner}" for inner in value if (key, inner) not in known]
+        elif (key,) not in known:
+            unknown.append(key)
+    return unknown
+
+
+def _json_document(path: Path) -> dict[str, object] | None:
+    """Read a JSON object from a file, telling a missing file from an unreadable one.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The object; {} if the file does not exist; None if it exists and cannot be read as a
+        JSON object.
+    """
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except OSError, ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _json_object(path: Path) -> dict[str, object]:

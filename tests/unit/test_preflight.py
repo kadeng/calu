@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from calu import preflight
 from calu.claude.sdk_runner import SdkRunner
 from calu.config import (
@@ -426,11 +428,14 @@ def test_sandbox_entries_of_the_settings_files_are_named(tmp_path: Path) -> None
     assert "allowUnsandboxedCommands" not in only and "filesystem.allowRead" in only
 
 
-def test_a_broken_settings_file_gives_no_sandbox_warning(tmp_path: Path) -> None:
+def test_a_broken_settings_file_is_reported_not_taken_for_empty(tmp_path: Path) -> None:
+    """calu cannot say what a file it cannot read sets, so each such file is named."""
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("{not json")
     (tmp_path / ".claude" / "settings.local.json").write_text('{"sandbox": ["x"]}')
-    assert preflight.settings_file_sandbox_warnings(Config(), tmp_path, tmp_path) == []
+    found = preflight.settings_file_sandbox_warnings(Config(), tmp_path, tmp_path)
+    assert any("cannot read it" in line for line in found)
+    assert any("not an object" in line for line in found)
 
 
 # ---------------------------------------------------------------- ci1: keys calu cannot hide
@@ -679,3 +684,49 @@ def test_a_linked_config_home_is_denied_under_both_names(tmp_path: Path) -> None
         assert calu_private_dir_of(path, environ) is not None, path
     assert calu_private_dir_of(tmp_path / "real" / "calumet" / "x", environ) is None
     assert calu_private_dir_of(tmp_path / "elsewhere", environ) is None
+
+
+def test_a_settings_file_calu_cannot_judge_is_a_finding(tmp_path: Path) -> None:
+    """The start is refused when calu cannot say what a loaded settings file does to the sandbox.
+
+    That covers a file calu cannot read as JSON, a sandbox key calu does not know, and a value
+    of an unexpected type; a missing file and a file without a `sandbox` object hold nothing.
+    """
+    home, workspace = tmp_path / "home", tmp_path / "work"
+    (home / ".claude").mkdir(parents=True)
+    (workspace / ".claude").mkdir(parents=True)
+
+    def findings() -> dict[str, list[str]]:
+        """Return the findings by file label."""
+        return dict(preflight.settings_file_sandbox_findings(Config(), home, workspace))
+
+    assert findings() == {}
+    user = home / ".claude" / "settings.json"
+    user.write_text('{"model": "opus"}', encoding="utf-8")
+    assert findings() == {}
+
+    user.write_text('{"sandbox": {"excludedCommands": ["docker"]},}', encoding="utf-8")
+    assert "cannot read it" in findings()["~/.claude/settings.json"][0]
+
+    project = workspace / ".claude" / "settings.json"
+    user.write_text("{}", encoding="utf-8")
+    project.write_text(
+        '{"sandbox": {"someFutureKey": true, "network": {"other": 1}, "enabled": 0,'
+        ' "excludedCommands": "docker"}}',
+        encoding="utf-8",
+    )
+    entries = " | ".join(findings()[".claude/settings.json"])
+    for expected in ("someFutureKey", "network.other", "enabled: 0", "excludedCommands"):
+        assert expected in entries
+
+
+def test_the_users_settings_file_is_found_where_claude_code_reads_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With `CLAUDE_CONFIG_DIR` set, the user's settings file is the one in that directory."""
+    relocated = tmp_path / "cfg"
+    relocated.mkdir()
+    (relocated / "settings.json").write_text('{"sandbox": {"enabled": false}}', encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(relocated))
+    ((label, entries),) = preflight.settings_file_sandbox_findings(Config())
+    assert label == "$CLAUDE_CONFIG_DIR/settings.json" and "enabled: false" in entries[0]

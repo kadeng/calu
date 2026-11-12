@@ -63,9 +63,8 @@ A changeset that calu could not read completely is never left to a model: `Chang
 makes the session escalate the commit (or refuse it, where staging first solves it), and
 `Changeset.cut` turns a checker's approval into an escalation.
 
-Not recognised as a commit, and therefore judged by the command checkers alone: a git alias
-(`git ci`), a script or a program that commits, and a variable that expands to the command
-(`$GIT commit`).
+The changeset review applies to a commit calu can read off the line. Every command line, with
+or without a commit, is judged by the command checkers.
 """
 
 import logging
@@ -468,6 +467,73 @@ def _commits(words: list[str], cwd: Path, depth: int) -> bool:
     return False
 
 
+HEREDOC = re.compile(r"<<(-?)\s*(\\?['\"]?)([A-Za-z_][A-Za-z0-9_]*)")
+"""A here-document operator: the dash of `<<-`, how its delimiter is quoted, the delimiter."""
+
+UNCERTAIN = (
+    "calu cannot tell from this line what the shell runs while it builds the command "
+    "(a backtick, `$'...'` or a line continuation). Write the commit with a plain quoted message."
+)
+"""The cause given when a commit line holds a construct `_shell_runs_more` does not resolve."""
+
+
+def _shell_runs_more(command: str) -> bool:
+    """Tell whether a line holds shell syntax whose effect calu does not read off the words.
+
+    `parse_command` resolves `$(...)`. This looks for what it does not resolve: a backtick the
+    shell would expand, ANSI-C quoting (`$'...'`), and a backslash at the end of a line, which
+    joins words. Text the shell takes literally is skipped: single-quoted strings, the body
+    of a here-document whose delimiter is quoted, and a character behind a backslash.
+
+    Args:
+        command: The command line as Claude sent it.
+
+    Returns:
+        True if such a construct is present, or if the quoting is not closed (then calu cannot
+        say what is literal).
+
+    Example:
+        _shell_runs_more("git commit -m 'a `b` c'") is False
+        _shell_runs_more('git commit -m "a `b` c"') is True
+    """
+    if "\\\n" in command:
+        return True
+    kept: list[str] = []
+    pending: list[tuple[str, bool, bool]] = []  # (delimiter, quoted, strip tabs)
+    for line in command.split("\n"):
+        if pending:
+            delimiter, quoted, dash = pending[0]
+            if (line.lstrip("\t") if dash else line) == delimiter:
+                pending.pop(0)
+            elif not quoted and "`" in line:
+                return True  # an expanded here-document body: quotes do not protect here
+            continue
+        kept.append(line)
+        pending += [(match[3], bool(match[2]), bool(match[1])) for match in HEREDOC.finditer(line)]
+    text = "\n".join(kept)
+    index, double = 0, False
+    while index < len(text):
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        if double:
+            if char == "`":
+                return True
+            double = char != '"'
+        elif char == "'":
+            end = text.find("'", index + 1)
+            if end < 0:
+                return True
+            index = end
+        elif char == '"':
+            double = True
+        elif char == "`" or text.startswith("$'", index):
+            return True
+        index += 1
+    return double
+
+
 def classify_commit(command: str, cwd: Path) -> CommitLine:
     """Tell whether a Bash line creates a git commit and whether calu can review its content.
 
@@ -482,7 +548,8 @@ def classify_commit(command: str, cwd: Path) -> CommitLine:
         `git commit` command whose content follows from the index and its options (see the
         module docstring); `options` is set then. COMPOUND otherwise, with the cause: other
         commands in the line, a wrapper or options before `commit`, path arguments, a
-        redirection into a file, or a line the parser cannot split (it is then also searched
+        redirection into a file, shell syntax calu does not resolve (`_shell_runs_more`), or
+        a line the parser cannot split (it is then also searched
         line by line, so a commit inside an unparsable command is still found).
 
     Example:
@@ -505,12 +572,23 @@ def _classify(command: str, cwd: Path, depth: int) -> CommitLine:
     Returns:
         As `classify_commit`.
     """
-    parsed = parse_command(command, cwd)
+    uncertain = _shell_runs_more(command)
+    # Bash joins a line that ends in a backslash with the next one before it reads words.
+    parsed = parse_command(command.replace("\\\n", ""), cwd)
     argvs = list(parsed.argvs)
     if parsed.error or not argvs:
         argvs += [line.split() for line in command.splitlines()]
     committing = [words for words in argvs if _commits(words, cwd, depth)]
     if not committing:
+        # A git call whose subcommand calu cannot read as a word may be a commit.
+        unread = any(
+            words
+            and Path(words[0]).name == "git"
+            and (_git_subcommand(words) or "").startswith(("$", "`"))
+            for words in argvs
+        )
+        if unread and uncertain:
+            return CommitLine(CommitKind.COMPOUND, cause=UNCERTAIN)
         return CommitLine(CommitKind.NONE)
 
     def compound(cause: str) -> CommitLine:
@@ -526,6 +604,8 @@ def _classify(command: str, cwd: Path, depth: int) -> CommitLine:
 
     if parsed.error:
         return compound("calu could not parse this command line.")
+    if uncertain:
+        return compound(UNCERTAIN)
     if len(committing) > 1:
         return compound("This line commits more than once.")
     words = committing[0]
