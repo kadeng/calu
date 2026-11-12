@@ -268,6 +268,9 @@ def _wrapper_options(
             short = option[:2]
             if not option.startswith("--") and (wrapper, short) in COMMAND_OPTIONS:
                 name, attached = short, option[2:]
+            elif re.fullmatch(r"-[A-Za-z]*c", option) and (wrapper, "-c") in COMMAND_OPTIONS:
+                # combined flags ending in the command option: `script -qec "cmd" /dev/null`
+                name, attached = "-c", ""
         if (wrapper, name) in COMMAND_OPTIONS:
             value = attached or (words.pop(0) if words else "")
             try:
@@ -589,8 +592,8 @@ class _Walker:
             or (
                 sub == "checkout"
                 and len(plain) == 1
-                and not options
-                and any(cwd is not None and (cwd / plain[0].value).is_file() for cwd in self.cwds)
+                and set(options) <= {"-q", "--quiet", "-f", "--force", "-m", "--merge"}
+                and any(cwd is not None and (cwd / plain[0].value).exists() for cwd in self.cwds)
             )
         ):
             if "--" in values:

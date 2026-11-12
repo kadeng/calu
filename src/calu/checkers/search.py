@@ -105,8 +105,11 @@ def _listing(
     """
     here = directory.resolve()
     seen = seen | {here}
-    ignored = _ignored(directory, deadline)
-    listed = _git_files(directory, deadline) if git_ignore and not ignored else None
+    listed = (
+        _git_files(directory, deadline)
+        if git_ignore and not _ignored(directory, deadline)
+        else None
+    )
     if listed is None:
         return _walk(directory, deadline)
     relative: list[str] = []
@@ -114,8 +117,18 @@ def _listing(
         if time.monotonic() > deadline or len(relative) > LIMIT:
             return relative, False
         path = directory / entry.rstrip("/")
-        if path.resolve() in seen:
-            continue  # `./` of an empty submodule, or a loop: nothing new below it
+        resolved = path.resolve()
+        if resolved == here:
+            # `./`: git lists an uninitialised submodule as itself, but rg still reads the
+            # untracked files in it -- walk it rather than skip it (D173; skipping let a Grep
+            # read `sub/.env` unchecked).
+            inner, complete = _walk(directory, deadline)
+            relative += inner
+            if not complete:
+                return relative, False
+            continue
+        if resolved in seen:
+            continue  # a link back to a directory above: nothing new below it
         if entry.endswith("/") or (path.is_dir() and not path.is_symlink()):
             inner, complete = _listing(path, git_ignore, deadline, seen)
             relative += [f"{entry.rstrip('/')}/{name}" for name in inner]

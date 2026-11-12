@@ -828,7 +828,7 @@ def test_diff_targets_cover_strip_levels_directories_and_pipes(tmp_path: Path) -
         ("git config set core.hooksPath /x", True),
         ("""python -c'print(open(".env").read())'""", True),
         ("docker-compose -p calu-db exec postgres psql", True),
-        ("docker compose -f /x/local-compose.yml exec postgres psql", True),
+        ("docker compose -f /x/calu/db/local-compose.yml exec postgres psql", True),
         ("git checkout main", False),
         ("git config get user.name", False),
         ("git config -f .gitmodules submodule.mod.url", False),
@@ -850,3 +850,115 @@ def test_a_branch_switch_behind_git_options_is_seen() -> None:
     for command in ("git -c x=y checkout main && python m.py", "git --git-dir=.git switch b"):
         assert SWITCHES_BRANCH.search(command), command
     assert not SWITCHES_BRANCH.search("git status")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "uv run -m calu.cli serve",
+        "python -X dev -m calu",
+        "python -W ignore -m calu.cli",
+        "uv run python -X dev -m calu",
+        "uv --quiet tool run calu",
+        "uv run --with-editable . calu",
+        "uv run -i https://example.org/simple calu",
+        "uvx -w x calu",
+        "uv run -n calu",
+        "uv run env calu",
+        "uv run timeout 5 calu",
+        "uv run nohup calu",
+    ],
+)
+def test_calu_started_through_any_launcher_spelling_asks(tmp_path: Path, command: str) -> None:
+    """D173 (third review): D172's precise launcher parsing missed these, which D168 caught;
+    the detection now fails closed."""
+    assert Rules.from_texts(tmp_path, {}).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+def test_a_secret_in_an_uninitialised_submodule_is_not_skipped(tmp_path: Path) -> None:
+    """D173: D172 skipped git's `./` entry of an empty submodule, so a Grep read `sub/.env`
+    with no check at all; the directory is walked instead."""
+    import subprocess
+
+    def git(*args: str, cwd: Path) -> None:
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "-c",
+                "protocol.file.allow=always",
+                *args,
+            ],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+        )
+
+    sub, top = tmp_path / "sub", tmp_path / "top"
+    sub.mkdir()
+    top.mkdir()
+    git("init", "-q", cwd=sub)
+    git("commit", "-q", "--allow-empty", "-m", "s", cwd=sub)
+    git("init", "-q", cwd=top)
+    git("submodule", "-q", "add", str(sub), "sub", cwd=top)
+    git("commit", "-qm", "add", cwd=top)
+    git("submodule", "-q", "deinit", "-f", "sub", cwd=top)
+    (top / "sub" / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    outcome = default_rules(top).evaluate(
+        Step(tool_name="Grep", tool_input={"pattern": "SECRET"}, cwd=str(top))
+    )
+    assert outcome.ask and "sub/.env" in outcome.ask[0]
+
+
+def test_diffs_are_stripped_the_way_the_tool_strips_them(tmp_path: Path) -> None:
+    """D173: D172 checked every suffix of a diff path -- slow on big diffs and wrong for a
+    nested `docs/CLAUDE.md`; quoted names, `git apply` from stdin and heredocs were missed."""
+    import time
+
+    (tmp_path / "nested.diff").write_text(
+        "diff --git a/docs/CLAUDE.md b/docs/CLAUDE.md\n"
+        "--- a/docs/CLAUDE.md\n+++ b/docs/CLAUDE.md\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "q.diff").write_text('--- "a/CLAUDE.md"\n+++ "b/CLAUDE.md"\n', encoding="utf-8")
+    rules = default_rules(tmp_path)
+    for command in (
+        "git apply q.diff",
+        "cat q.diff | git apply",
+        "git apply <q.diff",
+        "patch -p1 <<EOF\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -1 +1 @@\n-a\n+b\nEOF",
+        "patch < nested.diff",  # without -p, patch uses the base name: CLAUDE.md here
+    ):
+        assert rules.evaluate(bash(command, str(tmp_path))).ask, command
+    for command in ("git apply nested.diff", "patch -p1 < nested.diff"):
+        assert not rules.evaluate(bash(command, str(tmp_path))).ask, command
+    big = "".join(
+        f"--- a/d1/d2/d3/d4/f{i}.py\n+++ b/d1/d2/d3/d4/f{i}.py\n@@ -1 +1 @@\n-a\n+b\n"
+        for i in range(6000)
+    )
+    (tmp_path / "big.diff").write_text(big, encoding="utf-8")
+    started = time.monotonic()
+    rules.evaluate(bash("git apply big.diff", str(tmp_path)))
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ('script -qc "sudo ls" /dev/null', True),
+        ("git checkout -q CLAUDE.md", True),
+        ("git checkout .claude", True),
+        ("docker compose -f /x/calu/db/local-compose.yml exec postgres psql", True),
+        ("python3 -Ic\"print(open('.env').read())\"", True),
+        ("docker compose -f local-compose.yml up -d", False),
+        ("git checkout feature", False),
+    ],
+)
+def test_the_third_review_findings(tmp_path: Path, command: str, asks: bool) -> None:
+    """D173: what the review of D172 found, in both directions."""
+    (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
+    (tmp_path / ".claude").mkdir()
+    assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
