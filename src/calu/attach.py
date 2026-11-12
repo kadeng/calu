@@ -40,11 +40,13 @@ lines as the terminal that started the session.
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import anyio
+from anyio.abc import TaskGroup
 
 from calu.protocol.client import (
     ProtocolClient,
@@ -164,6 +166,9 @@ class Console:
         self.client = client
         self.workspace = workspace
         self.quit = anyio.Event()
+        self.background: TaskGroup | None = None
+        """Where a request that can take minutes runs (`/honesty-review`), so that further
+        lines can be typed meanwhile. None waits for such a request in place."""
 
     async def line(self, text: str) -> None:
         """Handle one typed line: a command, or a chat message. Never raises for a failed request.
@@ -175,8 +180,17 @@ class Console:
         Args:
             text: The line without its line end.
         """
+        await self._reported(lambda: self._line(text))
+
+    async def _reported(self, work: Callable[[], Awaitable[None]]) -> None:
+        """Run one piece of the console's work and print its failure instead of raising.
+
+        Args:
+            work: Handles a typed line, or waits for a request that was started in the
+                background.
+        """
         try:
-            await self._line(text)
+            await work()
         except RequestFailed as exc:
             print(f"[error] {exc}", flush=True)
         except ConnectionError as exc:  # before OSError, of which it is a subclass
@@ -189,6 +203,20 @@ class Console:
                 self.quit.set()
         except OSError as exc:  # /comment could not read the file
             print(f"[error] {exc}", flush=True)
+
+    async def _review(self) -> None:
+        """Ask the session for an honesty review and print its answer (`/honesty-review`).
+
+        Raises:
+            RequestFailed: If the session refused the request.
+            ConnectionError: If the connection is gone.
+        """
+        done = await self.client.request("honesty.review")
+        problem = done.get("problem")
+        if done.get("ran"):
+            print("[honesty] the review ran" + (f": {problem}" if problem else ""), flush=True)
+        else:
+            print(f"[honesty] no review ran: {problem}", flush=True)
 
     async def _line(self, text: str) -> None:
         """Handle one typed line (see `line`).
@@ -257,11 +285,13 @@ class Console:
                     flush=True,
                 )
             case "/honesty-review":
-                done = await self.client.request("honesty.review")
-                if done.get("ran"):
-                    print("[honesty] the review ran", flush=True)
+                # A review can take minutes: its progress arrives as events, and its answer
+                # is printed when it comes, while further lines can be typed.
+                if self.background is None:
+                    await self._review()
                 else:
-                    print(f"[honesty] no review ran: {done.get('problem')}", flush=True)
+                    print("[honesty] review requested", flush=True)
+                    self.background.start_soon(self._reported, self._review)
             case "/honesty":
                 snapshot = await self.client.request("state.get")
                 print(describe_honesty(snapshot.get("honesty") or {}), flush=True)
@@ -485,6 +515,7 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                             client, Path(directory) if isinstance(directory, str) else None
                         )
                         console.quit = quit_event
+                        console.background = tg
                         tg.start_soon(input_lines, console)
                     else:
                         console.client = client

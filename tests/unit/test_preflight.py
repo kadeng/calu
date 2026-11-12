@@ -131,6 +131,11 @@ def test_models_without_a_key_variable_are_not_checked():
     config = Config().with_model("bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0")
     assert preflight.key_warnings(config, environ={}) == []
     assert "narrator" in preflight.configured_models(config)
+    assert "honesty reviewer" not in preflight.configured_models(config)
+    tracking = Config(honesty=HonestyConfig(mode="track", reviewer_model="mistral:x"))
+    assert preflight.configured_models(tracking)["honesty reviewer"] == "mistral:x"
+    blank = Config(honesty=HonestyConfig(mode="track"))
+    assert preflight.configured_models(blank)["honesty reviewer"].startswith("anthropic:")
 
 
 def test_a_review_without_a_snapshot_is_reported() -> None:

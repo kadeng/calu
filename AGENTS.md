@@ -58,7 +58,7 @@ phases.
 | `src/calu/changes.py` | Git snapshots of the project directory: what a command wrote, as a patch, and how to undo it (D31, optional) |
 | `src/calu/paths.py` | Where calu's own secrets and state are on this machine (the XDG directories); imports nothing from calu, so the configuration and the rules both use it |
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
-| `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the checkers' read-only code tools (`tools.py`) |
+| `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the reviewer agent of the honesty review (`honesty_review.py`: batches, bounded concurrency, a failure verifies nothing), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
 | `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
@@ -68,7 +68,7 @@ phases.
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
 | `src/calu/model_choice.py` | Which model the checkers get when none is named: the first provider whose credentials are found (D129) |
 | `src/calu/claude_model.py` | The `claude:` model type: a check answered by the `claude` CLI on this machine's own account, no tools (D117) |
-| `src/calu/honesty.py` | Code honesty: which code was verified to say what it does. Marks and the checks of their paths; the honesty state of a session (`HonestyState`: baseline from the trusted commits, marks, verified contents, unreviewed files, the note for checkers, whether a commit may be certified). The session applies a step's marks and verifications after its tool result; the gate decides from a snapshot |
+| `src/calu/honesty.py` | Code honesty: which code was verified to say what it does. Marks and the checks of their paths; the honesty state of a session (`HonestyState`: baseline from the trusted commits, marks, verified contents, unreviewed files, the note for checkers, whether a commit may be certified, the plan of an honesty review). The session applies a step's marks and verifications after its tool result and runs the honesty review; the gate decides from a snapshot |
 | `src/calu/configdoc.py` | Walks `calu.config.Config` for `docs/CONFIGURATION.md` and `calu config list` |
 | `src/calu/markdown.py` | Code fences that the quoted text cannot close (commands, diffs, file excerpts) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |

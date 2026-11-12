@@ -563,23 +563,28 @@ class HonestyConfig(ConfigModel):
     leaving a mark); `user` is the strongest. A commit whose source is weaker than this
     setting is no baseline, and a file content whose source is weaker is unreviewed. With
     `review`, an edit check alone does not verify a file: it stays unreviewed until an honesty
-    review judged it. With `user`, only a person's certification counts. Raising the setting
-    deletes nothing; lowering it makes the weaker records count again."""
+    review judged it. With `user`, only a person's certification counts, and calu starts no
+    honesty review by itself, because a review cannot verify a file then; a person may still
+    ask for one. Raising the setting deletes nothing; lowering it makes the weaker records
+    count again."""
     max_open_marks: int = Field(default=3, ge=0)
     """How many marks may be open, counted over all files, before an honesty review is
     required. With more, a checker's single clean marks are ignored and only an honesty review
     clears the marks, which keeps documentation updates close to the edits they belong to."""
     review_max_files: int = Field(default=300, ge=1)
-    """The largest number of files one honesty review reads. With more files to review the
-    review does not run, and the step that needed it is escalated to a person with the
-    counts."""
+    """The largest number of files one honesty review reads: the files that are unreviewed or
+    carry a mark. With more, the review does not run, and the step that needed it is escalated
+    to a person with the counts. A file of more than 200,000 bytes and a file that is not
+    UTF-8 text are never read by the review; a person certifies them
+    (`calu honesty trust --file`)."""
     reviewer_model: str = ""
     """Pydantic AI model string of the honesty reviewer; blank uses the default model (see
     `command_checker.model`). The reviewer judges whole files against the honesty rules, so a
     more capable model than a step checker's is a reasonable choice."""
     review_batch_files: int = Field(default=8, ge=1)
-    """How many files one run of the reviewer agent judges. A review splits its files into
-    batches of this size."""
+    """How many files one run of the reviewer agent judges at most. A review splits its files
+    into batches of this size, and closes a batch earlier when its files' texts together
+    exceed 120,000 characters."""
     review_concurrency: int = Field(default=4, ge=1)
     """How many batches of one honesty review run at the same time."""
     reviewer_request_limit: int = Field(default=30, ge=1)
@@ -588,8 +593,11 @@ class HonestyConfig(ConfigModel):
     reviewer_output_tokens_limit: int = Field(default=60_000, ge=1)
     """Token budget for all answers of one batch (thinking included on most providers)."""
     review_timeout_s: float = Field(default=600.0, gt=0)
-    """Seconds one honesty review may take in all. A review that takes longer fails, and the
-    step that needed it is escalated."""
+    """Seconds one honesty review may take in all. A review that takes longer fails and
+    verifies nothing, and the step that needed it is escalated. A step waits for a review at
+    most as long as the check of one step may take (seven minutes, less the time its checkers
+    took); a review that needs longer goes on, the step is escalated meanwhile, and the
+    review's result is there when the step is tried again."""
 
 
 class ClockConfig(ConfigModel):
@@ -727,8 +735,8 @@ class Config(ConfigModel):
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.
 
-        The roles are the command, edit and subagent result checkers, the narrator and the
-        summarizer (e.g. for a test run with one model).
+        The roles are the command, edit, changeset and subagent result checkers, the honesty
+        reviewer, the narrator and the summarizer (e.g. for a test run with one model).
 
         Args:
             model: A Pydantic AI model string, e.g. "mistral:mistral-small-2603",
@@ -743,6 +751,7 @@ class Config(ConfigModel):
                 "edit_checker": self.edit_checker.model_copy(update={"model": model}),
                 "subagent_checker": self.subagent_checker.model_copy(update={"model": model}),
                 "changeset_checker": self.changeset_checker.model_copy(update={"model": model}),
+                "honesty": self.honesty.model_copy(update={"reviewer_model": model}),
                 "context": self.context.model_copy(
                     update={"narrator_model": model, "summarizer_model": model}
                 ),

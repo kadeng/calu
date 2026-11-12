@@ -17,7 +17,7 @@ from pydantic_ai.models import Model
 
 from calu.checkers import CodeMark, Decision, Route
 from calu.config import ChangesConfig, Config, HonestyConfig
-from calu.honesty import FileReview, Finding, HonestyState
+from calu.honesty import HonestyState
 from calu.protocol.client import RequestFailed
 from calu.protocol.messages import (
     ChatSendParams,
@@ -28,9 +28,9 @@ from calu.protocol.messages import (
     ToolResult,
     TurnResult,
 )
-from calu.session import REVIEW_NEEDED, Session, SessionError
+from calu.session import Session, SessionError
 from calu.store import MemorySessionStore
-from calu.testing import fake_models, marking_checker
+from calu.testing import fake_models, fake_reviewer, marking_checker
 from tests.unit.helpers import Recorder, default_settings, make_session
 from tests.unit.test_protocol_server import Events, client, served
 
@@ -511,97 +511,84 @@ async def test_without_a_baseline_an_executing_command_waits_for_a_person(repo: 
     assert store.trusted_commits == {}, "and certifies nothing"
 
 
-async def test_unreviewed_files_call_for_the_review_and_without_one_a_person_decides(repo: Path):
-    """Section 5: unreviewed files and an executing command: the review is asked for. The
-    review is not built yet, so the step is escalated with that reason."""
+async def test_unreviewed_files_call_for_the_review_and_a_clean_result_lets_the_command_run(
+    repo: Path,
+):
+    """Sections 4 and 5: unreviewed files and an executing command: the review runs, the
+    reviewer finds the file honest, calu verifies it at that content and the step goes on."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
-    session, rec, _store = await session_on(repo, [[bash("make test")]])
-    async with anyio.create_task_group() as tg:
-        await session.start(tg)
-        await session.send_chat(ChatSendParams(text="go"))
-        request = (await rec.wait_for(EscalationRequest))[0]
-        assert "An honesty review is needed" in request.reason
-        assert REVIEW_NEEDED in request.reason
-        assert "1 unreviewed file(s) (src/parser.py)" in request.reason
-        await session.decide_escalation(request.escalation_id, "deny", "not now")
-        await rec.wait_for(TurnResult)
-        await session.stop()
-    assert rec.of(ToolResult)[-1].is_error
-
-
-async def reviewing(session: Session, findings: tuple[Finding, ...] = ()) -> list[int]:
-    """Replace the session's honesty review by one that judges `src/parser.py`.
-
-    Args:
-        session: The session.
-        findings: What the review finds in the file; empty for "honest".
-
-    Returns:
-        A list that gets one entry per review that ran.
-    """
-    ran: list[int] = []
-
-    async def review() -> str:
-        """Verify the file at its present content, or record the findings.
-
-        Returns:
-            "": the review ran.
-        """
-        state: HonestyState = session.honesty
-        sha256 = state.content_sha256("src/parser.py")
-        assert sha256 is not None
-        state.apply_review({"src/parser.py": FileReview(sha256, findings)})
-        ran.append(1)
-        return ""
-
-    session.honesty_review = review  # type: ignore[method-assign]
-    return ran
-
-
-async def test_a_review_that_verifies_everything_lets_the_command_run(repo: Path):
-    """Section 5: the step follows the review's result: clean, so it goes on."""
-    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
-    session, rec, _store = await session_on(repo, [[bash("make test")]])
-    ran = await reviewing(session)
+    seen: list[str] = []
+    session, rec, store = await session_on(
+        repo, [[bash("make test")]], models={"honesty-review": fake_reviewer(seen=seen)}
+    )
     await run_turns(session, rec)
-    assert ran == [1]
+    assert len(seen) == 1 and "## File 1: src/parser.py" in seen[0]
+    assert "-    return sorted(line.split" in seen[0], "the reviewer gets the diff"
     assert checks(rec)[0].decision is Decision.PASS
     assert rec.of(HonestyUpdate)[-1].clean
+    assert any(update.review_running for update in rec.of(HonestyUpdate))
+    (row,) = store.trusted_files.values()
+    assert (row.path, row.method) == ("src/parser.py", "review")
+    assert "review started: 1 file(s)" in logs(rec) and "review finished" in logs(rec)
 
 
 async def test_a_review_with_findings_denies_the_command_with_them(repo: Path):
     """Section 5: findings of the review become marks, and the step is denied with them."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
-    session, rec, _store = await session_on(repo, [[bash("make test")]])
-    await reviewing(session, (Finding("fields", "returns the fields unsorted"),))
+    reviewer = fake_reviewer({"src/parser.py": [("fields", "returns the fields unsorted")]})
+    session, rec, store = await session_on(
+        repo, [[bash("make test")]], models={"honesty-review": reviewer}
+    )
     await run_turns(session, rec)
     assert checks(rec)[0].decision is Decision.DENY
     assert "src/parser.py:fields (returns the fields unsorted)" in checks(rec)[0].reason
+    assert store.trusted_files == {}, "a file with findings is not stored as verified"
+    assert session.honesty.open_marks[0].opened_by == "the honesty review"
 
 
-async def test_a_failed_review_escalates(repo: Path):
-    """Section 4: a review that fails verifies nothing, and the step is escalated."""
+async def test_a_failed_review_verifies_nothing_and_escalates(repo: Path):
+    """Section 4: a review whose answer is malformed verifies nothing; the step is escalated."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
-    session, rec, _store = await session_on(repo, [[bash("make test")]])
-
-    async def failed() -> str:
-        """Stand in for a review whose model call failed.
-
-        Returns:
-            The problem.
-        """
-        return "The honesty review failed (the model did not answer)."
-
-    session.honesty_review = failed  # type: ignore[method-assign]
+    (repo / "README.md").write_text("# changed\n", encoding="utf-8")
+    session, rec, store = await session_on(
+        repo, [[bash("make test")]], models={"honesty-review": fake_reviewer(fails=True)}
+    )
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         await session.send_chat(ChatSendParams(text="go"))
         request = (await rec.wait_for(EscalationRequest))[0]
-        assert "the model did not answer" in request.reason
+        assert "The honesty review failed: batch 1 of 1 failed" in request.reason
+        assert "2 unreviewed file(s)" in request.reason
         await session.decide_escalation(request.escalation_id, "deny", "no")
         await rec.wait_for(TurnResult)
         await session.stop()
+    assert rec.of(ToolResult)[-1].is_error
+    assert store.trusted_files == {} and session.honesty.verified == {}
     assert not (await session.honesty_snapshot()).clean
+
+
+async def test_more_files_than_the_cap_escalate_without_a_review(repo: Path):
+    """Section 4: over `honesty.review_max_files` the review does not run; the step waits for
+    a person, with the counts."""
+    for number in range(3):
+        (repo / f"new{number}.py").write_text(f"X = {number}\n", encoding="utf-8")
+    seen: list[str] = []
+    session, rec, _store = await session_on(
+        repo,
+        [[bash("make test")]],
+        models={"honesty-review": fake_reviewer(seen=seen)},
+        review_max_files=2,
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "3 files are unreviewed or marked" in request.reason
+        assert "at most 2 (honesty.review_max_files)" in request.reason
+        await session.decide_escalation(request.escalation_id, "deny", "no")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    assert seen == [], "no model was asked"
 
 
 async def test_track_mode_blocks_nothing(repo: Path):
@@ -676,18 +663,48 @@ async def test_a_commit_with_open_marks_is_denied(repo: Path):
 
 
 async def test_a_commit_with_unreviewed_files_follows_the_review(repo: Path):
-    """Section 5: a commit with unreviewed files asks for the review; a person's allow lets the
-    commit run once, and that commit is not certified."""
+    """Section 5: a commit with unreviewed files runs the review. With findings the commit is
+    denied; when the review verifies the files, the commit runs and is certified with the
+    source "review"."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     git(repo, "add", "-A")
+    first = git(repo, "rev-parse", "HEAD")
+    reviewer = fake_reviewer({"src/parser.py": [("fields", "returns the fields unsorted")]})
+    session, rec, store = await session_on(
+        repo,
+        [[bash("git commit -m second", run=COMMIT)]],
+        models={"honesty-review": reviewer},
+    )
+    await run_turns(session, rec)
+    assert checks(rec)[0].decision is Decision.DENY
+    assert "this command is a commit" in checks(rec)[0].reason
+    assert git(repo, "rev-parse", "HEAD") == first
+
     session, rec, store = await session_on(repo, [[bash("git commit -m second", run=COMMIT)]])
+    await run_turns(session, rec)
+    head = git(repo, "rev-parse", "HEAD")
+    assert head != first, "the commit ran"
+    assert store.trusted_commits[head].method == "review"
+    assert rec.of(HonestyUpdate)[-1].baseline == head
+
+
+async def test_a_person_s_allow_of_a_commit_certifies_nothing(repo: Path):
+    """Section 5: a person's allow on an honesty escalation lets the commit run once; the
+    commit is not certified."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    git(repo, "add", "-A")
+    session, rec, store = await session_on(
+        repo,
+        [[bash("git commit -m second", run=COMMIT)]],
+        models={"honesty-review": fake_reviewer(fails=True)},
+    )
     first = git(repo, "rev-parse", "HEAD")
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         await session.send_chat(ChatSendParams(text="go"))
         request = (await rec.wait_for(EscalationRequest))[0]
         assert "this command is a commit" in request.reason
-        assert REVIEW_NEEDED in request.reason
+        assert "The honesty review failed" in request.reason
         await session.decide_escalation(request.escalation_id, "allow", "this once")
         await rec.wait_for(TurnResult)
         await session.stop()
@@ -802,11 +819,12 @@ async def test_raising_sufficient_trust_makes_a_checked_commit_no_baseline(repo:
     assert (await session.honesty_snapshot()).baseline is None
 
 
-async def test_asking_for_a_review_answers_that_none_can_run_yet(repo: Path):
-    """Section 8: `honesty.review` runs the review; until it is built it says why none ran."""
-    session, _rec, _store = await session_on(repo, [[]])
+async def test_a_person_asks_for_a_review(repo: Path):
+    """Sections 4 and 8: `honesty.review` runs the review also when nothing needs it."""
+    session, rec, _store = await session_on(repo, [[]])
     done = await session.request_review(client="tester")
-    assert not done.ran and done.problem == REVIEW_NEEDED
+    assert done.ran and done.problem == ""
+    assert "the review tester asked for ran" in logs(rec)
     off, _rec2, _store2 = await session_on(repo, [[]], mode="off")
     with pytest.raises(SessionError, match=r"honesty\.mode is off"):
         await off.request_review()
@@ -835,7 +853,7 @@ async def test_a_client_certifies_and_asks_for_a_review_over_the_protocol(repo: 
             assert snapshot["honesty"]["baseline"] == head and snapshot["honesty"]["clean"]
             assert snapshot["honesty_mode"] == "enforce"
             review = await zed.request("honesty.review")
-            assert review == {"ran": False, "problem": REVIEW_NEEDED}
+            assert review == {"ran": True, "problem": ""}
             with pytest.raises(RequestFailed, match="names no commit"):
                 await zed.request("honesty.trust", {"rev": "no-such-branch"})
             with anyio.fail_after(5):
@@ -1001,10 +1019,15 @@ async def test_a_checker_s_escalation_names_what_is_not_verified(repo: Path):
     """Section 5: without marks the checker's escalation stands, no review runs, and the
     person is told what is not verified and that an allow certifies nothing."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    reviews: list[str] = []
     session, rec, _store = await session_on(
-        repo, [[bash("make test")]], models={"command": marking_checker(decision="ESCALATE")}
+        repo,
+        [[bash("make test")]],
+        models={
+            "command": marking_checker(decision="ESCALATE"),
+            "honesty-review": fake_reviewer(seen=reviews),
+        },
     )
-    reviews = await reviewing(session)
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         await session.send_chat(ChatSendParams(text="go"))

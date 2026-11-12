@@ -58,6 +58,9 @@ honesty state (`Session.honesty`) and keeps it up to date:
                                               the verification of a checked edit, the
                                               certification of a commit made in a clean state
     the call was denied or failed             they are dropped
+    a step needs a clean state (the gate),    the honesty review judges the unreviewed and the
+    `honesty.review`                          marked files (`_run_review`): one at a time, and
+                                              not again by itself while nothing changed
 
 While an escalation of the session is open or being opened, the gate approves no tool call that
 needs a check (`EscalationDesk.hold`), so that no other agent of the session gets a step approved
@@ -104,14 +107,16 @@ the main agent and of subagents overlap, so the most important one wins:
     > tool_call (an approved call runs) > running (Claude works) > idle
 """
 
+import functools
 import getpass
 import itertools
 import logging
 import os
 import platform
 import socket
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -138,6 +143,7 @@ from calu.checkers import (
     SubagentResult,
     ToolPolicy,
 )
+from calu.checkers.honesty_review import HonestyReviewer, batches
 from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file
 from calu.checkers.tools import StepTime
@@ -154,11 +160,11 @@ from calu.claude.sdk_runner import AGENT_TOOLS
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
-from calu.config import EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort
+from calu.config import EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort, default_model
 from calu.context import ContextBuilder, StepRecord, TurnRecord
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
-from calu.defaults.instructions import compose_instructions
+from calu.defaults.instructions import compose_instructions, review_instructions
 from calu.escalations import ANSWER_TEMPLATE as ANSWER_TEMPLATE
 from calu.escalations import ASK_PENDING_S as ASK_PENDING_S
 from calu.escalations import DB_UNREACHABLE as DB_UNREACHABLE
@@ -182,14 +188,18 @@ from calu.gate import _changeset_block as _changeset_block
 from calu.gate import combine_decisions as combine_decisions
 from calu.honesty import (
     NOTE_LIMIT,
+    NOTE_PATH_CHARS,
+    FileReview,
     GitError,
     HonestyMark,
     HonestySnapshot,
     HonestyState,
     MarkChanges,
+    ReviewPlan,
     find_baseline,
     resolve_commit,
     run_git,
+    shown,
 )
 from calu.models import resolve_model
 from calu.protocol.messages import (
@@ -322,8 +332,21 @@ RELAY_TEMPLATE = (
 """How a message for a background subagent is wrapped for the main agent."""
 
 
-REVIEW_NEEDED = "An honesty review is needed, and this version of calu cannot run one yet."
-"""What `Session.honesty_review` answers until the review is built."""
+REVIEW_CERTIFIER = "calu honesty review"
+"""Who an honesty review records as the certifier of what it verified."""
+
+
+@dataclass
+class ReviewRun:
+    """The honesty review in flight (`Session._run_review`)."""
+
+    done: anyio.Event = field(default_factory=anyio.Event)
+    """Set when the review ended, whatever its outcome."""
+    result: HonestyReviewResult | None = None
+    """The review's answer, once `done` is set."""
+    scope: anyio.CancelScope = field(default_factory=anyio.CancelScope)
+    """Around the review's work; cancelled when the run of the session ends."""
+
 
 CERTIFIER = "calu session"
 """Who certified, for a commit or a file content the session records itself."""
@@ -366,7 +389,8 @@ class Session:
             emit: Receives every event for the clients, in order.
             project: Name of the project row the session belongs to, or None.
             checker_models: Replacements for the configured models, by key "command", "edit",
-                "subagent", "narrator" and "summarizer" (tests pass fake models here).
+                "subagent", "narrator", "summarizer" and "honesty-review" (tests pass fake
+                models here).
             startup_warnings: Warnings about missing prerequisites, emitted as `log` warnings
                 at every `start`, before the runner starts.
             snapshot_root: Where the optional write-set snapshots live (PLAN.md D31); None
@@ -400,6 +424,11 @@ class Session:
         """The HEAD the baseline was last looked up for; a different HEAD looks it up again."""
         self._review_running = False
         """True while an honesty review runs; at most one runs at a time."""
+        self._review_run: ReviewRun | None = None
+        """The honesty review in flight, if any; a second caller waits for it."""
+        self._last_review: tuple[str, HonestyReviewResult] | None = None
+        """`HonestyState.review_fingerprint` after the last review that reached the reviewer,
+        and its answer; the gate's next review does not run while the fingerprint is the same."""
         self._honesty_sent = HonestyInfo()
         """What the last `honesty.update` said, so an unchanged state is not sent again."""
         self.snapshot_root = snapshot_root or default_root()
@@ -473,7 +502,7 @@ class Session:
             take_clock_alarm=self._take_clock_alarm,
             keep_changeset=self._keep_changeset,
             honesty=self._gate_honesty,
-            honesty_review=lambda _step: self.honesty_review(),
+            honesty_review=lambda _step, wait_s: self.honesty_review(wait_s=wait_s),
         )
         """Decides about each tool call (`calu.gate`); it reads the policy, the rules, the
         configuration and the checkers of this session as they are at the moment of a step."""
@@ -745,42 +774,394 @@ class Session:
         await self.announce_honesty()
         return result
 
-    async def honesty_review(self) -> str:
+    async def honesty_review(self, *, asked: bool = False, wait_s: float | None = None) -> str:
         """Run the honesty review: judge the unreviewed and the marked files (section 4).
 
         The gate calls this for a step that needs a clean honesty state, and `request_review`
-        calls it for a person. The review itself is not built yet: this method changes
-        nothing and says that a review is needed, so the gate escalates the step to a person.
+        calls it for a person (`_run_review` has the steps).
+
+        Args:
+            asked: True when a person asked for the review.
+            wait_s: The longest time to wait for the review's end, in seconds; None waits
+                until it ends.
 
         Returns:
-            "" if a review ran (the caller then reads the state again); otherwise one sentence
-            saying why none ran. Never raises.
+            "" if a review ran and judged every file it had to (the caller then reads the
+            state again); otherwise one sentence saying why none ran, why it failed, which
+            files it could not judge, or that it is still running. Never raises.
         """
-        return REVIEW_NEEDED
+        return (await self._run_review(asked, wait_s)).problem
+
+    async def _run_review(self, asked: bool, wait_s: float | None = None) -> HonestyReviewResult:
+        """Run one honesty review, or say why none runs (specification section 4).
+
+            the plan         `HonestyState.review_plan`: the unreviewed and the marked files,
+                             each read once; more than `honesty.review_max_files` -> no review
+            without a model  a file whose change is whitespace only is verified
+            the reviewer     `calu.checkers.honesty_review.HonestyReviewer`: batches of
+                             `honesty.review_batch_files`, `honesty.review_concurrency` at a
+                             time, `honesty.review_timeout_s` in all; a failure verifies nothing
+            the result       `HonestyState.apply_current_review`: an honest file is verified
+                             at the content the reviewer was shown and stored with the source
+                             "review"; findings replace the file's marks; "review required"
+                             is cleared when no mark is open
+            no baseline      every file is judged whole; if HEAD then records only verified
+                             contents, HEAD is certified with the source of those
+                             verifications (`_certify_reviewed`)
+
+        At most one review runs at a time: a caller that finds one running waits for it and
+        gets its answer. A review that the gate asks for does not run when nothing it would
+        read changed since the last one (`HonestyState.review_fingerprint`); the last answer
+        is then given again. A review a person asks for runs anyway. With
+        `honesty.sufficient_trust` "user" a review verifies no file, so only a person's
+        request starts one (its findings and the clearing of "review required" still apply).
+
+        While the session runs, the review is a task of the session, not of its caller: a
+        caller that stops waiting (`wait_s`, or the gate's own time limit) leaves the review
+        running, and its result is applied when it ends. A running review ends with the run.
+
+        Side effects: model calls; changes `self.honesty`; writes verified contents and
+        possibly a trusted commit to the database; emits `honesty.update` when the review
+        starts and ends (`review_running`) and `log` events with its progress and outcome.
+
+        Args:
+            asked: True when a person asked for the review.
+            wait_s: The longest time to wait for the review's end, in seconds; None waits
+                until it ends.
+
+        Returns:
+            `ran` says whether the reviewer's result was applied; `problem` is "" if every
+            file was judged. Never raises: an error is the problem of a review that did not
+            run, and so is a review that is still running after `wait_s`.
+        """
+        if self.config.honesty.mode == "off":
+            return HonestyReviewResult(ran=False, problem="honesty.mode is off.")
+        run = self._review_run
+        if run is None:
+            run = self._review_run = ReviewRun()
+            running = not self._run_state.run_done.is_set()
+            tasks = self._run_state.tg if running else None
+            if tasks is None:
+                await self._review_job(run, asked)
+            else:
+                tasks.start_soon(self._review_job, run, asked)
+        with anyio.move_on_after(wait_s):
+            await run.done.wait()
+        if run.result is None:
+            return HonestyReviewResult(
+                ran=False,
+                problem=(
+                    "The honesty review is still running. Its result is applied when it "
+                    "ends; the step can be tried again then."
+                ),
+            )
+        return run.result
+
+    async def _review_job(self, run: ReviewRun, fresh: bool) -> None:
+        """Run the one honesty review in flight and hand its answer to everyone who waits.
+
+        Side effects: as `_run_review`; sets `run.result` and `run.done`, and frees the
+        session for the next review. Never raises, except for cancellation from outside.
+
+        Args:
+            run: The record of this review.
+            fresh: True runs the review also when nothing changed since the last one.
+        """
+        try:
+            with run.scope:
+                run.result = await self._review_once(fresh)
+            if run.result is None:
+                run.result = HonestyReviewResult(
+                    ran=False, problem="The honesty review was stopped with the session."
+                )
+        except Exception as exc:
+            log.exception("the honesty review failed")
+            run.result = HonestyReviewResult(
+                ran=False, problem=f"The honesty review failed ({type(exc).__name__}: {exc})."
+            )
+        finally:
+            self._review_run = None
+            run.done.set()
+
+    async def _review_once(self, fresh: bool) -> HonestyReviewResult:
+        """Do the work of the one honesty review in flight (`_review_job`).
+
+        Args:
+            fresh: True runs the review also when nothing changed since the last one.
+
+        Returns:
+            As `_run_review`.
+
+        Raises:
+            Exception: Whatever git, the worker thread or the store raised; `_review_job`
+                turns it into the problem of a review that did not run.
+        """
+        cfg = self.config.honesty
+        if cfg.sufficient_trust == "user" and not fresh:
+            return HonestyReviewResult(
+                ran=False,
+                problem=(
+                    "No honesty review was started: honesty.sufficient_trust is 'user', so "
+                    "only a person's certification verifies a file (`/trust`, `/trust-file`)."
+                ),
+            )
+        async with self._honesty_lock:
+            await self._refresh_trust()
+            plan = await anyio.to_thread.run_sync(
+                self._review_plan, self._take_written(), cfg.review_max_files
+            )
+        if plan.problem:
+            return HonestyReviewResult(
+                ran=False, problem=f"The honesty review did not run: {plan.problem}."
+            )
+        if not fresh and self._last_review is not None:
+            fingerprint, last = self._last_review
+            if fingerprint == plan.fingerprint:
+                if not last.problem:
+                    return last
+                return last.model_copy(
+                    update={
+                        "problem": (
+                            f"{last.problem} Nothing changed since that review, so it was "
+                            "not repeated; `/honesty-review` runs it again."
+                        )
+                    }
+                )
+        base = plan.baseline
+        await self._emit_safely(
+            Log(
+                level="info",
+                message=(
+                    f"honesty: review started: {plan.count} file(s) to judge "
+                    f"({len(plan.files)} by the reviewer in "
+                    f"{len(batches(plan.files, cfg.review_batch_files))} batch(es), "
+                    f"{len(plan.shortcuts)} with a whitespace-only change, "
+                    f"{len(plan.skipped)} that the review cannot judge)"
+                ),
+            )
+        )
+        self._review_running = True
+        try:
+            await self.announce_honesty()
+            async with self._checking_scope():
+                outcome = await self._reviewer().review(
+                    plan.files, base.short if base else "", self._review_progress
+                )
+        finally:
+            self._review_running = False
+        if outcome.problem:
+            self._last_review = (
+                plan.fingerprint,
+                HonestyReviewResult(ran=False, problem=outcome.problem),
+            )
+            await self._emit_safely(Log(level="warning", message=f"honesty: {outcome.problem}"))
+            await self.announce_honesty()
+            return self._last_review[1]
+        async with self._honesty_lock:
+            changes, store, fingerprint = await anyio.to_thread.run_sync(
+                self._apply_review, {**plan.shortcuts, **outcome.results}
+            )
+            for sha256 in changes.withdrawn:
+                await self.recorder.attempt(
+                    "withdrawing the stored trust of a file content",
+                    self.store.distrust_file(sha256, REVIEW_CERTIFIER),
+                )
+            for sha256, path in store:
+                await self.recorder.attempt(
+                    "storing a verified file content",
+                    self.store.trust_file(sha256, path, "review", REVIEW_CERTIFIER),
+                )
+            if base is None:
+                await self._certify_reviewed()
+        await self._report_marks(changes)
+        problem = ""
+        left = [*(f"{path} ({why})" for path, why in plan.skipped), *changes.ignored]
+        if left:
+            rest = f"; and {len(left) - 5} more" if len(left) > 5 else ""
+            names = "; ".join(shown(one, NOTE_PATH_CHARS) for one in left[:5])
+            problem = (
+                f"The honesty review could not judge {len(left)} file(s): {names}{rest}. "
+                "A person certifies such a file with `/trust-file PATH`."
+            )
+        result = HonestyReviewResult(ran=True, problem=problem)
+        self._last_review = (fingerprint, result)
+        await self._emit_safely(
+            Log(
+                level="info",
+                message=(
+                    f"honesty: review finished: {len(store)} file(s) verified, "
+                    f"{len(changes.opened)} finding(s), {len(left)} file(s) not judged "
+                    f"({outcome.input_tokens} input and {outcome.output_tokens} output tokens)"
+                ),
+            )
+        )
+        await self.announce_honesty()
+        return result
+
+    def _reviewer(self) -> HonestyReviewer:
+        """Build the reviewer agent of one honesty review from the configuration as it is now.
+
+        Returns:
+            The reviewer with the model `honesty.reviewer_model` (blank: the default model,
+            `calu.config.default_model`), the fixed reviewer instructions with the honesty
+            rules, and the budget settings `honesty.review*`.
+        """
+        cfg = self.config.honesty
+        model = (
+            self._models.get("honesty-review")
+            or cfg.reviewer_model.strip()
+            or default_model(self.config.claude.use_bedrock)
+        )
+        return HonestyReviewer(
+            instructions=review_instructions(cfg.rules),
+            model=resolve_model(model),
+            workspace=self.workspace,
+            rules=self.rules,
+            usage_limits=UsageLimits(
+                request_limit=cfg.reviewer_request_limit,
+                output_tokens_limit=cfg.reviewer_output_tokens_limit,
+            ),
+            batch_files=cfg.review_batch_files,
+            concurrency=cfg.review_concurrency,
+            timeout_s=cfg.review_timeout_s,
+        )
+
+    async def _review_progress(self, done: int, total: int) -> None:
+        """Tell the clients that one batch of the running honesty review answered.
+
+        Args:
+            done: How many batches have answered.
+            total: How many batches the review has.
+        """
+        await self._emit_safely(
+            Log(level="info", message=f"honesty: review: batch {done} of {total} answered")
+        )
+
+    def _review_plan(self, written: Collection[str], max_files: int) -> ReviewPlan:
+        """Compute the plan of an honesty review (reads git and files; for a worker thread).
+
+        Args:
+            written: Files that commands wrote since the last look (`_take_written`); they
+                are watched from now on.
+            max_files: `honesty.review_max_files`.
+
+        Returns:
+            `HonestyState.review_plan`, after the marks whose code is gone were closed.
+        """
+        self.honesty.watch_all(written)
+        self.honesty.close_stale()
+        return self.honesty.review_plan(max_files)
+
+    def _apply_review(
+        self, results: Mapping[str, FileReview]
+    ) -> tuple[MarkChanges, list[tuple[str, str]], str]:
+        """Apply the result of an honesty review to the state (for a worker thread).
+
+        Args:
+            results: Path -> what the review said, for the files it judged.
+
+        Returns:
+            (what `HonestyState.apply_current_review` changed; the (SHA-256, path) of each
+            verification to store in the database with the source "review"; the state's
+            `review_fingerprint` afterwards).
+        """
+        state = self.honesty
+        changes = state.apply_current_review(results)
+        store: list[tuple[str, str]] = []
+        for path in results:
+            held = state.storable(path)
+            if held is not None and held.source == "review":
+                store.append((held.sha256, state.key(path)))
+        state.close_stale()
+        return changes, store, state.review_fingerprint()
+
+    async def _certify_reviewed(self) -> None:
+        """Certify HEAD after an honesty review of a repository without a baseline.
+
+        HEAD is recorded as trusted if every file it records has a verified content
+        (`HonestyState.certification` with `rooted=False`): calu compares the commit's
+        entries with the verified contents; the reviewer's answer alone certifies nothing.
+        The source is the weakest among those verifications, and never "user". The caller
+        holds `_honesty_lock`.
+
+        Side effects: writes through `SessionStore.certify_commit`, marks the stored trust as
+        stale so that the baseline is looked up again, and logs the outcome. A failure is
+        logged; HEAD is then not certified.
+        """
+        try:
+            head = await self._head()
+            if head is None:
+                return
+            verdict = await anyio.to_thread.run_sync(
+                functools.partial(self.honesty.certification, head, rooted=False)
+            )
+            if verdict.problem or verdict.source is None:
+                await self._emit_safely(
+                    Log(
+                        level="info",
+                        message=(
+                            f"honesty: commit {head[:12]} is not certified after the review: "
+                            f"{verdict.problem}"
+                        ),
+                    )
+                )
+                return
+            source = "review" if verdict.source == "user" else verdict.source
+            commit = await anyio.to_thread.run_sync(resolve_commit, self.workspace, head)
+            await self.store.certify_commit(
+                commit.commit_id, commit.tree_id, source, REVIEW_CERTIFIER
+            )
+            self._trust_stale = True
+            await self._emit_safely(
+                Log(
+                    level="info",
+                    message=(
+                        f"honesty: commit {commit.short} certified as trusted after the "
+                        f"review of every file it records (source {source})"
+                    ),
+                )
+            )
+        except Exception as exc:
+            log.exception("certifying HEAD after an honesty review failed")
+            await self._emit_safely(
+                Log(
+                    level="warning",
+                    message=(
+                        "honesty: HEAD was not certified after the review "
+                        f"({type(exc).__name__}: {exc})"
+                    ),
+                )
+            )
 
     async def request_review(self, client: str = "unknown") -> HonestyReviewResult:
         """Run the honesty review because a person asked for it (`honesty.review`).
 
-        Side effects: as `honesty_review`; logs who asked and sends `honesty.update`.
+        Side effects: as `_run_review`; logs who asked and sends `honesty.update`.
 
         Args:
             client: Who asked, for the log.
 
         Returns:
-            Whether a review ran, and if not, why.
+            Whether a review ran, and what it could not do.
 
         Raises:
             SessionError: If `honesty.mode` is "off".
         """
         if self.config.honesty.mode == "off":
             raise SessionError("honesty.mode is off; there is no honesty state to review")
-        problem = await self.honesty_review()
-        outcome = f"did not run: {problem}" if problem else "ran"
+        done = await self._run_review(asked=True)
+        outcome = "ran" if done.ran else "did not run"
         await self._emit_safely(
-            Log(level="info", message=f"honesty: the review {client} asked for {outcome}")
+            Log(
+                level="info",
+                message=(
+                    f"honesty: the review {client} asked for {outcome}"
+                    + (f": {done.problem}" if done.problem else "")
+                ),
+            )
         )
         await self.announce_honesty()
-        return HonestyReviewResult(ran=not problem, problem=problem)
+        return done
 
     def trust_changed(self) -> None:
         """Note that the stored trust changed, so the next snapshot reads it again.
@@ -1811,6 +2192,9 @@ class Session:
             )
         finally:
             self._run_state.run_done.set()  # first, so that `stop` never waits for a broken client
+            if self._review_run is not None:
+                # An honesty review in flight ends with the run; it has verified nothing.
+                self._review_run.scope.cancel()
             with anyio.CancelScope(shield=True):
                 await self.desk.cancel_all("The Claude session ended.")
                 if self._run_state.queue:  # messages Claude did not read are lost with the session

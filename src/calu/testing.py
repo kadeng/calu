@@ -10,7 +10,7 @@ every decision without a model:
     step text contains "calu:comment"   -> a remark to Claude next to the decision
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.messages import ModelMessage
@@ -209,6 +209,58 @@ def marking_checker(
     return FunctionModel(answer, model_name="marking-checker")
 
 
+def fake_reviewer(
+    findings: Mapping[str, Sequence[tuple[str, str]]] | None = None,
+    fails: bool = False,
+    seen: list[str] | None = None,
+) -> Model:
+    """Create a model for the honesty reviewer that answers with fixed findings.
+
+    It reads the "## File N: path" headings of the request and answers for each file.
+
+    Args:
+        findings: Path -> (symbol, reason) of each spot the review finds in that file. A file
+            that is not named, or named with no spot, is answered as honest.
+        fails: True answers with no file at all, which is a malformed answer: the review
+            fails.
+        seen: A list that gets the request text of every call, for a test to read.
+
+    Returns:
+        A `FunctionModel` named "fake-reviewer".
+    """
+    found = dict(findings or {})
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return one verdict per file heading of the request.
+
+        Args:
+            messages: The message history; the last one holds the request.
+            info: Agent information; its first output tool receives the answer.
+
+        Returns:
+            A response that calls the output tool.
+        """
+        prompt = _last_prompt(messages)
+        if seen is not None:
+            seen.append(prompt)
+        files: list[dict[str, object]] = []
+        for line in prompt.splitlines():
+            head, _, path = line.partition(": ")
+            if not head.startswith("## File ") or fails:
+                continue
+            spots = found.get(path, ())
+            files.append(
+                {
+                    "file": int(head.removeprefix("## File ")),
+                    "honest": not spots,
+                    "findings": [{"symbol": symbol, "reason": reason} for symbol, reason in spots],
+                }
+            )
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"files": files})])
+
+    return FunctionModel(answer, model_name="fake-reviewer")
+
+
 def fake_summarizer() -> Model:
     """Create a summarizer model that returns a fixed text naming the number of folded turns.
 
@@ -283,8 +335,8 @@ def fake_models() -> dict[str, str | Model]:
     """Create checker, summarizer and narrator models for `Session(checker_models=...)`.
 
     Returns:
-        New models under the keys "command", "edit", "changeset", "subagent", "summarizer" and
-        "narrator".
+        New models under the keys "command", "edit", "changeset", "subagent", "summarizer",
+        "narrator" and "honesty-review" (a reviewer that finds every file honest).
     """
     return {
         "command": rule_based_checker(),
@@ -293,4 +345,5 @@ def fake_models() -> dict[str, str | Model]:
         "subagent": fake_result_checker(),
         "summarizer": fake_summarizer(),
         "narrator": fake_narrator(),
+        "honesty-review": fake_reviewer(),
     }

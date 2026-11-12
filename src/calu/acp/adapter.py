@@ -685,6 +685,8 @@ class Adapter:
                 parts.append(f"{info.unreviewed_count} unreviewed file(s)")
             if info.review_required:
                 parts.append("an honesty review is required")
+            if info.review_running:
+                parts.append("an honesty review is running")
             effect = (
                 "Commands that execute project code and commits wait until this is settled."
                 if info.mode == "enforce"

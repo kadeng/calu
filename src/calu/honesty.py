@@ -20,6 +20,11 @@ tracks which code is verified:
     HonestySnapshot  the state at one moment: baseline, open marks, unreviewed files,
                      review required; `clean` and the note for the checkers are computed
                      from it
+    honesty review   a reviewer agent judges the unreviewed and the marked files
+                     (`calu.checkers.honesty_review`); the state computes what it reads
+                     (`HonestyState.review_plan`: the diff against the baseline or the whole
+                     file, each bound to the SHA-256 of the content it was made from) and
+                     applies its result (`apply_current_review`)
 
 `HonestyState` reads git and files and nothing else; the database is asked by its caller
 (`find_baseline` takes the lookup as a function). The session (`calu.session`) applies a
@@ -30,6 +35,7 @@ checker's marks and verifications to the state after the tool call succeeded, an
 
 from __future__ import annotations
 
+import difflib
 import functools
 import hashlib
 import os
@@ -184,6 +190,13 @@ SETTLE_NS = 2_000_000_000
 """A file's hashes are remembered with its size and times only when its last change is at
 least this old, so that two writes within the clock's resolution are both seen."""
 
+REVIEW_FILE_BYTES = 200_000
+"""The largest file, in bytes, that an honesty review hands to its reviewer. A larger file is
+skipped and stays unreviewed, so a person decides about it (`calu honesty trust --file`)."""
+
+REVIEWER = "the honesty review"
+"""Who opens and closes marks for an honesty review (`HonestyMark.opened_by`)."""
+
 CONTENT_ID = re.compile(r"[0-9a-f]{64}")
 """A SHA-256 as the verified map and the table `trusted_files` hold it."""
 
@@ -319,6 +332,46 @@ class FileReview:
     """SHA-256 of the content the review read (`HonestyState.content_sha256` before it read)."""
     findings: tuple[Finding, ...] = ()
     """Empty when the review judged the file honest."""
+    marks: tuple[int, ...] | None = None
+    """The ids of the open marks on the file when the review read it; None if not recorded.
+    `HonestyState.apply_current_review` drops a result whose file has other open marks now."""
+
+
+@dataclass(frozen=True)
+class ReviewFile:
+    """One file an honesty review hands to its reviewer agent."""
+
+    path: str
+    """The file as `HonestyState.key` names it."""
+    sha256: str
+    """SHA-256 of the content `text` was computed from."""
+    text: str
+    """The whole file if `whole`, else its unified diff against the baseline's content."""
+    whole: bool
+    marks: tuple[HonestyMark, ...] = ()
+    """The open marks on the file when the plan was made."""
+
+
+@dataclass(frozen=True)
+class ReviewPlan:
+    """What an honesty review has to do, computed from the state (`HonestyState.review_plan`)."""
+
+    baseline: Baseline | None
+    """The baseline the files are compared with; None reviews every file whole."""
+    count: int = 0
+    """How many files are unreviewed or carry an open mark."""
+    problem: str = ""
+    """Why no review can run: more files than the limit, or git could not list them. The
+    other fields are then empty."""
+    files: tuple[ReviewFile, ...] = ()
+    """The files for the reviewer agent, sorted by path."""
+    shortcuts: Mapping[str, FileReview] = field(default_factory=dict[str, FileReview])
+    """Files verified without a model: their change against the baseline is whitespace only
+    (`whitespace_only`)."""
+    skipped: tuple[tuple[str, str], ...] = ()
+    """(path, why) of each file the review cannot judge; it stays as it is."""
+    fingerprint: str = ""
+    """`HonestyState.review_fingerprint()` at the time of the plan."""
 
 
 @dataclass
@@ -458,8 +511,9 @@ def run_git(cwd: Path, arguments: Sequence[str], *, accept: tuple[int, ...] = (0
     git reads every object as the repository stores it under its own id: object replacement
     (`refs/replace`) and the grafts file are switched off, so the tree git names for a commit
     id is the tree of that commit.
-    The honesty state only uses commands that list names and ids (`rev-parse`, `rev-list`,
-    `ls-tree`, `ls-files`); calu reads and hashes file contents itself.
+    The honesty state uses commands that list names and ids (`rev-parse`, `rev-list`,
+    `ls-tree`, `ls-files`) and reads the baseline's content of a file for an honesty review
+    (`cat-file`); calu reads and hashes the working files itself.
 
     Args:
         cwd: The directory to run in.
@@ -818,6 +872,58 @@ def content_ids(path: Path, object_format: str = "sha1") -> ContentIds | None:
     return ContentIds(plain.hexdigest(), blob.hexdigest())
 
 
+def whitespace_only(before: str, after: str) -> bool:
+    r"""Tell whether two texts differ in nothing but trailing whitespace and blank lines.
+
+    An honesty review verifies such a change without a model. Compared are the lines of both
+    texts after the whitespace at each line's end (line endings included) is removed and
+    empty lines are left out. Whitespace at the start of a line or inside it is compared as
+    written, because indentation can decide what code does.
+
+    Args:
+        before: The content the baseline records.
+        after: The present content.
+
+    Returns:
+        True if the remaining lines are the same in both texts.
+
+    Example:
+        whitespace_only("a = 1  \r\n\nb = 2", "a = 1\nb = 2\n") is True;
+        whitespace_only("if x:\n    y()", "if x:\ny()") is False.
+    """
+
+    def kept(text: str) -> list[str]:
+        """Return the lines that are compared.
+
+        Args:
+            text: One of the two texts.
+
+        Returns:
+            The lines without trailing whitespace, empty ones left out.
+        """
+        return [line.rstrip() for line in text.split("\n") if line.strip()]
+
+    return kept(before) == kept(after)
+
+
+def change_diff(before: str, after: str, path: str) -> str:
+    """Render the change of one file as a unified diff with three lines of context.
+
+    Args:
+        before: The content the baseline records.
+        after: The present content.
+        path: The file's name for the two header lines.
+
+    Returns:
+        The diff as text; "" if the two contents have the same lines.
+    """
+    name = shown(path, NOTE_PATH_CHARS)
+    lines = difflib.unified_diff(
+        before.splitlines(), after.splitlines(), f"a/{name}", f"b/{name}", lineterm=""
+    )
+    return "\n".join(lines)
+
+
 def normal_symbol(symbol: str) -> str:
     """Normalise a symbol as a checker wrote it.
 
@@ -900,6 +1006,10 @@ class HonestyState:
         expect_edit(path, tool, input)     at the gate: the hash a checked edit will produce
         record_edit(path, expected)        after the edit: verified if it has that content
         apply_review(results)              an honesty review: verified files and findings
+        review_plan(max_files)             what an honesty review has to read now
+        apply_current_review(results)      apply_review for the files that did not change
+                                           while the review ran
+        review_fingerprint()               a hash of what a review would read
         storable(path)                     the verification to store in `trusted_files`
         close_stale() / clear(id, by)      marks calu or a person closes
         watch(path) / watch_all(paths)     files git does not list that the session wrote
@@ -1397,13 +1507,11 @@ class HonestyState:
                 changes.ignored.append(f"{key}: the review named no content hash")
                 continue
             for mark in [m for m in self.open_marks if m.path == key]:
-                changes.closed.append(self._close(mark, "the honesty review"))
+                changes.closed.append(self._close(mark, REVIEWER))
             self.verified[key] = Verified(review.sha256, "review")
             self.watched.add(key)
             for finding in review.findings:
-                changes.opened.append(
-                    self._open(key, finding.symbol, finding.reason, "the honesty review")
-                )
+                changes.opened.append(self._open(key, finding.symbol, finding.reason, REVIEWER))
             if review.findings:
                 self._marked(key, changes)
             else:
@@ -1413,6 +1521,215 @@ class HonestyState:
         self._check_threshold()
         changes.review_required = self.review_required
         return changes
+
+    @_locked
+    def apply_current_review(self, results: Mapping[str, FileReview]) -> MarkChanges:
+        """Apply the results of an honesty review that still describe their files.
+
+        A review takes time, and steps go on meanwhile. A result is applied (`apply_review`)
+        only if the file's present content has the SHA-256 the review read and, where the
+        result records them (`FileReview.marks`), the file's open marks are the ones the
+        review saw. Every other result changes nothing: its file is as it was.
+
+        Args:
+            results: Path (as `key` names it) -> what the review said about the file.
+
+        Returns:
+            What `apply_review` returns for the applied results, with one sentence in
+            `ignored` per result that was dropped.
+        """
+        current: dict[str, FileReview] = {}
+        dropped: list[str] = []
+        for path, review in results.items():
+            key = self.key(path)
+            ids = self._content(key)
+            held = tuple(sorted(mark.id for mark in self.open_marks if mark.path == key))
+            if ids is None or ids.sha256 != review.sha256:
+                dropped.append(f"{key}: the file changed while the review ran")
+            elif review.marks is not None and tuple(sorted(review.marks)) != held:
+                dropped.append(f"{key}: its marks changed while the review ran")
+            else:
+                current[key] = review
+        changes = self.apply_review(current)
+        changes.ignored += dropped
+        return changes
+
+    def _review_candidates(self) -> tuple[list[str], str]:
+        """List the files an honesty review has to judge: unreviewed or with an open mark.
+
+        Returns:
+            (the paths, sorted; "" or why git could not list them, in which case no path is
+            named). Without a baseline that counts, the files are every file git lists for
+            the repository, the watched files that exist, and the marked files.
+        """
+        found = self.dishonest_files()
+        if self._base() is not None:
+            unreviewed = self.unreviewed()
+            if unreviewed.everything:
+                return [], unreviewed.problem or "git did not list the files"
+            found.update(unreviewed.paths)
+            return sorted(found), ""
+        try:
+            top = self._repository()
+            output = run_git(top, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        except GitError as exc:
+            return [], str(exc)
+        for raw in set(output.split(b"\0")) - {b""}:
+            inside = os.fsdecode(raw).rstrip("/")
+            if os.path.lexists(top / inside):
+                found.add(self.key(top / inside))
+        found.update(key for key in self.watched if os.path.lexists(self.workspace / key))
+        return sorted(found), ""
+
+    def _fingerprint(self, candidates: Sequence[str], problem: str) -> str:
+        """Hash what an honesty review would read (see `review_fingerprint`).
+
+        Args:
+            candidates: The files of `_review_candidates`.
+            problem: Its problem, or "".
+
+        Returns:
+            A SHA-256 in hexadecimal.
+        """
+        base = self._base()
+        parts: list[str] = [base.commit_id if base else "", problem, str(self.review_required)]
+        for key in candidates:
+            ids = self._content(key)
+            parts.append(f"{key}\0{ids.sha256 if ids else ''}")
+        parts += [f"{mark.id}\0{mark.reason}" for mark in self.open_marks]
+        return hashlib.sha256("\0\0".join(parts).encode(errors="surrogateescape")).hexdigest()
+
+    @_locked
+    def review_fingerprint(self) -> str:
+        """Hash everything an honesty review would read, to tell whether anything changed.
+
+        The session keeps the value after a review and does not run a review by itself again
+        while the value is the same.
+
+        Returns:
+            A SHA-256 over the baseline's commit id, the files that are unreviewed or carry
+            an open mark with the SHA-256 of their present contents, the open marks with
+            their reasons, and whether a review is required.
+        """
+        return self._fingerprint(*self._review_candidates())
+
+    @_locked
+    def review_plan(self, max_files: int) -> ReviewPlan:
+        """Compute what an honesty review has to do now (specification section 4).
+
+        The files to judge are the unreviewed files and the files with an open mark. For each
+        the content is read once; the SHA-256 and the text for the reviewer both come from
+        those bytes, so a file is later verified at exactly the content the reviewer was
+        shown. Per file, the first rule that applies decides:
+
+            not a regular file calu can read, larger than
+            `REVIEW_FILE_BYTES`, or not UTF-8 text          -> skipped
+            no open mark, and the present content is
+            reviewed already (only the content the index
+            holds for the path is not)                      -> skipped
+            no open mark, and the change against the
+            baseline's content is whitespace only           -> verified without a model
+            an open mark, a file the baseline does not
+            hold, or no baseline                            -> the reviewer gets the whole file
+            otherwise                                       -> the reviewer gets the diff
+                                                               against the baseline's content
+
+        Args:
+            max_files: `honesty.review_max_files`. With more files to judge the plan has only
+                `count` and a `problem`, and no file is read.
+
+        Returns:
+            The plan. `problem` is set, and nothing else but `count`, when there are more
+            files than `max_files` or git could not list the files.
+        """
+        base = self._base()
+        candidates, problem = self._review_candidates()
+        if problem:
+            return ReviewPlan(base, problem=f"git could not list the files to review ({problem})")
+        if len(candidates) > max_files:
+            return ReviewPlan(
+                base,
+                count=len(candidates),
+                problem=(
+                    f"{len(candidates)} files are unreviewed or marked, and one honesty review "
+                    f"reads at most {max_files} (honesty.review_max_files)"
+                ),
+            )
+        tree: dict[str, tuple[str, str]] = {}
+        top: Path | None = None
+        if base is not None:
+            try:
+                top = self._repository()
+                tree = self._tree(base.commit_id)
+            except GitError as exc:
+                return ReviewPlan(base, problem=f"git could not list the baseline ({exc})")
+        files: list[ReviewFile] = []
+        shortcuts: dict[str, FileReview] = {}
+        skipped: list[tuple[str, str]] = []
+        for key in candidates:
+            marks = tuple(mark for mark in self.open_marks if mark.path == key)
+            data = read_regular(self.workspace / key, REVIEW_FILE_BYTES)
+            if data is None:
+                why = f"not a readable regular file of at most {REVIEW_FILE_BYTES} bytes"
+                skipped.append((key, why))
+                continue
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                skipped.append((key, "not UTF-8 text"))
+                continue
+            ids = hash_bytes(data, self._format())
+            if not marks and self._reviewed_source(key, ids) is not None:
+                skipped.append((key, "the index holds another content for it than the file has"))
+                continue
+            before = self._baseline_text(top, tree, key) if top is not None else None
+            if before is not None and not marks:
+                if whitespace_only(before, text):
+                    shortcuts[key] = FileReview(ids.sha256, marks=())
+                    continue
+                diff = change_diff(before, text, key)
+                files.append(ReviewFile(key, ids.sha256, diff, whole=False))
+                continue
+            files.append(ReviewFile(key, ids.sha256, text, whole=True, marks=marks))
+        return ReviewPlan(
+            base,
+            count=len(candidates),
+            files=tuple(files),
+            shortcuts=shortcuts,
+            skipped=tuple(skipped),
+            fingerprint=self._fingerprint(candidates, ""),
+        )
+
+    def _baseline_text(
+        self, top: Path, tree: Mapping[str, tuple[str, str]], key: str
+    ) -> str | None:
+        """Read the content the baseline records for a file, as text.
+
+        Args:
+            top: The repository's top directory.
+            tree: The baseline's listing (`_tree`).
+            key: The file.
+
+        Returns:
+            The content; None if the baseline does not hold the path as a file, the content
+            is larger than `REVIEW_FILE_BYTES` or not UTF-8, or git could not be asked.
+        """
+        try:
+            entry = tree.get((self.workspace / key).relative_to(top).as_posix())
+        except ValueError:
+            return None
+        if entry is None or entry[0] == GITLINK_MODE:
+            return None
+        try:
+            data = run_git(top, ["cat-file", "blob", entry[1]])
+        except GitError:
+            return None
+        if len(data) > REVIEW_FILE_BYTES:
+            return None
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
     # ------------------------------------------------------------------ marks
 
@@ -1781,7 +2098,7 @@ class HonestyState:
         )
 
     @_locked
-    def certification(self, commit_id: str) -> Certification:
+    def certification(self, commit_id: str, *, rooted: bool = True) -> Certification:
         """Decide whether a commit may be certified as trusted, and with which source.
 
         calu certifies a commit by what the commit records, not by the working tree: every
@@ -1795,19 +2112,25 @@ class HonestyState:
         `snapshot()` before the commit ran, because unreviewed files outside the commit do not
         show here.
 
+        Without a baseline a commit can still be certified when `rooted` is False: then every
+        entry the commit holds must be verified as above (there is no baseline entry to equal),
+        and the commit must hold at least one. The session asks this after an honesty review
+        that read every file of a repository without a trusted commit.
+
         Args:
             commit_id: The full id of the commit, usually the new HEAD after a `git commit`.
+            rooted: True requires a baseline. False also judges a commit when there is none.
 
         Returns:
             With `problem` "": the commit may be certified with `source`, the weakest among
             the baseline's source and the sources that verified the changed files (all by
             honesty review and a baseline of "review" or "user" give "review"; any step check
             gives "check"). Otherwise `problem` is one sentence: there is no baseline, marks
-            are open, a review is required, git could not list the commit, or which entries of
-            the commit are not verified.
+            are open, a review is required, git could not list the commit, the commit records
+            no file, or which entries of the commit are not verified.
         """
         base_commit = self._base()
-        if base_commit is None:
+        if base_commit is None and rooted:
             return Certification("there is no baseline")
         if self.open_marks:
             return Certification(f"{len(self.open_marks)} mark(s) are open")
@@ -1817,12 +2140,12 @@ class HonestyState:
             return Certification("the commit id is not a full commit id")
         try:
             top = self._repository()
-            base = self._tree(base_commit.commit_id)
+            base = self._tree(base_commit.commit_id) if base_commit is not None else {}
             recorded = self._tree(commit_id)
         except GitError as exc:
             return Certification(f"git could not list the commit ({exc})")
         failing: list[str] = []
-        sources: list[TrustSource] = [base_commit.source]
+        sources: list[TrustSource] = [base_commit.source] if base_commit is not None else []
         for inside, (mode, object_id) in recorded.items():
             entry = base.get(inside)
             key = self.key(top / inside)
@@ -1849,6 +2172,8 @@ class HonestyState:
             return Certification(
                 f"{len(failing)} file(s) of the commit are not verified: {names}{rest}"
             )
+        if not sources:
+            return Certification("the commit records no file")
         return Certification("", weakest(sources))
 
     def uncertified(self, commit_id: str) -> str:

@@ -22,6 +22,7 @@ from calu.config import (
     PROVIDER_KEYS_BY_PREFIX,
     ClaudeConfig,
     Config,
+    default_model,
     provider_key_variables,
     user_env_file,
 )
@@ -71,8 +72,9 @@ def configured_models(config: Config) -> dict[str, str]:
 
     Returns:
         Role name ("command checker", "edit checker", "changeset checker", "subagent result
-        checker", "narrator", "summarizer") -> Pydantic AI model string. Roles that are switched
-        off are left out.
+        checker", "narrator", "summarizer", "honesty reviewer") -> Pydantic AI model string.
+        Roles that are switched off are left out; the honesty reviewer is one while
+        `honesty.mode` is "off".
     """
     models = {
         "command checker": config.command_checker.model,
@@ -84,6 +86,10 @@ def configured_models(config: Config) -> dict[str, str]:
         models["subagent result checker"] = config.subagent_checker.model
     if config.context.narrate:
         models["narrator"] = config.context.narrator_model
+    if config.honesty.mode != "off":
+        models["honesty reviewer"] = config.honesty.reviewer_model.strip() or default_model(
+            config.claude.use_bedrock
+        )
     return models
 
 

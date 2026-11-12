@@ -150,6 +150,11 @@ HOLD_BUDGET_S = 300
 `calu.claude.sdk_runner.HOOK_TIMEOUT_S` (900 s): `HOLD_BUDGET_S + GATE_BUDGET_S` leaves three
 minutes of it for recording the step, so the hook answers before Claude Code gives up on it."""
 
+REVIEW_MARGIN_S = 20
+"""How long before the end of `GATE_BUDGET_S` the gate stops waiting for an honesty review, so
+that it can still read the state and answer. `honesty.review_timeout_s` may be longer than the
+gate's time: the review then ends after the step was escalated."""
+
 HELD_LATE = (
     "The check of this step ended with {decision}{reason} Before the step could start, "
     "{holding} came up. No step is approved while a human decides about another one, so a "
@@ -203,7 +208,7 @@ HONESTY_MARKS = (
 
 HONESTY_MARKS_REVIEW = (
     " More marks are open than honesty.max_open_marks allows, so an honesty review reads the "
-    "marked files again at the next attempt."
+    "marked files again at the next attempt after one of them changed."
 )
 """Addition to `HONESTY_MARKS` while a review is required."""
 
@@ -432,7 +437,7 @@ class StepGate:
         take_clock_alarm: Callable[[], str | None],
         keep_changeset: Callable[[str, str], None],
         honesty: Callable[[], Awaitable[HonestySnapshot | None]],
-        honesty_review: Callable[[Step], Awaitable[str]],
+        honesty_review: Callable[[Step, float | None], Awaitable[str]],
     ) -> None:
         """Create the gate of one session.
 
@@ -459,9 +464,11 @@ class StepGate:
             honesty: Computes the honesty state of the session as it is now; returns None
                 while `honesty.mode` is "off". It may raise; the step is then escalated
                 (`decide`).
-            honesty_review: Runs the honesty review for a step that needs a clean state.
-                Returns "" if the review ran (the gate then reads the state again), otherwise
-                one sentence saying why it did not run or failed; never raises.
+            honesty_review: Runs the honesty review for a step that needs a clean state: (the
+                step, the longest time to wait for the review in seconds or None for no
+                limit). Returns "" if the review ran (the gate then reads the state again),
+                otherwise one sentence saying why it did not run, failed or is still running;
+                never raises.
         """
         self._workspace = workspace
         self._desk = hold
@@ -856,7 +863,7 @@ class StepGate:
         if plain_commit and unclean and state is not None:
             # Committing needs a clean state. Open marks and a missing baseline are answered
             # without a model call; otherwise the honesty review decides.
-            stopped, state = await self._needs_clean(step, state, COMMITS, label)
+            stopped, state = await self._needs_clean(step, state, COMMITS, label, budget)
             if stopped is not None:
                 return Decided(route=route, decision=stopped, source="honesty", rules=rules)
             unclean = state is not None and not state.clean
@@ -913,7 +920,7 @@ class StepGate:
         ):
             summary = decision.step_summary or label
             if decision.decision is not Decision.ESCALATE:
-                stopped, state = await self._needs_clean(step, state, EXECUTES, summary)
+                stopped, state = await self._needs_clean(step, state, EXECUTES, summary, budget)
                 if stopped is not None:
                     decision, source = stopped, "honesty"
             elif state.marks:
@@ -989,7 +996,12 @@ class StepGate:
         return False
 
     async def _needs_clean(
-        self, step: Step, state: HonestySnapshot, what: str, summary: str
+        self,
+        step: Step,
+        state: HonestySnapshot,
+        what: str,
+        summary: str,
+        budget: anyio.CancelScope | None = None,
     ) -> tuple[CheckDecision | None, HonestySnapshot | None]:
         """Decide about a step that needs a clean honesty state while the state is not clean.
 
@@ -1002,6 +1014,10 @@ class StepGate:
                                                    state: clean -> no objection; marks -> DENY;
                                                    else ESCALATE with the review's problem
 
+        The gate waits for the review until `REVIEW_MARGIN_S` before the end of its own
+        time (`budget`). A review that takes longer goes on without the step: the step is
+        escalated with the note that the review is still running.
+
         Side effects: may run the honesty review (`honesty_review`), which takes time and
         changes the session's honesty state.
 
@@ -1010,6 +1026,7 @@ class StepGate:
             state: The honesty state, not clean.
             what: `EXECUTES` or `COMMITS`, for the reason.
             summary: The summary of the step for the decision.
+            budget: The cancel scope that bounds `judge`, or None if there is none.
 
         Returns:
             (the DENY or ESCALATE decision, or None if the state is clean after the review;
@@ -1027,7 +1044,10 @@ class StepGate:
                 ),
                 state,
             )
-        problem = await self._honesty_review(step)
+        wait_s: float | None = None
+        if budget is not None and budget.deadline != float("inf"):
+            wait_s = max(0.0, budget.deadline - anyio.current_time() - REVIEW_MARGIN_S)
+        problem = await self._honesty_review(step, wait_s)
         after = await self._honesty()
         if after is None or after.clean:
             return None, after

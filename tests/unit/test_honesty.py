@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 
 from calu.acp.adapter import Adapter
@@ -241,13 +242,13 @@ async def needs_clean(
     gate = gate_of(tmp_path)
     asked: list[str] = []
 
-    async def review(_step: Step) -> str:
-        """Record that the review was asked for.
+    async def review(_step: Step, wait_s: float | None) -> str:
+        """Record that the review was asked for, with the time the gate waits for it.
 
         Returns:
             `problem`.
         """
-        asked.append("review")
+        asked.append("review" if wait_s is None else f"review within {wait_s:.0f} s")
         return problem
 
     async def now() -> HonestySnapshot | None:
@@ -263,6 +264,40 @@ async def needs_clean(
     step = Step(tool_name="Bash", tool_input={"command": "make test"}, cwd=str(tmp_path))
     decision, _state = await gate._needs_clean(step, before, EXECUTES, "runs the tests")
     return decision, asked
+
+
+async def test_the_gate_waits_for_the_review_only_within_its_own_time(tmp_path: Path):
+    """The review gets the time the gate has left, less a margin for reading the state."""
+    gate = gate_of(tmp_path)
+    waits: list[float | None] = []
+
+    async def review(_step: Step, wait_s: float | None) -> str:
+        """Record the time the gate waits.
+
+        Returns:
+            The answer of a review that is still running.
+        """
+        waits.append(wait_s)
+        return "The honesty review is still running."
+
+    async def now() -> HonestySnapshot | None:
+        """Return the unchanged state.
+
+        Returns:
+            A state with one unreviewed file.
+        """
+        return state(unreviewed=("a.py",))
+
+    gate._honesty_review = review
+    gate._honesty = now
+    step = Step(tool_name="Bash", tool_input={"command": "make test"}, cwd=str(tmp_path))
+    budget = anyio.CancelScope(deadline=anyio.current_time() + 100)
+    decision, _state = await gate._needs_clean(
+        step, state(unreviewed=("a.py",)), EXECUTES, "runs the tests", budget
+    )
+    assert decision is not None and decision.decision is Decision.ESCALATE
+    assert "The honesty review is still running." in decision.reason
+    assert waits[0] is not None and 70 < waits[0] <= 80
 
 
 async def test_open_marks_deny_without_a_review(tmp_path: Path):

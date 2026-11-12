@@ -201,13 +201,17 @@ class HonestyTrustResult(BaseModel):
 class HonestyReviewResult(BaseModel):
     """Result of `honesty.review`: whether an honesty review ran.
 
-    The review judges the unreviewed and the marked files against the baseline. Its effect on
-    the state arrives as `honesty.update`.
+    The review judges the unreviewed and the marked files against the baseline. It can take
+    minutes; the answer comes when it ended. Meanwhile `honesty.update` says that a review is
+    running and `log` events name its progress. Its effect on the state arrives as
+    `honesty.update`.
     """
 
     ran: bool
+    """True if the reviewer judged the files and its result was applied to the state."""
     problem: str = ""
-    """Why the review did not run or failed; "" if it ran."""
+    """Why the review did not run or failed; for a review that ran, which files it could not
+    judge; "" if it judged every file."""
 
 
 class EventsSubscribeParams(BaseModel):

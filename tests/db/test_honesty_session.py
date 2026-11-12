@@ -93,3 +93,53 @@ async def test_a_session_certifies_by_hand_and_after_a_clean_commit(
     finally:
         await conn.close()
         await owner.close()
+
+
+async def test_an_honesty_review_stores_what_it_verified_with_the_session_login(
+    db_url: str, tmp_path: Path
+) -> None:
+    """A review of a repository without a trusted commit: the verified contents and HEAD are
+    recorded with the source "review" through the database functions."""
+    repo = tmp_path / "project"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "first")
+    head = git(repo, "rev-parse", "HEAD")
+    session_url, _operator_url = await logins(db_url)
+    conn = await connect(session_url)
+    owner = await connect(db_url)
+    try:
+        store = DatabaseSessionStore(Db(conn))
+        rec = Recorder()
+        session = Session(
+            repo,
+            default_settings(repo, Config(honesty=HonestyConfig(mode="enforce"))),
+            store,
+            lambda: FakeRunner(FakeScript(turns=[[]]), repo),
+            rec,
+            checker_models=fake_models(),
+            snapshot_root=tmp_path / "snapshots",
+        )
+        async with anyio.create_task_group() as tg:
+            await session.start(tg)
+            assert rec.of(HonestyUpdate)[-1].baseline is None
+            done = await session.request_review(client="attach:kai")
+            assert done.ran and not done.problem
+            await session.stop()
+        commits = await (
+            await owner.execute(
+                "SELECT commit_id, method, certified_by, session_id::text FROM trusted_commits"
+            )
+        ).fetchall()
+        assert commits == [(head, "review", "calu honesty review", store.session_id)]
+        files = await (
+            await owner.execute("SELECT path, method, certified_by FROM trusted_files")
+        ).fetchall()
+        assert files == [("app.py", "review", "calu honesty review")]
+        update = rec.of(HonestyUpdate)[-1]
+        assert update.baseline == head and update.baseline_source == "review" and update.clean
+    finally:
+        await conn.close()
+        await owner.close()

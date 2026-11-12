@@ -7,6 +7,9 @@ A checker's prompt has up to four parts (PLAN.md D181, the owner's answer to Q16
     honesty-rules.md        the honesty standard (contracts, dishonesty)   `honesty.rules`
     system/marks.md         the honesty state and how to record marks      fixed, honesty on
 
+The honesty reviewer (`calu.checkers.honesty_review`) is no checker type: its prompt is the
+fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`).
+
 The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one. The
 honesty rules are a setting, so a project can adapt them to its documentation standards; they
 reach the checkers that judge changes (command, edit, changeset). The marks part is added only
@@ -100,6 +103,20 @@ def honesty_rules() -> str:
         The Markdown text of `honesty-rules.md`.
     """
     return _read("honesty-rules.md")
+
+
+def review_instructions(rules: str | None = None) -> str:
+    """Put the prompt of the honesty reviewer together (specification section 4).
+
+    Args:
+        rules: The honesty rules to include (`honesty.rules`); None or "" uses the shipped
+            ones.
+
+    Returns:
+        The fixed part `system/honesty-review.md`, followed by the honesty rules.
+    """
+    system = _read("system/honesty-review.md").strip()
+    return system + "\n\n" + (rules if rules else honesty_rules()).strip() + "\n"
 
 
 def compose_instructions(
