@@ -1,8 +1,86 @@
 # Handoff
 
-State on 2026-11-12, after the review of the whole code base and its fixes (D183-D191). Read
-this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D191, open questions §11,
-phases §12).
+State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
+the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
+with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
+`PLAN.md` (decisions D1-D199, open questions §11, phases §12).
+
+## Pick up here
+
+**`main` is green and pushed** (1617 tests with `uv run pytest -q -m 'not live'`, 15 browser
+tests, ruff, pyright). Everything below is ordered: do it top to bottom.
+
+1. **Merge the honesty redesign.** Branch `feature/honesty-certification` (pushed) holds the
+   whole redesign of D196, built in three reviewed steps, and is already merged with `main`.
+   It is **not green**: 1778 tests pass and six fail.
+   - Five are tests of the full-screen client's honesty screens, which were written against
+     the specification before the real protocol existed:
+     `tests/unit/test_tui_admin.py` (`test_trust_and_review_requests_and_a_session_without_them`,
+     `test_the_honesty_page_shows_mode_baseline_and_what_is_not_clean`,
+     `test_trust_asks_names_the_commit_and_only_y_certifies`,
+     `test_a_session_without_certification_says_so`) and `tests/unit/test_tui_review.py`
+     (`test_the_honesty_page_has_keys_for_its_commands`). Reconcile the client
+     (`src/calu/tui/model.py: honesty_from`, the honesty page, `/trust`, `/trust-file`,
+     `/honesty-review`) with the real messages in `src/calu/protocol/messages.py`
+     (`HonestyInfo`, `HonestyTrustParams`, `HonestyTrustResult`, the review request) and the
+     test's fake session with what the session really sends.
+   - One is `tests/unit/test_handoff_counts.py`: update the counts in this file after the merge.
+   - Then: run the three test layers, look at the honesty screens of the client
+     (`scripts/tui_screenshots.py`), merge into `main`, push.
+   - The migrations of that branch are 0029 and 0030 (renumbered; `main` has 0027 and 0028).
+   - The specification is `docs/notes/honesty-spec.md`; what each step deferred, where it
+     deviated and what the user documentation must say is in
+     `docs/notes/reports-2026-11-12.md`. Read the deviations before the merge: several are
+     stricter than the specification on purpose.
+   - Never run against a real model: the reviewer's prompt
+     (`src/calu/defaults/checkers/system/honesty-review.md`) and the command checker's new
+     answer field (whether a command executes project code). Do one live run in `track` and
+     one in `enforce` mode before calling the feature done (manual checklist in
+     `docs/TESTING.md`).
+2. **The owner prefers gitui to lazygit** (https://github.com/gitui-org/gitui) as the program
+   the full-screen client starts with `f4`. Today the default is lazygit
+   (`src/calu/tui/gittool.py`: `KNOWN`, `RECOMMENDED`, `RELEASES`, `release_command`, the plans
+   per package manager; the texts in `app.py` and `commands.py`; tests in
+   `tests/unit/test_tui_admin.py`). Make gitui the default, keep it configurable
+   (`CALU_GIT_TOOL`, `git_tool` in `tui.toml`), and keep the offer to install it when it is
+   missing, with a command that needs no `sudo` where one exists (gitui publishes release
+   archives; check their names for this machine before writing the command, and run it once
+   into a scratch directory as was done for lazygit).
+3. **Write the user documentation of the full-screen client.** README ("Four front ends",
+   "Four ways to work with a running session") and `CALU_GUIDE.md` ("Attached to a session")
+   still describe only the line client. `calu attach` on a terminal now starts the
+   full-screen client (extra `tui`); `calu attach --plain` and every pipe keep the line
+   client. The keys, the commands and the wording to use are in
+   `docs/notes/reports-2026-11-12.md` ("what the documentation should say"). The decision
+   is recorded as D199 in `PLAN.md`, with the three protocol requests the client added
+   (`side.ask`, `usage.get`, `model.set`) and the event `usage.update`.
+4. **Try the full-screen client against a real Claude Code session** and fix what that shows.
+   It was driven under Textual's test pilot, in tmux against a real session server with the
+   fake runner, and through screenshots; `side.ask` was measured once against the real CLI
+   (`spikes/side_question.py`). The owner has not used it yet. His requirements, to check one
+   by one: scrolling that does not move what is visible when new text arrives; alt+left/right
+   between agents; chatting with a subagent; `/btw`; escalations with a full-screen detail;
+   user input visually distinct; thinking shown; checker instructions readable and editable;
+   the honesty view; `/trust` with a yes/no question; `/honesty off|track|enforce`; `f4`.
+5. **Write the user documentation of the honesty redesign** after step 1 (README's "Code
+   honesty", the guide's "Code honesty enforcement", which both still describe the old
+   register), from the reports in `docs/notes/`.
+6. **Defects the split of `session.py` found and left as they were**
+   (`docs/notes/reports-2026-11-12.md`, "defects found"). Fixed since: the store failure count
+   and the stopping flag are reset at a new run. Still open, most important first: the state
+   stays "tool_call" after a human accepts an escalated subagent result; a clock alarm is
+   forgotten when its escalation ends without a human decision; a rejected second start drops
+   the running session's not yet narrated text.
+7. Smaller open work, no decision needed: `herd.close_gone` trusts the hostname alone (below);
+   a checker's model and limits live in two stores (below); `cli.py` should become a package.
+
+Decisions of the owner on 2026-11-12 that are implemented and recorded: D178-D198 and Q22 in
+`PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
+is part of a checker's context (D193); rule lists stay empty by default and are the exception
+(D198); a blank model is Claude Haiku on the Anthropic API, or on Bedrock in an EU region in
+Bedrock mode (D194); calu does not override Claude Code's permission mode (Q22); documents,
+comments and prompts describe what calu guarantees and never spell out how to get around the
+checkers.
 
 ## Instructions from the owner
 
@@ -586,9 +664,10 @@ work for a developer without the owner. In short:
 | 4. Smaller gaps | **done** (by design, or D44) | -- |
 | 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
-| 7. Honesty enforcement | **being rebuilt** on `feature/honesty-certification` (D196: trusted commits in the database, computed state, honesty review, enforcement on running and committing) | -- |
+| 7. Honesty enforcement | **rebuilt on the branch `feature/honesty-certification`** (D196), merged with `main` there, six tests failing: see "Pick up here" | the merge |
 | 8. Splitting `session.py` | **done**: `run_state.py`, `escalations.py` (EscalationDesk), `gate.py` (StepGate), `write_sets.py`, `recorder.py`, `steps.py`; `session.py` holds the lifecycle, runner events and wiring (about 2,500 lines). Still in it: the subagent result review and the honesty bookkeeping | -- |
 | 9. Auto mode by default | **decided** (Q22): calu does not override Claude Code's permission mode | -- |
+| 10. Full-screen terminal client | **built and merged** (`src/calu/tui/`, Textual, extra `tui`): `calu attach` on a terminal; documentation and a run against a real session are open, see "Pick up here" | -- |
 
 Open developer work that needs no decision:
 
