@@ -505,6 +505,8 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         show_thinking=args.thinking,
         background_timeout_s=args.background_timeout,
     )
+    if args.background_timeout is not None and (not args.batch or args.background_timeout <= 0):
+        raise CliError("--background-timeout needs --batch and a number of seconds above 0")
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print("Type a message for Claude; /quit ends the session.")
     url = load_credential(store, "session", "Session password: ")

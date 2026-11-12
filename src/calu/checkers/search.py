@@ -81,7 +81,9 @@ def searched_files(
     return found
 
 
-def _listing(directory: Path, git_ignore: bool, deadline: float) -> tuple[list[str], bool]:
+def _listing(
+    directory: Path, git_ignore: bool, deadline: float, seen: frozenset[Path] = frozenset()
+) -> tuple[list[str], bool]:
     """List the files below `directory` that a search reads, as relative paths (D146, D168).
 
     With `git_ignore`, git's own list is used -- but a search given an ignored directory
@@ -94,11 +96,17 @@ def _listing(directory: Path, git_ignore: bool, deadline: float) -> tuple[list[s
         directory: The directory.
         git_ignore: Whether the search leaves out what git ignores.
         deadline: `time.monotonic()` value after which the listing stops, incomplete.
+        seen: Directories already being listed further up, so that an entry naming one of them
+            -- the `./` git lists inside an uninitialised submodule -- is not listed again
+            (it recursed until RecursionError, D172).
 
     Returns:
         (paths relative to `directory`, whether the listing is complete).
     """
-    listed = _git_files(directory) if git_ignore and not _ignored(directory) else None
+    here = directory.resolve()
+    seen = seen | {here}
+    ignored = _ignored(directory, deadline)
+    listed = _git_files(directory, deadline) if git_ignore and not ignored else None
     if listed is None:
         return _walk(directory, deadline)
     relative: list[str] = []
@@ -106,8 +114,10 @@ def _listing(directory: Path, git_ignore: bool, deadline: float) -> tuple[list[s
         if time.monotonic() > deadline or len(relative) > LIMIT:
             return relative, False
         path = directory / entry.rstrip("/")
+        if path.resolve() in seen:
+            continue  # `./` of an empty submodule, or a loop: nothing new below it
         if entry.endswith("/") or (path.is_dir() and not path.is_symlink()):
-            inner, complete = _listing(path, git_ignore, deadline)
+            inner, complete = _listing(path, git_ignore, deadline, seen)
             relative += [f"{entry.rstrip('/')}/{name}" for name in inner]
             if not complete:
                 return relative, False
@@ -136,11 +146,12 @@ def _walk(directory: Path, deadline: float) -> tuple[list[str], bool]:
     return relative, True
 
 
-def _ignored(directory: Path) -> bool:
+def _ignored(directory: Path, deadline: float) -> bool:
     """Tell whether git ignores `directory` itself.
 
     Args:
         directory: The directory.
+        deadline: `time.monotonic()` value the git call may not run past.
 
     Returns:
         True if `git check-ignore` says so; False otherwise, also outside a work tree.
@@ -150,7 +161,7 @@ def _ignored(directory: Path) -> bool:
             ["git", "check-ignore", "-q", directory.name],
             cwd=directory.parent,
             capture_output=True,
-            timeout=5,
+            timeout=_remaining(deadline),
             check=False,
         )
     except OSError, subprocess.TimeoutExpired:
@@ -158,11 +169,24 @@ def _ignored(directory: Path) -> bool:
     return done.returncode == 0
 
 
-def _git_files(directory: Path) -> list[str] | None:
+def _remaining(deadline: float) -> float:
+    """Return the seconds left until `deadline`, at least a little and at most 5.
+
+    Args:
+        deadline: A `time.monotonic()` value.
+
+    Returns:
+        The timeout for one git call, so that git cannot outlast the listing's time limit.
+    """
+    return min(5.0, max(0.05, deadline - time.monotonic()))
+
+
+def _git_files(directory: Path, deadline: float | None = None) -> list[str] | None:
     """Return the tracked and the untracked, not ignored files below `directory`.
 
     Args:
         directory: The directory.
+        deadline: `time.monotonic()` value the git call may not run past; None allows 5 s.
 
     Returns:
         Paths relative to `directory`, or None if it is not in a git work tree or git fails.
@@ -172,7 +196,7 @@ def _git_files(directory: Path) -> list[str] | None:
             ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
             cwd=directory,
             capture_output=True,
-            timeout=5,
+            timeout=_remaining(deadline) if deadline is not None else 5,
             check=False,
         )
     except OSError, subprocess.TimeoutExpired:

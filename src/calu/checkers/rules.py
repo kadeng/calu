@@ -786,7 +786,10 @@ def inline_code_paths(command: str) -> list[str]:
     seen_interpreter = False
     for index, word in enumerate(words):
         name = os.path.basename(word)
-        attached = word.startswith(("--eval=", "--print="))
+        attached = word.startswith(("--eval=", "--print=")) or (
+            # `python -c'open(".env")'`: the code joined to its flag (D172)
+            seen_interpreter and re.fullmatch(r"-[ce].+", word) is not None
+        )
         separate = index + 1 < len(words) and (
             word in _CODE_OPTIONS or re.fullmatch(r"-[A-Za-z]*[ce]", word) is not None
         )
@@ -795,7 +798,12 @@ def inline_code_paths(command: str) -> list[str]:
         elif word in ("&&", "||", "|", ";"):
             seen_interpreter = False
         elif seen_interpreter and (attached or separate):
-            code = word.partition("=")[2] if attached else words[index + 1]
+            if word.startswith("--"):
+                code = word.partition("=")[2]
+            elif attached:
+                code = word[2:]
+            else:
+                code = words[index + 1]
             for match in _LITERAL.finditer(code):
                 literal = match.group(2)
                 if "\n" not in literal and ("/" in literal or literal.startswith((".", "~"))):
@@ -803,11 +811,15 @@ def inline_code_paths(command: str) -> list[str]:
     return found
 
 
-CALU_CONTAINER = re.compile(r"^(docker|podman|nerdctl)( |$)(?=.*(^|[\s:=/])calu-db([-_:\s/]|$))")
+CALU_CONTAINER = re.compile(
+    r"^(docker|podman|nerdctl|docker-compose|podman-compose)( |$)"
+    r"(?=.*((^|[\s:=/])calu-db([-_:\s/]|$)|local-compose\.yml))"
+)
 """A container command that names calu's database container or compose project (`calu-db`,
-`calu.db.local.PROJECT`), D171. Docker access is root-equivalent, so this narrows the way
-around D163 -- `docker exec calu-db-postgres-1 psql` -- and does not close it: a script that
-looks the container up by id first is still the checker's."""
+`calu.db.local.PROJECT`), or its compose file `local-compose.yml`, whose `name: calu-db`
+reaches the container without naming it (D171, D172). Docker access is root-equivalent, so
+this narrows the way around D163 -- `docker exec calu-db-postgres-1 psql` -- and does not
+close it: a script that looks the container up by id first is still the checker's."""
 
 LAUNCHERS = frozenset({"uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "pixi", "conda"})
 """Programs that start another program named later on their command line (D168)."""
@@ -846,21 +858,101 @@ def runs_calu(command: str) -> bool:
         Returns:
             True if it does.
         """
-        return any(
-            word == "-m"
-            and index + 1 < len(rest)
-            and re.fullmatch(r"calu(\.\w+)*", rest[index + 1])
-            for index, word in enumerate(rest)
-        ) or any(re.fullmatch(r"-mcalu(\.\w+)*", word) for word in rest)
+        for index, word in enumerate(rest):
+            if not word.startswith("-"):
+                return False  # the script or module argument comes before any -m after it
+            if re.fullmatch(r"-[A-Za-z]*m", word) and index + 1 < len(rest):
+                return re.fullmatch(r"calu(\.\w+)*", rest[index + 1]) is not None
+            if re.fullmatch(r"-[A-Za-z]*mcalu(\.\w+)*", word):
+                return True
+        return False
 
     if program == "calu":
         return True
     if re.fullmatch(r"python[0-9.]*", program):
         return module_calu(words[1:])
-    if program in LAUNCHERS:
-        rest = words[1:]
-        return any(os.path.basename(word) == "calu" for word in rest) or module_calu(rest)
+    if program not in LAUNCHERS:
+        return False
+    started = _launched(program, words[1:])
+    if not started:
+        return False
+    name = re.split(r"[@=<>~!]", os.path.basename(started[0]), maxsplit=1)[0]
+    if name == "calu":
+        return True
+    if re.fullmatch(r"python[0-9.]*", name):
+        return module_calu(started[1:])
     return False
+
+
+LAUNCH_VALUE_OPTIONS = frozenset(
+    {
+        "--project",
+        "--directory",
+        "--with",
+        "--with-requirements",
+        "--from",
+        "--python",
+        "-p",
+        "--package",
+        "--extra",
+        "--group",
+        "--env-file",
+        "--index",
+        "--index-url",
+        "--extra-index-url",
+        "--spec",
+        "-n",
+        "--name",
+        "-e",
+        "--environment",
+        "--env",
+        "--manifest-path",
+        "-C",
+        "--config",
+        "--cwd",
+    }
+)
+"""Options of the launchers whose separate value is not the program they start (D172)."""
+
+
+def _launched(launcher: str, rest: list[str]) -> list[str]:
+    """Return the words of the program a launcher starts, from that program on (D172).
+
+    `uv run --project calu pytest` starts pytest, not calu: the D168 rule counted every word
+    named calu after a launcher, so `uv run pytest src/calu` and `uv add calu` asked. Only the
+    first word after the launcher's run verb (`run`, `exec`, `tool run`; none for `uvx`) that
+    is neither an option nor an option's value is the program.
+
+    Args:
+        launcher: The launcher's name, e.g. "uv".
+        rest: Its arguments.
+
+    Returns:
+        The program and its arguments, or [] when the launcher does not start one (`uv add`,
+        `uv pip install`).
+    """
+    words = list(rest)
+    if launcher not in ("uvx",):
+        if launcher == "uv" and words[:2] == ["tool", "run"]:
+            words = words[2:]
+        elif launcher == "pipx" and words[:1] == ["run"]:
+            words = words[1:]
+        else:
+            # Options may come before the verb: `uv --directory x run calu`.
+            while words and words[0].startswith("-"):
+                option = words.pop(0)
+                if option in LAUNCH_VALUE_OPTIONS and words:
+                    words.pop(0)
+            if not words or words[0] not in ("run", "exec", "x"):
+                return []
+            words = words[1:]
+    while words and words[0].startswith("-"):
+        option = words.pop(0)
+        if option == "--":
+            break
+        if option in LAUNCH_VALUE_OPTIONS and "=" not in option and words:
+            words.pop(0)
+    return words
 
 
 def _absolute(text: str, cwd: Path) -> Path | None:
@@ -889,71 +981,131 @@ def _absolute(text: str, cwd: Path) -> Path | None:
 DIFF_LIMIT = 1_000_000
 """Most bytes of a diff file read to find the files it changes."""
 
-_DIFF_TARGET = re.compile(
-    r"^(?:\+\+\+|---) (?:[ab]/)?(\S+)|^diff --git a/\S+ b/(\S+)|^rename to (\S+)"
-)
-
 
 def diff_targets(command: str, cwd: Path) -> list[Path]:
-    """Return the files that `patch` or `git apply` in `command` would change (PLAN.md D169).
+    """Return the files that `patch`, `git apply` or `git am` in `command` would change (D169).
 
     `patch -p1 < fix.diff` writes the files named inside the diff, not on the command line, so
     the write lists never saw `CLAUDE.md` or `.git/hooks/pre-commit` in it. The diff file is
-    read (it exists before the command runs; at most `DIFF_LIMIT` bytes) and every target of a
-    `+++`, `---`, `diff --git` or `rename to` line is returned, with `a/`/`b/` dropped.
+    read (it exists before the command runs; at most `DIFF_LIMIT` bytes) and the files of its
+    `+++`/`---` pairs, `diff --git` and `rename to` lines are returned. Since the strip level
+    (`-p`) and the prefixes vary (`a/`, `orig/`, `new/`), every suffix of each path is
+    returned, relative to `-d DIR` or `git -C DIR` where given (D172).
 
-    Side effects: reads the diff files named by `-i FILE`, `--input=FILE`, `< FILE` (for
-    `patch`) and the file arguments of `git apply`.
+    Side effects: reads the diff files named by `-i FILE`, `-iFILE`, `--input=FILE`, `< FILE`,
+    a `cat FILE |` in front of `patch`, and the file arguments of `git apply` / `git am`.
 
     Args:
         command: The command as Claude wrote it.
         cwd: The directory it runs in.
 
     Returns:
-        Absolute target paths, without duplicates; [] when the diff cannot be read, which
-        leaves the step to the checker as before.
+        Absolute target paths, without duplicates; [] when no diff can be read, which leaves
+        the step to the checker as before.
     """
     try:
         words = shlex.split(command)
     except ValueError:
         return []
-    diffs: list[str] = []
-    for index, word in enumerate(words):
-        base = os.path.basename(word)
-        segment = []
-        for later in words[index + 1 :]:
-            if later in ("&&", "||", "|", ";"):
-                break
-            segment.append(later)
-        if base == "patch":
-            for i, part in enumerate(segment):
-                if part in ("-i", "--input", "<") and i + 1 < len(segment):
-                    diffs.append(segment[i + 1])
+    segments: list[list[str]] = [[]]
+    joiners: list[str] = []
+    for word in words:
+        if word in ("&&", "||", "|", ";"):
+            segments.append([])
+            joiners.append(word)
+        else:
+            segments[-1].append(word)
+    diffs: list[tuple[str, Path]] = []
+    for number, segment in enumerate(segments):
+        if not segment:
+            continue
+        program = os.path.basename(segment[0])
+        if program == "patch":
+            base = cwd
+            for i, part in enumerate(segment[1:], start=1):
+                following = segment[i + 1] if i + 1 < len(segment) else ""
+                if part in ("-d", "--directory") and following:
+                    base = _absolute(following, cwd) or cwd
+                elif part.startswith("--directory="):
+                    base = _absolute(part.partition("=")[2], cwd) or cwd
+                elif part.startswith("-d") and len(part) > 2:
+                    base = _absolute(part[2:], cwd) or cwd
+            for i, part in enumerate(segment[1:], start=1):
+                following = segment[i + 1] if i + 1 < len(segment) else ""
+                if part in ("-i", "--input", "<") and following:
+                    diffs.append((following, base))
                 elif part.startswith("--input="):
-                    diffs.append(part.partition("=")[2])
-                elif part.startswith("<") and len(part) > 1:
-                    diffs.append(part[1:])
-        elif base == "git" and "apply" in segment:
-            after = segment[segment.index("apply") + 1 :]
-            diffs += [part for part in after if not part.startswith("-")]
+                    diffs.append((part.partition("=")[2], base))
+                elif (part.startswith("-i") or part.startswith("<")) and len(part) > 2 - (
+                    part[0] == "<"
+                ):
+                    diffs.append((part[1:] if part[0] == "<" else part[2:], base))
+            # `cat fix.diff | patch`: the files of the segment piped into it.
+            if number > 0 and joiners[number - 1] == "|":
+                before = segments[number - 1]
+                if before and os.path.basename(before[0]) == "cat":
+                    diffs += [(part, base) for part in before[1:] if not part.startswith("-")]
+        elif program == "git":
+            base = cwd
+            rest = segment[1:]
+            while rest and rest[0].startswith("-"):
+                option = rest.pop(0)
+                if option == "-C" and rest:
+                    base = _absolute(rest.pop(0), cwd) or cwd
+                elif option in ("-c", "--git-dir", "--work-tree") and rest:
+                    rest.pop(0)
+            if rest and rest[0] in ("apply", "am"):
+                # Found relative to `-C DIR`, but the paths inside are relative to the
+                # repository's top level, which may be the starting directory: both are tried.
+                for part in rest[1:]:
+                    if not part.startswith("-"):
+                        diffs.append((part, base))
+                        if base != cwd:
+                            found = _absolute(part, base)
+                            if found is not None:
+                                diffs.append((str(found), cwd))
     targets: list[Path] = []
-    for name in diffs:
-        source = _absolute(name, cwd)
+    for name, base in diffs:
+        source = _absolute(name, base if not name.startswith("<") else cwd)
+        if source is None or not source.is_file():
+            source = _absolute(name, cwd)
         if source is None or not source.is_file():
             continue
         try:
             with open(source, encoding="utf-8", errors="replace") as handle:
-                text = handle.read(DIFF_LIMIT)
+                lines = handle.read(DIFF_LIMIT).splitlines()
         except OSError:
             continue
-        for line in text.splitlines():
-            match = _DIFF_TARGET.match(line)
-            if match is None:
+        for index, line in enumerate(lines):
+            raw = _diff_path(line, lines[index + 1] if index + 1 < len(lines) else "")
+            if raw is None:
                 continue
-            raw = next(group for group in match.groups() if group)
-            if raw == "/dev/null":
-                continue
-            target = _absolute(raw, cwd)
-            if target is not None and target not in targets:
-                targets.append(target)
+            parts = [part for part in raw.split("/") if part]
+            for start in range(len(parts)):
+                target = _absolute("/".join(parts[start:]), base)
+                if target is not None and target not in targets:
+                    targets.append(target)
     return targets
+
+
+def _diff_path(line: str, following: str) -> str | None:
+    """Return the file a diff header line names, or None for any other line (D169, D172).
+
+    Args:
+        line: One line of the diff.
+        following: The next line: a `--- x` counts only when a `+++` line follows it, so that
+            a removed line of code starting with "-- " inside a hunk is not taken for a file.
+
+    Returns:
+        The path as written in the diff (prefix included), or None; `/dev/null` gives None.
+    """
+    path: str | None = None
+    if line.startswith("+++ ") or (line.startswith("--- ") and following.startswith("+++ ")):
+        path = line[4:].split("\t")[0].strip()
+    elif line.startswith("diff --git "):
+        path = line.rsplit(" ", 1)[-1]
+    elif line.startswith("rename to "):
+        path = line[len("rename to ") :].strip()
+    if not path or path == "/dev/null":
+        return None
+    return path

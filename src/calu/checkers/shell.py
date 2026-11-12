@@ -148,21 +148,33 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "chrt": (frozenset(), 1),
     "taskset": (frozenset(), 1),
     "unbuffer": (frozenset(), 0),
-    "watch": (frozenset({"-n", "--interval", "-d", "--differences", "-q", "--equexit"}), 0),
+    # `-d`/`--differences` takes only an attached value: `watch -d sudo ls` runs sudo (D172).
+    "watch": (frozenset({"-n", "--interval", "-q", "--equexit"}), 0),
     "strace": (frozenset({"-o", "-e", "-p", "-s", "-u", "-E", "-O", "-P", "-I", "-b"}), 0),
     "ltrace": (frozenset({"-o", "-e", "-p", "-s", "-u", "-n"}), 0),
     "flock": (frozenset({"-w", "--timeout", "-E", "--conflict-exit-code"}), 1),
-    "script": (frozenset({"-c", "--command", "-t", "--timing", "-T", "-I", "-O", "-B"}), 0),
+    "script": (frozenset({"-c", "--command", "-t", "--timing", "-T", "-I", "-O", "-B"}), 1),
     "sg": (frozenset(), 1),
     "chroot": (frozenset({"--userspec", "--groups"}), 1),
     "systemd-run": (frozenset({"-p", "--property", "-u", "--unit", "-E", "--setenv"}), 0),
 }
 
-COMMAND_OPTIONS = frozenset(
-    {("env", "-S"), ("env", "--split-string"), ("script", "-c"), ("script", "--command")}
-)
-"""(wrapper, option) pairs whose value is a command line to run, not an option value (D168)."""
 """Commands that run the command after them, with how to skip their own arguments (D145)."""
+
+COMMAND_OPTIONS = frozenset(
+    {
+        ("env", "-S"),
+        ("env", "--split-string"),
+        ("script", "-c"),
+        ("script", "--command"),
+        ("flock", "-c"),
+        ("flock", "--command"),
+        ("sg", "-c"),
+        ("su", "-c"),
+    }
+)
+"""(wrapper, option) pairs whose value is a command line to run, not an option value (D168),
+also when they follow the wrapper's positional argument (`flock FILE -c CMD`, D172)."""
 
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -215,31 +227,57 @@ def command_variants(command: str) -> list[str]:
             words = [os.path.basename(words[0]), *words[1:]]
             add(words)
         if words and words[0] in WRAPPERS:
-            valued, positional = WRAPPERS[words[0]]
-            rest = words[1:]
-            inner: list[str] = []
-            while rest and (rest[0].startswith("-") or (words[0] == "env" and "=" in rest[0])):
-                option = rest.pop(0)
-                if option == "--":
-                    break
-                # The value of these options is itself a command line (D168):
-                # `env -S "sudo ls"`, `script -c "sudo ls"`.
-                name, _, attached = option.partition("=")
-                if (words[0], name) in COMMAND_OPTIONS:
-                    value = attached or (rest.pop(0) if rest else "")
-                    try:
-                        inner = shlex.split(value)
-                    except ValueError:
-                        inner = value.split()
-                    continue
-                if option in valued and rest:
-                    rest.pop(0)
-            rest = rest[positional:]
+            wrapper = words[0]
+            valued, positional = WRAPPERS[wrapper]
+            rest, inner = _wrapper_options(wrapper, valued, words[1:])
+            if positional:
+                rest, later = _wrapper_options(wrapper, valued, rest[positional:])
+                inner = inner or later
             words = inner + rest if inner else rest
             add(words)
         if words == before:
             break
     return variants
+
+
+def _wrapper_options(
+    wrapper: str, valued: frozenset[str], rest: list[str]
+) -> tuple[list[str], list[str]]:
+    """Consume a wrapper's options at the front of `rest` (D145, D168, D172).
+
+    The value of a `COMMAND_OPTIONS` option is itself a command line: `env -S "sudo ls"`,
+    `script -c "sudo ls"`, also attached (`env -S'sudo ls'`) and after the wrapper's positional
+    argument (`flock FILE -c CMD`, which the caller handles by calling this twice).
+
+    Args:
+        wrapper: The wrapper's name, e.g. "env".
+        valued: Its options that take a separate value.
+        rest: The words after the wrapper (or after its positional argument).
+
+    Returns:
+        (the words left, the words of a command carried by an option, or []).
+    """
+    words = list(rest)
+    inner: list[str] = []
+    while words and (words[0].startswith("-") or (wrapper == "env" and "=" in words[0])):
+        option = words.pop(0)
+        if option == "--":
+            break
+        name, _, attached = option.partition("=")
+        if (wrapper, name) not in COMMAND_OPTIONS and len(option) > 2:
+            short = option[:2]
+            if not option.startswith("--") and (wrapper, short) in COMMAND_OPTIONS:
+                name, attached = short, option[2:]
+        if (wrapper, name) in COMMAND_OPTIONS:
+            value = attached or (words.pop(0) if words else "")
+            try:
+                inner = shlex.split(value)
+            except ValueError:
+                inner = value.split()
+            continue
+        if option in valued and words:
+            words.pop(0)
+    return words, inner
 
 
 def parse_command(command: str, cwd: Path, home: Path | None = None) -> ParsedCommand:
@@ -400,7 +438,9 @@ class _Walker:
             if value in outputs or (
                 # Combined short options ending in the output letter: `curl -sSLo FILE`,
                 # `wget -qO FILE` (D168).
-                re.fullmatch(r"-[A-Za-z]+", value) is not None
+                # Only for programs whose short options combine; `gcc -flto` is not `-o` (D172).
+                name in ("curl", "wget")
+                and re.fullmatch(r"-[A-Za-z]+", value) is not None
                 and any(o == "-" + value[-1] for o in outputs)
             ):
                 output_next = True
@@ -491,6 +531,28 @@ class _Walker:
         options = [a.value for a in rest if a.value.startswith("-")]
         plain = [a for a in rest if not a.value.startswith("-")]
         if sub == "config":
+            # `-f FILE` / `--file FILE` names the file it reads or writes (D172); its value is
+            # not a key.
+            target_file: str | None = None
+            keep: list[_Word] = []
+            skip = False
+            for index, arg in enumerate(rest):
+                if skip:
+                    skip = False
+                    continue
+                if arg.value in ("-f", "--file", "--blob") and index + 1 < len(rest):
+                    target_file = rest[index + 1].value if arg.value != "--blob" else None
+                    skip = True
+                elif arg.value.startswith("--file="):
+                    target_file = arg.value.partition("=")[2]
+                elif not arg.value.startswith("-"):
+                    keep.append(arg)
+            plain = keep
+            # git 2.46 subcommands: `git config get|list|set|unset ...`.
+            verb = plain[0].value if plain else ""
+            if verb in ("get", "list", "get-color", "get-colorbool"):
+                return
+            subcommand_writes = verb in ("set", "unset", "rename-section", "remove-section", "edit")
             reading = {"--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin"}
             # These write with a single argument or none (D168).
             writing = {
@@ -503,9 +565,13 @@ class _Walker:
                 "--edit",
                 "-e",
             }
-            if reading & set(options) or (len(plain) < 2 and not writing & set(options)):
+            if reading & set(options) or (
+                len(plain) < 2 and not writing & set(options) and not subcommand_writes
+            ):
                 return
-            if "--global" in options:
+            if target_file is not None:
+                target = target_file
+            elif "--global" in options:
                 target = "~/.gitconfig"
             elif "--system" in options:
                 target = "/etc/gitconfig"
@@ -518,11 +584,19 @@ class _Walker:
             # `git checkout REV PATH...` without `--` overwrites PATH as well (D168); a checkout
             # that makes a branch names a branch and a start point, not files.
             or (len(plain) >= 2 and not {"-b", "-B", "--orphan"} & set(options))
+            # `git checkout FILE` with one argument restores that file when it exists as one
+            # (D172); a branch name usually does not exist as a file.
+            or (
+                sub == "checkout"
+                and len(plain) == 1
+                and not options
+                and any(cwd is not None and (cwd / plain[0].value).is_file() for cwd in self.cwds)
+            )
         ):
             if "--" in values:
                 after = rest[[a.value for a in rest].index("--") + 1 :]
             elif sub == "checkout":
-                after = plain[1:]
+                after = plain[1:] if len(plain) >= 2 else plain
             else:
                 after = plain
             for arg in after:

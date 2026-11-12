@@ -153,7 +153,9 @@ from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
 
-SWITCHES_BRANCH = re.compile(r"(^|[\s;&|(])git(\s+-C\s+\S+)*\s+(checkout|switch|worktree)\b")
+SWITCHES_BRANCH = re.compile(
+    r"(^|[\s;&|(])git(\s+(-[Cc]\s+\S+|--[\w-]+(=\S+)?|-\w+))*\s+(checkout|switch|worktree)\b"
+)
 """A command that changes the branch it then runs on (D168): with `honesty.scope = branch`
 every mark applies to it, since the branch is read before the command runs."""
 

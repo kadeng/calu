@@ -726,3 +726,127 @@ def test_a_container_command_on_calus_database_asks(
     password-free path; Docker itself stays root-equivalent, so this narrows the rest)."""
     rules = Rules.from_texts(tmp_path, {})  # built in: no rule list needed
     assert bool(rules.evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+def test_an_uninitialised_submodule_does_not_recurse(tmp_path: Path) -> None:
+    """D172 (second review): git lists `./` inside an empty submodule, which was listed again
+    until RecursionError -- so every search of such a project asked."""
+    import subprocess
+
+    from calu.checkers.search import searched_files
+
+    def git(*args: str, cwd: Path) -> None:
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "-c",
+                "protocol.file.allow=always",
+                *args,
+            ],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+        )
+
+    sub, top = tmp_path / "sub", tmp_path / "top"
+    sub.mkdir()
+    top.mkdir()
+    git("init", "-q", cwd=sub)
+    git("commit", "-q", "--allow-empty", "-m", "s", cwd=sub)
+    git("init", "-q", cwd=top)
+    git("submodule", "-q", "add", str(sub), "mod", cwd=top)
+    git("commit", "-qm", "add", cwd=top)
+    git("submodule", "-q", "deinit", "-f", "mod", cwd=top)
+    listed = searched_files(top)
+    assert listed.complete and [p.name for p in listed.files] == [".gitmodules"]
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("uvx calu@latest resolve 1", True),
+        ("python -Im calu resolve", True),
+        ("uv --directory d run calu x", True),
+        ("uv run pytest src/calu", False),
+        ("uv run --project calu pytest", False),
+        ("uv pip install calu", False),
+        ("uv add calu", False),
+        ("poetry run pytest -k calu", False),
+        ("python script.py -m calu", False),
+    ],
+)
+def test_only_the_program_a_launcher_starts_counts_as_calu(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
+    """D172: D168 counted every word named calu after a launcher, so working on calu itself
+    (`uv run pytest src/calu`) asked."""
+    rules = Rules.from_texts(tmp_path, {})
+    assert bool(rules.evaluate(bash(command, str(tmp_path))).ask) is asks, command
+
+
+def test_diff_targets_cover_strip_levels_directories_and_pipes(tmp_path: Path) -> None:
+    """D172: `orig/CLAUDE.md` with -p1, `-d DIR`, `-iFILE`, `cat x | patch`, `git -C DIR apply`
+    and `git am` all went to the checker; a 150 kB heredoc took 14 s."""
+    import time
+
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "p1.diff").write_text(
+        "--- orig/CLAUDE.md\n+++ new/CLAUDE.md\n@@ -1 +1 @@\n-a\n+b\n", encoding="utf-8"
+    )
+    (tmp_path / "ok.diff").write_text(
+        "--- a/src/a.py\n+++ b/src/a.py\n@@ -1,2 +1,2 @@\n-- comment\n+x\n", encoding="utf-8"
+    )
+    rules = default_rules(tmp_path)
+    for command in (
+        "patch -p1 < p1.diff",
+        "patch -p1 -ip1.diff",
+        "cat p1.diff | patch -p1",
+        "git -C sub apply ../p1.diff",
+        "git am p1.diff",
+    ):
+        assert rules.evaluate(bash(command, str(tmp_path))).ask, command
+    assert not rules.evaluate(bash("patch -p1 < ok.diff", str(tmp_path))).ask
+    heredoc = "cat > notes.txt <<EOF\n" + "\n".join("word " * 10 for _ in range(3000)) + "\nEOF"
+    started = time.monotonic()
+    rules.evaluate(bash(heredoc, str(tmp_path)))
+    assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("watch -d sudo ls", True),
+        ("flock /tmp/l -c 'sudo ls'", True),
+        ("sg wheel -c 'sudo ls'", True),
+        ("script log -c 'sudo ls'", True),
+        ("env -S'sudo ls'", True),
+        ("git checkout CLAUDE.md", True),
+        ("git config set core.hooksPath /x", True),
+        ("""python -c'print(open(".env").read())'""", True),
+        ("docker-compose -p calu-db exec postgres psql", True),
+        ("docker compose -f /x/local-compose.yml exec postgres psql", True),
+        ("git checkout main", False),
+        ("git config get user.name", False),
+        ("git config -f .gitmodules submodule.mod.url", False),
+        ("gcc -flto main.c", False),
+        ("docker compose up -d", False),
+    ],
+)
+def test_the_second_review_findings(tmp_path: Path, command: str, asks: bool) -> None:
+    """D172: what the review of D168-D171 found, in both directions."""
+    (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
+    (tmp_path / "main.c").write_text("int main(){}\n", encoding="utf-8")
+    assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+def test_a_branch_switch_behind_git_options_is_seen() -> None:
+    """D172: `git -c x=y checkout` and `git --git-dir=.git switch` were not recognised."""
+    from calu.session import SWITCHES_BRANCH
+
+    for command in ("git -c x=y checkout main && python m.py", "git --git-dir=.git switch b"):
+        assert SWITCHES_BRANCH.search(command), command
+    assert not SWITCHES_BRANCH.search("git status")
