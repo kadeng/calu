@@ -2,7 +2,9 @@
 
 Everything that steers the checkers lives in the database, out of reach of Claude Code and of
 the commands it runs. A session loads it once at start and reloads it when the database
-announces a change:
+announces a change. The announcement is a hint, not the only path: `reload_loop` also re-reads
+the rows every `RECONCILE_S` seconds and applies them if they differ from what it loaded last,
+and it retries a reload that failed:
 
     config rows  (scope "global", then "project", key "settings")  ─┐
     checker_types rows (enabled)                                   ─┼─► ProjectSettings
@@ -14,6 +16,7 @@ announces a change:
 module writes.
 """
 
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -37,6 +40,38 @@ POLICIES = ("none", "proxy", "full")
 RELOAD_DEBOUNCE_S = 0.25
 """Quiet time after a `config_changed` notification before the settings are reloaded, so that
 one change of many rows (e.g. a replaced rule list) causes one reload."""
+
+RECONCILE_S = 60.0
+"""Seconds after which `reload_loop` re-reads the settings without a notification. It bounds how
+long a session can run on settings the database no longer holds when a notification was lost
+(a listening connection that was down, a change made before `LISTEN` took effect)."""
+
+RELOAD_RETRY_FIRST_S = 2.0
+"""Pause before the first retry of a failed reload; doubled per failure."""
+
+RELOAD_RETRY_MAX_S = 60.0
+"""Upper bound of the pause between two retries of a failed reload."""
+
+
+class UnknownProject(ValueError):
+    """The project a session was started for has no `projects` row.
+
+    Raised instead of falling back to the global settings: a session that silently runs
+    without its project's rules and settings applies less than the operator configured.
+    """
+
+    def __init__(self, name: str, known: list[str]) -> None:
+        """Create the error.
+
+        Args:
+            name: The project name that no row has.
+            known: The names of the registered projects, for the message.
+        """
+        self.name = name
+        self.known = known
+        listed = ", ".join(known) if known else "none are registered"
+        super().__init__(f"no project named {name!r} is registered (registered: {listed})")
+
 
 NARRATOR_CHECKER = "narrator"
 """Name of the checker type whose instructions the narrator uses."""
@@ -102,9 +137,10 @@ class ProjectSettings:
 class ConfigStore:
     """Reads the settings of one project from the database and watches them for changes.
 
-    The store keeps no state of its own except the connection, the workspace and the project
-    name: every `load` reads the current rows. A session keeps the `ProjectSettings` it last
-    loaded.
+    Every `load` reads the current rows; a session keeps the `ProjectSettings` it last loaded.
+    Besides the connection, the workspace and the project name, the store remembers a
+    fingerprint of the rows of its last successful `load`, which `reload_loop` uses to tell
+    whether a periodic re-read found a change.
     """
 
     def __init__(
@@ -120,12 +156,14 @@ class ConfigStore:
                 `checker_types`, `rules` and `projects`. The store does not close it.
             workspace: The project root; `Rules` matches paths inside it in relative form.
             project: Name of the project row whose `project`-scope configuration and rules
-                apply, or None for the global settings alone. A name that no row matches is
-                treated like None.
+                apply, or None for the global settings alone. A name that no row matches makes
+                `load` raise `UnknownProject`.
         """
         self._db = db
         self.workspace = workspace
         self.project = project
+        self.fingerprint: str | None = None
+        """SHA-256 over the rows of the last successful `load`; None before the first."""
 
     async def load(self) -> ProjectSettings:
         """Read configuration, checker definitions and rules from the database.
@@ -135,16 +173,21 @@ class ConfigStore:
             override them; rules apply in the order (global before project, then `position`).
             Disabled checker types and disabled rules are left out.
 
+        Side effects: on success, stores the fingerprint of the rows read in `fingerprint`.
+
         Raises:
             psycopg.Error: On database errors (connection lost, missing privileges, ...).
+            TimeoutError: If the database does not answer within the connection's timeout.
             pydantic.ValidationError: If the stored `settings` values do not match `Config`.
+            UnknownProject: If a project name was given and no `projects` row has it.
         """
         async with self._db.exclusive() as conn:
             # One lock for all four queries, so the settings cannot be read half-changed.
             project_id, policy = await self._project(conn)
             layers = await self._settings_layers(conn)
             checkers = await self._checker_definitions(conn)
-            rules = await self._rules(conn, project_id)
+            rule_rows = await self._rule_rows(conn, project_id)
+        rules = Rules.from_rows(self.workspace, rule_rows)
         config = build_config(
             layers,
             [
@@ -163,6 +206,8 @@ class ConfigStore:
                     )
                 }
             )
+        seen = repr((project_id, policy, layers, sorted(checkers.items()), rule_rows))
+        self.fingerprint = hashlib.sha256(seen.encode()).hexdigest()
         return ProjectSettings(config=config, checkers=checkers, rules=rules)
 
     async def watch(
@@ -201,29 +246,59 @@ class ConfigStore:
         dirty: Dirty,
         on_change: Callable[[ProjectSettings], Awaitable[None]],
         debounce: float = RELOAD_DEBOUNCE_S,
+        on_error: Callable[[Exception, int], Awaitable[None]] | None = None,
+        reconcile_s: float = RECONCILE_S,
     ) -> None:
-        """Reload the settings each time `dirty` is set, until cancelled.
+        """Keep the caller's settings equal to the database's, until cancelled.
 
-        Waits `debounce` seconds after the first notification of a burst, so that one change of
-        many rows causes one reload, then calls `load` and awaits `on_change` with the result. A
-        failed reload (database error, invalid stored settings) is logged as a warning and
-        otherwise ignored: the caller keeps the settings it has. An exception from `on_change`
-        propagates.
+        The loop reloads in four cases:
+
+        - `dirty.set()` (a `config_changed` notification): wait `debounce` seconds, `load`,
+          await `on_change`.
+        - `dirty.hint()` (a reconnect, a subscription that just took effect): the same, but
+          await `on_change` only if the rows differ from the last load.
+        - `reconcile_s` seconds passed without either: `load`; await `on_change` only if the
+          rows differ from the last load.
+        - The previous reload failed: retry after a pause (`RELOAD_RETRY_FIRST_S`, doubling up
+          to `RELOAD_RETRY_MAX_S`); await `on_change` when it succeeds.
+
+        A reload fails with a database error, a statement timeout, stored settings that do not
+        match `Config`, or a project row that has disappeared. The failure is logged and
+        reported to `on_error`; the caller keeps the settings it has until a retry succeeds,
+        and decides in `on_error` whether that is acceptable. The loop never ends because of a
+        failed reload. An exception from `on_change` or `on_error` propagates.
 
         Args:
             dirty: Set by the notification handler of `config_changed`.
-            on_change: Awaited with the newly loaded settings after every change.
-            debounce: Quiet time in seconds before the reload.
+            on_change: Awaited with the newly loaded settings.
+            debounce: Quiet time in seconds after a notification before the reload, so that one
+                change of many rows causes one reload.
+            on_error: Awaited with the error and the number of reloads that have failed in a
+                row (1 for the first), or None to only log.
+            reconcile_s: Seconds without a notification after which the settings are re-read.
         """
+        failures = 0
         while True:
-            await dirty.wait()
-            await anyio.sleep(debounce)
+            notified: bool | None = None
+            with anyio.move_on_after(reconcile_s):
+                notified = await dirty.wait()
+            if notified is not None:
+                await anyio.sleep(debounce)
+            before = self.fingerprint
             try:
                 settings = await self.load()
-            except (psycopg.Error, ValidationError) as exc:
-                log.warning("reloading the configuration failed: %s", exc)
+            except (psycopg.Error, TimeoutError, ValidationError, UnknownProject) as exc:
+                failures += 1
+                log.warning("reloading the configuration failed (%d in a row): %s", failures, exc)
+                if on_error is not None:
+                    await on_error(exc, failures)
+                pause = RELOAD_RETRY_FIRST_S * 2 ** min(failures - 1, 10)
+                await anyio.sleep(min(pause, RELOAD_RETRY_MAX_S))
+                dirty.hint()
                 continue
-            await on_change(settings)
+            recovered, failures = failures > 0, 0
+            if notified or recovered or self.fingerprint != before:
+                await on_change(settings)
 
     # ------------------------------------------------------------------ single queries
 
@@ -237,11 +312,12 @@ class ConfigStore:
 
         Returns:
             (`projects.id`, `projects.network_policy`), or (None, None) if no project is
-            configured or no row has that name. A policy of None leaves the sandbox settings as
-            they are configured, which is what a session without a project row gets.
+            configured. A policy of None leaves the sandbox settings as they are configured,
+            which is what a session without a project gets.
 
         Raises:
             psycopg.Error: On database errors.
+            UnknownProject: If a project is configured and no row has that name.
         """
         if self.project is None:
             return None, None
@@ -250,7 +326,8 @@ class ConfigStore:
         )
         row = await cur.fetchone()
         if row is None:
-            return None, None
+            cur = await conn.execute(b"SELECT name FROM projects ORDER BY name")
+            raise UnknownProject(self.project, [str(r[0]) for r in await cur.fetchall()])
         policy = str(row[1])
         return row[0], cast("NetworkPolicy", policy) if policy in POLICIES else None
 
@@ -303,7 +380,9 @@ class ConfigStore:
         rows: Iterable[tuple[str, str, str, str, int, int, int, int]] = await cur.fetchall()
         return {row[0]: CheckerDefinition(*row) for row in rows}
 
-    async def _rules(self, conn: psycopg.AsyncConnection, project_id: int | None) -> Rules:
+    async def _rule_rows(
+        self, conn: psycopg.AsyncConnection, project_id: int | None
+    ) -> list[tuple[str, str, int]]:
         """Read the enabled rules of the global scope and of one project.
 
         Args:
@@ -311,7 +390,8 @@ class ConfigStore:
             project_id: The project's row id, or None for the global rules alone.
 
         Returns:
-            The rules; sources are "<list>#<row id>" (see `Rules.from_rows`).
+            (list, pattern, row id) per rule, global rules before the project's, then by
+            position: the form `Rules.from_rows` takes.
 
         Raises:
             psycopg.Error: On database errors.
@@ -322,4 +402,4 @@ class ConfigStore:
             b" ORDER BY (project_id IS NOT NULL), position, id",
             (project_id,),
         )
-        return Rules.from_rows(self.workspace, await cur.fetchall())
+        return await cur.fetchall()

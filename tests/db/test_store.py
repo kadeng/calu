@@ -218,3 +218,166 @@ async def test_watch_survives_a_broken_configuration(
         await listener.close()
     assert reloaded.is_set()
     assert any("reloading the configuration failed" in r.getMessage() for r in caplog.records)
+
+
+# ------------------------------------------------------------------ unknown project (ga3)
+
+
+async def test_a_project_name_that_no_row_has_is_an_error(db_url: str) -> None:
+    """ga3: falling back to the global settings would silently drop the project's rules."""
+    from calu.store import UnknownProject
+
+    conn = await prepared(db_url)
+    try:
+        await add_project(conn, "payments")
+        with pytest.raises(UnknownProject, match=r"payment'.*registered: payments") as caught:
+            await ConfigStore(Db(conn), WORKSPACE, "payment").load()
+        assert caught.value.known == ["payments"]
+    finally:
+        await conn.close()
+
+
+# ------------------------------------------------------------------ reloading (sd2)
+
+
+class Reloads:
+    """Collects what `reload_loop` reports."""
+
+    def __init__(self) -> None:
+        self.seen: list[ProjectSettings] = []
+        self.errors: list[tuple[Exception, int]] = []
+
+    async def on_change(self, settings: ProjectSettings) -> None:
+        self.seen.append(settings)
+
+    async def on_error(self, exc: Exception, failures: int) -> None:
+        self.errors.append((exc, failures))
+
+    async def until(self, done, seconds: float = 10) -> None:
+        with anyio.fail_after(seconds):
+            while not done():
+                await anyio.sleep(0.01)
+
+
+async def test_a_change_without_a_notification_is_found_by_the_periodic_reload(
+    db_url: str,
+) -> None:
+    """sd2: a lost notification must not leave a session on the old rules for the night."""
+    from calu.db import Dirty
+
+    conn = await prepared(db_url)
+    store = ConfigStore(Db(conn), WORKSPACE)
+    reloads = Reloads()
+    try:
+        await store.load()
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(store.reload_loop, Dirty(), reloads.on_change, 0.01, None, 0.05)
+            # Nothing changed: the periodic re-read stays silent.
+            await anyio.sleep(0.3)
+            assert reloads.seen == []
+            await set_settings(conn, "global", "", {"auto_escalate": {"commands": True}})
+            await reloads.until(lambda: reloads.seen)
+            tg.cancel_scope.cancel()
+    finally:
+        await conn.close()
+    assert reloads.seen[-1].config.auto_escalate.commands is True
+
+
+async def test_a_change_made_before_the_subscription_is_found_once_listening(
+    db_url: str,
+) -> None:
+    """sd2: the window between the first load and LISTEN, and every reconnect of the listener."""
+    from calu.db import CONFIG_CHANGED, Dirty, Notifier
+
+    conn = await prepared(db_url)
+    listener = await connect(db_url)
+    store = ConfigStore(Db(conn), WORKSPACE)
+    reloads = Reloads()
+    try:
+        await store.load()
+        await set_settings(conn, "global", "", {"claude": {"model": "haiku"}})  # not heard
+        dirty = Dirty()
+        notifier = Notifier(listener)
+        notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
+        notifier.on_listening(dirty.hint)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(notifier.run)
+            tg.start_soon(store.reload_loop, dirty, reloads.on_change, 0.01, None, 3600)
+            await reloads.until(lambda: reloads.seen)
+            # A hint that finds nothing new does not make the session re-apply its settings.
+            dirty.hint()
+            await anyio.sleep(0.3)
+            assert len(reloads.seen) == 1
+            tg.cancel_scope.cancel()
+    finally:
+        await conn.close()
+        await listener.close()
+    assert reloads.seen[0].config.claude.model == "haiku"
+
+
+async def test_a_failed_reload_is_reported_and_retried(
+    db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sd2: one failed attempt used to be the last one until the next notification."""
+    from pydantic import ValidationError
+
+    from calu.db import Dirty
+    from calu.store import config as config_module
+
+    monkeypatch.setattr(config_module, "RELOAD_RETRY_FIRST_S", 0.02)
+    conn = await prepared(db_url)
+    store = ConfigStore(Db(conn), WORKSPACE)
+    reloads = Reloads()
+    try:
+        await store.load()
+        dirty = Dirty()
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(store.reload_loop, dirty, reloads.on_change, 0.01, reloads.on_error, 3600)
+            # Invalid stored settings: every attempt fails, and each is reported with its count.
+            await set_settings(conn, "global", "", {"context": {"fold_every": 0}})
+            dirty.set()
+            await reloads.until(lambda: len(reloads.errors) >= 3)
+            assert [count for _, count in reloads.errors[:3]] == [1, 2, 3]
+            assert isinstance(reloads.errors[0][0], ValidationError)
+            assert reloads.seen == []
+            # Repaired, and applied by the retry alone: no further notification is sent.
+            await set_settings(conn, "global", "", {"claude": {"model": "haiku"}})
+            await reloads.until(lambda: reloads.seen)
+            tg.cancel_scope.cancel()
+    finally:
+        await conn.close()
+    assert reloads.seen[-1].config.claude.model == "haiku"
+
+
+async def test_a_slow_database_does_not_end_the_reload_loop(
+    db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sd2: `TimeoutError` left the loop, and with it the session's task group."""
+    from calu.db import Dirty
+    from calu.store import config as config_module
+
+    monkeypatch.setattr(config_module, "RELOAD_RETRY_FIRST_S", 0.02)
+    conn = await prepared(db_url)
+    store = ConfigStore(Db(conn), WORKSPACE)
+    reloads = Reloads()
+    real_load = store.load
+    calls = 0
+
+    async def slow_once() -> ProjectSettings:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("the database did not answer within 30 s")
+        return await real_load()
+
+    monkeypatch.setattr(store, "load", slow_once)
+    try:
+        dirty = Dirty()
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(store.reload_loop, dirty, reloads.on_change, 0.01, reloads.on_error, 3600)
+            dirty.set()
+            await reloads.until(lambda: reloads.seen)
+            tg.cancel_scope.cancel()
+    finally:
+        await conn.close()
+    assert [type(exc) for exc, _ in reloads.errors] == [TimeoutError]

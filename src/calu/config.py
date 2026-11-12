@@ -453,10 +453,9 @@ class ClockConfig(ConfigModel):
 
     check_interval_s: float = Field(default=10.0, ge=0)
     """Seconds between samples; 0 switches the watch off. The interval only decides how soon a
-    jump is noticed, not whether it is: each sample is compared with the previous one. It is
-    also how often the session tells the database that it is still running, and a herd calls a
-    session stale after 180 s of silence, so an interval near that threshold makes a running
-    session look dead in `calu sessions` (the start warns about it)."""
+    jump is noticed, not whether it is: each sample is compared with the previous one. The
+    heartbeat that tells the database the session is still running has a fixed interval of its
+    own and does not depend on this value."""
     max_backward_s: float = Field(default=1.0, ge=0)
     """A backward move up to this size counts as a time-server correction. Above it, the session
     escalates its next tool call, because the attribution of file changes is no longer sound."""

@@ -29,7 +29,9 @@ Escalations can be resolved from two sides (PLAN.md D28):
 interrupted, or nobody answered in time.
 """
 
+import hashlib
 import json
+import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -547,9 +549,41 @@ class DatabaseSessionStore:
         self._db = db
         self.session_id: str | None = None
         self._token_hash: str | None = None
+        # The key that proves to the database which session this connection is (migration
+        # 0025). It exists in this process's memory only; the database holds its SHA-256.
+        self._session_key = secrets.token_urlsafe(32)
+        # A connection setting does not survive its connection, so a replacement connection
+        # is bound to the session again before `Db` uses it.
+        db.on_connect(self._bind)
+
+    async def _bind(self, conn: psycopg.AsyncConnection) -> None:
+        """Bind a connection to this session's row, so that row-level security lets it through.
+
+        Sets `calu.session_id` and `calu.session_key` for the lifetime of the connection. The
+        policies of migration 0025 give access to the session whose stored key hash matches,
+        and to no row at all otherwise. Does nothing before `start` created the row.
+
+        Args:
+            conn: The raw connection: the one `start` holds, or a replacement that `Db` opened
+                after the previous one was lost.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        if self.session_id is None:
+            return
+        # `false` makes a setting last for the connection, not the transaction.
+        await conn.execute(
+            b"SELECT set_config('calu.session_id', %s, false),"
+            b" set_config('calu.session_key', %s, false)",
+            (self.session_id, self._session_key),
+        )
 
     async def start(self, identity: SessionIdentity) -> str:
         """Create the host and session rows (see `SessionStore.start`).
+
+        Side effects: registers the SHA-256 of this store's session key with the new row and
+        binds the connection to the row (`_bind`).
 
         Args:
             identity: Where the session runs.
@@ -578,12 +612,12 @@ class DatabaseSessionStore:
                 )
                 row = await cur.fetchone()
                 project_id = row[0] if row else None
-            # Through the function, not with a plain INSERT: under the row-level security of
-            # migration 0015 a session may only touch rows that carry its own id, and at this
-            # moment that id does not exist yet. The function runs as the owner and hands it
-            # back (PLAN.md D49).
+            # Through the function, not with a plain INSERT: under row-level security a session
+            # may only touch rows that carry its own id, and at this moment that id does not
+            # exist yet. The function runs as the owner, stores the hash of the session key
+            # and hands the id back (PLAN.md D49, migration 0025).
             cur = await conn.execute(
-                b"SELECT calu_start_session(%s, %s, %s, %s, %s, %s, %s)",
+                b"SELECT calu_start_session(%s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     project_id,
                     host[0],
@@ -592,15 +626,16 @@ class DatabaseSessionStore:
                     identity.git_commit,
                     identity.pid,
                     identity.model,
+                    hashlib.sha256(self._session_key.encode()).hexdigest(),
                 ),
             )
             row = await cur.fetchone()
             if row is None or row[0] is None:
                 raise RuntimeError("the sessions row was not created")
             # From here on this connection may read and write this session's rows and no
-            # others. `false` makes the setting last for the connection, not the transaction.
-            await conn.execute(b"SELECT set_config('calu.session_id', %s, false)", (str(row[0]),))
-        self.session_id = str(row[0])
+            # others.
+            self.session_id = str(row[0])
+            await self._bind(conn)
         return self.session_id
 
     async def heartbeat(self) -> None:

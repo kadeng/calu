@@ -1,6 +1,6 @@
 """The database as the session sees it: configuration in, history and escalations out."""
 
-from calu.store.config import CheckerDefinition, ConfigStore, ProjectSettings
+from calu.store.config import CheckerDefinition, ConfigStore, ProjectSettings, UnknownProject
 from calu.store.memory import MemorySessionStore, RecordedStep
 from calu.store.session import (
     CheckerRun,
@@ -28,5 +28,6 @@ __all__ = [
     "SessionStore",
     "StepDecision",
     "StepRow",
+    "UnknownProject",
     "turn_record",
 ]

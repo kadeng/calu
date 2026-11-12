@@ -14,7 +14,6 @@ from pathlib import Path
 from calu.claude_model import is_cli_model
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.credentials import CredentialError, CredentialStore
-from calu.herd import STALE_AFTER_S
 
 SANDBOX_TOOLS = ("bwrap", "socat")
 """Programs that Claude Code's Linux sandbox needs (`spikes/RESULTS.md`, Q1a)."""
@@ -178,31 +177,22 @@ def network_warnings(config: Config) -> list[str]:
 
 
 def heartbeat_warnings(config: Config) -> list[str]:
-    """Warn when the heartbeat interval is too long for a herd to trust the session's state.
+    """Return no warning: the heartbeat no longer depends on a setting (PLAN.md D56).
 
-    `clock.check_interval_s` is also the heartbeat interval (PLAN.md D56): the session stamps
-    `sessions.last_seen` that often, and a herd calls a session stale after
-    `herd.STALE_AFTER_S` seconds of silence. Setting the interval near or above that threshold
-    makes every live session look dead in `calu sessions` and in the fleet view, which is worse
-    than a slow clock check, so it is said at the start rather than discovered later.
+    `clock.check_interval_s` used to be the heartbeat interval as well, so a long or
+    switched-off clock watch made a live session look stale after `herd.STALE_AFTER_S` seconds,
+    and this function warned about it. The session now stamps `sessions.last_seen` every
+    `herd.HEARTBEAT_S` seconds whatever the clock watch is set to, so there is nothing left to
+    warn about. The function stays so that `warnings` keeps its list of sources.
 
     Args:
-        config: The session configuration.
+        config: The session configuration (not read).
 
     Returns:
-        One warning, or an empty list while the interval leaves room (it must stay under half
-        the threshold). Switching the watch off (0) is not warned about: that is a deliberate
-        choice and the row keeps the stamp of its insert.
+        An empty list.
     """
-    interval = config.clock.check_interval_s
-    if interval <= 0 or interval < STALE_AFTER_S / 2:
-        return []
-    return [
-        f"clock.check_interval_s is {interval:g} s, and a session counts as stale after "
-        f"{STALE_AFTER_S:g} s without a sign of life, so `calu sessions` and the fleet view "
-        "will call this session stale although it is running. Lower the interval, or keep it "
-        "under half of that."
-    ]
+    del config
+    return []
 
 
 def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str]:

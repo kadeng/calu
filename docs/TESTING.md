@@ -62,6 +62,25 @@ creates and drops its own database, so the tests do not interfere and a failed r
 nothing behind. `tests/db/` covers the schema and the roles (what `calu_session` may *not* do),
 the stores, the admin commands, the herd queries, the web interface and the live relay.
 
+The databases are per test, but the roles `calu_session` and `calu_operator` belong to the whole
+server, and every `setup` gives `calu_session` a new password. Two test runs against the same
+server at the same time can therefore take each other's session login away, which shows as a
+failed login or as `tuple concurrently updated`. Give a second concurrent run a server of its
+own and point `CALU_TEST_DSN` at it:
+
+```bash
+docker run -d --rm --name calu-test-2 -e POSTGRES_USER=calu_owner -e POSTGRES_PASSWORD=calu-dev \
+    -e POSTGRES_DB=calu -p 127.0.0.1:55440:5432 --tmpfs /var/lib/postgresql postgres:18
+CALU_TEST_DSN=postgresql://calu_owner:calu-dev@127.0.0.1:55440/calu uv run pytest -m 'not live'
+```
+
+Lost connections are covered without restarting the server: `tests/db/test_connection.py` and
+`test_a_session_survives_the_loss_of_both_database_connections` end the session's server
+processes with `pg_terminate_backend`, which is what a restart does to them, and check that the
+session reconnects, is bound to its row again and loses no step. Session isolation
+(`tests/db/test_schema.py`) includes the attack of a second holder of the `calu_session` login
+who names another session's id.
+
 ## The browser layer
 
 ```bash
@@ -195,6 +214,17 @@ escalation resolved from the database alone.
    `calu sessions` and `calu escalations` must run without a prompt, `calu credential list`
    must mark it "file mode only", and `calu doctor` must report it -- as a note for `operator`,
    as a problem if `admin` or `session` is stored that way. Verified by hand on 2026-11-10.
+   `calu run` with a `session` entry stored that way must refuse to start.
+15. A database restart under a running session: start `calu run --batch -p "..."` with a prompt
+   that takes a few minutes, then `docker compose restart caludb`. The session must print that
+   the database connection is lost and, once the server answers, that it is back; its steps
+   wait meanwhile and none is missing on the session page of `calu web` afterwards. `calu sessions`
+   must not show it as SILENT once it is back. The automated tests end the connections with
+   `pg_terminate_backend`; only this check has the server really away for a while.
+16. The project of a directory: `calu project add . --name demo`, then `calu run` in that
+   directory and in a subdirectory must print `[project] demo (registered for this directory)`;
+   `calu run --project demoo` must refuse to start and list the registered projects; `calu run`
+   in an unregistered directory must print `[project] none`.
 
 ## Measuring the checkers
 
