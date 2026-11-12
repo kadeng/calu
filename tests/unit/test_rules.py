@@ -1067,3 +1067,75 @@ def test_the_branch_check_does_not_backtrack() -> None:
     started = time.monotonic()
     switches_branch("git " + "--git-dir " * 40 + "x")
     assert time.monotonic() - started < 0.1
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "script -c 'git push --force origin main' /dev/null",
+        "script -c 'rm -rf ~' /dev/null",
+        "env -S 'python -m calu'",
+        "COMPOSE_PROJECT_NAME=calu-db docker compose down -v",
+        '"patch" -p1 < fix.diff',
+        "pa''tch -p1 < fix.diff",
+        "git 'apply' fix.diff",
+        "git apply fix.diff;echo ok",
+        "patch -p1<fix.diff",
+        "cat fix.diff|patch -p1",
+        "(git apply fix.diff)",
+        "git apply $f",
+        "git checkout --conflict=merge CLAUDE.md",
+        "git checkout -2 CLAUDE.md",
+        "python -m coverage run -m calu",
+        "hatch run test:calu",
+        "python src/calu",
+    ],
+)
+def test_the_fifth_review_findings_ask(tmp_path: Path, command: str) -> None:
+    """D175: wrappers lost their quoted command's arguments, a quoted tool name skipped the
+    diff, shell operators touching a file name hid it, and more."""
+    (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
+    (tmp_path / "fix.diff").write_text(
+        "--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -1 +1 @@\n-a\n+b\n", encoding="utf-8"
+    )
+    assert default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git add docs/PLAN.md && git commit -am docs",
+        "git commit -m 'apply patch'",
+        "npm version patch && cat docs/PLAN.md",
+        "git stash apply && cat docs/PLAN.md",
+        "git grep -n apply docs/PLAN.md",
+        "git commit -F - <<'EOF'\nRead `.env` in the python loader\nEOF",
+        "cat > scripts/run.py <<'EOF'\n#!/usr/bin/env python\nload_dotenv('.env')\nEOF",
+        "cat src/calu/db/local-compose.yml",
+    ],
+)
+def test_the_fifth_review_false_positives_are_gone(tmp_path: Path, command: str) -> None:
+    """D175: a word `patch`/`apply`/`am` anywhere made every named file a diff, and any
+    multi-line command mentioning python had its literals read as code."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "PLAN.md").write_text(
+        "Example:\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n", encoding="utf-8"
+    )
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "src" / "calu" / "db").mkdir(parents=True)
+    (tmp_path / "src" / "calu" / "db" / "local-compose.yml").write_text(
+        "name: calu-db\n", encoding="utf-8"
+    )
+    assert not default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+def test_a_diff_too_large_to_check_asks(tmp_path: Path) -> None:
+    """D175: caps never let a step through silently; 51 named files or 5001 changed files ask."""
+    (tmp_path / "big.diff").write_text(
+        "".join(f"--- a/f{i}.py\n+++ b/f{i}.py\n" for i in range(5001)), encoding="utf-8"
+    )
+    outcome = default_rules(tmp_path).evaluate(bash("git apply big.diff", str(tmp_path)))
+    assert outcome.ask and "cannot be checked" in outcome.ask[0]
+    small = default_rules(tmp_path)
+    (tmp_path / "ok.diff").write_text("--- a/f.py\n+++ b/f.py\n", encoding="utf-8")
+    assert not small.evaluate(bash("git apply ok.diff", str(tmp_path))).ask

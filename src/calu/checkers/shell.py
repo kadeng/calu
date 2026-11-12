@@ -124,6 +124,10 @@ class ParsedCommand:
     """
 
     commands: list[str] = field(default_factory=list)
+    argvs: list[list[str]] = field(default_factory=list)
+    """The words of each entry of `commands`, as parsed (quotes removed, but not re-split), so
+    that a wrapper's quoted command keeps its arguments (`script -c 'git push --force'`, D175).
+    Same length and order as `commands`."""
     paths: list[ShellPath] = field(default_factory=list)
     error: str | None = None
 
@@ -161,6 +165,10 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
 
 """Commands that run the command after them, with how to skip their own arguments (D145)."""
 
+BRANCH_OPTIONS = frozenset({"-b", "-B", "--orphan", "--detach", "-t", "--track"})
+"""`git checkout` options that make or attach a branch: with them, one argument is a branch
+name or start point, not a file to restore (D175)."""
+
 COMMAND_OPTIONS = frozenset(
     {
         ("env", "-S"),
@@ -179,7 +187,7 @@ also when they follow the wrapper's positional argument (`flock FILE -c CMD`, D1
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
-def command_variants(command: str) -> list[str]:
+def command_variants(command: str, words: list[str] | None = None) -> list[str]:
     """Return a simple command and the forms of it a deny rule must also see (PLAN.md D145).
 
     Deny rules are anchored at the start of a command (`^(sudo|su|doas)( |$)`), and three
@@ -192,6 +200,8 @@ def command_variants(command: str) -> list[str]:
 
     Args:
         command: One simple command as the splitter recorded it.
+        words: Its words as parsed (`ParsedCommand.argvs`); None splits `command` again,
+            which loses the grouping of a quoted argument (D175).
 
     Returns:
         The command itself first, then each stripped form that differs from the one before,
@@ -202,10 +212,13 @@ def command_variants(command: str) -> list[str]:
             ["X=1 nohup /usr/bin/sudo ls", "nohup /usr/bin/sudo ls", "/usr/bin/sudo ls",
              "sudo ls"]
     """
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        return [command]
+    if words is not None:
+        words = list(words)
+    else:
+        try:
+            words = shlex.split(command)
+        except ValueError:
+            return [command]
     variants = [command]
 
     def add(tokens: list[str]) -> None:
@@ -377,6 +390,7 @@ class _Walker:
             and node.parent.type not in ("command", *_STATEMENT_TYPES)
         ):
             self.result.commands.append(" ".join(self.text(node).split()))
+            self.result.argvs.append(self.text(node).split())
             self.visit_children(node)
         elif kind == "file_redirect":
             self.redirect(node)
@@ -412,6 +426,7 @@ class _Walker:
         if not argv and not prefix:
             return
         self.result.commands.append(" ".join(prefix + [w.value for w in argv]))
+        self.result.argvs.append(prefix + [w.value for w in argv])
         if not argv:
             return
         name = os.path.basename(argv[0].value)
@@ -595,21 +610,12 @@ class _Walker:
             or (
                 sub == "checkout"
                 and len(plain) == 1
-                and all(
-                    re.fullmatch(r"-[qfm]+", option) is not None
-                    or option
-                    in {
-                        "--quiet",
-                        "--force",
-                        "--merge",
-                        "--ours",
-                        "--theirs",
-                        "--no-overlay",
-                        "--overlay",
-                        "-p",
-                        "--patch",
-                        "--ignore-skip-worktree-bits",
-                    }
+                # Any option but one that creates or attaches a branch: an allow list missed
+                # `--conflict=merge`, `-2`, `--progress` and more (D175).
+                and not any(
+                    option in BRANCH_OPTIONS
+                    or option.startswith(("--track=", "--orphan="))
+                    or re.fullmatch(r"-[A-Za-z]*[bBt]", option) is not None
                     for option in options
                 )
                 and any(cwd is not None and (cwd / plain[0].value).exists() for cwd in self.cwds)

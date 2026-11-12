@@ -45,7 +45,7 @@ from typing import Any
 from calu.checkers.model import Step
 from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.search import searched_files
-from calu.checkers.shell import ShellPath, command_variants, parse_command
+from calu.checkers.shell import ParsedCommand, ShellPath, command_variants, parse_command
 
 RULE_LISTS = (
     "command-allow",
@@ -338,6 +338,12 @@ class Rules:
                 for line in command.splitlines():
                     self._deny_command(line.strip(), outcome)
             for used in parsed.paths:
+                if not re.match(
+                    r"(argument|value of an option) of (docker|podman|nerdctl|docker-compose|"
+                    r"podman-compose)",
+                    used.via,
+                ):
+                    continue  # `cat local-compose.yml` does not reach the container (D175)
                 for candidate in used.paths:
                     if candidate is not None and _is_calu_compose(candidate):
                         all_allowed = False
@@ -346,10 +352,21 @@ class Rules:
                             f"`{self.display(candidate)}`, which reaches its database container "
                             "(built-in, D171, D174)."
                         )
-            for target in diff_targets(command, cwd):
+            diffs = diff_targets(command, cwd, parsed)
+            if diffs.unchecked:
+                all_allowed = False
+                outcome.ask.append(
+                    f"The diff this command applies cannot be checked: {diffs.unchecked} (D175)."
+                )
+            denied = 0
+            for target in diffs.paths:
                 # `patch < x.diff` and `git apply x.diff` write the files the diff names, which
-                # the command line does not show (D169).
-                if not self._check_path(target, "write", "file changed by the diff", outcome):
+                # the command line does not show (D169). Only the denied ones are reported: a
+                # note per candidate path outside the allowlist swamped the checker (D175).
+                if self.write_denied(target):
+                    denied += 1
+                    if denied <= 5:
+                        self._check_path(target, "write", "file changed by the diff", outcome)
                     all_allowed = False
             for literal in inline_code_paths(command):
                 # A path written into an interpreter's inline code is read like an argument
@@ -362,9 +379,9 @@ class Rules:
                         f"Inline code in `{command[:60]}` names `{self.display(path)}`, which "
                         "the read deny list protects."
                     )
-            for simple in parsed.commands:
+            for simple, words in zip(parsed.commands, parsed.argvs, strict=False):
                 parts += 1
-                if self._deny_command(simple, outcome):
+                if self._deny_command(simple, outcome, words):
                     continue
                 if not _first_match(self.lists("command-allow")[0], simple):
                     all_allowed = False
@@ -403,19 +420,31 @@ class Rules:
         outcome.allowed = parts > 0 and all_allowed and not outcome.ask
         return outcome
 
-    def _deny_command(self, command: str, outcome: RuleOutcome) -> bool:
+    def _deny_command(
+        self, command: str, outcome: RuleOutcome, words: list[str] | None = None
+    ) -> bool:
         """Add an `ask` reason if `command`, or a form of it, matches the command deny list.
 
         Args:
             command: One simple command; `shell.command_variants` gives the forms checked.
             outcome: Collects the reason.
+            words: Its words as parsed, so that a wrapper's quoted command keeps its arguments
+                (D175); None splits `command` again.
 
         Returns:
             True if a deny rule matched.
         """
+        if re.search(r"(^|\s)COMPOSE_PROJECT_NAME=['\"]?calu-db(['\"\s]|$)", command) and re.search(
+            r"(^|\s)(docker|podman|nerdctl|docker-compose|podman-compose)(\s|$)", command
+        ):
+            outcome.ask.append(
+                f"The command `{command}` reaches calu's own database container through "
+                "COMPOSE_PROJECT_NAME (built-in, D171, D175)."
+            )
+            return True
         # Also the forms without leading assignments, wrappers (`env`, `nohup`, `timeout 5`)
         # and a path before the program name: deny rules are anchored at the start (D145).
-        for variant in command_variants(command):
+        for variant in command_variants(command, words):
             if CALU_CONTAINER.search(variant):
                 outcome.ask.append(
                     f"The command `{command}` reaches calu's own database container, which "
@@ -630,6 +659,18 @@ class Rules:
                 return False
         return True
 
+    def write_denied(self, path: Path) -> bool:
+        """Tell whether writing `path` matches a write deny rule (built-in or `write-deny`).
+
+        Args:
+            path: An absolute path.
+
+        Returns:
+            True if a write deny rule matches the path's matching form (`match_form`).
+        """
+        deny = [*BUILT_IN_WRITE_DENY, *self.lists("write-deny")[0]]
+        return _first_match(deny, self.match_form(path)) is not None
+
     def read_denied(self, path: Path) -> bool:
         """Tell whether reading `path` matches a read deny rule (built-in or `read-deny`).
 
@@ -788,19 +829,29 @@ def inline_code_paths(command: str) -> list[str]:
         inline_code_paths("node -e \"fs.readFileSync('.env')\"") == [".env"]
     """
     found: list[str] = []
-    interpreter_named = re.search(
-        r"(^|[\s;&|(/])(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|Rscript)(\s|$)",
-        command,
-    )
-    if interpreter_named and ("<<" in command or "\n" in command):
-        # A heredoc or a script on several lines given to an interpreter (`python3 - <<EOF`):
-        # its literals are code like `-c CODE` (D174).
-        found += _path_literals(command.partition("\n")[2])
+    for line_number, line in enumerate(command.splitlines()):
+        # A heredoc read by an interpreter (`python3 - <<EOF`): its lines are code like
+        # `-c CODE` (D174). Only when the interpreter is the program of the command that
+        # reads it -- a commit message or a `cat > run.py <<EOF` that merely mentions python
+        # asked (D175).
+        if "<<" in line and re.search(
+            r"(^|[;&|(]\s*)([\w./-]*/)?(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|"
+            r"pypy[0-9.]*|ipython)(\s+[^;&|<]*)?<<",
+            line,
+        ):
+            found += _path_literals("\n".join(command.splitlines()[line_number + 1 :]))
+            break
     try:
         words = shlex.split(command)
     except ValueError:
-        # Unbalanced quotes (an apostrophe in a comment): look at the whole command (D174).
-        return found + (_path_literals(command) if interpreter_named else [])
+        # Unbalanced quotes (an apostrophe in a comment): look at the first line, where an
+        # interpreter's `-c CODE` is, when an interpreter is a program there (D174, D175).
+        first = command.splitlines()[0] if command else ""
+        program = re.search(
+            r"(^|[;&|(]\s*)([\w./-]*/)?(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua)\s",
+            first,
+        )
+        return found + (_path_literals(first) if program else [])
     seen_interpreter = False
     for index, word in enumerate(words):
         name = os.path.basename(word)
@@ -882,8 +933,10 @@ def runs_calu(command: str) -> bool:
     program = os.path.basename(words[0])
     if program == "calu":
         return True
-    if re.fullmatch(r"python[0-9.]*", program):
+    if re.fullmatch(r"(python|pypy)[0-9.]*", program):
         return _python_module_calu(words[1:])
+    if program in MODULE_RUNNERS:
+        return _mentions_module_calu(words[1:])
     if program not in LAUNCHERS:
         return False
     values = launch_value_options(program)
@@ -933,9 +986,14 @@ def runs_calu(command: str) -> bool:
             continue
         if name == "calu":
             return True
-        if re.fullmatch(r"python[0-9.]*", name):
+        if program == "hatch" and ":" in name:
+            # `hatch run ENV:ARGS`: a script name, or a command run as it is (D175)
+            name = name.partition(":")[2]
+            if name == "calu":
+                return True
+        if re.fullmatch(r"(python|pypy)[0-9.]*", name):
             return _python_module_calu(rest[index + 1 :])
-        if name in ORDINARY_PROGRAMS or (program == "hatch" and ":" in name):
+        if name in ORDINARY_PROGRAMS or name in MODULE_RUNNERS or program == "hatch":
             return _mentions_module_calu(rest[index + 1 :])
     return False
 
@@ -949,12 +1007,15 @@ def _mentions_module_calu(rest: list[str]) -> bool:
     Returns:
         True for `coverage run -m calu`, `ipython -m calu.cli` and the like.
     """
-    return any(
-        re.fullmatch(r"-[A-Za-z]*m", word) is not None
-        and index + 1 < len(rest)
-        and re.fullmatch(r"calu(\.\w+)*", rest[index + 1]) is not None
-        for index, word in enumerate(rest)
-    )
+    for index, word in enumerate(rest):
+        following = rest[index + 1] if index + 1 < len(rest) else ""
+        if (re.fullmatch(r"-[A-Za-z]*m", word) or word == "--module") and re.fullmatch(
+            r"calu(\.\w+)*", following
+        ):
+            return True
+        if re.fullmatch(r"-[A-Za-z]*mcalu(\.\w+)*|--module=calu(\.\w+)*", word):
+            return True
+    return False
 
 
 def _python_module_calu(rest: list[str]) -> bool:
@@ -980,16 +1041,23 @@ def _python_module_calu(rest: list[str]) -> bool:
         if word.startswith(("-X", "-W")):
             continue  # attached value: `-Wonce`, `-Xtracemalloc`
         if not word.startswith("-"):
-            return False
+            # The script: `python src/calu` runs that package's __main__.py (D175).
+            return os.path.basename(word.rstrip("/")) == "calu"
         if re.fullmatch(r"-[A-Za-z]*m", word):
             following = rest[index + 1] if index + 1 < len(rest) else ""
-            return re.fullmatch(r"calu(\.\w+)*", following) is not None
+            if re.fullmatch(r"calu(\.\w+)*", following):
+                return True
+            # A module that runs a module: `python -m coverage run -m calu`, `-m pdb -m calu`.
+            return _mentions_module_calu(rest[index + 2 :])
         if re.fullmatch(r"-[A-Za-z]*mcalu(\.\w+)*", word):
             return True
         if re.fullmatch(r"-[bBdEiIOPqsSuv]*c.*", word):
             return False  # `-c CODE`: the rest is the code's arguments
     return False
 
+
+MODULE_RUNNERS = frozenset({"coverage", "ipython", "pdb", "cProfile", "py-spy", "memray"})
+"""Programs that run a Python module given with `-m` (D175)."""
 
 COMMON_VALUE_OPTIONS = frozenset(
     {
@@ -1169,88 +1237,167 @@ DIFF_LIMIT = 1_000_000
 """Most bytes of a diff file read to find the files it changes."""
 
 
-DIFF_TOOLS = re.compile(r"(^|[\s;&|(/])(patch|git\s.*\b(apply|am))(\s|$)")
-"""A command that applies a diff somewhere in it, behind a wrapper or not (D169, D174)."""
-
 MAX_STRIP = 3
 """Strip levels tried for each path of a diff (`-p0` to `-p3`), plus the base name."""
 
+MAX_DIFF_PATHS = 5000
+"""Most distinct files of the diffs of one command that are checked; more asks (D175)."""
 
-def diff_targets(command: str, cwd: Path) -> list[Path]:
-    """Return the files a diff applied by `command` may change (PLAN.md D169, D174).
+MAX_DIFF_FILES = 50
+"""Most files read as diffs for one command; more asks (D175)."""
+
+NEVER_READ = ("/proc/", "/sys/", "/dev/")
+"""Paths a diff is never read from: reading them can block (`/proc/kmsg` as root, D175)."""
+
+
+@dataclass
+class DiffTargets:
+    """What `diff_targets` found: candidate paths, or a reason the diff could not be checked."""
+
+    paths: list[Path] = field(default_factory=list)
+    unchecked: str = ""
+    """Why the diff could not be checked completely ("" when it could); the step then asks."""
+
+
+def diff_targets(command: str, cwd: Path, parsed: ParsedCommand | None = None) -> DiffTargets:
+    """Return the files a diff applied by `command` may change (PLAN.md D169, D174, D175).
 
     `patch` and `git apply`/`git am` write the files named inside the diff, which the command
-    line does not show. Three rounds of parsing their options precisely each missed spellings
-    (`-Np1`, `-p 2`, `-dDIR`, wrappers, heredocs mistaken for file names), so this fails
-    closed instead: whenever such a tool appears anywhere in the command,
+    line does not show. Which command is a diff tool is read from the shell splitter's simple
+    commands, in every wrapper form (`X=1 patch`, `env git apply`, `"patch"`), so a word
+    `patch` or `apply` elsewhere (`npm version patch`, `git commit -am`) does not count.
+    For such a command:
 
-    - the diff text is every heredoc line of the command plus every existing file the command
-      names (at most `DIFF_LIMIT` bytes each), so `cat > fix.diff <<EOF ... patch < fix.diff`
-      is covered too;
+    - the diff text is every heredoc line of the command plus every file the splitter
+      resolved as a redirect or as an argument of the diff tool or of a `cat` (`cat x | patch`);
+      a source it could not resolve (a variable, an unmatched glob) leaves the diff unchecked;
     - the header paths are those of `+++`/`---`, context-diff `***`/`---`, `diff --git`,
-      `rename from`/`rename to` and `copy to` lines, quotes removed;
+      `rename from`/`rename to` and `copy from`/`copy to` lines, quotes removed, each
+      distinct path once;
     - each path is tried with 0 to `MAX_STRIP` leading components stripped and as its base
-      name, relative to the starting directory and to every `-d`/`-C`/`--directory` value.
+      name, relative to the starting directory and to the diff tool's own `-d`/`-C`/
+      `--directory` values. A nested `docs/CLAUDE.md` thus asks like the root one (D174).
 
-    A diff that changes a nested `docs/CLAUDE.md` therefore asks as if it changed the root
-    one -- the price of not guessing the strip level.
+    More than `MAX_DIFF_FILES` diff files or `MAX_DIFF_PATHS` paths leaves the diff unchecked
+    too, so a cap never lets a step through silently.
 
-    Side effects: reads the files the command names.
+    Side effects: reads the diff files (never below /proc, /sys or /dev).
 
     Args:
         command: The command as Claude wrote it.
         cwd: The directory it runs in.
+        parsed: The splitter's result for `command`; None parses it here.
 
     Returns:
-        Absolute candidate paths, without duplicates; [] when no diff tool is in the command.
+        The candidate paths, and why the diff could not be checked if it could not.
     """
-    if not DIFF_TOOLS.search(command):
-        return []
-    try:
-        words = shlex.split(command)
-    except ValueError:
-        words = command.split()
+    parsed = parsed if parsed is not None else parse_command(command, cwd)
+    found = DiffTargets()
     bases = [cwd]
-    for index, word in enumerate(words):
-        value = ""
-        if word in ("-d", "-C", "--directory") and index + 1 < len(words):
-            value = words[index + 1]
-        elif word.startswith("--directory="):
-            value = word.partition("=")[2]
-        elif re.fullmatch(r"-[dC].+", word):
-            value = word[2:]
-        if value:
-            found = _absolute(value, cwd)
-            if found is not None and found not in bases:
-                bases.append(found)
-    lines = list(_heredoc_lines(command))
-    read: set[Path] = set()
-    for word in words:
-        for name in {word, word.lstrip("<"), word.partition("=")[2], word[2:]}:
-            if not name or len(read) >= 50:
+    tool = False
+    tool_words: list[str] = []
+    for simple, words in zip(parsed.commands, parsed.argvs, strict=False):
+        for variant in command_variants(simple, words):
+            try:
+                parts = shlex.split(variant)
+            except ValueError:
+                parts = variant.split()
+            if not parts:
                 continue
-            for base in bases:
-                source = _absolute(name, base)
-                if source is not None and source not in read and source.is_file():
-                    read.add(source)
-                    lines += _read_diff(str(source), base)
-    targets: list[Path] = []
-    seen: set[Path] = set()
+            name = os.path.basename(parts[0])
+            rest = parts[1:]
+            if name == "git":
+                while rest and rest[0].startswith("-"):
+                    option = rest.pop(0)
+                    if option in ("-C", "-c", "--git-dir", "--work-tree", "--namespace") and rest:
+                        value = rest.pop(0)
+                        if option == "-C":
+                            bases.append(_absolute(value, cwd) or cwd)
+                if not rest or rest[0] not in ("apply", "am"):
+                    continue
+            elif name not in ("patch", "gpatch"):
+                continue
+            tool = True
+            # The tool's own words, resolved below against every base: the splitter knows
+            # neither `git -C DIR` nor which wrapper's arguments are the tool's (D175).
+            tool_words += [
+                word.lstrip("<")
+                for word in rest
+                if word not in ("apply", "am") and word.lstrip("<")
+            ]
+            for index, word in enumerate(rest):
+                value = ""
+                if word in ("-d", "--directory") and index + 1 < len(rest):
+                    value = rest[index + 1]
+                elif word.startswith("--directory="):
+                    value = word.partition("=")[2]
+                elif re.fullmatch(r"-d.+", word):
+                    value = word[2:]
+                if value:
+                    bases.append(_absolute(value, cwd) or cwd)
+            break
+    if not tool:
+        return found
+    sources: list[Path] = []
+    for used in parsed.paths:
+        if not (
+            used.via.startswith(("redirect", "argument of patch", "argument of gpatch"))
+            or used.via.startswith(("argument of git", "argument of cat", "value of an option"))
+        ):
+            continue
+        for candidate in used.paths:
+            if candidate is None:
+                if used.via.startswith(("redirect <", "argument of patch", "argument of git")):
+                    found.unchecked = f"`{used.raw}` ({used.via}) cannot be resolved"
+                continue
+            if str(candidate).startswith(NEVER_READ) or candidate in sources:
+                continue
+            if candidate.is_file():
+                sources.append(candidate)
+    for word in tool_words:
+        for base in dict.fromkeys(bases):
+            candidate = _absolute(word.partition("=")[2] if word.startswith("--") else word, base)
+            if (
+                candidate is not None
+                and candidate not in sources
+                and not str(candidate).startswith(NEVER_READ)
+                and candidate.is_file()
+            ):
+                sources.append(candidate)
+    if len(sources) > MAX_DIFF_FILES:
+        found.unchecked = f"{len(sources)} files may hold the diff"
+        return found
+    lines = list(_heredoc_lines(command))
+    for source in sources:
+        lines += _read_diff(str(source), cwd)
+    raw_paths: list[str] = []
+    seen_raw: set[str] = set()
     for index, line in enumerate(lines):
         following = lines[index + 1] if index + 1 < len(lines) else ""
         for raw in _diff_paths(line, following):
-            parts = [part for part in raw.split("/") if part]
-            if not parts:
-                continue
-            candidates = {"/".join(parts[k:]) for k in range(min(MAX_STRIP, len(parts) - 1) + 1)}
-            candidates.add(parts[-1])
-            for candidate in candidates:
-                for base in bases:
-                    target = _absolute(candidate, base)
-                    if target is not None and target not in seen:
-                        seen.add(target)
-                        targets.append(target)
-    return targets
+            # `a/x` and `b/x` of one file pair count once.
+            key = raw[2:] if raw.startswith(("a/", "b/")) else raw
+            if key not in seen_raw:
+                seen_raw.add(key)
+                raw_paths.append(raw)
+    if len(raw_paths) > MAX_DIFF_PATHS:
+        found.unchecked = f"the diff changes {len(raw_paths)} files"
+        return found
+    unique_bases = list(dict.fromkeys(bases))
+    seen: set[Path] = set()
+    for raw in raw_paths:
+        parts = [part for part in raw.split("/") if part]
+        if not parts:
+            continue
+        candidates = {"/".join(parts[k:]) for k in range(min(MAX_STRIP, len(parts) - 1) + 1)}
+        candidates.add(parts[-1])
+        for candidate in candidates:
+            for base in unique_bases:
+                target = _absolute(candidate, base)
+                if target is not None and target not in seen:
+                    seen.add(target)
+                    found.paths.append(target)
+    return found
 
 
 def _read_diff(name: str, base: Path) -> list[str]:
