@@ -19,6 +19,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from calu.config import CheckerConfig
 from calu.db import migrate
+from calu.defaults.instructions import legacy_instructions
 
 DEFAULT_CHECKER_MODEL = "mistral:mistral-small-2603"
 """Pydantic AI model string of the default checkers (Mistral Small 4)."""
@@ -163,6 +164,17 @@ async def seed_defaults(
                 ),
             )
             checkers += cur.rowcount
+            # D181: the shipped instructions were split into calu's fixed system part and a
+            # compact user part. A row that still holds the old shipped text unchanged gets
+            # the new user part -- otherwise the session would put the system part in front of
+            # the old text, which repeats it. A text somebody edited is left as it is.
+            legacy = legacy_instructions(name)
+            if legacy is not None:
+                await conn.execute(
+                    "UPDATE checker_types SET instructions = %s"
+                    " WHERE name = %s AND instructions = %s",
+                    (base.joinpath(path).read_text(encoding="utf-8"), name, legacy),
+                )
         cur = await conn.execute("SELECT count(*) FROM rules WHERE project_id IS NULL")
         row = await cur.fetchone()
         rules = 0

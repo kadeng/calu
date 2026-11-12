@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from calu.db import Db
+from calu.defaults.instructions import compose_instructions
 from calu.evals.cases import (
     CheckerName,
     EvalCase,
@@ -156,7 +157,14 @@ async def run_evals(
             # measured a checker that is switched off.
             reports.append(Report(checker=row_name, model="none"))
             continue
-        instructions = definition.instructions
+        # The full prompt a session builds from the stored part (D181): measuring the user's
+        # part alone would measure a checker no session runs.
+        instructions = compose_instructions(
+            checker,
+            definition.instructions,
+            settings.config.honesty.rules,
+            marks=settings.config.honesty.mode != "off" or row_name == "honesty",
+        )
         configured = {
             "command": settings.config.command_checker,
             "edit": settings.config.edit_checker,

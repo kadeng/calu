@@ -180,6 +180,16 @@ definition disabled.
     calu checker show honesty               # read its instructions
     calu checker edit honesty               # change them, in $EDITOR
 
+    calu honesty show                       # the honesty rules in force
+    calu honesty edit [--project NAME]      # adapt them to your documentation standard
+    calu honesty reset [--project NAME]     # back to the rules calu ships
+
+The **honesty rules** say what an API contract must contain and what counts as dishonest. The
+command, edit and changeset checkers read them too, whether or not honesty marks are on. They
+are the setting `honesty.rules` (empty: calu's text), editable so that a project can use its
+own documentation standard -- NumPy docstrings instead of Google style, say -- but not meant to
+change often.
+
 `track` is how to judge the checker on your own project before trusting it to block anything:
 the marks appear, nothing stops.
 
@@ -678,7 +688,10 @@ The ACP adapter has not yet been driven by a real editor, only by its own end-to
 ## Checker instructions, rules and evaluations
 
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the
-checkers follow them. The instructions calu ships are a starting point you are meant to
+checkers follow them. A checker's prompt has two parts: calu's fixed part -- its role, its
+tools, the answers it can give, the summary it writes -- and your instructions, which only say
+what to pass, deny and escalate. You edit only the second part, so it stays short. The checkers
+that judge changes also read the honesty rules (`calu honesty edit`, above). The instructions calu ships are a starting point you are meant to
 rewrite, and they are in the public domain rather than under calu's licence: what you make of
 them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 

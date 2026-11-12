@@ -346,7 +346,7 @@ def self_approval_warnings(config: Config, store: CredentialStore | None = None)
     try:
         store = store if store is not None else CredentialStore()
         unprotected = sorted(n for n in store.names() if not store.needs_password(n))
-    except (CredentialError, OSError):
+    except CredentialError, OSError:
         return []
     if not unprotected:
         return []

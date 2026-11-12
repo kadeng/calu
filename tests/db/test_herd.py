@@ -1,6 +1,5 @@
 """Herd management on the database alone: list sessions, list and resolve escalations."""
 
-
 import anyio
 import pytest
 

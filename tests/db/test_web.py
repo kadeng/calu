@@ -1,6 +1,5 @@
 """The web interface against a real database: the pages, resolving, minting, editing."""
 
-
 import httpx
 import pytest
 

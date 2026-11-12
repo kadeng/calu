@@ -77,6 +77,7 @@ from calu.configdoc import setting_rows
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, connect, migrate
 from calu.db import local as local_db
+from calu.defaults.instructions import honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
 from calu.model_choice import detect_model
@@ -2033,6 +2034,90 @@ def _edit_rule_list(args: argparse.Namespace, store: CredentialStore) -> None:
         wipe(url)
 
 
+def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Show, edit or reset the honesty rules the change checkers read (`honesty.rules`, D181).
+
+    The rules in force for a scope are the project's `honesty.rules` if set, else the global
+    one, else the text shipped with calu. `show` prints them; `edit` opens them in `$EDITOR`
+    and stores the result in the scope (`--project` or global); `reset` removes the scope's
+    value, so the next scope down (or the shipped text) applies again.
+
+    Args:
+        args: Parsed arguments (`action`: "show", "edit" or "reset"; `project`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential or no editor is available.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the project does not exist.
+        psycopg.Error: On database errors.
+    """
+    url = load_credential(store, "admin", "Admin password: ")
+    try:
+        admin_url = url.decode()
+
+        async def current(db: Db) -> str:
+            """Return the honesty rules in force for the scope.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The configured text of the most specific scope, or the shipped rules.
+            """
+            scopes = [args.project, None] if args.project else [None]
+            for scope in scopes:
+                value = (await admin.settings(db, scope)).get("honesty", {}).get("rules")
+                if value:
+                    return str(value)
+            return honesty_rules()
+
+        if args.action == "reset":
+
+            async def reset(db: Db) -> str:
+                """Remove the scope's `honesty.rules`.
+
+                Args:
+                    db: The connection.
+
+                Returns:
+                    The report.
+                """
+                await admin.unset_setting(db, "honesty.rules", args.project)
+                return f"honesty.rules ({args.project or 'global'}) removed"
+
+            print(asyncio.run(_with_admin(admin_url, reset)))
+            return
+        before = asyncio.run(_with_admin(admin_url, current))
+        if args.action == "show":
+            print(before, end="" if before.endswith("\n") else "\n")
+            return
+        after, path = edit_in_editor(before, "honesty-rules.md")
+        if after == before:
+            print("unchanged; nothing was stored")
+            return
+
+        async def write(db: Db) -> str:
+            """Store the edited rules in the scope.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The report.
+            """
+            await admin.set_setting(db, "honesty.rules", after, args.project)
+            return f"honesty.rules ({args.project or 'global'}) stored"
+
+        try:
+            print(asyncio.run(_with_admin(admin_url, write)))
+        except admin.AdminError, psycopg.Error:
+            print(f"the edited rules are kept in {path}", file=sys.stderr)
+            raise
+    finally:
+        wipe(url)
+
+
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
     """List the allow and deny lists, add, remove, enable or disable a rule, or add a rule set.
 
@@ -2350,6 +2435,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="for `stats` and `misses`: only the last N days (default: all of them)",
     )
     checker.set_defaults(handler=cmd_checker)
+
+    honesty = sub.add_parser(
+        "honesty",
+        help="the honesty rules the change checkers read",
+        description="calu honesty show | edit | reset [--project NAME]",
+    )
+    honesty.add_argument("action", choices=["show", "edit", "reset"])
+    honesty.add_argument("--project", help="the project's rules instead of the global ones")
+    honesty.set_defaults(handler=cmd_honesty)
 
     rules = sub.add_parser(
         "rules",

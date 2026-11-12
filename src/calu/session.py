@@ -101,6 +101,7 @@ from calu.config import EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort
 from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unchecked
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
+from calu.defaults.instructions import compose_instructions
 from calu.files import command_files
 from calu.honesty import (
     HonestyMark,
@@ -545,6 +546,24 @@ class Session:
             log.exception("reading the built-in %s instructions failed", name)
             return ""
 
+    def _prompt(self, route: str, name: str) -> str:
+        """Return a checker's full prompt: calu's system part, the user's part, the rules (D181).
+
+        Args:
+            route: The checker's route ("command", "edit", "changeset", "subagent").
+            name: The checker type, whose stored instructions are the user's part.
+
+        Returns:
+            The prompt `compose_instructions` builds, with the configured honesty rules and the
+            part about recording marks while `honesty.mode` is on.
+        """
+        return compose_instructions(
+            route,
+            self._instructions(name),
+            self.config.honesty.rules,
+            marks=self.config.honesty.mode != "off",
+        )
+
     def _result_checker(self) -> ResultChecker:
         """Build the subagent result checker from the configuration as it is now.
 
@@ -557,7 +576,7 @@ class Session:
         """
         cfg = self.config.subagent_checker
         return ResultChecker(
-            instructions=self._instructions("subagent-result"),
+            instructions=self._prompt("subagent", "subagent-result"),
             model=resolve_model(self._models.get("subagent") or cfg.model),
             usage_limits=UsageLimits(
                 request_limit=cfg.request_limit, output_tokens_limit=cfg.output_tokens_limit
@@ -576,9 +595,11 @@ class Session:
         Returns:
             The checker.
         """
+        definition = self.settings.checkers.get(name)
+        route = definition.route if definition is not None else name
         return Checker(
             name=name,
-            instructions=self._instructions(name),
+            instructions=self._prompt(route, name),
             model=resolve_model(self._models.get(name) or cfg.model),
             workspace=self.workspace,
             rules=self.rules,

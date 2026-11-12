@@ -68,6 +68,9 @@
               <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
             {% endfor %}
           </select>
+        {% elif s.kind == 'markdown' %}
+          <textarea id="{{ field }}" name="{{ s.path }}" rows="14" spellcheck="false"
+                    placeholder="(empty: calu's shipped text applies)">{{ s.text }}</textarea>
         {% elif s.kind == 'lines' or s.kind == 'json' %}
           <textarea id="{{ field }}" name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
         {% else %}

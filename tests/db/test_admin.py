@@ -7,7 +7,12 @@ import pytest
 
 from calu import admin
 from calu.db import Db, connect
-from calu.setup import setup
+from calu.defaults.instructions import (
+    compose_instructions,
+    default_instructions,
+    legacy_instructions,
+)
+from calu.setup import seed_defaults, setup
 from calu.store import ConfigStore
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -356,9 +361,10 @@ async def test_the_honesty_checker_is_seeded_off_and_switched_on_in_two_steps(db
         definition = next(c for c in await admin.checkers(db) if c.name == "honesty")
         assert definition.enabled is False
         assert definition.route == "edit", "it judges edits, beside the edit checker (D81)"
-        assert "marks_dirty" in await admin.instructions(db, "honesty"), (
-            "its instructions have to tell it how to record a spot"
-        )
+        # Its own text is the compact user part; how to record a spot is calu's fixed part,
+        # added while honesty.mode is on (D181).
+        own = await admin.instructions(db, "honesty")
+        assert "marks_dirty" in compose_instructions("edit", own, marks=True)
 
         # What a session loads: nothing while the checker is off.
         settings = await ConfigStore(db, Path("/w")).load()
@@ -415,5 +421,20 @@ async def test_the_publishing_set_is_added_once_and_respects_a_disabled_rule(
 
         with pytest.raises(admin.AdminError, match="no rule set"):
             admin.rule_set("everything")
+    finally:
+        await conn.close()
+
+
+async def test_setup_replaces_an_unedited_old_default_but_keeps_an_edited_text(db_url: str) -> None:
+    """D181: an old shipped text is upgraded to the compact one; a written one is not touched."""
+    db, conn = await prepared(db_url)
+    try:
+        old = legacy_instructions("edit")
+        assert old is not None
+        await admin.set_checker(db, "edit", instructions_text=old)
+        await admin.set_checker(db, "command", instructions_text="Our own command rules.")
+        await seed_defaults(conn, "test:model")
+        assert await admin.instructions(db, "edit") == default_instructions("edit")
+        assert await admin.instructions(db, "command") == "Our own command rules."
     finally:
         await conn.close()

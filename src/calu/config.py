@@ -436,6 +436,11 @@ class HonestyConfig(ConfigModel):
     nothing is blocked -- which is how to judge the checker on a real project before trusting
     it. `enforce`: a step that would run dirty code is denied, with the mark's reason. Default
     `off`, because the judgement needs a capable checker model (Q17)."""
+    rules: str | None = None
+    """The honesty standard the checkers that judge changes read: what dishonesty is and what an
+    API contract must say (PLAN.md D181). Empty uses the rules calu ships
+    (`calu honesty show`). Set it, globally or per project, to fit a project's documentation
+    standards (`calu honesty edit [--project NAME]`); it is not meant to be edited often."""
 
 
 class ClockConfig(ConfigModel):

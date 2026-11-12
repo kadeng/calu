@@ -1,9 +1,19 @@
 # The checker instructions that ship with calu
 
-Each `.md` file beside this one is the system prompt of one checker type. `calu setup` loads
-them into the `checker_types` table, where a session reads them from; after that, the database
-holds the text you run and `calu checker edit <name>` is how you change it. Editing the files
-here changes what a *new* database gets, not what a configured one uses.
+A checker's prompt is put together from parts (PLAN.md D181):
+
+| File | What it holds | Who edits it |
+|---|---|---|
+| `system/<route>.md` | the role, the tools, how to answer | calu (fixed) |
+| `<checker>.md` | what to pass, deny and escalate | you: `calu checker edit <name>` |
+| `honesty-rules.md` | API contracts and what dishonesty is | rarely: `calu honesty edit` |
+| `system/marks.md` | how to record dishonest code (honesty mode on) | calu (fixed) |
+
+`calu setup` loads each `<checker>.md` into the `checker_types` table, where a session reads it
+from; after that, the database holds the text you run. Editing the files here changes what a
+*new* database gets, not what a configured one uses. The honesty rules are the setting
+`honesty.rules`; empty means `honesty-rules.md`. `legacy/` keeps the texts shipped before the
+split, so `calu setup` can replace an unedited old default with the compact one.
 
 ## Licence
 

@@ -30,11 +30,14 @@ from pydantic import BaseModel
 
 from calu.config import Config
 
-Kind = Literal["bool", "choice", "int", "number", "text", "lines", "json"]
+Kind = Literal["bool", "choice", "int", "number", "text", "lines", "json", "markdown"]
 """Which control a field gets in the browser."""
 
 MODEL_SUGGESTIONS = ("fable", "opus", "sonnet", "haiku")
 """Claude Code's model aliases, offered next to the free-text field (`claude.model`)."""
+
+MARKDOWN = frozenset({"honesty.rules"})
+"""Text fields that hold a Markdown document and get a large text area (D181)."""
 
 SKIP = frozenset({"hidden_env"})
 """Fields the form leaves out: secrets-adjacent lists that belong in the environment."""
@@ -220,6 +223,8 @@ def parse(kind: Kind, raw: str) -> Any:
             return [line.strip() for line in raw.splitlines() if line.strip()]
         case "json":
             return json.loads(text) if text else {}
+        case "markdown":
+            return raw.replace("\r\n", "\n").strip() + "\n" if text else None
         case _:
             return text or None
 
@@ -272,6 +277,8 @@ def _setting(path: str, name: str, info: Any, current: Any) -> Setting | None:
     kind, choices = _kind_of(info.annotation)
     if kind is None:
         return None
+    if path in MARKDOWN:
+        kind = "markdown"
     default = _default(info)
     value = current if current is not None else default
     return Setting(
