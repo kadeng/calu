@@ -845,11 +845,11 @@ def test_the_second_review_findings(tmp_path: Path, command: str, asks: bool) ->
 
 def test_a_branch_switch_behind_git_options_is_seen() -> None:
     """D172: `git -c x=y checkout` and `git --git-dir=.git switch` were not recognised."""
-    from calu.session import SWITCHES_BRANCH
+    from calu.session import switches_branch
 
     for command in ("git -c x=y checkout main && python m.py", "git --git-dir=.git switch b"):
-        assert SWITCHES_BRANCH.search(command), command
-    assert not SWITCHES_BRANCH.search("git status")
+        assert switches_branch(command), command
+    assert not switches_branch("git status")
 
 
 @pytest.mark.parametrize(
@@ -933,8 +933,10 @@ def test_diffs_are_stripped_the_way_the_tool_strips_them(tmp_path: Path) -> None
         "patch < nested.diff",  # without -p, patch uses the base name: CLAUDE.md here
     ):
         assert rules.evaluate(bash(command, str(tmp_path))).ask, command
+    # D174: the strip level is no longer guessed, so a nested docs/CLAUDE.md asks as if it were
+    # the root one -- a deliberate false positive, in the safe direction.
     for command in ("git apply nested.diff", "patch -p1 < nested.diff"):
-        assert not rules.evaluate(bash(command, str(tmp_path))).ask, command
+        assert rules.evaluate(bash(command, str(tmp_path))).ask, command
     big = "".join(
         f"--- a/d1/d2/d3/d4/f{i}.py\n+++ b/d1/d2/d3/d4/f{i}.py\n@@ -1 +1 @@\n-a\n+b\n"
         for i in range(6000)
@@ -962,3 +964,106 @@ def test_the_third_review_findings(tmp_path: Path, command: str, asks: bool) -> 
     (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
     (tmp_path / ".claude").mkdir()
     assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+_HD = "--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -1 +1 @@\n-a\n+b\n"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git apply <<'EOF'\n" + _HD + "EOF",
+        "git apply -v <<'EOF'\n" + _HD + "EOF",
+        "patch -p1 <<'EOF'\n--- a/src/x.cpp\n+++ b/src/x.cpp\n #include <vector>\n" + _HD + "EOF",
+        "patch -Np1 < hook.diff",
+        "patch -sp1 < hook.diff",
+        "git apply -p 2 p2.diff",
+        "X=1 patch -p1 < hook.diff",
+        "nohup patch -p1 < hook.diff",
+        "env git apply hook.diff",
+        "timeout 5 git apply hook.diff",
+        "cat > fix.diff <<'EOF'\n" + _HD + "EOF\npatch -p1 < fix.diff",
+        "cat <<'EOF' | git apply\n" + _HD + "EOF",
+        "patch -p1 < ctx.diff",
+        "git apply ren.diff",
+    ],
+)
+def test_the_fourth_review_diff_findings_ask(tmp_path: Path, command: str) -> None:
+    """D174: precise option parsing kept missing spellings; `diff_targets` fails closed now."""
+    (tmp_path / "hook.diff").write_text(
+        "--- a/.git/hooks/pre-commit\n+++ b/.git/hooks/pre-commit\n", encoding="utf-8"
+    )
+    (tmp_path / "p2.diff").write_text(
+        "--- a/proj/CLAUDE.md\n+++ b/proj/CLAUDE.md\n", encoding="utf-8"
+    )
+    (tmp_path / "ctx.diff").write_text("*** a/CLAUDE.md\n--- b/CLAUDE.md\n", encoding="utf-8")
+    (tmp_path / "ren.diff").write_text(
+        "diff --git a/CLAUDE.md b/docs/old.md\nrename from CLAUDE.md\nrename to docs/old.md\n",
+        encoding="utf-8",
+    )
+    assert default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+def test_patch_with_a_directory_reads_its_diff_there(tmp_path: Path) -> None:
+    """D174: `patch -d .. -i g.diff` from a subdirectory, and `-d..` attached."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "g.diff").write_text(
+        "--- a/.git/hooks/pre-commit\n+++ b/.git/hooks/pre-commit\n", encoding="utf-8"
+    )
+    rules = default_rules(tmp_path)
+    for command in ("patch -d .. -p1 -i g.diff", "patch -d.. -p1 < ../g.diff"):
+        assert rules.evaluate(bash(command, str(tmp_path / "src"))).ask, command
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("uv run .venv/bin/calu", True),
+        ("uv run ./calu", True),
+        ("python -Wonce -m calu", True),
+        ("uv --color always run calu", True),
+        ("uv run --only-group test calu", True),
+        ("uv run coverage run -m calu", True),
+        ("uv run -m pytest -k calu", False),
+        ("conda run -n calu pytest", False),
+        ("hatch run test:pytest -k calu", False),
+        ("uv run bandit -r calu", False),
+        ('script -qc"sudo ls" /dev/null', True),
+        ("git checkout -fq CLAUDE.md", True),
+        ("git checkout --theirs CLAUDE.md", True),
+        ("python3 - <<EOF\nprint(open('.env').read())\nEOF", True),
+        ("python3 -c \"open('.env')\" # it's", True),
+        ("cat > notes.txt <<EOF\nsee ./docs\nEOF", False),
+    ],
+)
+def test_the_fourth_review_findings(tmp_path: Path, command: str, asks: bool) -> None:
+    """D174: what the review of D173 found, in both directions."""
+    (tmp_path / "CLAUDE.md").write_text("a\n", encoding="utf-8")
+    assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+def test_calus_compose_file_is_recognised_by_its_content(tmp_path: Path) -> None:
+    """D174: from calu's db folder, `docker compose -f local-compose.yml down -v` names neither
+    container nor project; another project's file of the same name is not calu's."""
+    db, other = tmp_path / "src" / "calu" / "db", tmp_path / "other"
+    db.mkdir(parents=True)
+    other.mkdir()
+    (db / "local-compose.yml").write_text("name: calu-db\nservices: {}\n", encoding="utf-8")
+    (other / "local-compose.yml").write_text("name: shop\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+    assert rules.evaluate(
+        bash("cd src/calu/db && docker compose -f local-compose.yml down -v", str(tmp_path))
+    ).ask
+    assert not rules.evaluate(bash("docker compose -f local-compose.yml up -d", str(other))).ask
+
+
+def test_the_branch_check_does_not_backtrack() -> None:
+    """D174: the regex took 1.5 s on 30 repeated `--git-dir`; the word-based check does not."""
+    import time
+
+    from calu.session import switches_branch
+
+    assert switches_branch("git --git-dir .git checkout x")
+    started = time.monotonic()
+    switches_branch("git " + "--git-dir " * 40 + "x")
+    assert time.monotonic() - started < 0.1

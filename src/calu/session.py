@@ -153,10 +153,45 @@ from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
 
-SWITCHES_BRANCH = re.compile(
-    r"(^|[\s;&|(])git(\s+(-[Cc]\s+\S+|--(git-dir|work-tree|namespace|exec-path|config-env)\s+\S+"
-    r"|--[\w-]+(=\S+)?|-\w+))*\s+(checkout|switch|worktree)\b"
-)
+
+def switches_branch(command: str) -> bool:
+    """Tell whether a command changes the branch it then runs on (D168, D174).
+
+    Word-based: the regex it replaces backtracked exponentially on repeated global options.
+
+    Args:
+        command: The command as written.
+
+    Returns:
+        True if a `git` word is followed, after git's global options and their values, by
+        `checkout`, `switch` or `worktree`.
+    """
+    words = re.split(r"[\s;&|()]+", command)
+    for index, word in enumerate(words):
+        if word != "git" and not word.endswith("/git"):
+            continue
+        rest = words[index + 1 :]
+        while rest and rest[0].startswith("-"):
+            option = rest.pop(0)
+            if (
+                option
+                in (
+                    "-C",
+                    "-c",
+                    "--git-dir",
+                    "--work-tree",
+                    "--namespace",
+                    "--exec-path",
+                    "--config-env",
+                )
+                and rest
+            ):
+                rest.pop(0)
+        if rest and rest[0] in ("checkout", "switch", "worktree"):
+            return True
+    return False
+
+
 """A command that changes the branch it then runs on (D168): with `honesty.scope = branch`
 every mark applies to it, since the branch is read before the command runs."""
 
@@ -3261,7 +3296,7 @@ class Session:
         if self.config.honesty.scope != "branch" or not self.honesty_marks:
             return list(self.honesty_marks)
         command = str(step.tool_input.get("command", "")) if step is not None else ""
-        if SWITCHES_BRANCH.search(command):
+        if switches_branch(command):
             return list(self.honesty_marks)
         branch = await self._git_branch()
         if branch in (None, "HEAD"):
