@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<title>calu</title>
+{# The answer to the address with `?token=` (TokenGate). login.js stores the key in this
+   origin's localStorage, which no other port can read, and goes on to `onward`. #}
+<meta name="calu-key" content="{{ key }}">
+<meta name="calu-onward" content="{{ onward }}">
+<script src="/static/login.js" defer></script>
+</head>
+<body>
+<p id="status">Signing in to calu web ...</p>
+<noscript><p>calu web needs JavaScript: its pages keep the key of your login in the browser.</p></noscript>
+</body>
+</html>

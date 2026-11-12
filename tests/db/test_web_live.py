@@ -40,9 +40,16 @@ pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 @asynccontextmanager
 async def running(
-    db_url: str, workspace: Path, turns: list[list[dict[str, Any]]]
+    db_url: str,
+    workspace: Path,
+    turns: list[list[dict[str, Any]]],
+    token: str | None = None,
+    host_name: str = "",
 ) -> AsyncGenerator[tuple[str, str, Session]]:
     """A real session with its protocol server, its row in the database, and the web server.
+
+    `token` and `host_name` are passed to `create_app`: with them the web server is guarded
+    as `calu web` guards it (the login and the host name), without them it is open.
 
     Yields (the web server's base URL, the session id, the session).
     """
@@ -61,9 +68,8 @@ async def running(
             checker_models=fake_models(),
             snapshot_root=workspace.parent / "snapshots",
         )
-        token = new_token()
         async with anyio.create_task_group() as tasks:
-            server = SessionServer(session, bus, token_hash(token), tasks)
+            server = SessionServer(session, bus, token_hash(new_token()), tasks)
             tasks.start_soon(server.listen, "127.0.0.1", 0)
             with anyio.fail_after(10):
                 await server.ready.wait()
@@ -71,7 +77,7 @@ async def running(
             await store.set_address(server.address)
             session_id = store.session_id or ""
             try:
-                async with serve(create_app(db)) as base:
+                async with serve(create_app(db, token=token, host_name=host_name)) as base:
                     yield base, session_id, session
             finally:
                 await session.stop()
@@ -265,3 +271,94 @@ async def test_a_revoked_live_token_is_replaced_instead_of_reported_as_unreachab
             assert sorted(row.revoked for row in after) == [False, True]
         finally:
             await watcher.close()
+
+
+@asynccontextmanager
+async def gone_quiet(db_url: str) -> AsyncGenerator[tuple[Db, str, anyio.Event]]:
+    """A session row whose address is a stand-in that answers every request and then hangs up.
+
+    The stand-in speaks just enough of the protocol for the relay to attach: every request is
+    answered with an empty result. Setting the event closes its connections, which is what the
+    relay sees when the session's process ends.
+
+    Yields (the database, the session id, the event that makes the stand-in hang up).
+    """
+    from websockets.asyncio.server import serve as ws_serve
+
+    hang_up = anyio.Event()
+
+    async def session_side(connection: Any) -> None:
+        """Answer requests until told to hang up."""
+        async with anyio.create_task_group() as tasks:
+
+            async def answer() -> None:
+                """Answer every request with an empty result."""
+                async for text in connection:
+                    request = json.loads(text)
+                    result = {"state": "running"} if request["method"] == "state.get" else {}
+                    reply = {"jsonrpc": "2.0", "id": request["id"], "result": result}
+                    await connection.send(json.dumps(reply))
+
+            tasks.start_soon(answer)
+            await hang_up.wait()
+            tasks.cancel_scope.cancel()
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(
+            SessionIdentity(hostname="box", os_user="u", directory="/w", pid=1, os="Linux")
+        )
+        async with ws_serve(session_side, "127.0.0.1", 0) as upstream:
+            port = upstream.sockets[0].getsockname()[1]
+            await store.set_address(f"ws://127.0.0.1:{port}")
+            try:
+                yield db, session_id, hang_up
+            finally:
+                hang_up.set()  # or the stand-in's handlers keep its server from closing
+    finally:
+        await conn.close()
+
+
+async def test_the_browser_is_told_when_the_session_hangs_up(db_url: str) -> None:
+    """wa4: the relay noticed a closed session only when the browser sent its next command.
+
+    An operator who only watches sends nothing, so the page of a session whose process had
+    ended kept saying "attached" and "running" for as long as it stayed open.
+    """
+    async with gone_quiet(db_url) as (db, session_id, hang_up), serve(create_app(db)) as base:
+        url = base.replace("http://", "ws://") + f"/ws/sessions/{session_id}"
+        async with ws_connect(url) as socket:
+            assert json.loads(await socket.recv())["type"] == "snapshot"
+            hang_up.set()
+            # Nothing is sent from here: the message has to arrive on its own.
+            with anyio.fail_after(10):
+                message = json.loads(await socket.recv())
+            assert message["type"] == "closed"
+            assert "the session closed the connection" in message["message"]
+
+
+async def test_a_frame_that_is_no_command_is_refused_and_the_relay_goes_on(db_url: str) -> None:
+    """wa4: text that is not JSON, or JSON that is not an object, ended the relay with a
+    traceback in the log of `calu web`."""
+    async with gone_quiet(db_url) as (db, session_id, _hang_up), serve(create_app(db)) as base:
+        url = base.replace("http://", "ws://") + f"/ws/sessions/{session_id}"
+        async with ws_connect(url) as socket:
+            assert json.loads(await socket.recv())["type"] == "snapshot"
+            for frame in ("this is not JSON", "[1, 2]", '"text"', b"\x00\x01"):
+                await socket.send(frame)
+                with anyio.fail_after(10):
+                    refused = json.loads(await socket.recv())
+                assert refused["type"] == "refused", frame
+                assert "not a JSON object" in refused["message"]
+            # The relay still works after them.
+            await socket.send(json.dumps({"method": "state.get", "params": {}}))
+            with anyio.fail_after(10):
+                result = json.loads(await socket.recv())
+            assert result == {
+                "type": "result",
+                "method": "state.get",
+                "result": {"state": "running"},
+            }

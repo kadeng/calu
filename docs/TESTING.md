@@ -75,7 +75,10 @@ into `~/.cache/calu-browser-libs` — Ubuntu does not ship them and `playwright 
 **skip with a pointer to the script** when the browser is missing, so nobody is forced to have
 it. They drive the real pages: the fleet, a session's four levels of detail, minting a token,
 answering an escalation, editing a checker, the triage queue, the live view over a real session,
-and the jump palette.
+and the jump palette. `tests/browser/test_web_login.py` runs the application guarded as
+`calu web` guards it (the token, the host name `calu.localhost`, the Content-Security-Policy)
+and checks what only a browser can show: which server the browser sends the login cookie to,
+that a captured cookie changes nothing, and that every page still works under the policy.
 
 ## The live layer
 
@@ -153,8 +156,12 @@ escalation resolved from the database alone.
 6. A deny-list escalation resolved from the database alone: `calu escalations`,
    `calu escalation <id>`, `calu resolve <id> deny --note ...` — the session continues within a
    second.
-7. `calu web`: open the printed address (it carries the token); the plain address must answer
-   401, and a `curl -X POST` without the cookie must not decide anything (D161). Then the
+7. `calu web`: open the printed address (`http://calu.localhost:8800/?token=...`); the address
+   without the token must answer 401 in a private window, `http://127.0.0.1:8800/` must answer
+   403 and name the right address, and a `curl -X POST` must not decide anything -- neither
+   without a cookie nor with the `calu_web_session` cookie copied from the browser (D161).
+   Restart the database while the triage page is open: the page says that its list may be out
+   of date and recovers by itself, without a restart of `calu web`. Then the
    fleet, a session at all four levels of detail, the triage queue, Ctrl+K. On the settings
    page (D182): open a checker pane and a rules pane, search for "effort", change a value on two
    panes and save once, type a broken regular expression into a rule list and check that the
@@ -285,7 +292,12 @@ What the gaps are, so nobody chases them again:
   directory**.
 - Database tests take the `db_url` fixture, which creates a database per test.
 - Browser tests take the `page` fixture of `tests/browser/conftest.py` and serve the application
-  with `serve(...)` on a free port in the same event loop.
+  with `serve(...)` on a free port in the same event loop. The pages are served with their
+  Content-Security-Policy, which forbids `eval`; the fixture therefore wraps the expression of
+  `page.wait_for_function` into a function. A template must not carry an inline script with a
+  template expression in it, an inline event handler or a `style` attribute
+  (`tests/unit/test_web_gate.py` checks that): the policy allows the inline scripts by the hash
+  of their source and drops the rest without an error.
 - **A test that spawns a process waits for what the child needs.** Both process-level tests
   connect to the session's port themselves before spawning the child: `SessionServer.ready` is
   set once the socket is bound, which should be enough, but one CI run failed with an empty

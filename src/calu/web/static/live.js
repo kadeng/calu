@@ -3,7 +3,11 @@
 // sends commands back. No framework and no build step, as the project's rules ask.
 (() => {
   const address = document.currentScript.dataset.socket.replace(/^http/, "ws");
-  const socket = new WebSocket(address);
+  // The key of this browser's login (login.js). A WebSocket cannot carry a header, so the key
+  // travels as an offered subprotocol; the server answers with the other one, "calu".
+  let key = "";
+  try { key = localStorage.getItem("calu-key") || ""; } catch (e) { /* storage blocked */ }
+  let socket = null;
   const el = (id) => document.getElementById(id);
   const stream = el("stream");
   const escalations = new Map();
@@ -57,6 +61,10 @@
   }
 
   function send(method, params) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      say(`${method} was not sent: this page is not attached to the session`);
+      return;
+    }
     socket.send(JSON.stringify({ method, params: params || {} }));
   }
 
@@ -228,9 +236,20 @@
     }
   }
 
-  socket.onmessage = (message) => {
+  // What the page shows of the session, emptied before a snapshot is applied: attaching again
+  // replays the events the session still holds, and they must not appear twice.
+  function reset() {
+    stream.replaceChildren();
+    open.clear();
+    escalations.clear();
+    agents.clear();
+  }
+
+  function onMessage(message) {
     const data = JSON.parse(message.data);
     if (data.type === "snapshot") {
+      reset();
+      retryAfter = 1000;
       onState(data.snapshot.state);
       renderMarks(data.snapshot.honesty_marks, data.snapshot.honesty_mode);
       say("attached");
@@ -251,11 +270,27 @@
       explained = true;
       onState("not attached");
     }
-  };
-  socket.onclose = () => {
-    if (!explained) { say("the connection to the session ended"); onState("not attached"); }
-  };
-  socket.onerror = () => { if (!explained) say("the connection to the session failed"); };
+  }
+
+  // The connection to calu web can end without an explanation: calu web was restarted, a
+  // tunnel dropped, the laptop slept. Then the page says that it is not attached and tries
+  // again, after 1 s, 2 s, 4 s ... up to 30 s. An explained end ("closed": the session is gone
+  // or serves no clients) is final; trying again would only repeat the explanation.
+  let retryAfter = 1000;
+  function attach() {
+    socket = key ? new WebSocket(address, ["calu", `calu.key.${key}`]) : new WebSocket(address);
+    socket.onmessage = onMessage;
+    socket.onclose = () => {
+      if (explained) return;
+      const seconds = Math.round(retryAfter / 1000);
+      say(`the connection to calu web ended; trying again in ${seconds} s. If this stays, ` +
+          "open the address that `calu web` printed again.");
+      onState("not attached");
+      setTimeout(attach, retryAfter);
+      retryAfter = Math.min(retryAfter * 2, 30000);
+    };
+  }
+  attach();
 
   const message = (delivery) => {
     const text = el("text").value.trim();

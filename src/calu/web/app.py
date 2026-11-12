@@ -1,6 +1,6 @@
 """The web interface: many sessions at once, their history, and what steers their checkers.
 
-    calu web                      # http://127.0.0.1:8800, needs the `admin` credential
+    calu web                # http://calu.localhost:8800/?token=..., needs the `admin` credential
 
 It is the herd client of PLAN.md §6.2: it works on the database, so it sees the sessions of
 every host without a process of its own on them, and it holds the `admin` credential, so it can
@@ -23,15 +23,26 @@ Pages:
     /settings             everything that steers a session: the configuration, the checker
                           instructions and the allow and deny lists, per scope
 
-**There is no login** (PLAN.md Q4 is open), so the server refuses to bind anything but the
-loopback interface: reach it from another machine through an SSH tunnel
+**The login is the token `calu web` prints** (`TokenGate`, D161); there are no user accounts
+(PLAN.md Q4 is open), so the server refuses to bind anything but the loopback interface: reach
+it from another machine through an SSH tunnel
 
-    ssh -L 8800:127.0.0.1:8800 the-host
+    ssh -L 8800:127.0.0.1:8800 the-host      # then open the printed address at home
 
 or put a TLS proxy with its own authentication in front of it. Everything the pages can do, the
 `admin` credential can do, including changing the rules a session is judged by.
+
+Who may do what (the three middlewares, outermost first):
+
+    SecurityHeaders   every response: Content-Security-Policy, nosniff, no referrer elsewhere
+    LocalOnly         the Host must be `calu.localhost`; a changing request must come from this
+                      interface's own pages
+    TokenGate         reading needs the browser's session cookie; changing anything needs the
+                      cookie and the browser's key, which no other port can read
 """
 
+import base64
+import hashlib
 import ipaddress
 import logging
 import re
@@ -42,11 +53,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
+import anyio
+import psycopg
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -186,36 +199,48 @@ def check_host(host: str) -> None:
         )
 
 
-def create_app(db: Db, git_url_template: str = "", token: str | None = None) -> Starlette:
+def create_app(
+    db: Db, git_url_template: str = "", token: str | None = None, host_name: str = ""
+) -> Starlette:
     """Build the web application on an open database connection.
 
     The connection is used by every request, and `calu.db.Db` serializes the statements, so
     concurrent requests are safe but not parallel. That is deliberate: one operator's overview
-    does not need a pool, and a session's credentials are not available here anyway.
+    does not need a pool, and a session's credentials are not available here anyway. `calu web`
+    passes a `calu.web.database.ReopeningDb`, which replaces a connection the database closed;
+    a database that cannot be reached is answered with status 503 (`_database_down`).
 
     Args:
         db: The database connection (owner or `calu_operator` rights).
         git_url_template: `web.git_url_template` for commit links to a git browser that is
             neither GitHub, GitLab nor Bitbucket ("" guesses from the project's remote).
-        token: The login token every request must carry (`TokenGate`, D161). `calu web`
-            always passes one; None leaves the gate out, for in-process tests.
+        token: The login token (`TokenGate`, D161). `calu web` always passes one; None leaves
+            the gate out, for in-process tests.
+        host_name: The only host name a request may carry (`LocalOnly`). `calu web` always
+            passes `WEB_HOST_NAME`; "" accepts every loopback name, for in-process tests.
 
     Returns:
         The Starlette application, ready for uvicorn.
     """
     state = _State(db=db, git_url_template=git_url_template)
+    # A session id is a UUID, and the routes say so: any other text is answered with a plain
+    # 404 by the router and never reaches a query (which would fail on the cast) or a page.
     routes = [
         Route("/", _page(fleet, state), name="fleet"),
-        Route("/sessions/{session_id}", _page(session_page, state), name="session"),
-        Route("/sessions/{session_id}/token", _page(mint, state), methods=["POST"], name="mint"),
-        Route("/sessions/{session_id}/live", _page(live_page, state), name="live"),
+        Route("/sessions/{session_id:uuid}", _page(session_page, state), name="session"),
         Route(
-            "/sessions/{session_id}/summary",
+            "/sessions/{session_id:uuid}/token", _page(mint, state), methods=["POST"], name="mint"
+        ),
+        Route("/sessions/{session_id:uuid}/live", _page(live_page, state), name="live"),
+        Route(
+            "/sessions/{session_id:uuid}/summary",
             _page(summary_page, state),
             methods=["GET", "POST"],
             name="summary",
         ),
-        WebSocketRoute("/ws/sessions/{session_id}", _socket(live_socket, state), name="live_ws"),
+        WebSocketRoute(
+            "/ws/sessions/{session_id:uuid}", _socket(live_socket, state), name="live_ws"
+        ),
         Route("/escalations", _page(escalations, state), name="escalations"),
         Route("/triage", _page(triage, state), name="triage"),
         Route("/api/escalations", _page(waiting_json, state), name="waiting_json"),
@@ -239,36 +264,195 @@ def create_app(db: Db, git_url_template: str = "", token: str | None = None) -> 
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
-    middleware = [Middleware(LocalOnly)]
+    # Outermost first: the headers go on every response, the refusals of the two guards
+    # included.
+    middleware = [
+        Middleware(SecurityHeaders),
+        Middleware(LocalOnly, host_name=host_name),
+    ]
     if token is not None:
         middleware.append(Middleware(TokenGate, token=token))
-    return Starlette(routes=routes, middleware=middleware)
+    return Starlette(
+        routes=routes,
+        middleware=middleware,
+        exception_handlers={
+            psycopg.OperationalError: _database_down,
+            TimeoutError: _database_down,
+        },
+    )
 
 
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
-"""Host names a request to the web interface may carry: it binds loopback only (`check_host`)."""
+WEB_HOST_NAME = "calu.localhost"
+"""The host name `calu web` is opened under (D161, finding wa0).
+
+Browsers resolve every name under `.localhost` to the loopback interface themselves, so the
+name needs no entry in a hosts file. It exists because a cookie belongs to a host name and not
+to a port: under `127.0.0.1` or `localhost` the browser would send the interface's cookie to
+every development server the supervised session starts on another port. No such server is
+opened as `calu.localhost` unless something makes the operator do so, and even then the cookie
+alone changes nothing (`TokenGate`).
+"""
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1", WEB_HOST_NAME})
+"""Host names an application built without `host_name` accepts (in-process tests)."""
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 """Methods that change nothing, and are therefore not checked for their origin."""
 
+SESSION_COOKIE = "calu_web_session"
+"""Cookie that names the browser's login to `calu web` (D161). It is not the token."""
 
-TOKEN_COOKIE = "calu_web_token"
-"""Cookie that carries the login token of `calu web` after the first visit (D161)."""
+KEY_HEADER = b"x-calu-key"
+"""Request header in which a page's `fetch` sends the browser's key."""
+
+KEY_FIELD = "_key"
+"""Form field in which a page's form sends the browser's key (`calu.js` adds it)."""
+
+KEY_PROTOCOL = "calu.key."
+"""Prefix of the WebSocket subprotocol in which `live.js` sends the browser's key."""
+
+LIVE_PROTOCOL = "calu"
+"""The WebSocket subprotocol the live relay answers with when the browser offered any."""
+
+MAX_FORM_BYTES = 8 * 1024 * 1024
+"""Largest form body `TokenGate` reads to find the key; a larger one is refused with 413."""
+
+MAX_BROWSERS = 64
+"""Browser logins `TokenGate` remembers; the oldest is forgotten when one more logs in."""
+
+
+def _inline_script_hashes() -> list[str]:
+    """Hash the inline scripts of the page templates, for the Content-Security-Policy.
+
+    A few templates carry a short inline `<script>` (the theme is applied before the
+    stylesheet loads, some pages reload themselves). The policy allows exactly these by their
+    SHA-256 hash, so a script that reaches a page any other way does not run. The hash is of
+    the template source, which is what the browser receives as long as the script contains no
+    template expression (`tests/unit/test_web_methods.py` checks that).
+
+    Returns:
+        One `'sha256-...'` source expression per distinct inline script, sorted.
+    """
+    found: set[str] = set()
+    for template in sorted((HERE / "templates").glob("*.html")):
+        source = template.read_text(encoding="utf-8")
+        for script in re.findall(r"<script>(.*?)</script>", source, flags=re.DOTALL):
+            digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
+            found.add(f"'sha256-{digest}'")
+    return sorted(found)
+
+
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    f"script-src 'self' {' '.join(_inline_script_hashes())}; "
+    "connect-src 'self' ws://{host} wss://{host}; "
+    "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+)
+"""The policy of every response; `{host}` is the request's Host, for the live WebSocket.
+
+Scripts run only from `/static` and from the templates' own inline scripts, so text that
+reaches a page unescaped is not executed (finding wa2); the pages cannot be framed, and a form
+cannot post anywhere else.
+"""
+
+
+class SecurityHeaders:
+    """Add the browser security headers to every HTTP response (finding wa2).
+
+    Content-Security-Policy   `CONTENT_SECURITY_POLICY`
+    X-Content-Type-Options    nosniff
+    Referrer-Policy           same-origin (no other site learns the address of a page)
+    """
+
+    def __init__(self, app: Any) -> None:
+        """Wrap the application.
+
+        Args:
+            app: The ASGI application.
+        """
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Pass the request on and add the headers to the start of its response.
+
+        Args:
+            scope: The ASGI scope.
+            receive: The ASGI receive channel.
+            send: The ASGI send channel.
+        """
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        host = _header(scope, b"host")
+        if not re.fullmatch(r"[A-Za-z0-9.\-\[\]:]+", host):
+            host = WEB_HOST_NAME  # never copy an odd Host into a header
+        policy = CONTENT_SECURITY_POLICY.replace("{host}", host)
+        extra = [
+            (b"content-security-policy", policy.encode("latin-1")),
+            (b"x-content-type-options", b"nosniff"),
+            (b"referrer-policy", b"same-origin"),
+        ]
+
+        async def send_with_headers(message: Any) -> None:
+            """Forward one ASGI message, with the headers added to a response start.
+
+            Args:
+                message: The ASGI message.
+            """
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), *extra]}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+def _header(scope: Any, name: bytes) -> str:
+    """Read one request header from an ASGI scope.
+
+    Args:
+        scope: The ASGI scope.
+        name: The header's name in lower case.
+
+    Returns:
+        The value of the first header of that name, or "" if there is none.
+    """
+    for key, value in scope.get("headers", []):
+        if key.lower() == name:
+            return value.decode("latin-1")
+    return ""
 
 
 class TokenGate:
-    """Let through only requests that carry the token `calu web` printed (PLAN.md D161).
+    """Let through only what a logged-in browser of the operator sends (PLAN.md D161).
 
     `LocalOnly` keeps other websites out, but not other processes of this user: Claude runs
     as the same user, and a `curl -X POST .../escalations/1/resolve` from its Bash would decide
     its own step. So the interface has a login of the kind a local web tool usually has: a
-    random token, printed with the address at start (`http://127.0.0.1:8800/?token=...`).
+    random token, printed with the address at start (`http://calu.localhost:8800/?token=...`).
 
-        GET /?token=<right>         ->  303 to / with an HttpOnly, SameSite=Strict cookie
-        request with the cookie     ->  passes
-        anything else               ->  401 (HTTP) or close code 1008 (WebSocket)
+    A login gives the browser two secrets, both random and both known only to this process
+    and that browser:
 
-    The token lives only in the process and the browser; a restart prints a new one.
+        session id   in an HttpOnly, SameSite=Strict cookie. The browser sends a cookie to
+                     every port of the host name, so a server on another port can see it.
+        key          in the page's `localStorage`, which belongs to one origin, port
+                     included. No other port can read it.
+
+    The cookie is therefore only enough to read, and everything that changes something needs
+    the key as well:
+
+        GET /...?token=<right>                 ->  200: a page that stores the key and goes on
+                                                   to the address without the token; sets the
+                                                   cookie
+        GET, HEAD, OPTIONS with the cookie     ->  passes
+        other methods: cookie and key          ->  passes; the key is the header `X-Calu-Key`
+                                                   or the form field `_key`
+        WebSocket: cookie and key              ->  passes; the key is the offered subprotocol
+                                                   `calu.key.<key>`
+        anything else                          ->  401 (HTTP) or close code 1008 (WebSocket)
+
+    The token is never stored in the browser. It and the logins live only in this process; a
+    restart prints a new token and forgets every login.
     """
 
     def __init__(self, app: Any, token: str) -> None:
@@ -276,13 +460,15 @@ class TokenGate:
 
         Args:
             app: The ASGI application.
-            token: The secret; a request must carry it as `TOKEN_COOKIE` or `?token=`.
+            token: The secret a browser logs in with, as `?token=`.
         """
         self.app = app
         self.token = token
+        self.browsers: dict[str, str] = {}
+        """Session id -> key, one entry per login, oldest first (at most `MAX_BROWSERS`)."""
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        """Pass a request on, exchange a token in the URL for a cookie, or refuse it.
+        """Pass a request on, log a browser in, or refuse the request.
 
         Args:
             scope: The ASGI scope.
@@ -292,60 +478,183 @@ class TokenGate:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        if self._has_cookie(scope):
+        key = self._key_of(scope)
+        if scope["type"] == "websocket":
+            offered = [
+                name[len(KEY_PROTOCOL) :]
+                for name in scope.get("subprotocols", [])
+                if name.startswith(KEY_PROTOCOL)
+            ]
+            if key is not None and any(_same(given, key) for given in offered):
+                await self.app(scope, receive, send)
+            else:
+                await send({"type": "websocket.close", "code": 1008})
+            return
+        method = scope.get("method", "GET")
+        if method == "GET" and await self._login(scope, send):
+            return
+        if key is None:
+            await _plain(
+                send,
+                401,
+                "calu web: open the address that `calu web` printed when it started; it "
+                "carries the login token (once per browser).",
+            )
+            return
+        if method in SAFE_METHODS or _same(_header(scope, KEY_HEADER), key):
             await self.app(scope, receive, send)
             return
-        if scope["type"] == "websocket":
-            await send({"type": "websocket.close", "code": 1008})
+        # A form of the interface's own pages: the key is a field of the body.
+        body = await _form_body(scope, receive)
+        if body is None:
+            await _plain(send, 413, "calu web: the form is too large.")
             return
+        fields = parse_qs(body.decode("latin-1"), keep_blank_values=True)
+        if not any(_same(given, key) for given in fields.get(KEY_FIELD, [])):
+            await _plain(
+                send,
+                401,
+                "calu web: this request did not carry the key of your browser's login, so "
+                "nothing was changed. Open the address that `calu web` printed once more "
+                "(the pages need JavaScript and the browser's local storage).",
+            )
+            return
+        await self.app(scope, _replay(body, receive), send)
+
+    async def _login(self, scope: Any, send: Any) -> bool:
+        """Log the browser in if the request carries the right `?token=`.
+
+        Side effects: remembers a new session id and key, forgetting the oldest login beyond
+        `MAX_BROWSERS`, and answers the request with the page that stores the key.
+
+        Args:
+            scope: The ASGI scope of a GET request.
+            send: The ASGI send channel.
+
+        Returns:
+            True if the token was right and the response was sent; False if the request
+            carries no token or a wrong one, and nothing was sent.
+        """
         query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
         offered = (query.get("token") or [""])[0]
-        if offered and _same(offered, self.token):
-            rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
-            location = scope.get("path", "/") + (f"?{rest}" if rest else "")
-            cookie = f"{TOKEN_COOKIE}={self.token}; HttpOnly; SameSite=Strict; Path=/"
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 303,
-                    "headers": [
-                        (b"location", location.encode("latin-1")),
-                        (b"set-cookie", cookie.encode("latin-1")),
-                    ],
-                }
-            )
-            await send({"type": "http.response.body", "body": b""})
-            return
-        body = (
-            b"calu web: open the address that `calu web` printed when it started; it carries "
-            b"the login token (once per browser).\n"
-        )
+        if not offered or not _same(offered, self.token):
+            return False
+        session_id, key = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
+        self.browsers[session_id] = key
+        while len(self.browsers) > MAX_BROWSERS:
+            del self.browsers[next(iter(self.browsers))]
+        rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
+        # One leading slash only: "//host/" would be read as an address on another host.
+        onward = "/" + str(scope.get("path", "/")).lstrip("/") + (f"?{rest}" if rest else "")
+        page = TEMPLATES.get_template("login.html").render(key=key, onward=onward)
+        cookie = f"{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Strict; Path=/"
         await send(
             {
                 "type": "http.response.start",
-                "status": 401,
-                "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"text/html; charset=utf-8"),
+                    (b"cache-control", b"no-store"),
+                    (b"set-cookie", cookie.encode("latin-1")),
+                ],
             }
         )
-        await send({"type": "http.response.body", "body": body})
+        await send({"type": "http.response.body", "body": page.encode("utf-8")})
+        return True
 
-    def _has_cookie(self, scope: Any) -> bool:
-        """Tell whether the request carries the right token cookie.
+    def _key_of(self, scope: Any) -> str | None:
+        """Find the login the request's cookie names.
 
         Args:
             scope: The ASGI scope.
 
         Returns:
-            True if a `TOKEN_COOKIE` with the token is among its cookies.
+            The key of that login, or None if the request carries no `SESSION_COOKIE` of a
+            login this process knows.
         """
         for name, value in scope.get("headers", []):
             if name.lower() != b"cookie":
                 continue
             for part in value.decode("latin-1").split(";"):
-                key, _, given = part.strip().partition("=")
-                if key == TOKEN_COOKIE and _same(given, self.token):
-                    return True
-        return False
+                cookie, _, given = part.strip().partition("=")
+                if cookie != SESSION_COOKIE:
+                    continue
+                for session_id, key in self.browsers.items():
+                    if _same(given, session_id):
+                        return key
+        return None
+
+
+async def _plain(send: Any, status: int, text: str) -> None:
+    """Answer an HTTP request with one line of plain text.
+
+    Args:
+        send: The ASGI send channel.
+        status: The HTTP status.
+        text: The line, without its newline.
+    """
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+        }
+    )
+    await send({"type": "http.response.body", "body": f"{text}\n".encode()})
+
+
+async def _form_body(scope: Any, receive: Any) -> bytes | None:
+    """Read the whole body of a form request, so that the key can be looked for in it.
+
+    Args:
+        scope: The ASGI scope of the request.
+        receive: The ASGI receive channel; it is read to the end of the body.
+
+    Returns:
+        The body; b"" if the request is not an `application/x-www-form-urlencoded` form or the
+        client went away; None if the body is larger than `MAX_FORM_BYTES`.
+    """
+    kind = _header(scope, b"content-type").split(";")[0].strip().lower()
+    if kind != "application/x-www-form-urlencoded":
+        return b""
+    body = b""
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            return b""
+        body += message.get("body", b"")
+        if len(body) > MAX_FORM_BYTES:
+            return None
+        if not message.get("more_body"):
+            return body
+
+
+def _replay(body: bytes, receive: Any) -> Callable[[], Awaitable[Any]]:
+    """Build a receive channel that hands out a body that was already read.
+
+    Args:
+        body: The request body.
+        receive: The original channel, which is used again once the body was handed out (it
+            then reports the disconnect).
+
+    Returns:
+        The ASGI receive channel for the application.
+    """
+    sent = False
+
+    async def replayed() -> Any:
+        """Hand out the body once, then whatever the original channel says.
+
+        Returns:
+            The next ASGI message.
+        """
+        nonlocal sent
+        if sent:
+            return await receive()
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return replayed
 
 
 def _same(given: str, token: str) -> bool:
@@ -367,8 +676,9 @@ def _same(given: str, token: str) -> bool:
 class LocalOnly:
     """Refuse requests that a page from another site could have caused (PLAN.md D136).
 
-    The interface has no login, because it serves loopback only -- but a browser on this
-    machine will send requests to 127.0.0.1 on behalf of **any** site it has open. Without this,
+    The interface serves loopback only -- but a browser on this machine will send requests to
+    a loopback address on behalf of **any** site it has open, with the login's cookie where
+    the site is another port of this host name. Without this,
     a page anywhere could submit "allow" for escalations 1 to 100 (a form POST is sent
     cross-site without asking, and the ids are small integers), rewrite the settings or the
     checker instructions, or open the live WebSocket and decide steps through it; a page whose
@@ -376,7 +686,9 @@ class LocalOnly:
 
     Two checks, on every request and WebSocket handshake:
 
-    - The `Host` header must be a loopback name. A rebinding page sends its own domain there.
+    - The `Host` header must name this interface: exactly `host_name` when one is given
+      (`calu web` gives `WEB_HOST_NAME`), a loopback name otherwise. A rebinding page sends its
+      own domain there, and a bookmark of `127.0.0.1` is told the right address.
     - A request that can change something -- every method but GET, HEAD and OPTIONS, and every
       WebSocket -- must come from this interface's own pages: `Sec-Fetch-Site` may not say
       `cross-site` or `same-site` (another port on localhost is "same-site"), and an `Origin`,
@@ -384,16 +696,19 @@ class LocalOnly:
       sends neither (curl, `calu`'s own tests) is not a browser acting for someone else.
     """
 
-    def __init__(self, app: Any, extra_hosts: Collection[str] = ()) -> None:
+    def __init__(self, app: Any, extra_hosts: Collection[str] = (), host_name: str = "") -> None:
         """Wrap the application.
 
         Args:
             app: The ASGI application.
             extra_hosts: Further host names to accept, for a test client whose base URL is not
                 a loopback name.
+            host_name: The only host name to accept, next to `extra_hosts`; "" accepts every
+                name of `LOOPBACK_HOSTS`.
         """
         self.app = app
-        self.hosts = LOOPBACK_HOSTS | set(extra_hosts)
+        self.host_name = host_name
+        self.hosts = (frozenset({host_name}) if host_name else LOOPBACK_HOSTS) | set(extra_hosts)
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         """Pass a request on, or refuse it with 403 (HTTP) or close code 1008 (WebSocket).
@@ -439,7 +754,14 @@ class LocalOnly:
         }
         host = headers.get("host", "")
         name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
-        if name not in self.hosts:
+        if name.lower() not in self.hosts:
+            if self.host_name:
+                port = host.rsplit(":", 1)[1] if ":" in host and not host.endswith("]") else ""
+                where = self.host_name + (f":{port}" if port.isdigit() else "")
+                return (
+                    f"host {host!r} is not the name of this interface; open http://{where}/ "
+                    "(with the ?token=... that `calu web` printed, the first time)"
+                )
             return f"host {host!r} is not this machine (the interface serves loopback only)"
         changes = scope["type"] == "websocket" or scope.get("method") not in SAFE_METHODS
         if not changes:
@@ -466,8 +788,6 @@ class _State:
         """
         self.db = db
         self.git_url_template = git_url_template
-        self.minted: dict[str, tuple[int, str]] = {}
-        """Session id -> the token id and token of the last `mint`, shown once on the page."""
         self.live_tokens: dict[str, str] = {}
         """Session id -> the token this server uses for its own live view.
 
@@ -597,10 +917,26 @@ async def session_page(request: Request, state: _State) -> Response:
     Returns:
         The session page, or a 404 page if no session has that id.
     """
-    session_id = request.path_params["session_id"]
+    return await _session_view(request, state, minted=None)
+
+
+async def _session_view(
+    request: Request, state: _State, minted: tuple[int, str] | None
+) -> Response:
+    """Render the page of one session, with a client token if one was just minted.
+
+    Args:
+        request: The request; its path holds the session id.
+        state: The shared state.
+        minted: The id and the text of a token minted by this request, or None.
+
+    Returns:
+        The session page, or a 404 page if no session has that id.
+    """
+    session_id = str(request.path_params["session_id"])
     row = await herd.session(state.db, session_id)
     if row is None:
-        return HTMLResponse(_not_found(session_id), status_code=404)
+        return _not_found(request, session_id)
     detail = request.query_params.get("detail", "compact")
     if detail not in DETAIL_LEVELS:
         detail = "compact"
@@ -608,7 +944,6 @@ async def session_page(request: Request, state: _State) -> Response:
     runs = await herd.checker_runs(state.db, session_id)
     project = await herd.project_of(state.db, session_id)
     remote = project[1] if project else ""
-    minted = state.minted.pop(session_id, None)
     by_turn: dict[int | None, list[herd.StepRow]] = {}
     for step in steps:
         by_turn.setdefault(step.turn, []).append(step)
@@ -642,25 +977,29 @@ async def session_page(request: Request, state: _State) -> Response:
 async def mint(request: Request, state: _State) -> Response:
     """Mint a client token for a session, so that a client can attach to it.
 
-    The token is shown once on the session page after the redirect and is not stored anywhere
-    else: the database holds only its hash (D30).
+    The token is shown once, in the answer to this very request, and is kept nowhere: the
+    database holds only its hash (D30). The answer is the session page itself and not a
+    redirect to it, so the token is never waiting in this process for a later GET -- a GET
+    needs less than this POST does (`TokenGate`), and the token decides escalations.
 
     Args:
         request: The request; its form may hold a `label`.
         state: The shared state.
 
     Returns:
-        A redirect back to the session page.
+        The session page with the token on it (not to be cached), or a 404 page if no session
+        has that id.
     """
-    session_id = request.path_params["session_id"]
+    session_id = str(request.path_params["session_id"])
     form = await request.form()
     label = str(form.get("label") or "calu web")
     try:
-        token_id, token = await herd.mint_token(state.db, session_id, label)
+        minted = await herd.mint_token(state.db, session_id, label)
     except ValueError:
-        return HTMLResponse(_not_found(session_id), status_code=404)
-    state.minted[session_id] = (token_id, token)
-    return RedirectResponse(request.url_for("session", session_id=session_id), 303)
+        return _not_found(request, session_id)
+    page = await _session_view(request, state, minted)
+    page.headers["cache-control"] = "no-store"
+    return page
 
 
 async def summary_page(request: Request, state: _State) -> Response:
@@ -680,13 +1019,13 @@ async def summary_page(request: Request, state: _State) -> Response:
     session_id = str(request.path_params["session_id"])
     row = await herd.session(state.db, session_id)
     if row is None:
-        return HTMLResponse(_not_found(session_id), status_code=404)
+        return _not_found(request, session_id)
     if request.method == "POST":
         form = await request.form()
         try:
             await admin.set_chat_summary(state.db, session_id, str(form.get("summary") or ""))
         except admin.AdminError as exc:
-            return HTMLResponse(_bad(str(exc)), status_code=400)
+            return _bad(request, str(exc))
         url = request.url_for("summary", session_id=session_id).include_query_params(saved="1")
         return RedirectResponse(url, 303)
     return _render(
@@ -712,10 +1051,10 @@ async def live_page(request: Request, state: _State) -> Response:
     Returns:
         The live page, or a 404 page if no session has that id.
     """
-    session_id = request.path_params["session_id"]
+    session_id = str(request.path_params["session_id"])
     row = await herd.session(state.db, session_id)
     if row is None:
-        return HTMLResponse(_not_found(session_id), status_code=404)
+        return _not_found(request, session_id)
     return _render(
         request,
         "live.html",
@@ -749,8 +1088,37 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
         websocket: The browser's connection.
         state: The shared state.
     """
-    await websocket.accept()
+    # A browser that offered subprotocols (the key, `TokenGate`) ends the connection unless
+    # the answer names one of them.
+    offered = websocket.scope.get("subprotocols") or []
+    await websocket.accept(subprotocol=LIVE_PROTOCOL if LIVE_PROTOCOL in offered else None)
     session_id = str(websocket.path_params["session_id"])
+    try:
+        await _live(websocket, state, session_id)
+    except (psycopg.OperationalError, TimeoutError) as exc:
+        with suppress(RuntimeError, WebSocketDisconnect):
+            await websocket.send_json(
+                {
+                    "type": "closed",
+                    "message": f"calu web cannot reach the database ({exc}); reload to try again",
+                }
+            )
+    with suppress(RuntimeError):
+        await websocket.close()
+
+
+async def _live(websocket: WebSocket, state: _State, session_id: str) -> None:
+    """Attach one accepted browser connection to a session and relay until either side ends.
+
+    Args:
+        websocket: The browser's connection, accepted.
+        state: The shared state.
+        session_id: Id of the session to attach to.
+
+    Raises:
+        psycopg.OperationalError: If the database cannot be reached.
+        TimeoutError: If the database does not answer in time.
+    """
     row = await herd.session(state.db, session_id)
     if row is None or not row.address:
         await websocket.send_json(
@@ -762,7 +1130,6 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
                 ),
             }
         )
-        await websocket.close()
         return
     for last_attempt in (False, True):
         token = state.live_tokens.get(session_id)
@@ -792,8 +1159,6 @@ async def live_socket(websocket: WebSocket, state: _State) -> None:
         except (OSError, ConnectionError) as exc:
             await websocket.send_json({"type": "closed", "message": _unreachable_message(row, exc)})
         break
-    with suppress(RuntimeError):
-        await websocket.close()
 
 
 def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
@@ -821,7 +1186,12 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
 
 
 async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None:
-    """Forward events and commands between one browser and one session.
+    """Forward events and commands between one browser and one session, until one side ends.
+
+        browser closes its connection      ->  returns
+        session closes its connection      ->  the browser gets {"type": "closed", ...}, then
+                                               returns; it does not wait for the browser's
+                                               next command to notice (finding wa4)
 
     Args:
         websocket: The browser's connection.
@@ -831,7 +1201,7 @@ async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None
     Raises:
         OSError: If the session's address cannot be reached.
         calu.protocol.client.RequestFailed: If the session refuses the token.
-        ConnectionError: If the session closes the connection.
+        ConnectionError: If the session closes the connection before it sent its state.
     """
     held: list[dict[str, Any]] = []
     sent_snapshot = False
@@ -861,11 +1231,59 @@ async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None
         for message in held:
             await websocket.send_json(message)
         held.clear()
-        while True:
+        session_ended = False
+        async with anyio.create_task_group() as tasks:
+
+            async def watch() -> None:
+                """End the relay as soon as the session's connection closes."""
+                nonlocal session_ended
+                await session.closed.wait()
+                session_ended = True
+                tasks.cancel_scope.cancel()
+
+            tasks.start_soon(watch)
+            if await _commands(websocket, session):
+                session_ended = True
+            tasks.cancel_scope.cancel()
+        if session_ended:
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await websocket.send_json(
+                    {
+                        "type": "closed",
+                        "message": (
+                            "the session closed the connection: its process ended or was "
+                            "restarted. Nothing more arrives here; the session list shows "
+                            "whether it runs again."
+                        ),
+                    }
+                )
+
+
+async def _commands(websocket: WebSocket, session: Any) -> bool:
+    """Forward the browser's commands to the session until one of the two connections ends.
+
+    Only the requests of `LIVE_METHODS` are forwarded. A frame that is not a JSON object, a
+    method that is not on the list and a request the session refuses are each answered with
+    `{"type": "refused", ...}`; none of them ends the relay.
+
+    Args:
+        websocket: The browser's connection.
+        session: The `calu.protocol.client.ProtocolClient` of the session.
+
+    Returns:
+        True if the session closed its connection, False if the browser closed its own.
+    """
+    while True:
+        try:
             try:
                 command = await websocket.receive_json()
-            except WebSocketDisconnect, RuntimeError:
-                return
+            except ValueError, KeyError:  # not JSON, or a binary frame
+                command = None
+            if not isinstance(command, dict):
+                await websocket.send_json(
+                    {"type": "refused", "method": "", "message": "not a JSON object"}
+                )
+                continue
             method = str(command.get("method") or "")
             params = command.get("params") or {}
             if method not in LIVE_METHODS:
@@ -880,7 +1298,11 @@ async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None
                     {"type": "refused", "method": method, "message": str(exc)}
                 )
                 continue
+            except ConnectionError:
+                return True
             await websocket.send_json({"type": "result", "method": method, "result": result})
+        except WebSocketDisconnect, RuntimeError:
+            return False
 
 
 async def escalations(request: Request, state: _State) -> Response:
@@ -909,7 +1331,7 @@ async def escalation_page(request: Request, state: _State) -> Response:
     escalation_id = int(request.path_params["escalation_id"])
     row = await herd.escalation(state.db, escalation_id)
     if row is None:
-        return HTMLResponse(_not_found(str(escalation_id)), status_code=404)
+        return _not_found(request, str(escalation_id))
     context = await herd.escalation_context(state.db, escalation_id)
     return _render(
         request,
@@ -943,7 +1365,7 @@ async def resolve(request: Request, state: _State) -> Response:
     decision = str(form.get("decision") or "")
     note = str(form.get("note") or "")
     if decision not in ("allow", "deny"):
-        return HTMLResponse(_bad(f"{decision!r} is neither allow nor deny"), status_code=400)
+        return _bad(request, f"{decision!r} is neither allow nor deny")
     resolved = await herd.resolve(state.db, escalation_id, decision, note)
     log.info("escalation %s %s by the web interface (%s)", escalation_id, decision, resolved)
     back = str(form.get("back") or request.url_for("escalations"))
@@ -1198,7 +1620,7 @@ async def settings_page(request: Request, state: _State) -> Response:
                 return RedirectResponse(url, 303)
         found = web_settings.panes(await web_settings.load(state.db, project))
     except admin.AdminError as exc:
-        return HTMLResponse(_not_found(str(exc)), status_code=404)
+        return _not_found(request, str(exc))
     web_settings.overlay(found, posted, errors)
     nav: list[tuple[str, list[web_settings.Pane]]] = []
     for pane in found:
@@ -1308,25 +1730,80 @@ def _connect(row: herd.SessionRow, token: str) -> list[tuple[str, str]]:
     return commands
 
 
-def _not_found(what: str) -> str:
-    """Render a small "not found" page.
+def _not_found(request: Request, what: str) -> Response:
+    """Render the "not found" page.
 
     Args:
-        what: The id that was asked for.
+        request: The request.
+        what: The id that was asked for, as the request gave it. The template escapes it.
 
     Returns:
-        The HTML.
+        The page, with status 404.
     """
-    return f"<!doctype html><title>not found</title><h1>No such thing: {what}</h1>"
+    return _error(request, 404, "Not found", f"No such thing: {what}")
 
 
-def _bad(why: str) -> str:
-    """Render a small "bad request" page.
+def _bad(request: Request, why: str) -> Response:
+    """Render the "bad request" page.
 
     Args:
-        why: What was wrong.
+        request: The request.
+        why: What was wrong; it may quote the request. The template escapes it.
 
     Returns:
-        The HTML.
+        The page, with status 400.
     """
-    return f"<!doctype html><title>bad request</title><h1>{why}</h1>"
+    return _error(request, 400, "Bad request", why)
+
+
+def _error(
+    request: Request, status: int, title: str, message: str, retry: bool = False
+) -> Response:
+    """Render an error page through the template, never by building HTML from text.
+
+    Args:
+        request: The request.
+        status: The HTTP status of the response.
+        title: The page's heading.
+        message: One paragraph of plain text. It is shown escaped, so it may hold anything a
+            request carried (finding wa2).
+        retry: True makes the page ask for itself again after five seconds.
+
+    Returns:
+        The page.
+    """
+    page = _render(request, "error.html", {"title": title, "message": message, "retry": retry})
+    page.status_code = status
+    return page
+
+
+async def _database_down(request: Request, exc: Exception) -> Response:
+    """Answer a request whose database statement could not be run (finding wa3).
+
+    Registered for `psycopg.OperationalError` and `TimeoutError`. The operator is told that
+    the page could not be read, instead of seeing an empty or stale one.
+    `calu.web.database.ReopeningDb` opens a new connection for the next request, so the pages
+    recover on their own when the database is back.
+
+    Args:
+        request: The request.
+        exc: What the statement raised.
+
+    Returns:
+        Status 503: `{"ok": false, "error": "database unreachable", "message": ...}` for the
+        paths under `/api/`, the error page otherwise. The page of a GET asks for itself again
+        after five seconds; the page of a request that was to change something does not, and
+        says that the change may not have happened.
+    """
+    log.warning("the database could not be reached for %s: %s", request.url.path, exc)
+    reading = request.method in SAFE_METHODS
+    message = f"calu web cannot reach the database ({type(exc).__name__}: {exc}). " + (
+        "This page tries again every five seconds. Sessions that wait for a decision keep waiting."
+        if reading
+        else "What you sent may not have taken effect: look at the page again before you repeat it."
+    )
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"ok": False, "error": "database unreachable", "message": message}, status_code=503
+        )
+    return _error(request, 503, "The database cannot be reached", message, retry=reading)
