@@ -434,7 +434,7 @@ class StepGate:
         narrate: Callable[[list[ClaudeOutput]], Awaitable[str]],
         emit_edit_diff: Callable[[Step], Awaitable[None]],
         own_agent: Callable[[Step], bool],
-        take_clock_alarm: Callable[[], str | None],
+        clock_alarm: Callable[[], str | None],
         keep_changeset: Callable[[str, str], None],
         honesty: Callable[[], Awaitable[HonestySnapshot | None]],
         honesty_review: Callable[[Step, float | None], Awaitable[str]],
@@ -457,8 +457,9 @@ class StepGate:
                 nothing to narrate or narrating failed; never raises.
             emit_edit_diff: Emits `edit.diff` for an edit step; never raises.
             own_agent: Says whether a `SendMessage` call addresses a subagent of this session.
-            take_clock_alarm: Returns the reason of a backward clock jump that no step has
-                shown to a human yet and forgets it, or returns None if there is none.
+            clock_alarm: Returns the reason of a backward clock jump that no human has
+                answered yet, or None if there is none. The gate only reads it: the session
+                forgets it when a human has decided the escalation the gate returns for it.
             keep_changeset: Remembers the rendered changeset of a commit for the escalation's
                 row: (the call's `tool_use_id`, the text).
             honesty: Computes the honesty state of the session as it is now; returns None
@@ -482,7 +483,7 @@ class StepGate:
         self._narrate = narrate
         self._emit_edit_diff = emit_edit_diff
         self._own_agent = own_agent
-        self._take_clock_alarm = take_clock_alarm
+        self._clock_alarm = clock_alarm
         self._keep_changeset = keep_changeset
         self._honesty = honesty
         self._honesty_review = honesty_review
@@ -733,11 +734,13 @@ class StepGate:
         outcome = await anyio.to_thread.run_sync(self._rules().evaluate, step)
         rules = _rules_outcome(step, outcome)
         label = label_for_unchecked(step.tool_name, step.tool_input)
-        alarm = self._take_clock_alarm()
+        alarm = self._clock_alarm()
         if alarm is not None:
             # A backward clock jump makes the attribution of file changes unreliable (D32), so a
-            # human decides before anything else runs. The alarm is cleared either way: the
-            # answer to this escalation is the answer to the jump.
+            # human decides before anything else runs. The alarm stays until a human has
+            # decided this escalation (`Session._ask`): one that ends without a decision (an
+            # interrupt, a timeout, a row that cannot be stored) leaves the next step
+            # escalated for the same reason.
             return Decided(
                 route=route,
                 decision=CheckDecision(

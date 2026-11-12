@@ -501,9 +501,47 @@ async def test_a_backward_clock_jump_escalates_the_next_step_and_then_clears(tmp
     assert "moved" in first.decision.reason and "which step changed which file" in (
         first.decision.reason
     )
-    # The answer to that escalation is the answer to the jump, so the next step is normal again.
+    # Judging alone answers nothing: the alarm stays until a human has decided.
     second = await session.gate.judge(step, None)
-    assert second.decision.decision is not Decision.ESCALATE or second.source != "clock"
+    assert second.decision.decision is Decision.ESCALATE and second.source == "clock"
+
+
+@pytest.mark.parametrize("ending", ["allow", "deny", "stop"])
+async def test_only_a_humans_decision_answers_a_backward_clock_jump(tmp_path: Path, ending: str):
+    """The alarm was forgotten when the gate returned its escalation. An escalation that then
+    ended without a decision (here: the session is stopped) left the next step unescalated,
+    although no human had seen the jump."""
+    session, rec, _store = make_session(tmp_path, [])
+    step = Step(
+        tool_name="Bash", tool_input={"command": "make"}, tool_use_id="t1", cwd=str(tmp_path)
+    )
+    later = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.clock_jumped(ClockJump(backward=True, seconds=42.0, at=1_700_000_000.0))
+        assert (await session.pre_tool_use(step)).verdict == "ask"
+        answers: list[HumanAnswer] = []
+
+        async def ask() -> None:
+            """Stand in for the SDK's permission callback."""
+            answers.append(await session.ask(step))
+
+        tg.start_soon(ask)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "clock" in request.reason
+        if ending == "stop":
+            await session.stop()
+        else:
+            await session.decide_escalation(request.escalation_id, ending, None)
+        with anyio.fail_after(10):
+            while not answers:
+                await anyio.sleep(0.01)
+        assert answers[0].allow is (ending == "allow")
+        after = await session.gate.judge(later, None)
+        assert (after.source == "clock") is (ending == "stop")
+        if ending != "stop":
+            await session.stop()
+        tg.cancel_scope.cancel()
 
 
 async def test_a_forward_clock_jump_is_only_reported(tmp_path: Path):

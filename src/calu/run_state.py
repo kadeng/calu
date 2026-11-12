@@ -134,7 +134,7 @@ class RunState:
     # The fields below are not reset by a start: `following` carries them into the next run.
     queue: list[tuple[QueuedMessage, str]] = field(default_factory=list[tuple[QueuedMessage, str]])
     """The chat messages Claude has not read yet, each with the text that was sent for it."""
-    clock_alarm: str | None = None  # a backward clock jump nobody has seen yet (D32)
+    clock_alarm: str | None = None  # a backward clock jump no human has answered yet (D32)
     store_failures: int = 0  # database writes that failed in a row (D59)
     stopping: bool = False  # a stop was already started, so it is not started twice
 
@@ -156,7 +156,7 @@ class RunState:
         (the same objects, so a task that still holds one of them sees the same content):
 
         - `queue`: the end of a run empties it, not its start.
-        - `clock_alarm`: it stays until a step has shown it to a human.
+        - `clock_alarm`: it stays until a human has decided the escalation that shows it.
 
         `store_failures` and `stopping` start from their defaults like the rest: a run that
         was stopped after repeated failed database writes must not leave the next run
@@ -203,8 +203,8 @@ class RunState:
     def release(self, tool_use_id: str) -> None:
         """Remove the record of a tool call if nothing is left in it.
 
-        The only place that removes a record from `calls`. It is called wherever a field was
-        emptied; the record goes with the last field.
+        It is called wherever a field was emptied; the record goes with the last field.
+        (`forget` removes the record of a step that is no tool call.)
 
         Args:
             tool_use_id: Claude's id of the call; an unknown id is ignored.
@@ -212,6 +212,18 @@ class RunState:
         record = self.calls.get(tool_use_id)
         if record is not None and record.is_empty():
             del self.calls[tool_use_id]
+
+    def forget(self, tool_use_id: str) -> None:
+        """Remove the record of a call that gets no tool result, with whatever is in it.
+
+        For a step that is no tool call of Claude Code, such as the review of a subagent's
+        result: no result event arrives that would empty its fields, so `release` would keep
+        the record, and its `running` mark would keep the session in the state "tool_call".
+
+        Args:
+            tool_use_id: The id the step was recorded under; an unknown id is ignored.
+        """
+        self.calls.pop(tool_use_id, None)
 
     def any_running(self) -> bool:
         """Say whether an approved tool call has not finished yet.

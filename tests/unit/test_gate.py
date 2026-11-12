@@ -135,6 +135,43 @@ async def test_a_subagent_result_nobody_decided_is_not_called_a_decision_of_the_
     assert [text for text in texts if "No human decided" in text], texts
 
 
+async def test_an_allowed_subagent_result_does_not_leave_the_session_in_a_tool_call(
+    tmp_path: Path,
+):
+    """The review of a subagent's result is recorded as a step but is no tool call. A human's
+    allow marked it as running, and no result event ever ended it: the state stayed
+    "tool_call" until the next start, and the step's per-call record stayed in memory."""
+    session, rec, _store = make_session(tmp_path, agent_turn("All done. calu:escalate-result"))
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert request.tool_name == "SubagentResult"
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await rec.wait_for(TurnResult)
+        with anyio.fail_after(10):
+            while session.state != "idle":
+                await anyio.sleep(0.01)
+        assert not [key for key in session._run_state.calls if key.startswith("result-")]
+        await session.stop()
+
+
+async def test_a_rejected_second_start_leaves_the_running_session_alone(tmp_path: Path):
+    """`start` cleared Claude's not yet narrated output before it looked whether a session
+    was running, so a refused start took the narration away from the next check."""
+    from calu.context.narrator import ClaudeOutput
+
+    session, _rec, _store = make_session(tmp_path, [])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        waiting = [ClaudeOutput("text", "I will now change the build script.")]
+        session._run_state.claude_outputs[None] = waiting
+        with pytest.raises(SessionError, match="already"):
+            await session.start(tg)
+        assert session._run_state.claude_outputs == {None: waiting}
+        await session.stop()
+
+
 async def test_opening_an_escalation_is_retried_before_the_step_is_denied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

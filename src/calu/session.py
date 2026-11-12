@@ -534,7 +534,7 @@ class Session:
             narrate=lambda outputs: self._narrate_safely(outputs),
             emit_edit_diff=lambda step: self._emit_edit_diff(step),
             own_agent=lambda step: self._own_agent(step),
-            take_clock_alarm=self._take_clock_alarm,
+            clock_alarm=self._clock_alarm,
             keep_changeset=self._keep_changeset,
             honesty=self._gate_honesty,
             honesty_review=lambda _step, wait_s: self.honesty_review(wait_s=wait_s),
@@ -2220,8 +2220,9 @@ class Session:
                 ready (the message names the runner's error), or if it was not ready within
                 `START_TIMEOUT_S` seconds (the runner is stopped then).
         """
-        self._run_state.claude_outputs.clear()  # text of an earlier session must not reach this one
         if self.state not in ("stopped", "failed") or not self._run_state.run_done.is_set():
+            # Nothing of the running session is touched: a rejected start once cleared its
+            # thinking and text that were not narrated yet.
             raise SessionError(f"a session is already {self.state}")
         overrides: dict[str, str | None] = {}
         if model is not None:
@@ -2231,7 +2232,8 @@ class Session:
         if overrides:
             self.config.claude = self.config.claude.model_copy(update=overrides)
         # A run begins: everything that describes one run starts from its default, except
-        # what `RunState.following` carries over.
+        # what `RunState.following` carries over. That includes Claude's output that was not
+        # narrated: text of an earlier session must not reach this one.
         self._run_state = self._run_state.following(tg)
         await self.write_sets.prepare()
         self.state = "stopped"
@@ -2784,7 +2786,8 @@ class Session:
     async def _ask(self, step: Step) -> Asked:
         """Implement `ask`, and also say how the escalation ended.
 
-        Side effects: as `ask`.
+        Side effects: as `ask`. A human's decision about the escalation of a backward clock
+        jump clears the clock alarm; every other ending of that escalation leaves it.
 
         Args:
             step: The tool call that needs a decision.
@@ -2798,6 +2801,14 @@ class Session:
         self._run_state.release(step.tool_use_id or "")
         reason, source = pending_reason or (HARNESS_ASKED, "harness")
         asked = await self.desk.ask(step, reason, source)
+        if (
+            source == "clock"
+            and asked.outcome in ("allowed", "denied")
+            and self._run_state.clock_alarm == reason
+        ):
+            # A human has seen the jump and decided: that answers the alarm. A jump that was
+            # detected since then has another reason and stays.
+            self._run_state.clock_alarm = None
         if asked.answer.allow and step.tool_use_id:
             self._run_state.call(step.tool_use_id).running = True
             await self._refresh_state()
@@ -2835,6 +2846,27 @@ class Session:
         Returns:
             The note for the main agent ("" if the result was accepted without remarks or the
             review is disabled by `check_subagent_results = false`).
+        """
+        try:
+            return await self._review_subagent_result(result)
+        finally:
+            # The review is recorded as a step, but it is no tool call: no result event ends
+            # it. Without this, a result that a human allowed left the session in the state
+            # "tool_call" until the next start.
+            self._run_state.forget(f"result-{result.agent_id}")
+            with anyio.CancelScope(shield=True):
+                await self._refresh_state()
+
+    async def _review_subagent_result(self, result: SubagentResult) -> str:
+        """Implement `review_subagent_result`; the caller removes the step's per-call record.
+
+        Side effects: as `review_subagent_result`.
+
+        Args:
+            result: The subagent's task and final result.
+
+        Returns:
+            The note for the main agent, as `review_subagent_result` returns it.
         """
         # The subagent's text after its last tool call is its result, reviewed below.
         self._run_state.claude_outputs.pop(result.agent_id, None)
@@ -2977,15 +3009,14 @@ class Session:
 
     # ------------------------------------------------------------------ deciding
 
-    def _take_clock_alarm(self) -> str | None:
-        """Hand the pending clock alarm to the gate and forget it (`clock_jumped`, D32).
+    def _clock_alarm(self) -> str | None:
+        """Tell the gate the pending clock alarm (`clock_jumped`, D32).
 
         Returns:
-            The reason of a backward clock jump that no step has shown to a human yet, or None
-            if there is none. After the call there is none.
+            The reason of a backward clock jump that no human has answered yet, or None if
+            there is none. `_ask` forgets it when a human has decided its escalation.
         """
-        alarm, self._run_state.clock_alarm = self._run_state.clock_alarm, None
-        return alarm
+        return self._run_state.clock_alarm
 
     def _keep_changeset(self, tool_use_id: str, text: str) -> None:
         """Remember the rendered changeset of a commit, for the escalation's row.

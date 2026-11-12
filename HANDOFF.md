@@ -7,7 +7,7 @@ with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUI
 
 ## Pick up here
 
-**`main` is green and pushed** (1786 tests with `uv run pytest -q -m 'not live'`, 16 browser
+**`main` is green and pushed** (1791 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
 1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
@@ -86,12 +86,16 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    checkers before you let them block"). Written from the reports in `docs/notes/` and checked
    against the live runs of item 1 and the command line's own help. `PLAN.md` §13 still
    describes the register of 2026-11-10 as history; D196 is what holds.
-6. **Defects the split of `session.py` found and left as they were**
-   (`docs/notes/reports-2026-11-12.md`, "defects found"). Fixed since: the store failure count
-   and the stopping flag are reset at a new run. Still open, most important first: the state
-   stays "tool_call" after a human accepts an escalated subagent result; a clock alarm is
-   forgotten when its escalation ends without a human decision; a rejected second start drops
-   the running session's not yet narrated text.
+6. **Done: the three defects the split of `session.py` left open**
+   (`docs/notes/reports-2026-11-12.md`, "defects found"), each with a test that fails on the
+   old code: the state stayed "tool_call" after a human allowed an escalated subagent result
+   (`RunState.forget`); the clock alarm was forgotten when the gate returned its escalation,
+   so an escalation that ended without a human decision left the next step unescalated (the
+   alarm now stays until a human allowed or denied, `Session._ask`); a rejected second start
+   cleared the running session's not yet narrated text. The same report lists smaller ones
+   that are still open (the escalation desk's entries for steps without a `tool_use_id`, an
+   unreachable `except TimeoutError`, wording of two log lines, a write set whose recording
+   failed).
 7. **Timing-sensitive browser tests.**
    `tests/browser/test_web_ui.py::test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_unsaved`
    failed once inside the full run of `-m 'not live'` (which includes the browser layer when
@@ -162,7 +166,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1786 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1791 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 30 migrations, 21 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
