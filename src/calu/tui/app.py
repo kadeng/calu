@@ -268,6 +268,8 @@ class CaluApp(App[None]):
         self.run_program: Callable[[Sequence[str], str], int] = self._run_program
         """Hands the terminal to a program in a directory and returns its exit code; tests
         replace it."""
+        self.unstaged_changes: Callable[[str], bool | None] = gittool.unstaged_changes
+        """Says whether `git diff` would show anything in a directory; tests replace it."""
         self.describe_commit: Callable[[str, str], str] = describe_commit
         """Names a commit of a repository for the question of `/trust`; tests replace it."""
         self._install_shown = False
@@ -3373,10 +3375,31 @@ class CaluApp(App[None]):
     def _cmd_honesty_review(self, rest: str) -> None:
         """Ask calu to review the unreviewed files now (`/honesty-review`).
 
+        The composer's header says at once that the review was asked for and, when the
+        session answers, whether a review ran and what it could not judge. The effect on the
+        state arrives with the session's events.
+
         Args:
             rest: Ignored.
         """
-        self._request(self.actions.honesty_review(), "the honesty review was asked for")
+        self.flash("the honesty review was asked for")
+
+        async def run() -> None:
+            """Await the review, which can take minutes, and say how it ended."""
+            outcome = await self.actions.honesty_review()
+            answer = outcome.data if isinstance(outcome.data, dict) else {}
+            problem = str(answer.get("problem") or "")
+            if not outcome.ok:
+                self.report(outcome)
+            elif not answer.get("ran"):
+                self.flash(f"no honesty review ran: {problem or 'no reason given'}", error=True)
+            elif problem:
+                self.flash(f"the honesty review ran: {problem}", error=True)
+            else:
+                self.flash("the honesty review ran")
+            self.render_all()
+
+        self._spawn(run())
 
     # ------------------------------------------------------------------ git program
 
@@ -3469,11 +3492,19 @@ class CaluApp(App[None]):
             Args:
                 chosen: The program.
             """
+            fallback = chosen.source == "fallback"
+            if fallback and self.unstaged_changes(self.model.workspace) is False:
+                # git would print nothing and start no pager: say so instead of a flicker.
+                self.flash(
+                    "git diff: no unstaged changes in the project directory"
+                    " · gitui shows staging, log and branches too"
+                )
+                return
             code = self._launch(chosen.argv, chosen.name)
             if code is not None and code != 127:
                 hint = (
                     " · that was git diff; gitui shows staging, log and branches too"
-                    if chosen.source == "fallback"
+                    if fallback
                     else ""
                 )
                 self.flash(f"back from {chosen.name}{hint}")

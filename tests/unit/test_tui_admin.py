@@ -64,7 +64,24 @@ def test_the_git_program_is_chosen_by_environment_then_setting_then_what_is_inst
     # configured, so without gitui the client falls back to git diff and offers to install it.
     fallback = gittool.choose({}, "", installed("lazygit", "tig", "git"))
     assert isinstance(fallback, gittool.GitTool) and fallback.source == "fallback"
-    assert fallback.argv[0] == "git" and fallback.argv[-1] == "diff" and fallback.name == "git"
+    assert fallback.argv == gittool.FALLBACK and fallback.name == "git"
+    # In a real terminal a short diff was gone at once: git's default options for less end
+    # it when the text fits on one screen. The fallback switches those two off.
+    assert fallback.argv[:2] == ("git", "-c") and "diff" in fallback.argv
+    assert "-+F" in fallback.argv[2] and "-+X" in fallback.argv[2]
+
+
+def test_git_says_whether_the_fallback_would_show_anything(tmp_path: Path) -> None:
+    import subprocess
+
+    assert gittool.unstaged_changes(str(tmp_path)) is None, "no repository: git cannot say"
+    assert gittool.unstaged_changes(str(tmp_path / "missing")) is None
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True)
+    assert gittool.unstaged_changes(str(tmp_path)) is False
+    (tmp_path / "a.txt").write_text("two\n", encoding="utf-8")
+    assert gittool.unstaged_changes(str(tmp_path)) is True
 
 
 def test_a_configured_program_that_is_missing_is_named_and_nothing_else_is_tried() -> None:
@@ -534,7 +551,7 @@ async def test_trust_of_a_branch_a_file_and_a_review() -> None:
         await command(run, "/honesty-review")
         assert run.session.sent("honesty.trust") == [{"rev": "release"}, {"path": "notes/plan.md"}]
         assert run.session.sent("honesty.review") == [{}]
-        assert "the honesty review was asked for" in run.line("composer-head")
+        assert "the honesty review ran" in run.line("composer-head")
 
 
 async def test_a_session_without_certification_says_so() -> None:
@@ -670,6 +687,11 @@ async def test_without_a_git_program_the_install_command_is_shown_and_never_run_
         await run.press("f4")
         assert not isinstance(run.app.screen, ConfirmScreen), "the notice is shown once"
         assert len(programs.runs) == 2
+        # Without changes git prints nothing and starts no pager: the client says so instead.
+        run.app.unstaged_changes = lambda directory: False
+        await run.press("f4")
+        assert len(programs.runs) == 2
+        assert "no unstaged changes" in run.line("composer-head")
 
 
 async def test_an_install_without_sudo_runs_only_after_a_yes(tmp_path: Path) -> None:

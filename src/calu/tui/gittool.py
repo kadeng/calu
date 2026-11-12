@@ -10,8 +10,8 @@ The program, by priority:
 1. the environment variable `CALU_GIT_TOOL` (a command line, e.g. `lazygit` or `tig status`);
 2. `git_tool` in `tui.toml`;
 3. gitui, the default, if it is installed (on the search path or in `~/.local/bin`);
-4. `git diff` through git's pager, if git is installed, after the client offered to install
-   gitui.
+4. `git diff` through a pager (`FALLBACK`), if git is installed, after the client offered to
+   install gitui.
 
 gitui (https://github.com/gitui-org/gitui) is the default, the owner's choice: the diff of the
 working copy, staging, log and branches in a fast terminal program. Another program (lazygit,
@@ -24,6 +24,7 @@ only shown.
 import platform
 import shlex
 import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,6 +95,16 @@ is used when neither brew nor the release command applies. Debian, Ubuntu and Fe
 gitui package, so they are not listed. `cargo install` writes into the user's own directory
 and comes last."""
 
+FALLBACK = ("git", "-c", "core.pager=less -R -+F -+X", "diff")
+"""The command line without a git program: the unstaged changes, in `less`.
+
+`-+F` and `-+X` switch off two options git sets for `less` by default (`LESS=FRX`): with them
+`less` ends at once when the text fits on one screen, and the diff is gone when the client
+draws itself again (seen in a real terminal). Without changes git prints nothing and starts
+no pager; `unstaged_changes` says so beforehand. (`git diff --exit-code` would report it, but
+git never starts a pager with that option.)
+"""
+
 
 def configured(environ: Mapping[str, str], setting: str = "") -> tuple[str, str]:
     """Return the configured command line and where it comes from.
@@ -146,7 +157,7 @@ def choose(
             # Installed by `install_plan`'s release command, with ~/.local/bin not on the PATH.
             return GitTool((str(local),), "installed")
     if which("git") is not None:
-        return GitTool(("git", "-c", "core.pager=less -R", "diff"), "fallback")
+        return GitTool(FALLBACK, "fallback")
     return Missing("git is not installed on this machine")
 
 
@@ -215,6 +226,31 @@ def release_command(which: Which = shutil.which) -> str | None:
         f'set -e; mkdir -p "{LOCAL_BIN}"; curl -fsSL "{archive}" | tar -xz -C "{LOCAL_BIN}" ./gitui'
     )
     return "sh -c " + shlex.quote(script)
+
+
+def unstaged_changes(directory: str) -> bool | None:
+    """Ask git whether `FALLBACK` would show anything (`git diff --quiet`).
+
+    Args:
+        directory: The directory to ask in.
+
+    Returns:
+        True if the working copy has unstaged changes, False if it has none, None if git
+        could not say (no repository, git missing, no answer within 10 seconds).
+    """
+    try:
+        done = subprocess.run(
+            ["git", "diff", "--quiet"],
+            cwd=directory,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return None
+    return {0: False, 1: True}.get(done.returncode)
 
 
 def usable_directory(workspace: str) -> str | None:

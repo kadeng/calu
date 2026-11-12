@@ -214,8 +214,11 @@ sandbox needs socat from `get-socat.sh`), `--changes` (measure and review what a
 D31), `--socket PATH` (serve the clients on a Unix socket), `--resolve allow|deny` (play the
 operator for the first escalation), `--model`, `--checker-model MODEL|auto` (real checkers
 instead of the rule-based fakes), `--honesty track|enforce`, `--trust-head` (certify HEAD of
-the project directory with the source `user` before the session starts) and
-`--reviewer-model`.
+the project directory with the source `user` before the session starts),
+`--reviewer-model` and `--stay` (keep the session after the first turn and read further
+messages from stdin: the `[clients]` lines name the address and the token for `calu attach`,
+which is how the full-screen client was tried against a real session; a client that is still
+attached keeps the session alive after Ctrl-D).
 
 Code honesty against a real model (run on 2026-11-12 with haiku as Claude and Nemotron
 Lightning as checker and reviewer; all four ended as described). The project directory is a

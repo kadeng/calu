@@ -178,7 +178,8 @@ async def main(args: argparse.Namespace) -> int:
                     RunOptions(
                         workspace=Path(args.directory).resolve(),
                         prompt=args.prompt,
-                        interactive=False,
+                        interactive=args.stay,
+                        show_thinking=args.stay,
                         socket_path=Path(args.socket) if args.socket else None,
                     ),
                     checker_models=None if args.checker_model else fake_models(),
@@ -239,6 +240,13 @@ parser.add_argument(
     "--socket", metavar="PATH", help="serve the clients on a Unix socket at PATH (PLAN.md §6)"
 )
 parser.add_argument("--timeout", type=float, default=240, help="how long the operator waits")
+parser.add_argument(
+    "--stay",
+    action="store_true",
+    help="keep the session after the first turn and read further messages from stdin, so that"
+    " a client can attach (the `[clients]` lines name the address and the token); end it with"
+    " Ctrl-D",
+)
 parser.add_argument(
     "--honesty",
     choices=["off", "track", "enforce"],

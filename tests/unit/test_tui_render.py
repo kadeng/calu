@@ -282,6 +282,9 @@ def test_a_subagents_tab_is_headed_by_who_it_is_and_what_it_was_asked() -> None:
     head, task = plain(render.agent_head(model.agents["a1"], model, view(90)))
     assert head == " explore  ·  Explore  ·  background  ·  tool call Grep"
     assert task == " task  Find every caller of check_step outside src/."
+    # Seen in a real terminal: a longer head wrapped onto a second line and pushed the task down.
+    narrow, _ = plain(render.agent_head(model.agents["a1"], model, view(40)))
+    assert len(narrow) <= 40 and narrow.startswith(" explore  ·  Explore") and narrow.endswith("…")
 
 
 def test_side_questions_are_drawn_as_question_and_answer_and_say_what_they_are() -> None:

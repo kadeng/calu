@@ -7,7 +7,7 @@ with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUI
 
 ## Pick up here
 
-**`main` is green and pushed** (1784 tests with `uv run pytest -q -m 'not live'`, 16 browser
+**`main` is green and pushed** (1786 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
 1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
@@ -41,21 +41,46 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    `CALU_GIT_TOOL` or `git_tool` in `tui.toml` name another program; without gitui the client
    offers to install it (`src/calu/tui/gittool.py`: brew, else the release binary into
    `~/.local/bin`, which was run once into a scratch directory, else the package manager's
-   command, shown and not run when it needs `sudo`). Not yet tried in a real terminal session:
-   pressing `f4`, quitting gitui, and the install offer on a machine without it.
+   command, shown and not run when it needs `sudo`). Tried in a real terminal on 2026-11-12:
+   the install offer on a machine without gitui, and the fallback `git diff` (which showed
+   nothing for a short diff until its pager options were corrected, and now says so when
+   there are no changes). **Not tried: gitui itself** (starting it with `f4` and quitting it);
+   this session was not allowed to download and run the binary.
 3. **Done: the user documentation of the full-screen client** (README "Four ways to work
    with a running session", `CALU_GUIDE.md` "Attached to a session"; the decision is D199).
    It was written from the builders' reports and checked against the command table in
    `src/calu/tui/commands.py`, not against a session in a real terminal: correct it where
    item 4 shows a difference.
-4. **Try the full-screen client against a real Claude Code session** and fix what that shows.
-   It was driven under Textual's test pilot, in tmux against a real session server with the
-   fake runner, and through screenshots; `side.ask` was measured once against the real CLI
-   (`spikes/side_question.py`). The owner has not used it yet. His requirements, to check one
-   by one: scrolling that does not move what is visible when new text arrives; alt+left/right
-   between agents; chatting with a subagent; `/btw`; escalations with a full-screen detail;
-   user input visually distinct; thinking shown; checker instructions readable and editable;
-   the honesty view; `/trust` with a yes/no question; `/honesty off|track|enforce`; `f4`.
+4. **Partly done: the full-screen client against a real Claude Code session.** On
+   2026-11-12 it was driven in tmux (120x36) against a real session (`spikes/smoke_session.py
+   --stay`: a real `claude` on haiku, checkers on Nemotron Lightning, `honesty.mode` track).
+   The owner has not used it yet.
+   - Worked as required: thinking shown; user input set apart (an automatic message of
+     Claude Code, such as a subagent's hand-back, is labelled "automatic message"); a
+     subagent's own tab and alt+left/right; a message to a running **background** subagent
+     (the main agent relays it with SendMessage; a foreground subagent takes none, and the
+     client says so); `/btw` during a running command; an escalation on the card, its
+     full-screen detail (`w w`), allow (`a a`), deny with a note (`n n`, alt+d); scrolling:
+     with the transcript scrolled up a new answer moved none of the visible lines, the marker
+     counted the new lines, End returned; the checkers screen (read); the honesty page with a
+     real review started by `r`; `/trust` (Enter certifies nothing); the mode chooser; `f4`.
+   - Found and fixed: (a) a side question appeared as a third agent and its answer went to
+     the subagent checker, because Claude Code calls the SubagentStop hook for the fork that
+     answers it (`SdkRunner.side_question`, `spikes/RESULTS.md`); (b) `/honesty-review` said
+     only "was asked for", and only when the review had ended; it now says so at once and
+     reports whether a review ran; (c) `f4` without gitui showed nothing for a diff shorter
+     than the screen and for no diff (`gittool.FALLBACK`, `gittool.unstaged_changes`);
+     (d) a subagent tab's first line wrapped when its state was long.
+   - **Not tried:** editing a checker's instructions and `/honesty MODE` with a password
+     (the machine's `admin` credential belongs to the owner's own database, not to the
+     trial's; a wrong password was refused and nothing was stored); gitui itself; `y` on
+     `/trust`; ssh without `COLORTERM`; 80x24; the mouse; `alt+c`; two clients on one
+     escalation; a restart of `calu run` while attached; the items of `docs/TESTING.md` 22
+     to 24 that are not named above.
+   - Seen and left: the detail screen shows "the step as the checker saw it" with its line
+     breaks collapsed into one paragraph; the line client prints an automatic message of
+     Claude Code with the same `> ` as a message of the user (the core records it as
+     automatic, so no checker takes it for user input).
 5. **Done: the user documentation of the honesty redesign** (README "Code honesty";
    `CALU_GUIDE.md` "Code honesty enforcement" with "Verified code, ..." and "Judging the
    checkers before you let them block"). Written from the reports in `docs/notes/` and checked
@@ -67,13 +92,17 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    stays "tool_call" after a human accepts an escalated subagent result; a clock alarm is
    forgotten when its escalation ends without a human decision; a rejected second start drops
    the running session's not yet narrated text.
-7. **Two timing-sensitive tests.**
-   `tests/unit/test_protocol_server.py::test_subscribing_again_does_not_send_an_event_twice`
-   failed once in CI with a `TimeoutError` (run of commit `50ae9ab`) and passes locally.
+7. **Timing-sensitive browser tests.**
    `tests/browser/test_web_ui.py::test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_unsaved`
    failed once inside the full run of `-m 'not live'` (which includes the browser layer when
-   the browser is installed) and passes on its own every time. Find the step that does not
-   wait for the page (probably a navigation after a save) and make it wait for a condition.
+   the browser is installed) and passes on its own every time. On 2026-11-12
+   `tests/browser/test_web_live_ui.py::test_a_question_of_the_agent_is_answered_by_clicking_an_option`
+   and `tests/browser/test_web_login.py::test_the_live_view_attaches_with_the_key` failed once
+   while a second test run used the machine, and passed alone. No failure output was kept, so
+   nothing was changed: the tests assert right after a click or a navigation without waiting
+   for a condition, which is the likely cause. Fixed since: the unit test
+   `test_subscribing_again_does_not_send_an_event_twice`, which failed once in CI, counted
+   pushes that a second subscription may legitimately replace by its replay.
 8. Smaller open work, no decision needed: `herd.close_gone` trusts the hostname alone (below);
    a checker's model and limits live in two stores (below); `cli.py` should become a package.
 9. **Later, not now: plugins for VSCode and the JetBrains IDEs, and a git browser in the web
@@ -133,7 +162,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1784 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1786 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 30 migrations, 21 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

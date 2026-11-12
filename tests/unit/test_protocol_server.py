@@ -722,6 +722,10 @@ async def test_subscribing_again_does_not_send_an_event_twice(tmp_path: Path):
         async with client(run, events) as protocol:
             for number in range(5):
                 await run.server.bus.publish(Log(level="info", message=f"line {number}"))
+            # A second subscription drops what the first one has not pushed yet (those events
+            # are in its replay), so the count below holds only once all five have arrived.
+            # Without this wait the test failed once in CI with five pushes instead of six.
+            await events.wait_for("log", 5)
             replay = await protocol.request("events.subscribe", {"after_seq": 0})
             assert len(replay["events"]) == 5
             await run.server.bus.publish(Log(level="info", message="after"))

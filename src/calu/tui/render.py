@@ -548,7 +548,7 @@ def agent_head(agent: Agent, model: SessionModel, view: View) -> list[Text]:
 
     Returns:
         A line with name, type, background flag and activity, and a line with the task the
-        agent was started with (the prompt of its Agent call), cut to the width.
+        agent was started with (the prompt of its Agent call), each cut to the width.
     """
     palette = view.palette
     activity = model.activity_of(agent)
@@ -558,6 +558,9 @@ def agent_head(agent: Agent, model: SessionModel, view: View) -> list[Text]:
             head.append(f"  ·  {part}", palette.muted)
     head.append("  ·  ", palette.muted)
     head.append(activity, state_style(activity, palette))
+    # A long activity ("checking SubagentHandback") wrapped onto a second line in a real
+    # terminal and pushed the task line down.
+    head.truncate(view.width, overflow="ellipsis")
     call = model.step(agent.key)
     prompt = call.input.get("prompt") if call is not None else None
     task = Text.assemble((" task  ", palette.muted))
