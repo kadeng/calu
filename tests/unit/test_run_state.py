@@ -13,8 +13,6 @@ pytestmark = pytest.mark.anyio
 CARRIED_OVER = {
     "queue",
     "clock_alarm",
-    "store_failures",
-    "stopping",
 }
 """The fields that `RunState.following` keeps; every other field starts from its default."""
 
@@ -48,6 +46,9 @@ async def test_a_new_run_starts_from_the_defaults_except_what_is_carried_over():
                 assert getattr(new, item.name) == getattr(fresh, item.name), item.name
         assert next(new.step_seq) == 1
         assert old.calls and old.session_id == "s1"  # the previous state is not changed
+        # A run stopped after repeated failed writes does not leave the next run without
+        # that stop: the count and the flag start again.
+        assert new.store_failures == 0 and new.stopping is False
 
 
 def test_a_record_is_removed_with_its_last_field():

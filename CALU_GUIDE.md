@@ -852,6 +852,13 @@ not.
 single-file binary can be built with `scripts/build-binary.sh` (70 MiB, no Python needed to run
 it) but is not published yet.
 
+`calu db reset` starts over: it drops every table and creates the database again as a fresh
+`calu setup` leaves it, so sessions, steps, escalations, projects, rules, checker instructions
+and all settings are gone. It asks for the admin password and then for the phrase
+`yes delete the db`, typed by hand: a phrase that arrives in under two seconds (a pipe, a paste,
+an automatic answer) is refused. The stored credentials keep working. Stop running sessions
+first; they lose their rows.
+
 An existing installation gets new schema versions with `calu db migrate` (`calu setup` applies
 them too). **Stop the running sessions first**: migration 0025 changes how a session proves its
 identity to the database, and a session that runs across it loses access to its rows and stops.

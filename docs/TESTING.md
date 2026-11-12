@@ -302,7 +302,12 @@ escalation resolved from the database alone.
    warnings, that auto mode's classifier is NOT active; with `calu config set
    claude.permission_mode auto` the session must report the mode "auto" when it starts.
    `calu doctor` must show an `auto mode` line in both cases.
-21. The full-screen client in a real terminal (`calu attach` beside a `calu run`): in tmux and
+21. Resetting the database: on a scratch database with a project and a rule, run
+   `calu db reset`. It must list what it would delete, ask for the admin password and for the
+   phrase `yes delete the db`. Paste the phrase (it arrives at once): nothing may be deleted.
+   Run it again and type the phrase: `calu project list` is empty afterwards and `calu run`
+   still starts with the stored session credential.
+22. The full-screen client in a real terminal (`calu attach` beside a `calu run`): in tmux and
    over ssh without `COLORTERM` (the verdict words and the state must stay readable in 256
    colours); at 80x24 (`f2` opens the side panel over the transcript); scroll up with PageUp
    and the mouse wheel while Claude writes — the visible lines must not move, `End` returns;
