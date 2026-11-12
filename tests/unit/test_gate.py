@@ -11,6 +11,7 @@ import anyio
 import pytest
 
 import calu.escalations as escalations_module
+import calu.gate as gate_module
 import calu.session as session_module
 from calu.changes import SnapshotError
 from calu.checkers import Step
@@ -222,7 +223,7 @@ async def test_a_check_that_does_not_finish_in_its_budget_escalates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """sg4: one budget for narration, diff and checkers; past it a human is asked."""
-    monkeypatch.setattr(session_module, "GATE_BUDGET_S", 0.2, raising=False)
+    monkeypatch.setattr(gate_module, "GATE_BUDGET_S", 0.2, raising=False)
     session, rec, _store = make_session(tmp_path, [])
     (checker,) = session.checkers[session_module.Route.COMMAND]
 
@@ -419,7 +420,7 @@ async def test_a_held_call_that_outlasts_the_hold_is_checked_but_not_approved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """ga2: the hook cannot wait for ever, so past the hold an approval becomes a question."""
-    monkeypatch.setattr(session_module, "HOLD_BUDGET_S", 0.1, raising=False)
+    monkeypatch.setattr(gate_module, "HOLD_BUDGET_S", 0.1, raising=False)
     session, rec, _store = make_session(tmp_path, [])
     first = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
     async with anyio.create_task_group() as tg:

@@ -42,6 +42,7 @@ phases.
 | `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
 | `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |
+| `src/calu/gate.py` | The decision about one tool call (`StepGate`): rules, routing, commits, running the checkers and combining their verdicts, auto-escalation, the budget; it returns the decision and writes nothing. Every error path ends in ESCALATE |
 | `src/calu/escalations.py` | Escalations of a session (`EscalationDesk`): opening a row, waiting for the decision (client, database, timeout), cancelling, and the hold on other steps while one is open or being opened |
 | `src/calu/run_state.py` | What the session knows about one run (`RunState`) and about one tool call (`PerCall`); a start replaces it, so each run begins from the defaults |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |

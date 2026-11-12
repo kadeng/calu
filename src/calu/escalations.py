@@ -49,7 +49,7 @@ ASK_PENDING_S = 30.0
 """How long a step whose gate verdict was ASK counts as an escalation that is being opened
 (`EscalationDesk.expect_ask`) if `ask` is never called for it. Claude Code calls `ask` right
 after the hook answered, so this only bounds the case where it does not; without the bound such
-a step would hold every later one for `calu.session.HOLD_BUDGET_S`."""
+a step would hold every later one for `calu.gate.HOLD_BUDGET_S`."""
 STORE_DECISION_TIMEOUT_S = 30.0
 """Upper bound for writing a client's decision about an escalation, or the cancellation of an
 escalation, to the database. These writes are shielded from cancellation, so without a bound a
@@ -86,7 +86,7 @@ class Escalation:
     step: Step
     reason: str = ""
     source: str = "checker"
-    """Who escalated: the `source` of the step's `_Decided` ("checker", "policy", "rules",
+    """Who escalated: the `source` of the step's `calu.gate.Decided` ("checker", "policy", "rules",
     "auto", "held", "changeset", "clock", "question", "internal"), or "harness" (Claude Code
     asked by itself, D38), "write_set" or "subagent_result" (the reviews after a step). A
     "question" is the only source that does not hold other steps (`EscalationDesk.holding`)."""

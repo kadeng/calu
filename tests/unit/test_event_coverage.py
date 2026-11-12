@@ -108,8 +108,10 @@ def test_every_advertised_request_has_a_handler() -> None:
 
 def test_every_route_is_handled_by_the_session() -> None:
     """A route the session does not act on would send a step nowhere."""
+    import calu.gate as gate_module
     from calu.checkers.policy import Route
 
-    source = inspect.getsource(session_module)
+    # The decision about a step, and with it the routing, is in `calu.gate`.
+    source = inspect.getsource(session_module) + inspect.getsource(gate_module)
     unused = [route.value for route in Route if f"Route.{route.name}" not in source]
     assert unused == [], f"routes the session never acts on: {', '.join(unused)}"

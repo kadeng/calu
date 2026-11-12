@@ -497,14 +497,14 @@ async def test_a_backward_clock_jump_escalates_the_next_step_and_then_clears(tmp
     assert "backwards by 42.0 s" in logs[-1].message
 
     step = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
-    first = await session._decide(step, None)
+    first = await session.gate.judge(step, None)
     assert first.decision.decision is Decision.ESCALATE
     assert first.source == "clock"
     assert "moved" in first.decision.reason and "which step changed which file" in (
         first.decision.reason
     )
     # The answer to that escalation is the answer to the jump, so the next step is normal again.
-    second = await session._decide(step, None)
+    second = await session.gate.judge(step, None)
     assert second.decision.decision is not Decision.ESCALATE or second.source != "clock"
 
 
@@ -514,7 +514,7 @@ async def test_a_forward_clock_jump_is_only_reported(tmp_path: Path):
     logs = [event for event in rec.of(Log) if "clock" in event.message]
     assert logs and logs[-1].level == "warning" and "not an escalation" in logs[-1].message
     step = Step(tool_name="Read", tool_input={"file_path": "a.txt"}, cwd=str(tmp_path))
-    decided = await session._decide(step, None)
+    decided = await session.gate.judge(step, None)
     assert decided.source != "clock"
 
 
