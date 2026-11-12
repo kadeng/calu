@@ -689,3 +689,19 @@ def test_odd_paths_do_not_crash_the_rules(tmp_path: Path) -> None:
     ]
     for tool, inp in named:
         assert rules.evaluate(Step(tool_name=tool, tool_input=inp, cwd=str(tmp_path))).ask, tool
+
+
+def test_a_diff_that_changes_a_protected_file_asks_when_applied(tmp_path: Path) -> None:
+    """D169: `patch < fix.diff` and `git apply fix.diff` write the files the diff names, which
+    the command line does not show; `grep -r x src/*` already reaches its files (D147)."""
+    (tmp_path / "evil.diff").write_text(
+        "--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -1 +1 @@\n-a\n+b\n", encoding="utf-8"
+    )
+    (tmp_path / "fine.diff").write_text(
+        "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n", encoding="utf-8"
+    )
+    rules = default_rules(tmp_path)
+    for command in ("patch -p1 < evil.diff", "patch -p1 -i evil.diff", "git apply evil.diff"):
+        assert rules.evaluate(bash(command, str(tmp_path))).ask, command
+    assert not rules.evaluate(bash("git apply fine.diff", str(tmp_path))).ask
+    assert not rules.evaluate(bash("patch -p1 < missing.diff", str(tmp_path))).ask

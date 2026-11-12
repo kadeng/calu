@@ -337,6 +337,11 @@ class Rules:
                 )
                 for line in command.splitlines():
                     self._deny_command(line.strip(), outcome)
+            for target in diff_targets(command, cwd):
+                # `patch < x.diff` and `git apply x.diff` write the files the diff names, which
+                # the command line does not show (D169).
+                if not self._check_path(target, "write", "file changed by the diff", outcome):
+                    all_allowed = False
             for literal in inline_code_paths(command):
                 # A path written into an interpreter's inline code is read like an argument
                 # (D167); without this `node -e "...readFileSync('.env')"` never met the read
@@ -867,3 +872,76 @@ def _absolute(text: str, cwd: Path) -> Path | None:
         return (path if path.is_absolute() else cwd / path).resolve()
     except OSError, RuntimeError, ValueError:
         return None
+
+
+DIFF_LIMIT = 1_000_000
+"""Most bytes of a diff file read to find the files it changes."""
+
+_DIFF_TARGET = re.compile(
+    r"^(?:\+\+\+|---) (?:[ab]/)?(\S+)|^diff --git a/\S+ b/(\S+)|^rename to (\S+)"
+)
+
+
+def diff_targets(command: str, cwd: Path) -> list[Path]:
+    """Return the files that `patch` or `git apply` in `command` would change (PLAN.md D169).
+
+    `patch -p1 < fix.diff` writes the files named inside the diff, not on the command line, so
+    the write lists never saw `CLAUDE.md` or `.git/hooks/pre-commit` in it. The diff file is
+    read (it exists before the command runs; at most `DIFF_LIMIT` bytes) and every target of a
+    `+++`, `---`, `diff --git` or `rename to` line is returned, with `a/`/`b/` dropped.
+
+    Side effects: reads the diff files named by `-i FILE`, `--input=FILE`, `< FILE` (for
+    `patch`) and the file arguments of `git apply`.
+
+    Args:
+        command: The command as Claude wrote it.
+        cwd: The directory it runs in.
+
+    Returns:
+        Absolute target paths, without duplicates; [] when the diff cannot be read, which
+        leaves the step to the checker as before.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return []
+    diffs: list[str] = []
+    for index, word in enumerate(words):
+        base = os.path.basename(word)
+        segment = []
+        for later in words[index + 1 :]:
+            if later in ("&&", "||", "|", ";"):
+                break
+            segment.append(later)
+        if base == "patch":
+            for i, part in enumerate(segment):
+                if part in ("-i", "--input", "<") and i + 1 < len(segment):
+                    diffs.append(segment[i + 1])
+                elif part.startswith("--input="):
+                    diffs.append(part.partition("=")[2])
+                elif part.startswith("<") and len(part) > 1:
+                    diffs.append(part[1:])
+        elif base == "git" and "apply" in segment:
+            after = segment[segment.index("apply") + 1 :]
+            diffs += [part for part in after if not part.startswith("-")]
+    targets: list[Path] = []
+    for name in diffs:
+        source = _absolute(name, cwd)
+        if source is None or not source.is_file():
+            continue
+        try:
+            with open(source, encoding="utf-8", errors="replace") as handle:
+                text = handle.read(DIFF_LIMIT)
+        except OSError:
+            continue
+        for line in text.splitlines():
+            match = _DIFF_TARGET.match(line)
+            if match is None:
+                continue
+            raw = next(group for group in match.groups() if group)
+            if raw == "/dev/null":
+                continue
+            target = _absolute(raw, cwd)
+            if target is not None and target not in targets:
+                targets.append(target)
+    return targets
