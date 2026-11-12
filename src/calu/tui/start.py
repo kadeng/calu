@@ -94,7 +94,8 @@ def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = 
     """Run the full-screen client until the user detaches or the session closes the connection.
 
     Blocks, and takes over the terminal while it runs. The session keeps running when the
-    client ends.
+    client ends. The settings come from `tui.toml` (`calu.tui.settings`); the environment
+    variable `CALU_TUI_THEME` overrides the theme, and `NO_COLOR` draws without colours.
 
     Args:
         address: The address `calu run` printed (`ws://host:port` or `unix:<path>`).
@@ -109,14 +110,24 @@ def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = 
         OSError: If the address cannot be reached.
         calu.protocol.client.RequestFailed: If the session refuses the token.
     """
+    from calu.tui import settings
     from calu.tui.app import CaluApp, TuiOptions
     from calu.tui.connection import protocol_connector
     from calu.tui.theme import DARK
 
+    path = settings.config_path()
+    stored = settings.load(path)
     options = TuiOptions(
         after_seq=after_seq,
-        show_thinking=show_thinking,
-        theme=os.environ.get("CALU_TUI_THEME") or DARK,
+        show_thinking=show_thinking and stored.thinking,
+        theme=os.environ.get("CALU_TUI_THEME") or stored.theme or DARK,
+        bell=stored.bell,
+        toasts=stored.toasts,
+        panel_width=stored.panel_width,
+        keys=stored.keys,
+        settings_path=path,
+        history_path=settings.history_path(),
+        problems=stored.problems,
     )
     app = CaluApp(protocol_connector(address, token), options)
     app.run()

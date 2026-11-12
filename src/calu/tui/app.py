@@ -23,8 +23,9 @@ whatever the composer holds.
 
 import time
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
+from pathlib import Path
 from typing import Any, ClassVar
 
 from rich.markdown import Markdown
@@ -36,14 +37,17 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static
 
 from calu.acp.modes import LADDER
-from calu.tui import render
+from calu.tui import completion, render, settings
 from calu.tui.actions import Actions, Outcome
 from calu.tui.capabilities import CAPABILITIES, Capabilities
 from calu.tui.commands import COMMANDS, CaluCommands, by_slash, completions
 from calu.tui.connection import Connector, Link
+from calu.tui.difftools import unified_text
+from calu.tui.export import transcript_markdown
 from calu.tui.model import (
     ALL,
     MAIN,
+    Block,
     Change,
     Decision,
     SessionModel,
@@ -51,10 +55,12 @@ from calu.tui.model import (
     TextBlock,
     TurnEndBlock,
 )
-from calu.tui.screens.detail import DetailScreen
+from calu.tui.screens.confirm import ConfirmScreen
+from calu.tui.screens.detail import DetailScreen, proposed_diffs
+from calu.tui.screens.diff import DiffScreen
 from calu.tui.screens.text import TextScreen
 from calu.tui.theme import CALU_DARK, CALU_LIGHT, DARK, Palette, palette_for
-from calu.tui.widgets.chrome import AgentTabs, Line, Lines, NewBelow, Picked
+from calu.tui.widgets.chrome import AgentTabs, Line, Lines, NewBelow, PanelList, Picked
 from calu.tui.widgets.composer import Composer
 from calu.tui.widgets.transcript import Transcript
 
@@ -91,6 +97,30 @@ class TuiOptions:
     theme: str = DARK
     bell: bool = True
     """Ring the terminal bell when a new decision waits."""
+    toasts: bool = True
+    """Show a short notice for what happened elsewhere (a decision by another client, a
+    warning of the session, a changed supervision level)."""
+    panel_width: int = 36
+    """Columns of the side panel on a wide terminal."""
+    keys: dict[str, str] = field(default_factory=dict)
+    """Binding id -> the keys that replace its default (`[keys]` of `tui.toml`)."""
+    settings_path: Path | None = None
+    """Where `/theme`, `/bell` and `alt+t` store their choice; None stores nothing."""
+    history_path: Path | None = None
+    """Where the sent texts are kept between runs; None keeps them for this run only."""
+    history: bool = True
+    """Whether the stored history of the session is shown above the replayed events."""
+    problems: list[str] = field(default_factory=list)
+    """What was wrong with the settings file; shown once after the start."""
+
+
+@dataclass
+class Ask:
+    """A yes-or-no question shown in the composer's header until `y`, `n` or Escape."""
+
+    prompt: str
+    yes: Callable[[], None]
+    no: Callable[[], None] | None = None
 
 
 def _digit_bindings() -> list[BindingType]:
@@ -140,6 +170,9 @@ class CaluApp(App[None]):
         Binding("alt+w", "command('detail')", show=False, priority=True, id="detail"),
         Binding("alt+t", "command('thinking')", show=False, priority=True, id="thinking"),
         Binding("alt+c", "command('copy')", show=False, priority=True, id="copy"),
+        Binding("ctrl+f", "command('search')", show=False, priority=True, id="search"),
+        Binding("alt+h", "command('hold')", show=False, priority=True, id="hold"),
+        Binding("alt+e", "command('expand')", show=False, priority=True, id="expand"),
         *_digit_bindings(),
     ]
 
@@ -165,11 +198,26 @@ class CaluApp(App[None]):
         self.clock = clock
         self.live = live
         self.model = SessionModel()
-        self.link = Link(connector, self.model, self._changed, clock, self.options.after_seq)
+        self.link = Link(
+            connector,
+            self.model,
+            self._changed,
+            clock,
+            self.options.after_seq,
+            history=self.options.history,
+        )
         self.actions = Actions(self.link, self.model)
         self.palette: Palette = palette_for({})
         self.mode = "chat"
-        """What Enter does with the composer's text: chat, note, answer or side."""
+        """What Enter does with the composer's text: chat, note, answer, side or search."""
+        self.ask: Ask | None = None
+        """A yes-or-no question that waits for `y` or `n`; None otherwise."""
+        self.held: list[str] = []
+        """Drafts kept in this client, sent one per idle moment of the session; they are not
+        part of the session's queue and are lost when the client ends."""
+        self.next_model: str | None = None
+        """The model the next start asks for (`/model` while the session is stopped)."""
+        self._was_working = False
         self.target = MAIN
         """The agent a chat message goes to: `MAIN` or a running background subagent."""
         self.delivery = "queued"
@@ -209,7 +257,7 @@ class CaluApp(App[None]):
                 yield NewBelow("", id="new-below")
                 yield Lines(id="card")
             with VerticalScroll(id="side"):
-                yield Lines(id="panel-lines")
+                yield PanelList(id="panel-lines")
                 yield Lines(id="side-lines")
         yield Line("", id="composer-head")
         with Horizontal(id="composer-row"):
@@ -224,12 +272,24 @@ class CaluApp(App[None]):
         self.transcript.thinking_open = self.options.show_thinking
         self.composer.intercept = self._composer_key
         self.composer.cursor_blink = self.live
+        if self.options.history_path is not None:
+            self.composer.sent = settings.load_history(self.options.history_path)
+        if self.options.keys:
+            known = {binding.id for binding in self.BINDINGS if isinstance(binding, Binding)}
+            unknown = sorted(set(self.options.keys) - known)
+            if unknown:
+                self.options.problems.append(
+                    f"tui.toml: no binding is called {', '.join(unknown)} (f1 lists the ids)"
+                )
+            self.set_keymap({k: v for k, v in self.options.keys.items() if k in known})
         self._apply_theme(self.options.theme)
         self._breakpoints()
         self.run_worker(self._run_link(), name="link", group="link", exit_on_error=False)
         if self.live:
             self.set_interval(1.0, self._second)
         self.render_all()
+        if self.options.problems:
+            self.flash(" · ".join(self.options.problems), error=True)
 
     async def _run_link(self) -> None:
         """Keep the connection until the user detaches; leave the app if it never opened."""
@@ -292,6 +352,7 @@ class CaluApp(App[None]):
         self.palette = palette_for(self.get_css_variables())
         self.transcript.palette = self.palette
         self.transcript.dark = self.current_theme.dark
+        self.query_one("#panel-lines", PanelList).highlight = f"on {self.palette.user_bg}"
         self.transcript.rebuild()
         self.render_all()
 
@@ -301,6 +362,11 @@ class CaluApp(App[None]):
         self.set_class(self.size.height < TALL, "-short")
         self.set_class(self.panel_open, "-panel")
         self.set_class(self.side_open, "-side")
+        side = self.query_one("#side")
+        if self.size.width >= WIDE:
+            side.styles.width = self.options.panel_width + (10 if self.side_open else 0)
+        else:
+            side.styles.width = None
         self.composer.max_lines = 3 if self.size.height < TALL else 8
         self.composer.fit()
 
@@ -351,8 +417,9 @@ class CaluApp(App[None]):
             self._usage_asked = True
             self._spawn(self._refresh_usage())
         self._check_target()
+        self._send_held()
         self.render_all()
-        for notice in change.notices:
+        for notice in change.notices if self.options.toasts else ():
             self.notify(notice.text, severity=notice.severity)  # type: ignore[arg-type]
         if change.bell and self.options.bell:
             self.bell()
@@ -454,10 +521,19 @@ class CaluApp(App[None]):
         decision = self.current_decision()
         card.set_class(decision is not None, "-shown")
         card.set_class(decision is not None and decision.is_question, "-question")
+        stopped = decision is None and self.model.state in {"stopped", "failed"}
+        card.set_class(decision is not None or stopped, "-shown")
         if decision is None:
             if self.armed:
                 self.disarm()
-            card.show([])
+            width = max(30, self.query_one("#main").size.width - 6)
+            card.show(
+                render.start_card_lines(
+                    self.model, self.view(width), self.next_model, self.next_effort
+                )
+                if stopped
+                else []
+            )
             return
         waiting = list(self.model.decisions)
         position = (waiting.index(decision.escalation_id) + 1, len(waiting))
@@ -474,13 +550,16 @@ class CaluApp(App[None]):
     def _render_panel(self) -> None:
         """Draw the supervision panel."""
         selected = self.current_decision()
+        panel = self.query_one("#panel-lines", PanelList)
         lines, targets = render.panel_lines(
             self.model,
             self.view(self._side_width()),
             self.capabilities,
             selected.escalation_id if selected else None,
+            self.held,
+            panel.has_focus,
         )
-        self.query_one("#panel-lines", Lines).show(lines, targets)
+        panel.show(lines, targets)
 
     def _side_width(self) -> int:
         """Return the width of the inside of the side column.
@@ -490,7 +569,7 @@ class CaluApp(App[None]):
         """
         if self.size.width < WIDE:
             return min(44, self.size.width * 9 // 10) - 4
-        return (46 if self.side_open else 36) - 4
+        return self.options.panel_width + (10 if self.side_open else 0) - 4
 
     def _render_side(self) -> None:
         """Draw the side questions and scroll to the newest one."""
@@ -533,6 +612,18 @@ class CaluApp(App[None]):
             The text of the composer's header for the current mode.
         """
         decision = self.current_decision()
+        if self.ask is not None:
+            return f"{self.ask.prompt}  y yes · n no · esc cancels"
+        if self.mode == "search":
+            transcript = self.transcript
+            if not transcript.needle:
+                return "search the transcript · type the text · esc ends"
+            if not transcript.matches:
+                return "search: no line contains this · esc ends"
+            return (
+                f"search: match {transcript.match + 1} of {len(transcript.matches)} · "
+                "enter or ↑ older · ↓ newer · esc ends"
+            )
         if self.model.connection.status in {"detached", "reconnecting"}:
             return "not attached: sending is off, the text is kept"
         if self.mode == "note":
@@ -562,19 +653,34 @@ class CaluApp(App[None]):
         palette = self.palette
         text = self.composer.text
         line = Text()
-        if self.message:
+        if self.ask is not None:
+            line.append(self.mode_text(), f"bold {palette.orange}")
+        elif self.message:
             line.append(
                 self.message, f"bold {palette.red}" if self.message_error else palette.orange
             )
-        elif text.startswith("/") and " " not in text and "\n" not in text:
+        elif text.startswith("/") and " " not in text and "\n" not in text and self.ask is None:
             found = completions(text)
             line.append(
                 "  ".join(found[:8]) or "no such command (/help lists them)", palette.accent
             )
             if found:
                 line.append("  · tab completes", palette.faint)
+        elif self.ask is None and (paths := self._path_completions()) is not None:
+            if paths[1]:
+                line.append("  ".join(paths[1][:6]), palette.accent)
+                more = len(paths[1]) - 6
+                line.append(f"  +{more} more" if more > 0 else "", palette.faint)
+                line.append("  · tab completes", palette.faint)
+            elif not completion.complete_path(self.model.workspace, ""):
+                line.append(
+                    "@ completes project paths only where the project directory is on this machine",
+                    palette.faint,
+                )
+            else:
+                line.append("no project path starts like this", palette.faint)
         else:
-            special = self.mode != "chat" or self.target != MAIN
+            special = self.mode != "chat" or self.target != MAIN or self.ask is not None
             line.append(self.mode_text(), f"bold {palette.accent}" if special else palette.muted)
             if self.mode == "chat" and len(self._send_modes()) > 1:
                 line.append("  · tab changes", palette.faint)
@@ -589,15 +695,39 @@ class CaluApp(App[None]):
         parts: list[tuple[int, str, str]] = []
         if self._escape_at is not None:
             parts.append((9, "esc", "again to interrupt"))
-        if self.focused is self.transcript:
+        if self.ask is not None:
+            parts += [(9, "y", "yes"), (9, "n", "no"), (9, "esc", "cancel")]
+        elif self.mode == "search":
+            parts += [(9, "enter ↑", "older"), (9, "↓", "newer"), (9, "esc", "end search")]
+        elif self.focused is self.transcript:
             parts += [
                 (9, "j k", "move"),
                 (9, "enter", "expand"),
                 (8, "e", "next waiting"),
+                (8, "D", "diff"),
+                (7, "/", "search"),
+                (6, "i", "agent task"),
                 (7, "t", "thinking"),
                 (7, "c", "copy"),
                 (9, "esc", "back to input"),
             ]
+        elif isinstance(self.focused, PanelList):
+            kind = self.focused.cursor[0] if self.focused.cursor else ""
+            parts.append((9, "j k", "move"))
+            parts += {
+                "decision": [(9, "enter", "show on the card")],
+                "agent": [(9, "enter", "show its tab"), (8, "i", "its task")],
+                "queue": [
+                    (9, "enter", "whole text"),
+                    (8, "c", "copy"),
+                    (8, "r", "reuse in the input"),
+                ],
+                "held": [(9, "enter", "edit"), (9, "s", "send now"), (9, "d", "delete")],
+                "mark": [(9, "enter", "detail"), (9, "x", "clear mark")],
+            }.get(kind, [])
+            parts.append((9, "esc", "back to input"))
+        elif decision is None and self.model.state in {"stopped", "failed"} and not typed:
+            parts += [(9, "enter", "start the session")]
         elif self.armed:
             parts.append((9, self.armed[0], f"again to {self.armed}"))
         elif decision is not None and decision.is_question:
@@ -606,13 +736,13 @@ class CaluApp(App[None]):
             parts += [(9, "alt+a", "allow"), (9, "alt+d", "deny"), (9, "alt+w", "detail")]
         elif decision is not None:
             parts += [(9, "a a", "allow"), (9, "d d", "deny"), (8, "n", "note"), (9, "w", "detail")]
+        stopped = self.model.state in {"stopped", "failed"}
         if self.model.working():
             parts += [(5, "esc esc", "interrupt"), (3, "tab", "send mode")]
-        else:
+        elif (not stopped or typed) and self.mode != "search" and self.ask is None:
             parts += [(5, "enter", "send"), (1, "^j", "newline")]
         parts += [(7, "alt+←/→", "agent"), (4, "pgup/pgdn", "scroll"), (6, "f3", "side question")]
-        if self.size.width < WIDE:
-            parts.append((6, "f2", "panel"))
+        parts.append((6 if self.size.width < WIDE else 3, "f2", "panel"))
         parts += [(8, "^p", "palette"), (8, "f1", "help"), (2, "^d", "detach")]
 
         def length() -> int:
@@ -693,20 +823,117 @@ class CaluApp(App[None]):
         """
         if message.kind == "agent":
             self.select_tab(message.key)
-        elif message.kind == "decision":
-            self.selected = message.key
-            self.disarm()
-            self.render_all()
         elif message.kind == "follow":
             self.transcript.follow()
         self.composer.focus()
 
-    def on_descendant_focus(self) -> None:
-        """Show the keys of the widget that got the focus."""
+    def on_panel_list_moved(self) -> None:
+        """Show the keys of the entry the panel's cursor went to."""
         self._render_footer()
 
+    def on_panel_list_act(self, message: PanelList.Act) -> None:
+        """Carry out a key pressed on an entry of the side panel.
+
+            decision   enter shows it on the card
+            agent      enter or m shows its tab (and aims the composer at it if it takes
+                       messages); i shows the task it was given and its result
+            queue      enter shows the whole text, c copies it, r copies it into the composer
+            held       enter or e moves the draft back into the composer, s sends it now,
+                       d deletes it
+            mark       enter shows the mark in full, x clears it after a yes
+
+        Args:
+            message: The entry and the key.
+        """
+        kind, key, pressed = message.kind, message.key, message.pressed
+        if kind == "decision" and pressed == "enter":
+            self.selected = key
+            self.disarm()
+            self.composer.focus()
+        elif kind == "agent" and pressed in {"enter", "m"}:
+            self.select_tab(key)
+            self.composer.focus()
+        elif kind == "agent" and pressed == "i":
+            self.run_command("agent_info", key)
+        elif kind == "queue":
+            entry = next((queued for queued in self.model.queue if queued.id == key), None)
+            if entry is None:
+                return
+            if pressed == "enter":
+                to = self.model.label(None if entry.to == MAIN else entry.to)
+                how = "after the running tool calls" if entry.delivery == "inject" else "next turn"
+                self._page(
+                    f"Queued message to {to} ({how}) · Claude has not read it yet",
+                    [Text(row, self.palette.fg) for row in entry.text.splitlines()],
+                )
+            elif pressed == "c":
+                self.copy_to_clipboard(entry.text)
+                self.flash("queued message copied")
+            elif pressed == "r":
+                self.composer.set_text(entry.text)
+                self.composer.focus()
+                self.flash(
+                    "copied into the input; the queued message stays queued: "
+                    + str(self.capabilities.reason("queue_withdraw"))
+                )
+        elif kind == "held" and key.isdigit() and int(key) < len(self.held):
+            index = int(key)
+            if pressed in {"enter", "e", "r"}:
+                self.composer.set_text(self.held.pop(index))
+                self.composer.focus()
+                self.flash("the draft is back in the input and no longer held")
+            elif pressed == "d":
+                del self.held[index]
+                self.flash("draft deleted")
+            elif pressed == "s":
+                text = self.held.pop(index)
+                self._spawn(self._send(text, MAIN, "queued"))
+        elif kind == "mark":
+            mark = next((entry for entry in self.model.marks if str(entry.id) == key), None)
+            if mark is None:
+                return
+            spot = f"{mark.path}:{mark.symbol}" if mark.symbol else mark.path
+            if pressed == "enter":
+                rows = [
+                    ("mark", str(mark.id)),
+                    ("where", spot),
+                    ("branch", mark.git_branch or "not recorded"),
+                    ("mode", self.model.honesty_mode),
+                ]
+                body = [
+                    Text.assemble((f"{name:<8}", self.palette.muted), (value, self.palette.fg))
+                    for name, value in rows
+                ]
+                body += [Text(""), *render.wrap(Text(mark.reason, self.palette.fg), 90)]
+                body += [
+                    Text(""),
+                    Text(
+                        "The checker closes the mark when name and documentation fit the code "
+                        f"again. /clear-mark {mark.id} closes it by hand.",
+                        self.palette.muted,
+                    ),
+                ]
+                self._page("Honesty mark", body)
+            elif pressed == "x":
+                self._ask(
+                    f"clear the honesty mark on {render.cut(spot, 40)}?",
+                    partial(self.run_command, "clear_mark", key),
+                )
+        self.render_all()
+
+    def on_descendant_focus(self) -> None:
+        """Show the keys of the widget that got the focus, and the panel's hints with it."""
+        self._render_footer()
+        self._render_panel()
+
+    def on_descendant_blur(self) -> None:
+        """Draw the panel without its hints once it has lost the focus."""
+        self.call_after_refresh(self._render_panel)
+
     def on_text_area_changed(self) -> None:
-        """Redraw header and footer when the composer's text changes."""
+        """Redraw header and footer when the composer's text changes; search as it is typed."""
+        if self.mode == "search":
+            self.transcript.search(self.composer.text.strip())
         self._render_head()
         self._render_footer()
 
@@ -723,8 +950,15 @@ class CaluApp(App[None]):
         """
         if len(self.screen_stack) > 1 or self.focused is self.composer:
             return
-        in_transcript = {"t": "thinking", "c": "copy", "w": "detail"}
-        if self.focused is self.transcript and event.key in in_transcript:
+        in_transcript = {
+            "t": "thinking",
+            "c": "copy",
+            "w": "detail",
+            "D": "diff",
+            "i": "agent_info",
+            "slash": "search",
+        }
+        if self.focused is self.transcript and event.key in in_transcript and self.ask is None:
             event.stop()
             self.run_command(in_transcript[event.key])
             return
@@ -760,6 +994,7 @@ class CaluApp(App[None]):
             "decide",
             "tab_number",
             "command",
+            "detach",
         }
         if action in own and len(self.screen_stack) > 1:
             return (
@@ -791,6 +1026,21 @@ class CaluApp(App[None]):
         if self.message:
             self.message = ""  # a message stays until the next key
             self._render_head()
+        if self.ask is not None:
+            ask = self.ask
+            if key in {"y", "n"}:
+                self.ask = None
+                chosen = ask.yes if key == "y" else ask.no
+                if chosen is not None:
+                    chosen()
+                self.render_all()
+            return True
+        if self.mode == "search":
+            if key in {"up", "down"}:
+                self.transcript.search_step(-1 if key == "up" else 1)
+                self._render_head()
+                return True
+            return False
         if self.armed:
             letter = self.armed[0]
             if key == letter:
@@ -811,6 +1061,9 @@ class CaluApp(App[None]):
             return True
         if key == "question_mark":
             self.run_command("help")
+            return True
+        if key == "up" and self.held and not composer.sent:
+            self.query_one("#panel-lines", PanelList).focus()
             return True
         decision = self.current_decision()
         if decision is None or self.mode != "chat":
@@ -924,7 +1177,7 @@ class CaluApp(App[None]):
         if decision is None:
             return
         if self.mode == "note":
-            decision.note = self.composer.text.strip()
+            decision.note = self.composer.value.strip()
             self.mode = "chat"
             self.composer.set_text("")
         self._spawn(self._decide(decision.escalation_id, wanted, decision.note))
@@ -964,7 +1217,41 @@ class CaluApp(App[None]):
             self.armed, self.armed_for = wanted, decision.escalation_id
             self.render_all()
             return
+        typed = self.composer.value.strip()
+        if self.mode == "chat" and typed and not typed.startswith("/") and not decision.is_question:
+
+            def with_note() -> None:
+                """Decide with the composer's text as the note for Claude."""
+                current = self.current_decision()
+                if current is not None:
+                    current.note = typed
+                    self.composer.set_text("")
+                    self.decide_now(wanted)
+
+            self._ask(
+                f"send the text in the input as a note with the {wanted}?",
+                with_note,
+                partial(self.decide_now, wanted),
+            )
+            return
         self.decide_now(wanted)
+
+    def _ask(
+        self, prompt: str, yes: Callable[[], None], no: Callable[[], None] | None = None
+    ) -> None:
+        """Ask a yes-or-no question in the composer's header.
+
+        The next `y` or `n` answers it and is not typed; Escape cancels it. Every other key is
+        ignored while the question is open, so that an answer is never given by accident.
+
+        Args:
+            prompt: The question.
+            yes: Called for `y`.
+            no: Called for `n`; None does nothing.
+        """
+        self.ask = Ask(prompt, yes, no)
+        self.composer.focus()
+        self.render_all()
 
     def on_composer_submitted(self, message: Composer.Submitted) -> None:
         """Handle Enter in the composer according to the mode.
@@ -975,6 +1262,12 @@ class CaluApp(App[None]):
         text = message.text.strip()
         composer = self.composer
         decision = self.current_decision()
+        if self.ask is not None:
+            return
+        if self.mode == "search":
+            self.transcript.search_step(-1)
+            self._render_head()
+            return
         if self.mode == "note":
             if decision is not None:
                 decision.note = text
@@ -999,8 +1292,10 @@ class CaluApp(App[None]):
                 self.flash(f"{decision.answered()} of {len(decision.questions)} questions answered")
             elif decision is not None:
                 self.jump_to(decision)
+            elif self.model.state in {"stopped", "failed"}:
+                self.run_command("start")
             return
-        composer.remember(message.text)
+        self._remember(message.text)
         if self.mode == "side":
             composer.set_text("")
             self._spawn(self._ask_side(text))
@@ -1131,6 +1426,18 @@ class CaluApp(App[None]):
             if found:
                 self.composer.set_text(found[0] + " ")
             return
+        paths = self._path_completions()
+        if paths is not None:
+            (row, start, column), found = paths
+            if found:
+                grown = found[0] if len(found) == 1 else completion.common_prefix(found)
+                self.composer.replace(
+                    grown + ("" if grown.endswith("/") or len(found) > 1 else " "),
+                    (row, start + 1),
+                    (row, column),
+                )
+                self._render_head()
+            return
         if self.mode != "chat":
             return
         modes = self._send_modes()
@@ -1148,7 +1455,8 @@ class CaluApp(App[None]):
         if not text.strip() or self.mode != "chat":
             return
         other = "queued" if self.delivery == "inject" else "inject"
-        self.composer.remember(text)
+        text = self.composer.value
+        self._remember(text)
         self.composer.set_text("")
         self._spawn(self._send(text, MAIN, other))
 
@@ -1185,13 +1493,20 @@ class CaluApp(App[None]):
     def action_escape(self) -> None:
         """Step back once: cancel, close, return to the composer, or count towards an interrupt.
 
-        In this order: forget a first decision key; leave note or answer mode; close the side
+        In this order: cancel a yes-or-no question; forget a first decision key; end a search;
+        leave note or answer mode; close the side
         questions; close the side panel on a narrow screen; return the focus to the composer;
         and while the session works, a second Escape within `DOUBLE_ESCAPE_S` interrupts the
         turn.
         """
-        if self.armed:
+        if self.ask is not None:
+            self.ask = None
+        elif self.armed:
             self.disarm()
+        elif self.mode == "search":
+            self.mode = "chat"
+            self.transcript.search("")
+            self.composer.set_text("")
         elif self.mode in {"note", "answer"}:
             self.mode = "chat"
             self.composer.set_text("")
@@ -1202,6 +1517,7 @@ class CaluApp(App[None]):
         elif self.panel_open:
             self.panel_open = False
             self._breakpoints()
+            self.composer.focus()
         elif self.focused is not self.composer:
             self.composer.focus()
         elif self.model.working():
@@ -1222,7 +1538,19 @@ class CaluApp(App[None]):
         self._render_footer()
 
     def action_detach(self) -> None:
-        """Leave the client; the session keeps running."""
+        """Leave the client; the session keeps running.
+
+        Drafts that are still held would be lost, so with held drafts the client asks first.
+        """
+        if self.held and self.ask is None and len(self.screen_stack) == 1:
+            count = len(self.held)
+            what = "1 held draft is" if count == 1 else f"{count} held drafts are"
+            self._ask(f"{what} not sent and will be lost: detach?", self._leave)
+            return
+        self._leave()
+
+    def _leave(self) -> None:
+        """Close the connection and end the app."""
         self.link.detach()
         self.exit()
 
@@ -1554,70 +1882,231 @@ class CaluApp(App[None]):
         self._request(self.actions.stop(), "the session stopped (/start starts it again)")
 
     def _cmd_start(self, rest: str) -> None:
-        """Start the session, or resume a stored one (`/start [resume id]`).
+        """Start the session, or resume a stored one (`/start [resume id | new]`).
+
+        The start uses the model and the effort chosen with `/model` and `/effort` since the
+        session stopped. A running session is not started again: with an id it is stopped
+        and resumed with that conversation after a confirmation (`_resume`).
 
         Args:
-            rest: A Claude session id to resume; empty resumes the conversation of this
-                session if it has one.
+            rest: A Claude session id to resume, or `new` for a new conversation; empty
+                resumes the conversation of this session if it has one.
         """
-        resume = rest or self.model.claude_session_id
-        self._request(self.actions.start(resume, effort=self.next_effort), "the session starts")
-        self.next_effort = None
+        running = self.model.state not in {"stopped", "failed"}
+        if running and rest and rest != "new":
+            self._resume(rest)
+            return
+        resume = None if rest == "new" else (rest or self.model.claude_session_id)
+        other = resume != self.model.claude_session_id
+        self._spawn(self._restart(resume, self.next_model, self.next_effort, reload=other))
 
     def _cmd_shutdown(self, rest: str) -> None:
-        """Shut down calu after a typed confirmation (`/shutdown confirm`).
+        """Shut down calu after a typed confirmation (`/shutdown`, or `/shutdown confirm`).
 
         Args:
-            rest: Must be `confirm`.
+            rest: `confirm` shuts down at once; empty asks to type the word `shutdown`.
         """
-        if rest != "confirm":
-            self.flash(
-                "this ends the calu process and the session: type /shutdown confirm", error=True
-            )
-        else:
+        if rest == "confirm":
             self._request(self.actions.shutdown(), "calu shuts down")
+            return
+
+        def answered(confirmed: bool | None) -> None:
+            """Shut down if the word was typed.
+
+            Args:
+                confirmed: The answer of the confirmation screen.
+            """
+            if confirmed:
+                self._request(self.actions.shutdown(), "calu shuts down")
+
+        self.push_screen(
+            ConfirmScreen(
+                "Shut down calu?",
+                [
+                    "the calu process of this session ends, and with it Claude's session",
+                    "the running turn, its tool calls, background tasks and subagents end",
+                    "steps that wait for a decision are cancelled",
+                    "calu run has to be started again in the project directory",
+                ],
+                self.palette,
+                typed="shutdown",
+            ),
+            answered,
+        )
 
     def _cmd_model(self, rest: str) -> None:
         """Change the model, or list the models to choose from (`/model [name]`).
 
+            session runs, it can change the model   the model changes from Claude's next step
+            session runs, it cannot                 stop and resume with it, after a yes
+            session stopped                         the model is set for the start (Enter)
+
         Args:
             rest: An alias or a model id; empty opens the list.
         """
-        if rest:
-            self._request(self.actions.set_model(rest))
-            return
         running = self.model.state not in {"stopped", "failed"}
-        if running and not self.capabilities.has("live_model_change"):
-            self.flash(str(self.capabilities.reason("live_model_change")), error=True)
+        live = self.capabilities.has("live_model_change")
+        if not rest:
+            how = (
+                "applies from Claude's next step"
+                if running and live
+                else "stops and resumes the session with it, after a confirmation"
+                if running
+                else "used by the start (enter)"
+            )
+            entries = [(name, partial(self.run_command, "model", name), how) for name in MODELS]
+            self.search_commands(entries, placeholder="model… (/model <id> takes any model id)")
             return
-        how = "applies from Claude's next step" if running else "starts the session with it"
-        entries = [(name, partial(self.run_command, "model", name), how) for name in MODELS]
-        self.search_commands(entries, placeholder="model… (/model <id> takes any model id)")
+        if running and live:
+            self._request(self.actions.set_model(rest))
+        elif running:
+            self.next_model = rest
+            self.run_command("restart")
+        else:
+            self.next_model = rest
+            self.flash(f"model {rest} is set for the start: enter starts the session")
 
     def _cmd_effort(self, rest: str) -> None:
-        """Choose the effort for the next start (`/effort [level]`).
+        """Choose the effort (`/effort [level]`).
+
+        A session takes its effort when it starts. For a stopped session the choice is used
+        by the start; for a running one the client offers to stop and resume the conversation
+        with it, and keeps the choice for the next start if the user declines.
 
         Args:
             rest: One of `EFFORTS`; empty opens the list.
         """
+        running = self.model.state not in {"stopped", "failed"}
         if not rest:
-            entries = [
-                (name, partial(self.run_command, "effort", name), "used by the next /start")
-                for name in EFFORTS
-            ]
+            how = (
+                "stops and resumes the session with it, after a confirmation"
+                if running
+                else "used by the start (enter)"
+            )
+            entries = [(name, partial(self.run_command, "effort", name), how) for name in EFFORTS]
             self.search_commands(entries, placeholder="effort…")
             return
         if rest not in EFFORTS:
             self.flash(f"effort is one of: {', '.join(EFFORTS)}", error=True)
             return
         self.next_effort = rest
-        running = self.model.state not in {"stopped", "failed"}
-        tail = (
-            ": /stop and /start apply it (the conversation is resumed)"
-            if running
-            else ": /start applies it"
+        if running:
+            self.run_command("restart")
+        else:
+            self.flash(f"effort {rest} is set for the start: enter starts the session")
+
+    def _cmd_restart(self, rest: str) -> None:
+        """Stop the session and resume its conversation (`/restart [model] [effort]`).
+
+        This is how a running session gets another effort (and another model where it cannot
+        change the model while it runs). The client lists what the stop ends and asks for a
+        yes first. A stopped session is started without a question.
+
+        Args:
+            rest: A model, an effort, or both, in any order; empty uses what `/model` and
+                `/effort` chose.
+        """
+        for word in rest.split():
+            if word in EFFORTS:
+                self.next_effort = word
+            else:
+                self.next_model = word
+        model, effort = self.next_model, self.next_effort
+        resume = self.model.claude_session_id
+        if self.model.state in {"stopped", "failed"}:
+            self._spawn(self._restart(resume, model, effort))
+            return
+        chosen = f"{model or self.model.model_name or 'default'} / " + (
+            effort or self.model.effort or "default"
         )
-        self.flash(f"effort {rest} is set for the next start{tail}")
+
+        def answered(confirmed: bool | None) -> None:
+            """Restart after a yes; keep the choice for the next start after a no.
+
+            Args:
+                confirmed: The answer of the confirmation screen.
+            """
+            if confirmed:
+                self._spawn(self._restart(resume, model, effort))
+            else:
+                self.flash(f"not restarted; {chosen} stays chosen for the next start")
+
+        self.push_screen(
+            ConfirmScreen(
+                f"Stop the session and resume this conversation with {chosen}?",
+                [
+                    "the running turn ends; tool calls that run now are interrupted",
+                    "background tasks and subagents of this session are lost",
+                    "messages in the queue that Claude has not read are lost",
+                    "steps that wait for a decision are cancelled",
+                    "the conversation itself is kept: Claude resumes it"
+                    if resume
+                    else "the session has no conversation yet: a new one starts",
+                ],
+                self.palette,
+            ),
+            answered,
+        )
+
+    async def _restart(
+        self, resume: str | None, model: str | None, effort: str | None, reload: bool = False
+    ) -> None:
+        """Stop if needed, start, and show the result.
+
+        After a failed start the chosen model and effort stay, so that Enter on the start
+        card tries again with them.
+
+        Args:
+            resume: The Claude session id to resume; None starts a new conversation.
+            model: The model for the start; None keeps the setting.
+            effort: The effort for the start; None keeps the setting.
+            reload: The start shows another conversation: forget the transcript and load the
+                stored history of the new one.
+        """
+        outcome = await self.actions.restart(resume, model, effort)
+        if outcome.ok:
+            self.next_model = self.next_effort = None
+            if reload:
+                self.link.reload()
+        self.report(outcome)
+        self.render_all()
+
+    def _resume(self, claude_session_id: str) -> None:
+        """Resume another stored conversation, after a yes if a session runs.
+
+        Args:
+            claude_session_id: The Claude session id of the conversation.
+        """
+        if self.model.state in {"stopped", "failed"}:
+            self._spawn(
+                self._restart(claude_session_id, self.next_model, self.next_effort, reload=True)
+            )
+            return
+
+        def answered(confirmed: bool | None) -> None:
+            """Stop and resume after a yes.
+
+            Args:
+                confirmed: The answer of the confirmation screen.
+            """
+            if confirmed:
+                self._spawn(
+                    self._restart(claude_session_id, self.next_model, self.next_effort, reload=True)
+                )
+
+        self.push_screen(
+            ConfirmScreen(
+                f"Stop this session and resume the conversation {claude_session_id[:8]}?",
+                [
+                    "the running turn ends; tool calls that run now are interrupted",
+                    "background tasks and subagents of this session are lost",
+                    "messages in the queue that Claude has not read are lost",
+                    "the conversation shown now stays stored and can be resumed later",
+                ],
+                self.palette,
+            ),
+            answered,
+        )
 
     def _cmd_level(self, rest: str) -> None:
         """Set the supervision level, or list the levels (`/level [name]`).
@@ -1815,46 +2304,42 @@ class CaluApp(App[None]):
         self._read_page("Checkers of this session", "checkers.get", shape)
 
     def _cmd_sessions(self, rest: str) -> None:
-        """List the stored sessions of this project.
+        """List the stored sessions of this project and resume the chosen one (`/sessions`).
 
         Args:
             rest: Ignored.
         """
 
-        def shape(data: Any) -> list[Text]:
-            """Render the session list.
-
-            Args:
-                data: The result of `session.list`.
-
-            Returns:
-                Two lines per session: id, state and start, then its first input.
-            """
-            lines = [
-                Text("/start <claude session id> resumes one of them.", self.palette.muted),
-                Text(""),
-            ]
-            for entry in data.get("sessions") or []:
-                lines.append(
-                    Text.assemble(
-                        (
-                            str(entry.get("claude_session_id") or "no claude id"),
-                            f"bold {self.palette.fg}",
-                        ),
-                        (
-                            f"  {entry.get('state')}  {str(entry.get('started_at'))[:16]}",
-                            self.palette.muted,
-                        ),
+        async def load() -> None:
+            """Ask for the list and open the picker."""
+            outcome = await self.actions.read("session.list", {"limit": 50})
+            if not outcome.ok:
+                self.flash(outcome.message, error=True)
+                return
+            listed = (outcome.data or {}).get("sessions") or []
+            entries = []
+            for entry in listed:
+                claude_id = entry.get("claude_session_id")
+                if not claude_id:
+                    continue
+                current = " (shown now)" if claude_id == self.model.claude_session_id else ""
+                title = render.cut(
+                    " ".join(str(entry.get("first_input") or "no input yet").split()), 70
+                )
+                when = str(entry.get("started_at") or "")[:16].replace("T", " ")
+                entries.append(
+                    (
+                        f"{when}  {title}",
+                        partial(self._resume, claude_id),
+                        f"{entry.get('state')} · {claude_id}{current}",
                     )
                 )
-                lines.append(
-                    Text(
-                        "  " + render.cut(str(entry.get("first_input") or ""), 100), self.palette.fg
-                    )
-                )
-            return lines
+            if not entries:
+                self.flash("no stored session of this project can be resumed")
+                return
+            self.search_commands(entries, placeholder="resume a stored conversation…")
 
-        self._read_page("Stored sessions of this project", "session.list", shape, {"limit": 30})
+        self._spawn(load())
 
     def _cmd_history(self, rest: str) -> None:
         """Show the stored steps of a session (`/history [id]`).
@@ -1944,7 +2429,7 @@ class CaluApp(App[None]):
         self.transcript.focus()
 
     def _cmd_thinking(self, rest: str) -> None:
-        """Show thinking in full or as one line per block.
+        """Show thinking in full or as one line per block; the choice is stored.
 
         Args:
             rest: Ignored.
@@ -1952,53 +2437,263 @@ class CaluApp(App[None]):
         if not self.model.saw_thinking:
             self.flash("this session has sent no thinking (claude.thinking_display)")
         self.transcript.toggle_thinking()
+        self._store("thinking", self.transcript.thinking_open)
 
     def _cmd_panel(self, rest: str) -> None:
-        """Show or hide the side panel on a narrow screen.
+        """Move into the side panel, or back (`f2`); on a narrow screen this opens and closes it.
+
+        In the panel `j`/`k` move over its entries and Enter opens one; Escape returns.
 
         Args:
             rest: Ignored.
         """
-        if self.size.width >= WIDE and not self.side_open:
-            self.flash("the side panel is always shown at this width")
-            return
+        panel = self.query_one("#panel-lines", PanelList)
         if self.side_open:
             self.side_open = False
             self.mode = "chat"
-            self.panel_open = True
+        if self.size.width >= WIDE:
+            if panel.has_focus:
+                self.composer.focus()
+            else:
+                panel.focus()
         else:
             self.panel_open = not self.panel_open
+            if self.panel_open:
+                self.call_after_refresh(panel.focus)
+            else:
+                self.composer.focus()
         self._breakpoints()
 
+    def _cursor_block(self) -> Block | None:
+        """Return the block under the transcript's cursor while the transcript has the focus.
+
+        Returns:
+            The block, or None.
+        """
+        transcript = self.transcript
+        if transcript.cursor is not None and transcript.has_focus:
+            return self.model.blocks[transcript.cursor]
+        return None
+
+    def _last(self, wanted: Callable[[Block], bool]) -> Block | None:
+        """Find the newest block of the shown tab that fits.
+
+        Args:
+            wanted: Tells whether a block fits.
+
+        Returns:
+            The block, or None.
+        """
+        blocks = self.model.blocks_of(self.model.selected_tab)
+        return next((block for block in reversed(blocks) if wanted(block)), None)
+
+    def _step_with_diffs(self) -> StepBlock | None:
+        """Find the step whose diff a command means.
+
+        Returns:
+            The step under the transcript's cursor if it changed a file, else the newest step
+            of the shown tab that did; None if there is none.
+        """
+        block = self._cursor_block()
+        if isinstance(block, StepBlock) and block.diffs:
+            return block
+        found = self._last(lambda b: isinstance(b, StepBlock) and bool(b.diffs))
+        return found if isinstance(found, StepBlock) else None
+
     def _cmd_copy(self, rest: str) -> None:
-        """Copy the block under the transcript's cursor, or Claude's last text, to the clipboard.
+        """Copy to the clipboard (`/copy [answer | block | command | result | diff]`).
+
+        Args:
+            rest: What to copy. Empty: the block under the transcript's cursor, or Claude's
+                last text. `answer`: Claude's last text. `command`, `result`: of the step
+                under the cursor, or of the last step. `diff`: the unified diff of that step.
+        """
+        what = rest.strip().lower()
+        cursor = self._cursor_block()
+        step = cursor if isinstance(cursor, StepBlock) else None
+        if step is None:
+            last = self._last(lambda b: isinstance(b, StepBlock))
+            step = last if isinstance(last, StepBlock) else None
+        text = ""
+        if what in {"", "block"} and cursor is not None:
+            text = render.block_plain(cursor)
+        elif what in {"", "answer", "block"}:
+            answer = self._last(lambda b: isinstance(b, TextBlock))
+            text = render.block_plain(answer) if answer is not None else ""
+        elif what == "command" and step is not None:
+            command = step.input.get("command") or step.input.get("file_path")
+            text = str(command or render.block_plain(step))
+        elif what == "result" and step is not None:
+            text = step.result or ""
+        elif what == "diff":
+            changed = self._step_with_diffs()
+            if changed is not None:
+                text = "\n".join(
+                    unified_text(diff.path, diff.before, diff.after) for diff in changed.diffs
+                )
+        elif what not in {"command", "result"}:
+            self.flash("usage: /copy [answer | block | command | result | diff]", error=True)
+            return
+        if not text:
+            self.flash("nothing to copy yet")
+            return
+        self.copy_to_clipboard(text)
+        self.flash("copied (needs a terminal that accepts OSC 52; shift+drag selects natively)")
+
+    def _cmd_diff(self, rest: str) -> None:
+        """Open the full-screen diff of a step (`D` in the transcript, `/diff`).
+
+        Args:
+            rest: Ignored. The step is the one under the transcript's cursor, else the open
+                decision's step if it is an edit, else the newest step that changed a file.
+        """
+        cursor = self._cursor_block()
+        step = cursor if isinstance(cursor, StepBlock) and cursor.diffs else None
+        diffs = step.diffs if step is not None else []
+        title = render.step_title(step) if step is not None else ""
+        decision = self.current_decision()
+        if not diffs and decision is not None:
+            diffs = proposed_diffs(decision, self.model, {})
+            title = decision.tool_name
+        if not diffs:
+            step = self._step_with_diffs()
+            if step is not None:
+                diffs, title = step.diffs, render.step_title(step)
+        if not diffs:
+            self.flash("no step of this tab has changed a file yet")
+            return
+        self.push_screen(DiffScreen(diffs, title))
+
+    def _cmd_search(self, rest: str) -> None:
+        """Search the transcript as the text is typed (`ctrl+f`, `/` in the transcript).
+
+        Args:
+            rest: A text to start the search with.
+        """
+        self.mode = "search"
+        self.composer.set_text(rest)
+        self.composer.focus()
+        self.transcript.search(rest)
+
+    def _cmd_export(self, rest: str) -> None:
+        """Write the shown tab's transcript to a Markdown file (`/export [file]`).
+
+        Args:
+            rest: The file; empty writes `calu-transcript-<date>-<time>.md` in the directory
+                the client was started in. An existing file is not overwritten.
+        """
+        name = rest.strip() or f"calu-transcript-{time.strftime('%Y%m%d-%H%M%S')}.md"
+        path = Path(name).expanduser()
+        text = transcript_markdown(self.model, self.model.selected_tab)
+        try:
+            with path.open("x", encoding="utf-8") as file:
+                file.write(text)
+        except FileExistsError:
+            self.flash(f"{path} exists already: /export <other file>", error=True)
+        except OSError as error:
+            self.flash(f"not written: {error}", error=True)
+        else:
+            self.flash(f"transcript written to {path.resolve()}")
+
+    def _cmd_agent_info(self, rest: str) -> None:
+        """Show the task a subagent was given and what it returned (`i`).
+
+        Args:
+            rest: An agent key; empty means the Agent call under the transcript's cursor,
+                else the agent whose tab is shown.
+        """
+        key = rest.strip()
+        named = next(
+            (agent.key for agent in self.model.agents.values() if key and agent.label == key),
+            None,
+        )
+        key = named or key
+        cursor = self._cursor_block()
+        if not key and isinstance(cursor, StepBlock) and cursor.tool_use_id in self.model.agents:
+            key = cursor.tool_use_id or ""
+        key = key or self.model.selected_tab
+        agent = self.model.agents.get(key)
+        if agent is None or key == MAIN:
+            self.flash("put the cursor on an Agent call, or show a subagent's tab first")
+            return
+        call = self.model.step(key)
+        palette = self.palette
+        width = min(100, self.size.width - 6)
+        body = [
+            Text.assemble(
+                (f"{agent.label}", f"bold {palette.fg}"),
+                (
+                    f"  ·  {agent.subagent_type or 'subagent'}"
+                    f"{' · background' if agent.background else ''}"
+                    f"  ·  {self.model.activity_of(agent)}  ·  {agent.steps} steps",
+                    palette.muted,
+                ),
+            ),
+            Text(""),
+            Text("The task it was given", f"bold {palette.accent}"),
+        ]
+        prompt = str(call.input.get("prompt") or "") if call is not None else ""
+        body += render.markdown_lines(
+            prompt or "_not seen by this client (the call was made before it attached)_",
+            width,
+            palette,
+            self.current_theme.dark,
+        )
+        body += [Text(""), Text("What it returned", f"bold {palette.accent}")]
+        result = (call.result if call is not None else None) or ""
+        body += render.markdown_lines(
+            result or "_nothing yet_", width, palette, self.current_theme.dark
+        )
+        self._page(f"Subagent {agent.label}", body)
+
+    def _cmd_hold(self, rest: str) -> None:
+        """Keep the composer's text in this client until the session is idle (`alt+h`).
+
+        A held draft is not sent and not in the session's queue: it can be edited or deleted
+        in the side panel (`f2`) and is sent as a message for the next turn when the session
+        turns idle. It is lost when the client ends.
+
+        Args:
+            rest: A text to hold instead of the composer's.
+        """
+        text = rest.strip() or self.composer.value.strip()
+        if not text:
+            self.flash("nothing to hold: type the message first")
+            return
+        if not rest.strip():
+            self.composer.set_text("")
+        self.held.append(text)
+        idle = "" if self.model.working() else " (the session is idle now: enter sends at once)"
+        self.flash(
+            f"held, not sent: it goes out when the session turns idle{idle} · f2 lists the "
+            "drafts · lost on detach"
+        )
+
+    def _cmd_expand(self, rest: str) -> None:
+        """Show pasted texts in full in the composer in place of their markers (`alt+e`).
 
         Args:
             rest: Ignored.
         """
-        transcript = self.transcript
-        block = (
-            self.model.blocks[transcript.cursor]
-            if transcript.cursor is not None and transcript.has_focus
-            else None
-        )
-        if block is None:
-            block = next(
-                (
-                    b
-                    for b in reversed(self.model.blocks_of(self.model.selected_tab))
-                    if isinstance(b, TextBlock)
-                ),
-                None,
-            )
-        if block is None:
-            self.flash("nothing to copy yet")
+        if not self.composer.expand_pastes():
+            self.flash("the input holds no pasted text marker")
+
+    def _cmd_bell(self, rest: str) -> None:
+        """Switch the bell for a new waiting step on or off; the choice is stored (`/bell`).
+
+        Args:
+            rest: `on` or `off`; empty switches.
+        """
+        word = rest.strip().lower()
+        if word not in {"", "on", "off"}:
+            self.flash("usage: /bell [on | off]", error=True)
             return
-        self.copy_to_clipboard(render.block_plain(block))
-        self.flash("copied (needs a terminal that accepts OSC 52; shift+drag selects natively)")
+        self.options.bell = (word == "on") if word else not self.options.bell
+        self._store("bell", self.options.bell)
+        self.flash(f"bell for a new waiting step: {'on' if self.options.bell else 'off'}")
 
     def _cmd_theme(self, rest: str) -> None:
-        """Switch the colour theme, or list the themes (`/theme [name]`).
+        """Switch the colour theme, or list the themes (`/theme [name]`); the choice is stored.
 
         Args:
             rest: A theme name; empty opens the list.
@@ -2008,11 +2703,65 @@ class CaluApp(App[None]):
                 self.flash(f"no theme {rest}", error=True)
             else:
                 self._apply_theme(rest)
+                self._store("theme", rest)
             return
         names = sorted(self.available_themes, key=lambda name: (not name.startswith("calu"), name))
         self.search_commands(
-            [(name, partial(self._apply_theme, name)) for name in names], placeholder="theme…"
+            [(name, partial(self.run_command, "theme", name)) for name in names],
+            placeholder="theme…",
         )
+
+    def _store(self, name: str, value: bool | int | str) -> None:
+        """Write one setting to `tui.toml`, if this client has a settings file.
+
+        Args:
+            name: The setting.
+            value: Its value.
+        """
+        if self.options.settings_path is None:
+            return
+        problem = settings.remember(self.options.settings_path, name, value)
+        if problem:
+            self.flash(problem, error=True)
+
+    def _remember(self, text: str) -> None:
+        """Add a sent text to the composer's history, and to the history file if there is one.
+
+        Args:
+            text: The text.
+        """
+        self.composer.remember(text)
+        if self.options.history_path is not None:
+            settings.append_history(self.options.history_path, text)
+
+    def _path_completions(self) -> tuple[tuple[int, int, int], list[str]] | None:
+        """Find the project paths that complete the `@` word at the cursor.
+
+        Returns:
+            None if the cursor is not at the end of a word that starts with `@`. Otherwise
+            `((row, column of the @, cursor column), paths)`; the list is empty if nothing
+            matches or the project directory is not on this machine.
+        """
+        composer = self.composer
+        row, column = composer.cursor_location
+        found = completion.at_word(composer.document.get_line(row), column)
+        if found is None or self.mode != "chat":
+            return None
+        start, partial_path = found
+        return (row, start, column), completion.complete_path(self.model.workspace, partial_path)
+
+    def _send_held(self) -> None:
+        """Send the oldest held draft when the session has just turned idle.
+
+        One draft per idle moment: the message starts a turn, and the next draft waits for
+        the end of that turn.
+        """
+        working = self.model.working()
+        turned_idle = self._was_working and not working and self.model.state == "idle"
+        self._was_working = working
+        if turned_idle and self.held and self.link.connection is not None:
+            text = self.held.pop(0)
+            self._spawn(self._send(text, MAIN, "queued"))
 
     def _cmd_help(self, rest: str) -> None:
         """Show every key and command, and what this session does not offer.
@@ -2067,10 +2816,25 @@ def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[T
         "walk the history of sent texts. The decision keys (a, d, n, w, 1-9) act only while "
         "the input is empty; a and d ask for a second press, and any other key after the first "
         "one is typed, the first letter included. Select text with the mouse while holding "
-        "shift (option in iTerm); alt+c copies a block."
+        "shift (option in iTerm); alt+c copies a block. @ at the start of a word completes a "
+        "path of the project with tab. A large pasted text is shown as one marker and sent in "
+        "full; alt+e shows it. alt+h holds the input as a draft until the session is idle."
     )
     lines += [Text(""), Text("Typing and selecting", f"bold {palette.accent}")]
     lines += [Text.assemble("  ", row) for row in render.wrap(Text(typing, palette.fg), width - 4)]
+    rebind = (
+        "Other keys are set in the table [keys] of tui.toml in calu's configuration directory, "
+        'by the name of the binding, e.g. detach = "ctrl+q". The names: '
+        + ", ".join(
+            f"{binding.id} ({binding.key})"
+            for binding in CaluApp.BINDINGS
+            if isinstance(binding, Binding) and binding.id and not binding.id.startswith("tab-")
+        )
+        + ", tab-0 to tab-9 (alt+0 to alt+9). The same file holds theme, bell, toasts, "
+        "thinking and panel_width."
+    )
+    lines += [Text(""), Text("Settings and other keys", f"bold {palette.accent}")]
+    lines += [Text.assemble("  ", row) for row in render.wrap(Text(rebind, palette.fg), width - 4)]
     missing = [entry for entry in CAPABILITIES if not caps.has(entry.key)]
     if missing:
         lines += [Text(""), Text("Not offered by this session", f"bold {palette.accent}")]

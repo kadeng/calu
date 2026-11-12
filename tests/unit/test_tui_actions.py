@@ -285,6 +285,6 @@ def test_the_command_table_is_consistent_and_says_why_something_is_unavailable()
     assert "not available from this session" in str(side.unavailable(none))
     assert side.unavailable(Capabilities(frozenset({"side_question"}))) is None
     later = [command for command in COMMANDS if command.later]
-    assert later and all(command.unavailable(none) == command.later for command in later)
+    assert all(command.unavailable(none) == command.later for command in later)
     withdraw = next(command for command in COMMANDS if command.id == "withdraw")
     assert "cannot be withdrawn" in str(withdraw.unavailable(Capabilities(frozenset({"usage"}))))

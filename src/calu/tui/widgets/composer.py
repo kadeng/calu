@@ -12,11 +12,21 @@ key there when it is a command rather than text (a decision key while the input 
 instance), and the composer then does nothing with it.
 """
 
+import re
 from collections.abc import Callable
 
 from textual import events
 from textual.message import Message
 from textual.widgets import TextArea
+
+PASTE_LINES = 6
+"""A pasted text with at least this many lines is shown as one short marker."""
+
+PASTE_CHARS = 1200
+"""A pasted text with at least this many characters is shown as one short marker."""
+
+PASTE_MARK = re.compile(r"\[pasted (\d+) lines? #(\d+)\]")
+"""The marker that stands for a pasted text in the composer."""
 
 NEWLINE_KEYS = frozenset({"ctrl+j", "alt+enter", "shift+enter"})
 """Keys that insert a newline. Enter itself sends; `shift+enter` only arrives as its own key
@@ -30,7 +40,8 @@ class Composer(TextArea):
         """The user pressed Enter.
 
         Attributes:
-            text: The text of the input, not stripped; may be empty.
+            text: The text of the input with pasted texts in place of their markers
+                (`Composer.value`), not stripped; may be empty.
         """
 
         def __init__(self, text: str) -> None:
@@ -62,8 +73,53 @@ class Composer(TextArea):
         self.intercept: Callable[[events.Key], bool] | None = None
         """Set by the app; returns True for a key the app has handled."""
         self.sent: list[str] = []
+        self.pastes: dict[int, str] = {}
+        """The pasted texts that markers in the input stand for, by the marker's number."""
         self._position: int | None = None
         self._draft = ""
+
+    @property
+    def value(self) -> str:
+        """The text of the input with every paste marker replaced by the pasted text.
+
+        Returns:
+            What Enter sends. A marker whose number is unknown (typed by hand) stays as it is.
+        """
+        return PASTE_MARK.sub(
+            lambda found: self.pastes.get(int(found.group(2)), found.group(0)), self.text
+        )
+
+    def expand_pastes(self) -> bool:
+        """Replace every paste marker in the input by the pasted text, to read or edit it.
+
+        Returns:
+            True if a marker was replaced.
+        """
+        full = self.value
+        if full == self.text:
+            return False
+        self.set_text(full)
+        return True
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        """Insert a pasted text; a large one as a marker that stands for it.
+
+        A paste of at least `PASTE_LINES` lines or `PASTE_CHARS` characters would fill the
+        input and push the screen around, so the input shows `[pasted N lines #k]` instead.
+        Enter sends the pasted text in the marker's place; `expand_pastes` shows it.
+
+        Args:
+            event: The paste, as one text (never interpreted as keys).
+        """
+        text = event.text
+        lines = text.count("\n") + 1
+        if lines < PASTE_LINES and len(text) < PASTE_CHARS:
+            return  # Textual calls the text area's own handler next, which inserts the text
+        event.stop()
+        event.prevent_default()
+        number = len(self.pastes) + 1
+        self.pastes[number] = text
+        self.insert(f"[pasted {lines} line{'s' if lines != 1 else ''} #{number}]")
 
     def set_text(self, text: str) -> None:
         """Replace the text and put the cursor at its end.
@@ -106,7 +162,7 @@ class Composer(TextArea):
         if event.key == "enter":
             event.stop()
             event.prevent_default()
-            self.post_message(self.Submitted(self.text))
+            self.post_message(self.Submitted(self.value))
             return
         if event.key in NEWLINE_KEYS:
             event.stop()

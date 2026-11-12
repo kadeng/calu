@@ -146,7 +146,18 @@ COMMANDS: tuple[Command, ...] = (
     # ---- session
     Command("interrupt", "Interrupt the running turn", "esc esc", "/interrupt"),
     Command("model", "Choose the model", "", "/model [name]"),
-    Command("effort", "Choose the effort for the next start", "", "/effort [level]"),
+    Command(
+        "effort",
+        "Choose the effort (a running session is stopped and resumed, after a yes)",
+        "",
+        "/effort [level]",
+    ),
+    Command(
+        "restart",
+        "Stop and resume this conversation with another model or effort",
+        "",
+        "/restart [model] [effort]",
+    ),
     Command(
         "level",
         "Supervision level: what waits for you besides the checkers' escalations",
@@ -157,13 +168,15 @@ COMMANDS: tuple[Command, ...] = (
     Command("state", "Session state", "", "/state"),
     Command("context", "The conversation as the checkers see it", "", "/context"),
     Command("checkers", "The checkers and their instructions", "", "/checkers"),
-    Command("sessions", "Stored sessions of this project", "", "/sessions"),
+    Command("sessions", "Resume a stored conversation of this project", "", "/sessions"),
     Command("history", "Stored history of a session", "", "/history [id]"),
     Command("log", "The session's log", "", "/log"),
     Command("clear_mark", "Clear an honesty mark", "", "/clear-mark <id>"),
-    Command("start", "Start the session, or resume a stored one", "", "/start [resume id]"),
+    Command(
+        "start", "Start the session, or resume a stored one", "enter", "/start [resume id | new]"
+    ),
     Command("stop", "Stop the Claude session (calu keeps running)", "", "/stop"),
-    Command("shutdown", "Shut down calu (type /shutdown confirm)", "", "/shutdown"),
+    Command("shutdown", "Shut down calu (asks for the word shutdown)", "", "/shutdown"),
     # ---- view
     Command(
         "scroll",
@@ -174,42 +187,68 @@ COMMANDS: tuple[Command, ...] = (
     Command("follow", "Jump to the end and follow new output", "end · ctrl+end", group="View"),
     Command(
         "focus_transcript",
-        "Move into the transcript (j k move, enter expands, e next waiting step, t, c)",
+        "Move into the transcript (j k move, enter expands, e next waiting step, D diff, "
+        "/ search, i agent task, t thinking, c copy)",
         "ctrl+↑",
         group="View",
     ),
     Command(
         "thinking", "Show thinking in full or as one line each", "alt+t", "/thinking", group="View"
     ),
-    Command("panel", "Show or hide the side panel", "f2", group="View"),
     Command(
-        "copy",
-        "Copy the block under the cursor (or the last answer)",
-        "alt+c",
-        "/copy",
+        "panel",
+        "Move into the side panel (j k move, enter opens; queue: c copy, r back to the input; "
+        "held: s send, d delete; mark: x clear)",
+        "f2",
         group="View",
     ),
-    Command("theme", "Choose the colour theme", "", "/theme [name]", group="View"),
-    Command("help", "Help: all keys and commands", "f1", "/help", group="View"),
-    Command("detach", "Detach (the session keeps running)", "ctrl+d", "/quit", group="View"),
     Command(
         "diff",
-        "Full-screen split diff with comments on lines",
-        later="not built yet: enter on a step shows its diff, w on a waiting step shows all of it",
+        "Full-screen diff of a step, side by side when wide; v and enter comment on lines",
+        "D in the transcript",
+        "/diff",
         group="View",
     ),
     Command(
         "search",
-        "Search the transcript",
-        later="not built yet: /history and /context show the conversation as text",
+        "Search the transcript as you type (enter older, ↓ newer)",
+        "ctrl+f · / in the transcript",
+        "/search [text]",
         group="View",
     ),
     Command(
-        "export",
-        "Export the transcript to Markdown",
-        later="not built yet: /history shows the stored conversation",
+        "copy",
+        "Copy the block under the cursor, or the last answer, a command, a result, a diff",
+        "alt+c",
+        "/copy [answer | block | command | result | diff]",
         group="View",
     ),
+    Command(
+        "export", "Write the transcript to a Markdown file", "", "/export [file]", group="View"
+    ),
+    Command(
+        "agent_info",
+        "The task a subagent was given and what it returned",
+        "i in the transcript",
+        "/task [agent]",
+        group="Agents and messages",
+    ),
+    Command(
+        "hold",
+        "Hold the input as a draft in this client until the session is idle",
+        "alt+h",
+        "/hold [text]",
+        group="Agents and messages",
+    ),
+    Command(
+        "expand", "Show pasted texts in full in the input", "alt+e", group="Agents and messages"
+    ),
+    Command(
+        "bell", "Bell when a step begins to wait: on or off", "", "/bell [on | off]", group="View"
+    ),
+    Command("theme", "Choose the colour theme", "", "/theme [name]", group="View"),
+    Command("help", "Help: all keys and commands", "f1", "/help", group="View"),
+    Command("detach", "Detach (the session keeps running)", "ctrl+d", "/quit", group="View"),
 )
 """Every command, in the order the help screen lists them."""
 
@@ -218,6 +257,8 @@ ALIASES = {
     "/detail": "/why",
     "/side": "/btw",
     "/agents": "/agent",
+    "/find": "/search",
+    "/resume": "/sessions",
 }
 """Other words for a slash command."""
 

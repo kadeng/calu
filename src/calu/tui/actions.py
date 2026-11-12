@@ -16,7 +16,7 @@ from calu.acp.modes import settings_for
 from calu.config import AutoEscalate
 from calu.protocol.client import RequestFailed
 from calu.tui.connection import Link
-from calu.tui.model import MAIN, SessionModel
+from calu.tui.model import MAIN, Diff, SessionModel
 
 NOT_ATTACHED = "not sent: this client is not attached to the session"
 """The message of a request made while no connection is open."""
@@ -343,6 +343,77 @@ class Actions:
         if outcome.ok:
             outcome.message = f"comment on {path}:{first}-{last} sent to Claude"
         return outcome
+
+    async def comment_diff(
+        self, diff: Diff, side: str, first: int, last: int, text: str
+    ) -> Outcome:
+        """Send a comment on lines of a diff (`comment.add`, kind "diff").
+
+        The content before and after the edit comes from the step's `edit.diff` event, so
+        this needs no file on the client's machine.
+
+        Args:
+            diff: The file with its content before and after the edit.
+            side: "after" for lines of the new content, "before" for lines of the old one.
+            first: First line on that side, counted from 1.
+            last: Last line, inclusive.
+            text: The comment; must not be empty.
+
+        Returns:
+            The outcome, with a confirmation as its message.
+        """
+        if not text.strip():
+            return Outcome(False, "the comment is empty")
+        outcome = await self.request(
+            "comment.add",
+            {
+                "kind": "diff",
+                "path": diff.path,
+                "side": side,
+                "start_line": first,
+                "end_line": last,
+                "after_text": diff.after,
+                "before_text": diff.before,
+                "text": text.strip(),
+            },
+        )
+        if outcome.ok:
+            lines = f"{first}" if first == last else f"{first}-{last}"
+            which = "" if side == "after" else " (old content)"
+            outcome.message = f"comment on {diff.path}:{lines}{which} sent to Claude"
+        return outcome
+
+    async def restart(
+        self, resume_id: str | None, model: str | None = None, effort: str | None = None
+    ) -> Outcome:
+        """Stop the Claude session and start it again (`session.stop`, then `session.start`).
+
+        This is how a running session gets another effort, another model where the session
+        cannot change it while it runs, or another conversation. The running turn ends with
+        the stop; background tasks and subagents of the session are lost.
+
+        Args:
+            resume_id: The Claude session id to resume; None starts a new conversation.
+            model: A model alias or id for the start; None keeps the setting.
+            effort: An effort for the start; None keeps the setting.
+
+        Returns:
+            The outcome of the start. If the stop is refused, its refusal and nothing was
+            started. If the start fails after the stop, a message that says the session is
+            stopped and why the start failed.
+        """
+        if self.model.state not in {"stopped", "failed"}:
+            stopped = await self.stop()
+            if not stopped.ok:
+                return Outcome(False, f"not stopped: {stopped.message}")
+        started = await self.start(resume_id, model, effort)
+        if not started.ok:
+            return Outcome(
+                False, f"the session is stopped, and the start failed: {started.message}"
+            )
+        what = " / ".join(part for part in (model, effort) if part)
+        started.message = "the session starts" + (f" with {what}" if what else "")
+        return started
 
     async def shutdown(self) -> Outcome:
         """Stop the session and end the calu process (`shutdown`).

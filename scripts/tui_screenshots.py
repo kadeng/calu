@@ -9,8 +9,11 @@ PNG next to it.
 The states: a finished turn, an open escalation, a session with subagents and a question, a
 subagent's own tab, a step expanded to its diff, the full-screen detail of an escalation, a
 set of three questions, a side question with its answer, the transcript scrolled up while
-output arrives, the side panel over the transcript on a narrow terminal, the help page, and the
-light theme.
+output arrives, the side panel over the transcript on a narrow terminal, the help page, the
+light theme, the first press of an allow, a stopped session with its start card, the diff of an
+edit with two selected lines, the side panel with the focus on a held draft, a search, the
+confirmation before a session is stopped and resumed, the stored history above a turn, and the
+screen without colours (`NO_COLOR`).
 """
 
 import asyncio
@@ -189,6 +192,76 @@ async def answered_questions(
         await pilot.pause()
 
 
+async def diff_with_selection(
+    pilot: Pilot[None], app: CaluApp, session: FakeSession, clock: Clock
+) -> None:
+    """Open the diff of the edit and select two lines of it.
+
+    Args:
+        pilot: The pilot of the running app.
+        app: The app.
+        session: The scripted session.
+        clock: The clock.
+    """
+    edit = next(block for block in app.model.blocks if getattr(block, "diffs", None))
+    app.transcript.focus()
+    app.transcript.set_cursor(edit.id)
+    for key in ("D", "v", "j"):
+        await pilot.press(key)
+        await pilot.pause()
+
+
+async def panel_with_drafts(
+    pilot: Pilot[None], app: CaluApp, session: FakeSession, clock: Clock
+) -> None:
+    """Hold two drafts and move into the side panel, onto the first draft.
+
+    Args:
+        pilot: The pilot of the running app.
+        app: The app.
+        session: The scripted session.
+        clock: The clock.
+    """
+    app.run_command("hold", "After the push: tag the release as v0.9.")
+    app.run_command("hold", "Then update the changelog.")
+    await pilot.press("f2")
+    await pilot.pause()
+    for _ in range(7):
+        await pilot.press("j")
+    await pilot.pause()
+
+
+def typed(*parts: str) -> Drive:
+    """Build a state that presses keys, where a longer part is typed character by character.
+
+    Args:
+        *parts: Key names (`ctrl+f`, `enter`) or texts that start with a space or a slash or
+            hold a space.
+
+    Returns:
+        The drive function.
+    """
+
+    async def drive(pilot: Pilot[None], app: CaluApp, session: FakeSession, clock: Clock) -> None:
+        """Press and type.
+
+        Args:
+            pilot: The pilot of the running app.
+            app: The app.
+            session: The scripted session.
+            clock: The clock.
+        """
+        for part in parts:
+            if part.startswith("text:"):
+                for character in part[5:]:
+                    await pilot.press(character if character != " " else "space")
+            else:
+                await pilot.press(part)
+            await pilot.pause()
+
+    return drive
+
+
 STATES: list[tuple[str, str, Drive, str]] = [
     ("01-turn", "simple_turn", nothing, ""),
     ("02-escalation", "escalation", nothing, ""),
@@ -203,6 +276,13 @@ STATES: list[tuple[str, str, Drive, str]] = [
     ("11-help", "escalation", keys("f1"), ""),
     ("12-light", "showcase", nothing, LIGHT),
     ("13-armed-allow", "escalation", keys("a"), ""),
+    ("14-stopped", "stopped", nothing, ""),
+    ("15-diff", "simple_turn", diff_with_selection, ""),
+    ("16-panel-drafts", "showcase", panel_with_drafts, ""),
+    ("17-search", "simple_turn", typed("ctrl+f", "text:gate"), ""),
+    ("18-confirm-restart", "simple_turn", typed("text:/effort max", "enter"), ""),
+    ("19-stored-history", "history", nothing, ""),
+    ("20-no-colour", "showcase", nothing, "mono"),
 ]
 """`(file name, scenario, what to do after it, theme)` per state."""
 
@@ -222,12 +302,20 @@ async def shoot(name: str, scenario: str, drive: Drive, theme: str, size: tuple[
     """
     clock = Clock()
     session = FakeSession()
+    if scenario == "history":
+        session.results["session.history"] = scenarios.stored_history()
+        scenario = "simple_turn"
     items = scenarios.SCENARIOS[scenario]()
     if scenario == "long_session":
         items = scenarios.long_session(60)
     session.results["escalation.context"] = CONTEXT
-    options = TuiOptions(theme=theme) if theme else TuiOptions()
-    app = CaluApp(fake_connector(session), options, clock=clock, live=False)
+    options = TuiOptions(theme=theme) if theme and theme != "mono" else TuiOptions()
+    if theme == "mono":
+        os.environ["NO_COLOR"] = "1"
+    try:
+        app = CaluApp(fake_connector(session), options, clock=clock, live=False)
+    finally:
+        os.environ.pop("NO_COLOR", None)
     async with app.run_test(size=size, notifications=False) as pilot:
         await pilot.pause()
         await scenarios.play(session, items, clock.advance)

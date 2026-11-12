@@ -22,9 +22,9 @@ is shown only for what happened while this client was attached.
 """
 
 import difflib
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -185,6 +185,8 @@ class StepBlock(Block):
     """Client clock when the escalation arrived; None if it was replayed."""
     note: str = ""
     """The note or answer that went to Claude with the decision."""
+    stored: bool = False
+    """True for a step taken from the stored history: it has no duration and no diff."""
 
     @property
     def verdict(self) -> str:
@@ -633,6 +635,12 @@ class SessionModel:
         self.logs: list[LogLine] = []
         self.side: list[SideExchange] = []
         """The side questions of this client, oldest first; they survive a rebuild."""
+        self.clock: Callable[[], float] | None = None
+        """The client clock, set by the connection. With it the waiting time of an escalation
+        that was opened before this client attached is counted from the time the session
+        gives for it (`escalation.request.opened_at`)."""
+        self.wall: Callable[[], datetime] = lambda: datetime.now(UTC)
+        """The wall clock that `opened_at` of a request is compared with."""
         self.reset()
 
     def reset(self) -> None:
@@ -655,6 +663,8 @@ class SessionModel:
         self.queue: list[Queued] = []
         self.usage = Usage()
         self.blocks: list[Block] = []
+        self.stored_blocks = 0
+        """How many blocks at the start come from the stored history (`load_history`)."""
         self.agents: dict[str, Agent] = {MAIN: Agent(MAIN, label=MAIN)}
         self.decisions: dict[str, Decision] = {}
         self.turn = 0
@@ -879,6 +889,107 @@ class SessionModel:
         for request in snapshot.escalations:
             if request.escalation_id not in self.decisions:
                 self._open(request, None, change)
+        return change
+
+    def load_history(
+        self,
+        raw: dict[str, Any],
+        replayed_ids: Iterable[str] = (),
+        replayed_inputs: Iterable[str] = (),
+    ) -> Change:
+        """Put the stored conversation of the session above the events that follow.
+
+        `session.history` holds what the database recorded: per turn the user's inputs and
+        Claude's answer, and per tool call its input, the verdict and the checker's summary.
+        Streamed text between the steps, thinking, diffs and durations are not stored. The
+        blocks are added in the order turn by turn: inputs, steps, answer, end of the turn.
+
+        The events the session replays after this call may cover the newest part of the same
+        conversation. The first stored turn that has a step or an input among the replayed
+        ones is the boundary: earlier turns are added whole, of the boundary turn only what was
+        not replayed (nothing but earlier inputs if its input was replayed), later turns not at
+        all. A line of the client follows the stored blocks
+        and says what they are.
+
+        Precondition: the model holds no blocks (a new or a reset model); otherwise nothing is
+        added.
+
+        Args:
+            raw: The result of `session.history` as the session returned it.
+            replayed_ids: The `tool_use_id` of every tool call among the events that follow.
+            replayed_inputs: The text of every user input among the events that follow.
+
+        Returns:
+            A change that names the added blocks; an empty one if there was nothing to add or
+            the result does not fit the protocol (which adds a log line).
+        """
+        if self.blocks:
+            return Change()
+        try:
+            history = m.SessionHistoryResult.model_validate(raw)
+        except ValidationError as error:
+            return self._invalid("session.history", error)
+        seen_ids = set(replayed_ids)
+        seen_inputs = {text.strip() for text in replayed_inputs}
+        known = {turn.index for turn in history.turns}
+        by_turn: dict[int | None, list[m.StoredStep]] = {}
+        for stored in history.steps:
+            by_turn.setdefault(stored.turn if stored.turn in known else None, []).append(stored)
+        change = Change()
+
+        def add_steps(steps: list[m.StoredStep]) -> None:
+            """Add the stored steps that were not replayed.
+
+            Args:
+                steps: The stored steps of one turn.
+            """
+            for stored in steps:
+                if stored.tool_use_id and stored.tool_use_id in seen_ids:
+                    continue
+                step = self._new_step(
+                    stored.tool_use_id,
+                    stored.agent_id,
+                    stored.tool_name,
+                    stored.tool_input,
+                    None,
+                    change,
+                )
+                if stored.decision:
+                    step.checks.append(
+                        Check("", stored.decision, stored.reason, stored.summary or "")
+                    )
+                step.result = stored.result_summary or None
+                step.stored = True
+
+        add_steps(by_turn.get(None, []))
+        for turn in history.turns:
+            steps = by_turn.get(turn.index, [])
+            boundary = any(text.strip() in seen_inputs for text in turn.user_inputs) or any(
+                stored.tool_use_id in seen_ids for stored in steps if stored.tool_use_id
+            )
+            for text in turn.user_inputs:
+                if text.strip() not in seen_inputs:
+                    self._add(UserBlock(id=len(self.blocks), turn=self.turn, text=text), change)
+            if any(text.strip() in seen_inputs for text in turn.user_inputs):
+                break  # the replay holds this turn from its input on
+            add_steps(steps)
+            if boundary:
+                break
+            if turn.answer.strip():
+                self._add(TextBlock(id=len(self.blocks), turn=self.turn, text=turn.answer), change)
+            if turn.ended_at is not None:
+                self.turn += 1
+                self._add(
+                    TurnEndBlock(id=len(self.blocks), turn=self.turn - 1, number=self.turn), change
+                )
+        if not change.blocks_added:
+            return change
+        self.stored_blocks = len(self.blocks)
+        self.note("above: stored history · inputs, steps and answers, without thinking and diffs")
+        change.blocks_added.append(len(self.blocks) - 1)
+        for agent in self.agents.values():
+            agent.unread = False
+        change.rebuilt = True
         return change
 
     def apply(self, method: str, params: dict[str, Any], time: float | None = None) -> Change:
@@ -1390,6 +1501,9 @@ class SessionModel:
             The new decision.
         """
         questions = parse_questions(request.questions)
+        if time is None and request.opened_at is not None and self.clock is not None:
+            age = (self.wall() - request.opened_at).total_seconds()
+            time = self.clock() - max(0.0, age)
         step = self.step(request.tool_use_id)
         if step is None:
             step = self._new_step(

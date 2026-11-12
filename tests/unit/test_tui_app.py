@@ -21,6 +21,7 @@ from calu.tui import scenarios
 from calu.tui.app import CaluApp, TuiOptions
 from calu.tui.fake import FakeSession, fake_connector
 from calu.tui.model import ALL, MAIN
+from calu.tui.screens.confirm import ConfirmScreen
 from calu.tui.screens.detail import DetailScreen
 from calu.tui.screens.text import TextScreen
 from calu.tui.widgets.chrome import AgentTabs, Line, Lines
@@ -108,6 +109,7 @@ async def running(
     size: tuple[int, int] = (120, 36),
     live_events: bool = True,
     session: FakeSession | None = None,
+    options: TuiOptions | None = None,
 ) -> AsyncGenerator[Running]:
     """Run the app on a scenario.
 
@@ -117,13 +119,16 @@ async def running(
         live_events: True plays the scenario after attaching (with times); False preloads it
             as history, which the app gets replayed.
         session: A prepared session to attach to instead of a new one.
+        options: How the client starts; without them the bell is off.
     """
     clock = Clock()
     session = session or FakeSession()
     items = scenarios.SCENARIOS[scenario]() if scenario else []
     if not live_events:
         scenarios.preload(session, items)
-    app = CaluApp(fake_connector(session), TuiOptions(bell=False), clock=clock, live=False)
+    app = CaluApp(
+        fake_connector(session), options or TuiOptions(bell=False), clock=clock, live=False
+    )
     async with app.run_test(size=size, notifications=False) as pilot:
         await pilot.pause()
         run = Running(app, pilot, session, clock)
@@ -272,8 +277,24 @@ async def test_the_chord_keys_decide_while_a_text_is_in_the_composer() -> None:
         assert run.session.sent("escalation.decide") == [], "a deny rule stopped it: once more"
         assert "Stopped by a deny rule: press a again to allow" in run.line("card")
         await run.press("alt+a")
-        assert run.session.sent("escalation.decide")[0]["decision"] == "allow"
+        assert "send the text in the input as a note with the allow?" in run.line("composer-head")
+        await run.press("x")
+        assert run.session.sent("escalation.decide") == [], "only y or n answer the question"
+        await run.press("n")
+        assert run.session.sent("escalation.decide") == [
+            {"escalation_id": "e1", "decision": "allow", "note": None}
+        ]
         assert run.composer == "a drafta", "the draft is kept"
+
+
+async def test_a_text_in_the_composer_can_go_along_as_the_note() -> None:
+    async with running("escalation") as run:
+        await run.type("please not on main")
+        await run.press("alt+d", "y")
+        assert run.session.sent("escalation.decide") == [
+            {"escalation_id": "e1", "decision": "deny", "note": "please not on main"}
+        ]
+        assert run.composer == ""
 
 
 async def test_a_refusal_of_the_session_is_shown_on_the_card() -> None:
@@ -692,12 +713,17 @@ async def test_slash_commands_do_what_the_line_client_does() -> None:
         await run.press("ctrl+u")
         await run.type("/shutdown")
         await run.press("enter")
-        assert run.session.sent("shutdown") == [] and "type /shutdown confirm" in run.line(
-            "composer-head"
-        )
-        await run.press("ctrl+u")
-        run.app.run_command("search")
-        assert "not built yet" in run.line("composer-head")
+        assert isinstance(run.app.screen, ConfirmScreen) and run.session.sent("shutdown") == []
+        await run.press("s", "h", "enter")
+        assert isinstance(run.app.screen, ConfirmScreen), "the whole word is needed"
+        await run.press("escape")
+        assert not isinstance(run.app.screen, ConfirmScreen)
+        assert run.session.sent("shutdown") == []
+        await run.type("/shutdown")
+        await run.press("enter")
+        await run.press(*"shutdown", "enter")
+        await run.pilot.pause()
+        assert run.session.sent("shutdown") == [{}]
 
 
 async def test_pages_show_usage_help_and_the_checkers_context() -> None:

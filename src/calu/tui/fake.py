@@ -326,6 +326,7 @@ class FakeSession:
             case "session.start":
                 self.model = params.get("model") or self.model
                 self.effort = params.get("effort") or self.effort
+                self.claude_session_id = params.get("resume_id") or "0new0000-claude"
                 await self.emit("session.state", {"state": "starting"})
                 await self.emit("session.state", {"state": "idle"})
             case "honesty.clear":

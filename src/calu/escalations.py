@@ -25,6 +25,7 @@ import itertools
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -408,6 +409,7 @@ class EscalationDesk:
                 tool_input=step.tool_input,
                 reason=reason,
                 rendered=rendered,
+                opened_at=datetime.now(UTC),
             )
             self.escalations[escalation_id] = esc
         finally:

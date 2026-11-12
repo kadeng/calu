@@ -8,11 +8,12 @@ number, and why the connection closed. `calu.protocol.client.ProtocolClient` fit
 continues after a sequence number; `protocol_connector` wraps `calu.protocol.client.connect`.
 
 `Link.run` is the reconnect loop of `calu.attach.attach` with the model in place of the
-printer: on the first attach it takes the replayed events and a snapshot; when the session
+printer: on the first attach it takes the stored history of the session (`session.history`),
+the replayed events below it and a snapshot; when the session
 closes the connection because this client fell behind, it connects again after the last event
 it applied, at most `calu.attach.MAX_RECONNECTS` times in a row without an event in between;
-when the session can no longer replay the missed events, it forgets the session data, applies
-the events it did get and takes the rest from a snapshot.
+when the session can no longer replay the missed events, it forgets the session data, loads
+the stored history again, applies the events it did get and takes the rest from a snapshot.
 """
 
 from collections.abc import Callable
@@ -25,6 +26,12 @@ from calu.attach import MAX_RECONNECTS
 from calu.protocol.client import OnEvent, RequestFailed, connect, first_set
 from calu.tui.capabilities import Capabilities, capabilities
 from calu.tui.model import Change, Notice, SessionModel
+
+HISTORY_STEPS = 500
+"""How many stored steps (the newest) the client asks for when it attaches."""
+
+HISTORY_TIMEOUT_S = 8.0
+"""How long the client waits for the stored history before it shows the session without it."""
 
 CLIENT_NAME = "calu attach (full screen)"
 """How this client names itself in `initialize`, for the session's log."""
@@ -123,6 +130,7 @@ class Link:
         notify: Callable[[Change], None],
         clock: Callable[[], float],
         after_seq: int = 0,
+        history: bool = True,
     ) -> None:
         """Create the link; `run` starts it.
 
@@ -133,9 +141,14 @@ class Link:
                 not send requests, because the connection reads no response while it runs.
             clock: The client clock in seconds (monotonic).
             after_seq: Sequence number the first subscription continues after.
+            history: Whether the stored history of the session is loaded above the replayed
+                events on the first attach (not with an `after_seq` above 0) and after a
+                rebuild.
         """
         self.connector = connector
         self.model = model
+        self.history = history
+        model.clock = clock
         self.notify = notify
         self.clock = clock
         self.after_seq = after_seq
@@ -146,9 +159,18 @@ class Link:
         self.stop = anyio.Event()
         self._stale = anyio.Event()
         self._replaying = False
-        self._seen_event = False
+        self._reload = False
         self._held: list[tuple[str, dict[str, Any]]] | None = None
         """The events replayed by a reconnect, until it is known whether a gap precedes them."""
+
+    def reload(self) -> None:
+        """Ask `run` to forget the session data and build the view again.
+
+        Used after the client started the session with another conversation: the stored
+        history of the conversation that runs now is loaded, then a snapshot.
+        """
+        self._reload = True
+        self._stale.set()
 
     def detach(self) -> None:
         """Ask `run` to close the connection and return. The session keeps running."""
@@ -159,8 +181,8 @@ class Link:
 
         A replayed event gets no time. A change of the session state that involves a start
         marks the snapshot as stale, because model and effort are not part of any event. While
-        a reconnect replays, the events are held back until `run` knows whether the replay
-        continues without a gap (`_release`).
+        a connection replays, and until the stored history is loaded, the events are held back
+        (`_release`), so that they are applied below what precedes them.
 
         Args:
             method: The notification method.
@@ -170,15 +192,6 @@ class Link:
             self._held.append((method, params))
             return
         change = Change()
-        if not self._seen_event:
-            self._seen_event = True
-            if self._replaying and self.after_seq == 0 and int(params.get("seq") or 0) > 1:
-                change.merge(
-                    self.model.note(
-                        "above: events the session no longer holds for replay "
-                        "(/history shows the stored conversation)"
-                    )
-                )
         before = self.model.state
         change.merge(self.model.apply(method, params, None if self._replaying else self.clock()))
         after = self.model.state
@@ -188,24 +201,74 @@ class Link:
         if change:
             self.notify(change)
 
-    async def _release(self, rebuild: bool) -> None:
-        """Apply the events a reconnect replayed, after a reset if a gap precedes them.
+    async def _history(self, connection: Connection) -> dict[str, Any] | None:
+        """Ask the session for its stored conversation (`session.history`).
 
         Args:
-            rebuild: The session could not replay every missed event: forget the session data
-                first and say so in the transcript; the replayed events follow that line.
+            connection: The open connection.
+
+        Returns:
+            The result, or None if the session refused, answered with something else than an
+            object, or took longer than `HISTORY_TIMEOUT_S`.
         """
-        held, self._held = self._held or [], None
+        result: Any = None
+        with anyio.move_on_after(HISTORY_TIMEOUT_S):
+            try:
+                result = await connection.request("session.history", {"limit": HISTORY_STEPS})
+            except RequestFailed:
+                return None
+        return result if isinstance(result, dict) else None
+
+    async def _release(self, connection: Connection, first: bool, reload: bool = False) -> None:
+        """Apply the events a connection replayed, below what the session has stored.
+
+        On the first attach, and after a reconnect whose replay has a gap, the model starts
+        empty: the stored history of the session comes first (`SessionModel.load_history`,
+        without what the replayed events cover), then the replayed events. A line of the client
+        says where a gap is: after a rebuild, and when the replay does not reach back to the
+        start of the session and the session has no stored history for the part before.
+
+        Args:
+            connection: The open connection.
+            first: Whether this is the first attach of this link.
+            reload: The model was emptied on purpose (`reload`): load the stored history
+                whatever sequence number the link started after, and name no gap.
+        """
+        rebuild = not first and not connection.complete
         if rebuild:
             self.model.reset()
-            change = Change(rebuilt=True)
-            change.merge(
-                self.model.note(
-                    "the session could not replay every event this client missed: "
-                    "the view was rebuilt from the session's current state"
+            self.notify(Change(rebuilt=True))
+        if first or rebuild:
+            stored = Change()
+            wanted = self.history and (rebuild or reload or self.after_seq == 0)
+            raw = await self._history(connection) if wanted else None
+            held = self._held or []
+            if raw is not None:
+                ids = [str(params.get("tool_use_id") or "") for _, params in held]
+                inputs = [
+                    str(params.get("text") or "")
+                    for method, params in held
+                    if method == "user.input"
+                ]
+                stored = self.model.load_history(raw, [i for i in ids if i], inputs)
+            gap = not reload and bool(held) and int(held[0][1].get("seq") or 0) > 1
+            if rebuild:
+                stored.merge(
+                    self.model.note(
+                        "the session could not replay every event this client missed: "
+                        "the view was rebuilt from the session's current state"
+                    )
                 )
-            )
-            self.notify(change)
+            elif gap and not stored.blocks_added and self.after_seq == 0:
+                stored.merge(
+                    self.model.note(
+                        "above: events the session no longer holds for replay "
+                        "(/history shows the stored conversation)"
+                    )
+                )
+            if stored:
+                self.notify(stored)
+        held, self._held = self._held or [], None
         self._replaying = True
         for method, params in held:
             await self._on_event(method, params)
@@ -241,13 +304,12 @@ class Link:
         first = True
         while not self.stop.is_set():
             self._replaying = True
-            self._held = None if first else []
+            self._held = []
             try:
                 async with self.connector(self._on_event, after_seq) as connection:
                     self._replaying = False
                     self.connection = connection
-                    if not first:
-                        await self._release(rebuild=not connection.complete)
+                    await self._release(connection, first)
                     await self._snapshot(connection)
                     first = False
                     self.notify(self.model.set_connection("attached"))
@@ -256,6 +318,12 @@ class Link:
                         if self._stale.is_set():
                             self._stale = anyio.Event()
                             if not (self.stop.is_set() or connection.closed.is_set()):
+                                if self._reload:
+                                    self._reload = False
+                                    self._held = []
+                                    self.model.reset()
+                                    self.notify(Change(rebuilt=True))
+                                    await self._release(connection, first=True, reload=True)
                                 await self._snapshot(connection)
                     if connection.last_seq > after_seq:
                         reconnects = 0

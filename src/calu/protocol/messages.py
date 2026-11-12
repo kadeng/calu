@@ -768,6 +768,10 @@ class EscalationRequest(Event):
     asked them, each with `question`, `header`, `options` (`label` and `description`) and
     `multiSelect`. A client shows the options and answers with `escalation.decide {answer}`.
     Empty for every other escalation."""
+    opened_at: datetime | None = None
+    """When the step began to wait. The snapshot of `state.get` carries the same value, so a
+    client that attaches later can say how long the step has waited. None from a session that
+    does not report it."""
 
 
 class EscalationResolved(Event):

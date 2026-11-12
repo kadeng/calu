@@ -184,8 +184,54 @@ Screen {
 
 /* ---- full-screen views */
 
-DetailScreen, TextScreen {
+DetailScreen, TextScreen, DiffScreen {
     background: $background;
+}
+
+#diff-title {
+    height: 1;
+    background: $panel;
+}
+
+#diff-scroll {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+#diff-body {
+    height: auto;
+}
+
+#diff-comment {
+    display: none;
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $surface;
+}
+
+#diff-keys {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+}
+
+ConfirmScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#confirm-box {
+    width: 76;
+    max-width: 94%;
+    height: auto;
+    padding: 1 2;
+    border: round $warning;
+    background: $surface;
+}
+
+#confirm-body {
+    height: auto;
 }
 
 #detail-scroll, #text-scroll {

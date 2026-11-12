@@ -651,6 +651,65 @@ def long_session(steps: int = 2000) -> list[Item]:
     return items
 
 
+def stored_history() -> dict[str, Any]:
+    """Build what `session.history` returns for a session with two finished turns.
+
+    Returns:
+        A `SessionHistoryResult` as a dict: two turns with their inputs and answers, and three
+        stored steps (a read, an edit, a denied command).
+    """
+    return {
+        "calu_session_id": "calu-7d41",
+        "claude_session_id": "5f0c2a9e-claude",
+        "chat_summary": "",
+        "turns": [
+            {
+                "index": 1,
+                "user_inputs": ["Find out where the step gate decides."],
+                "answer": "The decision is made in `check_step` in `src/gate.py`.",
+                "ended_at": "2026-11-12T09:14:00Z",
+            },
+            {
+                "index": 2,
+                "user_inputs": ["Add a docstring to it."],
+                "answer": "`check_step` has a docstring now.",
+                "ended_at": "2026-11-12T09:20:00Z",
+            },
+        ],
+        "steps": [
+            {
+                "seq": 1,
+                "turn": 1,
+                "tool_use_id": "h1",
+                "tool_name": "Grep",
+                "tool_input": {"pattern": "def check_step"},
+                "decision": "pass",
+                "summary": "searched for the definition of check_step",
+                "result_summary": "src/gate.py:1",
+            },
+            {
+                "seq": 2,
+                "turn": 2,
+                "tool_use_id": "h2",
+                "tool_name": "Edit",
+                "tool_input": {"file_path": "src/gate.py"},
+                "decision": "pass",
+                "summary": "added a docstring to check_step",
+            },
+            {
+                "seq": 3,
+                "turn": 2,
+                "tool_use_id": "h3",
+                "tool_name": "Bash",
+                "tool_input": {"command": "cat ~/.netrc"},
+                "decision": "deny",
+                "reason": "the task does not need this file",
+                "summary": "read a credentials file",
+            },
+        ],
+    }
+
+
 SCENARIOS: dict[str, Callable[[], list[Item]]] = {
     "simple_turn": simple_turn,
     "escalation": escalation_scenario,

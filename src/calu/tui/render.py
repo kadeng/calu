@@ -20,6 +20,7 @@ a denial, the reason of an escalation, the answer to a question.
 import difflib
 import io
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar
@@ -343,7 +344,8 @@ def _right_of(step: StepBlock, view: View) -> Text:
 
     Returns:
         The waiting time of an open escalation, else the size of the diff, else the duration,
-        else `running` for a step that was let through and has no result; "" otherwise.
+        else `running` for a step that was let through and has no result yet; "" otherwise,
+        and for a step of the stored history, of which only the verdict is known.
     """
     palette = view.palette
     if step.waiting == "open":
@@ -356,7 +358,7 @@ def _right_of(step: StepBlock, view: View) -> Text:
         return Text.assemble((f"+{added}", palette.green), " ", (f"-{removed}", palette.red))
     if step.duration is not None and step.verdict not in {"DENY", "DENIED", "CANCELLED"}:
         return Text(duration_text(step.duration), palette.muted)
-    if step.result is None and step.verdict in {"PASS", "ALLOW", "ALLOWED"}:
+    if step.result is None and not step.stored and step.verdict in {"PASS", "ALLOW", "ALLOWED"}:
         return Text("running", palette.accent)
     return Text("")
 
@@ -1236,6 +1238,8 @@ def panel_lines(
     view: View,
     caps: Capabilities,
     selected: str | None = None,
+    held: Sequence[str] = (),
+    focused: bool = False,
 ) -> tuple[list[Text], dict[int, tuple[str, str]]]:
     """Render the supervision panel: what needs the user, the agents, the queue, the session.
 
@@ -1244,10 +1248,13 @@ def panel_lines(
         view: Width (of the panel's inside), colours, clock and the selected tab.
         caps: What the session offers; a missing function is named as not available.
         selected: The id of the escalation the decision card shows.
+        held: The drafts this client holds back until the session is idle, oldest first.
+        focused: Whether the panel has the focus; each section then names its keys.
 
     Returns:
-        The lines, and for mouse clicks a map from line index to `("decision", id)` or
-        `("agent", key)`.
+        The lines, and a map from line index to what the line stands for: `("decision", id)`,
+        `("agent", key)`, `("queue", message id)`, `("held", index)` or `("mark", id)`. A
+        click or the panel's cursor selects by it.
     """
     palette = view.palette
     width = view.width
@@ -1304,13 +1311,28 @@ def panel_lines(
             (f" {delivery} ", palette.accent if entry.delivery == "inject" else palette.muted),
             (f"→ {cut(model.label(None if entry.to == MAIN else entry.to), 8)} ", palette.muted),
         )
-        row.append(cut(entry.text, max(4, width - row.cell_len)), palette.fg)
+        row.append(cut(" ".join(entry.text.split()), max(4, width - row.cell_len)), palette.fg)
+        targets[len(lines)] = ("queue", entry.id)
         lines.append(row)
     if model.queue:
-        lines.append(
-            Text(" " + cut("a sent message cannot be withdrawn", width - 2), palette.faint)
-        )
+        hint = "enter text · c copy · r reuse" if focused else "a sent message cannot be withdrawn"
+        lines.append(Text(" " + cut(hint, width - 2), palette.faint))
     lines.append(Text(""))
+
+    if held:
+        lines.append(_section("HELD", len(held), view, "not sent"))
+        for index, draft in enumerate(held):
+            row = Text.assemble((" draft  ", palette.orange))
+            row.append(cut(" ".join(draft.split()), max(4, width - row.cell_len)), palette.fg)
+            targets[len(lines)] = ("held", str(index))
+            lines.append(row)
+        hint = (
+            "enter edit · s send · d delete"
+            if focused
+            else "sent when the session is idle · lost on detach"
+        )
+        lines.append(Text(" " + cut(hint, width - 2), palette.faint))
+        lines.append(Text(""))
 
     if model.honesty_mode != "off" or model.marks:
         lines.append(_section("HONESTY", len(model.marks), view, model.honesty_mode))
@@ -1318,8 +1340,12 @@ def panel_lines(
             spot = (
                 f"{mark_entry.path}:{mark_entry.symbol}" if mark_entry.symbol else mark_entry.path
             )
+            targets[len(lines)] = ("mark", str(mark_entry.id))
             lines.append(Text(" " + cut(spot, width - 2), palette.fg))
+            targets[len(lines)] = ("mark", str(mark_entry.id))
             lines.append(Text("   " + cut(mark_entry.reason, width - 4), palette.muted))
+        if model.marks and focused:
+            lines.append(Text(" " + cut("enter detail · x clear", width - 2), palette.faint))
         lines.append(Text(""))
 
     lines.append(_section("SESSION", None, view))
@@ -1356,7 +1382,7 @@ def panel_lines(
     if not caps.has("context_fill"):
         lines.append(figure("context", missing, palette.faint))
     elif usage.context is None:
-        lines.append(figure("context", "not known yet (/usage asks)", palette.faint))
+        lines.append(figure("context", "not known yet", palette.faint))
     else:
         context = usage.context
         lines.append(
@@ -1390,6 +1416,58 @@ def panel_lines(
     if usage.background_tasks:
         lines.append(figure("bg tasks", f"{usage.background_tasks} still running"))
     return lines, targets
+
+
+def start_card_lines(
+    model: SessionModel, view: View, next_model: str | None, next_effort: str | None
+) -> list[Text]:
+    """Render the card shown in place of a decision while the session is stopped or failed.
+
+    Args:
+        model: The model.
+        view: Width (of the card's inside) and colours.
+        next_model: The model the next start asks for; None keeps the configured one.
+        next_effort: The effort the next start asks for; None keeps the configured one.
+
+    Returns:
+        The lines: the state, what Enter starts (the conversation, model and effort), and the
+        commands that start something else.
+    """
+    palette = view.palette
+    failed = model.state == "failed"
+    head = Text(
+        "SESSION FAILED" if failed else "SESSION STOPPED",
+        f"bold {palette.red if failed else palette.orange}",
+    )
+    head.append("  ·  calu keeps running, Claude does not", palette.muted)
+    resumes = (
+        f"resumes the conversation {model.claude_session_id[:8]}"
+        if model.claude_session_id
+        else "starts a new conversation"
+    )
+    chosen = f"{next_model or model.model_name or 'default'} / " + (
+        next_effort or model.effort or "default"
+    )
+    lines = [
+        head,
+        Text.assemble(
+            ("  enter", f"bold {palette.fg}"),
+            (f" {resumes} with ", palette.muted),
+            (chosen, f"bold {palette.fg}"),
+        ),
+        *[
+            Text.assemble("  ", row)
+            for row in wrap(
+                Text(
+                    "/model and /effort choose for that start · /sessions resumes another "
+                    "conversation · /start new begins a new one",
+                    palette.muted,
+                ),
+                view.width - 4,
+            )
+        ],
+    ]
+    return lines
 
 
 def reset_text(moment: datetime) -> str:

@@ -18,6 +18,9 @@ Scrolling:
 from bisect import bisect_right
 from dataclasses import dataclass, field
 
+from rich.cells import cell_len
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.geometry import Size
@@ -94,6 +97,12 @@ class Transcript(ScrollView, can_focus=True):
         self._tops: list[int] = []
         self._width = 0
         self._moving = False
+        self.needle = ""
+        """The text the transcript is searched for; "" while no search is on."""
+        self.matches: list[int] = []
+        """The lines (counted from the start of the tab) that contain `needle`, top to bottom."""
+        self.match = -1
+        """Index into `matches` of the line the search stands on; -1 without a match."""
 
     # ------------------------------------------------------------------ rendering
 
@@ -143,6 +152,8 @@ class Transcript(ScrollView, can_focus=True):
             top += len(entry.strips)
         self._tops = [entry.top for entry in self._entries]
         self.virtual_size = Size(0, top)
+        if self.needle:
+            self._find()
 
     def rebuild(self) -> None:
         """Render every block of the tab again: after a tab change, a resize or a reset.
@@ -282,9 +293,110 @@ class Transcript(ScrollView, can_focus=True):
         offset = line - entry.top
         if offset >= len(entry.strips):
             return Strip.blank(width, self.rich_style)
-        return (
+        strip = (
             entry.strips[offset].crop_extend(0, width, self.rich_style).apply_style(self.rich_style)
         )
+        if self.needle and self.matches:
+            place = bisect_right(self.matches, line) - 1
+            if place >= 0 and self.matches[place] == line:
+                strip = self._marked(strip, place == self.match)
+        return strip
+
+    def _marked(self, strip: Strip, current: bool) -> Strip:
+        """Draw every occurrence of the search text in a line on its own background.
+
+        Args:
+            strip: The line.
+            current: Whether the search stands on this line (its matches are orange, those of
+                other lines have the accent colour).
+
+        Returns:
+            The line with the occurrences marked.
+        """
+        text, wanted = strip.text, self.needle.lower()
+        lowered = text.lower()
+        cuts: list[int] = []
+        position = lowered.find(wanted)
+        while position >= 0:
+            cuts += [cell_len(text[:position]), cell_len(text[: position + len(wanted)])]
+            position = lowered.find(wanted, position + len(wanted))
+        if not cuts:
+            return strip
+        colour = self.palette.orange if current else self.palette.accent
+        mark = Style(bgcolor=colour, color=self.palette.bg, bold=True)
+        parts = strip.divide([*cuts, strip.cell_length])
+        marked = [
+            Strip([Segment(seg.text, (seg.style or Style()) + mark) for seg in part])
+            if index % 2
+            else part
+            for index, part in enumerate(parts)
+        ]
+        return Strip.join(marked)
+
+    # ------------------------------------------------------------------ search
+
+    def _find(self) -> None:
+        """Recompute which lines contain the query and keep the search on its line."""
+        wanted = self.needle.lower()
+        before = self.matches[self.match] if 0 <= self.match < len(self.matches) else None
+        self.matches = [
+            entry.top + offset
+            for entry in self._entries
+            for offset, strip in enumerate(entry.strips)
+            if wanted in strip.text.lower()
+        ]
+        if before in self.matches:
+            self.match = self.matches.index(before)
+        elif self.match >= len(self.matches):
+            self.match = len(self.matches) - 1
+
+    def search(self, query: str) -> int:
+        """Search the lines of the tab for a text, ignoring case, and show the newest match.
+
+        The lines that contain the text get their own background. The search stands on the
+        last match at or above the bottom of the view and scrolls it into view; `search_step`
+        moves it. An empty query ends the search and removes the marks.
+
+        Args:
+            query: The text to look for.
+
+        Returns:
+            The number of lines that contain it.
+        """
+        self.needle = query
+        self.matches, self.match = [], -1
+        if query:
+            self._find()
+            bottom = round(self.scroll_y) + self.scrollable_content_region.height - 1
+            self.match = bisect_right(self.matches, bottom) - 1
+            if self.match < 0 and self.matches:
+                self.match = 0
+            self._show_match()
+        self.refresh()
+        return len(self.matches)
+
+    def search_step(self, delta: int) -> None:
+        """Move the search to another match and scroll it into view.
+
+        Args:
+            delta: -1 for the match above (older), +1 for the one below; the ends wrap.
+        """
+        if not self.matches:
+            return
+        self.match = (self.match + delta) % len(self.matches)
+        self._show_match()
+        self.refresh()
+
+    def _show_match(self) -> None:
+        """Scroll so that the match the search stands on is in the upper half of the view."""
+        if not 0 <= self.match < len(self.matches):
+            return
+        line = self.matches[self.match]
+        height = self.scrollable_content_region.height
+        top = round(self.scroll_y)
+        if not top <= line < top + height:
+            target = min(self.max_scroll_y, max(0, line - height // 3))
+            self.scroll_to(y=target, animate=False, immediate=True)
 
     def visible_text(self) -> list[str]:
         """Return the text of the visible lines, for tests of what the user sees.
