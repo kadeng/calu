@@ -92,6 +92,7 @@ from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
 from calu.setup import enable_operator_login, seed_defaults, setup
 from calu.store.projects import register_directory
+from calu.tui import start as tui_start
 
 
 class CliError(Exception):
@@ -1071,8 +1072,13 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
     client with the token it printed at its start. Without one it finds the session running in
     this directory and mints its own token, which it revokes when it ends (PLAN.md D105).
 
+    On a terminal this is the full-screen client (`calu.tui`, the extra `tui`); with `--plain`,
+    through a pipe, or without Textual installed it is the line client (`calu.attach`). The
+    choice is made by `calu.tui.start.wants_full_screen`.
+
     Args:
-        args: Parsed arguments (`address`, `token`, `session`, `after_seq`, `thinking`).
+        args: Parsed arguments (`address`, `token`, `session`, `after_seq`, `thinking`,
+            `plain`).
         store: The credential store; used only when no address is given.
 
     Raises:
@@ -1081,7 +1087,15 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
     """
     endpoint = _endpoint_of(args, store, "calu attach")
     try:
-        code = asyncio.run(attach(endpoint.address, endpoint.token, args.after_seq, args.thinking))
+        if tui_start.wants_full_screen(args.plain):
+            # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
+            ended = tui_start.run_tui(endpoint.address, endpoint.token, args.after_seq)
+            print("\n".join(tui_start.exit_lines(ended)))
+            code = ended.code
+        else:
+            code = asyncio.run(
+                attach(endpoint.address, endpoint.token, args.after_seq, args.thinking)
+            )
     except (OSError, RequestFailed) as exc:
         raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
     finally:
@@ -2490,6 +2504,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--after-seq", type=int, default=0, help="continue after this event sequence number"
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
+    p.add_argument(
+        "--plain",
+        action="store_true",
+        help="the line client instead of the full-screen one (a pipe always gets the line client)",
+    )
     p.set_defaults(handler=cmd_attach)
 
     p = sub.add_parser("acp", help="serve a running session to an ACP editor (stdin/stdout)")

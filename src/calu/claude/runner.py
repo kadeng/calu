@@ -8,14 +8,14 @@
 (`fake_runner.py`) replays a script and is used by tests and front-end development.
 """
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, Protocol
 
 from calu.checkers.model import Step
 from calu.checkers.result_checker import SubagentResult
-from calu.protocol.messages import AgentInfo, Event
+from calu.protocol.messages import AgentInfo, ContextUsage, Event
 
 EventSink = Callable[[Event], Awaitable[None]]
 """Receives events in the order Claude produced them. Must not block for long.
@@ -40,6 +40,14 @@ under "User:". A message of another Claude session keeps its own source, "cross_
 
 NOT_FROM_USER_LABEL = "Automatic message from calu or Claude Code, not from the user"
 """Turn entry label of a `NOT_FROM_USER` message, as the checkers read it."""
+
+
+class SideQuestionFailed(Exception):
+    """A side question got no answer; the message says why, for the client that asked."""
+
+
+class ModelChangeFailed(Exception):
+    """The model of the running session was not changed; the message says why."""
 
 
 class StartRefused(Exception):
@@ -235,4 +243,45 @@ class ClaudeRunner(Protocol):
 
     async def stop(self) -> None:
         """End the session; `run` returns soon after."""
+        ...
+
+    async def side_question(self, question: str, history: Sequence[tuple[str, str]] = ()) -> str:
+        """Ask Claude a question beside the running work and return its answer.
+
+        Claude Code answers from the conversation as it stands, without tools, while a turn of
+        the main agent may be running. The question and the answer do not enter the
+        conversation: no turn starts or ends, no tool call is made, and no event is reported
+        to the sink.
+
+        Args:
+            question: The question.
+            history: Earlier side questions of the same asker with their answers, oldest
+                first, so that a follow-up can refer to them.
+
+        Returns:
+            The answer text.
+
+        Raises:
+            SideQuestionFailed: If no session runs, or Claude Code gave no answer (it was
+                cancelled, refused, or timed out); the message says which.
+        """
+        ...
+
+    async def context_usage(self) -> ContextUsage | None:
+        """Ask Claude Code how full the context window of the main agent is.
+
+        Returns:
+            The numbers, or None if no session runs or Claude Code did not answer.
+        """
+        ...
+
+    async def set_model(self, model: str | None) -> None:
+        """Change the model of the running session; it applies from the next model request.
+
+        Args:
+            model: A Claude Code alias or model id; None for Claude Code's default model.
+
+        Raises:
+            ModelChangeFailed: If no session runs or Claude Code refused the change.
+        """
         ...
