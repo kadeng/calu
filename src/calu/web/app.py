@@ -35,11 +35,12 @@ or put a TLS proxy with its own authentication in front of it. Everything the pa
 import ipaddress
 import logging
 import re
+import secrets
 from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -162,7 +163,7 @@ def check_host(host: str) -> None:
         )
 
 
-def create_app(db: Db, git_url_template: str = "") -> Starlette:
+def create_app(db: Db, git_url_template: str = "", token: str | None = None) -> Starlette:
     """Build the web application on an open database connection.
 
     The connection is used by every request, and `calu.db.Db` serializes the statements, so
@@ -173,6 +174,8 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         db: The database connection (owner or `calu_operator` rights).
         git_url_template: `web.git_url_template` for commit links to a git browser that is
             neither GitHub, GitLab nor Bitbucket ("" guesses from the project's remote).
+        token: The login token every request must carry (`TokenGate`, D161). `calu web`
+            always passes one; None leaves the gate out, for in-process tests.
 
     Returns:
         The Starlette application, ready for uvicorn.
@@ -233,7 +236,10 @@ def create_app(db: Db, git_url_template: str = "") -> Starlette:
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
-    return Starlette(routes=routes, middleware=[Middleware(LocalOnly)])
+    middleware = [Middleware(LocalOnly)]
+    if token is not None:
+        middleware.append(Middleware(TokenGate, token=token))
+    return Starlette(routes=routes, middleware=middleware)
 
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
@@ -241,6 +247,102 @@ LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]", "::1"})
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 """Methods that change nothing, and are therefore not checked for their origin."""
+
+
+TOKEN_COOKIE = "calu_web_token"
+"""Cookie that carries the login token of `calu web` after the first visit (D161)."""
+
+
+class TokenGate:
+    """Let through only requests that carry the token `calu web` printed (PLAN.md D161).
+
+    `LocalOnly` keeps other websites out, but not other processes of this user: Claude runs
+    as the same user, and a `curl -X POST .../escalations/1/resolve` from its Bash would decide
+    its own step. So the interface has a login of the kind a local web tool usually has: a
+    random token, printed with the address at start (`http://127.0.0.1:8800/?token=...`).
+
+        GET /?token=<right>         ->  303 to / with an HttpOnly, SameSite=Strict cookie
+        request with the cookie     ->  passes
+        anything else               ->  401 (HTTP) or close code 1008 (WebSocket)
+
+    The token lives only in the process and the browser; a restart prints a new one.
+    """
+
+    def __init__(self, app: Any, token: str) -> None:
+        """Wrap the application.
+
+        Args:
+            app: The ASGI application.
+            token: The secret; a request must carry it as `TOKEN_COOKIE` or `?token=`.
+        """
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        """Pass a request on, exchange a token in the URL for a cookie, or refuse it.
+
+        Args:
+            scope: The ASGI scope.
+            receive: The ASGI receive channel.
+            send: The ASGI send channel.
+        """
+        if scope["type"] not in ("http", "websocket"):
+            await self.app(scope, receive, send)
+            return
+        if self._has_cookie(scope):
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] == "websocket":
+            await send({"type": "websocket.close", "code": 1008})
+            return
+        query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+        offered = (query.get("token") or [""])[0]
+        if offered and secrets.compare_digest(offered, self.token):
+            rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
+            location = scope.get("path", "/") + (f"?{rest}" if rest else "")
+            cookie = f"{TOKEN_COOKIE}={self.token}; HttpOnly; SameSite=Strict; Path=/"
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 303,
+                    "headers": [
+                        (b"location", location.encode("latin-1")),
+                        (b"set-cookie", cookie.encode("latin-1")),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+            return
+        body = (
+            b"calu web: open the address that `calu web` printed when it started; it carries "
+            b"the login token (once per browser).\n"
+        )
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
+
+    def _has_cookie(self, scope: Any) -> bool:
+        """Tell whether the request carries the right token cookie.
+
+        Args:
+            scope: The ASGI scope.
+
+        Returns:
+            True if a `TOKEN_COOKIE` with the token is among its cookies.
+        """
+        for name, value in scope.get("headers", []):
+            if name.lower() != b"cookie":
+                continue
+            for part in value.decode("latin-1").split(";"):
+                key, _, given = part.strip().partition("=")
+                if key == TOKEN_COOKIE and secrets.compare_digest(given, self.token):
+                    return True
+        return False
 
 
 class LocalOnly:

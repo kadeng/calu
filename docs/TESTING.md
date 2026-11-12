@@ -153,8 +153,9 @@ escalation resolved from the database alone.
 6. A deny-list escalation resolved from the database alone: `calu escalations`,
    `calu escalation <id>`, `calu resolve <id> deny --note ...` — the session continues within a
    second.
-7. `calu web`: the fleet, a session at all four levels of detail, the triage queue, the settings
-   page, Ctrl+K.
+7. `calu web`: open the printed address (it carries the token); the plain address must answer
+   401, and a `curl -X POST` without the cookie must not decide anything (D161). Then the
+   fleet, a session at all four levels of detail, the triage queue, the settings page, Ctrl+K.
 8. The session mode from a client (D42): with a session running, set `auto_escalate.edits` on
    the settings page and watch an attached `calu attach` report it; then the session page must
    list the change with who asked for it (D43). With an ACP editor, the same through its own

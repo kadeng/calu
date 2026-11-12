@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**813 tests pass** (plus 11 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**814 tests pass** (plus 11 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 239 commits, ~28.5k lines of Python in `src` (~31.5k with the SQL, templates and
 default instructions), ~16.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -161,7 +161,7 @@ there.
   `/start /stop /interrupt /allow /deny /inject /to /comment /why /checkers /state /context
   /sessions /history /shutdown`. `calu protocol [--out FILE]` writes the JSON Schema.
 - **The web interface** (phase 6, `src/calu/web/`, the optional `web` extra): `calu web` serves
-  the loopback interface only (no login yet, Q4). The fleet page groups sessions as every such
+  the loopback interface only, behind the token it prints at start (D161). The fleet page groups sessions as every such
   tool does and leads with the ones that need a human (Needs you / Working / Idle / Ended), with
   a filter. A session page shows its history at four levels of detail (the narrated summary a
   checker reads, compact, detailed, full), its subagents, and ready-to-run connect commands with

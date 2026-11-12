@@ -95,13 +95,23 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
     await server.stdin.send(f"{password}\n".encode())
     try:
         with anyio.fail_after(START_TIMEOUT_S):
-            async with httpx.AsyncClient() as client:
+            # The address it prints carries the login token (D161).
+            assert server.stdout is not None
+            printed = b""
+            while b"?token=" not in printed or not printed.endswith(b"\n"):
+                printed += await server.stdout.receive(4096)
+            line = next(x for x in printed.decode().splitlines() if "?token=" in x)
+            address = line.split()[3]
+            assert address.startswith(f"http://127.0.0.1:{port}/?token=")
+            async with httpx.AsyncClient(follow_redirects=True) as client:
                 while True:
                     try:
-                        answer = await client.get(f"http://127.0.0.1:{port}/", timeout=2)
+                        refused = await client.get(f"http://127.0.0.1:{port}/", timeout=2)
                         break
                     except httpx.HTTPError:
                         await anyio.sleep(0.3)
+                assert refused.status_code == 401, "no token, no page"
+                answer = await client.get(address, timeout=5)
             assert answer.status_code == 200
             assert "calu" in answer.text
             # An empty database is the first thing a new user sees, so the page has to say

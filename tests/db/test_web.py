@@ -967,3 +967,42 @@ def test_the_guard_closes_a_websocket_from_another_site() -> None:
     )
     assert guard.refusal(scope("http", host="[::1]:8800")) is None, "IPv6 loopback is loopback"
     assert guard.refusal(scope("http", host="192.168.1.5:8800")), "not this machine's loopback"
+
+
+async def test_without_the_token_nothing_is_served_and_nothing_decided(db_url: str) -> None:
+    """D161: `LocalOnly` stops other websites, not other local processes -- Claude's own
+    `curl -X POST .../resolve` included. `calu web` therefore prints a token, and only a
+    request carrying it (as `?token=` once, then as a cookie) gets through."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await populate(db)
+        app = create_app(db, git_url_template="", token="s3cret")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as plain:
+            refused = await plain.get("/")
+            assert refused.status_code == 401
+            assert "printed" in refused.text, "says how to get in"
+            assert (
+                await plain.post("/escalations/1/resolve", data={"decision": "allow"})
+            ).status_code == 401
+            assert (await plain.get("/?token=wrong")).status_code == 401
+            async with plain.stream("GET", "/static/calu.css") as css:
+                assert css.status_code == 401
+
+            entered = await plain.get("/?token=s3cret&project=x")
+            assert entered.status_code == 303
+            assert entered.headers["location"] == "/?project=x", "the token leaves the URL"
+            cookie = entered.headers["set-cookie"]
+            assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://127.0.0.1", cookies={"calu_web_token": "s3cret"}
+        ) as browser:
+            assert (await browser.get("/")).status_code == 200
+        # Nothing was decided by the refused POST.
+        cur = await conn.execute("SELECT state FROM escalations ORDER BY id")
+        assert {row[0] for row in await cur.fetchall()} == {"open"}
+    finally:
+        await conn.close()

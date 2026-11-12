@@ -44,6 +44,7 @@ import asyncio
 import getpass
 import json
 import os
+import secrets
 import shlex
 import shutil
 import socket
@@ -999,11 +1000,18 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
             db = Db(conn)
             values = await admin.settings(db)
             template = str((values.get("web") or {}).get("git_url_template") or "")
-            app = create_app(db, git_url_template=template)
+            # The login token (D161): any local process could otherwise decide escalations,
+            # Claude's own `curl` included. New on every start, never stored.
+            token = secrets.token_urlsafe(24)
+            app = create_app(db, git_url_template=template, token=token)
             # Flushed: this is the one line a user needs, and the process then serves for
             # hours. Without it the address sits in a buffer whenever stdout is a pipe -- a
             # log file, a systemd unit, `tmux pipe-pane` -- and the user sees nothing (D125).
-            print(f"calu web on http://{args.host}:{args.port} (no login: local only)", flush=True)
+            print(
+                f"calu web on http://{args.host}:{args.port}/?token={token}"
+                " (open it once per browser; the token is your login, keep it to yourself)",
+                flush=True,
+            )
             config = uvicorn.Config(
                 app, host=args.host, port=args.port, log_level="warning", access_log=False
             )

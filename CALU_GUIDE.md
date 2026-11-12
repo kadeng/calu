@@ -550,11 +550,14 @@ one line of `/help`. The ones that matter while a step waits:
 
 ## From another machine
 
-Nothing calu runs binds a public interface, and that is deliberate: there is no login in front
-of the web interface and no TLS in front of a session's WebSocket. The web interface does refuse
-what another site could make your browser send to it -- every request must name a loopback
-host, and anything that changes state must come from its own pages -- so a web page you happen
-to have open cannot answer an escalation for you (PLAN.md D136). Two ways to work remotely:
+Nothing calu runs binds a public interface, and that is deliberate: the web interface has only
+a local login and a session's WebSocket has no TLS. The web interface refuses what another
+site could make your browser send to it -- every request must name a loopback host, and
+anything that changes state must come from its own pages -- so a web page you happen to have
+open cannot answer an escalation for you (PLAN.md D136). And it serves only requests that carry
+the token `calu web` prints at start, so another program of yours -- Claude's own `curl`
+included -- cannot answer one either (D161). The token is new on every start and becomes a
+cookie on the first visit. Two ways to work remotely:
 
 **Through the database.** The five commands above need nothing but a reachable PostgreSQL, so
 an operator anywhere can watch the fleet and answer escalations without touching the machines
@@ -629,7 +632,7 @@ calu token revoke 3
 A browser shows every session of every host at once:
 
 ```bash
-calu web          # http://127.0.0.1:8800, local only: there is no login yet
+calu web          # prints http://127.0.0.1:8800/?token=...: open it once per browser
 ```
 
 A session stamps the database every few seconds, so the fleet separates the sessions that are

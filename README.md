@@ -226,7 +226,7 @@ cannot go on without you — plus each session's history, its diffs, the triage 
 settings and the checker instructions:
 
 ```bash
-calu web          # http://127.0.0.1:8800, local only: there is no login yet
+calu web          # prints http://127.0.0.1:8800/?token=...: open it once per browser
 ```
 
 From another machine, forward the port instead of opening it: `ssh -L 8800:127.0.0.1:8800
