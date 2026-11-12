@@ -585,7 +585,22 @@ work for a developer without the owner. In short:
 | 4. Smaller gaps | **done** (by design, or D44) | -- |
 | 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
-| 7. Honesty enforcement | built, off; options D141/D142 built | Q17-Q20 |
+| 7. Honesty enforcement | built, off; **under redesign**: it cannot hold for changes made by a command or at scale | the owner's answers to the redesign proposal |
+| 8. Splitting `session.py` | in progress on the branch `refactor/session-split` (run state, escalations, gate, write sets) | -- |
+| 9. Auto mode by default | open | Q22 |
+
+Open developer work that needs no decision:
+
+- `herd.close_gone` takes "ran on this host" from the hostname alone. Two machines or
+  containers with the same hostname have different process tables, so a listing on one can
+  cancel the open escalation of a silent session of the other (the step is then refused, not
+  run). A machine identity recorded with the session would settle it; that changes
+  `calu_start_session` and needs a migration.
+- A checker's model and limits live in two places: the configuration sections for the four
+  route checkers, the `checker_types` row for every other checker. One source
+  (`checkers.<name>` in the configuration, with defaults) would remove the special case; it
+  needs a migration and changes `calu checker set --model`.
+- `cli.py` (about 2,500 lines) should become a package with one module per command group.
 
 Beyond the plan, 2026-11-12 hardened the rules engine (D145-D177, five review rounds); its
 standing conclusion is in D175: the rules are a best-effort layer, the sandbox -- required by
