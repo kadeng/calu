@@ -305,7 +305,7 @@ async def test_trust_and_review_requests_and_a_session_without_them() -> None:
         )
         assert not (await actions.honesty_review()).ok
         session.honesty_requests = True
-        assert (await actions.trust()).data == {"commit_id": "4f2a9c1d07"}
+        assert (await actions.trust()).data == {"commit_id": "4f2a9c1d07", "recorded": True}
         await actions.trust("main")
         await actions.trust_file("notes/plan.md")
         assert (await actions.honesty_review()).ok
@@ -437,11 +437,14 @@ async def test_a_session_that_refuses_the_checkers_says_so() -> None:
 # ------------------------------------------------------------------ honesty in the app
 
 STATE = {
-    "baseline": {"commit_id": "4f2a9c1d07aa", "source": "user", "subject": "Rename the helper"},
+    "baseline": "4f2a9c1d07aa",
+    "baseline_source": "user",
     "unreviewed": ["src/gate.py", "notes/plan.md"],
     "unreviewed_count": 2,
+    "unreviewed_all": False,
     "review_required": False,
     "review_running": False,
+    "clean": False,
 }
 """The honesty fields of a session that certifies commits."""
 
@@ -462,7 +465,7 @@ async def test_the_honesty_page_shows_mode_baseline_and_what_is_not_clean() -> N
         for expected in (
             "mode      enforce · code runs and is committed only while the state is clean",
             "state     not clean",
-            "baseline  4f2a9c1d07 · Rename the helper · trusted by user",
+            "baseline  4f2a9c1d07 · trusted by user",
             "MARKED (1)",
             "src/gate.py:judge_step",
             "the docstring is old",

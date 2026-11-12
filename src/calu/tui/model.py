@@ -1141,9 +1141,7 @@ class SessionModel:
         self._set_agents(snapshot.agents)
         self.queue = [Queued(q.id, q.text, q.delivery, q.to) for q in snapshot.queue]
         self.honesty_mode = snapshot.honesty_mode
-        self.marks = [
-            Mark(k.id, k.path, k.symbol, k.reason, "") for k in snapshot.honesty_marks
-        ]
+        self.marks = [Mark(k.id, k.path, k.symbol, k.reason, "") for k in snapshot.honesty_marks]
         self.honesty = honesty_from(raw)
         self.usage.limits = self._limits(snapshot.rate_limits)
         listed = {request.escalation_id for request in snapshot.escalations}
@@ -1323,9 +1321,7 @@ class SessionModel:
                         change.blocks_updated.add(call.id)
             case m.HonestyUpdate():
                 self.honesty_mode = event.mode
-                self.marks = [
-                    Mark(k.id, k.path, k.symbol, k.reason, "") for k in event.marks
-                ]
+                self.marks = [Mark(k.id, k.path, k.symbol, k.reason, "") for k in event.marks]
                 self.honesty = honesty_from(params)
                 change.honesty = True
             case m.UsageUpdate():

@@ -327,15 +327,14 @@ HONESTY_STATE: dict[str, Any] = {
             "reason": "the docstring still names check_step and says the step is only logged",
         }
     ],
-    "baseline": {
-        "commit_id": "4f2a9c1d07aa",
-        "source": "user",
-        "subject": "Rename the helper in gate.py",
-    },
+    "baseline": "4f2a9c1d07aa",
+    "baseline_source": "user",
     "unreviewed": ["scripts/migrate.sh", "notes/plan.md"],
     "unreviewed_count": 2,
+    "unreviewed_all": False,
     "review_required": False,
     "review_running": False,
+    "clean": False,
 }
 """The honesty state of the honesty pictures: one mark, two unreviewed files."""
 

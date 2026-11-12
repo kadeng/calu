@@ -473,22 +473,22 @@ class FakeSession:
             params: `{rev}` or `{path}` for a trust; nothing for a review.
 
         Returns:
-            `{commit_id}` for a trusted commit, `{path}` for a trusted file, `{findings: 0}`
-            for a review.
+            `HonestyTrustResult` as a dict for a trust (`commit_id` or `path`, `recorded`),
+            `HonestyReviewResult` for a review (`ran`, `problem`).
         """
         extra = dict(self.honesty_extra)
         result: dict[str, Any]
         if method == "honesty.review":
             extra.update(unreviewed=[], unreviewed_count=0, review_required=False)
-            result = {"findings": 0}
+            result = {"ran": True, "problem": ""}
         elif params.get("path"):
             kept = [path for path in extra.get("unreviewed") or [] if path != params["path"]]
             extra.update(unreviewed=kept, unreviewed_count=len(kept))
-            result = {"path": params["path"]}
+            result = {"path": params["path"], "recorded": True}
         else:
             commit = "4f2a9c1d07" if params.get("rev") in {None, "", "HEAD"} else "9e8d7c6b5a"
-            extra["baseline"] = {"commit_id": commit, "source": "user"}
-            result = {"commit_id": commit}
+            extra.update(baseline=commit, baseline_source="user")
+            result = {"commit_id": commit, "recorded": True}
         await self.emit(
             "honesty.update",
             {"marks": list(self.honesty_marks), "mode": self.honesty_mode, **extra},
@@ -524,7 +524,10 @@ class FakeSession:
         self.requests.append((method, params))
         if method in self.fail:
             raise self._refuse(self.fail[method])
-        if self.honesty_requests and method in {"honesty.trust", "honesty.review"}:
+        if method in {"honesty.trust", "honesty.review"}:
+            if not self.honesty_requests:
+                # A session of a calu version before certification: it does not know the method.
+                raise RequestFailed({"code": -32601, "message": f"unknown method {method}"})
             return await self._honesty(method, params)
         model = REQUESTS.get(method)
         if model is None:
