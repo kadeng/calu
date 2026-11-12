@@ -594,6 +594,9 @@ unreadable to Claude's commands; and a built-in rule makes every `calu` command 
 What the rules cannot stop is a script Claude runs that reads the file itself; without the
 sandbox only the checker sees that, and a session says so at its start when a credential has
 no password.
+The local database of `calu db up` asks every connection for a password, including those from
+inside its container (an older one is converted at the next `calu db up`), so `docker exec`
+into it is no way around calu either.
 
 The operator login reads every table, resolves escalations and mints or revokes client tokens,
 and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu

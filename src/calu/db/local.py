@@ -111,6 +111,53 @@ def up(port: int = DEFAULT_PORT, owner_password: str | None = None) -> None:
     )
     if result.returncode != 0:
         raise DockerError(result.stderr.strip() or result.stdout.strip())
+    harden()
+
+
+HARDEN_SCRIPT = (
+    'grep -qE "[[:space:]]trust$" "$PGDATA/pg_hba.conf" || exit 0; '
+    'sed -i -E "s/[[:space:]]trust$/ scram-sha-256/" "$PGDATA/pg_hba.conf" && '
+    'gosu postgres pg_ctl reload -D "$PGDATA" >/dev/null'
+)
+"""Replace every `trust` line of the container's pg_hba.conf with `scram-sha-256` and reload;
+does nothing when none is left (D163)."""
+
+
+def harden() -> None:
+    """Make PostgreSQL in the container ask every connection for a password (PLAN.md D163).
+
+    The official image trusts connections from inside the container, so `docker exec <container>
+    psql -U calu_owner` gets in without a password -- for any program of the user that may use
+    Docker, Claude's included, and with the owner's rights. New volumes are created without
+    trust (`POSTGRES_INITDB_ARGS` in the compose file); this converts a volume created before,
+    in place, and is a no-op afterwards. calu's own connections come through the published port,
+    which already uses `scram-sha-256`, so nothing of calu's changes. Measured on postgres:18:
+    afterwards `psql` inside the container fails without a password, works with it, and the
+    healthcheck (`pg_isready`) is unaffected.
+
+    Side effects: edits pg_hba.conf in the container's data directory and reloads the server.
+
+    Raises:
+        DockerError: If the edit or the reload fails.
+    """
+    result = _run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(compose_file()),
+            "-p",
+            PROJECT,
+            "exec",
+            "-T",
+            "postgres",
+            "sh",
+            "-c",
+            HARDEN_SCRIPT,
+        ]
+    )
+    if result.returncode != 0:
+        raise DockerError(result.stderr.strip() or result.stdout.strip())
 
 
 def down() -> None:

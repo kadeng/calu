@@ -11,6 +11,11 @@ services:
       POSTGRES_USER: calu_owner
       POSTGRES_DB: calu
       POSTGRES_PASSWORD: ${CALU_DB_OWNER_PASSWORD:-}
+      # No trust for connections from inside the container (PLAN.md D163): the image's default
+      # lets `docker exec ... psql` in without a password, which would let any program of the
+      # user -- Claude's included -- decide escalations. Applies when the volume is created;
+      # `calu db up` converts an older volume in place.
+      POSTGRES_INITDB_ARGS: "--auth-local=scram-sha-256 --auth-host=scram-sha-256"
     ports:
       - "127.0.0.1:${CALU_DB_PORT:-5433}:5432"
     volumes:

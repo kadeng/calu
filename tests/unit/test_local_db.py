@@ -136,3 +136,24 @@ def test_the_owner_url_and_password_are_usable(tmp_path: Path) -> None:
     parsed = conninfo_to_dict(url)
     assert parsed["password"] == password
     assert parsed["port"] == "5599"
+
+
+def test_up_removes_trust_from_the_containers_authentication(docker: Path) -> None:
+    """D163: the image trusts connections from inside the container, so `docker exec ... psql`
+    got in without a password. Every start converts pg_hba.conf, after the container is up."""
+    local.up(port=5599, owner_password="secret")
+    recorded = [call["args"] for call in calls(docker)]
+    started = next(i for i, args in enumerate(recorded) if args[-3:] == ["up", "-d", "--wait"])
+    hardened = next(i for i, args in enumerate(recorded) if "exec" in args)
+    assert hardened > started
+    args = recorded[hardened]
+    assert local.PROJECT in args and "postgres" in args
+    script = args[-1]
+    assert "scram-sha-256" in script and "pg_ctl reload" in script
+    assert script.startswith("grep -qE"), "a no-op once no trust line is left"
+
+
+def test_new_volumes_are_created_without_trust() -> None:
+    """D163: the compose file asks initdb for passwords on every connection."""
+    text = local.compose_file().read_text(encoding="utf-8")
+    assert "--auth-local=scram-sha-256 --auth-host=scram-sha-256" in text
