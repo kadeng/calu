@@ -314,9 +314,8 @@ class Session:
     ) -> None:
         """Set up the checkers, the context builder and the rules from `settings`.
 
-        Nothing is read from or written to the workspace except the project files that the
-        context builder shows the checkers (AGENTS.md, CLAUDE.md, ... ) and the files that
-        rendered steps quote.
+        Nothing is read from or written to the workspace except the files that rendered
+        steps quote.
 
         Args:
             workspace: Project root and Claude's working directory.
