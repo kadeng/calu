@@ -4,6 +4,8 @@
                                    the `admin` credential
     calu db down                   stop the local PostgreSQL (data is kept)
     calu db migrate                apply schema migrations (asks for the admin password)
+    calu db reset                  drop and recreate everything in the database; asks for the
+                                   admin password and a typed confirmation
     calu setup [--checker-model M] migrate, load default checkers and rules, create the
                                    `session` credential (asks for both passwords)
     calu credential list|set NAME|remove NAME
@@ -52,6 +54,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,7 +90,7 @@ from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
-from calu.setup import enable_operator_login, setup
+from calu.setup import enable_operator_login, seed_defaults, setup
 from calu.store.projects import register_directory
 
 
@@ -250,6 +253,162 @@ def cmd_db_migrate(args: argparse.Namespace, store: CredentialStore) -> None:
     finally:
         wipe(url)
     print(f"migrations applied: {count}")
+
+
+RESET_PHRASE = "yes delete the db"
+"""What `calu db reset` asks the user to type before it deletes anything."""
+
+RESET_MIN_SECONDS = 2.0
+"""The least time typing `RESET_PHRASE` may take. A phrase that arrives faster was not typed
+by a person looking at the prompt (piped input, a pasted line, an automatic "yes")."""
+
+RESET_COUNTS = (
+    ("sessions", "session(s)"),
+    ("steps", "step(s)"),
+    ("escalations", "escalation(s)"),
+    ("projects", "project(s)"),
+    ("rules", "rule(s)"),
+    ("checker_types", "checker definition(s)"),
+)
+"""The tables whose row counts `calu db reset` shows before it asks: (table, what a row is)."""
+
+
+async def _reset_summary(url: bytearray) -> list[str]:
+    """Describe what a reset of the database would delete.
+
+    Args:
+        url: The owner connection string.
+
+    Returns:
+        One line per table of `RESET_COUNTS` that exists, with its row count, and one line
+        about sessions that have not ended; [] for a database without calu's tables.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    conn = await connect(url)
+    try:
+        db = Db(conn)
+        lines: list[str] = []
+        for table, what in RESET_COUNTS:
+            exists = await db.one("SELECT to_regclass(%s) IS NOT NULL", (f"public.{table}",))
+            if not exists or not exists[0]:
+                continue
+            # `table` is one of the fixed names of `RESET_COUNTS`, never input.
+            count = await db.scalar(f"SELECT count(*) FROM {table}")
+            lines.append(f"  {count} {what}")
+            if table == "sessions":
+                running = await db.scalar("SELECT count(*) FROM sessions WHERE ended_at IS NULL")
+                if running:
+                    lines.append(
+                        f"  {running} of them have not ended: a session that still runs loses "
+                        "its rows and stops"
+                    )
+        return lines
+    finally:
+        await conn.close()
+
+
+async def _reset(url: bytearray) -> str:
+    """Drop everything calu keeps in the database and create it again, empty.
+
+    The schema `public` is dropped with all its tables, functions and types and created anew;
+    then the migrations run and the default checker definitions are loaded, as on a fresh
+    database. The roles and their passwords are not part of the schema and stay, so the
+    stored `session` and `operator` credentials keep working.
+
+    Args:
+        url: The owner connection string.
+
+    Returns:
+        A report of what was created.
+
+    Raises:
+        psycopg.Error: On database errors. The drop and the re-creation of the schema are one
+            transaction; a failure there leaves the database as it was.
+    """
+    conn = await connect(url)
+    try:
+        async with conn.transaction():
+            await conn.execute("DROP SCHEMA public CASCADE")
+            await conn.execute("CREATE SCHEMA public")
+            # A new schema has no privileges for other roles; PostgreSQL's own `public` lets
+            # every role look names up in it, and the migrations' grants build on that.
+            await conn.execute("GRANT USAGE ON SCHEMA public TO PUBLIC")
+        applied = await migrate(conn)
+        checkers, _rules = await seed_defaults(conn)
+        return (
+            f"the database is empty again: {len(applied)} migration(s) applied, {checkers} "
+            "default checker definition(s) loaded, no rules, no projects, no settings.\n"
+            "The stored credentials still work. Register your projects again with "
+            "`calu project add`."
+        )
+    finally:
+        await conn.close()
+
+
+def confirm_reset(
+    read: Callable[[str], str] = input, clock: Callable[[], float] = time.monotonic
+) -> None:
+    """Ask the user to type `RESET_PHRASE`, and refuse an answer that came too fast.
+
+    Args:
+        read: Shows a prompt and returns the line typed; `input` by default.
+        clock: A monotonic clock in seconds.
+
+    Raises:
+        CliError: If the line is not exactly `RESET_PHRASE`, if it arrived in less than
+            `RESET_MIN_SECONDS` after the prompt, or if the input ended.
+    """
+    started = clock()
+    try:
+        answer = read(f'Type "{RESET_PHRASE}" to delete everything: ')
+    except EOFError as exc:
+        raise CliError("no confirmation was given; nothing was deleted") from exc
+    elapsed = clock() - started
+    if answer.strip() != RESET_PHRASE:
+        raise CliError("the confirmation does not match; nothing was deleted")
+    if elapsed < RESET_MIN_SECONDS:
+        raise CliError(
+            f"the confirmation arrived after {elapsed:.1f} s, faster than a person types it; "
+            "nothing was deleted. Run the command again and type the phrase by hand"
+        )
+
+
+def cmd_db_reset(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Delete everything in calu's database and set it up again, empty.
+
+    Every table is dropped and created anew, not emptied: sessions, steps, escalations,
+    projects, rules, checker instructions and all settings are gone, and the defaults of a
+    fresh database are loaded. Two things stand in front of that: the `admin` credential's
+    password, which must be typed (a credential stored without a password is refused here),
+    and the phrase `RESET_PHRASE`, typed in not less than `RESET_MIN_SECONDS`.
+
+    Args:
+        args: Parsed arguments (unused).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `admin` credential, it has no password, or the confirmation
+            is missing, wrong or too fast.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    if "admin" in store and not store.needs_password("admin"):
+        raise CliError(
+            "the `admin` credential is stored without a password, and a reset must be confirmed "
+            "with one. Store it with a password first: `calu credential set admin`"
+        )
+    url = load_credential(store, "admin", "Admin password: ")
+    try:
+        lines = asyncio.run(_reset_summary(url))
+        print("This deletes the whole calu database and creates it again, empty:")
+        print("\n".join(lines) if lines else "  (the database holds no calu tables yet)")
+        print("Checker instructions, rules and every setting are lost. This cannot be undone.")
+        confirm_reset()
+        print(asyncio.run(_reset(url)))
+    finally:
+        wipe(url)
 
 
 def _chosen_model(requested: str | None, effort: str | None) -> tuple[str, str | None, str]:
@@ -2257,6 +2416,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_db_up)
     db.add_parser("down", help="stop the local PostgreSQL").set_defaults(handler=cmd_db_down)
     db.add_parser("migrate", help="apply schema migrations").set_defaults(handler=cmd_db_migrate)
+    db.add_parser(
+        "reset",
+        help="delete the whole database (sessions, rules, instructions, settings) and create "
+        "it again, empty; asks for the admin password and a typed confirmation",
+    ).set_defaults(handler=cmd_db_reset)
 
     p = sub.add_parser("setup", help="first-time setup of the database")
     p.add_argument(
