@@ -551,6 +551,15 @@ class HonestyConfig(ConfigModel):
     API contract must say (PLAN.md D181). Empty uses the rules calu ships
     (`calu honesty show`). Set it, globally or per project, to fit a project's documentation
     standards (`calu honesty edit [--project NAME]`); it is not meant to be edited often."""
+    sufficient_trust: Literal["check", "review", "user"] = "check"
+    """The weakest source of stored trust that counts. Every trusted commit and every verified
+    file content records who established it: `user` (a person certified it), `review` (calu's
+    honesty review verified it) or `check` (calu's step checkers judged the edit without
+    leaving a mark); `user` is the strongest. A commit whose source is weaker than this
+    setting is no baseline, and a file content whose source is weaker is unreviewed. With
+    `review`, an edit check alone does not verify a file: it stays unreviewed until an honesty
+    review judged it. With `user`, only a person's certification counts. Raising the setting
+    deletes nothing; lowering it makes the weaker records count again."""
     max_open_marks: int = Field(default=3, ge=0)
     """How many marks may be open, counted over all files, before an honesty review is
     required. With more, a checker's single clean marks are ignored and only an honesty review

@@ -42,7 +42,7 @@ class AllowAll:
 def test_claude_code_authenticates_as_configured(tmp_path: Path):
     """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""
     options = SdkRunner(tmp_path, ClaudeConfig(), {"MISTRAL_API_KEY"})._options(AllowAll(), None)
-    assert options.env == {"MISTRAL_API_KEY": ""}
+    assert options.env == {"MISTRAL_API_KEY": "", "CALU_INSIDE_SESSION": "1"}
     # calu does not set the permission mode: Claude Code takes it from its own settings (D5).
     assert options.permission_mode is None
     chosen = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))._options(AllowAll(), None)
@@ -137,7 +137,11 @@ def test_use_bedrock_sets_the_bedrock_switch_for_claude_code(tmp_path: Path):
     assert "CLAUDE_CODE_USE_BEDROCK" not in plain
     bedrock = SdkRunner(tmp_path, ClaudeConfig(use_bedrock=True), {"MISTRAL_API_KEY"})
     env = bedrock._options(AllowAll(), None).env
-    assert env == {"CLAUDE_CODE_USE_BEDROCK": "1", "MISTRAL_API_KEY": ""}
+    assert env == {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "MISTRAL_API_KEY": "",
+        "CALU_INSIDE_SESSION": "1",
+    }
 
 
 class FixedVerdict(AllowAll):

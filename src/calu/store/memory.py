@@ -29,7 +29,7 @@ from calu.store.session import (
     StepDecision,
     StepRow,
 )
-from calu.store.trust import TrustedCommit, TrustedFile, TrustMethod
+from calu.store.trust import TRUST_STRENGTH, TrustedCommit, TrustedFile, TrustSource, stronger
 
 
 @dataclass
@@ -487,7 +487,7 @@ class MemorySessionStore:
 
     async def trusted_among(
         self, commit_ids: Sequence[str], tree_ids: Sequence[str]
-    ) -> tuple[frozenset[str], frozenset[str]]:
+    ) -> tuple[dict[str, TrustSource], dict[str, TrustSource]]:
         """Tell which ids are in `trusted_commits` (see `SessionStore.trusted_among`).
 
         Args:
@@ -495,71 +495,100 @@ class MemorySessionStore:
             tree_ids: Tree ids to look up.
 
         Returns:
-            The trusted commit ids among `commit_ids`, and the tree ids among `tree_ids` that
-            a trusted commit records.
+            Commit id -> source for the trusted ones among `commit_ids`, and tree id -> the
+            strongest source among the trusted commits that record it, for the ones among
+            `tree_ids`.
         """
-        trees = {row.tree_id for row in self.trusted_commits.values()}
-        return (
-            frozenset(commit for commit in commit_ids if commit in self.trusted_commits),
-            frozenset(tree for tree in tree_ids if tree in trees),
-        )
+        trees: dict[str, TrustSource] = {}
+        for row in self.trusted_commits.values():
+            if row.tree_id in tree_ids:
+                method = row.method
+                trees[row.tree_id] = stronger(trees.get(row.tree_id), method) or method
+        commits: dict[str, TrustSource] = {
+            commit: self.trusted_commits[commit].method
+            for commit in commit_ids
+            if commit in self.trusted_commits
+        }
+        return commits, trees
 
     async def certify_commit(
-        self, commit_id: str, tree_id: str, method: TrustMethod, by: str, note: str = ""
+        self, commit_id: str, tree_id: str, method: TrustSource, by: str, note: str = ""
     ) -> bool:
         """Record a trusted commit (see `SessionStore.certify_commit`).
 
         Args:
             commit_id: The full commit id.
             tree_id: The id of the tree the commit records.
-            method: "user", "review" or "session".
+            method: "user", "review" or "check".
             by: Who certified it.
             note: An optional note.
 
         Returns:
-            True if the commit was recorded; False if it was trusted already.
+            True if the commit was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
 
         Raises:
-            ValueError: If `by` is empty, which the database refuses as well.
+            ValueError: If `by` is empty or `method` is none of the three, which the database
+                refuses as well.
         """
         if not by:
             raise ValueError("a certification names who certified")
-        if commit_id in self.trusted_commits:
+        if method not in TRUST_STRENGTH:
+            raise ValueError("the method is one of user, review, check")
+        held = self.trusted_commits.get(commit_id)
+        if held is not None and TRUST_STRENGTH[held.method] >= TRUST_STRENGTH[method]:
             return False
         self.trusted_commits[commit_id] = TrustedCommit(
             commit_id, tree_id, datetime.now(UTC), by, method, note
         )
         return True
 
-    async def trusted_file_hashes(self) -> frozenset[str]:
-        """Return the hashes of `trusted_files` (see `SessionStore.trusted_file_hashes`).
+    async def trusted_file_sources(
+        self, hashes: Sequence[str] | None = None
+    ) -> dict[str, TrustSource]:
+        """Return the sources of `trusted_files` (see `SessionStore.trusted_file_sources`).
+
+        Args:
+            hashes: The SHA-256 values to look up; None for all.
 
         Returns:
-            The SHA-256 values.
+            SHA-256 -> source.
         """
-        return frozenset(self.trusted_files)
+        return {
+            sha256: row.method
+            for sha256, row in self.trusted_files.items()
+            if hashes is None or sha256 in hashes
+        }
 
-    async def trust_file(self, content_sha256: str, path: str, by: str, note: str = "") -> bool:
-        """Record a trusted file content (see `SessionStore.trust_file`).
+    async def trust_file(
+        self, content_sha256: str, path: str, method: TrustSource, by: str, note: str = ""
+    ) -> bool:
+        """Record a verified file content (see `SessionStore.trust_file`).
 
         Args:
             content_sha256: SHA-256 of the file's content.
             path: Where the file is, as a hint for people.
-            by: The client's name.
+            method: "user", "review" or "check".
+            by: Who certified it.
             note: An optional note.
 
         Returns:
-            True if the hash was recorded; False if it was trusted already.
+            True if the hash was recorded or its record was strengthened; False if a record
+            of the same or a stronger source exists.
 
         Raises:
-            ValueError: If `by` is empty, which the database refuses as well.
+            ValueError: If `by` is empty or `method` is none of the three, which the database
+                refuses as well.
         """
         if not by:
             raise ValueError("a certification names who certified")
-        if content_sha256 in self.trusted_files:
+        if method not in TRUST_STRENGTH:
+            raise ValueError("the method is one of user, review, check")
+        held = self.trusted_files.get(content_sha256)
+        if held is not None and TRUST_STRENGTH[held.method] >= TRUST_STRENGTH[method]:
             return False
         self.trusted_files[content_sha256] = TrustedFile(
-            content_sha256, path, datetime.now(UTC), by, note
+            content_sha256, path, datetime.now(UTC), by, method, note
         )
         return True
 

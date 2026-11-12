@@ -70,6 +70,7 @@ from calu.context.foreign import (
     user_message_source,
 )
 from calu.files import skill_file
+from calu.paths import INSIDE_SESSION_ENV
 from calu.preflight import settings_file_sandbox_blockers
 from calu.protocol.messages import (
     AgentInfo,
@@ -869,7 +870,9 @@ class SdkRunner:
     def _claude_env(self) -> dict[str, str]:
         """Return the environment overrides for the Claude Code process.
 
-        Checker keys (`hidden_env`) are blanked so that Claude cannot read them. With
+        Checker keys (`hidden_env`) are blanked so that Claude cannot read them.
+        `calu.paths.INSIDE_SESSION_ENV` is set to "1", which tells calu's own command line that
+        it was started from inside a session. With
         `claude.use_bedrock`, `CLAUDE_CODE_USE_BEDROCK` is set to "1". Otherwise Claude Code's own
         authentication settings (claude.ai login, Bedrock, Vertex, Foundry, API key) are left as
         they are configured on this machine.
@@ -878,6 +881,7 @@ class SdkRunner:
             Variable name -> value ("" means unset for Claude Code).
         """
         env = dict.fromkeys(sorted(self.hidden_env), "")
+        env[INSIDE_SESSION_ENV] = "1"
         if self.config.use_bedrock:
             env["CLAUDE_CODE_USE_BEDROCK"] = "1"
         return env

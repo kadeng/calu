@@ -6,11 +6,13 @@ PostgreSQL announces three kinds of change with `pg_notify`:
 |---|---|---|
 | `config_changed` | a row of `config`, `rules` or `checker_types` changed | `{"table": "<name>"}` |
 | `escalation_resolved` | an operator resolved an escalation | `{"id", "session_id", "state"}` |
-| `trust_changed` | a trusted commit or file content was added or removed | `{"table": "<name>"}` |
+| `trust_changed` | stored trust changed (see below) | `{"table": "<name>"}` |
 
 Trust has a channel of its own rather than using `config_changed`, because a session records a
 trusted commit after a commit of its own: announcing that on the configuration channel would
-make every session of the database reload all of its settings.
+make every session of the database reload all of its settings. It is sent when a trusted commit
+is added, strengthened or removed, and when a file content is trusted by a person, removed or
+pruned. A file content that a session's own checks or review verified is not announced.
 
 A connection that waits for notifications cannot run queries at the same time, so a session
 uses one connection for its queries and a second one for listening.

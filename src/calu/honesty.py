@@ -23,9 +23,13 @@ The second half of the module is the **honesty state** of the redesign (trusted 
 owner's decisions of 2026-11-12). calu tracks which code was verified to be honest:
 
     trusted commit   a commit a person or calu certified (database table `trusted_commits`)
-    baseline         the nearest trusted ancestor of HEAD (`find_baseline`)
+    source           who established a trust: user > review > check (`calu.store.trust`);
+                     `honesty.sufficient_trust` names the weakest source that counts
+    baseline         the nearest ancestor of HEAD that is trusted by a sufficient source
+                     (`find_baseline`)
     HonestyState     per session, in memory: the marks, the verified contents (path ->
-                     SHA-256), the files to watch that git does not list, "review required"
+                     SHA-256 and source), the stored trust of file contents it was given,
+                     the files to watch that git does not list, "review required"
     HonestySnapshot  the state at one moment: baseline, open marks, unreviewed files,
                      review required; `clean` and the note for the checkers are computed
                      from it
@@ -37,17 +41,21 @@ above; the state replaces it in a later step.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import re
 import shlex
 import stat
 import subprocess
+import threading
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from typing import Any, Concatenate
 
 import anyio.to_thread
 
@@ -56,6 +64,7 @@ from calu.checkers.changeset import GIT_OPTIONS, HEAD_ID
 from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.shell import parse_command
 from calu.checkers.symbols import definition_names
+from calu.store.trust import TrustSource, stronger, sufficient, weakest
 
 
 @dataclass(frozen=True)
@@ -657,7 +666,18 @@ GIT_TIMEOUT_S = 30.0
 failed, and every failure is read as "not verified"."""
 
 GITLINK_MODE = "160000"
-"""The mode of a submodule entry in a git tree. calu does not look into submodules."""
+"""The mode of a submodule entry in a git tree. calu does not look into submodules; it compares
+the commit a submodule is at with the commit the baseline records for it."""
+
+READ_LIMIT = 8_000_000
+"""The largest file, in bytes, that `read_regular` returns. A larger file is hashed in pieces
+(`content_ids`), but an edit of it is not predicted, so it is unreviewed after the edit."""
+
+NOTE_PATH_CHARS = 300
+"""Characters of a path or symbol that the note for a checker shows before it cuts."""
+
+NOTE_REASON_CHARS = 200
+"""Characters of a mark's reason that the note for a checker shows before it cuts."""
 
 SETTLE_NS = 2_000_000_000
 """A file's hashes are remembered with its size and times only when its last change is at
@@ -690,6 +710,63 @@ class GitCommit:
             Its first `SHORT_ID` characters.
         """
         return self.commit_id[:SHORT_ID]
+
+
+@dataclass(frozen=True)
+class Baseline(GitCommit):
+    """The trusted commit a session compares its files with, and who established its trust."""
+
+    source: TrustSource
+    """The source the database records for the commit, or the strongest one recorded for its
+    tree: "user", "review" or "check"."""
+
+
+@dataclass(frozen=True)
+class Verified:
+    """One verified file content and who verified it."""
+
+    sha256: str
+    source: TrustSource
+    """"check" for the result of an edit the step checkers judged, "review" for a content an
+    honesty review read."""
+
+
+@dataclass(frozen=True)
+class Certification:
+    """Whether a commit may be certified as trusted, and with which source."""
+
+    problem: str
+    """"" if the commit may be certified; otherwise one sentence saying why not."""
+    source: TrustSource | None = None
+    """The source to record: the weakest among the verifications of the files the commit
+    changes and the baseline's own source. None when `problem` is set."""
+
+
+def shown(text: str, limit: int) -> str:
+    r"""Render untrusted text for one line of the note: no line break, bounded length.
+
+    File names come from the working tree and reasons from a model's answer, so neither may
+    add lines to a note that calu computes.
+
+    Args:
+        text: A path, a symbol or a reason.
+        limit: The largest number of characters of `text` that are rendered.
+
+    Returns:
+        `text` with every character that is not printable (control characters, line and
+        paragraph separators, format characters) written as a backslash escape, cut after
+        `limit` characters with "..." appended.
+
+    Example:
+        shown("a" + chr(10) + "b", 10) == "a\\nb": the line break is written as a backslash
+        and the letter n.
+    """
+    cut = text[:limit]
+    safe = "".join(
+        char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
+        for char in cut
+    )
+    return safe + ("..." if len(text) > limit else "")
 
 
 @dataclass(frozen=True)
@@ -761,7 +838,9 @@ class MarkChanges:
 class HonestySnapshot:
     """The honesty state of a session at one moment (specification section 2)."""
 
-    baseline: GitCommit | None
+    baseline: Baseline | None
+    """The baseline with the source of its trust; None when there is none or its source is
+    weaker than `honesty.sufficient_trust`."""
     marks: tuple[HonestyMark, ...]
     """The open marks, oldest first."""
     unreviewed: Unreviewed
@@ -786,7 +865,8 @@ class HonestySnapshot:
         """Render the state as the note every change checker gets (specification section 6).
 
         The note is data computed by calu. What a checker does with it is said once, in the
-        fixed instruction part `system/marks.md`.
+        fixed instruction part `system/marks.md`. Paths, symbols and reasons are rendered with
+        `shown`, so the note has one line per item below whatever they contain.
 
         Args:
             own_paths: The workspace-relative paths of the step being judged; the marks on
@@ -795,17 +875,33 @@ class HonestySnapshot:
                 before the rest is counted.
 
         Returns:
-            Several lines: the baseline (short id, or that there is none), the open marks with
-            their reasons, the unreviewed files and their number, and whether a review is
-            required. Never empty.
+            Four to six lines: the heading, the baseline (short id and source, or that there
+            is none), the open marks with their reasons (one line for this step's files, one
+            for other files, or one saying there are none), the unreviewed files and their
+            number (left out without a baseline), and whether a review is required.
 
         Example:
             Code honesty state, computed by calu.
-            Baseline: trusted commit 1a2b3c4d5e6f.
+            Baseline: trusted commit 1a2b3c4d5e6f (trust established by: user).
             Open marks on this step's files: src/parser.py:fields (returns unsorted).
             Unreviewed files (2): scripts/gen.py, src/new.py.
             Review required: no.
         """
+
+        def spot(mark: HonestyMark) -> str:
+            """Render one mark.
+
+            Args:
+                mark: An open mark.
+
+            Returns:
+                "path:symbol (reason)", each part rendered with `shown`.
+            """
+            where = shown(mark.path, NOTE_PATH_CHARS)
+            if mark.symbol:
+                where += ":" + shown(mark.symbol, NOTE_PATH_CHARS)
+            return f"{where} ({shown(mark.reason, NOTE_REASON_CHARS)})"
+
         lines = ["Code honesty state, computed by calu."]
         if self.baseline is None:
             lines.append(
@@ -813,29 +909,32 @@ class HonestySnapshot:
                 "as unreviewed."
             )
         else:
-            lines.append(f"Baseline: trusted commit {self.baseline.short}.")
+            lines.append(
+                f"Baseline: trusted commit {self.baseline.short} "
+                f"(trust established by: {self.baseline.source})."
+            )
         own = [mark for mark in self.marks if mark.path in own_paths]
         others = [mark for mark in self.marks if mark.path not in own_paths]
         if own:
-            spots = "; ".join(f"{mark.label()} ({mark.reason})" for mark in own)
-            lines.append(f"Open marks on this step's files: {spots}.")
+            lines.append(f"Open marks on this step's files: {'; '.join(map(spot, own))}.")
         if others:
-            shown = others[:limit]
-            spots = "; ".join(f"{mark.label()} ({mark.reason})" for mark in shown)
-            rest = f"; and {len(others) - len(shown)} more" if len(others) > len(shown) else ""
-            lines.append(f"Open marks on other files: {spots}{rest}.")
+            seen = others[:limit]
+            rest = f"; and {len(others) - len(seen)} more" if len(others) > len(seen) else ""
+            lines.append(f"Open marks on other files: {'; '.join(map(spot, seen))}{rest}.")
         if not self.marks:
             lines.append("Open marks: none.")
         if self.unreviewed.everything:
             if self.baseline is not None:
+                problem = shown(self.unreviewed.problem, NOTE_PATH_CHARS) or "git did not answer"
                 lines.append(
                     "Unreviewed files: all (the files could not be compared with the "
-                    f"baseline: {self.unreviewed.problem or 'git did not answer'})."
+                    f"baseline: {problem})."
                 )
         elif self.unreviewed.paths:
             paths = self.unreviewed.paths
             rest = f", and {len(paths) - limit} more" if len(paths) > limit else ""
-            lines.append(f"Unreviewed files ({len(paths)}): {', '.join(paths[:limit])}{rest}.")
+            names = ", ".join(shown(path, NOTE_PATH_CHARS) for path in paths[:limit])
+            lines.append(f"Unreviewed files ({len(paths)}): {names}{rest}.")
         else:
             lines.append("Unreviewed files: none.")
         lines.append(
@@ -851,6 +950,9 @@ def run_git(cwd: Path, arguments: Sequence[str], *, accept: tuple[int, ...] = (0
 
     The command runs with `calu.checkers.changeset.GIT_OPTIONS` (no pager, no file system
     monitor, no rewrite of the index), without prompting and without fetching missing objects.
+    git reads every object as the repository stores it under its own id: object replacement
+    (`refs/replace`) and the grafts file are switched off, so the tree git names for a commit
+    id is the tree of that commit.
     The honesty state only uses commands that list names and ids (`rev-parse`, `rev-list`,
     `ls-tree`, `ls-files`); calu reads and hashes file contents itself.
 
@@ -866,7 +968,13 @@ def run_git(cwd: Path, arguments: Sequence[str], *, accept: tuple[int, ...] = (0
         GitError: If git is missing, does not answer within `GIT_TIMEOUT_S` or exits with a
             code that is not in `accept`.
     """
-    environment = {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
+    environment = {
+        **os.environ,
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_GRAFT_FILE": os.devnull,
+    }
     try:
         done = subprocess.run(
             ["git", *GIT_OPTIONS, *arguments],
@@ -949,35 +1057,48 @@ def resolve_commit(directory: Path, rev: str) -> GitCommit:
 
 
 def nearest_trusted(
-    commits: Sequence[GitCommit], trusted_commits: Collection[str], trusted_trees: Collection[str]
-) -> GitCommit | None:
+    commits: Sequence[GitCommit],
+    trusted_commits: Mapping[str, TrustSource],
+    trusted_trees: Mapping[str, TrustSource],
+    minimum: TrustSource = "check",
+) -> Baseline | None:
     """Pick the baseline out of a list of ancestors.
 
     Args:
         commits: A commit and its ancestors, nearest first (`ancestors`).
-        trusted_commits: The commit ids among them that the database holds as trusted.
-        trusted_trees: The tree ids among theirs that belong to a trusted commit.
+        trusted_commits: Commit id -> the source of its trust, for the commits among them
+            that the database holds as trusted.
+        trusted_trees: Tree id -> the strongest source among the trusted commits that record
+            that tree.
+        minimum: `honesty.sufficient_trust`: the weakest source that counts.
 
     Returns:
-        The first commit whose commit id or tree id is trusted; None if there is none.
+        The first commit whose commit id or tree id is trusted by a source at least as strong
+        as `minimum`, with the stronger of its two sources; None if there is none. A commit
+        whose recorded source is weaker than `minimum` is passed over like an untrusted one.
     """
     for commit in commits:
-        if commit.commit_id in trusted_commits or commit.tree_id in trusted_trees:
-            return commit
+        source = stronger(trusted_commits.get(commit.commit_id), trusted_trees.get(commit.tree_id))
+        if source is not None and sufficient(source, minimum):
+            return Baseline(commit.commit_id, commit.tree_id, source)
     return None
 
 
 type TrustLookup = Callable[
-    [Sequence[str], Sequence[str]], Awaitable[tuple[Collection[str], Collection[str]]]
+    [Sequence[str], Sequence[str]],
+    Awaitable[tuple[Mapping[str, TrustSource], Mapping[str, TrustSource]]],
 ]
 """Asks the database which of some commit ids and tree ids are trusted
-(`SessionStore.trusted_among`): (commit ids, tree ids) -> (the trusted commit ids among them,
-the tree ids among them that a trusted commit records)."""
+(`SessionStore.trusted_among`): (commit ids, tree ids) -> (commit id -> source for the trusted
+ones, tree id -> strongest source for the trees a trusted commit records)."""
 
 
 async def find_baseline(
-    workspace: Path, lookup: TrustLookup, limit: int = BASELINE_SEARCH_LIMIT
-) -> GitCommit | None:
+    workspace: Path,
+    lookup: TrustLookup,
+    limit: int = BASELINE_SEARCH_LIMIT,
+    minimum: TrustSource = "check",
+) -> Baseline | None:
     """Find the baseline of a session: the nearest trusted ancestor of HEAD, HEAD included.
 
     The search is bounded: only the last `limit` commits (default `BASELINE_SEARCH_LIMIT`,
@@ -988,10 +1109,13 @@ async def find_baseline(
         workspace: The project directory.
         lookup: Asks the database which ids are trusted (`TrustLookup`).
         limit: The largest number of commits to look at.
+        minimum: `honesty.sufficient_trust`: a commit trusted by a weaker source is no
+            baseline.
 
     Returns:
-        The baseline, or None when the directory is in no git repository, HEAD has no commit,
-        git could not be asked, or none of the commits read is trusted.
+        The baseline with the source of its trust, or None when the directory is in no git
+        repository, HEAD has no commit, git could not be asked, or none of the commits read is
+        trusted by a sufficient source.
 
     Raises:
         Exception: Whatever `lookup` raises (`psycopg.Error` for the database store). The
@@ -1004,11 +1128,152 @@ async def find_baseline(
         [commit.commit_id for commit in commits],
         sorted({commit.tree_id for commit in commits}),
     )
-    return nearest_trusted(commits, trusted_commits, trusted_trees)
+    return nearest_trusted(commits, trusted_commits, trusted_trees, minimum)
+
+
+def _open_regular(path: Path) -> tuple[int, os.stat_result] | None:
+    """Open a regular file for reading without waiting and without following a link.
+
+    Args:
+        path: The file.
+
+    Returns:
+        (the open descriptor, which the caller closes; its status). None if the path is
+        missing, is not a regular file, or cannot be opened.
+    """
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    try:
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return None
+        descriptor = os.open(path, flags)
+    except OSError, ValueError:
+        return None
+    try:
+        status = os.fstat(descriptor)
+    except OSError:
+        os.close(descriptor)
+        return None
+    if not stat.S_ISREG(status.st_mode):
+        os.close(descriptor)
+        return None
+    return descriptor, status
+
+
+def read_regular(path: Path, limit: int = READ_LIMIT) -> bytes | None:
+    """Read the bytes of a regular file, without following a link and without waiting.
+
+    Args:
+        path: The file.
+        limit: The largest size in bytes that is read.
+
+    Returns:
+        The content; None if the path is missing, is not a regular file (a symbolic link, a
+        directory, a pipe, a device), is larger than `limit`, cannot be read, or changed in
+        size while it was read.
+    """
+    opened = _open_regular(path)
+    if opened is None:
+        return None
+    descriptor, status = opened
+    try:
+        if status.st_size > limit:
+            return None
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            data = handle.read(limit + 1)
+    except OSError:
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return data if len(data) == status.st_size else None
+
+
+def hash_bytes(data: bytes, object_format: str = "sha1") -> ContentIds:
+    """Hash a content that is held in memory.
+
+    Args:
+        data: The content of a file.
+        object_format: The hash of the repository's object ids, "sha1" or "sha256".
+
+    Returns:
+        Both hashes, equal to what `content_ids` returns for a file with that content.
+    """
+    blob = hashlib.new(object_format, b"blob %d\0" % len(data), usedforsecurity=False)
+    blob.update(data)
+    return ContentIds(hashlib.sha256(data).hexdigest(), blob.hexdigest())
+
+
+def expected_edit(
+    tool_name: str, tool_input: Mapping[str, Any], before: bytes | None
+) -> bytes | None:
+    """Compute the content a file has after an Edit, Write or MultiEdit, from the tool's input.
+
+    The edit checkers judge this content: the whole of it for a Write, the replacements for an
+    Edit or MultiEdit. calu verifies a file after an edit only at exactly this content
+    (`HonestyState.expect_edit`, `HonestyState.record_edit`).
+
+    The prediction is exact for UTF-8 text that the tool writes back unchanged outside the
+    replacements. Where the tool writes other bytes (another encoding, converted line
+    endings), the file's content after the edit differs from the prediction and the file is
+    unreviewed.
+
+    Args:
+        tool_name: "Write", "Edit" or "MultiEdit".
+        tool_input: The tool's input: `content` for Write; `old_string`, `new_string` and
+            optionally `replace_all` for Edit; `edits` (a list of such objects) for MultiEdit.
+        before: The file's bytes before the edit; None if there is no file.
+
+    Returns:
+        The expected bytes. None if the tool is another one, the input does not have that
+        shape, the present content is not UTF-8, or a replacement does not apply (its
+        `old_string` does not occur; an empty `old_string` applies only to a missing or empty
+        file).
+    """
+    if tool_name == "Write":
+        content = tool_input.get("content")
+        return content.encode("utf-8", "surrogatepass") if isinstance(content, str) else None
+    if tool_name == "Edit":
+        edits: object = [tool_input]
+    elif tool_name == "MultiEdit":
+        edits = tool_input.get("edits")
+    else:
+        return None
+    if not isinstance(edits, list) or not edits:
+        return None
+    try:
+        text = (before or b"").decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    for edit in edits:
+        if not isinstance(edit, Mapping):
+            return None
+        old, new = edit.get("old_string"), edit.get("new_string")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return None
+        if not old:
+            if text:
+                return None
+            text = new
+        elif old not in text:
+            return None
+        else:
+            text = (
+                text.replace(old, new)
+                if edit.get("replace_all") is True
+                else text.replace(old, new, 1)
+            )
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
 
 
 def content_ids(path: Path, object_format: str = "sha1") -> ContentIds | None:
-    """Hash the content of one file, without following a symbolic link.
+    """Hash the content of one file, without following a symbolic link and without waiting.
+
+    The type of the path is read before anything is opened, and a regular file is opened
+    without blocking, so a pipe or a device at the path is answered with None at once.
 
     Args:
         path: The file. For a symbolic link the content is the link's target path, which is
@@ -1020,15 +1285,17 @@ def content_ids(path: Path, object_format: str = "sha1") -> ContentIds | None:
         link, could not be read, or changed in size while it was read.
     """
     try:
-        if path.is_symlink():
-            data = os.fsencode(os.readlink(path))
-            blob = hashlib.new(object_format, b"blob %d\0" % len(data), usedforsecurity=False)
-            blob.update(data)
-            return ContentIds(hashlib.sha256(data).hexdigest(), blob.hexdigest())
-        with path.open("rb") as handle:
-            status = os.fstat(handle.fileno())
-            if not stat.S_ISREG(status.st_mode):
-                return None
+        if stat.S_ISLNK(path.lstat().st_mode):
+            return hash_bytes(os.fsencode(os.readlink(path)), object_format)
+    except OSError, ValueError:
+        return None
+    opened = _open_regular(path)
+    if opened is None:
+        return None
+    descriptor, status = opened
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
             plain = hashlib.sha256()
             blob = hashlib.new(object_format, b"blob %d\0" % status.st_size, usedforsecurity=False)
             read = 0
@@ -1036,11 +1303,14 @@ def content_ids(path: Path, object_format: str = "sha1") -> ContentIds | None:
                 read += len(chunk)
                 plain.update(chunk)
                 blob.update(chunk)
-            if read != status.st_size:
-                return None
-            return ContentIds(plain.hexdigest(), blob.hexdigest())
-    except OSError, ValueError:
+    except OSError:
         return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if read != status.st_size:
+        return None
+    return ContentIds(plain.hexdigest(), blob.hexdigest())
 
 
 def normal_symbol(symbol: str) -> str:
@@ -1082,54 +1352,106 @@ def match_symbol(symbol: str, names: Collection[str]) -> str | None:
     return fitting[0] if len(fitting) == 1 else None
 
 
-class HonestyState:
-    """The honesty state of one session, in memory only (specification section 2, D180).
+def _locked[**P, R](
+    method: Callable[Concatenate[HonestyState, P], R],
+) -> Callable[Concatenate[HonestyState, P], R]:
+    """Make a method of `HonestyState` run while it holds the state's lock.
 
-    The state holds what cannot be computed: the marks, the verified contents, the files to
-    watch that git does not list, the hashes a person trusted, and whether a review is
-    required. Everything else is computed when asked, from the working tree and the baseline:
+    Args:
+        method: The method.
+
+    Returns:
+        A method with the same contract that takes the state's reentrant lock for the whole
+        call, so that calls from several threads run one after the other.
+    """
+
+    @functools.wraps(method)
+    def held(self: HonestyState, /, *args: P.args, **kwargs: P.kwargs) -> R:
+        """Run the method under the lock.
+
+        Args:
+            self: The state.
+            *args: The method's positional arguments.
+            **kwargs: The method's keyword arguments.
+
+        Returns:
+            What the method returns.
+        """
+        with self._lock:  # pyright: ignore[reportPrivateUsage]
+            return method(self, *args, **kwargs)
+
+    return held
+
+
+class HonestyState:
+    """The honesty state of one session, in memory only (specification sections 2 and 13).
+
+    The state holds what cannot be computed: the marks, the contents verified in this session,
+    the files to watch that git does not list, the stored trust it was given, and whether a
+    review is required. Everything else is computed when asked, from the working tree and the
+    baseline:
 
         record(dirty, clean, by, edited)   a checker's marks, after the tool call succeeded
-        record_edit(path, basis_reviewed)  a checked edit: its file is verified at its content
+        expect_edit(path, tool, input)     at the gate: the hash a checked edit will produce
+        record_edit(path, expected)        after the edit: verified if it has that content
         apply_review(results)              an honesty review: verified files and findings
+        storable(path)                     the verification to store in `trusted_files`
         close_stale() / clear(id, by)      marks calu or a person closes
         watch(path)                        a file git does not list that the session wrote
         snapshot()                         baseline, open marks, unreviewed files, required
-        uncertified(commit)                why a commit may not be certified, or ""
+        certification(commit)              whether a commit may be certified, and its source
 
     Paths are relative to the workspace, with forward slashes; a file outside the workspace is
     named by its absolute path. A file is **verified** while the SHA-256 of its content is the
-    one recorded for its path, or one a person stored as trusted. A file is **unreviewed**
-    when it exists, differs from the baseline (or the baseline does not hold it) and is not
-    verified. Every failure to read git or a file counts as unreviewed.
+    one recorded for its path in this session, or one of `trusted_hashes`, and the source of
+    that record is at least `sufficient_trust`. A file is **unreviewed** when it exists,
+    differs from the baseline (or the baseline does not hold it) and is not verified. Every
+    failure to read git or a file counts as unreviewed.
 
-    The methods read git and files synchronously and take no lock: the session calls them from
-    one task at a time (in a worker thread where a call may be slow).
+    Contents are compared byte for byte with what git stores. In a repository that converts
+    line endings or applies content filters on checkout, a converted file differs from the
+    baseline and is unreviewed until its working content is verified, and a commit of it is
+    not certified by the session, because the commit records other bytes than the verified
+    ones. A person certifies such commits.
+
+    The public methods read git and files synchronously and may be called from several
+    threads: each takes the state's lock for its whole call, so a slow `unreviewed()` makes
+    other callers wait. The attributes may be set by the session between calls.
     """
 
-    def __init__(self, workspace: Path, max_open_marks: int = 3) -> None:
+    def __init__(
+        self, workspace: Path, max_open_marks: int = 3, sufficient_trust: TrustSource = "check"
+    ) -> None:
         """Create an empty state: no baseline, no mark, nothing verified.
 
         Args:
             workspace: The project directory.
             max_open_marks: `honesty.max_open_marks`: with more open marks than this a review
                 is required. The attribute may be set again when the configuration changes.
+            sufficient_trust: `honesty.sufficient_trust`: the weakest source of trust that
+                counts. The attribute may be set again when the configuration changes; the
+                session then also looks up its baseline again.
         """
         self.workspace = workspace.resolve()
         self.max_open_marks = max_open_marks
-        self.baseline: GitCommit | None = None
-        """The nearest trusted ancestor of HEAD, set by the session (`find_baseline`)."""
+        self.sufficient_trust: TrustSource = sufficient_trust
+        self.baseline: Baseline | None = None
+        """The nearest trusted ancestor of HEAD with the source of its trust, set by the
+        session (`find_baseline`). It counts only while its source is sufficient."""
         self.marks: list[HonestyMark] = []
         """Every mark of the session, open and closed, oldest first."""
-        self.verified: dict[str, str] = {}
-        """Path -> SHA-256 of the content that a checked edit or an honesty review judged."""
+        self.verified: dict[str, Verified] = {}
+        """Path -> the content that a checked edit or an honesty review verified in this
+        session, with its source."""
         self.watched: set[str] = set()
         """Files git does not list (ignored, or outside the repository) that the session wrote
         or a person named. calu does not search for others."""
-        self.trusted_hashes: frozenset[str] = frozenset()
-        """The SHA-256 values of the table `trusted_files`, set by the session. A file with
-        such a content is verified wherever it lies."""
+        self.trusted_hashes: Mapping[str, TrustSource] = {}
+        """SHA-256 -> source, from the table `trusted_files`, set by the session
+        (`SessionStore.trusted_file_sources`). A file with such a content is verified wherever
+        it lies, if the source is sufficient."""
         self.review_required = False
+        self._lock = threading.RLock()
         self._next_id = 1
         self._top: Path | None = None
         self._object_format: str | None = None
@@ -1268,24 +1590,62 @@ class HonestyState:
         self._trees[commit_id] = listed
         return listed
 
-    def _verified_content(self, key: str, ids: ContentIds) -> bool:
-        """Tell whether a content is verified for a file.
+    def _base(self) -> Baseline | None:
+        """Return the baseline that counts.
+
+        Returns:
+            `self.baseline`, or None if there is none or its source is weaker than
+            `sufficient_trust`.
+        """
+        base = self.baseline
+        if base is None or not sufficient(base.source, self.sufficient_trust):
+            return None
+        return base
+
+    def _verified_source(self, key: str, ids: ContentIds) -> TrustSource | None:
+        """Tell who verified a content of a file, if a sufficient source did.
 
         Args:
             key: The file.
-            ids: The hashes of its present content.
+            ids: The hashes of the content.
 
         Returns:
-            True if the SHA-256 is the one recorded for the path or one a person stored as
-            trusted.
+            The stronger of the source recorded for the path in this session (if it records
+            this SHA-256) and the source `trusted_hashes` holds for the SHA-256; None if
+            neither exists or the stronger one is weaker than `sufficient_trust`.
         """
-        return self.verified.get(key) == ids.sha256 or ids.sha256 in self.trusted_hashes
+        held = self.verified.get(key)
+        own = held.source if held is not None and held.sha256 == ids.sha256 else None
+        source = stronger(own, self.trusted_hashes.get(ids.sha256))
+        return source if sufficient(source, self.sufficient_trust) else None
 
+    def _reviewed_source(self, key: str, ids: ContentIds) -> TrustSource | None:
+        """Tell by which source a content of a file counts as reviewed.
+
+        Args:
+            key: The file.
+            ids: The hashes of the content.
+
+        Returns:
+            The source of its verification (`_verified_source`); else the baseline's source if
+            the content is the one the baseline records for that path; else None, also when
+            git cannot be asked.
+        """
+        source = self._verified_source(key, ids)
+        base = self._base()
+        if source is not None or base is None:
+            return source
+        try:
+            top = self._repository()
+            inside = (self.workspace / key).relative_to(top).as_posix()
+            entry = self._tree(base.commit_id).get(inside)
+        except GitError, ValueError:
+            return None
+        return base.source if entry is not None and entry[1] == ids.blob else None
+
+    @_locked
     def is_reviewed(self, path: str | Path) -> bool:
         """Tell whether a file's present content is one that was reviewed.
-
-        The session asks this before an edit runs: an edit that changes a part of a file
-        verifies the file only if the content it starts from was reviewed (`record_edit`).
 
         Args:
             path: Absolute, or relative to the workspace.
@@ -1299,20 +1659,11 @@ class HonestyState:
         ids = self._content(key)
         if ids is None:
             return not os.path.lexists(self.workspace / key)
-        if self._verified_content(key, ids):
-            return True
-        if self.baseline is None:
-            return False
-        try:
-            top = self._repository()
-            inside = (self.workspace / key).relative_to(top).as_posix()
-            entry = self._tree(self.baseline.commit_id).get(inside)
-        except GitError, ValueError:
-            return False
-        return entry is not None and entry[1] == ids.blob
+        return self._reviewed_source(key, ids) is not None
 
     # ------------------------------------------------------------------ verification
 
+    @_locked
     def watch(self, path: str | Path) -> str:
         """Remember a file so that it is tracked even if git does not list it.
 
@@ -1330,40 +1681,121 @@ class HonestyState:
         self.watched.add(key)
         return key
 
-    def record_edit(self, path: str | Path, *, basis_reviewed: bool) -> bool:
+    @_locked
+    def expect_edit(
+        self, path: str | Path, tool_name: str, tool_input: Mapping[str, Any]
+    ) -> str | None:
+        """Compute, before an edit runs, the hash of the content the edit checkers judge.
+
+        The session calls this when an Edit, Write or MultiEdit reaches the gate and passes
+        the result to `record_edit` after the tool succeeded. The file is then verified only
+        if it has exactly this content, so a change that anything else makes to the file
+        between the gate and the tool's result leaves the file unreviewed.
+
+        The bytes of the file are read once. For a Write the expected content is the tool's
+        `content`. For an Edit or MultiEdit it is the replacements applied to the bytes read
+        (`expected_edit`), and those bytes must themselves be reviewed (verified, or the
+        baseline's content for the path): the checkers judge the replacements, so the rest of
+        the file must have been reviewed before.
+
+        Args:
+            path: The file the tool names; absolute, or relative to the workspace.
+            tool_name: "Write", "Edit" or "MultiEdit".
+            tool_input: The tool's input as Claude sent it.
+
+        Returns:
+            The SHA-256 of the expected content. None if the result would not be a verified
+            content: the path is a symbolic link or no regular file, the file is larger than
+            `READ_LIMIT` or cannot be read, the edit cannot be predicted (`expected_edit`),
+            or the bytes a partial edit starts from are not reviewed.
+        """
+        key = self.key(path)
+        target = self.workspace / key
+        before: bytes | None = None
+        if os.path.lexists(target):
+            before = read_regular(target)
+            if before is None:
+                return None
+        after = expected_edit(tool_name, tool_input, before)
+        if after is None:
+            return None
+        if tool_name != "Write" and before is not None:
+            if self._reviewed_source(key, hash_bytes(before, self._format())) is None:
+                return None
+        return hashlib.sha256(after).hexdigest()
+
+    @_locked
+    def record_edit(self, path: str | Path, expected_sha256: str | None) -> Verified | None:
         """Record that the edit checkers judged an edit of a file, after the edit succeeded.
 
-        The file is watched from now on. If the edit's basis was reviewed, the file is
-        verified at its present content; otherwise what was recorded for the path is dropped,
-        so the file stays unreviewed until an honesty review reads it. A mark the checkers
-        left on the file is separate: a file with an open mark is dishonest whatever is
-        recorded here (`record`).
+        The file is watched from now on. If its present content has the hash `expect_edit`
+        computed at the gate, the file is recorded as verified at that content by the source
+        "check". Otherwise what was recorded for the path is dropped, so the file is
+        unreviewed until an honesty review reads it. If the path is a symbolic link, the file
+        it points at is watched too and nothing is verified.
+
+        A mark the checkers left on the file is separate: a file with an open mark is
+        dishonest whatever is recorded here (`record`), and `storable` hands out nothing for
+        it. Whether the record counts depends on `sufficient_trust`: with "review" or "user" a
+        checked edit does not make the file reviewed (`is_reviewed`).
 
         Args:
             path: The edited file; absolute, or relative to the workspace.
-            basis_reviewed: Whether the checkers judged the whole content the file now has:
-                True when `is_reviewed(path)` was True before the edit ran, and for a tool
-                that writes the whole file (Write).
+            expected_sha256: What `expect_edit` returned for this edit before it ran.
 
         Returns:
-            True if the file is now verified at its present content.
+            The record if the file has the expected content; None otherwise.
         """
         key = self.watch(path)
-        ids = self._content(key) if basis_reviewed else None
-        if ids is None:
+        target = self.workspace / key
+        if target.is_symlink():
+            with suppress(OSError):
+                self.watch(target.resolve())
             self.verified.pop(key, None)
-            return False
-        self.verified[key] = ids.sha256
-        return True
+            return None
+        ids = None
+        if expected_sha256 is not None and CONTENT_ID.fullmatch(expected_sha256):
+            ids = self._content(key)
+        if ids is None or ids.sha256 != expected_sha256:
+            self.verified.pop(key, None)
+            return None
+        record = Verified(ids.sha256, "check")
+        self.verified[key] = record
+        return record
 
+    @_locked
+    def storable(self, path: str | Path) -> Verified | None:
+        """Return the verification of a file that the session should store in the database.
+
+        calu stores what it verifies (specification section 13): after `record_edit` or
+        `apply_review` the session asks this for each file and records the answer with
+        `SessionStore.trust_file`, so the content stays verified after a restart.
+
+        Args:
+            path: Absolute, or relative to the workspace.
+
+        Returns:
+            The record of this session for the path, if the file's present content is the
+            recorded one and the file carries no open mark. None otherwise: a content that was
+            found dishonest is not stored, because the marks live only in this session.
+        """
+        key = self.key(path)
+        held = self.verified.get(key)
+        if held is None or key in self.dishonest_files():
+            return None
+        ids = self._content(key)
+        return held if ids is not None and ids.sha256 == held.sha256 else None
+
+    @_locked
     def apply_review(self, results: Mapping[str, FileReview]) -> MarkChanges:
         """Apply the result of an honesty review (specification section 4).
 
-        For every reviewed file: its open marks are closed, the file is verified at the
-        content the review read, and each finding opens a mark. A result without a SHA-256
-        changes nothing for its file. Afterwards a review is
-        required if more than `max_open_marks` marks are open, and no longer required if none
-        is open. A review that failed must not be passed here: it verifies nothing.
+        For every reviewed file: its open marks are closed, the file is recorded as verified
+        by the source "review" at the content the review read, and each finding opens a mark.
+        A file with findings is dishonest while they are open; `storable` hands out nothing
+        for it. A result without a SHA-256 changes nothing for its file. Afterwards a review
+        is required if more than `max_open_marks` marks are open, and no longer required if
+        none is open. A review that failed must not be passed here: it verifies nothing.
 
         Args:
             results: Path (as `key` names it) -> what the review said about the file.
@@ -1380,7 +1812,7 @@ class HonestyState:
                 continue
             for mark in [m for m in self.open_marks if m.path == key]:
                 changes.closed.append(self._close(mark, "the honesty review"))
-            self.verified[key] = review.sha256
+            self.verified[key] = Verified(review.sha256, "review")
             self.watched.add(key)
             for finding in review.findings:
                 changes.opened.append(
@@ -1395,6 +1827,7 @@ class HonestyState:
     # ------------------------------------------------------------------ marks
 
     @property
+    @_locked
     def open_marks(self) -> list[HonestyMark]:
         """The open marks, oldest first.
 
@@ -1403,6 +1836,7 @@ class HonestyState:
         """
         return [mark for mark in self.marks if mark.open]
 
+    @_locked
     def dishonest_files(self) -> set[str]:
         """Name the files that carry at least one open mark.
 
@@ -1411,6 +1845,7 @@ class HonestyState:
         """
         return {mark.path for mark in self.open_marks}
 
+    @_locked
     def record(
         self,
         dirty: Sequence[CodeMark],
@@ -1426,8 +1861,10 @@ class HonestyState:
         in a Python file that parses, the symbol is first read as the definition it names).
         A dirty mark must name an existing file of the workspace (`checked_marks`); for a
         Python file that parses, its symbol is replaced by the definition's dotted name, and a
-        symbol that names no definition becomes a mark on the whole file. A dirty mark on a
-        spot that is already open refreshes its reason.
+        symbol that names no definition becomes a mark on the whole file. A dirty mark whose
+        path contains a character that is not printable (a line break, a control character) is
+        not recorded; a symbol with such a character becomes a mark on the whole file. A dirty
+        mark on a spot that is already open refreshes its reason.
 
         Args:
             dirty: The answer's `marks_dirty`.
@@ -1468,11 +1905,18 @@ class HonestyState:
         kept, rejected = checked_marks(dirty, self.workspace, must_exist=True)
         changes.ignored += rejected
         for entry in kept:
+            if not entry.path.isprintable():
+                changes.ignored.append(
+                    f"{shown(entry.path, NOTE_PATH_CHARS)}: the path contains a character "
+                    "that is not printable"
+                )
+                continue
             changes.opened.append(self._open(entry.path, entry.symbol, entry.reason, by))
         self._check_threshold()
         changes.review_required = self.review_required
         return changes
 
+    @_locked
     def clear(self, mark_id: int, by: str) -> HonestyMark | None:
         """Close one open mark by hand: a person's override of a checker.
 
@@ -1490,6 +1934,7 @@ class HonestyState:
                 return self._close(mark, by)
         return None
 
+    @_locked
     def close_stale(self) -> list[HonestyMark]:
         """Close the open marks whose code is gone (section 3).
 
@@ -1519,14 +1964,18 @@ class HonestyState:
             path: The file, relative to the workspace.
 
         Returns:
-            The dotted names; None if the file is no Python file, cannot be read or does not
-            parse (`calu.checkers.symbols.definition_names`).
+            The dotted names; None if the file is no Python file, is no regular file, cannot
+            be read (`read_regular`), is not UTF-8 or does not parse
+            (`calu.checkers.symbols.definition_names`).
         """
         if not path.endswith((".py", ".pyi")):
             return None
+        data = read_regular(self.workspace / path)
+        if data is None:
+            return None
         try:
-            source = (self.workspace / path).read_text(encoding="utf-8")
-        except OSError, ValueError:
+            source = data.decode("utf-8")
+        except UnicodeDecodeError:
             return None
         return definition_names(source, path)
 
@@ -1542,9 +1991,13 @@ class HonestyState:
         Returns:
             The open mark. For a Python file that parses, its symbol is the definition's
             dotted name; a symbol that names no single definition gives a mark on the whole
-            file whose reason starts with the symbol as written.
+            file whose reason starts with the symbol as written. A symbol with a character
+            that is not printable gives a mark on the whole file in any file.
         """
         wanted = normal_symbol(symbol)
+        if not wanted.isprintable():
+            reason = f"{shown(wanted, NOTE_PATH_CHARS)}: {reason}"
+            wanted = ""
         names = self._definitions(path) if wanted else None
         if wanted and names is not None:
             found = match_symbol(wanted, names)
@@ -1588,23 +2041,60 @@ class HonestyState:
 
     # ------------------------------------------------------------------ computed state
 
+    def _submodule_at(self, directory: Path, commit_id: str) -> bool:
+        """Tell whether a submodule's directory is at the commit the baseline records.
+
+        Args:
+            directory: The directory of the submodule in the working tree.
+            commit_id: The commit id of the baseline's submodule entry.
+
+        Returns:
+            True if the directory is empty (the submodule is not checked out, so nothing of
+            it is there to review), or if it is the top of a repository whose HEAD is
+            `commit_id`. False otherwise, also when the directory or git cannot be read.
+        """
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            return False
+        if not names:
+            return True
+        if ".git" not in names:
+            return False
+        try:
+            answer = run_git(directory, ["rev-parse", "--show-toplevel", "HEAD"])
+        except GitError:
+            return False
+        lines = os.fsdecode(answer).splitlines()
+        if len(lines) != 2:
+            return False
+        try:
+            same_top = Path(lines[0]).resolve() == directory.resolve()
+        except OSError:
+            return False
+        return same_top and lines[1].strip() == commit_id
+
+    @_locked
     def unreviewed(self) -> Unreviewed:
         """Compute the files whose present content nobody verified.
 
         Looked at are the files git lists for the repository (tracked files and untracked
-        files that git does not ignore) and the watched files. Not looked at: other ignored
-        files, other files outside the repository, deleted files, and the inside of
-        submodules.
+        files that git does not ignore) and the watched files. A submodule is looked at as one
+        entry: its directory is unreviewed unless it is at the commit the baseline records for
+        it or is not checked out; the files inside it are not looked at. A directory that git
+        names as one entry and the baseline does not record as a submodule is unreviewed. Not
+        looked at: other ignored files, other files outside the repository, deleted files.
 
         Returns:
-            The unreviewed files. `everything` is set when there is no baseline, and when git
-            could not list the files (then with `problem`).
+            The unreviewed files. `everything` is set when there is no baseline that counts,
+            and when git could not list the files (then with `problem`).
         """
-        if self.baseline is None:
+        base_commit = self._base()
+        if base_commit is None:
             return Unreviewed(everything=True)
         try:
             top = self._repository()
-            base = self._tree(self.baseline.commit_id)
+            base = self._tree(base_commit.commit_id)
             output = run_git(top, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
         except GitError as exc:
             return Unreviewed(everything=True, problem=str(exc))
@@ -1620,88 +2110,122 @@ class HonestyState:
             except OSError:
                 continue  # deleted: nothing is left to review
             if stat.S_ISDIR(status.st_mode):
-                # A submodule the baseline records is not looked into; any other directory
-                # git names as one entry is a repository of its own that nobody reviewed.
-                if entry is None or entry[0] != GITLINK_MODE:
+                at_baseline = (
+                    entry is not None
+                    and entry[0] == GITLINK_MODE
+                    and self._submodule_at(top / inside, entry[1])
+                )
+                if not at_baseline:
                     found.add(key)
                 continue
             ids = self._content(key)
             if ids is None:
                 found.add(key)
-            elif entry is not None and entry[1] == ids.blob:
+            elif entry is not None and entry[0] != GITLINK_MODE and entry[1] == ids.blob:
                 continue
-            elif not self._verified_content(key, ids):
+            elif self._verified_source(key, ids) is None:
                 found.add(key)
         for key in self.watched - listed:
             if not os.path.lexists(self.workspace / key):
                 continue
             ids = self._content(key)
-            if ids is None or not self._verified_content(key, ids):
+            if ids is None or self._verified_source(key, ids) is None:
                 found.add(key)
         return Unreviewed(paths=tuple(sorted(found)))
 
+    @_locked
     def snapshot(self) -> HonestySnapshot:
         """Compute the state as it is now.
 
         Stale marks are not closed here; call `close_stale` first.
 
         Returns:
-            The baseline, the open marks, the unreviewed files and whether a review is
-            required.
+            The baseline that counts, the open marks, the unreviewed files and whether a
+            review is required.
         """
         return HonestySnapshot(
-            baseline=self.baseline,
+            baseline=self._base(),
             marks=tuple(self.open_marks),
             unreviewed=self.unreviewed(),
             review_required=self.review_required,
         )
 
-    def uncertified(self, commit_id: str) -> str:
-        """Say why a commit must not be certified as trusted, if anything speaks against it.
+    @_locked
+    def certification(self, commit_id: str) -> Certification:
+        """Decide whether a commit may be certified as trusted, and with which source.
 
         calu certifies a commit by what the commit records, not by the working tree: every
-        file the commit holds must have the content the baseline holds for that path, or the
-        content of the working file with that content verified. Files the commit deletes and
-        submodule entries are not looked at.
+        entry the commit holds must be the one the baseline holds for that path, or a file
+        whose committed content is the content of the working file with that content
+        verified. A submodule entry that the baseline does not hold with the same commit id
+        is never verified. Files the commit deletes are not looked at.
+
+        This looks only at what the commit records. The session additionally requires a clean
+        `snapshot()` before the commit ran, because unreviewed files outside the commit do not
+        show here.
 
         Args:
             commit_id: The full id of the commit, usually the new HEAD after a `git commit`.
 
         Returns:
-            "" if the commit may be certified. Otherwise one sentence: there is no baseline,
-            marks are open, a review is required, git could not list the commit, or which
-            files of the commit are not verified.
+            With `problem` "": the commit may be certified with `source`, the weakest among
+            the baseline's source and the sources that verified the changed files (all by
+            honesty review and a baseline of "review" or "user" give "review"; any step check
+            gives "check"). Otherwise `problem` is one sentence: there is no baseline, marks
+            are open, a review is required, git could not list the commit, or which entries of
+            the commit are not verified.
         """
-        if self.baseline is None:
-            return "there is no baseline"
+        base_commit = self._base()
+        if base_commit is None:
+            return Certification("there is no baseline")
         if self.open_marks:
-            return f"{len(self.open_marks)} mark(s) are open"
+            return Certification(f"{len(self.open_marks)} mark(s) are open")
         if self.review_required:
-            return "an honesty review is required"
+            return Certification("an honesty review is required")
         if not HEAD_ID.fullmatch(commit_id):
-            return "the commit id is not a full commit id"
+            return Certification("the commit id is not a full commit id")
         try:
             top = self._repository()
-            base = self._tree(self.baseline.commit_id)
+            base = self._tree(base_commit.commit_id)
             recorded = self._tree(commit_id)
         except GitError as exc:
-            return f"git could not list the commit ({exc})"
+            return Certification(f"git could not list the commit ({exc})")
         failing: list[str] = []
+        sources: list[TrustSource] = [base_commit.source]
         for inside, (mode, object_id) in recorded.items():
-            if mode == GITLINK_MODE:
-                continue
             entry = base.get(inside)
+            key = self.key(top / inside)
+            if mode == GITLINK_MODE or (entry is not None and entry[0] == GITLINK_MODE):
+                if entry != (mode, object_id):
+                    failing.append(key)
+                continue
             if entry is not None and entry[1] == object_id:
                 continue
-            key = self.key(top / inside)
             ids = self._content(key)
-            if ids is None or ids.blob != object_id or not self._verified_content(key, ids):
+            source = None
+            if ids is not None and ids.blob == object_id:
+                source = self._verified_source(key, ids)
+            if source is None:
                 failing.append(key)
+            else:
+                sources.append(source)
         if failing:
             failing.sort()
             rest = f" and {len(failing) - 5} more" if len(failing) > 5 else ""
-            return (
-                f"{len(failing)} file(s) of the commit are not verified: "
-                f"{', '.join(failing[:5])}{rest}"
+            names = ", ".join(shown(name, NOTE_PATH_CHARS) for name in failing[:5])
+            return Certification(
+                f"{len(failing)} file(s) of the commit are not verified: {names}{rest}"
             )
-        return ""
+        return Certification("", weakest(sources))
+
+    def uncertified(self, commit_id: str) -> str:
+        """Say why a commit must not be certified as trusted, if anything speaks against it.
+
+        Args:
+            commit_id: The full id of the commit.
+
+        Returns:
+            `certification(commit_id).problem`: "" if the commit may be certified, otherwise
+            one sentence.
+        """
+        return self.certification(commit_id).problem

@@ -38,6 +38,7 @@
                                    the allow and deny lists (`edit` opens one in $EDITOR)
     calu honesty show|edit|reset   the honesty rules the change checkers read
     calu honesty trust REV [--note TEXT] | trust --file PATH | trusted | untrust COMMIT
+    calu honesty prune --days N    remove the trust calu itself stored longer than N days ago
                                    certify a commit (or a file's content) as honest, list
                                    and remove certifications
 
@@ -91,6 +92,7 @@ from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
 from calu.honesty import GitError, content_ids, resolve_commit
 from calu.model_choice import detect_model
+from calu.paths import INSIDE_SESSION_ENV
 from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
@@ -2266,33 +2268,49 @@ def _os_user() -> str:
 
 
 def _honesty_trust(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Certify a commit or a file content as honest, list the certifications, or remove one.
+    """Certify a commit or a file content as honest, list the certifications, or remove some.
 
         calu honesty trust REV [--note TEXT]     REV is a commit, a branch or a tag; a branch
                                                  is resolved to the commit it points at now
         calu honesty trust --file PATH [--note TEXT]
                                                  the SHA-256 of the file's present content
-        calu honesty trusted [--all]             the trusted commits and file contents
+        calu honesty trusted [--all]             the trusted commits and file contents, each
+                                                 with the source of its trust
         calu honesty untrust COMMIT              a commit id, its prefix, or a name git
                                                  resolves in the current directory
         calu honesty untrust --file HASH_OR_PATH
+        calu honesty prune --days N              remove what calu itself stored (sources
+                                                 `check` and `review`) longer than N days ago
 
-    `trust` records the method `user` and the OS user name. Names are resolved with git in the
-    current directory; the database is not asked whether the commit exists anywhere. The
-    commands use the `operator` credential, or `admin` if there is none.
+    `trust` records the source `user` and the OS user name; it replaces a weaker record
+    (`check`, `review`) of the same commit or content. `prune` never removes a `user` record.
+    Names are resolved with git in the current directory; the database is not asked whether
+    the commit exists anywhere.
+
+    The commands use the `operator` credential, or `admin` if there is none: a `user`
+    certification made here rests on the protection of the credential store. `trust`,
+    `untrust` and `prune` do not run inside a calu session (`calu.paths.INSIDE_SESSION_ENV`
+    is set there): a person runs them in a terminal of their own, or uses `/trust` in a
+    client of the session.
 
     Args:
-        args: Parsed arguments (`action`: "trust", "trusted" or "untrust"; `target`, `file`,
-            `note`, `all`).
+        args: Parsed arguments (`action`: "trust", "trusted", "untrust" or "prune"; `target`,
+            `file`, `note`, `all`, `days`).
         store: The credential store.
 
     Raises:
-        CliError: If neither credential is stored, the commit or file is not named or cannot
-            be resolved or read, or there is nothing to remove.
+        CliError: If a changing action is started from inside a session, neither credential is
+            stored, the commit or file is not named or cannot be resolved or read, `--days`
+            is missing or negative, or there is nothing to remove.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
     here = Path.cwd()
+    if args.action != "trusted" and os.environ.get(INSIDE_SESSION_ENV):
+        raise CliError(
+            f"calu honesty {args.action} does not run inside a calu session; a person runs it "
+            "in a terminal of their own, or certifies with /trust in a client of the session"
+        )
     if args.action == "trusted":
 
         async def listing(db: Db) -> str:
@@ -2302,22 +2320,48 @@ def _honesty_trust(args: argparse.Namespace, store: CredentialStore) -> None:
                 db: The connection.
 
             Returns:
-                The trusted commits, newest first, then the trusted file contents.
+                The trusted commits, newest first, then the trusted file contents (all with
+                `--all`, otherwise the newest `TRUSTED_SHOWN` of each).
             """
             commits = await trust.trusted_commits(db, None if args.all else TRUSTED_SHOWN + 1)
-            files = await trust.trusted_files(db)
-            lines = ["trusted commits:"]
-            lines += [f"  {row.line()}" for row in commits[: None if args.all else TRUSTED_SHOWN]]
+            files = await trust.trusted_files(db, None if args.all else TRUSTED_SHOWN + 1)
+            shown = None if args.all else TRUSTED_SHOWN
+            lines = ["trusted commits (id, certified, source, by, note):"]
+            lines += [f"  {row.line()}" for row in commits[:shown]]
             if not commits:
                 lines.append("  none; `calu honesty trust <commit-or-branch>` certifies one")
             elif not args.all and len(commits) > TRUSTED_SHOWN:
                 lines.append("  ... older ones are left out; --all lists every one")
             if files:
-                lines.append("trusted file contents:")
-                lines += [f"  {row.line()}" for row in files]
+                lines.append("trusted file contents (sha256, certified, source, by, path, note):")
+                lines += [f"  {row.line()}" for row in files[:shown]]
+                if not args.all and len(files) > TRUSTED_SHOWN:
+                    lines.append("  ... older ones are left out; --all lists every one")
             return "\n".join(lines)
 
         _herd_command(store, listing)
+        return
+    if args.action == "prune":
+        days = args.days
+        if days is None or days < 0:
+            raise CliError("calu honesty prune needs --days N with N of 0 or more")
+
+        async def pruning(db: Db) -> str:
+            """Remove the old `check` and `review` records.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The report.
+            """
+            removed = await trust.prune(db, days)
+            return (
+                f"{removed} record(s) of the sources check and review older than {days} day(s) "
+                "removed; user records are kept"
+            )
+
+        _herd_command(store, pruning)
         return
     note = args.note or ""
     if args.file:
@@ -2339,8 +2383,8 @@ def _honesty_trust(args: argparse.Namespace, store: CredentialStore) -> None:
                 Returns:
                     The report.
                 """
-                added = await trust.trust_file(db, sha256, str(named), _os_user(), note)
-                state = "trusted" if added else "was trusted already"
+                added = await trust.trust_file(db, sha256, str(named), "user", _os_user(), note)
+                state = "trusted" if added else "was trusted by a user already"
                 return f"{named} with its present content (sha256 {sha256[:12]}): {state}"
 
             _herd_command(store, trust_file)
@@ -2387,7 +2431,7 @@ def _honesty_trust(args: argparse.Namespace, store: CredentialStore) -> None:
             added = await trust.certify_commit(
                 db, commit.commit_id, commit.tree_id, "user", _os_user(), note
             )
-            state = "trusted" if added else "was trusted already"
+            state = "trusted" if added else "was trusted by a user already"
             return f"commit {commit.short} ({args.target}): {state}"
 
         _herd_command(store, certify)
@@ -2426,11 +2470,11 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
     if set, else the global one, else the text shipped with calu. `show` prints them; `edit`
     opens them in `$EDITOR` and stores the result in the scope (`--project` or global);
     `reset` removes the scope's value, so the next scope down (or the shipped text) applies
-    again. `trust`, `trusted` and `untrust` are described at `_honesty_trust`.
+    again. `trust`, `trusted`, `untrust` and `prune` are described at `_honesty_trust`.
 
     Args:
-        args: Parsed arguments (`action`: "show", "edit", "reset", "trust", "trusted" or
-            "untrust"; `project`; and what `_honesty_trust` reads).
+        args: Parsed arguments (`action`: "show", "edit", "reset", "trust", "trusted",
+            "untrust" or "prune"; `project`; and what `_honesty_trust` reads).
         store: The credential store.
 
     Raises:
@@ -2440,7 +2484,7 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
         admin.AdminError: If the project does not exist.
         psycopg.Error: On database errors.
     """
-    if args.action in ("trust", "trusted", "untrust"):
+    if args.action in ("trust", "trusted", "untrust", "prune"):
         _honesty_trust(args, store)
         return
     url = load_credential(store, "admin", "Admin password: ")
@@ -2840,11 +2884,13 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "calu honesty show | edit | reset [--project NAME] (the honesty rules); "
             "calu honesty trust COMMIT-OR-BRANCH [--note TEXT] | trust --file PATH | "
-            "trusted [--all] | untrust COMMIT | untrust --file HASH-OR-PATH "
+            "trusted [--all] | untrust COMMIT | untrust --file HASH-OR-PATH | prune --days N "
             "(what is certified as honest)"
         ),
     )
-    honesty.add_argument("action", choices=["show", "edit", "reset", "trust", "trusted", "untrust"])
+    honesty.add_argument(
+        "action", choices=["show", "edit", "reset", "trust", "trusted", "untrust", "prune"]
+    )
     honesty.add_argument(
         "target",
         nargs="?",
@@ -2859,7 +2905,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     honesty.add_argument("--note", help="for trust: why, kept with the certification")
     honesty.add_argument(
-        "--all", action="store_true", help="for trusted: every commit, not only the newest"
+        "--all", action="store_true", help="for trusted: every entry, not only the newest"
+    )
+    honesty.add_argument(
+        "--days",
+        type=int,
+        help="for prune: remove the records of the sources check and review that are older "
+        "than this many days; user records are never removed",
     )
     honesty.set_defaults(handler=cmd_honesty)
 
