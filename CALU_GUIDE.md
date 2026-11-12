@@ -723,7 +723,12 @@ itself). The sidebar picks a pane, the search (`/`) looks through all of them, a
 **Reset**; a project shows the global value it inherits. A refused value -- a regular
 expression that does not compile, say -- is reported at its field, keeps what you typed, and
 does not stop the other changes from being saved. Checker instructions are shared by every
-project and are edited in the global scope.
+project and are edited in the global scope. A model field (each checker, the narrator, the
+summarizer) offers a list by provider -- Anthropic, AWS Bedrock, Fireworks, Mistral, and this
+machine's Claude Code account -- and "Other" opens it for any model string Pydantic AI
+supports, with a link to its list. The Bedrock entries are model ids; an account that reaches a
+model only through a regional inference profile needs that profile's id
+(`calu config models auto` finds the EU Haiku profile).
 
 Other agent fleet tools do much of this; what they do not do is the part calu exists for. Some
 of them start the agent with `--dangerously-skip-permissions` so that nothing interrupts it.

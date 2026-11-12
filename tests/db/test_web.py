@@ -283,6 +283,18 @@ async def test_one_settings_page_holds_the_values_the_instructions_and_the_rules
             assert 'name="claude.effort"' in page and ">xhigh<" in page
             assert 'name="claude.use_bedrock"' in page and 'type="checkbox"' in page
             assert 'name="command_checker.model"' in page
+            # A checker's model: a list by provider that fills a free text field, and the page
+            # that documents every other model string (the owner's ask).
+            for offered in (
+                "anthropic:claude-sonnet-5-5",
+                "bedrock:anthropic.claude-opus-5-5",
+                "fireworks:accounts/fireworks/models/",
+                "mistral:mistral-small-2603",
+                "claude:haiku",
+            ):
+                assert f'<option value="{offered}' in page
+            assert 'data-model-for="f-command_checker-model"' in page
+            assert 'href="https://pydantic.dev/docs/ai/models/overview/"' in page
             assert 'name="changeset_checker.effort"' in page
             assert 'name="claude.sandbox.deny_read"' in page  # a list, one per line
             assert 'name="clock.max_backward_s"' in page

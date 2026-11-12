@@ -111,6 +111,39 @@
   });
   form.addEventListener("change", refresh);
 
+  // ---- model fields: a list of known models that fills the text field, which stays free
+  const syncModel = (select) => {
+    const input = document.getElementById(select.dataset.modelFor);
+    const known = [...select.options].some((option) => option.value && option.value === input.value);
+    select.value = known ? input.value : "";
+    // The text field shows only for a model the list does not have; for a listed one the
+    // string behind the entry is shown instead.
+    input.hidden = known;
+    const id = select.parentElement.querySelector("[data-model-id]");
+    id.textContent = input.value;
+    id.hidden = !known;
+  };
+  const modelSelects = [...root.querySelectorAll("select[data-model-for]")];
+  for (const select of modelSelects) {
+    const input = document.getElementById(select.dataset.modelFor);
+    select.addEventListener("change", () => {
+      if (select.value) {
+        input.value = select.value;
+        syncModel(select);
+      } else {
+        input.hidden = false;
+        select.parentElement.querySelector("[data-model-id]").hidden = true;
+        input.focus();
+        input.select();
+      }
+      refresh();
+    });
+    // Typing a listed model by hand selects it in the list when the field is left.
+    input.addEventListener("change", () => syncModel(select));
+    syncModel(select);
+  }
+  const syncModels = () => modelSelects.forEach(syncModel);
+
   // ---- "Reset": show the inherited value and ask the server to drop the stored one
   root.addEventListener("click", (event) => {
     const button = event.target.closest("[data-reset]");
@@ -127,6 +160,7 @@
       form.append(marker);
     }
     if (el.matches("textarea")) fit(el);
+    syncModels();
     refresh();
   });
 
@@ -134,6 +168,7 @@
     form.reset();
     form.querySelectorAll('input[name="_reset"]').forEach((marker) => marker.remove());
     fitAll();
+    syncModels();
     refresh();
   });
 

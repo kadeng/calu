@@ -13,6 +13,22 @@
       <option value="" {{ 'selected' if f.value is none }}>—</option>
       {% for choice in f.choices %}<option value="{{ choice }}" {{ 'selected' if f.text == choice }}>{{ choice }}</option>{% endfor %}
     </select>
+  {%- elif f.kind == 'model' -%}
+    <div class="st-model">
+      {# The text field holds the value and is what the form sends; the list fills it. #}
+      <select data-model-for="{{ id }}" aria-label="{{ f.label }}: choose a model"{{ off }}>
+        {% for provider, models in f.options %}
+          <optgroup label="{{ provider }}">
+            {% for value, label in models %}<option value="{{ value }}">{{ value.split(':')[0] | capitalize }} · {{ label }}</option>{% endfor %}
+          </optgroup>
+        {% endfor %}
+        <option value="">Other: type a model string</option>
+      </select>
+      <input type="text" id="{{ id }}" name="{{ f.name }}" value="{{ f.text }}" autocomplete="off"
+             spellcheck="false" placeholder="provider:model"{{ off }}>
+      {# The string behind the chosen entry, so that two providers of one model stay apart. #}
+      <code class="st-model-id" data-model-id hidden></code>
+    </div>
   {%- elif f.block -%}
     <div class="st-editor{% if f.tone %} st-editor--{{ f.tone }}{% endif %}">
       <textarea id="{{ id }}" name="{{ f.name }}" spellcheck="false" autocomplete="off" autocapitalize="off"
@@ -30,7 +46,7 @@
 {% macro row(f) -%}
   {%- set id = 'f-' ~ f.name | replace('.', '-') | replace(':', '-') -%}
   {%- set head, rest = f.help_parts -%}
-  <div class="st-row st-row--{{ 'block' if f.block else ('text' if f.kind == 'text' else 'inline') }}{{ ' is-set' if f.is_set }}{{ ' is-locked' if f.locked }}{{ ' has-error' if f.error }}"
+  <div class="st-row st-row--{{ 'block' if f.block else ('text' if f.kind in ('text', 'model') else 'inline') }}{{ ' is-set' if f.is_set }}{{ ' is-locked' if f.locked }}{{ ' has-error' if f.error }}"
        data-field="{{ f.name }}" data-kind="{{ f.kind }}" data-search="{{ f.search }}"
        {% if f.key and not ':' in f.name %}data-base="{{ f.base_text }}"{% endif %}>
     <div class="st-row-text">
@@ -42,6 +58,7 @@
         {% if f.meta %}<span class="st-meta">{{ f.meta }}</span>{% endif %}
       </div>
       {% if head %}<div class="st-help">{{ head | prose }}{% if rest %} <details class="st-more"><summary>More</summary><span>{{ rest | prose }}</span></details>{% endif %}</div>{% endif %}
+      {% if f.doc %}<div class="st-help">Choose from the list, or pick "Other" and type a model string: <a href="{{ f.doc[0] }}" target="_blank" rel="noopener noreferrer">{{ f.doc[1] }}</a> works.</div>{% endif %}
       {% if f.key %}<code class="st-key">{{ f.key }}</code>{% endif %}
     </div>
     <div class="st-row-control">

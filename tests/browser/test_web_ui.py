@@ -307,6 +307,29 @@ async def test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_un
             assert await page.input_value("[name='rules:command-allow']") == "^unclosed("
             assert "Not saved" in await page.inner_text(".st-pane.is-active")
 
+            # A model is chosen from a list by provider; "Other" opens the field for any string.
+            await page.goto(base + "/settings")
+            await page.reload()
+            await page.get_by_role("link", name="Edit checker").click()
+            choose = page.locator("select[data-model-for='f-edit_checker-model']")
+            typed = page.locator("[name='edit_checker.model']")
+            await choose.select_option("anthropic:claude-haiku-5-5")
+            assert await typed.input_value() == "anthropic:claude-haiku-5-5"
+            assert not await typed.is_visible()
+            assert await page.inner_text("#st-dirty-count") == "1"
+            await choose.select_option("")
+            assert await typed.is_visible()
+            await typed.fill("openrouter:some/model")
+            async with page.expect_navigation():
+                await page.keyboard.press("Control+s")
+            assert (await admin.settings(db))["edit_checker"] == {"model": "openrouter:some/model"}
+            # A stored model the list does not have is shown in the text field.
+            assert await page.locator("[name='edit_checker.model']").is_visible()
+            assert (
+                await page.locator("select[data-model-for='f-edit_checker-model']").input_value()
+                == ""
+            )
+
             # A phone gets the same page in one column, without a sideways scroll.
             await page.set_viewport_size({"width": 390, "height": 800})
             await page.goto(base + "/settings#claude")

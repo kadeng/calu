@@ -42,7 +42,17 @@ from calu.db import Db
 from calu.defaults.instructions import SYSTEM_PARTS, honesty_rules, system_part
 
 Kind = Literal[
-    "bool", "choice", "int", "number", "text", "lines", "json", "markdown", "prompt", "rules"
+    "bool",
+    "choice",
+    "int",
+    "number",
+    "text",
+    "model",
+    "lines",
+    "json",
+    "markdown",
+    "prompt",
+    "rules",
 ]
 """Which control a field gets in the browser."""
 
@@ -51,6 +61,61 @@ BLOCK_KINDS = frozenset({"lines", "json", "markdown", "prompt", "rules"})
 
 MODEL_SUGGESTIONS = ("fable", "opus", "sonnet", "haiku")
 """Claude Code's model aliases, offered next to the free-text field (`claude.model`)."""
+
+MODEL_OPTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "Anthropic API",
+        (
+            ("anthropic:claude-haiku-5-5", "Claude Haiku 5.5"),
+            ("anthropic:claude-sonnet-5-5", "Claude Sonnet 5.5"),
+            ("anthropic:claude-opus-5-5", "Claude Opus 5.5"),
+        ),
+    ),
+    (
+        "AWS Bedrock",
+        (
+            ("bedrock:anthropic.claude-haiku-5-5", "Claude Haiku 5.5"),
+            ("bedrock:anthropic.claude-sonnet-5-5", "Claude Sonnet 5.5"),
+            ("bedrock:anthropic.claude-opus-5-5", "Claude Opus 5.5"),
+            (
+                "bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "Claude Haiku 4.5 (EU profile)",
+            ),
+        ),
+    ),
+    (
+        "Fireworks",
+        (
+            (
+                "fireworks:accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+                "Nemotron Lightning 3.5 30B",
+            ),
+        ),
+    ),
+    (
+        "Mistral",
+        (
+            ("mistral:mistral-small-2603", "Mistral Small 4"),
+            ("mistral:mistral-medium-latest", "Mistral Medium"),
+            ("mistral:ministral-3b-latest", "Ministral 3B"),
+        ),
+    ),
+    (
+        "This machine's Claude Code account (no API key, no tools)",
+        (
+            ("claude:haiku", "Haiku"),
+            ("claude:sonnet", "Sonnet"),
+            ("claude:opus", "Opus"),
+        ),
+    ),
+)
+"""The models offered for a checker, the narrator and the summarizer: (provider, ((Pydantic AI
+model string, label), ...)). A suggestion list, not a limit: the field takes any model string.
+The Bedrock entries are model ids; an account that reaches a model only through a regional
+inference profile needs that profile's id instead (`calu config models auto` finds one)."""
+
+MODELS_DOC = ("https://pydantic.dev/docs/ai/models/overview/", "Any model Pydantic AI supports")
+"""Where the model strings are documented: (address, link text)."""
 
 SKIP: frozenset[str] = frozenset()
 """Fields the form leaves out; none. `hidden_env` is editable here like every other list: it
@@ -118,6 +183,10 @@ class Field:
     """Read-only text shown folded under the editor: the fixed part calu puts in front of a
     checker's instructions, or the global rules that apply on top of a project's list."""
     placeholder: str = ""
+    options: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = ()
+    """For a model field: the offered models by provider, as `MODEL_OPTIONS`."""
+    doc: tuple[str, str] | None = None
+    """A page that documents the value: (address, link text); None for no link."""
 
     @property
     def block(self) -> bool:
@@ -836,7 +905,9 @@ def _checker_fields(src: Sources, row: admin.CheckerRow) -> list[Field]:
             Field(
                 name=f"checker:{row.name}:{column}",
                 label=_label(column),
-                kind="text" if column == "model" else "int",
+                kind="model" if column == "model" else "int",
+                options=MODEL_OPTIONS if column == "model" else (),
+                doc=MODELS_DOC if column == "model" else None,
                 value=getattr(row, column),
                 key=f"calu checker set {row.name} --{column.replace('_', '-')}",
                 help=_help(info.description),
@@ -932,6 +1003,10 @@ def _config_field(src: Sources, path: str) -> Field | None:
         return None
     if path in MARKDOWN:
         kind = "markdown"
+    # A Pydantic AI model string: every `model` field but Claude Code's own (`claude.model`).
+    is_model = kind == "text" and name.endswith("model") and path != "claude.model"
+    if is_model:
+        kind = "model"
     default = _default(info)
     if path == "honesty.rules":
         default = honesty_rules()
@@ -946,6 +1021,8 @@ def _config_field(src: Sources, path: str) -> Field | None:
         key=path,
         choices=choices,
         suggestions=MODEL_SUGGESTIONS if path == "claude.model" else (),
+        options=MODEL_OPTIONS if is_model else (),
+        doc=MODELS_DOC if is_model else None,
         help=_help(info.description),
         base=base,
         is_set=stored is not None,
