@@ -28,9 +28,9 @@ Tool call flow (ToolGate):
     ask -> an `escalations` row and an `escalation.request` event; waits without a time limit
 
 While an escalation of the session is open or being opened, the gate approves no tool call that
-needs a check (`Session._hold`), so that no other agent of the session gets a step approved
+needs a check (`EscalationDesk.hold`), so that no other agent of the session gets a step approved
 while a human decides. An escalation counts from the moment the gate's verdict for its step is
-ASK (`Session._expect_ask`), not only once its row exists. The gate looks three times:
+ASK (`EscalationDesk.expect_ask`), not only once its row exists. The gate looks three times:
 
     another call reaches the gate ── no check needed (read tools, tool policy) ──► answered
             │ needs a check
@@ -54,7 +54,8 @@ ASK (`Session._expect_ask`), not only once its row exists. The gate looks three 
 "Being opened" ends when the row exists, when it could not be stored, or `ASK_PENDING_S` after
 the verdict if Claude Code never asks. Tool calls that already run are not touched, and the
 reviews after a step (`review_write_set`, `review_subagent_result`) never wait: they open
-escalations themselves.
+escalations themselves. The escalations and this hold are kept by
+`calu.escalations.EscalationDesk` (`Session.desk`), whose docstring states the invariants.
 
 A human resolves an escalation in the database (`calu resolve`, a web UI, SQL); the session
 notices the resolution through `note_resolution` (a `escalation_resolved` notification) or by
@@ -112,7 +113,7 @@ from calu.checkers import (
 )
 from calu.checkers.changeset import STAGE_FIRST, Changeset, CommitKind, changeset, classify_commit
 from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
-from calu.checkers.render import changed_lines, edited_file, inline, render_step
+from calu.checkers.render import changed_lines, edited_file, inline
 from calu.checkers.rules import (
     OTHER_RULED_TOOLS,
     READ_PATH_TOOLS,
@@ -138,6 +139,15 @@ from calu.context import ContextBuilder, StepRecord, TurnRecord, label_for_unche
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
 from calu.defaults.instructions import compose_instructions
+from calu.escalations import ANSWER_TEMPLATE as ANSWER_TEMPLATE
+from calu.escalations import ASK_PENDING_S as ASK_PENDING_S
+from calu.escalations import DB_UNREACHABLE as DB_UNREACHABLE
+from calu.escalations import ESCALATION_POLL_S as ESCALATION_POLL_S
+from calu.escalations import OPEN_ESCALATION_RETRY_S as OPEN_ESCALATION_RETRY_S
+from calu.escalations import STORE_DECISION_TIMEOUT_S as STORE_DECISION_TIMEOUT_S
+from calu.escalations import Asked, EscalationDesk, EscalationError
+from calu.escalations import Escalation as Escalation
+from calu.escalations import Outcome as Outcome
 from calu.files import command_files
 from calu.honesty import (
     HonestyMark,
@@ -164,8 +174,6 @@ from calu.protocol.messages import (
     CommentAddParams,
     EditDiff,
     EscalationContextResult,
-    EscalationRequest,
-    EscalationResolved,
     Event,
     HonestyMarkInfo,
     HonestyUpdate,
@@ -185,7 +193,7 @@ from calu.protocol.messages import (
 )
 from calu.protocol.messages import CheckResult as CheckResultEvent
 from calu.run_state import STEP_TIMES_KEPT as STEP_TIMES_KEPT
-from calu.run_state import Escalation, Outcome, RunState
+from calu.run_state import RunState
 from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
 from calu.store import StepRow as StoredStep
 from calu.tokens import token_hash
@@ -246,7 +254,7 @@ NOBODY_ASKED: dict[str, str] = {
     ),
     "timed_out": "Nobody answered within the escalation timeout, and the session stops.",
 }
-"""Why a review after a step got no human decision, by escalation outcome (see `_Asked`); any
+"""Why a review after a step got no human decision, by escalation outcome (see `Asked`); any
 other outcome without a decision reads "No decision was made."."""
 
 WRITE_SET_NOT_REVERTED = (
@@ -255,13 +263,6 @@ WRITE_SET_NOT_REVERTED = (
     "the change yourself before you go on."
 )
 """Note for Claude when a refused change could not be reverted."""
-
-ANSWER_TEMPLATE = (
-    "The user answered your question: {answer}\nThe AskUserQuestion call itself was not run; "
-    "this is the answer. Carry on with it."
-)
-"""What Claude receives when a human answers its question (PLAN.md D35). It travels as the
-message of the refusal that keeps the call from running, which the spike showed Claude acts on."""
 
 CHECKER_DEADLINE_S = 300
 """Upper bound for one checker model call; on timeout the step is escalated."""
@@ -274,23 +275,9 @@ escalation. Past it the step is escalated. Narration and checkers run one after 
 this is more than `NARRATOR_DEADLINE_S + CHECKER_DEADLINE_S`."""
 HOLD_BUDGET_S = 300
 """How long a new tool call waits in the gate while an escalation of the session is open
-(`Session._hold`). The gate runs inside Claude Code's PreToolUse hook, whose timeout is
+(`EscalationDesk.hold`). The gate runs inside Claude Code's PreToolUse hook, whose timeout is
 `calu.claude.sdk_runner.HOOK_TIMEOUT_S` (900 s): `HOLD_BUDGET_S + GATE_BUDGET_S` leaves three
 minutes of it for recording the step, so the hook answers before Claude Code gives up on it."""
-ASK_PENDING_S = 30.0
-"""How long a step whose gate verdict was ASK counts as an escalation that is being opened
-(`Session._expect_ask`) if `ask` is never called for it. Claude Code calls `ask` right after the
-hook answered, so this only bounds the case where it does not; without the bound such a step
-would hold every later one for `HOLD_BUDGET_S`."""
-STORE_DECISION_TIMEOUT_S = 30.0
-"""Upper bound for writing a client's decision about an escalation, or the cancellation of an
-escalation, to the database. These writes are shielded from cancellation, so without a bound a
-database that does not answer would keep the escalation from ever being decided here."""
-OPEN_ESCALATION_RETRY_S: tuple[float, ...] = (0.5, 2.0)
-"""Pauses before the second and the third attempt to store an escalation. A step whose
-escalation cannot be stored is denied, so one failed INSERT should not decide that."""
-ESCALATION_POLL_S = 1.0
-"""How often an open escalation's database row is read while the session waits for a human."""
 START_TIMEOUT_S = 120
 """Upper bound for a Claude session to become ready in `Session.start`."""
 GIT_HEAD_TTL_S = 2.0
@@ -390,12 +377,6 @@ RELAY_TEMPLATE = (
 )
 """How a message for a background subagent is wrapped for the main agent."""
 
-DB_UNREACHABLE = (
-    "calu could not record this step in the database, so no human can be asked about it. "
-    "The step was denied. Tell the user that calu's database is unreachable."
-)
-"""Reason Claude receives when an escalation cannot be stored (the step is denied)."""
-
 
 class SessionError(Exception):
     """A request cannot be served in the current state (reported to the client)."""
@@ -408,19 +389,6 @@ class _PendingNarration:
     outputs: list[ClaudeOutput]
     text: str | None = None
     """None until narrated; "" if there was nothing to narrate or narrating failed."""
-
-
-@dataclass(frozen=True)
-class _Asked:
-    """The result of asking a human: the answer for the runner and how the escalation ended.
-
-    Before a step, only `answer.allow` matters: every outcome but "allowed" keeps the step from
-    running. The reviews after a step need the outcome, because there "nobody decided" must not
-    be treated as "a human refused".
-    """
-
-    answer: HumanAnswer
-    outcome: Outcome
 
 
 @dataclass
@@ -606,8 +574,23 @@ class Session:
         self.narrator: Narrator | None = self._narrator()
         self._run_state = RunState.before_first_run()
         """Everything that describes one run; `start` replaces it (`calu.run_state`)."""
+        self.desk = EscalationDesk(
+            store,
+            workspace,
+            emit=self._emit_safely,
+            refresh_state=self._refresh_state,
+            store_call=self._store_call,
+            store_failed=self._store_failed,
+            store_succeeded=self._store_succeeded,
+            timeout_s=lambda: self.config.escalation_timeout_s,
+            claude_session_id=lambda: self.session_id,
+            row_context=self._escalation_row_context,
+            step_row=self._step_row,
+            stop_session=self._stop_soon,
+        )
+        """The escalations of this session and the hold they put on other steps
+        (`calu.escalations`); it outlives runs."""
         self.state: State = "stopped"
-        self._local_ids = itertools.count(1)
         self._git_head_value: str | None = None
         self._git_head_time = float("-inf")
         self._pending = 0  # background tasks (narration, turn storage, folding)
@@ -1585,11 +1568,7 @@ class Session:
             model=self.config.claude.model,
             effort=self.config.claude.effort,
             agents=list(self.runner.agents.values()) if self.runner else [],
-            escalations=[
-                esc.request
-                for esc in self._run_state.escalations.values()
-                if esc.request is not None
-            ],
+            escalations=self.desk.requests(),
             queue=[message for message, _ in self._run_state.queue],
             auto_escalate=self.config.auto_escalate,
             honesty_mode=self.config.honesty.mode,
@@ -1807,7 +1786,7 @@ class Session:
         finally:
             self._run_state.run_done.set()  # first, so that `stop` never waits for a broken client
             with anyio.CancelScope(shield=True):
-                await self._cancel_escalations("The Claude session ended.")
+                await self.desk.cancel_all("The Claude session ended.")
                 if self._run_state.queue:  # messages Claude did not read are lost with the session
                     self._run_state.queue.clear()
                     await self._emit_safely(ChatQueue(messages=[]))
@@ -1827,7 +1806,7 @@ class Session:
         """
         self._run_state.claude_outputs.clear()
         if not self._run_state.run_done.is_set():
-            await self._cancel_escalations("The session was stopped.")
+            await self.desk.cancel_all("The session was stopped.")
             assert self.runner is not None
             await self.runner.stop()
             await self._run_state.run_done.wait()
@@ -1844,25 +1823,7 @@ class Session:
         runner = self._require_running()
         # the main agent's text of the interrupted turn
         self._run_state.claude_outputs.pop(None, None)
-        # The interrupt cancels the hooks, so no `ask` follows for the verdicts they carried.
-        self._run_state.asking.clear()
-        self._wake_held()
-        # Pending reviews of foreground subagent results belong to the interrupted turn; the
-        # hooks that wait for them may not be cancelled by Claude Code, so they are ended here
-        # (as cancelled: no note is sent to Claude). Background subagents keep running.
-        for esc_id, esc in list(self._run_state.escalations.items()):
-            if esc.step.tool_name == "SubagentResult" and not esc.step.tool_input.get("background"):
-                self._run_state.escalations.pop(esc_id, None)
-                esc.answer = HumanAnswer(
-                    allow=False, message="The turn was interrupted.", cancelled=True
-                )
-                esc.outcome = "interrupted"
-                esc.done.set()
-                if esc.db_id is not None:
-                    await self._store_call(
-                        "cancelling an escalation",
-                        self.store.close_escalation(esc.db_id, "the turn was interrupted"),
-                    )
+        await self.desk.turn_interrupted()
         await runner.interrupt()
 
     async def send_chat(self, params: ChatSendParams) -> None:
@@ -2013,66 +1974,10 @@ class Session:
                 step has not been released. Also if the escalation was cancelled (stop,
                 timeout, interrupt) while the decision was written: the step did not run.
         """
-        esc = self._run_state.escalations.get(escalation_id)
-        if esc is None or esc.answer is not None:
-            raise SessionError(f"no open escalation {escalation_id!r}")
-        if esc.deciding:
-            raise SessionError(f"escalation {escalation_id!r} is being decided right now")
-        allow = answer is None and decision == "allow"
-        if answer is not None:
-            human = HumanAnswer(allow=False, message=ANSWER_TEMPLATE.format(answer=answer))
-            outcome: Outcome = "answered"
-        else:
-            message = "The user denied this step."
-            if note:
-                message += f" Note from the user: {note}"
-            human = HumanAnswer(allow=allow, message=message, note=note or "")
-            outcome = "allowed" if allow else "denied"
-        esc.deciding = True
         try:
-            with anyio.CancelScope(shield=True):
-                if esc.db_id is not None:
-                    try:
-                        with anyio.fail_after(STORE_DECISION_TIMEOUT_S):
-                            recorded = await self.store.decide_escalation(
-                                esc.db_id,
-                                allow,
-                                answer if answer is not None else (note or ""),
-                                client,
-                                answered=answer is not None,
-                                token_sha256=token_sha256,
-                            )
-                    except Exception as exc:
-                        log.exception("recording a client decision failed")
-                        await self._emit_safely(
-                            Log(
-                                level="error",
-                                message=f"recording a client decision failed: {exc}",
-                            )
-                        )
-                        raise SessionError(
-                            f"the decision could not be recorded, so escalation "
-                            f"{escalation_id} stays open: {exc}"
-                        ) from exc
-                    if not recorded:
-                        esc.wake.set()  # the poll reads what the row says now
-                        raise SessionError(
-                            f"escalation {escalation_id} was already resolved in the "
-                            "database, or this session may not decide it; the step follows "
-                            "what the database says"
-                        )
-                if esc.answer is None:  # the poll may have adopted a resolution meanwhile
-                    esc.answer = human
-                    esc.answered = answer is not None
-                    esc.outcome = outcome
-                    esc.done.set()
-                elif esc.answer.cancelled:
-                    raise SessionError(
-                        f"escalation {escalation_id} was cancelled while the decision was "
-                        "recorded, so the step did not run"
-                    )
-        finally:
-            esc.deciding = False
+            await self.desk.decide(escalation_id, decision, note, client, answer, token_sha256)
+        except EscalationError as exc:
+            raise SessionError(str(exc)) from exc
 
     def note_resolution(self, escalation_id: int) -> None:
         """Wake the session so it reads a resolved escalation at once.
@@ -2084,9 +1989,7 @@ class Session:
         Args:
             escalation_id: Id of the resolved `escalations` row.
         """
-        for esc in self._run_state.escalations.values():
-            if esc.db_id == escalation_id:
-                esc.wake.set()
+        self.desk.note_resolution(escalation_id)
 
     # ------------------------------------------------------------------ ToolGate
 
@@ -2097,7 +2000,7 @@ class Session:
         (edits) and `check.result`, and remembers the reason of an escalation for `ask`. While
         an escalation of the session is open or being opened, a call that needs a check waits
         here first (`_hold`), and a verdict ASK makes this step count as an escalation that is
-        being opened (`_expect_ask`).
+        being opened (`EscalationDesk.expect_ask`).
 
         The verdict is fixed in guarded stages, so that no error and no hanging model can let a
         call run unchecked:
@@ -2139,7 +2042,7 @@ class Session:
         if result.decision is Decision.ESCALATE:
             # From here on no other step is approved, although the escalation's row does not
             # exist yet: recording comes first, then Claude Code calls `ask`.
-            self._expect_ask(step, source)
+            self.desk.expect_ask(step, source)
         try:
             comment = await self._record_check(step, step_id, pending, decided)
         except Exception as exc:
@@ -2160,7 +2063,7 @@ class Session:
                 source = "internal"
                 self._run_state.peek(step.tool_use_id or "").running = False
                 self._run_state.release(step.tool_use_id or "")
-        if result.decision.approves and source != "policy" and (holding := self._holding()):
+        if result.decision.approves and source != "policy" and (holding := self.desk.holding()):
             # `_decide` looked last before the decision was recorded, and recording takes time.
             # No await stands between this look and the answer to Claude Code.
             result = CheckDecision(
@@ -2176,7 +2079,7 @@ class Session:
             self._run_state.peek(step.tool_use_id or "").running = False
             self._run_state.release(step.tool_use_id or "")
         if result.decision is Decision.ESCALATE:
-            self._expect_ask(step, source)
+            self.desk.expect_ask(step, source)
             if step.tool_use_id:
                 self._run_state.call(step.tool_use_id).pending_reason = (result.reason, source)
         verdict = {
@@ -2312,19 +2215,7 @@ class Session:
     ) -> str:
         """Hold a tool call while an escalation of this session is open or being opened.
 
-        A human is deciding about a step; until then no other step of the session is approved,
-        so that every step is judged with the human's decision known. Escalations that are
-        questions of the agent (source "question") do not hold anything: nothing was objected
-        to.
-
-        The wait ends when nothing holds any more (`_holding`) or after `limit_s`, because the
-        PreToolUse hook that carries this call has a timeout. It ends at once with the caller's
-        cancellation (an interrupt cancels the hook). It cannot deadlock with the reviews after
-        a step: they do not come through here.
-
-        Side effects: emits a `log` event saying that the call waits and for what; moves the
-        deadline of `budget` by the time waited, so that the hold does not use up the time for
-        checking.
+        See `EscalationDesk.hold`, which does the waiting.
 
         Args:
             step: The tool call that reached the gate.
@@ -2333,86 +2224,9 @@ class Session:
 
         Returns:
             "" if nothing holds the step (any more); otherwise what still held it when the
-            wait ran out, as `_holding` describes it, for the reason of the caller's decision.
+            wait ran out, as `EscalationDesk.holding` describes it.
         """
-        limit = HOLD_BUDGET_S if limit_s is None else max(limit_s, 0.0)
-        holding = self._holding()
-        if not holding:
-            return ""
-        started = anyio.current_time()
-        if budget is not None:
-            budget.deadline += limit
-        who = f"subagent {step.agent_id}" if step.agent_id else "the main agent"
-        await self._emit_safely(
-            Log(
-                level="info",
-                message=(
-                    f"{step.tool_name} of {who} waits: {holding} is not decided yet, and no "
-                    "further step is approved until then"
-                ),
-            )
-        )
-        try:
-            with anyio.move_on_after(limit):
-                while self._holding():
-                    closed = self._run_state.escalation_closed
-                    # An expected `ask` that never comes stops counting without an event.
-                    expiry = min(self._run_state.asking.values(), default=None)
-                    with anyio.move_on_after(
-                        None if expiry is None else max(expiry - anyio.current_time(), 0.0)
-                    ):
-                        await closed.wait()
-        finally:
-            if budget is not None:
-                budget.deadline -= limit - (anyio.current_time() - started)
-        return self._holding()
-
-    def _holding(self) -> str:
-        """Describe what keeps new tool calls from being approved at this moment.
-
-        Side effect: forgets the steps whose `ask` did not come within `ASK_PENDING_S`.
-
-        Returns:
-            "" if nothing does. Otherwise a phrase for a message, e.g. "escalation 4" or
-            "escalation 4, 5 and an escalation that is being opened": every open escalation
-            except a question of the agent, and "being opened" if a step's gate verdict was
-            ASK and its escalation is not registered yet (`_expect_ask`, `_ask`).
-        """
-        now = anyio.current_time()
-        for key in [key for key, until in self._run_state.asking.items() if until <= now]:
-            del self._run_state.asking[key]
-        ids = [
-            escalation_id
-            for escalation_id, esc in self._run_state.escalations.items()
-            if esc.source != "question"
-        ]
-        parts = [f"escalation {', '.join(ids)}"] if ids else []
-        if self._run_state.opening or self._run_state.asking:
-            parts.append("an escalation that is being opened")
-        return " and ".join(parts)
-
-    def _expect_ask(self, step: Step, source: str) -> None:
-        """Count a step whose gate verdict is ASK as an escalation that is being opened.
-
-        Between that verdict and the escalation's row lie the recording of the decision, Claude
-        Code's call of `ask` and the INSERT with its retries. A step whose check finishes in
-        that time must not be approved, so the hold starts here. The entry ends when `_ask`
-        takes over for the step, with the step's tool result, with an interrupt or a stop, or
-        after `ASK_PENDING_S`.
-
-        Args:
-            step: The step that will be asked about.
-            source: Who escalated; a "question" of the agent holds nothing and is not counted.
-        """
-        if source == "question":
-            return
-        key = step.tool_use_id or f"unnamed-{next(self._local_ids)}"
-        self._run_state.asking[key] = anyio.current_time() + ASK_PENDING_S
-
-    def _wake_held(self) -> None:
-        """Wake the tool calls that `_hold` keeps waiting, so they look at `_holding` again."""
-        closed, self._run_state.escalation_closed = self._run_state.escalation_closed, anyio.Event()
-        closed.set()
+        return await self.desk.hold(step, budget, HOLD_BUDGET_S if limit_s is None else limit_s)
 
     async def ask(self, step: Step) -> HumanAnswer:
         """Ask the human about `step` and wait for the answer, without a time limit (ToolGate).
@@ -2439,7 +2253,7 @@ class Session:
         """
         return (await self._ask(step)).answer
 
-    async def _ask(self, step: Step) -> _Asked:
+    async def _ask(self, step: Step) -> Asked:
         """Implement `ask`, and also say how the escalation ended.
 
         Side effects: as `ask`.
@@ -2455,192 +2269,18 @@ class Session:
         pending_reason, call.pending_reason = call.pending_reason, None
         self._run_state.release(step.tool_use_id or "")
         reason, source = pending_reason or (HARNESS_ASKED, "harness")
-        # Until the escalation is in `RunState.escalations`, this call is what holds other steps:
-        # the count goes up before the entry of `_expect_ask` goes, and down only after the
-        # registration, with no await in between.
-        holds = source != "question"
-        self._run_state.opening += 1 if holds else 0
-        self._run_state.asking.pop(step.tool_use_id or "", None)
-        esc: Escalation | None = None
-        try:
-            if source == "harness" and step.asked_about:
-                # Claude Code's own prompt sentence first, then why it reached a human: for a
-                # capability request the tool name and the input say nothing actionable (D60).
-                reason = f"{step.asked_about}\n\n{reason}"
-            rendered = _render_safely(step, self.workspace)
-            db_id = await self._open_escalation(step, reason, rendered)
-            if db_id is None:
-                return _Asked(
-                    HumanAnswer(allow=False, message=DB_UNREACHABLE, cancelled=True),
-                    "unstorable",
-                )
-            escalation_id = str(db_id)
-            esc = Escalation(step=step, reason=reason, source=source, db_id=db_id)
-            esc.request = EscalationRequest(
-                escalation_id=escalation_id,
-                questions=_questions(step),
-                tool_use_id=step.tool_use_id,
-                agent_id=step.agent_id,
-                tool_name=step.tool_name,
-                tool_input=step.tool_input,
-                reason=reason,
-                rendered=rendered,
-            )
-            self._run_state.escalations[escalation_id] = esc
-        finally:
-            self._run_state.opening -= 1 if holds else 0
-            if esc is None:
-                self._wake_held()  # nothing was opened: the held calls look again
-        assert esc is not None and esc.request is not None
-        escalation_id = str(esc.db_id)
-        try:
-            await self._emit_safely(esc.request)
-            await self._refresh_state()
-            await self._wait_for_decision(esc)
-        finally:
-            self._run_state.escalations.pop(escalation_id, None)
-            self._wake_held()  # the tool calls that `_hold` keeps waiting for this escalation
-            with anyio.CancelScope(shield=True):
-                answer = esc.answer
-                if answer is None and esc.db_id is not None:
-                    # This call was cancelled while it waited, so nothing else closes the row.
-                    await self._store_call(
-                        "cancelling an escalation", self._close_bounded(esc.db_id)
-                    )
-                if answer is None or esc.outcome not in ("allowed", "denied", "answered"):
-                    decision = "cancelled"
-                else:
-                    decision = "allow" if answer.allow else "deny"
-                await self._emit_safely(
-                    EscalationResolved(
-                        escalation_id=escalation_id,
-                        decision=decision,
-                        note=None
-                        if answer is None
-                        else (answer.note or None)
-                        if answer.allow
-                        else answer.message,
-                    )
-                )
-                await self._refresh_state()
-        assert esc.answer is not None
-        if esc.answer.allow and step.tool_use_id:
+        asked = await self.desk.ask(step, reason, source)
+        if asked.answer.allow and step.tool_use_id:
             self._run_state.call(step.tool_use_id).running = True
             await self._refresh_state()
-        return _Asked(esc.answer, esc.outcome)
+        return asked
 
-    async def _close_bounded(self, db_id: int) -> None:
-        """Mark an escalation row as cancelled because its wait was interrupted, within a bound.
+    def _stop_soon(self) -> None:
+        """Start stopping the session in a task of its own, if a run has a task group.
 
-        Args:
-            db_id: The `escalations` row.
-
-        Raises:
-            TimeoutError: If the database does not answer within `STORE_DECISION_TIMEOUT_S`;
-                the row then stays open and answerable, and no step waits for it any more.
-            Exception: Whatever the store raises.
+        For callers that run inside a tool call that is being held: waiting for the runner to
+        end there would deadlock.
         """
-        with anyio.fail_after(STORE_DECISION_TIMEOUT_S):
-            await self.store.close_escalation(
-                db_id, "cancelled: the wait for a decision was interrupted"
-            )
-
-    async def _wait_for_decision(self, esc: Escalation) -> None:
-        """Wait until `esc` is decided locally or in the database.
-
-        Reads the escalation row every `ESCALATION_POLL_S` seconds, and at once when
-        `note_resolution` was called for it, until it is no longer open; a local
-        `decide_escalation` ends the wait as well. Store errors are logged and the poll
-        continues, so a short database outage does not turn into a denial.
-
-        Args:
-            esc: The open escalation; its `answer` and `done` are set by this call or by
-                `decide_escalation`.
-        """
-        timeout = self.config.escalation_timeout_s or float("inf")
-        if esc.db_id is None:
-            with anyio.move_on_after(timeout):
-                await esc.done.wait()
-            if esc.answer is None:
-                await self._escalation_timed_out(esc)
-            return
-
-        async def poll() -> None:
-            """Read the escalation row until it is resolved."""
-            while True:
-                wake = esc.wake
-                with anyio.move_on_after(ESCALATION_POLL_S):
-                    await wake.wait()
-                esc.wake = anyio.Event()
-                assert esc.db_id is not None
-                try:
-                    row = await self.store.escalation(esc.db_id)
-                except Exception:
-                    log.exception("reading an escalation failed")
-                    continue
-                if row.open:
-                    continue
-                if esc.answer is not None:
-                    return  # a client's decision was accepted while the row was being read
-                if row.answered:
-                    # A question of the agent that an operator answered in the database (D35).
-                    esc.answered = True
-                    esc.answer = HumanAnswer(
-                        allow=False, message=ANSWER_TEMPLATE.format(answer=row.note)
-                    )
-                    esc.outcome = "answered"
-                    esc.done.set()
-                    return
-                message = (
-                    "The user denied this step."
-                    if not row.allowed
-                    else "The user allowed this step."
-                )
-                if row.note:
-                    message += f" Note from the user: {row.note}"
-                esc.answer = HumanAnswer(allow=row.allowed, message=message, note=row.note)
-                if row.allowed:
-                    esc.outcome = "allowed"
-                else:
-                    # A row that was cancelled was decided by nobody; only "denied" is a refusal.
-                    esc.outcome = "denied" if row.state == "denied" else "cancelled"
-                esc.done.set()
-                return
-
-        async with anyio.create_task_group() as tg:
-            tg.start_soon(poll)
-            with anyio.move_on_after(timeout):
-                await esc.done.wait()
-            tg.cancel_scope.cancel()
-        if esc.answer is None:
-            await self._escalation_timed_out(esc)
-
-    async def _escalation_timed_out(self, esc: Escalation) -> None:
-        """Deny the step of an escalation nobody answered, and stop the session (D27).
-
-        The session gives the machine and the Claude session back instead of waiting for ever.
-        Claude's session id is in the database, so `calu run --resume <id>` takes the
-        conversation up again; the escalation row is cancelled with the reason. The stop runs in
-        its own task, because this call happens inside the tool call that is being held: waiting
-        for the runner to end here would deadlock.
-
-        Args:
-            esc: The escalation that was not answered.
-        """
-        seconds = self.config.escalation_timeout_s
-        resume = f"calu run --resume {self.session_id}" if self.session_id else "calu sessions"
-        message = (
-            f"No decision within {seconds / 3600:.1f} h. The step was denied and the session "
-            f"stops; take the conversation up again with `{resume}`."
-        )
-        esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
-        esc.outcome = "timed_out"
-        esc.done.set()
-        if esc.db_id is not None:
-            await self._store_call(
-                "cancelling an escalation", self.store.close_escalation(esc.db_id, message)
-            )
-        await self._emit_safely(Log(level="error", message=message))
         if self._run_state.tg is not None:
             # Not a tracked background task: `stop` waits for those, and this one calls it.
             self._run_state.tg.start_soon(self._stop_after_timeout)
@@ -3052,8 +2692,9 @@ class Session:
 
         The check of a step takes time, and an escalation of another step can appear during
         it. So an approval is looked at again here, after the check: if something holds
-        (`_holding`), the step waits once more, for what is left of its `HOLD_BUDGET_S`, and an
-        approval that is still held after that becomes an escalation (`_auto_escalate`).
+        (`EscalationDesk.holding`), the step waits once more, for what is left of its
+        `HOLD_BUDGET_S`, and an approval that is still held after that becomes an escalation
+        (`_auto_escalate`).
 
         Args:
             decided: The decision of the checkers or of the rules.
@@ -3066,7 +2707,7 @@ class Session:
             `decided`, with an approval turned into an ESCALATE where `_auto_escalate` says so.
         """
         decided = self._auto_escalate(decided, held)
-        if decided.decision.decision.approves and self._holding():
+        if decided.decision.decision.approves and self.desk.holding():
             decided = self._auto_escalate(decided, await self._hold(step, budget, hold_left))
         return decided
 
@@ -3079,8 +2720,8 @@ class Session:
 
         Args:
             decided: The decision of the checker or of the rules.
-            held: What still held this step when its hold ran out, as `_holding` describes
-                it; "" if the step was not held or was released.
+            held: What still held this step when its hold ran out, as `EscalationDesk.holding`
+                describes it; "" if the step was not held or was released.
 
         Returns:
             `decided` unchanged, or the same object with an ESCALATE decision and source "auto"
@@ -3264,8 +2905,7 @@ class Session:
                         call.running = False
                         call.changeset = None
                         self._run_state.release(event.tool_use_id)
-                        if self._run_state.asking.pop(event.tool_use_id, None) is not None:
-                            self._wake_held()  # the call ended without `ask`
+                        self.desk.call_ended(event.tool_use_id)
                     call = self._run_state.peek(event.tool_use_id)
                     step_id, call.step_id = call.step_id, None
                     self._run_state.release(event.tool_use_id)
@@ -3597,8 +3237,8 @@ class Session:
             call.step_id = step_id
         return step_id
 
-    async def _open_escalation(self, step: Step, reason: str, rendered: str) -> int | None:
-        """Open an `escalations` row for a step that needs a human decision.
+    def _escalation_row_context(self, step: Step, rendered: str) -> dict[str, Any]:
+        """Return the context that is stored with the `escalations` row of a step.
 
         The context holds what an operator needs to decide and what an evaluation case needs
         to reproduce the step later (`calu.evals.cases`): the rendered step, the tool input with
@@ -3606,15 +3246,12 @@ class Session:
 
         Args:
             step: The tool call.
-            reason: Why it needs a decision.
             rendered: The step rendered as Markdown, for the operator.
 
         Returns:
-            The id of the row, or None if it could not be stored in
-            `1 + len(OPEN_ESCALATION_RETRY_S)` attempts. Only the last failure counts as a store
-            failure (`_store_failed`).
+            The context, as `SessionStore.open_escalation` stores it.
         """
-        context: dict[str, Any] = {
+        return {
             "rendered": rendered,
             "tool_name": step.tool_name,
             "tool_input": workspace_relative_input(step.tool_input, self.workspace),
@@ -3625,22 +3262,21 @@ class Session:
             "chat_summary": self.context.summary,
             "calu_version": __version__,
         }
-        pauses: tuple[float | None, ...] = (*OPEN_ESCALATION_RETRY_S, None)
-        for pause in pauses:
-            try:
-                stored = await self.store.open_escalation(
-                    reason, context, self._run_state.peek(step.tool_use_id or "").step_id
-                )
-            except Exception as exc:
-                if pause is None:
-                    await self._store_failed("storing an escalation", exc)
-                    return None
-                log.warning("storing an escalation failed, trying again in %s s: %s", pause, exc)
-                await anyio.sleep(pause)
-            else:
-                self._run_state.store_failures = 0
-                return stored
-        return None
+
+    def _step_row(self, step: Step) -> int | None:
+        """Return the id of the `steps` row of a tool call.
+
+        Args:
+            step: The tool call.
+
+        Returns:
+            The id, or None if the row could not be stored or the call has ended.
+        """
+        return self._run_state.peek(step.tool_use_id or "").step_id
+
+    def _store_succeeded(self) -> None:
+        """Note that a database write succeeded: the count of failures in a row starts again."""
+        self._run_state.store_failures = 0
 
     async def _store_call(self, what: str, call: Any) -> None:
         """Await a store call and report its failure as a `log` error; never raises.
@@ -3724,28 +3360,6 @@ class Session:
             # Not a tracked task: `stop` waits for those, and this one calls it.
             self._run_state.tg.start_soon(self._stop_after_timeout)
 
-    async def _cancel_escalations(self, message: str) -> None:
-        """Deny all open escalations with `message` (their `ask` calls then return).
-
-        The answers are marked as cancelled with the outcome "cancelled": no human decided, so a
-        review after a step neither reverts anything nor reports a decision of the user.
-
-        Args:
-            message: The text Claude receives with the denial.
-        """
-        for esc in list(self._run_state.escalations.values()):
-            if esc.answer is None:
-                esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
-                esc.outcome = "cancelled"
-            esc.done.set()
-            if esc.db_id is not None:
-                await self._store_call(
-                    "cancelling an escalation", self.store.close_escalation(esc.db_id, message)
-                )
-        self._run_state.escalations.clear()
-        self._run_state.asking.clear()
-        self._wake_held()
-
     # ------------------------------------------------------------------ state and events
 
     def _spawn(self, func: Callable[..., Awaitable[None]], *args: Any) -> None:
@@ -3806,7 +3420,7 @@ class Session:
         Returns:
             "escalated", "checking", "tool_call", "running" or "idle".
         """
-        if self._run_state.escalations:
+        if self.desk.escalations:
             return "escalated"
         if self._run_state.checking > 0:
             return "checking"
@@ -4239,43 +3853,6 @@ def _changeset_block(change: Changeset) -> str:
     if not change.text:
         return f"# Changeset of this commit\n\n{change.shown()}"
     return f"# Changeset of this commit\n\n{CHANGESET_NOTE}\n\n{fence(change.text, 'diff')}"
-
-
-def _render_safely(step: Step, workspace: Path) -> str:
-    """Render `step` for an escalation; fall back to the raw input if rendering fails.
-
-    Args:
-        step: The tool call.
-        workspace: Workspace root for relative paths.
-
-    Returns:
-        The Markdown rendering of the step.
-    """
-    try:
-        return render_step(step, workspace)
-    except Exception:
-        log.exception("rendering a step failed")
-        return f"`{step.tool_name}` {step.tool_input!r}"
-
-
-def _questions(step: Step) -> list[dict[str, Any]]:
-    """Return the questions of an `AskUserQuestion` call, for the client that shows them.
-
-    Args:
-        step: The tool call.
-
-    Returns:
-        The `questions` list as Claude sent it (each with its text, header, options and whether
-        several may be chosen), or an empty list for any other tool.
-    """
-    if step.tool_name != "AskUserQuestion":
-        return []
-    questions = step.tool_input.get("questions")
-    return (
-        [question for question in questions if isinstance(question, dict)]
-        if (isinstance(questions, list))
-        else []
-    )
 
 
 def _question_reason(tool_input: dict[str, Any]) -> str:

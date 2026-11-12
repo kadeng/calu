@@ -10,6 +10,7 @@ from typing import Any
 import anyio
 import pytest
 
+import calu.escalations as escalations_module
 import calu.session as session_module
 from calu.changes import SnapshotError
 from calu.checkers import Step
@@ -76,7 +77,7 @@ async def test_a_write_set_nobody_could_be_asked_about_is_not_reverted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """sg1: a failed INSERT is not a human refusing the change."""
-    monkeypatch.setattr(session_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
+    monkeypatch.setattr(escalations_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
     (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
     session, rec, store = make_session(tmp_path, write_turn("two # calu:escalate\n"), REVIEWED)
 
@@ -116,7 +117,7 @@ async def test_a_subagent_result_nobody_decided_is_not_called_a_decision_of_the_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """sg1: the note to the main agent must not attribute a decision that no user made."""
-    monkeypatch.setattr(session_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
+    monkeypatch.setattr(escalations_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
     session, rec, store = make_session(tmp_path, agent_turn("All done. calu:escalate-result"))
 
     async def broken(*args: object, **kwargs: object) -> int:
@@ -137,7 +138,7 @@ async def test_opening_an_escalation_is_retried_before_the_step_is_denied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """sg1: one database hiccup must not turn an escalation into a denial."""
-    monkeypatch.setattr(session_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
+    monkeypatch.setattr(escalations_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
     session, rec, store = make_session(
         tmp_path,
         [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "done"}]],
@@ -579,7 +580,7 @@ async def test_no_step_is_approved_between_an_ask_verdict_and_its_escalation(tmp
         await session.start(tg)
         assert (await session.pre_tool_use(first)).verdict is Verdict.ASK
         # Claude Code has not called `ask` yet: no row, no entry in `_escalations`.
-        assert not session._run_state.escalations
+        assert not session.desk.escalations
         tg.start_soon(gate, bash("ls", "t2", tmp_path, agent_id="agent-b"))
         await anyio.sleep(0.3)
         assert not results, "a step was approved while an escalation was being opened"
@@ -632,7 +633,7 @@ async def test_an_ask_verdict_that_claude_code_never_follows_up_stops_holding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """ga2: an unattended run must not hang behind an escalation that never opens."""
-    monkeypatch.setattr(session_module, "ASK_PENDING_S", 0.3)
+    monkeypatch.setattr(escalations_module, "ASK_PENDING_S", 0.3)
     session, _rec, _store = make_session(tmp_path, [])
     async with anyio.create_task_group() as tg:
         await session.start(tg)
@@ -649,7 +650,7 @@ async def test_an_ask_verdict_that_claude_code_never_follows_up_stops_holding(
 async def test_an_escalation_that_cannot_be_stored_releases_the_held_steps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(session_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
+    monkeypatch.setattr(escalations_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
     session, _rec, store = make_session(tmp_path, [])
     first = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
 
@@ -688,7 +689,7 @@ async def test_an_approval_does_not_stand_if_an_escalation_opens_while_it_is_rec
         await original(step_id, decision)
         if decision.decision == "pass":
             # Another step's verdict becomes ASK while this approval is being recorded.
-            session._expect_ask(blocker, "checker")
+            session.desk.expect_ask(blocker, "checker")
 
     store.decide_step = racing  # type: ignore[method-assign]
     async with anyio.create_task_group() as tg:
@@ -708,7 +709,7 @@ async def test_a_database_that_does_not_answer_does_not_block_every_later_decisi
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """An unattended run must stay decidable: the shielded write of a decision has a bound."""
-    monkeypatch.setattr(session_module, "STORE_DECISION_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(escalations_module, "STORE_DECISION_TIMEOUT_S", 0.2)
     session, rec, store = make_session(
         tmp_path,
         [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "deployed"}]],

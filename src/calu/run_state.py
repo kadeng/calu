@@ -9,6 +9,9 @@ fields that describe one run are collected here, so that a new run starts from t
 
 `PerCall` holds what the session remembers about one tool call, by Claude's `tool_use_id`.
 
+The open escalations and the hold they put on other steps are not part of a run's state: they
+belong to `calu.escalations.EscalationDesk`, which a start does not replace.
+
 This module holds data only. It does not know the session, the runner, the store or the clients.
 """
 
@@ -17,56 +20,17 @@ from __future__ import annotations
 import itertools
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Literal
 
 import anyio
 from anyio.abc import TaskGroup
 
 from calu.changes import SnapshotStore
-from calu.checkers import Step
 from calu.checkers.tools import StepTime
-from calu.claude.runner import HumanAnswer
 from calu.context.narrator import ClaudeOutput
-from calu.protocol.messages import EscalationRequest, QueuedMessage
+from calu.protocol.messages import QueuedMessage
 
 STEP_TIMES_KEPT = 500
 """How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
-
-Outcome = Literal[
-    "allowed", "denied", "answered", "interrupted", "cancelled", "timed_out", "unstorable"
-]
-"""How an escalation ended. A human decided for "allowed", "denied" and "answered" (the answer
-to a question of the agent). Nobody decided for the others: the turn was interrupted or the wait
-cancelled ("interrupted"), the session stopped or the row was cancelled in the database
-("cancelled"), the escalation timeout ran out, or the escalation could not be stored."""
-
-
-@dataclass
-class Escalation:
-    """An open escalation: the step, its database row and, once decided, the human's answer."""
-
-    step: Step
-    reason: str = ""
-    source: str = "checker"
-    """Who escalated: the `source` of the step's `_Decided` ("checker", "policy", "rules",
-    "auto", "held", "changeset", "clock", "question", "internal"), or "harness" (Claude Code
-    asked by itself, D38), "write_set" or "subagent_result" (the reviews after a step). A
-    "question" is the only source that does not hold other steps (`Session._holding`)."""
-    db_id: int | None = None
-    """Id of the `escalations` row, or None if it could not be stored."""
-    request: EscalationRequest | None = None
-    """The event that asked the human, kept so that a client which connects later sees it."""
-    done: anyio.Event = field(default_factory=anyio.Event)
-    wake: anyio.Event = field(default_factory=anyio.Event)
-    """Set by `note_resolution` so the waiting session reads the row at once."""
-    answer: HumanAnswer | None = None
-    answered: bool = False
-    """True if this was a question of the agent and `answer` carries the human's answer (D35)."""
-    outcome: Outcome = "interrupted"
-    """How the escalation ended; set together with `answer`. While `answer` is None it reads
-    "interrupted", which is what an escalation is whose wait was cancelled before any answer."""
-    deciding: bool = False
-    """True while a client's decision is being written to the database (`decide_escalation`)."""
 
 
 @dataclass
@@ -137,17 +101,6 @@ class RunState:
     )
 
     # The fields below are not reset by a start: `following` carries them into the next run.
-    escalations: dict[str, Escalation] = field(default_factory=dict[str, Escalation])
-    escalation_closed: anyio.Event = field(default_factory=anyio.Event)
-    """Set, and replaced by a new event, each time an escalation leaves `escalations` or
-    stops being opened (`Session._wake_held`); `Session._hold` waits for it."""
-    asking: dict[str, float] = field(default_factory=dict[str, float])
-    """Steps whose gate verdict was ASK and for which `ask` has not been called yet: key
-    (the tool_use_id, or a generated one) -> the `anyio.current_time()` at which the entry
-    stops counting (`ASK_PENDING_S`)."""
-    opening: int = 0
-    """Calls of `Session._ask` that are storing their escalation and have not registered it
-    yet."""
     queue: list[tuple[QueuedMessage, str]] = field(default_factory=list[tuple[QueuedMessage, str]])
     """The chat messages Claude has not read yet, each with the text that was sent for it."""
     clock_alarm: str | None = None  # a backward clock jump nobody has seen yet (D32)
@@ -171,8 +124,7 @@ class RunState:
         Every field has its default again, with these exceptions, which keep what `self` has
         (the same objects, so a task that still holds one of them sees the same content):
 
-        - `escalations`, `escalation_closed`, `asking`, `opening` and `queue`: the end of a run
-          empties them, not its start.
+        - `queue`: the end of a run empties it, not its start.
         - `clock_alarm`: it stays until a step has shown it to a human.
         - `store_failures`: only a database write that succeeds resets the count.
         - `stopping`: nothing resets it.
@@ -187,10 +139,6 @@ class RunState:
         """
         return RunState(
             tg=tg,
-            escalations=self.escalations,
-            escalation_closed=self.escalation_closed,
-            asking=self.asking,
-            opening=self.opening,
             queue=self.queue,
             clock_alarm=self.clock_alarm,
             store_failures=self.store_failures,

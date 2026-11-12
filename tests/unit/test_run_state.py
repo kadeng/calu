@@ -11,10 +11,6 @@ from calu.run_state import PerCall, RunState
 pytestmark = pytest.mark.anyio
 
 CARRIED_OVER = {
-    "escalations",
-    "escalation_closed",
-    "asking",
-    "opening",
     "queue",
     "clock_alarm",
     "store_failures",
@@ -37,8 +33,6 @@ async def test_a_new_run_starts_from_the_defaults_except_what_is_carried_over():
         next(old.step_seq)
         old.call("t1").running = True
         old.claude_outputs[None] = []
-        old.asking["t1"] = 1.0
-        old.opening = 1
         old.clock_alarm = "the clock jumped"
         old.store_failures = 3
         old.stopping = True
