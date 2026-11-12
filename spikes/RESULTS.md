@@ -872,3 +872,32 @@ would then record it as not from the user, which keeps the checkers strict and l
 prompt in their context), and messages of channels or peers.
 
 **Re-run when** the CLI or the SDK is updated: `uv run pytest -m live tests/unit/test_runner_live.py`.
+
+## Side question (`/btw`) and context usage in a headless session (2026-11-12, CLI 2.1.319, SDK 0.2.179)
+
+**Question:** can a client ask Claude something beside the running work, as Claude Code's own
+`/btw` does, in the headless stream-json mode calu uses?
+
+**Setup:** `spikes/side_question.py` starts a turn whose Bash command takes 25 seconds, sends the
+control request `{"subtype": "side_question", "question": ...}` after 12 seconds through the
+SDK's control channel (the Python SDK has no method for it), asks `get_context_usage`, and
+asks in the next turn whether a question was asked beside the task.
+
+**Results:**
+
+- The side question was answered 1.4 s after it was sent, while the command still ran for
+  another 15 s: `{'response': 'The secret word is PELICAN.', 'synthetic': False}`. The answer
+  used the conversation (the word was in the prompt of the running turn).
+- The turn was not interrupted and ended normally; no message for the side question appeared
+  on the stream except one `control_request_progress` system message.
+- In the next turn Claude said that no question had been asked beside the task: neither the
+  question nor the answer is part of the conversation.
+- `get_context_usage` answered inside the running turn as well (`totalTokens`, `maxTokens`,
+  `percentage`, `model` with the resolved model id).
+- An optional `history` (`[{question, response}]`) is accepted for follow-up questions.
+
+**Used by:** `SdkRunner.side_question` and `SdkRunner.context_usage`, the requests `side.ask` and
+`usage.get`.
+
+**Re-run when** the CLI or the SDK is updated: `uv run python spikes/side_question.py` (Haiku,
+well under one cent).

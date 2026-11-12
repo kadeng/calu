@@ -47,10 +47,10 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1332 tests pass** (plus 15 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 348 commits, ~39.5k lines of Python in `src` (~43k with the SQL, templates and
-default instructions), ~26.5k of tests, 26 migrations, 21 CLI commands, 17 protocol requests,
-18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+**1617 tests pass** (plus 15 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 386 commits, ~58k lines of Python in `src` (~62k with the SQL, templates and
+default instructions), ~32k of tests, 28 migrations, 21 CLI commands, 20 protocol requests,
+19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
 
@@ -123,7 +123,7 @@ there.
   next tool here.
 - **What a checker reads** (D185): text from Claude, a tool or a file is fenced data; no file
   of the workspace is part of the context (D193: `context.files` and `context.skill_dirs` are
-  gone); a step or diff cut at 60,000
+  gone); a step cut at 60,000 characters or a commit diff cut at 240,000
   characters turns an approval into an escalation.
 - **What a command wrote** (D31, `src/calu/changes.py`, **off by default**): with
   `changes.snapshot` on, the session snapshots the project directory before and after every step
@@ -586,7 +586,7 @@ work for a developer without the owner. In short:
 | 4. Smaller gaps | **done** (by design, or D44) | -- |
 | 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
-| 7. Honesty enforcement | built, off; **under redesign**: it cannot hold for changes made by a command or at scale | the owner's answers to the redesign proposal |
+| 7. Honesty enforcement | **being rebuilt** on `feature/honesty-certification` (D196: trusted commits in the database, computed state, honesty review, enforcement on running and committing) | -- |
 | 8. Splitting `session.py` | **done**: `run_state.py`, `escalations.py` (EscalationDesk), `gate.py` (StepGate), `write_sets.py`, `recorder.py`, `steps.py`; `session.py` holds the lifecycle, runner events and wiring (about 2,500 lines). Still in it: the subagent result review and the honesty bookkeeping | -- |
 | 9. Auto mode by default | **decided** (Q22): calu does not override Claude Code's permission mode | -- |
 

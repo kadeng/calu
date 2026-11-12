@@ -31,12 +31,14 @@ receives the remark together with the approval. A checker can also **look at the
 file, list files by glob, grep for a pattern, all inside the project directory, so that it
 judges on evidence rather than on the diff alone. That is all it can do: it cannot write, run commands or talk to the outside.
 
-- **Allow and deny lists before the models, if you want them.** calu ships no rules: every
-  list starts empty, and every step goes to a checker. Two ready-made sets add what most
-  projects want. `calu rules add-set recommended` lets harmless commands (`ls`, `git status`)
-  run without a model call and makes known-dangerous ones (`sudo`, force pushes, remote
+- **Allow and deny lists as overrides, for the exception.** calu ships no rules: every list
+  starts empty, and every step goes to a checker. A rule overrides the checkers -- a deny match
+  asks a human without asking them, an allow match lets a step skip them -- and an allow rule
+  matches a command by its text, whatever program that text starts, so most projects are
+  better off without any. Two ready-made sets exist for fixed stops.
+  `calu rules add-set recommended` makes known-dangerous commands (`sudo`, force pushes, remote
   deletions, reads of your credentials, writes to `.git`, `.claude` and `CLAUDE.md`) always ask
-  a human; `calu rules add-set publishing` makes pushes, deploys and package uploads ask as
+  a human and lets reads of project files pass; it allows no command; `calu rules add-set publishing` makes pushes, deploys and package uploads ask as
   well. With rules in place, the checks also follow their files through other spellings: a tool
   -- an MCP server's too -- that names a protected file asks, as reading it directly would, and
   so does a search of a whole folder that would read one. Independent of any list, calu always
@@ -55,7 +57,7 @@ judges on evidence rather than on the diff alone. That is all it can do: it cann
   What your project asks for -- its coding and documentation standard -- belongs in the checker
   instructions, which are stored in the database. Claude Code itself reads those files as
   always; this is only about the checkers.
-  A step or diff longer than 60,000 characters is shown cut, and a checker's approval of a cut
+  A step longer than 60,000 characters, or a commit's diff longer than 240,000, is shown cut, and a checker's approval of a cut
   step becomes an escalation. They can also ask **when** things happened: the times of the
   session's steps, and which step last changed a file. That last question is answered from the file's change time, which an
   unprivileged process cannot forge, so a command that edits more than it said it would leaves a

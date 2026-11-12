@@ -852,9 +852,9 @@ async def replace_rule_list(
 RULE_SETS: dict[str, tuple[str, str]] = {
     "recommended": (
         "all",
-        "harmless commands and project reads run without a model call; sudo, force pushes, "
-        "remote deletions, reads of credentials and writes to .git, .claude and CLAUDE.md ask "
-        "(the defaults before D179)",
+        "reads of project files run without a model call; sudo, force pushes, remote "
+        "deletions, reads of credentials and writes to .git, .claude and CLAUDE.md ask. No "
+        "command is allowed by it",
     ),
     "publishing": (
         "command-deny",

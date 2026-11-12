@@ -84,7 +84,7 @@ from calu.checkers.shell import command_variants, parse_command
 
 log = logging.getLogger(__name__)
 
-MAX_DIFF_CHARS = 60_000
+MAX_DIFF_CHARS = 240_000
 """Characters of the diff the checker sees; a longer diff is cut, with the stat kept whole."""
 
 GIT_TIMEOUT_S = 30.0

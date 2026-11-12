@@ -20,6 +20,9 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"tool": "Edit", "input": {...}, "fails": true}   ... the approved call fails: it writes
                                                       nothing and reports an error result
     {"sleep": 0.5}                                    pause (lets tests inject messages)
+    {"rate_limit": {"type": "five_hour", "utilization": 0.4}}
+                                                      Claude Code reports a usage limit
+                                                      (`usage.update`)
     {"background_tasks": 2}                           the turn ends with 2 background tasks
                                                       running; like Claude Code (D158), the
                                                       runner then starts the next scripted turn
@@ -36,6 +39,7 @@ Messages sent with priority "next" during a turn are taken in after the current 
 
 import itertools
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +49,15 @@ from pydantic import BaseModel, Field
 
 from calu.checkers.model import Step
 from calu.checkers.result_checker import SubagentResult
-from calu.claude.runner import NOT_FROM_USER, EventSink, Fork, Priority, ToolGate, Verdict
+from calu.claude.runner import (
+    NOT_FROM_USER,
+    EventSink,
+    Fork,
+    Priority,
+    SideQuestionFailed,
+    ToolGate,
+    Verdict,
+)
 from calu.context.foreign import user_message_source
 from calu.protocol.messages import (
     AgentInfo,
@@ -53,10 +65,13 @@ from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
     AssistantThinking,
+    ContextUsage,
     Event,
+    RateLimit,
     ToolResult,
     ToolUse,
     TurnResult,
+    UsageUpdate,
     UserInput,
 )
 
@@ -115,6 +130,19 @@ class FakeRunner:
         self.fork: Fork | None = None
         """The fork point `run` was called with, for tests (PLAN.md D36)."""
         self._follow_up = False
+        self.side_questions: list[tuple[str, list[tuple[str, str]]]] = []
+        """Every side question asked, with the history it came with, for tests."""
+        self.side_error: str | None = None
+        """If set, `side_question` fails with this message."""
+        self.context: ContextUsage | None = ContextUsage(
+            tokens=42_000, max_tokens=200_000, percent=21.0, model="fake-model"
+        )
+        """What `context_usage` returns."""
+        self.model: str | None = None
+        """The model `set_model` was last called with, for tests."""
+        self.model_changes = 0
+        """How often `set_model` was called."""
+        self._rate_limits: dict[str, RateLimit] = {}
 
     async def run(
         self,
@@ -197,6 +225,41 @@ class FakeRunner:
         """Cancel `run`; does nothing if `run` has not started."""
         if self._cancel is not None:
             self._cancel.cancel()
+
+    async def side_question(self, question: str, history: Sequence[tuple[str, str]] = ()) -> str:
+        """Answer a side question with a fixed text and record it in `side_questions`.
+
+        Args:
+            question: The question.
+            history: Earlier side questions with their answers.
+
+        Returns:
+            `Side answer to: <question>`.
+
+        Raises:
+            SideQuestionFailed: If `side_error` is set, with that message.
+        """
+        self.side_questions.append((question, list(history)))
+        if self.side_error is not None:
+            raise SideQuestionFailed(self.side_error)
+        return f"Side answer to: {question}"
+
+    async def context_usage(self) -> ContextUsage | None:
+        """Return the scripted context usage.
+
+        Returns:
+            `self.context`.
+        """
+        return self.context
+
+    async def set_model(self, model: str | None) -> None:
+        """Record a change of model in `model` and `model_changes`.
+
+        Args:
+            model: The new model; None for the default.
+        """
+        self.model = model
+        self.model_changes += 1
 
     # ------------------------------------------------------------------ script execution
 
@@ -290,6 +353,10 @@ class FakeRunner:
             await sink(AssistantText(agent_id=agent, text=action["text"], message_id=message_id))
         elif "sleep" in action:
             await anyio.sleep(float(action["sleep"]))
+        elif "rate_limit" in action:
+            limit = RateLimit.model_validate(action["rate_limit"])
+            self._rate_limits[limit.type] = limit
+            await sink(UsageUpdate(rate_limits=list(self._rate_limits.values())))
         elif "background_tasks" in action:
             pass  # reported with the turn's result (`_turn`)
         elif "tool" in action:

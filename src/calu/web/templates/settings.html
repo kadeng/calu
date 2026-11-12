@@ -198,7 +198,7 @@
       {% if pane.rule_sets %}
         <div class="st-group">
           <h2>Starter sets</h2>
-          <p class="st-note">The lists start empty, so every step goes to a checker. A set appends the patterns a list does not have yet; afterwards they are ordinary rules you can edit or delete.</p>
+          <p class="st-note">The lists start empty, and that is how they are meant to stay in most projects: every step then goes to a checker. A rule overrides the checkers, and an allow rule matches a command by its text, whatever program that text starts. If you want rules, a set appends the patterns a list does not have yet; afterwards they are ordinary rules you can edit or delete.</p>
           <div class="st-card">
             {% for set in pane.rule_sets %}
               <div class="st-row st-row--inline" data-search="{{ set.name }} {{ set.what | lower }} rule set">

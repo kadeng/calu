@@ -41,6 +41,12 @@ async def prepare(db_url: str, workspace: Path) -> str:
         _, session_url = await setup(owner, db_url, "test:model")
         # D179: no rules are shipped; these runs are written against the recommended set.
         await admin.add_rule_set(Db(owner), "recommended")
+        # calu ships no command allow list (D198); these runs let harmless commands through
+        # with the list the rules engine's tests use.
+        fixture = Path(__file__).parents[1] / "unit" / "fixtures" / "command-allow.txt"
+        await admin.replace_rule_list(
+            Db(owner), "command-allow", fixture.read_text(encoding="utf-8")
+        )
         # The sandbox is not available in the test environment, and the narrator would need a
         # second fake model per step; both are switched off through the stored configuration.
         await owner.execute(

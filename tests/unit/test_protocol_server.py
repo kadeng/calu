@@ -1038,6 +1038,8 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "honesty.trust",
         "honesty.review",
         "interrupt",
+        "side.ask",
+        "model.set",
         "shutdown",
     }, "a new request is checked against the token unless it is listed as read-only: decide"
 

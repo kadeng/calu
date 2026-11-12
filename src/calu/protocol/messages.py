@@ -214,6 +214,87 @@ class HonestyReviewResult(BaseModel):
     judge and which changed while it ran; "" if it judged every file."""
 
 
+class SideExchange(BaseModel):
+    """One earlier side question of a client with the answer it got (`side.ask`)."""
+
+    question: str = Field(min_length=1, max_length=20_000)
+    answer: str = Field(max_length=100_000)
+
+
+class SideAskParams(BaseModel):
+    """`side.ask`: a question to Claude beside the running work. Result: `SideAskResult`.
+
+    Claude Code answers from the conversation as it stands, without tools, while the turn of
+    the main agent goes on (its `/btw`). Neither the question nor the answer becomes part of
+    the conversation: the main agent never sees them, no turn is started or interrupted, no
+    step is taken, and nothing is recorded in the history. The answer goes to the asking client
+    only. `history` holds that client's earlier side questions, so that a follow-up question
+    can refer to them; the session keeps none.
+    """
+
+    question: str = Field(min_length=1, max_length=20_000)
+    history: list[SideExchange] = Field(default_factory=list, max_length=20)
+
+
+class SideAskResult(BaseModel):
+    """Result of `side.ask`: Claude's answer to the side question, as Markdown."""
+
+    answer: str
+
+
+class ModelSetParams(BaseModel):
+    """`model.set`: change the model of the running Claude session. Result: `{}`.
+
+    The change applies from the next request Claude Code sends to the model, also inside a
+    running turn, and to later sessions of this calu process (as `session.start {model}` does).
+    `model` is a Claude Code alias ("fable", "opus", "sonnet", "haiku") or a model id; None
+    switches back to Claude Code's default model. The effort is fixed when a session starts
+    (`session.start {effort}`).
+    """
+
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class RateLimit(BaseModel):
+    """The state of one usage limit of the Claude Code account, as Claude Code reports it."""
+
+    type: str = ""
+    """Which limit: "five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet" or
+    "overage"; "" if Claude Code did not say."""
+    status: str = "allowed"
+    """"allowed", "allowed_warning" (close to the limit) or "rejected" (the limit is reached)."""
+    utilization: float | None = None
+    """Used part of the limit, 0.0 to 1.0; None if Claude Code did not report it."""
+    resets_at: datetime | None = None
+    """When the limit's window starts again."""
+
+
+class ContextUsage(BaseModel):
+    """How full the context window of the main agent is, as Claude Code counts it."""
+
+    tokens: int
+    max_tokens: int
+    percent: float
+    """`tokens` as a percentage of `max_tokens`, 0 to 100."""
+    model: str = ""
+    """The model the numbers were counted for: the resolved model id of the session."""
+
+
+class UsageResult(BaseModel):
+    """Result of `usage.get`: what the session knows about cost, context and limits.
+
+    `context` is asked from Claude Code when the request arrives and is None when no session
+    runs or Claude Code does not answer. `rate_limits` is the newest state of each limit Claude
+    Code reported in this calu process; an account without limits (an API key, Bedrock) has
+    none. `cost_usd` and `num_turns` are those of the last `turn.result`.
+    """
+
+    context: ContextUsage | None = None
+    rate_limits: list[RateLimit] = Field(default_factory=list)
+    cost_usd: float | None = None
+    num_turns: int = 0
+
+
 class EventsSubscribeParams(BaseModel):
     """`events.subscribe`: receive events from now on, with the ones since `after_seq`.
 
@@ -479,6 +560,8 @@ class SessionSnapshot(BaseModel):
     honesty: HonestyInfo = Field(default_factory=HonestyInfo)
     """The code honesty state as the session last computed it (it is computed at the start,
     for every checked step and after every change, and sent as `honesty.update`)."""
+    rate_limits: list[RateLimit] = Field(default_factory=list)
+    """The newest state of each usage limit Claude Code reported (`usage.update`)."""
 
 
 class CheckerContextResult(BaseModel):
@@ -514,6 +597,9 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "honesty.review": EmptyParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,
+    "side.ask": SideAskParams,
+    "usage.get": EmptyParams,
+    "model.set": ModelSetParams,
     "shutdown": EmptyParams,
 }
 """Request method -> model of its params. `shutdown` ends the calu process, so only a client
@@ -764,6 +850,10 @@ class EscalationRequest(Event):
     asked them, each with `question`, `header`, `options` (`label` and `description`) and
     `multiSelect`. A client shows the options and answers with `escalation.decide {answer}`.
     Empty for every other escalation."""
+    opened_at: datetime | None = None
+    """When the step began to wait. The snapshot of `state.get` carries the same value, so a
+    client that attaches later can say how long the step has waited. None from a session that
+    does not report it."""
 
 
 class EscalationResolved(Event):
@@ -818,6 +908,18 @@ class AutoEscalateChanged(Event):
     settings: AutoEscalate
 
 
+class UsageUpdate(Event):
+    """Claude Code reported the state of a usage limit of its account (the whole known list).
+
+    Sent when a limit changes state (for example from "allowed" to "allowed_warning"), so a
+    client can show how much of the quota is used without asking. Not recorded in the history,
+    and it does not change the session's state.
+    """
+
+    method: ClassVar[str] = "usage.update"
+    rate_limits: list[RateLimit]
+
+
 EVENTS: list[type[Event]] = [
     SessionState,
     AssistantText,
@@ -836,6 +938,7 @@ EVENTS: list[type[Event]] = [
     EditDiff,
     AutoEscalateChanged,
     HonestyUpdate,
+    UsageUpdate,
     Log,
 ]
 """Every event class, for the JSON Schema export (`calu.protocol.schema`)."""

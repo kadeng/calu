@@ -30,6 +30,7 @@ NOT_CARRIED_BY_ACP = {
     "tool.files",  # ACP carries a tool call's locations with the call itself
     "chat.queue",  # ACP has no shape for a queue of waiting messages
     "agents.update",  # ACP has no subagents; the web interface shows them (PLAN.md §6.1)
+    "usage.update",  # ACP has no shape for the usage limits of the agent's account
 }
 """Events the ACP adapter deliberately drops, because the protocol has nowhere to put them."""
 

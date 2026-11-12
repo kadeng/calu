@@ -305,3 +305,90 @@ def test_the_turn_result_carries_the_running_background_tasks(tmp_path: Path) ->
     sdk._translate(SystemMessage(subtype="background_tasks_changed", data={"tasks": []}))
     (turn,) = sdk._translate(result())
     assert isinstance(turn, TurnResult) and turn.background_tasks == 0
+
+
+def test_a_rate_limit_report_becomes_a_usage_update_with_every_known_limit(tmp_path: Path):
+    from claude_agent_sdk.types import RateLimitEvent, RateLimitInfo
+
+    from calu.protocol.messages import UsageUpdate
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    first = RateLimitEvent(
+        rate_limit_info=RateLimitInfo(
+            status="allowed_warning",
+            resets_at=1_800_000_000,
+            rate_limit_type="five_hour",
+            utilization=0.82,
+        ),
+        uuid="u1",
+        session_id="s",
+    )
+    (event,) = runner._translate(first)
+    assert isinstance(event, UsageUpdate)
+    (limit,) = event.rate_limits
+    assert (limit.type, limit.status, limit.utilization) == ("five_hour", "allowed_warning", 0.82)
+    assert limit.resets_at is not None and limit.resets_at.year == 2027
+    second = RateLimitEvent(
+        rate_limit_info=RateLimitInfo(status="allowed", rate_limit_type="seven_day"),
+        uuid="u2",
+        session_id="s",
+    )
+    (event,) = runner._translate(second)
+    assert isinstance(event, UsageUpdate)
+    assert [entry.type for entry in event.rate_limits] == ["five_hour", "seven_day"]
+
+
+@pytest.mark.anyio
+async def test_a_side_question_and_a_model_change_need_a_connected_client(tmp_path: Path):
+    from calu.claude.runner import ModelChangeFailed, SideQuestionFailed
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    with pytest.raises(SideQuestionFailed, match="no Claude session is running"):
+        await runner.side_question("anything?")
+    with pytest.raises(ModelChangeFailed, match="no Claude session is running"):
+        await runner.set_model("opus")
+    assert await runner.context_usage() is None
+
+
+@pytest.mark.anyio
+async def test_a_side_question_goes_out_as_the_control_request_of_the_cli(tmp_path: Path):
+    from calu.claude.runner import SideQuestionFailed
+
+    sent: list[tuple[dict, float]] = []
+
+    class Query:
+        """Stands in for the SDK's control channel."""
+
+        answer: object = {"response": "Two callers.", "synthetic": False}
+
+        async def _send_control_request(self, request: dict, timeout: float = 60.0) -> object:
+            """Record the request and return the scripted answer."""
+            sent.append((request, timeout))
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return self.answer
+
+    class Client:
+        """Stands in for a connected `ClaudeSDKClient`."""
+
+        _query = Query()
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._client = Client()  # type: ignore[assignment]
+    assert await runner.side_question("How many?", [("Before?", "Yes.")]) == "Two callers."
+    assert sent == [
+        (
+            {
+                "subtype": "side_question",
+                "question": "How many?",
+                "history": [{"question": "Before?", "response": "Yes."}],
+            },
+            180.0,
+        )
+    ]
+    Client._query.answer = {"response": None}
+    with pytest.raises(SideQuestionFailed, match="returned no answer"):
+        await runner.side_question("And now?")
+    Client._query.answer = Exception("Side question cancelled")
+    with pytest.raises(SideQuestionFailed, match="Side question cancelled"):
+        await runner.side_question("And now?")

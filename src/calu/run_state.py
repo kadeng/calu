@@ -157,8 +157,10 @@ class RunState:
 
         - `queue`: the end of a run empties it, not its start.
         - `clock_alarm`: it stays until a step has shown it to a human.
-        - `store_failures`: only a database write that succeeds resets the count.
-        - `stopping`: nothing resets it.
+
+        `store_failures` and `stopping` start from their defaults like the rest: a run that
+        was stopped after repeated failed database writes must not leave the next run
+        without that stop.
 
         `run_done` of the result is not set: a run is beginning.
 
@@ -172,8 +174,6 @@ class RunState:
             tg=tg,
             queue=self.queue,
             clock_alarm=self.clock_alarm,
-            store_failures=self.store_failures,
-            stopping=self.stopping,
         )
 
     def call(self, tool_use_id: str) -> PerCall:

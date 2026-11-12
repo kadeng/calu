@@ -154,6 +154,8 @@ from calu.claude.runner import (
     Fork,
     GateResult,
     HumanAnswer,
+    ModelChangeFailed,
+    SideQuestionFailed,
     Verdict,
 )
 from calu.claude.sdk_runner import AGENT_TOOLS
@@ -227,6 +229,7 @@ from calu.protocol.messages import (
     InitializeResult,
     Log,
     QueuedMessage,
+    RateLimit,
     SessionHistoryResult,
     SessionSnapshot,
     SessionState,
@@ -236,6 +239,8 @@ from calu.protocol.messages import (
     ToolResult,
     ToolUse,
     TurnResult,
+    UsageResult,
+    UsageUpdate,
     UserInput,
 )
 from calu.protocol.messages import CheckResult as CheckResultEvent
@@ -426,6 +431,11 @@ class Session:
         self._sink = emit
         self._models = dict(checker_models or {})
         self.startup_warnings = tuple(startup_warnings)
+        self._rate_limits: list[RateLimit] = []
+        """The newest state of each usage limit Claude Code reported (`usage.update`)."""
+        self._last_cost: float | None = None
+        self._last_turns = 0
+        """Cost and turn count of the last `turn.result`, for `usage.get`."""
         self.honesty = HonestyState(
             workspace, self.config.honesty.max_open_marks, self.config.honesty.sufficient_trust
         )
@@ -2074,6 +2084,7 @@ class Session:
             honesty_mode=self.config.honesty.mode,
             honesty_marks=list(self._honesty_sent.marks),
             honesty=self._honesty_sent.model_copy(update={"mode": self.config.honesty.mode}),
+            rate_limits=list(self._rate_limits),
         )
 
     async def recent_sessions(self, limit: int = 20) -> list[SessionSummary]:
@@ -2334,6 +2345,71 @@ class Session:
         self._run_state.claude_outputs.pop(None, None)
         await self.desk.turn_interrupted()
         await runner.interrupt()
+
+    async def ask_side(self, question: str, history: Sequence[tuple[str, str]] = ()) -> str:
+        """Ask Claude a question beside the running work (`side.ask`).
+
+        The runner answers from the conversation as it stands, without tools. Nothing of the
+        session changes: no message is sent to the main agent, no turn starts, the state stays
+        what it is, the queue is untouched, and neither the question nor the answer is recorded
+        or shown to the checkers. No step can be approved or taken this way.
+
+        Args:
+            question: The question.
+            history: Earlier side questions of the asking client with their answers.
+
+        Returns:
+            Claude's answer.
+
+        Raises:
+            SessionError: If no session runs, or Claude Code gave no answer.
+        """
+        runner = self._require_running()
+        try:
+            return await runner.side_question(question, history)
+        except SideQuestionFailed as exc:
+            raise SessionError(str(exc)) from exc
+
+    async def usage(self) -> UsageResult:
+        """Return what the session knows about cost, context fill and usage limits (`usage.get`).
+
+        Returns:
+            The context fill as Claude Code counts it now (None when no session runs), the
+            newest state of each usage limit, and cost and turn count of the last turn result.
+        """
+        context = None
+        if self.runner is not None and self.state not in ("stopped", "failed", "starting"):
+            context = await self.runner.context_usage()
+        return UsageResult(
+            context=context,
+            rate_limits=list(self._rate_limits),
+            cost_usd=self._last_cost,
+            num_turns=self._last_turns,
+        )
+
+    async def set_model(self, model: str | None, client: str = "unknown") -> None:
+        """Change the model of the running Claude session (`model.set`).
+
+        Side effects: the runner applies the model from Claude's next model request; the
+        configured `claude.model` of this process changes with it, so the snapshot and later
+        starts use it; a `log` event names the change and who made it.
+
+        Args:
+            model: A Claude Code alias or model id; None for Claude Code's default model.
+            client: Name of the client that asked, for the log.
+
+        Raises:
+            SessionError: If no session runs or Claude Code refused the change.
+        """
+        runner = self._require_running()
+        try:
+            await runner.set_model(model)
+        except ModelChangeFailed as exc:
+            raise SessionError(str(exc)) from exc
+        self.config.claude = self.config.claude.model_copy(update={"model": model})
+        await self._emit_safely(
+            Log(message=f"model changed to {model or 'the default'} by {client}")
+        )
 
     async def send_chat(self, params: ChatSendParams) -> None:
         """Send a chat message to the main agent, or relayed to a background subagent.
@@ -3048,7 +3124,11 @@ class Session:
                             self.store.finish_step(step_id, result_summary(event)),
                         )
                 case TurnResult():
+                    self._last_cost = event.cost_usd
+                    self._last_turns = event.num_turns
                     await self._on_turn_result(event)
+                case UsageUpdate():
+                    self._rate_limits = list(event.rate_limits)
                 case _:
                     pass
         finally:
@@ -3061,7 +3141,8 @@ class Session:
                 if isinstance(event, TurnResult):
                     self._run_state.busy = False
                     await self._refresh_state()
-                else:
+                elif not isinstance(event, UsageUpdate):
+                    # A report about the account's limits is no work of Claude.
                     await self._mark_busy()
 
     async def _after_event(self, event: Event) -> None:

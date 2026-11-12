@@ -24,7 +24,8 @@ spike-results.md`.
 
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -46,6 +47,7 @@ from claude_agent_sdk import (
 from claude_agent_sdk.types import (
     PermissionResultAllow,
     PermissionResultDeny,
+    RateLimitEvent,
     TaskNotificationMessage,
     TaskStartedMessage,
     ToolPermissionContext,
@@ -58,7 +60,9 @@ from calu.claude.runner import (
     NOT_FROM_USER,
     EventSink,
     Fork,
+    ModelChangeFailed,
     Priority,
+    SideQuestionFailed,
     StartRefused,
     ToolGate,
     Verdict,
@@ -78,16 +82,22 @@ from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
     AssistantThinking,
+    ContextUsage,
     Event,
     Log,
+    RateLimit,
     ToolFiles,
     ToolResult,
     ToolUse,
     TurnResult,
+    UsageUpdate,
     UserInput,
 )
 
 log = logging.getLogger(__name__)
+
+SIDE_QUESTION_TIMEOUT_S = 180.0
+"""How long `SdkRunner.side_question` waits for Claude Code's answer."""
 
 AGENT_TOOLS = ("Agent", "Task")
 HOOK_TIMEOUT_S = 900
@@ -230,6 +240,8 @@ class SdkRunner:
         self.background_tasks = 0
         """Claude Code's background tasks now running, from `background_tasks_changed` (D158)."""
         self.session_id: str | None = None
+        self.rate_limits: dict[str, RateLimit] = {}
+        """The newest state of each usage limit Claude Code reported, by limit type."""
 
     # ------------------------------------------------------------------ ClaudeRunner interface
 
@@ -439,6 +451,81 @@ class SdkRunner:
         self._stop_requested = True
         if self._cancel is not None:
             self._cancel.cancel()
+
+    async def side_question(self, question: str, history: Sequence[tuple[str, str]] = ()) -> str:
+        """Ask Claude Code a side question (its `/btw`) and return the answer.
+
+        Sent as the control request `side_question` of the CLI's stream-json protocol, which
+        Claude Code answers from the conversation so far, without tools, also while a turn
+        runs; neither question nor answer enters the conversation (measured with CLI 2.1.319,
+        `spikes/side_question.py`). The Agent SDK has no public method for this request, so
+        it goes through the SDK's own control channel.
+
+        Args:
+            question: The question.
+            history: Earlier side questions with their answers, oldest first.
+
+        Returns:
+            The answer text.
+
+        Raises:
+            SideQuestionFailed: If no session runs, or Claude Code answered with an error, with
+                nothing, or not within `SIDE_QUESTION_TIMEOUT_S`.
+        """
+        query: Any = getattr(self._client, "_query", None)
+        if query is None:
+            raise SideQuestionFailed("no Claude session is running")
+        request: dict[str, Any] = {"subtype": "side_question", "question": question}
+        if history:
+            request["history"] = [{"question": q, "response": a} for q, a in history]
+        try:
+            answer = await query._send_control_request(request, timeout=SIDE_QUESTION_TIMEOUT_S)
+        except Exception as exc:
+            # The SDK raises bare `Exception` for an error response and for a timeout.
+            raise SideQuestionFailed(
+                f"Claude Code did not answer the side question: {exc}"
+            ) from exc
+        text = answer.get("response") if isinstance(answer, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            raise SideQuestionFailed("Claude Code returned no answer to the side question")
+        return text
+
+    async def context_usage(self) -> ContextUsage | None:
+        """Ask Claude Code for the fill of the main agent's context window.
+
+        Returns:
+            The numbers, or None if not connected or Claude Code gave no usable answer.
+        """
+        if self._client is None:
+            return None
+        try:
+            usage: Any = await self._client.get_context_usage()
+            return ContextUsage(
+                tokens=int(usage["totalTokens"]),
+                max_tokens=int(usage["maxTokens"]),
+                percent=float(usage["percentage"]),
+                model=str(usage.get("model") or ""),
+            )
+        except Exception:
+            # The SDK raises bare `Exception`; a missing figure is not worth more than a log line.
+            log.warning("Claude Code did not report the context usage", exc_info=True)
+            return None
+
+    async def set_model(self, model: str | None) -> None:
+        """Change the model of the running session through the SDK.
+
+        Args:
+            model: A Claude Code alias or model id; None for the default model.
+
+        Raises:
+            ModelChangeFailed: If not connected or Claude Code refused the change.
+        """
+        if self._client is None:
+            raise ModelChangeFailed("no Claude session is running")
+        try:
+            await self._client.set_model(model)
+        except Exception as exc:  # the SDK raises bare `Exception` for an error response
+            raise ModelChangeFailed(f"Claude Code did not change the model: {exc}") from exc
 
     # ------------------------------------------------------------------ options and callbacks
 
@@ -1093,6 +1180,18 @@ class SdkRunner:
                         background_tasks=self.background_tasks,
                     )
                 )
+            case RateLimitEvent():
+                info = msg.rate_limit_info
+                kind = info.rate_limit_type or ""
+                self.rate_limits[kind] = RateLimit(
+                    type=kind,
+                    status=info.status,
+                    utilization=info.utilization,
+                    resets_at=(
+                        datetime.fromtimestamp(info.resets_at, UTC) if info.resets_at else None
+                    ),
+                )
+                events.append(UsageUpdate(rate_limits=list(self.rate_limits.values())))
             case SystemMessage() if msg.subtype == "background_tasks_changed":
                 tasks = msg.data.get("tasks")
                 self.background_tasks = len(tasks) if isinstance(tasks, list) else 0

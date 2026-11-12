@@ -1,0 +1,371 @@
+/* Layout of the full-screen client. Regions are told apart by background steps
+   ($background transcript, $surface input and side panel, $panel status and footer);
+   the only bordered element is the decision card, because it asks for the user. */
+
+Screen {
+    layout: vertical;
+    background: $background;
+    color: $foreground;
+}
+
+#status {
+    height: 1;
+    background: $panel;
+}
+
+#tabs {
+    height: 1;
+    background: $surface;
+}
+
+#body {
+    height: 1fr;
+    layers: base over;
+}
+
+#main {
+    width: 1fr;
+    height: 100%;
+    layer: base;
+}
+
+#agent-head {
+    width: 100%;
+    display: none;
+    height: 2;
+    background: $surface;
+}
+
+#agent-head.-shown {
+    display: block;
+}
+
+#transcript {
+    width: 100%;
+    height: 1fr;
+    background: $background;
+    overflow: hidden scroll;
+    scrollbar-size: 0 1;
+    scrollbar-background: $background;
+    scrollbar-color: $panel;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
+}
+
+#new-below {
+    width: 100%;
+    height: 1;
+    display: none;
+    background: $background;
+    color: $warning;
+    text-align: right;
+    text-style: bold;
+    padding: 0 2;
+}
+
+#new-below.-shown {
+    display: block;
+}
+
+#pending {
+    display: none;
+    width: 100%;
+    height: auto;
+    max-height: 3;
+    background: $surface;
+}
+
+#pending.-shown {
+    display: block;
+}
+
+#card {
+    display: none;
+    height: auto;
+    max-height: 60%;
+    margin: 0 1;
+    padding: 0 1;
+    border: round $warning;
+    background: $background;
+    overflow-y: auto;
+}
+
+#card.-shown {
+    display: block;
+}
+
+#card.-question {
+    max-height: 50%;
+}
+
+.-short #card {
+    max-height: 10;
+}
+
+.-short #card.-question {
+    max-height: 12;
+}
+
+#slash {
+    display: none;
+    width: 100%;
+    height: auto;
+    max-height: 10;
+    background: $surface;
+    border-top: hkey $panel;
+    padding: 0 1;
+}
+
+#slash.-shown {
+    display: block;
+}
+
+#composer-head {
+    width: 100%;
+    height: auto;
+    min-height: 1;
+    max-height: 3;
+    background: $surface;
+    padding: 0 1;
+}
+
+#composer-row {
+    width: 100%;
+    height: auto;
+    background: $surface;
+    padding: 0 1 0 1;
+}
+
+#prompt {
+    width: 2;
+    height: 1;
+    color: $primary;
+    text-style: bold;
+    background: $surface;
+}
+
+#composer {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    max-height: 8;
+    border: none;
+    padding: 0;
+    background: $surface;
+}
+
+#composer:focus {
+    border: none;
+}
+
+#side {
+    width: 36;
+    height: 100%;
+    layer: base;
+    background: $surface;
+    border-left: vkey $panel;
+    padding: 0 1;
+    overflow-x: hidden;
+    scrollbar-size-vertical: 1;
+    scrollbar-background: $surface;
+    scrollbar-color: $panel;
+}
+
+.-side #side {
+    width: 46;
+}
+
+.-narrow #side {
+    display: none;
+}
+
+.-narrow.-panel #side, .-narrow.-side #side {
+    display: block;
+    layer: over;
+    dock: right;
+    width: 44;
+    max-width: 90%;
+    border-left: vkey $primary;
+}
+
+#panel-lines {
+    height: auto;
+}
+
+#side-lines {
+    height: auto;
+    display: none;
+}
+
+.-side #panel-lines {
+    display: none;
+}
+
+.-side #side-lines {
+    display: block;
+}
+
+#footer {
+    height: 1;
+    background: $panel;
+}
+
+/* ---- full-screen views */
+
+DetailScreen, TextScreen, DiffScreen {
+    background: $background;
+}
+
+#diff-title {
+    height: 1;
+    background: $panel;
+}
+
+#diff-scroll {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+}
+
+#diff-body {
+    height: auto;
+}
+
+#diff-comment {
+    display: none;
+    height: 1;
+    border: none;
+    padding: 0 1;
+    background: $surface;
+}
+
+#diff-keys {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+}
+
+ConfirmScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#confirm-box {
+    width: 76;
+    max-width: 94%;
+    height: auto;
+    padding: 1 2;
+    border: round $warning;
+    background: $surface;
+}
+
+#confirm-body {
+    height: auto;
+}
+
+#detail-scroll, #text-scroll {
+    height: 1fr;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+#detail-body, #text-body {
+    height: auto;
+}
+
+#detail-keys, #text-keys {
+    height: 1;
+    background: $panel;
+    color: $text-muted;
+}
+
+#text-title {
+    height: 1;
+    background: $panel;
+}
+
+/* ---- password, checkers */
+
+PasswordScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#password-box {
+    width: 70;
+    max-width: 94%;
+    height: auto;
+    padding: 1 2;
+    border: round $warning;
+    background: $surface;
+}
+
+#password-box Static {
+    height: auto;
+}
+
+#password-input {
+    margin: 1 0;
+    border: none;
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
+
+CheckersScreen {
+    background: $background;
+}
+
+#checkers-title, #checkers-keys {
+    height: 1;
+    background: $panel;
+}
+
+#checkers-message {
+    height: auto;
+    max-height: 4;
+    background: $panel;
+}
+
+#checkers-keys {
+    color: $text-muted;
+}
+
+#checkers-body {
+    height: 1fr;
+}
+
+#checkers-list {
+    width: 30;
+    height: 1fr;
+    padding: 1 1;
+    background: $surface;
+}
+
+CheckersScreen.narrow #checkers-list {
+    width: 20;
+}
+
+#checkers-scroll {
+    height: 1fr;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+#checkers-text {
+    height: auto;
+}
+
+#checkers-editor {
+    display: none;
+    height: 1fr;
+    border: none;
+    padding: 1 2;
+}
+
+CheckersScreen.editing #checkers-editor {
+    display: block;
+}
+
+CheckersScreen.editing #checkers-scroll {
+    display: none;
+}
