@@ -135,3 +135,14 @@ async def test_read_lines_ends_at_end_of_input(monkeypatch):
 
 async def _collect(sink: list, text: str) -> None:
     sink.append(text)
+
+
+async def test_a_background_timeout_ends_the_wait_for_tasks_that_never_finish():
+    """D170: a background dev server keeps an unattended run open forever; with
+    `--background-timeout` the run ends once the session has been idle that long."""
+    idle = IdleSignal(background_timeout_s=0.2)
+    await idle(SessionState(state="running"))
+    await idle(TurnResult(background_tasks=1))
+    await idle(SessionState(state="idle"))
+    with anyio.fail_after(3):
+        await idle.wait()

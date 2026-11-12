@@ -503,6 +503,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         effort=args.effort,
         interactive=not args.batch,
         show_thinking=args.thinking,
+        background_timeout_s=args.background_timeout,
     )
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print("Type a message for Claude; /quit ends the session.")
@@ -2264,6 +2265,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch",
         action="store_true",
         help="end the session when Claude is done, instead of reading messages from stdin",
+    )
+    p.add_argument(
+        "--background-timeout",
+        type=float,
+        metavar="SECONDS",
+        help="with --batch: end the run after Claude has been idle this long while background "
+        "tasks (a dev server, a Monitor, a workflow) still run; default: wait for them",
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_run)

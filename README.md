@@ -195,6 +195,11 @@ calu project add . --name demo        # the proxy policy, with a starter domain 
 calu run -p "fix the failing test"    # a session in the current directory
 ```
 
+`calu run -p "..." --batch` ends when Claude is done instead of waiting for your next message.
+It also waits for Claude Code's background tasks, because Claude continues by itself when they
+finish; `--background-timeout 600` stops a run whose background task (a dev server, say) never
+ends.
+
 `calu run` stays in the foreground and prints every step as the checkers judge it. **On a server
 you put it in a detachable session**, so it keeps working after you log out:
 

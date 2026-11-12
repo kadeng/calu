@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -117,6 +118,9 @@ class RunOptions:
     """Port of the protocol server; 0 lets the operating system choose a free one."""
     serve: bool = True
     """Serve the protocol at all; False runs the session without clients (used by tests)."""
+    background_timeout_s: float | None = None
+    """Unattended runs only: end the run after the session has been idle this long while Claude
+    Code's background tasks still run (D170). None (the default) waits as long as they run."""
 
 
 def format_event(event: Event) -> str | None:
@@ -257,11 +261,19 @@ class IdleSignal:
     WORKING = ("running", "checking", "tool_call", "escalated")
     """States that count as "the session has started working"."""
 
-    def __init__(self) -> None:
-        """Create a signal that is not set."""
+    def __init__(self, background_timeout_s: float | None = None) -> None:
+        """Create a signal that is not set.
+
+        Args:
+            background_timeout_s: How long to wait while the session is idle but background
+                tasks still run before `wait` returns anyway (`calu run --background-timeout`,
+                D170); None waits for them as long as they run.
+        """
         self._event = anyio.Event()
         self._worked = False
         self._background = 0
+        self.background_timeout_s = background_timeout_s
+        self._idle_with_tasks_since: float | None = None
 
     async def __call__(self, event: Event) -> None:
         """Set the signal when the session becomes idle after having worked.
@@ -276,14 +288,34 @@ class IdleSignal:
             return
         if event.state in self.WORKING:
             self._worked = True
+            self._idle_with_tasks_since = None
         elif event.state in ("stopped", "failed") or (
             self._worked and event.state == "idle" and not self._background
         ):
             self._event.set()
+        elif self._worked and event.state == "idle":
+            self._idle_with_tasks_since = time.monotonic()
 
     async def wait(self) -> None:
-        """Wait until the session is idle again, stopped or failed."""
-        await self._event.wait()
+        """Wait until the session is idle again, stopped or failed.
+
+        With `background_timeout_s`, also return once the session has been idle that long while
+        background tasks still run; the caller then stops the session, and with it the tasks.
+        """
+        if self.background_timeout_s is None:
+            await self._event.wait()
+            return
+        while not self._event.is_set():
+            with anyio.move_on_after(0.5):
+                await self._event.wait()
+            since = self._idle_with_tasks_since
+            if since is not None and time.monotonic() - since >= self.background_timeout_s:
+                print(
+                    f"[background task(s) still running after {self.background_timeout_s:g} s;"
+                    " ending the run, which stops them]",
+                    flush=True,
+                )
+                return
 
 
 def both(first: Callable[[Event], Awaitable[None]], second: Callable[[Event], Awaitable[None]]):
@@ -402,7 +434,7 @@ async def _run(
     config_store = ConfigStore(db, options.workspace, options.project)
     settings = await config_store.load()
     console = Console(options.show_thinking)
-    idle = IdleSignal()
+    idle = IdleSignal(options.background_timeout_s)
     bus = Bus()
     store = DatabaseSessionStore(db)
     session = Session(
