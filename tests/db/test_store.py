@@ -133,7 +133,7 @@ async def test_disabled_checker_type_is_left_out(db_url: str) -> None:
     assert "edit" not in settings.checkers
     assert settings.config.command_checker.model == "other:model"
     assert settings.config.command_checker.max_tokens == 123
-    assert settings.config.edit_checker.model == "mistral:mistral-small-2603"  # the default
+    assert settings.config.edit_checker.model == "anthropic:claude-haiku-5-5"  # the default
     assert settings.checkers["command"].version == 2  # the trigger bumped it
     assert settings.checkers["command"].limits().max_tokens == 123
 

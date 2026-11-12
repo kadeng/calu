@@ -690,7 +690,7 @@ async def set_checker(
             )
         await db.execute(
             "INSERT INTO checker_types (name, route, instructions, model) VALUES (%s, %s, %s, %s)",
-            (name, route, instructions_text, model or "mistral:mistral-small-2603"),
+            (name, route, instructions_text, model or ""),
         )
         instructions_text, model, route = None, None, None
     changes = {
@@ -1086,7 +1086,8 @@ async def set_all_models(
 
     Args:
         db: A connection of the database owner.
-        model: The Pydantic AI model string.
+        model: The Pydantic AI model string, or "" to store none, so that every role uses the
+            default model (`calu.config.default_model`).
         effort: The checkers' effort, or None to remove any that is set.
         project: The project's scope, or None for the global one.
 
@@ -1099,8 +1100,12 @@ async def set_all_models(
     """
     changed: list[str] = []
     for key in MODEL_KEYS:
-        await set_setting(db, key, model, project)
-        changed.append(f"{key} = {model}")
+        if model:
+            await set_setting(db, key, model, project)
+            changed.append(f"{key} = {model}")
+        else:
+            await unset_setting(db, key, project)
+            changed.append(f"{key}: the default")
     for key in EFFORT_KEYS:
         if effort is None:
             await unset_setting(db, key, project)
@@ -1113,5 +1118,5 @@ async def set_all_models(
         for row in await checkers(db):
             if row.model != model:
                 await set_checker(db, row.name, model=model)
-                changed.append(f"checker definition {row.name}: model = {model}")
+                changed.append(f"checker definition {row.name}: model = {model or 'the default'}")
     return changed

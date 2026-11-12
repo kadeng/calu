@@ -19,7 +19,7 @@ module writes.
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,7 +28,14 @@ import psycopg
 from pydantic import ValidationError
 
 from calu.checkers.rules import Rules
-from calu.config import SETTINGS_KEY, CheckerConfig, Config, NetworkPolicy, build_config
+from calu.config import (
+    SETTINGS_KEY,
+    CheckerConfig,
+    Config,
+    NetworkPolicy,
+    build_config,
+    default_model,
+)
 from calu.db import Db
 from calu.db.notify import CONFIG_CHANGED, Dirty, Notifier
 
@@ -207,6 +214,13 @@ class ConfigStore:
                 }
             )
         seen = repr((project_id, policy, layers, sorted(checkers.items()), rule_rows))
+        # A definition without a model of its own (an extra checker such as `honesty`) uses
+        # the default model, which follows Bedrock mode (D194).
+        fallback = default_model(config.claude.use_bedrock)
+        checkers = {
+            name: definition if definition.model.strip() else replace(definition, model=fallback)
+            for name, definition in checkers.items()
+        }
         self.fingerprint = hashlib.sha256(seen.encode()).hexdigest()
         return ProjectSettings(config=config, checkers=checkers, rules=rules)
 

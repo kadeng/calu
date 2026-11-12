@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from calu.checkers.model import CheckerEffort
 from calu.checkers.policy import Route
@@ -39,6 +39,26 @@ EMPTY_CHAT_SUMMARY = "# Chat summary\n\nNo turns have been folded into this summ
 
 SETTINGS_KEY = "settings"
 """Key of the `config` rows that hold a partial `Config`."""
+
+
+ANTHROPIC_HAIKU = "anthropic:claude-haiku-5-5"
+"""The model of every role whose model is left blank: the current Haiku on the Anthropic API."""
+
+BEDROCK_EU_HAIKU = "bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+"""The same default in Bedrock mode (`claude.use_bedrock`): Haiku through AWS Bedrock's EU
+inference profile, which keeps the requests in EU regions."""
+
+
+def default_model(use_bedrock: bool) -> str:
+    """Return the model a role uses when its model is left blank (PLAN.md D194).
+
+    Args:
+        use_bedrock: Whether Bedrock mode is on (`claude.use_bedrock`).
+
+    Returns:
+        `BEDROCK_EU_HAIKU` in Bedrock mode, else `ANTHROPIC_HAIKU`.
+    """
+    return BEDROCK_EU_HAIKU if use_bedrock else ANTHROPIC_HAIKU
 
 
 class ConfigModel(BaseModel):
@@ -62,8 +82,10 @@ class CheckerConfig(ConfigModel):
     with "off" while the changeset checker thinks.
     """
 
-    model: str = "mistral:mistral-small-2603"  # Mistral Small 4
-    """Pydantic AI model string of this checker, e.g. "mistral:mistral-small-2603",
+    model: str = ""
+    """Pydantic AI model string of this checker; blank uses the default: Haiku on the Anthropic
+    API, or Haiku through AWS Bedrock in an EU region when `claude.use_bedrock` is on. Other
+    values are e.g. "mistral:mistral-small-2603",
     "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or "bedrock:eu.anthropic....".
     `claude:<alias>` ("claude:haiku", "claude:sonnet") is special: the check then runs through
     the `claude` CLI on this machine's own Claude Code account, which is the only way a
@@ -101,13 +123,14 @@ class ContextConfig(ConfigModel):
     """Fold the oldest turns into the chat summary once this many turns are unfolded."""
     fold_count: int = Field(default=20, ge=1)
     """How many of the oldest turns are folded into the chat summary each time."""
-    summarizer_model: str = "mistral:ministral-3b-latest"
-    """Model that writes the chat summary when turns are folded."""
+    summarizer_model: str = ""
+    """Model that writes the chat summary when turns are folded; blank uses the default (see
+    a checker's `model`)."""
     narrate: bool = True
     """Narrate Claude's thinking and text for the checkers (`calu.context.narrator`)."""
-    narrator_model: str = "mistral:mistral-small-2603"  # Mistral Small 4
+    narrator_model: str = ""
     """Model that narrates Claude's thinking and text in indirect speech, so that a checker
-    does not read it as an instruction."""
+    does not read it as an instruction; blank uses the default (see a checker's `model`)."""
     max_recent_chars: int = Field(default=40_000, ge=1_000)
     """Upper bound in characters for the unfolded turns in a checker's context."""
 
@@ -637,6 +660,29 @@ class Config(ConfigModel):
                     'one: a name is not empty and has no "=", white space or NUL character'
                 )
         return names
+
+    @model_validator(mode="after")
+    def _fill_blank_models(self) -> Config:
+        """Give every role whose model is blank the default model (PLAN.md D194).
+
+        Runs on every validation, so a `Config` never holds a blank model: readers use
+        `command_checker.model`, `context.narrator_model` and the others as they are. What is
+        stored in the database stays blank, so switching Bedrock mode later changes the
+        default with it.
+
+        Returns:
+            The configuration itself, with the blank models filled.
+        """
+        model = default_model(self.claude.use_bedrock)
+        for checker in CHECKER_FIELDS.values():
+            section = getattr(self, checker)
+            if not section.model.strip():
+                section.model = model
+        if not self.context.narrator_model.strip():
+            self.context.narrator_model = model
+        if not self.context.summarizer_model.strip():
+            self.context.summarizer_model = model
+        return self
 
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.

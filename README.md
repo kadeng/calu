@@ -194,13 +194,13 @@ calu setup                # default checkers and rules; asks for a new session p
 ```
 
 The checkers need credentials of their own -- AWS for Bedrock, or a key in
-`~/.config/calu/.env`, which Claude Code never sees. `calu setup` picks the model from what it
-finds (Bedrock, then Anthropic, Fireworks, Mistral); `calu config models` switches every role at
-once later:
+`~/.config/calu/.env`, which Claude Code never sees. Every checker, the narrator and the
+summarizer use Claude Haiku on the Anthropic API unless you choose another model; with
+`claude.use_bedrock` on they use Haiku through AWS Bedrock in an EU region instead:
 
 ```bash
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
-calu config models auto
+calu config models auto          # or: pick one from the credentials found, for every role
 ```
 
 Register the project, which also sets what its commands may reach over the network, and start a

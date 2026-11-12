@@ -21,8 +21,9 @@ from calu.config import CheckerConfig
 from calu.db import migrate
 from calu.defaults.instructions import legacy_instructions
 
-DEFAULT_CHECKER_MODEL = "mistral:mistral-small-2603"
-"""Pydantic AI model string of the default checkers (Mistral Small 4)."""
+DEFAULT_CHECKER_MODEL = ""
+"""The model new checker types are stored with: blank, which means the default model of
+`calu.config.default_model` (Haiku on the Anthropic API, or through Bedrock in Bedrock mode)."""
 
 CHECKER_DEFAULTS = (
     ("command", "command", "checkers/command.md", None, True),

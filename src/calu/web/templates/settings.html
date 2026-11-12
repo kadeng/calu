@@ -17,12 +17,13 @@
     <div class="st-model">
       {# The text field holds the value and is what the form sends; the list fills it. #}
       <select data-model-for="{{ id }}" aria-label="{{ f.label }}: choose a model"{{ off }}>
+        <option value="">Default: Haiku (Anthropic API; AWS Bedrock EU in Bedrock mode)</option>
         {% for provider, models in f.options %}
           <optgroup label="{{ provider }}">
             {% for value, label in models %}<option value="{{ value }}">{{ value.split(':')[0] | capitalize }} · {{ label }}</option>{% endfor %}
           </optgroup>
         {% endfor %}
-        <option value="">Other: type a model string</option>
+        <option value="__other__">Other: type a model string</option>
       </select>
       <input type="text" id="{{ id }}" name="{{ f.name }}" value="{{ f.text }}" autocomplete="off"
              spellcheck="false" placeholder="provider:model"{{ off }}>

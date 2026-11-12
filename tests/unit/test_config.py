@@ -23,7 +23,10 @@ def test_layers_and_checker_rows_build_the_config() -> None:
     assert config.claude.model == "sonnet" and config.claude.use_bedrock
     assert config.command_checker.model == "fireworks:x"
     assert config.command_checker.max_tokens == 500
-    assert config.edit_checker == Config().edit_checker
+    # A blank model is the default, which follows Bedrock mode (D194).
+    assert config.edit_checker.model == "bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert Config().edit_checker.model == "anthropic:claude-haiku-5-5"
+    assert Config().context.summarizer_model == "anthropic:claude-haiku-5-5"
     assert config.context.narrator_model == "mistral:small"
 
 

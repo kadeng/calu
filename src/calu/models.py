@@ -29,10 +29,14 @@ from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
 from pydantic_ai.models import Model
 from pydantic_ai.models.bedrock import BedrockConverseModel
 from pydantic_ai.models.mistral import MistralModel
+from pydantic_ai.providers.bedrock import BedrockProvider
 from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.settings import ModelSettings
 
 from calu.claude_model import claude_cli_model, is_cli_model
+
+BEDROCK_EU_REGION = "eu-central-1"
+"""The AWS region an EU inference profile is called in when the environment names none."""
 
 MISTRAL_EU_BASE_URL = "https://api.eu.mistral.ai"
 """Mistral's EU endpoint; the default for all "mistral:" models."""
@@ -152,7 +156,14 @@ def resolve_model(model: str | Model) -> str | Model:
             base_url = os.environ.get("MISTRAL_BASE_URL") or MISTRAL_EU_BASE_URL
             return MistralModel(name, provider=MistralProvider(base_url=base_url))
         if provider == "bedrock" and "anthropic.claude" in name:
-            return BedrockConverseModel(name, settings=ModelSettings(thinking=False))
+            settings = ModelSettings(thinking=False)
+            regional = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+            if name.startswith("eu.") and not regional:
+                # An EU inference profile is called from an EU region; without one in the
+                # environment the call would go to the SDK's default region and fail there.
+                region = BedrockProvider(region_name=BEDROCK_EU_REGION)
+                return BedrockConverseModel(name, provider=region, settings=settings)
+            return BedrockConverseModel(name, settings=settings)
     except Exception as exc:
         log.warning(
             "%s cannot be built yet (%s: %s); it is used as a string",

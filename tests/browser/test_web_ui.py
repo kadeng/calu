@@ -324,7 +324,10 @@ async def test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_un
             assert await typed.input_value() == "anthropic:claude-haiku-5-5"
             assert not await typed.is_visible()
             assert await page.inner_text("#st-dirty-count") == "1"
+            # Blank is the default model (Haiku), and it is an entry of the list too.
             await choose.select_option("")
+            assert await typed.input_value() == "" and not await typed.is_visible()
+            await choose.select_option("__other__")
             assert await typed.is_visible()
             await typed.fill("openrouter:some/model")
             async with page.expect_navigation():
@@ -334,7 +337,7 @@ async def test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_un
             assert await page.locator("[name='edit_checker.model']").is_visible()
             assert (
                 await page.locator("select[data-model-for='f-edit_checker-model']").input_value()
-                == ""
+                == "__other__"
             )
 
             # A phone gets the same page in one column, without a sideways scroll.

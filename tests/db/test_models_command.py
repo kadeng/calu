@@ -1,6 +1,7 @@
-"""`calu config models` and `calu setup` choosing a model (D129), against a real database."""
+"""`calu config models` and `calu setup` choosing a model (D129, D194), against a real database."""
 
 import io
+from pathlib import Path
 from typing import cast
 
 import anyio
@@ -11,6 +12,7 @@ from calu.credentials import CredentialStore
 from calu.db import Db, connect
 from calu.model_choice import ModelChoice
 from calu.setup import setup
+from calu.store import ConfigStore
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -73,7 +75,7 @@ async def test_one_model_for_every_role_reaches_both_places_it_is_kept(
 async def test_setup_chooses_the_model_on_a_fresh_database_only(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A second `calu setup` must not overwrite the models someone chose since."""
+    """Setup stores no model (the default applies, D194) and never overwrites a chosen one."""
     monkeypatch.setattr(
         cli,
         "detect_model",
@@ -87,19 +89,37 @@ async def test_setup_chooses_the_model_on_a_fresh_database_only(
     monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
     assert await _run(store, ["setup"]) == 0
     said = capsys.readouterr().out
-    assert "anthropic:claude-haiku-5-5, effort medium (Anthropic: ANTHROPIC_API_KEY" in said
+    assert "models: the default for every role -- anthropic:claude-haiku-5-5" in said
 
     conn = await connect(db_url)
     try:
         db = Db(conn)
-        assert (await admin.settings(db))["context"]["narrator_model"] == (
-            "anthropic:claude-haiku-5-5"
-        )
+        assert "context" not in await admin.settings(db), "no model is stored"
+        loaded = await ConfigStore(db, Path("/w")).load()
+        assert loaded.config.command_checker.model == "anthropic:claude-haiku-5-5"
+        assert loaded.config.context.narrator_model == "anthropic:claude-haiku-5-5"
+        # Bedrock mode moves every blank model to Haiku on Bedrock's EU profile, the extra
+        # checker included, which has no configuration section of its own.
+        await admin.set_setting(db, "claude.use_bedrock", True)
+        await admin.set_checker(db, "honesty", enabled=True)
+        loaded = await ConfigStore(db, Path("/w")).load()
+        bedrock = "bedrock:eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert loaded.config.edit_checker.model == bedrock
+        assert loaded.config.context.summarizer_model == bedrock
+        assert loaded.checkers["honesty"].model == bedrock
         # Someone chooses another model; setup runs again and leaves it alone.
         await admin.set_all_models(db, "claude:sonnet")
         monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
         assert await _run(store, ["setup"]) == 0
         capsys.readouterr()
         assert (await admin.settings(db))["context"]["narrator_model"] == "claude:sonnet"
+        # `--checker-model auto` is the detection of D129, now only on request.
+        monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
+        assert await _run(store, ["setup", "--checker-model", "auto"]) == 0
+        assert "anthropic:claude-haiku-5-5, effort medium (Anthropic" in capsys.readouterr().out
+        # `calu config models default` removes every stored model again.
+        assert await _run(store, ["config", "models", "default"]) == 0
+        assert "narrator_model" not in (await admin.settings(db)).get("context", {})
+        assert all(row.model == "" for row in await admin.checkers(db))
     finally:
         await conn.close()

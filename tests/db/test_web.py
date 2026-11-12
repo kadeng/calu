@@ -336,7 +336,7 @@ async def test_a_save_writes_only_what_changed(db_url: str) -> None:
                     "claude.effort": "high",
                     "claude.use_bedrock": "on",
                     "command_checker.effort": "off",
-                    "command_checker.model": "mistral:mistral-small-2603",
+                    "command_checker.model": "",
                     "escalation_timeout_s": "3600",
                     "prompt:command": "# New instructions\r\n\r\nBe brief.\r\n",
                     "prompt:edit": await admin.instructions(db, "edit"),
