@@ -8,12 +8,19 @@ dropped socket): statements then wait until the database answers again instead o
                                │ no
                                └► reconnect with backoff, run the `on_connect` hooks, then run it
 
+A failed reconnect is one of two kinds. The server did not answer, or answered that it cannot
+take connections right now: waiting may help, so the wrapper tries again without a limit. The
+server answered and refused this login (the password no longer matches, the role may not log
+in, the database does not exist): waiting does not help, so after `REFUSED_ATTEMPTS` such
+answers in a row the wrapper gives up with `LoginRefused` (see `ConnectionSource.open`).
+
 Migrations are the files `calu/db/migrations/NNNN_name.sql`, applied in the order of their
 number. Each runs in its own transaction and is recorded in `schema_migrations`. A
 transaction-level advisory lock keeps two processes from migrating at the same time.
 """
 
 import logging
+import os
 import re
 import select
 import time
@@ -24,9 +31,10 @@ from importlib import resources
 from typing import Any
 
 import anyio
+import anyio.to_thread
 import psycopg
 from psycopg import pq
-from psycopg.conninfo import conninfo_to_dict
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +96,104 @@ RECONNECT_MAX_S = 30.0
 """Upper bound of the pause between two attempts to reopen a lost connection."""
 
 
+REFUSED_ATTEMPTS = 3
+"""Reconnect attempts in a row that the server may refuse before `Db` and `Notifier` give up.
+More than one, because a server that is being reconfigured can refuse a login for a moment."""
+
+REFUSAL_PROBE_S = 5.0
+"""Upper bound for asking the server why it refused a login (`ConnectionSource.refusal`)."""
+
+LAST_ATTEMPT_S = 2.0
+"""How long one reconnect attempt may still take once `Db.limit_reconnect` has run out."""
+
+REFUSED_CLASSES = ("28", "3D")
+"""SQLSTATE classes of a refused login that waiting does not change: 28 "invalid authorization
+specification" (wrong password, role missing or without LOGIN, no pg_hba.conf entry) and 3D
+"invalid catalog name" (the database does not exist)."""
+
+REFUSED_STATES = ("42501",)
+"""Further SQLSTATEs of that kind: 42501 "insufficient privilege" (CONNECT was revoked)."""
+
+_ERROR_CODE = re.compile(rb'\tErrorResponse\t.*? C "([0-9A-Z]{5})"')
+"""The SQLSTATE field of a server error in libpq's protocol trace."""
+
+
+class LoginRefused(psycopg.OperationalError):
+    """The server answered a login and refused it for a reason that waiting does not change.
+
+    Raised by `ConnectionSource.open`. `Db` and `Notifier` stop reconnecting after
+    `REFUSED_ATTEMPTS` of these in a row; every other connection error is retried.
+    """
+
+    def __init__(self, message: str, code: str) -> None:
+        """Create the error.
+
+        Args:
+            message: The server's message, as libpq reports it.
+            code: The SQLSTATE the server answered with, e.g. "28P01".
+        """
+        super().__init__(message)
+        self.code = code
+        """The SQLSTATE the server answered the login with."""
+
+
+def refuses_for_good(code: str | None) -> bool:
+    """Tell whether a login refused with this SQLSTATE stays refused however long one waits.
+
+    Args:
+        code: The SQLSTATE of the server's answer, or None if the server gave none.
+
+    Returns:
+        True for the classes in `REFUSED_CLASSES` and the states in `REFUSED_STATES`. False
+        for None and for everything else, among them 57P03 (the server is starting up or
+        shutting down) and 53300 (too many connections), which pass.
+    """
+    return code is not None and (code[:2] in REFUSED_CLASSES or code in REFUSED_STATES)
+
+
+def _login_answer(conninfo: str, timeout: float) -> str | None:
+    """Try one login and return the SQLSTATE of the server's refusal; blocks the thread.
+
+    psycopg reports a failed login as text only, in the language of the server, so the code is
+    read from libpq's protocol trace of one more attempt. The trace is written to an anonymous
+    memory file that no other process can open, and is discarded.
+
+    Args:
+        conninfo: The libpq connection string.
+        timeout: Upper bound in seconds for the attempt.
+
+    Returns:
+        The SQLSTATE of the error the server answered with, or None if the login worked, the
+        server did not answer in time, or it could not be reached at all.
+    """
+    trace = os.memfd_create("calu-login-trace")
+    conn = None
+    try:
+        conn = pq.PGconn.connect_start(conninfo.encode())
+        conn.trace(trace)
+        deadline = time.monotonic() + timeout
+        status = pq.PollingStatus.WRITING
+        while status in (pq.PollingStatus.READING, pq.PollingStatus.WRITING):
+            left = deadline - time.monotonic()
+            if left <= 0 or conn.status == pq.ConnStatus.BAD:
+                break
+            reading = status == pq.PollingStatus.READING
+            select.select(
+                [conn.socket] if reading else [], [] if reading else [conn.socket], [], left
+            )
+            status = conn.connect_poll()
+        conn.untrace()
+        os.lseek(trace, 0, os.SEEK_SET)
+        found = _ERROR_CODE.search(os.read(trace, 1 << 20))
+        return found.group(1).decode() if found else None
+    except psycopg.Error, OSError, ValueError:
+        return None
+    finally:
+        if conn is not None:
+            conn.finish()
+        os.close(trace)
+
+
 async def connect(url: str | bytes | bytearray) -> psycopg.AsyncConnection:
     """Open an async connection in autocommit mode, with the `LIVENESS` parameters.
 
@@ -128,15 +234,46 @@ class ConnectionSource:
         self._conninfo = url if isinstance(url, str) else bytes(url).decode()
 
     async def open(self) -> psycopg.AsyncConnection:
-        """Open a new connection (see `connect`).
+        """Open a new connection (see `connect`), and say when a failure cannot heal.
+
+        Side effects: after a failed attempt, one more login attempt that only reads the
+        server's answer (`refusal`).
 
         Returns:
             The open connection in autocommit mode; the caller closes it.
 
         Raises:
-            psycopg.OperationalError: If the server cannot be reached or rejects the login.
+            LoginRefused: If the server answered and refused the login for a reason that
+                waiting does not change (`refuses_for_good`).
+            psycopg.OperationalError: If the server cannot be reached, or refuses for a reason
+                that may pass. `LoginRefused` is a subclass, so a caller that does not care
+                about the difference catches this one.
         """
-        return await connect(self._conninfo)
+        try:
+            return await connect(self._conninfo)
+        except psycopg.OperationalError as exc:
+            code = await self.refusal()
+            if refuses_for_good(code):
+                assert code is not None
+                raise LoginRefused(" ".join(str(exc).split()), code) from exc
+            raise
+
+    async def refusal(self) -> str | None:
+        """Ask the server how it answers a login with this connection string.
+
+        Side effects: one login attempt, in a worker thread, bounded by `REFUSAL_PROBE_S`.
+
+        Returns:
+            The SQLSTATE of the server's refusal, or None if the login worked or the server
+            did not answer.
+        """
+        try:
+            params = {**LIVENESS, **conninfo_to_dict(self._conninfo)}
+        except psycopg.ProgrammingError:
+            return None
+        return await anyio.to_thread.run_sync(
+            _login_answer, make_conninfo("", **params), REFUSAL_PROBE_S, abandon_on_cancel=True
+        )
 
     def __repr__(self) -> str:
         """Return a representation that does not contain the connection string.
@@ -269,6 +406,9 @@ class Db:
       hooks on it. The statement **waits** for that, without a time limit and cancellable. A
       session's tool calls therefore wait while the database is away (fail closed) instead of
       failing.
+    - If the server refuses the login `REFUSED_ATTEMPTS` times in a row for a reason that
+      waiting does not change, the wrapper gives up: the `on_refused` callbacks run, the
+      waiting statement and every later one raise `LoginRefused`.
     - A statement during which the connection breaks raises `psycopg.OperationalError` and is
       **not** repeated, because the wrapper cannot know whether the server ran it. The next
       statement reconnects first.
@@ -295,10 +435,13 @@ class Db:
         self._source = source
         self._suspect = False  # the last statement timed out: the connection may be unusable
         self._on_connect: list[Callable[[psycopg.AsyncConnection], Awaitable[None]]] = []
-        self._on_lost: list[Callable[[], None]] = []
+        self._on_lost: list[Callable[[str], None]] = []
         self._on_restored: list[Callable[[], None]] = []
-        self._give_up_at: float | None = None
-        self._gone = False
+        self._on_refused: list[Callable[[LoginRefused], None]] = []
+        self._give_up_at: float | None = None  # on the clock of `anyio.current_time`
+        self._gone: psycopg.OperationalError | None = None  # why reconnecting was given up
+        self._attempt: anyio.CancelScope | None = None  # the reconnect attempt in flight
+        self._wake = anyio.Event()  # ends the pause between two attempts early
         self.waiting = False
         """True while a statement waits for the connection to be reopened."""
 
@@ -314,12 +457,14 @@ class Db:
         """
         self._on_connect.append(hook)
 
-    def on_lost(self, callback: Callable[[], None]) -> None:
-        """Register a callback for the moment a lost connection is noticed.
+    def on_lost(self, callback: Callable[[str], None]) -> None:
+        """Register a callback for the moment the wrapper starts to replace its connection.
 
         Args:
-            callback: Called once per outage, before the first reconnect attempt. It must
-                return at once and must not use this wrapper.
+            callback: Called once per replacement, before the first attempt, with the reason
+                in plain words: the connection was lost, or a statement did not finish in time
+                and the connection may be unusable. It must return at once and must not use
+                this wrapper.
         """
         self._on_lost.append(callback)
 
@@ -327,24 +472,41 @@ class Db:
         """Register a callback for the moment a replacement connection is in use.
 
         Args:
-            callback: Called once per outage, after the `on_connect` hooks succeeded. It must
-                return at once and must not use this wrapper.
+            callback: Called once per replacement, after the `on_connect` hooks succeeded. It
+                must return at once and must not use this wrapper.
         """
         self._on_restored.append(callback)
+
+    def on_refused(self, callback: Callable[[LoginRefused], None]) -> None:
+        """Register a callback for the moment the wrapper gives up on a refused login.
+
+        Args:
+            callback: Called once, with the last refusal, after the server refused
+                `REFUSED_ATTEMPTS` reconnect attempts in a row. From then on every statement
+                raises `LoginRefused`. It must return at once and must not use this wrapper.
+        """
+        self._on_refused.append(callback)
 
     def limit_reconnect(self, seconds: float) -> None:
         """Stop waiting for a lost connection `seconds` from now.
 
         For the end of a process: its last writes (the session's end) are worth a short wait,
-        but a shutdown must not wait for a database that stays away. After the limit a
-        statement that finds the connection lost makes one more attempt and then raises
-        `psycopg.OperationalError`; once an attempt has failed after the limit, every later
-        statement raises at once.
+        but a shutdown must not wait for a database that stays away. A statement that is
+        waiting between two attempts tries again at once. When the limit has run out, the
+        attempt in flight (or the one attempt of a statement that comes later) gets
+        `LAST_ATTEMPT_S` more and then the statement raises `psycopg.OperationalError`; every
+        later statement raises at once. A waiting statement therefore returns or raises at most
+        `seconds + LAST_ATTEMPT_S` after this call.
+
+        Must be called from within the event loop.
 
         Args:
             seconds: How long statements may still wait, counted from this call.
         """
-        self._give_up_at = time.monotonic() + max(seconds, 0.0)
+        self._give_up_at = anyio.current_time() + max(seconds, 0.0)
+        if self._attempt is not None:
+            self._attempt.deadline = min(self._attempt.deadline, self._give_up_at + LAST_ATTEMPT_S)
+        self._wake.set()
 
     async def aclose(self) -> None:
         """Close the current connection; errors while closing are ignored."""
@@ -360,39 +522,77 @@ class Db:
         docstring), which can take as long as the database is away.
 
         Raises:
+            LoginRefused: If the server refused the login `REFUSED_ATTEMPTS` times in a row
+                for a reason that waiting does not change, now or before an earlier statement.
             psycopg.OperationalError: If the connection is lost and `limit_reconnect` has run
                 out.
         """
         if self._source is None or (not self._suspect and alive(self._conn)):
             return
-        if self._gone:
-            raise psycopg.OperationalError("the database connection is lost")
-        log.warning("the database connection is lost; reconnecting")
+        if self._gone is not None:
+            error = _again(self._gone)
+            raise error
+        reason = (
+            "a statement did not finish in time, so the connection is replaced"
+            if self._suspect
+            else "the database connection is lost"
+        )
+        log.warning("%s; reconnecting", reason)
         self.waiting = True
-        _call_all(self._on_lost)
+        _call_all(self._on_lost, reason)
+        refused = 0
         try:
             pause = RECONNECT_FIRST_S
             while True:
-                try:
-                    await self._replace()
+                failure = await self._try_replace()
+                if failure is None:
                     break
-                except (psycopg.Error, OSError) as exc:
-                    log.warning("reconnecting to the database failed: %s", exc)
-                    wait = pause
-                    if self._give_up_at is not None:
-                        left = self._give_up_at - time.monotonic()
-                        if left <= 0:
-                            self._gone = True
-                            raise psycopg.OperationalError(
-                                f"the database connection is lost: {exc}"
-                            ) from exc
-                        wait = min(pause, left)
-                    await anyio.sleep(wait)
-                    pause = min(pause * 2, RECONNECT_MAX_S)
+                log.warning("reconnecting to the database failed: %s", failure)
+                refused = refused + 1 if isinstance(failure, LoginRefused) else 0
+                if isinstance(failure, LoginRefused) and refused >= REFUSED_ATTEMPTS:
+                    self._gone = failure
+                    _call_all(self._on_refused, failure)
+                    error = _again(failure)
+                    raise error from failure
+                wait = pause
+                if self._give_up_at is not None:
+                    left = self._give_up_at - anyio.current_time()
+                    if left <= 0:
+                        self._gone = psycopg.OperationalError(
+                            f"the database connection is lost: {failure}"
+                        )
+                        error = _again(self._gone)
+                        raise error from failure
+                    wait = min(pause, left)
+                self._wake = anyio.Event()
+                with anyio.move_on_after(wait):
+                    await self._wake.wait()
+                pause = min(pause * 2, RECONNECT_MAX_S)
         finally:
             self.waiting = False
         log.warning("the database connection is back")
         _call_all(self._on_restored)
+
+    async def _try_replace(self) -> Exception | None:
+        """Make one attempt to replace the connection, bounded once `limit_reconnect` was set.
+
+        Returns:
+            None if `_conn` is a new, bound connection; else why the attempt failed: the
+            `psycopg.Error` or `OSError` of `_replace`, or a `TimeoutError` if the attempt was
+            cut off by the limit.
+        """
+        with anyio.CancelScope() as scope:
+            self._attempt = scope
+            if self._give_up_at is not None:
+                scope.deadline = max(self._give_up_at, anyio.current_time()) + LAST_ATTEMPT_S
+            try:
+                await self._replace()
+            except (psycopg.Error, OSError) as exc:
+                return exc
+            finally:
+                self._attempt = None
+            return None
+        return TimeoutError("the attempt to reconnect did not finish before the process ends")
 
     async def _replace(self) -> None:
         """Open a new connection, run the `on_connect` hooks on it and make it `_conn`.
@@ -540,15 +740,31 @@ class Db:
                 raise self._timed_out("an exclusive block")
 
 
-def _call_all(callbacks: Sequence[Callable[[], None]]) -> None:
+def _again(error: psycopg.OperationalError) -> psycopg.OperationalError:
+    """Return a new error like `error`, so that one instance is not raised again and again.
+
+    Args:
+        error: Why reconnecting was given up.
+
+    Returns:
+        A `LoginRefused` with the same message and code, or an `OperationalError` with the
+        same message.
+    """
+    if isinstance(error, LoginRefused):
+        return LoginRefused(str(error), error.code)
+    return psycopg.OperationalError(str(error))
+
+
+def _call_all(callbacks: Sequence[Callable[..., None]], *args: object) -> None:
     """Call every callback; one that raises is logged and the others still run.
 
     Args:
         callbacks: The callbacks.
+        *args: Passed to each.
     """
     for callback in callbacks:
         try:
-            callback()
+            callback(*args)
         except Exception:
             log.exception("a connection callback failed")
 

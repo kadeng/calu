@@ -32,7 +32,13 @@ import anyio
 import psycopg
 from psycopg import sql
 
-from calu.db.connection import RECONNECT_FIRST_S, RECONNECT_MAX_S, ConnectionSource
+from calu.db.connection import (
+    RECONNECT_FIRST_S,
+    RECONNECT_MAX_S,
+    REFUSED_ATTEMPTS,
+    ConnectionSource,
+    LoginRefused,
+)
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +129,9 @@ class Notifier:
     `on_lost` callbacks, reopens the connection with pauses from `RECONNECT_FIRST_S` doubling up
     to `RECONNECT_MAX_S`, subscribes again and calls the `on_listening` callbacks. Notifications
     sent while it was not listening are lost; `on_listening` is where a caller makes up for them.
+    If the server refuses the login `REFUSED_ATTEMPTS` times in a row for a reason that waiting
+    does not change (`calu.db.connection.LoginRefused`), `run` tells the `on_refused` callbacks
+    and returns.
     """
 
     def __init__(
@@ -141,6 +150,7 @@ class Notifier:
         self._handlers: dict[str, list[Callable[[Mapping[str, Any]], None]]] = {}
         self._listening: list[Callable[[], None]] = []
         self._lost: list[Callable[[BaseException], None]] = []
+        self._refused: list[Callable[[LoginRefused], None]] = []
         self.listening = False
         """True while `LISTEN` is in force on a connection that has not failed."""
 
@@ -174,6 +184,16 @@ class Notifier:
         """
         self._lost.append(callback)
 
+    def on_refused(self, callback: Callable[[LoginRefused], None]) -> None:
+        """Register a callback for the moment the notifier gives up on a refused login.
+
+        Args:
+            callback: Called once, with the last refusal, after the server refused
+                `REFUSED_ATTEMPTS` reconnect attempts in a row; `run` returns after it. It
+                must return at once.
+        """
+        self._refused.append(callback)
+
     async def aclose(self) -> None:
         """Close the current listening connection; errors while closing are ignored."""
         try:
@@ -184,6 +204,10 @@ class Notifier:
     async def run(self) -> None:
         """Subscribe to the registered channels and dispatch notifications until cancelled.
 
+        With a `source` this returns in one case only: the server refused the login
+        `REFUSED_ATTEMPTS` times in a row for a reason that waiting does not change. The
+        `on_refused` callbacks were called then, and nothing listens any more.
+
         Raises:
             psycopg.Error: Without a `source`: if `LISTEN` fails or the connection breaks. With
                 a `source` the notifier reconnects instead and this never raises.
@@ -191,13 +215,14 @@ class Notifier:
         """
         pause = RECONNECT_FIRST_S
         reported = False
+        refused = 0
 
         def subscribed() -> None:
             """Note that `LISTEN` is in force and tell the `on_listening` callbacks."""
-            nonlocal pause, reported
+            nonlocal pause, reported, refused
             if reported:
                 log.warning("the notification connection is back")
-            pause, reported = RECONNECT_FIRST_S, False
+            pause, reported, refused = RECONNECT_FIRST_S, False, 0
             self.listening = True
             self._call(self._listening)
 
@@ -213,6 +238,11 @@ class Notifier:
                     self._call(self._lost, exc)
                     reported = True
                 await self.aclose()
+                refused = refused + 1 if isinstance(exc, LoginRefused) else 0
+                if isinstance(exc, LoginRefused) and refused >= REFUSED_ATTEMPTS:
+                    log.error("the notification connection cannot be reopened: %s", exc)
+                    self._call(self._refused, exc)
+                    return
                 await anyio.sleep(pause)
                 pause = min(pause * 2, RECONNECT_MAX_S)
 

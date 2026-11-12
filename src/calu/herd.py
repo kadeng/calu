@@ -15,15 +15,22 @@ that access again.
 """
 
 import json
+import logging
+import os
+import socket
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+import psycopg
+
 from calu.context.turns import TurnRecord
 from calu.db import Db
 from calu.store.session import turn_record
 from calu.tokens import new_token, token_hash
+
+log = logging.getLogger(__name__)
 
 STALE_AFTER_S = 180.0
 """Silence after which a session is called stale (PLAN.md D56).
@@ -40,6 +47,12 @@ that an operator could raise (or switch off, as `clock.check_interval_s` allows 
 watch) would make live sessions look dead and their escalations unanswerable."""
 
 assert HEARTBEAT_S * 3 <= STALE_AFTER_S, "a session must be able to miss two beats"
+
+CLOSE_SILENT_AFTER_S = 24 * 3600.0
+"""Silence after which the open escalations of a session are closed without further evidence
+that its process is gone (`close_gone`). Much longer than `STALE_AFTER_S`: a session that is
+still alive after a silence (a suspended machine, a network that was away) would find its
+question cancelled, so the lists only mark a stale session as gone until then."""
 
 
 @dataclass(frozen=True)
@@ -177,8 +190,89 @@ class TokenRow:
         )
 
 
+async def close_gone(db: Db) -> int:
+    """Close the open escalations of sessions that are gone, so the queue holds none of them.
+
+    An escalation is closed -- recorded as "cancelled" with a note that says why, because
+    nobody decided it (PLAN.md D57) -- when its session
+
+    1. has ended (`sessions.ended_at`), or
+    2. is stale (silent for more than `STALE_AFTER_S`, D56), ran on this host, and no process
+       with its pid exists here any more, or
+    3. has been silent for more than `CLOSE_SILENT_AFTER_S` while the database server was up.
+
+    A stale session of another host is only marked as gone in the lists until rule 3 applies:
+    silence does not prove that its process is gone (a suspended machine, a network that was
+    away), and a process that is still alive treats a cancelled escalation as "not allowed".
+
+    Side effects: updates `escalations` through `calu_close_gone_escalations` and
+    `calu_close_session_escalations`, which send `escalation_resolved` for each closed row.
+
+    Args:
+        db: A connection of the database owner or of `calu_operator`.
+
+    Returns:
+        How many escalations were closed; 0 as well when the connection's role may not close
+        them (a role that only reads) or the database is read-only, because listing must
+        still work then.
+
+    Raises:
+        psycopg.Error: On other database errors.
+    """
+    try:
+        closed = int(
+            await db.scalar("SELECT calu_close_gone_escalations(%s)", (CLOSE_SILENT_AFTER_S,))
+        )
+        rows = await db.all(
+            "SELECT s.id::text, s.pid FROM sessions s JOIN hosts h ON h.id = s.host_id"
+            " WHERE s.ended_at IS NULL AND h.hostname = %s"
+            " AND s.last_seen < now() - make_interval(secs => %s)"
+            " AND EXISTS (SELECT 1 FROM escalations e"
+            "             WHERE e.session_id = s.id AND e.state = 'open')",
+            (socket.gethostname(), STALE_AFTER_S),
+        )
+        for session_id, pid in rows:
+            if process_exists(pid):
+                continue
+            note = f"the session's process (pid {pid}) is gone"
+            closed += int(
+                await db.scalar(
+                    "SELECT calu_close_session_escalations(%s::uuid, %s)", (session_id, note)
+                )
+            )
+        return closed
+    except (psycopg.errors.InsufficientPrivilege, psycopg.errors.ReadOnlySqlTransaction) as exc:
+        log.debug("not closing the escalations of gone sessions: %s", exc)
+        return 0
+
+
+def process_exists(pid: int) -> bool:
+    """Tell whether a process with this pid exists on this machine.
+
+    Args:
+        pid: The process id.
+
+    Returns:
+        False only if the operating system says there is no such process. True otherwise,
+        including when the process belongs to another user or the pid is not a usable number,
+        so that a doubt never counts as "gone".
+    """
+    if pid <= 0:
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
     """List the sessions of all hosts, newest first.
+
+    Side effects: closes the open escalations of sessions that are gone first (`close_gone`),
+    so `open_escalations` counts only questions somebody still waits for.
 
     Args:
         db: A connection with read access to `sessions` (owner or `calu_operator`).
@@ -190,6 +284,7 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
     Raises:
         psycopg.Error: On database errors.
     """
+    await close_gone(db)
     rows = await db.all(
         "SELECT s.id::text, h.hostname, s.os_user, s.directory, s.state, s.state_since,"
         " s.started_at, s.ended_at, s.claude_session_id,"
@@ -208,6 +303,9 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
 async def escalations(db: Db, session_id: str | None = None) -> list[EscalationRow]:
     """List the open escalations, oldest first.
 
+    Side effects: closes the open escalations of sessions that are gone first (`close_gone`),
+    so the list holds only questions whose answer a running session would act on.
+
     Args:
         db: A connection with read access to `escalations`.
         session_id: Only escalations of this session, or None for all.
@@ -218,6 +316,7 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
     Raises:
         psycopg.Error: On database errors.
     """
+    await close_gone(db)
     rows = await db.all(
         "SELECT e.id, e.session_id::text, e.state, e.reason, e.created_at,"
         " coalesce(e.context->>'rendered', ''), h.hostname, s.directory,"

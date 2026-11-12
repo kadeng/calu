@@ -477,6 +477,70 @@ async def test_a_session_survives_the_loss_of_both_database_connections(
         await owner.close()
 
 
+async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unattended run must neither hang for ever nor end silently.
+
+    The session waits for an operator. `calu setup` runs again, which replaces the session
+    credential, and then the session's connections are lost. No waiting brings that login
+    back, so the run ends with exit code 1 and names the cause; the step it was waiting for
+    never ran.
+    """
+    from calu.setup import enable_session_login
+
+    monkeypatch.setattr("calu.db.connection.RECONNECT_FIRST_S", 0.05)
+    monkeypatch.setattr("calu.db.notify.RECONNECT_FIRST_S", 0.05)
+    session_url = await prepare(db_url, tmp_path)
+    codes: list[int] = []
+
+    async def run() -> None:
+        codes.append(
+            await run_session(
+                session_url,
+                RunOptions(workspace=tmp_path, prompt="have a look", interactive=False),
+                runner_factory=lambda workspace, _config, _hidden: FakeRunner(SCRIPT, workspace),
+                checker_models=fake_models(),
+            )
+        )
+
+    async def replace_credential_then_restart() -> None:
+        owner = await connect(db_url)
+        try:
+            with anyio.fail_after(20):
+                while True:
+                    cur = await owner.execute("SELECT id FROM escalations WHERE state = 'open'")
+                    if await cur.fetchone() is not None:
+                        break
+                    await anyio.sleep(0.05)
+            await enable_session_login(owner, db_url)
+            await owner.execute(
+                "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity"
+                " WHERE usename = 'calu_session' AND datname = current_database()"
+            )
+        finally:
+            await owner.close()
+
+    with anyio.fail_after(60):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(replace_credential_then_restart)
+            tg.start_soon(run)
+    assert codes == [1]
+    captured = capsys.readouterr()
+    assert "the database refuses the session's login" in captured.err
+    assert "password authentication failed" in captured.err
+    assert "calu setup" in captured.err
+    assert "the database refuses the session's login" in captured.out, "clients are told too"
+    assert "shipped" not in captured.out, "the step that waited for a human did not run"
+
+    owner = await connect(db_url)
+    try:
+        cur = await owner.execute("SELECT seq, decision, result_summary FROM steps ORDER BY seq")
+        assert await cur.fetchall() == [(1, "pass", "a.py"), (2, "escalate", None)]
+    finally:
+        await owner.close()
+
+
 def test_the_calu_process_cannot_be_read_by_other_processes_of_the_user() -> None:
     """cs2: what calu keeps in memory to reconnect is out of reach of same-user processes."""
     import subprocess
@@ -854,3 +918,97 @@ async def test_settings_that_cannot_be_reloaded_hold_every_checked_step(
             tg.start_soon(break_then_repair)
             tg.start_soon(run)
     assert codes == [0]
+
+
+# ------------------------------------------------------------------ the end of an unattended run
+
+
+SLOW_TEXT_TURNS = FakeScript(turns=[[{"sleep": 0.5}, {"text": f"Answer {n}."}] for n in (1, 2, 3)])
+"""Turns that outlast any short pause of the run loop, so a message sent meanwhile queues."""
+
+
+async def text_only_run(
+    db_url: str, workspace: Path, options: RunOptions, narrate: bool, on_serving=None
+) -> int:
+    """Run a session whose turns take a moment and call no tool; return its exit code."""
+    session_url = await prepare(db_url, workspace)
+    owner = await connect(db_url)
+    try:
+        await owner.execute(
+            "UPDATE config SET value = %s WHERE scope = 'global' AND key = %s",
+            (
+                json.dumps(
+                    {"claude": {"sandbox": {"enabled": False}}, "context": {"narrate": narrate}}
+                ),
+                SETTINGS_KEY,
+            ),
+        )
+    finally:
+        await owner.close()
+    return await run_session(
+        session_url,
+        options,
+        runner_factory=lambda w, _c, _h: FakeRunner(SLOW_TEXT_TURNS, w),
+        checker_models=fake_models(),
+        on_serving=on_serving,
+    )
+
+
+@pytest.mark.parametrize("narrate", [False, True])
+async def test_a_run_whose_stdin_ended_finishes_after_its_queued_messages(
+    db_url: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    narrate: bool,
+) -> None:
+    """An unattended run always ends: a prompt, two piped lines, three turns without a tool
+    call. Every message gets its turn, and the command returns after the last one."""
+    import io
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("second\nthird\n"))
+    with anyio.fail_after(25):
+        code = await text_only_run(
+            db_url,
+            tmp_path,
+            RunOptions(workspace=tmp_path, prompt="first", interactive=True, serve=False),
+            narrate,
+        )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert [line for line in out.splitlines() if line.startswith("Answer ")] == [
+        "Answer 1.",
+        "Answer 2.",
+        "Answer 3.",
+    ]
+
+
+async def _ignore(_method: str, _params: dict) -> None:
+    """Event handler of a client that only sends."""
+
+
+@pytest.mark.parametrize("narrate", [False, True])
+async def test_a_batch_run_finishes_after_a_message_a_client_queued(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str], narrate: bool
+) -> None:
+    """An unattended run always ends: a client queues a message behind the prompt's turn and
+    detaches; the run does the second turn and then returns."""
+
+    async def queue_one(address: str, token: str) -> None:
+        async with connect_client(address, token, "test-client", _ignore) as client:
+            await client.request("chat.send", {"text": "second"})
+
+    with anyio.fail_after(25):
+        code = await text_only_run(
+            db_url,
+            tmp_path,
+            RunOptions(workspace=tmp_path, prompt="first", interactive=False),
+            narrate,
+            on_serving=queue_one,
+        )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert [line for line in out.splitlines() if line.startswith("Answer ")] == [
+        "Answer 1.",
+        "Answer 2.",
+    ]

@@ -25,6 +25,8 @@ database or a dropped connection:
     connection lost ──► statements wait (tool calls wait in the gate: fail closed)
                    ──► reconnect with backoff ──► bind the session again, LISTEN again
                    ──► re-read the configuration ──► continue
+                   └─► the server refuses the login for good (the credential was replaced,
+                       the role or the database is gone): say why, stop the session, exit 1
 
 `harden_process` makes the memory of the calu process unreadable for other processes of the
 same user, which is what "out of reach of the Claude Code session" (REQUIREMENTS 15) rests on.
@@ -67,6 +69,7 @@ from calu.db import (
     ConnectionSource,
     Db,
     Dirty,
+    LoginRefused,
     Notifier,
 )
 from calu.protocol.messages import (
@@ -81,6 +84,7 @@ from calu.protocol.messages import (
     HonestyUpdate,
     Log,
     SessionState,
+    State,
     ToolResult,
     ToolUse,
     TurnResult,
@@ -101,8 +105,12 @@ START_TIMEOUT_S = 10.0
 QUIT_COMMANDS = ("/quit", "/exit")
 """Lines that end the session when they are typed instead of a message."""
 
-IDLE_SETTLE_S = 0.2
-"""Pause after an unattended run became idle before it is believed (see `_run`)."""
+IDLE_POLL_S = 0.5
+"""Longest time between two evaluations of "is the run finished" (`IdleSignal.wait`)."""
+
+QUEUED_PICKUP_S = 15.0
+"""How long an idle session may list a queued message or an open turn before an unattended run
+ends anyway (`IdleSignal`); Claude Code takes a queued message within moments."""
 
 STOP_RECONNECT_S = 5.0
 """How long the last writes of an ending session wait for a database that is away."""
@@ -285,85 +293,175 @@ class Console:
             print(line, flush=True)
 
 
-class IdleSignal:
-    """Event sink that reports when the session has nothing left to do.
+@dataclass(frozen=True)
+class Activity:
+    """What the session is doing at one moment, as far as the end of a run depends on it."""
 
-    Used for unattended runs (`calu run -p "..."` without `--interactive`): the run ends when
-    the session is idle again after it has worked, or when it stopped or failed. A turn that
-    ends while Claude Code still has background tasks running (a background command, a
-    Monitor, a Workflow, a background subagent) does not count: Claude Code starts another
-    turn by itself when they finish, and their steps still pass the gate -- ending the run
-    there stopped the session under them (D158).
+    state: State
+    """The session's state."""
+    queued: int
+    """Messages that were sent to Claude and that Claude has not taken in yet."""
+    turn_open: bool
+    """Whether a turn has started that has not ended yet."""
+
+
+def activity(session: Session) -> Activity:
+    """Read from `session` what the end of an unattended run depends on.
+
+    Args:
+        session: The running session.
+
+    Returns:
+        Its state, the number of messages Claude has not taken in, and whether a turn is open.
+    """
+    return Activity(
+        state=session.state,
+        queued=len(session.snapshot().queue),
+        turn_open=session.context.current is not None,
+    )
+
+
+class IdleSignal:
+    """Decides when the session of an unattended run has nothing left to do.
+
+    Used for runs without `--interactive` and for runs whose stdin ended. The answer is read
+    from the session each time it is needed (`view`), not collected from the order of earlier
+    events, so a message sent at any moment cannot make the run miss its end:
+
+        finished  <=>  state in {stopped, failed}
+                   or  (the session has worked  and  state = idle
+                        and  no message is queued  and  no turn is open
+                        and  the last turn left no background task)
+
+    Events only wake a waiting `wait` and supply the two facts the session does not keep: that
+    it has worked at all (a latch that is never reset) and how many background tasks the last
+    turn left. A turn that ends while Claude Code still has background tasks running (a
+    background command, a Monitor, a Workflow, a background subagent) does not end the run:
+    Claude Code starts another turn by itself when they finish, and their steps still pass the
+    gate -- ending the run there stopped the session under them (D158).
+
+    Two waits are bounded, so that the run ends even when something else went wrong:
+
+    - `background_timeout_s` (optional): idle that long with background tasks still running.
+    - `pickup_timeout_s`: idle that long while a message still counts as queued or a turn as
+      open. Claude Code takes a queued message within moments of the end of a turn; one that
+      is still listed after this time will not start a turn.
     """
 
     WORKING = ("running", "checking", "tool_call", "escalated")
     """States that count as "the session has started working"."""
 
-    def __init__(self, background_timeout_s: float | None = None) -> None:
-        """Create a signal that is not set.
+    def __init__(
+        self,
+        view: Callable[[], Activity],
+        background_timeout_s: float | None = None,
+        pickup_timeout_s: float = QUEUED_PICKUP_S,
+    ) -> None:
+        """Create a signal for the session that `view` reads.
 
         Args:
+            view: Returns what the session is doing now; called at every evaluation.
             background_timeout_s: How long to wait while the session is idle but background
-                tasks still run before `wait` returns anyway (`calu run --background-timeout`,
-                D170); None waits for them as long as they run.
+                tasks still run before the run is finished anyway (`calu run
+                --background-timeout`, D170); None waits for them as long as they run.
+            pickup_timeout_s: How long an idle session may keep a queued message or an open
+                turn before the run is finished anyway.
         """
-        self._event = anyio.Event()
+        self._view = view
+        self._changed = anyio.Event()
         self._worked = False
         self._background = 0
         self.background_timeout_s = background_timeout_s
-        self._idle_with_tasks_since: float | None = None
+        self.pickup_timeout_s = pickup_timeout_s
+        self._idle_since: float | None = None
+        self._reported = False
 
     async def __call__(self, event: Event) -> None:
-        """Set the signal when the session becomes idle after having worked.
+        """Note what only events tell, and wake a waiting `wait`.
 
         Args:
             event: The session event.
         """
         if isinstance(event, TurnResult):
             self._background = event.background_tasks
+        elif isinstance(event, SessionState):
+            self._note(event.state)
+        else:
             return
-        if not isinstance(event, SessionState):
-            return
-        if event.state in self.WORKING:
-            self._worked = True
-            self._idle_with_tasks_since = None
-        elif event.state in ("stopped", "failed") or (
-            self._worked and event.state == "idle" and not self._background
-        ):
-            self._event.set()
-        elif self._worked and event.state == "idle":
-            self._idle_with_tasks_since = time.monotonic()
+        changed, self._changed = self._changed, anyio.Event()
+        changed.set()
 
-    def rearm(self) -> None:
-        """Forget that the session was idle, because it has been given more to do.
+    def _note(self, state: State) -> None:
+        """Keep the "has worked" latch and the start of the current idleness up to date.
 
-        After this call `wait` returns at the next time the session becomes idle after having
-        worked, not for an idleness that is already over.
+        Args:
+            state: A state the session is or was in.
         """
-        self._event = anyio.Event()
-        self._worked = False
-        self._idle_with_tasks_since = None
+        if state in self.WORKING:
+            self._worked = True
+        if state != "idle":
+            self._idle_since = None
+        elif self._idle_since is None:
+            self._idle_since = time.monotonic()
+
+    def finished(self) -> bool:
+        """Return whether the run has nothing left to wait for, as of now.
+
+        Side effect: prints one line the first time one of the two bounded waits ends the run.
+
+        Returns:
+            True if the session stopped or failed, or is idle after having worked with no
+            queued message, no open turn and no background task -- or if one of the bounded
+            waits described in the class docstring ran out.
+        """
+        now = self._view()
+        if now.state in ("stopped", "failed"):
+            return True
+        self._note(now.state)
+        if now.state != "idle" or not self._worked or self._idle_since is None:
+            return False
+        idle_for = time.monotonic() - self._idle_since
+        if self._background:
+            limit = self.background_timeout_s
+            if limit is None or idle_for < limit:
+                return False
+            self._report(
+                f"[background task(s) still running after {limit:g} s; ending the run, which"
+                " stops them]"
+            )
+            return True
+        if now.queued or now.turn_open:
+            if idle_for < self.pickup_timeout_s:
+                return False
+            self._report(
+                f"[the session has been idle for {self.pickup_timeout_s:g} s although"
+                f" {now.queued} message(s) still count as queued; ending the run]"
+            )
+        return True
+
+    def _report(self, line: str) -> None:
+        """Print `line` once per signal.
+
+        Args:
+            line: The line for stdout.
+        """
+        if not self._reported:
+            self._reported = True
+            print(line, flush=True)
 
     async def wait(self) -> None:
-        """Wait until the session is idle again, stopped or failed.
+        """Wait until `finished()` holds.
 
-        With `background_timeout_s`, also return once the session has been idle that long while
-        background tasks still run; the caller then stops the session, and with it the tasks.
+        Returns at once if it already holds. Otherwise the condition is evaluated again at
+        every state change and turn result and at least every `IDLE_POLL_S` seconds, so the
+        wait does not depend on any single event being seen.
         """
-        if self.background_timeout_s is None:
-            await self._event.wait()
-            return
-        while not self._event.is_set():
-            with anyio.move_on_after(0.5):
-                await self._event.wait()
-            since = self._idle_with_tasks_since
-            if since is not None and time.monotonic() - since >= self.background_timeout_s:
-                print(
-                    f"[background task(s) still running after {self.background_timeout_s:g} s;"
-                    " ending the run, which stops them]",
-                    flush=True,
-                )
+        while True:
+            changed = self._changed
+            if self.finished():
                 return
+            with anyio.move_on_after(IDLE_POLL_S):
+                await changed.wait()
 
 
 def both(first: Callable[[Event], Awaitable[None]], second: Callable[[Event], Awaitable[None]]):
@@ -448,7 +546,9 @@ async def run_session(
 ) -> int:
     """Run one session until it ends, and report what happened.
 
-    Side effects: clears the process's "dumpable" flag (`harden_process`), opens two database
+    Side effects: clears the process's "dumpable" flag (`harden_process`; `calu run` has done
+    that already before it read the password, this call covers a caller that embeds the
+    function, and the flag then stays cleared for the rest of that process), opens two database
     connections, creates a `sessions` row, starts a Claude Code process, prints events to stdout
     and, with `options.interactive`, reads messages from stdin. A `bytearray` passed as `url` is
     wiped before Claude Code starts; a copy of the connection string stays in a
@@ -574,7 +674,7 @@ async def _run(
         print(f"calu: {exc}; nothing was started", file=sys.stderr)
         return 1
     console = Console(options.show_thinking)
-    idle = IdleSignal(options.background_timeout_s)
+    idle = IdleSignal(lambda: activity(session), options.background_timeout_s)
     bus = Bus()
     store = DatabaseSessionStore(db)
     emit = both(bus.publish, both(console, idle))
@@ -686,9 +786,8 @@ async def _run(
             tg.start_soon(emit, Log(level=level, message=message))
 
         db.on_lost(
-            lambda: report(
-                "error",
-                "the database connection is lost; steps wait until it is back (calu reconnects)",
+            lambda reason: report(
+                "error", f"{reason}; steps wait until the database answers (calu reconnects)"
             )
         )
 
@@ -697,6 +796,32 @@ async def _run(
             report("info", "the database connection is back")
             dirty.hint()
 
+        work = anyio.CancelScope()
+
+        def refused(exc: LoginRefused) -> None:
+            """End the run: the database refuses this session's login, and waiting is no use.
+
+            Args:
+                exc: The server's last refusal.
+            """
+            nonlocal failed
+            if failed:
+                return
+            failed = True
+            message = (
+                f"the database refuses the session's login ({one_line(str(exc))}), and calu"
+                " does not expect that to change by waiting: the session credential was"
+                " probably replaced by a later `calu setup`, or the role or the database was"
+                " removed. The session stops; the end of this session and anything it had"
+                " not written yet are not recorded. Start a new one with `calu run`"
+                " (`--resume` continues the conversation)."
+            )
+            print(f"calu: {message}", file=sys.stderr, flush=True)
+            report("error", message)
+            work.cancel()
+
+        db.on_refused(refused)
+        notifier.on_refused(refused)
         db.on_restored(restored)
         notifier.on_lost(
             lambda exc: report(
@@ -706,8 +831,17 @@ async def _run(
             )
         )
         tg.start_soon(notifier.run)
+        # The chat summary is re-read with every periodic look at the settings, not only when
+        # they changed: an operator's correction of it must not depend on a notification.
         tg.start_soon(
-            config_store.reload_loop, dirty, on_settings, RELOAD_DEBOUNCE_S, on_reload_error
+            functools.partial(
+                config_store.reload_loop,
+                dirty,
+                on_settings,
+                RELOAD_DEBOUNCE_S,
+                on_reload_error,
+                on_unchanged=session.reload_summary,
+            )
         )
         if clock.check_interval_s > 0:
             # Watches calu's own clock: a backward jump breaks the attribution of file changes
@@ -719,54 +853,47 @@ async def _run(
         tg.start_soon(session.beat, herd.HEARTBEAT_S)
         server: SessionServer | None = None
         try:
-            await session.start(tg, options.resume_id, options.model, options.effort, fork)
-            if options.serve:
-                # After the start, so that the session row and its id exist when the first
-                # client asks; the events of the start are in the bus and are replayed.
-                token = new_token()
-                server = SessionServer(session, bus, token_hash(token), tg)
-                tg.start_soon(_listen, server, options, token, store, on_serving)
-            sent = bool(options.prompt)
-            if options.prompt:
-                await session.send_chat(ChatSendParams(text=options.prompt))
-            ended = "eof"
-            if options.interactive:
+            with work:
+                await session.start(tg, options.resume_id, options.model, options.effort, fork)
+                if options.serve:
+                    # After the start, so that the session row and its id exist when the first
+                    # client asks; the events of the start are in the bus and are replayed.
+                    token = new_token()
+                    server = SessionServer(session, bus, token_hash(token), tg)
+                    tg.start_soon(_listen, server, options, token, store, on_serving)
+                sent = bool(options.prompt)
+                if options.prompt:
+                    await session.send_chat(ChatSendParams(text=options.prompt))
+                ended = "eof"
+                if options.interactive:
 
-                async def send(text: str) -> None:
-                    """Send one typed line to Claude.
+                    async def send(text: str) -> None:
+                        """Send one typed line to Claude.
 
-                    Args:
-                        text: The line.
-                    """
-                    nonlocal sent
-                    sent = True
-                    idle.rearm()
-                    await session.send_chat(ChatSendParams(text=text))
+                        Args:
+                            text: The line.
+                        """
+                        nonlocal sent
+                        sent = True
+                        await session.send_chat(ChatSendParams(text=text))
 
-                ended = await read_lines(send)
-                if ended == "eof" and sent:
-                    # A closed stdin only means that no further message comes (a password
-                    # piped in, a service unit, nohup). Stopping here ended the session
-                    # seconds into its first turn, with exit code 0.
-                    print(
-                        "calu: stdin closed; waiting for Claude to finish (as with --batch)",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-            if not options.interactive or (ended == "eof" and sent):
-                while True:
+                    ended = await read_lines(send)
+                    if ended == "eof" and sent:
+                        # A closed stdin only means that no further message comes (a password
+                        # piped in, a service unit, nohup). Stopping here ended the session
+                        # seconds into its first turn, with exit code 0.
+                        print(
+                            "calu: stdin closed; waiting for Claude to finish (as with --batch)",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                if not options.interactive or (ended == "eof" and sent):
+                    # `idle` reads the session each time: a message that is still queued behind a
+                    # turn, or was sent a moment ago, keeps the run going until its turn is over.
                     if server is not None:
                         await _until_done(idle, server, bus)
                     else:
                         await idle.wait()
-                    # A message that was queued behind a running turn starts its own turn
-                    # after the session was idle for a moment; that turn is waited for too.
-                    await anyio.sleep(IDLE_SETTLE_S)
-                    if session.state not in IdleSignal.WORKING or (
-                        server is not None and server.shutdown.is_set()
-                    ):
-                        break
-                    idle.rearm()
         except SessionError as exc:
             print(f"calu: {exc}", file=sys.stderr)
             failed = True
@@ -905,7 +1032,8 @@ async def _until_done(idle: IdleSignal, server: SessionServer, bus: Bus) -> None
 
     A run without `--interactive` ends when Claude has nothing left to do. A client that is
     attached at that moment keeps the session alive, because it may want to send the next
-    message: the run then ends when that client sends `shutdown` or the last client detaches.
+    message: the run then ends when that client sends `shutdown`, or when the last client has
+    detached and the session is finished with what the clients sent.
 
     Args:
         idle: The idle signal of the session.
@@ -916,10 +1044,13 @@ async def _until_done(idle: IdleSignal, server: SessionServer, bus: Bus) -> None
 
         async def wait_idle() -> None:
             """End the wait when the session is idle and nobody is watching."""
-            await idle.wait()
-            if bus.clients:
+            while True:
+                await idle.wait()
+                if not bus.clients:
+                    break
                 log.info("the session is idle; waiting for its %d client(s)", bus.clients)
                 await bus.no_clients.wait()
+                # The client that left may have sent a message first; its turn is waited for.
             tg.cancel_scope.cancel()
 
         async def wait_shutdown() -> None:

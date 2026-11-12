@@ -246,6 +246,10 @@ class Reloads:
     def __init__(self) -> None:
         self.seen: list[ProjectSettings] = []
         self.errors: list[tuple[Exception, int]] = []
+        self.looked = 0
+
+    async def unchanged(self) -> None:
+        self.looked += 1
 
     async def on_change(self, settings: ProjectSettings) -> None:
         self.seen.append(settings)
@@ -271,10 +275,14 @@ async def test_a_change_without_a_notification_is_found_by_the_periodic_reload(
     try:
         await store.load()
         async with anyio.create_task_group() as tg:
-            tg.start_soon(store.reload_loop, Dirty(), reloads.on_change, 0.01, None, 0.05)
+            tg.start_soon(
+                store.reload_loop, Dirty(), reloads.on_change, 0.01, None, 0.05, reloads.unchanged
+            )
             # Nothing changed: the periodic re-read stays silent.
             await anyio.sleep(0.3)
             assert reloads.seen == []
+            # But it says that it looked, so a caller can re-read what the rows do not cover.
+            assert reloads.looked > 0
             await set_settings(conn, "global", "", {"auto_escalate": {"commands": True}})
             await reloads.until(lambda: reloads.seen)
             tg.cancel_scope.cancel()

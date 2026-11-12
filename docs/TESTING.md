@@ -77,9 +77,19 @@ CALU_TEST_DSN=postgresql://calu_owner:calu-dev@127.0.0.1:55440/calu uv run pytes
 Lost connections are covered without restarting the server: `tests/db/test_connection.py` and
 `test_a_session_survives_the_loss_of_both_database_connections` end the session's server
 processes with `pg_terminate_backend`, which is what a restart does to them, and check that the
-session reconnects, is bound to its row again and loses no step. Session isolation
+session reconnects, is bound to its row again and loses no step. The same files cover the
+login that stops working for good: a test replaces the session credential (as every `calu setup`
+does) or removes the database, and checks that the reconnecting ends after a few attempts with
+an error that names the cause, and that `calu run` then exits with 1. Session isolation
 (`tests/db/test_schema.py`) includes the attack of a second holder of the `calu_session` login
-who names another session's id.
+who names another session's id, and checks with two real `calu_session` logins that the
+sessions of one conversation read each other's rows and write only their own.
+
+The end of an unattended run (`tests/db/test_run.py`, `tests/unit/test_run.py`): a prompt with
+further messages piped to stdin, and a `--batch` run with a message a client queued, each with
+and without narration and with turns that call no tool, must do every turn and then return.
+That a session which ends, or whose process is gone, leaves no open escalation is covered in
+`tests/db/test_herd.py`.
 
 ## The browser layer
 

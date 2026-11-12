@@ -3,9 +3,13 @@
 import anyio
 import psycopg
 import pytest
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
-from calu.db import ConnectionSource, Db, Dirty, Notifier, connect
+from calu.db import ConnectionSource, Db, Dirty, LoginRefused, Notifier, connect
 from calu.db import connection as connection_module
+from calu.db.connection import REFUSED_ATTEMPTS, refuses_for_good
+from calu.setup import enable_session_login, setup
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -83,7 +87,7 @@ async def test_a_lost_connection_is_replaced_before_the_next_statement(db_url: s
     source = ConnectionSource(db_url)
     db = Db(await source.open(), source=source)
     events: list[str] = []
-    db.on_lost(lambda: events.append("lost"))
+    db.on_lost(lambda reason: events.append("lost") if "lost" in reason else None)
     db.on_restored(lambda: events.append("restored"))
 
     async def bind(conn: psycopg.AsyncConnection) -> None:
@@ -151,16 +155,185 @@ async def test_the_end_of_a_process_does_not_wait_for_a_database_that_stays_away
         await db.aclose()
 
 
+async def test_a_stopping_process_does_not_sit_out_a_long_pause_between_attempts(
+    db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`limit_reconnect` bounds the wait of a statement that was already waiting, however long
+    the pause it is in and however slow the attempt after it."""
+    monkeypatch.setattr(connection_module, "RECONNECT_FIRST_S", 30.0)
+    monkeypatch.setattr(connection_module, "LAST_ATTEMPT_S", 0.3)
+
+    class SlowSource(FlakySource):
+        async def open(self) -> psycopg.AsyncConnection:
+            if self.attempts >= 1 and self.attempts >= self.failures:
+                await anyio.sleep(60)  # a server that does not answer
+            return await super().open()
+
+    source = SlowSource(db_url, failures=0)
+    db = Db(await source.open(), source=source)
+    try:
+        pid = await db.scalar("SELECT pg_backend_pid()")
+        source.failures = 2
+        await kill(db_url, pid)
+        errors: list[BaseException] = []
+
+        async def ask() -> None:
+            try:
+                await db.execute("SELECT 1")
+            except psycopg.OperationalError as exc:
+                errors.append(exc)
+
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(ask)
+                await anyio.sleep(0.2)  # the statement is in its 30 s pause now
+                assert db.waiting and not errors
+                db.limit_reconnect(0.2)
+        assert len(errors) == 1 and "lost" in str(errors[0])
+    finally:
+        await db.aclose()
+
+
+async def session_login(db_url: str) -> str:
+    """Migrate the test database and return a working `calu_session` connection string."""
+    owner = await connect(db_url)
+    try:
+        _, session_url = await setup(owner, db_url, "test:model")
+    finally:
+        await owner.close()
+    return session_url
+
+
+async def replace_session_credential(db_url: str) -> None:
+    """Give `calu_session` a new password, as every `calu setup` does."""
+    owner = await connect(db_url)
+    try:
+        await enable_session_login(owner, db_url)
+    finally:
+        await owner.close()
+
+
+def test_which_refusals_of_a_login_do_not_heal() -> None:
+    for code in ("28P01", "28000", "3D000", "42501"):
+        assert refuses_for_good(code), code
+    # The server is starting or stopping, is full, or gave no answer at all: these pass.
+    for code in ("57P03", "57P01", "53300", "08006", None):
+        assert not refuses_for_good(code), code
+
+
+async def test_a_refused_login_ends_the_reconnecting_and_says_why(db_url: str) -> None:
+    """An unattended session must not wait for ever for a login that will not work again.
+
+    The session credential was replaced while the session ran. When its connection is lost,
+    the wrapper tries a bounded number of times and then raises an error that names the cause.
+    """
+    source = ConnectionSource(await session_login(db_url))
+    db = Db(await source.open(), source=source)
+    refused: list[LoginRefused] = []
+    db.on_refused(refused.append)
+    try:
+        pid = await db.scalar("SELECT pg_backend_pid()")
+        await replace_session_credential(db_url)
+        assert await db.scalar("SELECT 1") == 1  # the open connection is not affected
+        await kill(db_url, pid)
+        with anyio.fail_after(15):
+            with pytest.raises(LoginRefused, match="password authentication failed") as caught:
+                await db.scalar("SELECT 1")
+        assert caught.value.code == "28P01"
+        assert len(refused) == 1 and not db.waiting
+        # Later statements fail at once, with the same cause, and nothing is called twice.
+        with anyio.fail_after(1):
+            with pytest.raises(LoginRefused, match="password authentication failed"):
+                await db.execute("SELECT 1")
+        assert len(refused) == 1
+    finally:
+        await db.aclose()
+
+
+async def test_a_database_that_was_removed_ends_the_reconnecting(db_url: str) -> None:
+    source = ConnectionSource(db_url)
+    db = Db(await source.open(), source=source)
+    try:
+        await db.scalar("SELECT 1")
+        name = await db.scalar("SELECT current_database()")
+        admin = await connect(make_conninfo(db_url, dbname="postgres"))
+        try:
+            await admin.execute(
+                sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name))
+            )
+        finally:
+            await admin.close()
+        await anyio.sleep(0.2)
+        with anyio.fail_after(15):
+            with pytest.raises(LoginRefused) as caught:
+                await db.scalar("SELECT 1")
+        assert caught.value.code == "3D000"
+    finally:
+        await db.aclose()
+
+
+async def test_a_refusal_that_passes_within_the_attempts_is_survived(db_url: str) -> None:
+    """A login refused for a moment (a server being reconfigured) does not end the session."""
+
+    class RefusingSource(ConnectionSource):
+        refusals = REFUSED_ATTEMPTS - 1
+
+        async def open(self) -> psycopg.AsyncConnection:
+            if self.refusals > 0:
+                self.refusals -= 1
+                raise LoginRefused("password authentication failed", "28P01")
+            return await super().open()
+
+    plain = ConnectionSource(db_url)
+    source = RefusingSource(db_url)
+    db = Db(await plain.open(), source=source)
+    try:
+        await kill(db_url, await db.scalar("SELECT pg_backend_pid()"))
+        with anyio.fail_after(10):
+            assert await db.scalar("SELECT 41 + 1") == 42
+        assert source.refusals == 0
+    finally:
+        await db.aclose()
+
+
+async def test_the_notifier_stops_when_its_login_is_refused_for_good(db_url: str) -> None:
+    source = ConnectionSource(await session_login(db_url))
+    listener = await source.open()
+    notifier = Notifier(listener, source=source)
+    notifier.on("config_changed", lambda _payload: None)
+    listening: list[bool] = []
+    refused: list[LoginRefused] = []
+    notifier.on_listening(lambda: listening.append(True))
+    notifier.on_refused(refused.append)
+    try:
+        with anyio.fail_after(20):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(notifier.run)
+                while not listening:
+                    await anyio.sleep(0.01)
+                await replace_session_credential(db_url)
+                await kill(db_url, listener.info.backend_pid)
+                # `run` returns by itself: the task group ends without being cancelled.
+        assert len(refused) == 1 and refused[0].code == "28P01"
+        assert not notifier.listening
+    finally:
+        await notifier.aclose()
+
+
 async def test_a_statement_that_timed_out_gets_a_fresh_connection(db_url: str) -> None:
     """sd2: one slow statement must not leave every later statement on a broken connection."""
     source = ConnectionSource(db_url)
     db = Db(await source.open(), timeout=0.2, source=source)
+    reasons: list[str] = []
+    db.on_lost(reasons.append)
     try:
         pid = await db.scalar("SELECT pg_backend_pid()")
         with pytest.raises(TimeoutError):
             await db.execute("SELECT pg_sleep(5)")
         assert await db.scalar("SELECT 1") == 1
         assert await db.scalar("SELECT pg_backend_pid()") != pid
+        # It is reported as what it is, not as a lost connection.
+        assert len(reasons) == 1 and "did not finish in time" in reasons[0]
     finally:
         await db.aclose()
 

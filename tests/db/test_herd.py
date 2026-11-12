@@ -1,6 +1,7 @@
 """Herd management on the database alone: list sessions, list and resolve escalations."""
 
 import anyio
+import psycopg
 import pytest
 
 from calu import herd
@@ -261,6 +262,155 @@ async def test_an_escalation_of_a_gone_session_says_so(db_url: str) -> None:
         )
         ended = await herd.escalation(db, escalation)
         assert ended is not None and ended.unanswerable is True
+    finally:
+        await owner.close()
+
+
+def _pid_without_a_process() -> int:
+    """Return a process id of this machine that no process has."""
+    import os
+
+    pid = os.fork()
+    if pid == 0:
+        os._exit(0)
+    os.waitpid(pid, 0)
+    return pid
+
+
+async def test_no_escalation_stays_open_for_a_session_that_is_known_to_be_gone(
+    db_url: str,
+) -> None:
+    """The queue a human works through holds only questions a session may still wait for.
+
+    A session whose process is gone cannot close its own escalations. Listing the herd closes
+    them where the session is known to be gone -- it ended, its process no longer exists on
+    this host -- as cancelled and with the reason: nobody decided them (D57). A session that
+    is only silent keeps its question and is marked (D56) until the silence has lasted a day.
+    """
+    import os
+    import socket
+
+    finished_pid = _pid_without_a_process()
+    here = socket.gethostname()
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+
+        async def waiting_session(hostname: str, pid: int) -> tuple[str, int, DatabaseSessionStore]:
+            store = DatabaseSessionStore(db)
+            identity = SessionIdentity(hostname=hostname, os_user="u", directory="/w", pid=pid)
+            session_id = await store.start(identity)
+            return session_id, await store.open_escalation("why", {"rendered": "$ x"}), store
+
+        async def silent(session_id: str, interval: str) -> None:
+            await db.execute(
+                "UPDATE sessions SET last_seen = now() - %s::interval WHERE id = %s::uuid",
+                (interval, session_id),
+            )
+
+        dead, dead_esc, dead_store = await waiting_session(here, finished_pid)
+        alive, alive_esc, _ = await waiting_session(here, os.getpid())
+        far, far_esc, _ = await waiting_session("another-box", finished_pid)
+        ended, ended_esc, _ = await waiting_session("another-box", 7)
+        beating, beating_esc, _ = await waiting_session(here, finished_pid)
+        assert await herd.close_gone(db) == 0, "every session beats"
+
+        for session_id in (dead, alive, far):
+            await silent(session_id, "10 minutes")
+        # A session row that was ended without its escalations (written by an older calu).
+        await db.execute("UPDATE sessions SET ended_at = now() WHERE id = %s::uuid", (ended,))
+
+        listed = {row.id: row for row in await herd.escalations(db)}
+        assert sorted(listed) == sorted([alive_esc, far_esc, beating_esc])
+        assert listed[far_esc].unanswerable and not listed[beating_esc].unanswerable
+        by_id = {row.id: row for row in await herd.sessions(db, active_only=False)}
+        assert by_id[dead].open_escalations == 0 and by_id[dead].stale
+        assert by_id[far].open_escalations == 1 and by_id[far].stale
+
+        async def closed(escalation_id: int) -> herd.EscalationRow:
+            row = await herd.escalation(db, escalation_id)
+            assert row is not None and row.state == "cancelled", "closed, and not as a decision"
+            return row
+
+        assert f"pid {finished_pid}) is gone" in (await closed(dead_esc)).note
+        assert "the session ended" in (await closed(ended_esc)).note
+        # The process, should it still be there, reads the cancellation: the step is not allowed.
+        assert (await dead_store.escalation(dead_esc)).allowed is False
+        assert await herd.close_gone(db) == 0
+        assert beating  # its escalation was listed above: a beating session is left alone
+    finally:
+        await owner.close()
+
+
+async def test_a_restart_of_the_database_does_not_count_as_silence_of_its_sessions(
+    db_url: str,
+) -> None:
+    """A session that could not beat because the server was down keeps its question."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        session_id = await store.start(IDENTITY)
+        escalation = await store.open_escalation("why", {"rendered": "$ x"})
+        uptime = await db.scalar(
+            "SELECT extract(epoch FROM now() - pg_postmaster_start_time())::float8"
+        )
+        await db.execute(
+            "UPDATE sessions SET last_seen = now() - make_interval(secs => %s) WHERE id = %s::uuid",
+            (uptime + 7200, session_id),
+        )
+        # Silent for longer than the limit, but the server has not been up that long.
+        assert await db.scalar("SELECT calu_close_gone_escalations(%s)", (uptime + 3600,)) == 0
+        assert (await store.escalation(escalation)).open
+        # A limit the server has been up for: now the silence counts, and the row says why.
+        await anyio.sleep(1.1)
+        assert await db.scalar("SELECT calu_close_gone_escalations(1)") == 1
+        row = await herd.escalation(db, escalation)
+        assert row is not None and row.state == "cancelled"
+        assert "no heartbeat" in row.note and row.resolved_by == "calu: the session is gone"
+    finally:
+        await owner.close()
+
+
+async def test_a_session_that_ends_closes_its_open_escalations(db_url: str) -> None:
+    """With the real `calu_session` login: `end` leaves no open row, and only its own."""
+    owner = await connect(db_url)
+    try:
+        _, session_url = await setup(owner, db_url, "test:model")
+        first_conn = await connect(session_url)
+        second_conn = await connect(session_url)
+        try:
+            first = DatabaseSessionStore(Db(first_conn))
+            first_id = await first.start(IDENTITY)
+            one = await first.open_escalation("why", {"rendered": "$ deploy"})
+            two = await first.open_escalation("why", {"rendered": "$ ship"})
+            second = DatabaseSessionStore(Db(second_conn))
+            await second.start(IDENTITY)
+            other = await second.open_escalation("why", {"rendered": "$ ls"})
+            await herd.resolve(Db(owner), two, "allow", "fine")
+
+            # A session closes its own escalations only, and not those of the whole herd.
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await second_conn.execute(
+                    "SELECT calu_close_session_escalations(%s::uuid, 'x')", (first_id,)
+                )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await second_conn.execute("SELECT calu_close_gone_escalations(0.001)")
+            assert await herd.close_gone(Db(second_conn)) == 0
+
+            await first.end("failed")
+
+            cur = await owner.execute("SELECT id, state, note FROM escalations ORDER BY id")
+            assert await cur.fetchall() == [
+                (one, "cancelled", "the session ended before anybody answered"),
+                (two, "allowed", "fine"),
+                (other, "open", None),
+            ]
+        finally:
+            await first_conn.close()
+            await second_conn.close()
     finally:
         await owner.close()
 

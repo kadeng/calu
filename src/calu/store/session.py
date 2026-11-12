@@ -56,6 +56,10 @@ EscalationState = Literal["open", "allowed", "denied", "answered", "cancelled"]
 neither ran nor was refused, and the note holds the answer (PLAN.md D35, migration 0011)."""
 
 
+SESSION_ENDED_NOTE = "the session ended before anybody answered"
+"""Note of an escalation that was still open when its session ended (`SessionStore.end`)."""
+
+
 @dataclass(frozen=True)
 class SessionIdentity:
     """Where and by whom a session runs (`sessions` and `hosts` rows).
@@ -261,7 +265,12 @@ class SessionStore(Protocol):
         ...
 
     async def end(self, state: State) -> None:
-        """Record the end of the session and revoke the client tokens it accepted.
+        """Record the end of the session, close its escalations and revoke its client tokens.
+
+        An escalation that is still open when the session ends is recorded as cancelled:
+        nobody waits for the answer any more, and no row may stay open for a session that is
+        gone. The session cancels its escalations itself before it ends; this call also covers
+        the ones whose cancellation was not written.
 
         Every client token belongs to one session (`client_tokens.session_id`), so when the
         session ends none of them can ever authenticate anything again. Marking them revoked
@@ -766,22 +775,39 @@ class DatabaseSessionStore:
                 )
 
     async def end(self, state: State) -> None:
-        """Record the end of the session and revoke its client tokens (see `SessionStore.end`).
+        """Record the end of the session, close its open escalations and revoke its tokens.
+
+        See `SessionStore.end`. The three writes are independent: each is attempted even when
+        an earlier one failed, so one failed statement does not leave the other two undone.
 
         Args:
             state: The final state.
 
         Raises:
-            psycopg.Error: On database errors.
+            psycopg.Error: On database errors (the first one, after all three were attempted).
+            TimeoutError: If a statement takes longer than the connection's bound.
         """
         session_id = self._require_session()
-        await self._db.execute(
-            "UPDATE sessions SET state = %s, state_since = now(), ended_at = now() WHERE id = %s",
-            (state, session_id),
-        )
-        # Through the function, because the session role has no UPDATE on `client_tokens`:
-        # it must not be able to un-revoke what an operator revoked (D30, migration 0022).
-        await self._db.execute("SELECT calu_revoke_session_tokens(%s)", (session_id,))
+        statements: list[tuple[str, tuple[Any, ...]]] = [
+            (
+                "UPDATE sessions SET state = %s, state_since = now(), ended_at = now()"
+                " WHERE id = %s",
+                (state, session_id),
+            ),
+            # Through functions, because the session role has no UPDATE on these tables: it
+            # must not be able to decide an escalation or to un-revoke what an operator
+            # revoked (D30, migrations 0022 and 0026).
+            ("SELECT calu_close_session_escalations(%s, %s)", (session_id, SESSION_ENDED_NOTE)),
+            ("SELECT calu_revoke_session_tokens(%s)", (session_id,)),
+        ]
+        first: psycopg.Error | TimeoutError | None = None
+        for statement, params in statements:
+            try:
+                await self._db.execute(statement, params)
+            except (psycopg.Error, TimeoutError) as exc:
+                first = first or exc
+        if first is not None:
+            raise first
 
     async def add_step(self, step: StepRow) -> int:
         """Record a tool call (see `SessionStore.add_step`).

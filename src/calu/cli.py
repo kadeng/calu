@@ -84,7 +84,7 @@ from calu.model_choice import detect_model
 from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
-from calu.run import RunOptions, default_socket_path, run_session
+from calu.run import RunOptions, default_socket_path, harden_process, run_session
 from calu.setup import enable_operator_login, setup
 from calu.store.projects import register_directory
 
@@ -523,6 +523,9 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
             "password protected by design (REQUIREMENTS 17); store it again with "
             "`calu credential set session`"
         )
+    # Before the password is read and the credential decrypted, so that neither is ever in a
+    # process that another process of this user can read.
+    harden_process()
     url = load_credential(store, "session", "Session password: ")
     try:
         code = asyncio.run(run_session(url, options))
