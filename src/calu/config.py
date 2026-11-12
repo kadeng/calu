@@ -551,6 +551,31 @@ class HonestyConfig(ConfigModel):
     API contract must say (PLAN.md D181). Empty uses the rules calu ships
     (`calu honesty show`). Set it, globally or per project, to fit a project's documentation
     standards (`calu honesty edit [--project NAME]`); it is not meant to be edited often."""
+    max_open_marks: int = Field(default=3, ge=0)
+    """How many marks may be open, counted over all files, before an honesty review is
+    required. With more, a checker's single clean marks are ignored and only an honesty review
+    clears the marks, which keeps documentation updates close to the edits they belong to."""
+    review_max_files: int = Field(default=300, ge=1)
+    """The largest number of files one honesty review reads. With more files to review the
+    review does not run, and the step that needed it is escalated to a person with the
+    counts."""
+    reviewer_model: str = ""
+    """Pydantic AI model string of the honesty reviewer; blank uses the default model (see
+    `command_checker.model`). The reviewer judges whole files against the honesty rules, so a
+    more capable model than a step checker's is a reasonable choice."""
+    review_batch_files: int = Field(default=8, ge=1)
+    """How many files one run of the reviewer agent judges. A review splits its files into
+    batches of this size."""
+    review_concurrency: int = Field(default=4, ge=1)
+    """How many batches of one honesty review run at the same time."""
+    reviewer_request_limit: int = Field(default=30, ge=1)
+    """Maximum model requests for one batch, including the reviewer's tool calls. A batch that
+    runs out fails, and a failed review verifies nothing."""
+    reviewer_output_tokens_limit: int = Field(default=60_000, ge=1)
+    """Token budget for all answers of one batch (thinking included on most providers)."""
+    review_timeout_s: float = Field(default=600.0, gt=0)
+    """Seconds one honesty review may take in all. A review that takes longer fails, and the
+    step that needed it is escalated."""
 
 
 class ClockConfig(ConfigModel):

@@ -6,13 +6,11 @@ PostgreSQL announces three kinds of change with `pg_notify`:
 |---|---|---|
 | `config_changed` | a row of `config`, `rules` or `checker_types` changed | `{"table": "<name>"}` |
 | `escalation_resolved` | an operator resolved an escalation | `{"id", "session_id", "state"}` |
-| `honesty_changed` | a mark of the honesty register was opened or closed | `{"session_id"}` |
+| `trust_changed` | a trusted commit or file content was added or removed | `{"table": "<name>"}` |
 
-The register has a channel of its own rather than using `config_changed`, because a mark is
-written on an **edit** and a configuration change is rare: announcing marks on the
-configuration channel would make every session of the database reload all of its settings on
-every edit of every session (PLAN.md D92). The payload names the session that wrote it, so a
-session can skip its own.
+Trust has a channel of its own rather than using `config_changed`, because a session records a
+trusted commit after a commit of its own: announcing that on the configuration channel would
+make every session of the database reload all of its settings.
 
 A connection that waits for notifications cannot run queries at the same time, so a session
 uses one connection for its queries and a second one for listening.

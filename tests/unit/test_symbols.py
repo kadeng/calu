@@ -113,3 +113,14 @@ def test_a_new_file_and_a_text_file_get_no_contract_section(tmp_path: Path) -> N
             tool_name="Write", tool_input={"file_path": name, "content": content}, cwd=str(tmp_path)
         )
         assert "Definitions this edit changes" not in render_step(step, tmp_path)
+
+
+def test_definition_names_lists_what_a_python_file_defines() -> None:
+    """Dotted names for a file that parses; None where calu knows nothing."""
+    from calu.checkers.symbols import definition_names
+
+    source = "class A:\n    def run(self):\n        pass\n\ndef run():\n    pass\n"
+    assert sorted(definition_names(source, "a.py") or []) == ["A", "A.run", "run"]
+    assert definition_names("x = 1\n", "a.py") == []
+    assert definition_names("def broken(:\n", "a.py") is None
+    assert definition_names(source, "a.txt") is None

@@ -8,6 +8,7 @@ which stands for the operator's `calu_resolve_escalation`.
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from calu.comments import Comment
@@ -28,6 +29,7 @@ from calu.store.session import (
     StepDecision,
     StepRow,
 )
+from calu.store.trust import TrustedCommit, TrustedFile, TrustMethod
 
 
 @dataclass
@@ -89,6 +91,11 @@ class MemorySessionStore:
     """Which agent started which; None means the main agent."""
     history: SessionHistoryResult | None = None
     """What `load_history` returns; None builds it from the stored turns."""
+    trusted_commits: dict[str, TrustedCommit] = field(default_factory=dict)
+    """The trusted commits by commit id, as `certify_commit` recorded them; a test may also
+    fill it to stand for a certification made elsewhere."""
+    trusted_files: dict[str, TrustedFile] = field(default_factory=dict)
+    """The trusted file contents by SHA-256, as `trust_file` recorded them."""
     _ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     async def start(self, identity: SessionIdentity) -> str:
@@ -475,6 +482,84 @@ class MemorySessionStore:
             state="answered" if answered else ("allowed" if allow else "denied"),
             note=note,
             resolved_by=f"client:{actor or 'unknown'}",
+        )
+        return True
+
+    async def trusted_among(
+        self, commit_ids: Sequence[str], tree_ids: Sequence[str]
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """Tell which ids are in `trusted_commits` (see `SessionStore.trusted_among`).
+
+        Args:
+            commit_ids: Commit ids to look up.
+            tree_ids: Tree ids to look up.
+
+        Returns:
+            The trusted commit ids among `commit_ids`, and the tree ids among `tree_ids` that
+            a trusted commit records.
+        """
+        trees = {row.tree_id for row in self.trusted_commits.values()}
+        return (
+            frozenset(commit for commit in commit_ids if commit in self.trusted_commits),
+            frozenset(tree for tree in tree_ids if tree in trees),
+        )
+
+    async def certify_commit(
+        self, commit_id: str, tree_id: str, method: TrustMethod, by: str, note: str = ""
+    ) -> bool:
+        """Record a trusted commit (see `SessionStore.certify_commit`).
+
+        Args:
+            commit_id: The full commit id.
+            tree_id: The id of the tree the commit records.
+            method: "user", "review" or "session".
+            by: Who certified it.
+            note: An optional note.
+
+        Returns:
+            True if the commit was recorded; False if it was trusted already.
+
+        Raises:
+            ValueError: If `by` is empty, which the database refuses as well.
+        """
+        if not by:
+            raise ValueError("a certification names who certified")
+        if commit_id in self.trusted_commits:
+            return False
+        self.trusted_commits[commit_id] = TrustedCommit(
+            commit_id, tree_id, datetime.now(UTC), by, method, note
+        )
+        return True
+
+    async def trusted_file_hashes(self) -> frozenset[str]:
+        """Return the hashes of `trusted_files` (see `SessionStore.trusted_file_hashes`).
+
+        Returns:
+            The SHA-256 values.
+        """
+        return frozenset(self.trusted_files)
+
+    async def trust_file(self, content_sha256: str, path: str, by: str, note: str = "") -> bool:
+        """Record a trusted file content (see `SessionStore.trust_file`).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            path: Where the file is, as a hint for people.
+            by: The client's name.
+            note: An optional note.
+
+        Returns:
+            True if the hash was recorded; False if it was trusted already.
+
+        Raises:
+            ValueError: If `by` is empty, which the database refuses as well.
+        """
+        if not by:
+            raise ValueError("a certification names who certified")
+        if content_sha256 in self.trusted_files:
+            return False
+        self.trusted_files[content_sha256] = TrustedFile(
+            content_sha256, path, datetime.now(UTC), by, note
         )
         return True
 

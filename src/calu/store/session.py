@@ -50,6 +50,8 @@ from calu.protocol.messages import (
     State,
     StoredStep,
 )
+from calu.store import trust
+from calu.store.trust import TrustMethod
 
 EscalationState = Literal["open", "allowed", "denied", "answered", "cancelled"]
 """States of an `escalations` row. "answered" belongs to a question of the agent: the step
@@ -539,6 +541,72 @@ class SessionStore(Protocol):
         Returns:
             The stored context with the checker runs of the step, or None if no escalation has
             that id.
+        """
+        ...
+
+    async def trusted_among(
+        self, commit_ids: Sequence[str], tree_ids: Sequence[str]
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """Tell which of some commit ids and tree ids are trusted (code honesty).
+
+        The session passes HEAD and its ancestors to find its baseline
+        (`calu.honesty.find_baseline`).
+
+        Args:
+            commit_ids: Commit ids to look up.
+            tree_ids: Tree ids to look up.
+
+        Returns:
+            (the commit ids among `commit_ids` that are trusted, the tree ids among `tree_ids`
+            that a trusted commit records).
+        """
+        ...
+
+    async def certify_commit(
+        self, commit_id: str, tree_id: str, method: TrustMethod, by: str, note: str = ""
+    ) -> bool:
+        """Record a commit as trusted, with the method of its certification.
+
+        This is the only way a session adds a trusted commit. The session decides from its
+        own computed honesty state whether to call it (`HonestyState.uncertified`); a model's
+        answer alone is never the reason.
+
+        Args:
+            commit_id: The full commit id.
+            tree_id: The id of the tree the commit records.
+            method: "session" for a commit made in a clean state, "review" after an honesty
+                review, "user" when a person asked for it through a client.
+            by: Who certified it: the client's name for "user", a name of the session
+                otherwise.
+            note: An optional note.
+
+        Returns:
+            True if the commit was recorded; False if it was trusted already.
+        """
+        ...
+
+    async def trusted_file_hashes(self) -> frozenset[str]:
+        """Read the SHA-256 of every file content a person stored as trusted.
+
+        Returns:
+            The hashes; a file with such a content counts as verified wherever it lies.
+        """
+        ...
+
+    async def trust_file(self, content_sha256: str, path: str, by: str, note: str = "") -> bool:
+        """Record a file content as trusted, because a person asked for it through a client.
+
+        calu itself never calls this for what an edit check or a review verified: that stays
+        in the session's memory.
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            path: Where the file is, as a hint for people.
+            by: The client's name.
+            note: An optional note.
+
+        Returns:
+            True if the hash was recorded; False if it was trusted already.
         """
         ...
 
@@ -1548,6 +1616,77 @@ class DatabaseSessionStore:
         await self._db.execute(
             "SELECT calu_cancel_escalation(%s, %s)", (escalation_id, note or None)
         )
+
+    async def trusted_among(
+        self, commit_ids: Sequence[str], tree_ids: Sequence[str]
+    ) -> tuple[frozenset[str], frozenset[str]]:
+        """Ask the database which ids are trusted (see `SessionStore.trusted_among`).
+
+        Args:
+            commit_ids: Commit ids to look up.
+            tree_ids: Tree ids to look up.
+
+        Returns:
+            The trusted commit ids and tree ids among them.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        return await trust.trusted_among(self._db, commit_ids, tree_ids)
+
+    async def certify_commit(
+        self, commit_id: str, tree_id: str, method: TrustMethod, by: str, note: str = ""
+    ) -> bool:
+        """Record a trusted commit through `calu_certify_commit` (see the protocol).
+
+        The database records this connection's proven session with the row.
+
+        Args:
+            commit_id: The full commit id.
+            tree_id: The id of the tree the commit records.
+            method: "user", "review" or "session".
+            by: Who certified it.
+            note: An optional note.
+
+        Returns:
+            True if the commit was recorded; False if it was trusted already.
+
+        Raises:
+            psycopg.Error: On database errors, and if the ids are malformed or `by` is empty.
+            RuntimeError: If `start` has not run.
+        """
+        self._require_session()
+        return await trust.certify_commit(self._db, commit_id, tree_id, method, by, note)
+
+    async def trusted_file_hashes(self) -> frozenset[str]:
+        """Read the trusted file hashes (see `SessionStore.trusted_file_hashes`).
+
+        Returns:
+            The SHA-256 values of `trusted_files`.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        return await trust.trusted_file_hashes(self._db)
+
+    async def trust_file(self, content_sha256: str, path: str, by: str, note: str = "") -> bool:
+        """Record a trusted file content through `calu_trust_file` (see the protocol).
+
+        Args:
+            content_sha256: SHA-256 of the file's content.
+            path: Where the file is, as a hint for people.
+            by: The client's name.
+            note: An optional note.
+
+        Returns:
+            True if the hash was recorded; False if it was trusted already.
+
+        Raises:
+            psycopg.Error: On database errors, and if the hash is malformed or `by` is empty.
+            RuntimeError: If `start` has not run.
+        """
+        self._require_session()
+        return await trust.trust_file(self._db, content_sha256, path, by, note)
 
     # ------------------------------------------------------------------ helpers
 
