@@ -78,6 +78,9 @@ class SessionIdentity:
     git_commit: str | None = None
     project: str | None = None
     model: str | None = None
+    machine: str = ""
+    """In which process table the session runs (`calu.machine.Machine.text`); "" records
+    none, and `calu sessions` then judges such a session by its host name alone."""
 
 
 @dataclass(frozen=True)
@@ -730,7 +733,7 @@ class DatabaseSessionStore:
             # exist yet. The function runs as the owner, stores the hash of the session key
             # and hands the id back (PLAN.md D49, migration 0025).
             cur = await conn.execute(
-                b"SELECT calu_start_session(%s, %s, %s, %s, %s, %s, %s, %s)",
+                b"SELECT calu_start_session(%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     project_id,
                     host[0],
@@ -740,6 +743,7 @@ class DatabaseSessionStore:
                     identity.pid,
                     identity.model,
                     hashlib.sha256(self._session_key.encode()).hexdigest(),
+                    identity.machine,
                 ),
             )
             row = await cur.fetchone()

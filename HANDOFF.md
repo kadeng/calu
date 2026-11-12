@@ -3,11 +3,11 @@
 State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
 the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
 with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D201, open questions §11, phases §12).
+`PLAN.md` (decisions D1-D202, open questions §11, phases §12).
 
 ## Pick up here
 
-**`main` is green and pushed** (1791 tests with `uv run pytest -q -m 'not live'`, 16 browser
+**`main` is green and pushed** (1794 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
 1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
@@ -107,8 +107,10 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    for a condition, which is the likely cause. Fixed since: the unit test
    `test_subscribing_again_does_not_send_an_event_twice`, which failed once in CI, counted
    pushes that a second subscription may legitimately replace by its replay.
-8. Smaller open work, no decision needed: `herd.close_gone` trusts the hostname alone (below);
-   a checker's model and limits live in two stores (below); `cli.py` should become a package.
+8. Smaller open work, no decision needed: a checker's model and limits live in two stores
+   (below); `cli.py` should become a package. Done: `herd.close_gone` no longer takes "ran on
+   this machine" from the host name; a session records its machine, boot and pid namespace
+   (D202, `src/calu/machine.py`, migration 0031).
 9. **Later, not now: plugins for VSCode and the JetBrains IDEs, and a git browser in the web
    interface** (the owner on 2026-11-12, requirement 23 and soft goal 6; `PLAN.md` D200, D201
    and phase 9). Both plugins must work in the IDE's most modern remote development mode.
@@ -166,9 +168,9 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1791 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1794 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
-default instructions), ~36k of tests, 30 migrations, 21 CLI commands, 22 protocol requests,
+default instructions), ~36k of tests, 31 migrations, 21 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
@@ -712,11 +714,6 @@ work for a developer without the owner. In short:
 
 Open developer work that needs no decision:
 
-- `herd.close_gone` takes "ran on this host" from the hostname alone. Two machines or
-  containers with the same hostname have different process tables, so a listing on one can
-  cancel the open escalation of a silent session of the other (the step is then refused, not
-  run). A machine identity recorded with the session would settle it; that changes
-  `calu_start_session` and needs a migration.
 - A checker's model and limits live in two places: the configuration sections for the four
   route checkers, the `checker_types` row for every other checker. One source
   (`checkers.<name>` in the configuration, with defaults) would remove the special case; it

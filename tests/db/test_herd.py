@@ -5,6 +5,7 @@ import psycopg
 import pytest
 
 from calu import herd
+from calu import machine as machine_module
 from calu.checkers import Decision
 from calu.db import Db, connect
 from calu.evals import cases_from_escalations
@@ -278,7 +279,7 @@ def _pid_without_a_process() -> int:
 
 
 async def test_no_escalation_stays_open_for_a_session_that_is_known_to_be_gone(
-    db_url: str,
+    db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The queue a human works through holds only questions a session may still wait for.
 
@@ -297,9 +298,13 @@ async def test_no_escalation_stays_open_for_a_session_that_is_known_to_be_gone(
     try:
         await setup(owner, db_url, "test:model")
 
-        async def waiting_session(hostname: str, pid: int) -> tuple[str, int, DatabaseSessionStore]:
+        async def waiting_session(
+            hostname: str, pid: int, machine: str = ""
+        ) -> tuple[str, int, DatabaseSessionStore]:
             store = DatabaseSessionStore(db)
-            identity = SessionIdentity(hostname=hostname, os_user="u", directory="/w", pid=pid)
+            identity = SessionIdentity(
+                hostname=hostname, os_user="u", directory="/w", pid=pid, machine=machine
+            )
             session_id = await store.start(identity)
             return session_id, await store.open_escalation("why", {"rendered": "$ x"}), store
 
@@ -314,15 +319,28 @@ async def test_no_escalation_stays_open_for_a_session_that_is_known_to_be_gone(
         far, far_esc, _ = await waiting_session("another-box", finished_pid)
         ended, ended_esc, _ = await waiting_session("another-box", 7)
         beating, beating_esc, _ = await waiting_session(here, finished_pid)
+        # D202: the host name does not say whose process table a pid belongs to. A session
+        # that recorded where it runs is judged by that.
+        this = machine_module.here()
+        twin_machine = machine_module.Machine("another-machine-id", "another-boot", "pid:[1]")
+        twin, twin_esc, _ = await waiting_session(here, finished_pid, twin_machine.text())
+        before_reboot = machine_module.Machine("m1", "an-earlier-boot", this.pid_namespace)
+        monkeypatch.setattr(
+            machine_module, "here", lambda: machine_module.Machine("m1", "boot", "pid:[1]")
+        )
+        rebooted, rebooted_esc, _ = await waiting_session(here, os.getpid(), before_reboot.text())
+        mine, mine_esc, _ = await waiting_session(here, finished_pid, machine_module.here().text())
         assert await herd.close_gone(db) == 0, "every session beats"
 
-        for session_id in (dead, alive, far):
+        for session_id in (dead, alive, far, twin, rebooted, mine):
             await silent(session_id, "10 minutes")
         # A session row that was ended without its escalations (written by an older calu).
         await db.execute("UPDATE sessions SET ended_at = now() WHERE id = %s::uuid", (ended,))
 
         listed = {row.id: row for row in await herd.escalations(db)}
-        assert sorted(listed) == sorted([alive_esc, far_esc, beating_esc])
+        assert sorted(listed) == sorted([alive_esc, far_esc, beating_esc, twin_esc])
+        # The same host name on another machine: its pid means nothing here, so it waits.
+        assert listed[twin_esc].unanswerable
         assert listed[far_esc].unanswerable and not listed[beating_esc].unanswerable
         by_id = {row.id: row for row in await herd.sessions(db, active_only=False)}
         assert by_id[dead].open_escalations == 0 and by_id[dead].stale
@@ -334,6 +352,9 @@ async def test_no_escalation_stays_open_for_a_session_that_is_known_to_be_gone(
             return row
 
         assert f"pid {finished_pid}) is gone" in (await closed(dead_esc)).note
+        assert f"pid {finished_pid}) is gone" in (await closed(mine_esc)).note
+        # A pid of today says nothing about a process from before the reboot.
+        assert "ended when its machine was restarted" in (await closed(rebooted_esc)).note
         assert "the session ended" in (await closed(ended_esc)).note
         # The process, should it still be there, reads the cancellation: the step is not allowed.
         assert (await dead_store.escalation(dead_esc)).allowed is False

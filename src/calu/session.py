@@ -125,7 +125,7 @@ from anyio.abc import TaskGroup
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
-from calu import __version__
+from calu import __version__, machine
 from calu.changes import default_root
 from calu.checkers import (
     CheckContext,
@@ -3392,8 +3392,8 @@ class Session:
         """Describe where this session runs, for the `sessions` row.
 
         Returns:
-            Host name, operating system, OS user, directory, process id, git commit, project
-            and Claude model.
+            Host name, operating system, OS user, directory, process id, git commit, project,
+            Claude model and the identity of this machine's process table.
         """
         return SessionIdentity(
             hostname=socket.gethostname(),
@@ -3404,6 +3404,7 @@ class Session:
             git_commit=self._git_head_value,
             project=self.project,
             model=self.config.claude.model,
+            machine=machine.here().text(),
         )
 
     def _escalation_row_context(self, step: Step, rendered: str) -> dict[str, Any]:

@@ -25,6 +25,7 @@ from typing import Any
 
 import psycopg
 
+from calu import machine
 from calu.context.turns import TurnRecord
 from calu.db import Db
 from calu.store.session import turn_record
@@ -197,13 +198,17 @@ async def close_gone(db: Db) -> int:
     nobody decided it (PLAN.md D57) -- when its session
 
     1. has ended (`sessions.ended_at`), or
-    2. is stale (silent for more than `STALE_AFTER_S`, D56), ran on this host, and no process
-       with its pid exists here any more, or
+    2. is stale (silent for more than `STALE_AFTER_S`, D56), ran in this machine's process
+       table, and no process with its pid exists here any more; or ran on this machine before
+       its last reboot (`calu.machine`, D202), or
     3. has been silent for more than `CLOSE_SILENT_AFTER_S` while the database server was up.
 
-    A stale session of another host is only marked as gone in the lists until rule 3 applies:
-    silence does not prove that its process is gone (a suspended machine, a network that was
-    away), and a process that is still alive treats a cancelled escalation as "not allowed".
+    A stale session of another machine is only marked as gone in the lists until rule 3
+    applies: silence does not prove that its process is gone (a suspended machine, a network
+    that was away), and a process that is still alive treats a cancelled escalation as "not
+    allowed". The same host name does not make it this machine: a session that recorded where
+    it runs (`sessions.machine`) is judged by that, and only a session of a calu that recorded
+    nothing is judged by the host name.
 
     Side effects: updates `escalations` through `calu_close_gone_escalations` and
     `calu_close_session_escalations`, which send `escalation_resolved` for each closed row.
@@ -224,17 +229,24 @@ async def close_gone(db: Db) -> int:
             await db.scalar("SELECT calu_close_gone_escalations(%s)", (CLOSE_SILENT_AFTER_S,))
         )
         rows = await db.all(
-            "SELECT s.id::text, s.pid FROM sessions s JOIN hosts h ON h.id = s.host_id"
+            "SELECT s.id::text, s.pid, s.machine FROM sessions s JOIN hosts h ON h.id = s.host_id"
             " WHERE s.ended_at IS NULL AND h.hostname = %s"
             " AND s.last_seen < now() - make_interval(secs => %s)"
             " AND EXISTS (SELECT 1 FROM escalations e"
             "             WHERE e.session_id = s.id AND e.state = 'open')",
             (socket.gethostname(), STALE_AFTER_S),
         )
-        for session_id, pid in rows:
-            if process_exists(pid):
+        this = machine.here()
+        for session_id, pid, recorded_text in rows:
+            recorded = machine.Machine.parse(recorded_text)
+            relation = "same" if recorded is None else this.relation(recorded)
+            if relation == "other" or (relation == "same" and process_exists(pid)):
                 continue
-            note = f"the session's process (pid {pid}) is gone"
+            note = (
+                f"the session's process (pid {pid}) is gone"
+                if relation == "same"
+                else f"the session's process (pid {pid}) ended when its machine was restarted"
+            )
             closed += int(
                 await db.scalar(
                     "SELECT calu_close_session_escalations(%s::uuid, %s)", (session_id, note)

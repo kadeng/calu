@@ -55,6 +55,7 @@ phases.
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys, write-set settings |
 | `src/calu/doctor.py` | `calu doctor`: what is in place and what a session would miss, before anything runs |
+| `src/calu/machine.py` | In which process table a process runs (machine id, boot id, pid namespace): what a session records at its start and `calu sessions` compares before it takes a missing pid for a gone process (D202) |
 | `src/calu/clock.py` | Watches calu's own clock: a backward jump breaks the attribution of file changes to steps (D32) |
 | `src/calu/changes.py` | Git snapshots of the project directory: what a command wrote, as a patch, and how to undo it (D31, optional) |
 | `src/calu/paths.py` | Where calu's own secrets and state are on this machine (the XDG directories); imports nothing from calu, so the configuration and the rules both use it |

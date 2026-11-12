@@ -899,8 +899,11 @@ A session stamps the database every 30 seconds, so the fleet separates the sessi
 working from the ones whose process is gone — a killed process cannot set its own state, and an
 escalation nobody can answer should not sit among the ones that need you. A session that ends
 closes its open escalations, and the overview, `calu sessions` and `calu escalations` close
-those of a session whose process no longer exists on the host they run on, or that has been
-silent for 24 hours.
+those of a session whose process no longer exists on the machine they run on, or that has been
+silent for 24 hours. "The machine" is not the host name: a session records the machine it
+started on, its boot and its process namespace, so a command on another machine or in another
+container with the same host name leaves that session's escalations alone, and a session from
+before a reboot counts as gone.
 
 Every page shows what needs you and jumps to any session with Ctrl+K. It leads with the
 sessions that cannot go on without you, opens one session's history at four
