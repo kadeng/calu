@@ -177,6 +177,36 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
     return found
 
 
+def self_approval_findings(store: CredentialStore) -> list[Finding]:
+    """Report a password-free credential on a machine where the sandbox cannot run (D164).
+
+    The start-up warning of D162 says the same for a session; doctor runs before any password
+    is entered, so it cannot read whether the sandbox is switched on, only whether it can run
+    here at all (`bwrap` and `socat`). Without it, any program Claude runs can read a
+    credential that has no password and resolve its own escalations.
+
+    Args:
+        store: The credential store; only names and kinds of protection are read.
+
+    Returns:
+        One failed finding for that combination, or [].
+    """
+    unprotected = sorted(name for name in store.names() if not store.needs_password(name))
+    missing = [tool for tool in ("bwrap", "socat") if shutil.which(tool) is None]
+    if not unprotected or not missing:
+        return []
+    return [
+        Finding(
+            "self-approval",
+            False,
+            f"{', '.join(unprotected)} has no password and the sandbox cannot run here "
+            f"({' and '.join(missing)} missing)",
+            "Any program Claude runs could read it and resolve its own escalations. Install "
+            "bubblewrap and socat, or put a password back (`calu credential set operator`).",
+        )
+    ]
+
+
 def key_findings(environ: Sequence[str] | None = None) -> list[Finding]:
     """Check which model provider keys are available to the checkers.
 
@@ -382,6 +412,7 @@ def local_findings(store: CredentialStore) -> list[Finding]:
     return [
         *tool_findings(),
         *credential_findings(store),
+        *self_approval_findings(store),
         *key_findings(),
         *key_value_findings(),
         *directory_findings(),

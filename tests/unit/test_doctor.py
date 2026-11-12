@@ -264,3 +264,22 @@ def test_aws_credentials_are_shown_to_sts_when_boto3_finds_any() -> None:
     assert "aws sso login" in refused.advice
 
     assert doctor.aws_findings(lambda: Session(False)) == [], "no AWS, no finding"
+
+
+def test_a_password_free_credential_where_no_sandbox_can_run_is_a_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D164: doctor's view of D162 -- it cannot read the setting, only whether bwrap and socat
+    are there."""
+    from calu import doctor
+    from calu.credentials import CredentialStore, KdfParams
+
+    store = CredentialStore(
+        tmp_path / "c.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
+    )
+    store.save("operator", "postgresql://op@localhost/calu", None)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None if name == "socat" else "/x")
+    (finding,) = doctor.self_approval_findings(store)
+    assert not finding.ok and "socat missing" in finding.detail
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/" + name)
+    assert doctor.self_approval_findings(store) == []
