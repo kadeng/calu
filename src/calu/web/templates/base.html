@@ -28,7 +28,6 @@
     {{ nav('escalations', 'Escalations') }}
     {{ nav('triage', 'Triage') }}
     {{ nav('checkers', 'Checkers') }}
-    {{ nav('rules', 'Rules') }}
     {{ nav('settings', 'Settings') }}
   </nav>
   {% block header_extra %}{% endblock %}
@@ -37,7 +36,7 @@
   <span class="version">calu {{ version }} · local only</span>
   <button type="button" class="theme-switch" id="theme-switch" title="Switch between the system's theme, light and dark">Theme</button>
 </header>
-<main>
+<main{% block main_attrs %}{% endblock %}>
 {% block body %}{% endblock %}
 </main>
 </body>

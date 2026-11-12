@@ -250,141 +250,72 @@ async def test_an_escalation_can_be_resolved_from_the_page(db_url: str) -> None:
         await conn.close()
 
 
-async def test_checker_instructions_can_be_read_and_written(db_url: str) -> None:
-    conn = await connect(db_url)
-    try:
-        await setup(conn, db_url, "test:model")
-        db = Db(conn)
-        async with await client_for(db) as client:
-            listing = (await client.get("/checkers")).text
-            assert "command" in listing and "edit" in listing and "changeset" in listing
+def area(page: str, name: str) -> str:
+    """Return the text of the editor with the given form name on the settings page.
 
-            before = next(r for r in await admin.checkers(db) if r.name == "command")
-            page = (await client.get("/checkers/command")).text
-            assert "textarea" in page
+    Args:
+        page: The HTML of the page.
+        name: The form field name, e.g. "rules:command-deny".
 
-            saved = await client.post(
-                "/checkers/command", data={"instructions": "# New instructions\n\nBe brief."}
-            )
-            assert saved.status_code == 200
-            assert "Be brief." in saved.text
-            after = next(r for r in await admin.checkers(db) if r.name == "command")
-            assert after.version == before.version + 1  # a change bumps the version
-            assert await admin.instructions(db, "command") == "# New instructions\n\nBe brief."
-
-            empty = await client.post("/checkers/command", data={"instructions": "  "})
-            assert empty.status_code == 400
-            assert (await client.get("/checkers/nonsense")).status_code == 404
-    finally:
-        await conn.close()
-
-
-async def test_the_rules_page_groups_the_lists(db_url: str) -> None:
-    conn = await connect(db_url)
-    try:
-        await setup(conn, db_url, "test:model")
-        async with await client_for(Db(conn)) as client:
-            page = (await client.get("/rules")).text
-            assert "command-deny" in page and "command-allow" in page
-            assert "sudo" in page
-    finally:
-        await conn.close()
-
-
-async def test_the_publishing_set_is_offered_and_added_from_the_rules_page(db_url: str) -> None:
-    """D143: the set is offered under command-deny, added once, and then part of the text."""
-    conn = await connect(db_url)
-    try:
-        await setup(conn, db_url, "test:model")
-        async with await client_for(Db(conn)) as client:
-            page = (await client.get("/rules")).text
-            assert "Add publishing to command-deny" in page
-            assert "push( |$)" not in page.split('id="command-deny"')[1].split("</textarea>")[0]
-
-            first = await client.post("/rule-sets/publishing", follow_redirects=True)
-            assert first.status_code == 200
-            assert "rule(s) added from the set" in first.text
-            deny_text = first.text.split('id="command-deny"')[1].split("</textarea>")[0]
-            assert "^git( -[Cc] \\S+)* push( |$)" in deny_text
-
-            again = await client.post("/rule-sets/publishing", follow_redirects=True)
-            assert "0 rule(s) added from the set" in again.text, "a second press adds nothing"
-            assert (await client.post("/rule-sets/everything")).status_code == 404
-    finally:
-        await conn.close()
-
-
-async def test_a_rule_list_is_edited_as_text_on_the_rules_page(db_url: str) -> None:
-    """D137, the owner's request: each list is one text area of regexes, saved as a whole.
-
-    The format is `calu rules edit`'s -- one pattern per line, a `# ...` line directly above a
-    pattern is its comment -- and so is the safety: every pattern is compiled before anything
-    is replaced, so a typo leaves the list as it was, and the page keeps what was typed.
+    Returns:
+        What the text area holds, HTML-unescaped.
     """
+    import html
+
+    body = page.split(f'name="{name}"', 1)[1].split(">", 1)[1].split("</textarea>", 1)[0]
+    return html.unescape(body)
+
+
+async def test_one_settings_page_holds_the_values_the_instructions_and_the_rules(
+    db_url: str,
+) -> None:
+    """The owner's ask: checker prompts and allow and deny lists are settings too, on one page."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
         db = Db(conn)
         await admin.add_rule_set(db, "recommended")  # D179: the lists start empty
         async with await client_for(db) as client:
-            page = (await client.get("/rules")).text
-            assert page.count("<textarea") == len(admin.RULE_LISTS), "one text area per list"
-            assert "^(sudo|su|doas)( |$)" in page
-
-            text = "# Never deploy from a session.\n^deploy( |$)\n\n^sudo( |$)\n"
-            saved = await client.post("/rules/command-deny", data={"text": text})
-            assert saved.status_code == 200 and "saved=command-deny" in str(saved.url)
-            rows = await admin.rules(db, rule_list="command-deny")
-            assert [(r.pattern, r.comment) for r in rows if r.enabled] == [
-                ("^deploy( |$)", "Never deploy from a session."),
-                ("^sudo( |$)", ""),
-            ]
-            # The page shows the list as it is now, comment above its pattern.
-            assert "# Never deploy from a session.\n^deploy( |$)" in saved.text
-
-            # A pattern that does not compile changes nothing, and what was typed stays.
-            broken = "^deploy( |$)\n^unclosed(\n"
-            refused = await client.post("/rules/command-deny", data={"text": broken})
-            assert refused.status_code == 400
-            assert "Not saved" in refused.text and "^unclosed(" in refused.text
-            rows = await admin.rules(db, rule_list="command-deny")
-            assert [r.pattern for r in rows if r.enabled] == ["^deploy( |$)", "^sudo( |$)"]
-
-            # A project's lists are its own, on top of the global ones.
-            await admin.add_project(db, "demo")
-            await client.post("/rules/command-allow?project=demo", data={"text": "^make( |$)\n"})
-            own = await admin.rules(db, "demo", "command-allow")
-            assert [r.pattern for r in own if r.scope == "demo"] == ["^make( |$)"]
-            assert any(r.scope == "global" for r in own), "the global list is untouched"
-    finally:
-        await conn.close()
-
-
-async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None:
-    """The owner's ask: model and effort dropdowns, the checker models, use_bedrock."""
-    conn = await connect(db_url)
-    try:
-        await setup(conn, db_url, "test:model")
-        db = Db(conn)
-        async with await client_for(db) as client:
             page = (await client.get("/settings")).text
-            # The controls the owner named, each generated from the configuration model.
+            # Configuration values, each generated from the model with the right control.
             assert 'name="claude.model"' in page and 'list="claude-models"' in page
             assert 'name="claude.effort"' in page and ">xhigh<" in page
             assert 'name="claude.use_bedrock"' in page and 'type="checkbox"' in page
             assert 'name="command_checker.model"' in page
-            assert 'name="command_checker.effort"' in page
             assert 'name="changeset_checker.effort"' in page
             assert 'name="claude.sandbox.deny_read"' in page  # a list, one per line
             assert 'name="clock.max_backward_s"' in page
-
-            # Each control carries what the setting does, from the field's own docstring
-            # (D47): the form has rendered `info.description` all along, and until the
-            # configuration documented itself every one of them was empty.
+            # Each control carries what the setting does, from the field's own docstring (D47),
+            # with code spans rendered as code.
             assert "Reasoning effort of the Claude session" in page
-            assert "Set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code" in page
-            assert "Paths a sandboxed command must not read" in page
+            assert "<code>CLAUDE_CODE_USE_BEDROCK=1</code>" in page
+            # Every checker's instructions and every rule list is a text area of the same page.
+            for name in ("command", "edit", "changeset", "subagent-result", "honesty", "narrator"):
+                assert f'name="prompt:{name}"' in page
+            for name in admin.RULE_LISTS:
+                assert f'name="rules:{name}"' in page
+            assert "^(sudo|su|doas)( |$)" in area(page, "rules:command-deny")
+            assert "<table" not in page
 
+            # The old addresses lead to the place on the new page.
+            old = await client.get("/checkers/command", follow_redirects=False)
+            assert old.headers["location"].endswith("/settings#checker-command")
+            old = await client.get("/rules?project=demo", follow_redirects=False)
+            assert old.headers["location"].endswith("/settings?project=demo#rules-command")
+    finally:
+        await conn.close()
+
+
+async def test_a_save_writes_only_what_changed(db_url: str) -> None:
+    """One form for everything: values, a prompt and a rule list are stored by one save."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        before = next(r for r in await admin.checkers(db) if r.name == "command")
+        edit_before = next(r for r in await admin.checkers(db) if r.name == "edit")
+        async with await client_for(db) as client:
+            rules = "# Never deploy from a session.\n^deploy( |$)\n\n^sudo( |$)\n"
             saved = await client.post(
                 "/settings",
                 data={
@@ -394,9 +325,13 @@ async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None
                     "command_checker.effort": "off",
                     "command_checker.model": "mistral:mistral-small-2603",
                     "escalation_timeout_s": "3600",
+                    "prompt:command": "# New instructions\r\n\r\nBe brief.\r\n",
+                    "prompt:edit": await admin.instructions(db, "edit"),
+                    "rules:command-deny": rules,
                 },
             )
-            assert saved.status_code == 200
+            assert saved.status_code == 200 and "saved=7" in str(saved.url)
+            assert "7 changes saved" in saved.text
             values = await admin.settings(db)
             assert values["claude"]["model"] == "sonnet"
             assert values["claude"]["effort"] == "high"
@@ -405,12 +340,159 @@ async def test_the_settings_page_edits_what_the_model_knows(db_url: str) -> None
             assert values["escalation_timeout_s"] == pytest.approx(3600.0)
             # An unchanged value is not written, so the audit log stays meaningful.
             assert "model" not in values.get("command_checker", {})
+            # A switch the form did not contain is not switched off by its absence.
+            assert "check_subagent_results" not in values
 
-            # The configuration is validated before anything is stored.
-            refused = await client.post("/settings", data={"claude.effort": "enormous"})
+            after = next(r for r in await admin.checkers(db) if r.name == "command")
+            assert after.version == before.version + 1  # a change bumps the version
+            assert await admin.instructions(db, "command") == "# New instructions\n\nBe brief."
+            edit_after = next(r for r in await admin.checkers(db) if r.name == "edit")
+            assert edit_after.version == edit_before.version, "unchanged instructions stay"
+
+            rows = await admin.rules(db, rule_list="command-deny")
+            assert [(r.pattern, r.comment) for r in rows if r.enabled] == [
+                ("^deploy( |$)", "Never deploy from a session."),
+                ("^sudo( |$)", ""),
+            ]
+            assert "# Never deploy from a session.\n^deploy( |$)" in area(
+                saved.text, "rules:command-deny"
+            )
+
+            # A switch the form contains and leaves off is switched off.
+            await client.post("/settings", data={"_present": "claude.use_bedrock"})
+            assert (await admin.settings(db))["claude"]["use_bedrock"] is False
+
+            # "Reset" removes the stored value, so the default applies again.
+            await client.post("/settings", data={"claude.effort": "", "_reset": "claude.effort"})
+            assert "effort" not in (await admin.settings(db))["claude"]
+    finally:
+        await conn.close()
+
+
+async def test_a_refused_value_is_reported_at_its_field_and_the_rest_is_saved(
+    db_url: str,
+) -> None:
+    """A typo must not cost the other edits, and what was typed stays in the field."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.replace_rule_list(db, "command-deny", "^sudo( |$)\n")
+        async with await client_for(db) as client:
+            refused = await client.post(
+                "/settings",
+                data={
+                    "claude.effort": "enormous",
+                    "claude.model": "sonnet",
+                    "rules:command-deny": "^deploy( |$)\n^unclosed(\n",
+                    "prompt:edit": "   ",
+                    "tool_routes": "{not json",
+                },
+            )
             assert refused.status_code == 400
-            assert "refused" in refused.text
+            assert "4 values refused" in refused.text and "1 saved" in refused.text
+            assert refused.text.count("Not saved:") == 4
+            # What was typed is still there, and the page opens at the first refused field.
+            assert "^unclosed(" in area(refused.text, "rules:command-deny")
+            assert 'data-open="checker-edit"' in refused.text
+            values = await admin.settings(db)
+            assert values["claude"] == {"model": "sonnet"}
+            rows = await admin.rules(db, rule_list="command-deny")
+            assert [r.pattern for r in rows if r.enabled] == ["^sudo( |$)"]
+            assert (await admin.instructions(db, "edit")).strip()
+    finally:
+        await conn.close()
+
+
+async def test_a_project_scope_overrides_values_and_adds_rules(db_url: str) -> None:
+    """A project shows what it inherits, stores only its own values and cannot edit prompts."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.add_project(db, "demo")
+        await admin.set_setting(db, "claude.effort", "high")
+        await admin.replace_rule_list(db, "command-allow", "^ls( |$)\n")
+        command = await admin.instructions(db, "command")
+        async with await client_for(db) as client:
+            page = (await client.get("/settings?project=demo")).text
+            # The global value is what the project inherits, and what "Reset" returns to.
+            assert '<option value="high" selected>' in page
+            assert "1 global pattern(s) apply as well" in page
+            assert "global only" in page  # the instructions are shared by every project
+
+            await client.post(
+                "/settings?project=demo",
+                data={
+                    "claude.effort": "low",
+                    "rules:command-allow": "^make( |$)\n",
+                    "prompt:command": "A project may not change this.",
+                },
+            )
+            assert (await admin.settings(db, "demo"))["claude"]["effort"] == "low"
             assert (await admin.settings(db))["claude"]["effort"] == "high"
+            own = await admin.rules(db, "demo", "command-allow")
+            assert [r.pattern for r in own if r.scope == "demo"] == ["^make( |$)"]
+            assert any(r.scope == "global" for r in own), "the global list is untouched"
+            assert await admin.instructions(db, "command") == command
+
+            assert (await client.get("/settings?project=nobody")).status_code == 404
+    finally:
+        await conn.close()
+
+
+async def test_a_starter_rule_set_is_added_from_the_rules_pane(db_url: str) -> None:
+    """D143: a set is offered beside the lists, added once, and then part of the text."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        async with await client_for(Db(conn)) as client:
+            page = (await client.get("/settings")).text
+            assert 'name="add_set" value="publishing"' in page
+            assert "push( |$)" not in area(page, "rules:command-deny")
+
+            first = await client.post("/settings", data={"add_set": "publishing"})
+            assert first.status_code == 200
+            assert "rule(s) added from the set" in first.text
+            assert "^git( -[Cc] \\S+)* push( |$)" in area(first.text, "rules:command-deny")
+
+            again = await client.post("/settings", data={"add_set": "publishing"})
+            assert "0 rule(s) added from the set" in again.text, "a second press adds nothing"
+            assert (await client.post("/settings", data={"add_set": "all"})).status_code == 404
+    finally:
+        await conn.close()
+
+
+async def test_an_extra_checker_is_switched_on_and_given_a_model_on_the_page(db_url: str) -> None:
+    """The honesty checker's row is edited on the Code honesty pane, beside `honesty.mode`."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        async with await client_for(db) as client:
+            await client.post(
+                "/settings",
+                data={
+                    "_present": "checker:honesty:enabled",
+                    "checker:honesty:enabled": "on",
+                    "checker:honesty:model": "claude:haiku",
+                    "checker:honesty:request_limit": "7",
+                    "honesty.mode": "track",
+                    "honesty.rules": "# Our standard\n\nNumPy docstrings.",
+                },
+            )
+            row = next(r for r in await admin.checkers(db) if r.name == "honesty")
+            assert (row.enabled, row.model, row.request_limit) == (True, "claude:haiku", 7)
+            values = await admin.settings(db)
+            assert values["honesty"] == {
+                "mode": "track",
+                "rules": "# Our standard\n\nNumPy docstrings.\n",
+            }
+            # Emptying the honesty rules returns to the text calu ships.
+            await client.post("/settings", data={"honesty.rules": ""})
+            assert "rules" not in (await admin.settings(db))["honesty"]
+            page = (await client.get("/settings")).text
+            assert "What dishonesty is" in area(page, "honesty.rules")
     finally:
         await conn.close()
 

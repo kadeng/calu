@@ -46,6 +46,19 @@ def _read(relative: str) -> str:
     )
 
 
+def system_part(route: str) -> str:
+    """Return the fixed part calu puts in front of the instructions of a route's checkers.
+
+    Args:
+        route: The checker's route, e.g. "edit".
+
+    Returns:
+        The Markdown text of `system/<route>.md`, or "" for a route without a system part.
+    """
+    name = SYSTEM_PARTS.get(route)
+    return _read(f"system/{name}.md") if name is not None else ""
+
+
 def default_instructions(name: str) -> str:
     """Return the shipped user instructions of a checker type (its editable part).
 
@@ -111,9 +124,9 @@ def compose_instructions(
         contains "# The user's instructions" followed by the given text.
     """
     parts: list[str] = []
-    system = SYSTEM_PARTS.get(route)
-    if system is not None:
-        parts.append(_read(f"system/{system}.md").strip())
+    system = system_part(route)
+    if system:
+        parts.append(system.strip())
         parts.append("# The user's instructions\n\n" + user.strip())
     else:
         parts.append(user.strip())

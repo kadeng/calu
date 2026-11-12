@@ -172,10 +172,11 @@ there.
   the keyboard, with "remember exactly this command" turning the decision into an anchored rule.
   Every page carries an attention badge (filled from `/api/sessions`, also in the tab title) and
   a jump palette on Ctrl+K that goes to any session's live view.
-  `/settings` is generated from `calu.config.Config`, so every value — Claude's model and effort,
-  `use_bedrock`, each checker's model and thinking effort, the sandbox, the clock, the write sets
-  — is editable with the right control, and `/checkers/{name}` edits the instructions with
-  Ctrl+S. Git links point into the project's own browser (`calu.web.git`); calu browses no git.
+  `/settings` is one page for everything that steers a session (D182): the configuration values
+  generated from `calu.config.Config`, each checker's instructions, and the allow and deny
+  lists, per scope, with a pane per topic, a search across all and one save
+  (`calu.web.settings` builds the page model and writes the changes). `/rules` and
+  `/checkers/{name}` redirect into it. Git links point into the project's own browser (`calu.web.git`); calu browses no git.
 - **Forking a conversation** (D36, verified end to end): `calu run --resume <id>
   --fork-before-turn <n>` keeps everything up to the previous turn and discards turn n, under a
   new session id, so the original conversation stays as it was. calu records the transcript uuids

@@ -10,7 +10,7 @@ from calu.defaults.instructions import (
     honesty_rules,
     legacy_instructions,
 )
-from calu.web.settings import parse, sections
+from calu.web.settings import Sources, panes, parse
 
 
 @pytest.mark.parametrize("route", sorted(SYSTEM_PARTS))
@@ -71,9 +71,26 @@ def test_a_type_without_an_old_default_has_none() -> None:
     assert legacy_instructions("no-such-checker") is None
 
 
-def test_the_honesty_rules_are_a_large_field_in_the_settings_page() -> None:
-    """The settings form shows `honesty.rules` as a Markdown text area and keeps its lines."""
-    found = [s for section in sections({}) for s in section.settings if s.path == "honesty.rules"]
-    assert [s.kind for s in found] == ["markdown"]
+def test_the_honesty_rules_are_an_editor_that_shows_the_shipped_text() -> None:
+    """The settings page shows `honesty.rules` as a Markdown editor holding what applies."""
+    src = Sources(None, {}, {}, [], {}, [])
+    found = [f for pane in panes(src) for f in pane.fields if f.name == "honesty.rules"]
+    assert [f.kind for f in found] == ["markdown"]
+    assert found[0].value == honesty_rules() and not found[0].is_set
     assert parse("markdown", "# A\r\n\r\n- b\r\n") == "# A\n\n- b\n"
     assert parse("markdown", "  \n") is None
+
+
+def test_every_setting_of_the_model_is_on_the_page_exactly_once() -> None:
+    """A new configuration field appears on the settings page without a change to the page."""
+    from calu.configdoc import setting_rows
+    from calu.web.settings import SKIP
+
+    src = Sources(None, {}, {}, [], {}, [])
+    names = [f.name for pane in panes(src) for f in pane.fields]
+    assert len(names) == len(set(names))
+    keys = [row[0] for row in setting_rows()]
+    # A nested model has a row of its own; its fields are what the page shows.
+    documented = {key for key in keys if not any(other.startswith(key + ".") for other in keys)}
+    missing = {key for key in documented - set(names) if key.split(".")[-1] not in SKIP}
+    assert not missing, f"not on the settings page: {sorted(missing)}"

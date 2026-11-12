@@ -19,9 +19,9 @@ Pages:
     /triage               one escalation at a time, with the queue behind it
     /api/sessions         the fleet as JSON, for the jump palette and the attention badge
     /escalations/{id}     what the checker saw when it escalated the step
-    /checkers             the checker definitions and their instructions, editable
-    /rules                the allow and deny lists
-    /settings             every configuration value, generated from the model
+    /checkers             what the checkers decided and where a human disagreed
+    /settings             everything that steers a session: the configuration, the checker
+                          instructions and the allow and deny lists, per scope
 
 **There is no login** (PLAN.md Q4 is open), so the server refuses to bind anything but the
 loopback interface: reach it from another machine through an SSH tunnel
@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -61,6 +62,27 @@ log = logging.getLogger(__name__)
 
 HERE = Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=str(HERE / "templates"))
+
+
+def _prose(text: str) -> Markup:
+    """Render a sentence of help text, with `code` spans as code.
+
+    Args:
+        text: Plain text in which backticks mark code, as the configuration docstrings use.
+
+    Returns:
+        The escaped text with each backtick pair turned into a `<code>` element.
+    """
+    parts = str(text).split("`")
+    if len(parts) % 2 == 0:  # an unpaired backtick: show the text as it is
+        return escape(text)
+    return Markup("").join(
+        Markup("<code>{}</code>").format(part) if index % 2 else escape(part)
+        for index, part in enumerate(parts)
+    )
+
+
+TEMPLATES.env.filters["prose"] = _prose
 """The page templates; they ship with the package."""
 
 MAX_STEPS = 300
@@ -212,22 +234,8 @@ def create_app(db: Db, git_url_template: str = "", token: str | None = None) -> 
             name="resolve",
         ),
         Route("/checkers", _page(checkers, state), name="checkers"),
-        Route(
-            "/checkers/{name}",
-            _page(checker_page, state),
-            methods=["GET", "POST"],
-            name="checker",
-        ),
-        Route("/rules", _page(rules, state), name="rules"),
-        Route(
-            "/rules/{rule_list}", _page(save_rule_list, state), methods=["POST"], name="save_rules"
-        ),
-        Route(
-            "/rule-sets/{name}",
-            _page(add_rule_set, state),
-            methods=["POST"],
-            name="add_rule_set",
-        ),
+        Route("/checkers/{name}", _page(checker_redirect, state), name="checker"),
+        Route("/rules", _page(rules_redirect, state), name="rules"),
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
@@ -1109,261 +1117,115 @@ async def checkers(request: Request, state: _State) -> Response:
     )
 
 
-async def checker_page(request: Request, state: _State) -> Response:
-    """Show one checker's instructions in an editable form, or store what was edited.
-
-    The same URL serves the form and takes it, so editing the instructions is one page and one
-    keystroke (the page submits on Ctrl+S) — this is the page an owner visits most.
+async def checker_redirect(request: Request, state: _State) -> Response:
+    """Send an old link to a checker's own page to that checker on the settings page.
 
     Args:
-        request: The request; its path holds the checker's name. A POST holds the new
-            `instructions`.
+        request: The request; its path holds the checker's name.
         state: The shared state.
 
     Returns:
-        The checker page, a redirect after a successful save, a 400 page if the instructions are
-        empty, or a 404 page if there is no such checker.
+        A redirect to the pane of the settings page that edits the checker.
     """
     name = str(request.path_params["name"])
-    if request.method == "POST":
-        return await save_checker(request, state)
-    rows = [row for row in await admin.checkers(state.db) if row.name == name]
-    if not rows:
-        return HTMLResponse(_not_found(name), status_code=404)
-    return _render(
-        request,
-        "checker.html",
-        {
-            "checker": rows[0],
-            "instructions": await admin.instructions(state.db, name),
-            "saved": request.query_params.get("saved") == "1",
-        },
+    pane = (
+        "honesty" if name == "honesty" else "context" if name == "narrator" else f"checker-{name}"
     )
+    return RedirectResponse(f"{request.url_for('settings')}#{pane}", 307)
 
 
-async def save_checker(request: Request, state: _State) -> Response:
-    """Store new instructions for a checker; running sessions pick them up at their next step.
-
-    A changed definition bumps the checker's version and is written to the audit log, as it is
-    for `calu checker set` (the database does both).
+async def rules_redirect(request: Request, state: _State) -> Response:
+    """Send an old link to the rules page to the rule lists on the settings page.
 
     Args:
-        request: The request; its form holds the `instructions`.
+        request: The request; `?project=` is kept.
         state: The shared state.
 
     Returns:
-        A redirect back to the checker page, or a 400 page if the instructions are empty.
+        A redirect to the command rules of the settings page.
     """
-    name = str(request.path_params["name"])
-    form = await request.form()
-    instructions = str(form.get("instructions") or "").strip()
-    if not instructions:
-        return HTMLResponse(_bad("the instructions may not be empty"), status_code=400)
-    try:
-        await admin.set_checker(state.db, name, instructions_text=instructions)
-    except admin.AdminError as exc:
-        return HTMLResponse(_bad(str(exc)), status_code=400)
-    url = request.url_for("checker", name=name).include_query_params(saved="1")
-    return RedirectResponse(url, 303)
-
-
-async def rules(request: Request, state: _State) -> Response:
-    """Show the allow and deny lists, grouped by list.
-
-    Args:
-        request: The request.
-        state: The shared state.
-
-    Returns:
-        The rules page.
-    """
-    return await _rules_page(request, state)
-
-
-RULE_GROUPS = (
-    ("Commands", "command", "a command"),
-    ("File reads", "read", "a path a tool reads"),
-    ("File writes", "write", "a path a tool writes"),
-)
-"""The three kinds of list, each shown as its allow list beside its deny list."""
-
-
-async def _rules_page(
-    request: Request,
-    state: _State,
-    failed: tuple[str, str, str] | None = None,
-) -> Response:
-    """Render the rules page: every list of one scope as a text area (PLAN.md D137).
-
-    Args:
-        request: The request; `?project=` names the scope, `?saved=` a list just stored.
-        state: The shared state.
-        failed: (list, the text that was submitted, why it was refused) after a save that did
-            not go through, so the page shows the error at that list and keeps what was typed.
-
-    Returns:
-        The page; status 400 when `failed` is given.
-    """
-    project = request.query_params.get("project") or None
-    rows = await admin.rules(state.db, project)
-    scope = project or "global"
-    texts: dict[str, str] = {}
-    disabled: dict[str, int] = {}
-    inherited: dict[str, int] = {}
-    for rule_list in admin.RULE_LISTS:
-        own = [r for r in rows if r.list == rule_list and r.scope == scope]
-        texts[rule_list] = admin.rule_list_text([r for r in own if r.enabled])
-        disabled[rule_list] = sum(1 for r in own if not r.enabled)
-        inherited[rule_list] = sum(
-            1 for r in rows if r.list == rule_list and r.scope == "global" and project
-        )
-    error = None
-    if failed is not None:
-        texts[failed[0]] = failed[1]
-        error = {"list": failed[0], "message": failed[2]}
-    page = _render(
-        request,
-        "rules.html",
-        {
-            "groups": RULE_GROUPS,
-            "texts": texts,
-            "counts": {name: _pattern_count(text) for name, text in texts.items()},
-            "disabled": disabled,
-            "inherited": inherited,
-            "project": project,
-            "projects": await admin.projects(state.db),
-            "saved": None if failed else request.query_params.get("saved"),
-            "error": error,
-            # Ready-made sets that are not in the default lists (D143), offered under the list
-            # they would be added to.
-            "rule_sets": [
-                (name, rule_list, what) for name, (rule_list, what) in admin.RULE_SETS.items()
-            ],
-            "set_added": request.query_params.get("set_added"),
-        },
-    )
-    if failed is not None:
-        page.status_code = 400
-    return page
-
-
-def _pattern_count(text: str) -> int:
-    """Count the patterns in the text of a rule list.
-
-    Args:
-        text: The list as edited: patterns, `#` comments and blank lines.
-
-    Returns:
-        The number of pattern lines.
-    """
-    return sum(1 for line in text.splitlines() if line.strip() and not line.strip().startswith("#"))
-
-
-async def save_rule_list(request: Request, state: _State) -> Response:
-    """Replace one rule list of one scope with the text of its form (PLAN.md D137).
-
-    The whole list is replaced, as `calu rules edit` does, through
-    `calu.admin.replace_rule_list`: every pattern is compiled before anything is deleted, so a
-    typo leaves the list as it was -- and the page then shows the error at that list with the
-    text still in it, so nothing typed is lost. Disabled rules are not part of the text and are
-    kept.
-
-    Args:
-        request: The request; its path names the list, `?project=` the scope, and its form
-            holds `text`.
-        state: The shared state.
-
-    Returns:
-        A redirect back to the page with `saved=<list>`, or the page with the error (400).
-    """
-    rule_list = str(request.path_params["rule_list"])
-    project = request.query_params.get("project") or None
-    form = await request.form()
-    text = str(form.get("text") or "").replace("\r\n", "\n")
-    try:
-        await admin.replace_rule_list(state.db, rule_list, text, project)
-    except admin.AdminError as exc:
-        return await _rules_page(request, state, failed=(rule_list, text, str(exc)))
-    query = f"?project={project}&saved={rule_list}" if project else f"?saved={rule_list}"
-    return RedirectResponse(
-        str(request.url_for("rules")) + query + f"#{rule_list}", status_code=303
-    )
-
-
-async def add_rule_set(request: Request, state: _State) -> Response:
-    """Append a ready-made rule set to its list in one scope (PLAN.md D143).
-
-    The same as `calu rules add-set NAME`, through `calu.admin.add_rule_set`: patterns the list
-    already has, disabled ones included, are skipped, so pressing the button twice adds nothing.
-
-    Args:
-        request: The request; its path names the set, `?project=` the scope.
-        state: The shared state.
-
-    Returns:
-        A redirect back to the page at that list, with `set_added=<count>`; 404 for an unknown
-        set or project.
-    """
-    name = str(request.path_params["name"])
-    project = request.query_params.get("project") or None
-    try:
-        added, _skipped = await admin.add_rule_set(state.db, name, project)
-    except admin.AdminError as exc:
-        return HTMLResponse(_not_found(str(exc)), status_code=404)
-    rule_list = admin.RULE_SETS[name][0]
-    query = f"?set_added={len(added)}" + (f"&project={project}" if project else "")
-    return RedirectResponse(
-        str(request.url_for("rules")) + query + f"#{rule_list}", status_code=303
-    )
+    url = request.url_for("settings")
+    project = request.query_params.get("project")
+    if project:
+        url = url.include_query_params(project=project)
+    return RedirectResponse(f"{url}#rules-command", 307)
 
 
 async def settings_page(request: Request, state: _State) -> Response:
-    """Show and change the configuration of the global scope or of one project.
+    """Show and change everything that steers a session, for the global scope or one project.
 
-    The form is generated from `calu.config.Config` (`calu.web.settings`), so every value calu
-    knows is editable here with the right control: Claude's model and effort, whether
-    `CLAUDE_CODE_USE_BEDROCK=1` is passed, the model and the thinking effort of each checker,
-    the sandbox, the context budget, the clock watch and the write sets. Only the values that
-    changed are written, each through `calu.admin.set_setting`, which validates the whole
-    configuration first and writes the audit log.
+    One page holds the configuration values, the checker instructions and the allow and deny
+    lists (`calu.web.settings` builds it). A POST writes what the form changed, each value
+    through the `calu.admin` function the command line uses, which validates it and writes the
+    audit log. A refused value does not stop the others: the page comes back with the error at
+    its field and what was typed still in it.
 
     Args:
-        request: The request; `?project=NAME` edits that project's scope. A POST holds the form.
+        request: The request; `?project=NAME` shows that project's scope. A POST holds the
+            form: the fields by name, `_present` for every switch it contains, `_reset` for
+            every configuration key to remove from the scope, and `add_set` when a starter rule
+            set was asked for.
         state: The shared state.
 
     Returns:
-        The settings page, a redirect after a save, or a 400 page if a value is refused.
+        The settings page; a redirect to it after a save that stored everything; the page with
+        status 400 if a value was refused; 404 for an unknown project.
     """
     project = request.query_params.get("project") or None
-    values = await admin.settings(state.db, project)
-    if request.method == "POST":
-        form = await request.form()
-        posted = {key: str(value) for key, value in form.multi_items() if key != "project"}
-        try:
-            changed = web_settings.changes(values, posted)
-        except ValueError as exc:
-            return HTMLResponse(_bad(f"a value was not valid JSON: {exc}"), status_code=400)
-        for key, value in changed.items():
-            try:
-                await admin.set_setting(state.db, key, value, project)
-            except (admin.AdminError, ValueError) as exc:
-                # Everything before this key is stored; the page says which one was refused, so
-                # the human sees what still has to be fixed.
-                return HTMLResponse(_bad(f"{key} was refused: {exc}"), status_code=400)
-        url = request.url_for("settings").include_query_params(saved=str(len(changed)))
-        if project:
-            url = url.include_query_params(project=project)
-        return RedirectResponse(url, 303)
-    return _render(
+    posted: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    saved_now = 0
+    try:
+        if request.method == "POST":
+            form = await request.form()
+            posted = {key: str(value) for key, value in form.multi_items() if key[:1] != "_"}
+            result = await web_settings.save(
+                state.db,
+                project,
+                posted,
+                present=[str(value) for value in form.getlist("_present")],
+                resets=[str(value) for value in form.getlist("_reset")],
+            )
+            errors, saved_now = result.errors, result.count
+            if not errors:
+                url = request.url_for("settings").include_query_params(saved=str(saved_now))
+                if project:
+                    url = url.include_query_params(project=project)
+                add_set = posted.get("add_set")
+                if add_set:
+                    added, _skipped = await admin.add_rule_set(state.db, add_set, project)
+                    url = url.include_query_params(set_added=str(len(added)))
+                return RedirectResponse(url, 303)
+        found = web_settings.panes(await web_settings.load(state.db, project))
+    except admin.AdminError as exc:
+        return HTMLResponse(_not_found(str(exc)), status_code=404)
+    web_settings.overlay(found, posted, errors)
+    nav: list[tuple[str, list[web_settings.Pane]]] = []
+    for pane in found:
+        if not nav or nav[-1][0] != pane.section:
+            nav.append((pane.section, []))
+        nav[-1][1].append(pane)
+    page = _render(
         request,
         "settings.html",
         {
-            "sections": web_settings.sections(values),
+            "panes": found,
+            "sidebar": nav,
             "projects": await admin.projects(state.db),
             "project": project or "",
             "saved": request.query_params.get("saved"),
+            "set_added": request.query_params.get("set_added"),
+            "errors": errors,
+            "saved_now": saved_now,
+            # The pane to show first: the one with the first refused field, if any.
+            "open_pane": next(
+                (pane.id for pane in found if any(item.error for item in pane.fields)), ""
+            ),
         },
     )
+    if errors:
+        page.status_code = 400
+    return page
 
 
 # ------------------------------------------------------------------ helpers

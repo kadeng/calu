@@ -29,13 +29,11 @@ CHECKERS = ["command", "edit", "changeset", "narrator", "subagent-result"]
 
 PAGES = [
     "base.html",
-    "checker.html",
     "checkers.html",
     "escalation.html",
     "escalations.html",
     "fleet.html",
     "live.html",
-    "rules.html",
     "session.html",
     "settings.html",
     "summary.html",
@@ -43,7 +41,7 @@ PAGES = [
 ]
 """The templates `calu.web.app` renders; a missing one is a 500 on that page."""
 
-ASSETS = ["calu.css", "calu.js", "live.js", "triage.js"]
+ASSETS = ["calu.css", "calu.js", "live.js", "settings.js", "triage.js"]
 """The static files the pages reference."""
 
 DATA_DIRECTORIES = {

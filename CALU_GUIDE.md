@@ -632,11 +632,19 @@ Every page shows what needs you and jumps to any session with Ctrl+K. It leads w
 sessions that cannot go on without you, opens one session's history at four
 levels of detail (from the summary a checker reads to every tool input), attaches to a running
 one live — the stream, a visible message queue, stop, interrupt, "steer" into the running turn,
-and a conversation with a background subagent — and answers escalations where they appear. The
-settings page is generated from calu's own configuration model, so Claude's model and effort,
-`CLAUDE_CODE_USE_BEDROCK=1`, each checker's model and thinking effort, the sandbox and the rest
-are all editable, and so are the checker instructions themselves. For git it links into whatever
-browser your project already has rather than growing one of its own.
+and a conversation with a background subagent — and answers escalations where they appear. For
+git it links into whatever browser your project already has rather than growing one of its own.
+
+**Settings** is one page for everything that steers a session, for the global scope or one
+project: each checker's instructions with its model and limits, the six allow and deny lists as
+plain text editors, the honesty rules, Claude Code's model, effort and sandbox, and every other
+configuration value (generated from calu's configuration model, so a new setting appears by
+itself). The sidebar picks a pane, the search (`/`) looks through all of them, and one **Save**
+(Ctrl+S) stores what you changed on any pane. A value the scope stores is marked and has a
+**Reset**; a project shows the global value it inherits. A refused value -- a regular
+expression that does not compile, say -- is reported at its field, keeps what you typed, and
+does not stop the other changes from being saved. Checker instructions are shared by every
+project and are edited in the global scope.
 
 Other agent fleet tools do much of this; what they do not do is the part calu exists for. Some
 of them start the agent with `--dangerously-skip-permissions` so that nothing interrupts it.
@@ -701,7 +709,7 @@ calu summary <session id> --edit              # correct what the checkers read o
 calu rules edit command-deny                  # opens the whole deny list, one regex per line
                                                # (a deny rule for `sudo` also catches `X=1 sudo`,
                                                # `env sudo`, `nohup sudo`, `/usr/bin/sudo`)
-                                               # (the web interface's Rules page edits the same text)
+                                               # (the web interface's Settings page edits the same text)
 calu rules add-set publishing                 # pushes, deploys, releases, uploads: always ask
 calu config list --changed                     # what is set, where it comes from, the defaults
 calu config set claude.model opus             # Claude's model -- for the *next* session

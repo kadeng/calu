@@ -71,12 +71,16 @@ async def test_an_operator_can_work_through_a_session_in_the_browser(db_url: str
 
             # The checker instructions are one click away from the session and save in place.
             await page.goto(f"{base}/sessions/{session_id}")
-            await page.get_by_role("link", name="edit the command instructions").click()
-            await page.fill("textarea", "# Command checker\n\nBe brief.")
             async with page.expect_navigation():
-                await page.get_by_role("button", name="Save").click()
-            assert "saved" in await page.inner_text("main")
-            assert "Be brief." in await page.input_value("textarea")
+                await page.get_by_role("link", name="edit the command instructions").click()
+            assert await page.inner_text(".st-pane.is-active h1") == "Command checker"
+            await page.fill("[name='prompt:command']", "# Command checker\n\nBe brief.")
+            async with page.expect_navigation():
+                await page.keyboard.press("Control+s")
+            assert "1 change saved" in await page.inner_text(".st-flash")
+            # The save comes back to the pane it was made on.
+            assert await page.inner_text(".st-pane.is-active h1") == "Command checker"
+            assert "Be brief." in await page.input_value("[name='prompt:command']")
     finally:
         await conn.close()
 
@@ -154,7 +158,7 @@ async def test_the_badge_and_the_jump_palette_work_on_every_page(db_url: str, pa
         session_id, _escalation = await populate(db)
         async with serve(create_app(db)) as base:
             # The badge is filled from the API, so it shows on a page that knows nothing of it.
-            await page.goto(f"{base}/rules")
+            await page.goto(f"{base}/settings")
             await page.wait_for_function(
                 "document.getElementById('attention').textContent.includes('1 waiting')"
             )
@@ -222,47 +226,92 @@ async def test_the_theme_switch_cycles_and_survives_a_reload(db_url: str, page) 
             # The page being shown is marked in the navigation.
             current = page.locator("header nav a[aria-current=page]")
             assert await current.inner_text() == "Sessions"
-            await page.goto(base + "/rules")
-            assert await current.inner_text() == "Rules"
+            await page.goto(base + "/settings")
+            assert await current.inner_text() == "Settings"
     finally:
         await conn.close()
 
 
-async def test_the_settings_page_can_be_filtered_and_says_what_is_unsaved(
+async def test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_unsaved(
     db_url: str, page
 ) -> None:
-    """D138: 75 settings on one page need a filter, a "changed only" view and a save bar."""
+    """One page for values, instructions and rules: a pane at a time, a search across all."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
         db = Db(conn)
         await admin.set_setting(db, "escalation_timeout_s", 3600)
         async with serve(create_app(db)) as base:
+            problems: list[str] = []
+            page.on("pageerror", lambda error: problems.append(str(error)))
             await page.goto(base + "/settings")
-            visible = "[...document.querySelectorAll('.setting')].filter(r => !r.hidden).length"
-            everything = await page.evaluate(visible)
-            assert everything > 40
+            shown = "[...document.querySelectorAll('.st-pane')].filter(p => p.offsetParent).length"
+            rows = "[...document.querySelectorAll('.st-row')].filter(r => r.offsetParent).length"
+            assert await page.evaluate(shown) == 1, "one pane at a time"
 
-            await page.fill("#settings-filter", "effort")
-            assert 0 < await page.evaluate(visible) < 10
-            await page.fill("#settings-filter", "no setting is called this")
-            assert await page.evaluate(visible) == 0
-            assert await page.is_visible("#no-match")
-            await page.fill("#settings-filter", "")
+            # The sidebar opens a pane; the rule lists are editors, not tables.
+            await page.get_by_role("link", name="Commands", exact=True).click()
+            assert await page.inner_text(".st-pane.is-active h1") == "Commands"
+            assert await page.is_visible("[name='rules:command-deny']")
+            assert await page.locator("main table").count() == 0
 
-            # Only what differs from the default -- here the one value set above.
-            await page.check("#only-changed")
-            assert await page.evaluate(visible) == 1
-            assert "default 28800" in await page.inner_text(".setting.is-changed")
-            await page.uncheck("#only-changed")
+            # The search looks through every pane and shows the rows that match.
+            await page.keyboard.press("/")
+            await page.keyboard.type("effort")
+            assert await page.evaluate(shown) > 3
+            assert 3 < await page.evaluate(rows) < 10
+            await page.fill("#st-search", "no setting is called this")
+            assert await page.is_visible("#st-empty")
+            await page.keyboard.press("Escape")
+            assert await page.evaluate(shown) == 1
 
-            # An edit shows the save bar with a count; Discard puts the value back.
-            assert not await page.is_visible("#save-bar")
-            await page.fill("#f-store_failures_before_stop", "4")
-            assert await page.is_visible("#save-bar")
-            assert await page.inner_text("#dirty-count") == "1"
-            await page.click("#discard")
-            assert not await page.is_visible("#save-bar")
-            assert await page.input_value("#f-store_failures_before_stop") == "10"
+            # A value this scope stores is marked, and "Reset" returns it to the default.
+            await page.goto(base + "/settings#escalation")
+            row = page.locator(".st-row[data-field=escalation_timeout_s]")
+            assert "modified" in await row.inner_text()
+            assert not await page.is_visible("#st-save")
+            await row.get_by_role("button", name="Reset").click()
+            assert await page.input_value("[name=escalation_timeout_s]") == "28800"
+            assert await page.inner_text("#st-dirty-count") == "1"
+
+            # An edit on another pane counts too, and the sidebar says where it is.
+            await page.click("#st-discard")
+            assert await page.input_value("[name=escalation_timeout_s]") == "3600"
+            await page.fill("[name=store_failures_before_stop]", "4")
+            await page.get_by_role("link", name="Session", exact=True).click()
+            await page.locator(".st-row[data-field='claude.use_bedrock'] .st-switch").click()
+            assert await page.inner_text("#st-dirty-count") == "2"
+            assert "Session, Escalation and routing" in await page.inner_text("#st-save")
+            assert await page.locator(".st-nav .st-dot:visible").count() == 2
+            await page.click("#st-discard")
+            assert not await page.is_visible("#st-save")
+
+            # Saving a reset and an edit together, and coming back to the same pane.
+            await page.get_by_role("link", name="Escalation and routing").click()
+            await row.get_by_role("button", name="Reset").click()
+            await page.fill("[name=store_failures_before_stop]", "4")
+            async with page.expect_navigation():
+                await page.get_by_role("button", name="Save changes").click()
+            assert "2 changes saved" in await page.inner_text(".st-flash")
+            assert await page.inner_text(".st-pane.is-active h1") == "Escalation and routing"
+            assert await admin.settings(db) == {"store_failures_before_stop": 4}
+
+            # A refused value opens its pane and keeps what was typed.
+            await page.fill("[name=store_failures_before_stop]", "-3")
+            await page.get_by_role("link", name="Commands", exact=True).click()
+            await page.fill("[name='rules:command-allow']", "^unclosed(")
+            async with page.expect_navigation():
+                await page.get_by_role("button", name="Save changes").click()
+            assert "2 values refused" in await page.inner_text(".st-flash")
+            assert await page.inner_text(".st-pane.is-active h1") == "Commands"
+            assert await page.input_value("[name='rules:command-allow']") == "^unclosed("
+            assert "Not saved" in await page.inner_text(".st-pane.is-active")
+
+            # A phone gets the same page in one column, without a sideways scroll.
+            await page.set_viewport_size({"width": 390, "height": 800})
+            await page.goto(base + "/settings#claude")
+            wide = "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+            assert not await page.evaluate(wide)
+            assert not problems, problems
     finally:
         await conn.close()

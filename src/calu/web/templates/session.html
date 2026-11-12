@@ -188,6 +188,6 @@ session shows the real thinking as it streams.</p>
 <p class="row">
   <a href="{{ url_for('summary', session_id=session.id) }}">the folded conversation they read</a> ·
   {% for c in checker_names %}<a href="{{ url_for('checker', name=c) }}">edit the {{ c }} instructions</a>{{ '·' if not loop.last }}{% endfor %}
-  · <a href="{{ url_for('rules') }}">the allow and deny lists</a>
+  · <a href="{{ url_for('settings') }}#rules-command">the allow and deny lists</a>
 </p>
 {% endblock %}

@@ -155,7 +155,11 @@ escalation resolved from the database alone.
    second.
 7. `calu web`: open the printed address (it carries the token); the plain address must answer
    401, and a `curl -X POST` without the cookie must not decide anything (D161). Then the
-   fleet, a session at all four levels of detail, the triage queue, the settings page, Ctrl+K.
+   fleet, a session at all four levels of detail, the triage queue, Ctrl+K. On the settings
+   page (D182): open a checker pane and a rules pane, search for "effort", change a value on two
+   panes and save once, type a broken regular expression into a rule list and check that the
+   error is shown at the list with the text still there, switch the scope to a project and
+   check that the global value is shown as inherited; repeat the first steps at phone width.
 8. The session mode from a client (D42): with a session running, set `auto_escalate.edits` on
    the settings page and watch an attached `calu attach` report it; then the session page must
    list the change with who asked for it (D43). With an ACP editor, the same through its own

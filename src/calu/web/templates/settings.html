@@ -1,176 +1,175 @@
 {% extends "base.html" %}
 {% block title %}Settings · calu{% endblock %}
+{% block main_attrs %} class="st-shell"{% endblock %}
+
+{# One control. `f` is a calu.web.settings.Field; the form name says where it is stored. #}
+{% macro control(f, id) -%}
+  {%- set off = ' disabled' if f.locked else '' -%}
+  {%- if f.kind == 'bool' -%}
+    <input type="hidden" name="_present" value="{{ f.name }}"{{ off }}>
+    <label class="st-switch"><input type="checkbox" id="{{ id }}" name="{{ f.name }}" {{ 'checked' if f.value }}{{ off }}><span aria-hidden="true"></span></label>
+  {%- elif f.kind == 'choice' -%}
+    <select id="{{ id }}" name="{{ f.name }}"{{ off }}>
+      <option value="" {{ 'selected' if f.value is none }}>—</option>
+      {% for choice in f.choices %}<option value="{{ choice }}" {{ 'selected' if f.text == choice }}>{{ choice }}</option>{% endfor %}
+    </select>
+  {%- elif f.block -%}
+    <div class="st-editor{% if f.tone %} st-editor--{{ f.tone }}{% endif %}">
+      <textarea id="{{ id }}" name="{{ f.name }}" spellcheck="false" autocomplete="off" autocapitalize="off"
+                data-kind="{{ f.kind }}" rows="{{ 3 if f.kind in ('lines', 'json') else 6 }}"
+                {% if f.placeholder %}placeholder="{{ f.placeholder }}"{% endif %}{{ ' readonly' if f.locked else '' }}>{{ f.text }}</textarea>
+    </div>
+  {%- else -%}
+    <input type="{{ 'number' if f.kind in ('int', 'number') else 'text' }}" id="{{ id }}" name="{{ f.name }}"
+           value="{{ f.text }}" autocomplete="off" spellcheck="false"
+           {% if f.kind == 'number' %}step="any"{% endif %}
+           {% if f.suggestions %}list="claude-models"{% endif %}{{ off }}>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro row(f) -%}
+  {%- set id = 'f-' ~ f.name | replace('.', '-') | replace(':', '-') -%}
+  {%- set head, rest = f.help_parts -%}
+  <div class="st-row st-row--{{ 'block' if f.block else ('text' if f.kind == 'text' else 'inline') }}{{ ' is-set' if f.is_set }}{{ ' is-locked' if f.locked }}{{ ' has-error' if f.error }}"
+       data-field="{{ f.name }}" data-kind="{{ f.kind }}" data-search="{{ f.search }}"
+       {% if f.key and not ':' in f.name %}data-base="{{ f.base_text }}"{% endif %}>
+    <div class="st-row-text">
+      <div class="st-row-title">
+        {% if f.tone %}<span class="st-tone st-tone--{{ f.tone }}" aria-hidden="true"></span>{% endif %}
+        <label for="{{ id }}">{{ f.label }}</label>
+        {% if f.is_set %}<span class="st-chip" title="This scope stores its own value. Reset returns to {{ f.base_label }}">{{ 'project override' if project else 'modified' }}</span>{% endif %}
+        {% if f.locked %}<span class="st-chip st-chip--lock" title="{{ f.locked }}">global only</span>{% endif %}
+        {% if f.meta %}<span class="st-meta">{{ f.meta }}</span>{% endif %}
+      </div>
+      {% if head %}<div class="st-help">{{ head | prose }}{% if rest %} <details class="st-more"><summary>More</summary><span>{{ rest | prose }}</span></details>{% endif %}</div>{% endif %}
+      {% if f.key %}<code class="st-key">{{ f.key }}</code>{% endif %}
+    </div>
+    <div class="st-row-control">
+      {{ control(f, id) }}
+      {% if f.key and not ':' in f.name and not f.locked %}
+        <button type="button" class="st-reset" data-reset="{{ f.name }}" title="Reset to {{ f.base_label }}"{{ '' if f.is_set else ' hidden' }}>Reset</button>
+      {% endif %}
+    </div>
+    {% if f.error %}<p class="st-error" role="alert">Not saved: {{ f.error }}</p>{% endif %}
+    {% if f.locked and f.block %}<p class="st-locked-note">{{ f.locked }} <a href="{{ url_for('settings') }}">Open Global</a></p>{% endif %}
+    {% if f.extra %}
+      <details class="st-extra"><summary>{{ f.extra_title }}</summary><pre>{{ f.extra }}</pre></details>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
 {% block body %}
-<h1>Settings{% if project %} <span class="muted">· project {{ project }}</span>{% endif %}</h1>
-<p class="muted lead">
-  Every value calu knows, generated from its configuration model, so this form and
-  <code>calu config set</code> take the same names. A running session applies a change at its next
-  step -- except the <code>claude.*</code> settings, which Claude Code reads when a session starts.
-  Writing validates the whole configuration first.
-</p>
-
-<nav class="segmented" aria-label="Scope">
-  <a href="{{ url_for('settings') }}"{% if not project %} aria-current="page"{% endif %}>global</a>
-  {% for p in projects %}
-    <a href="{{ url_for('settings') }}?project={{ p.name }}"{% if p.name == project %} aria-current="page"{% endif %}>{{ p.name }}</a>
-  {% endfor %}
-</nav>
-{% if saved %}<p class="saved" role="status">{{ saved }} setting(s) saved.</p>{% endif %}
-
+<script>document.documentElement.classList.add("st-js");</script>
 <datalist id="claude-models">
   <option value="fable"></option><option value="opus"></option>
   <option value="sonnet"></option><option value="haiku"></option>
 </datalist>
 
-<div class="settings-layout">
-  <aside class="settings-index" aria-label="Sections">
-    <input type="search" id="settings-filter" placeholder="Filter settings…" autocomplete="off"
-           aria-label="Filter settings by name, key or description">
-    <label class="only-changed"><input type="checkbox" id="only-changed"> changed only</label>
-    <nav>
-    {% for section in sections %}
-      {% set changed = section.settings | selectattr('changed') | list | length %}
-      <a href="#s-{{ section.name }}" data-section="{{ section.name }}">{{ section.title }}{% if changed %} <span class="dot" title="{{ changed }} changed">{{ changed }}</span>{% endif %}</a>
-    {% endfor %}
+<div class="st" id="st" data-open="{{ open_pane }}">
+  <aside class="st-side" aria-label="Settings navigation">
+    <div class="st-scope">
+      <label for="st-scope">Scope</label>
+      <select id="st-scope" aria-describedby="st-scope-help">
+        <option value="{{ url_for('settings') }}" {{ 'selected' if not project }}>Global</option>
+        {% for p in projects %}
+          <option value="{{ url_for('settings') }}?project={{ p.name | urlencode }}" {{ 'selected' if p.name == project }}>Project: {{ p.name }}</option>
+        {% endfor %}
+      </select>
+      <p class="st-scope-help" id="st-scope-help">
+        {% if project %}Values set here apply to <strong>{{ project }}</strong> only and override the global ones.
+        {% else %}Applies to every project that does not override a value.{% endif %}
+      </p>
+      <noscript><p class="st-scope-help">
+        <a href="{{ url_for('settings') }}">Global</a>
+        {% for p in projects %} · <a href="{{ url_for('settings') }}?project={{ p.name | urlencode }}">{{ p.name }}</a>{% endfor %}
+      </p></noscript>
+    </div>
+    <div class="st-search">
+      <input type="search" id="st-search" placeholder="Search settings" autocomplete="off"
+             aria-label="Search settings by name, key or description">
+      <kbd>/</kbd>
+    </div>
+    <nav class="st-nav" id="st-nav">
+      {% for section, section_panes in sidebar %}
+        <p class="st-nav-heading">{{ section }}</p>
+        {% for pane in section_panes %}
+          <a href="#{{ pane.id }}" data-pane="{{ pane.id }}">
+            <span>{{ pane.title }}</span>
+            {% if pane.set_count %}<span class="st-count" title="{{ pane.set_count }} value(s) set in this scope">{{ pane.set_count }}</span>{% endif %}
+            <span class="st-dot" title="Unsaved changes" hidden></span>
+          </a>
+        {% endfor %}
+      {% endfor %}
     </nav>
   </aside>
 
-  <form method="post" action="{{ url_for('settings') }}{% if project %}?project={{ project }}{% endif %}" id="settings">
-  {% for section in sections %}
-    <section class="settings-section" id="s-{{ section.name }}" data-section="{{ section.name }}">
-    <h2>{{ section.title }}</h2>
-    <div class="card">
-    {% for s in section.settings %}
-      {# The text on the left, the control in a column of its own, so that a checkbox lines up
-         with every other control. The label points at its control by id, so it stays clickable. #}
-      {%- set field = 'f-' ~ s.path|replace('.', '-') %}
-      {%- set head, rest = s.help_parts %}
-      <div class="setting{% if s.changed %} is-changed{% endif %}"
-           data-search="{{ (s.label ~ ' ' ~ s.path ~ ' ' ~ s.help) | lower }}">
-        <div class="setting-text">
-          <label for="{{ field }}">{{ s.label }}</label>
-          <code class="setting-key">{{ s.path }}</code>
-          {% if s.changed %}<span class="badge-changed" title="differs from the default">changed · default {{ s.default_text }}</span>{% endif %}
-          {% if head %}
-            {# A div, not a p: a <details> may not sit inside a paragraph, and the browser closed it
-               early, which put "more" on a line of its own. #}
-            <div class="setting-help">{{ head }}
-            {%- if rest %} <details class="more"><summary>more</summary>{{ rest }}</details>{% endif %}</div>
-          {% endif %}
-        </div>
-        <div class="setting-control">
-        {% if s.kind == 'bool' %}
-          <input type="checkbox" id="{{ field }}" name="{{ s.path }}" {{ 'checked' if s.value }}>
-        {% elif s.kind == 'choice' %}
-          <select id="{{ field }}" name="{{ s.path }}">
-            <option value="" {{ 'selected' if s.value is none }}>(the default)</option>
-            {% for choice in s.choices %}
-              <option value="{{ choice }}" {{ 'selected' if s.value|string == choice }}>{{ choice }}</option>
-            {% endfor %}
-          </select>
-        {% elif s.kind == 'markdown' %}
-          <textarea id="{{ field }}" name="{{ s.path }}" rows="14" spellcheck="false"
-                    placeholder="(empty: calu's shipped text applies)">{{ s.text }}</textarea>
-        {% elif s.kind == 'lines' or s.kind == 'json' %}
-          <textarea id="{{ field }}" name="{{ s.path }}" rows="4" spellcheck="false">{{ s.text }}</textarea>
-        {% else %}
-          <input type="{{ 'number' if s.kind in ('int', 'number') else 'text' }}"
-                 id="{{ field }}"
-                 {% if s.kind == 'number' %}step="any"{% endif %}
-                 name="{{ s.path }}" value="{{ s.text }}"
-                 {% if s.suggestions %}list="claude-models"{% endif %}>
-        {% endif %}
-        </div>
+  <form class="st-main" id="st-form" method="post"
+        action="{{ url_for('settings') }}{% if project %}?project={{ project | urlencode }}{% endif %}">
+    {% if saved is not none %}
+      <div class="st-flash st-flash--ok" role="status">
+        <strong>{{ saved }} change{{ '' if saved == '1' else 's' }} saved.</strong>
+        Running sessions use them at their next step; the Claude Code and sandbox settings apply to the next session.
+        {% if set_added is not none %}<br>{{ set_added }} rule(s) added from the set.{% endif %}
       </div>
-    {% endfor %}
-    </div>
-    </section>
-  {% endfor %}
-    <p class="empty" id="no-match" hidden>No setting matches the filter.</p>
+    {% endif %}
+    {% if errors %}
+      <div class="st-flash st-flash--bad" role="alert">
+        <strong>{{ errors | length }} value{{ '' if errors | length == 1 else 's' }} refused</strong>{% if saved_now %}, {{ saved_now }} saved{% endif %}.
+        Nothing you typed is lost:
+        {% for pane in panes %}{% for f in pane.fields if f.error %}<a href="#{{ pane.id }}" data-goto="{{ pane.id }}">{{ pane.title }} › {{ f.label }}</a> {% endfor %}{% endfor %}
+      </div>
+    {% endif %}
 
-    <div class="save-bar" id="save-bar" hidden>
-      <span><strong id="dirty-count">0</strong> unsaved change(s)</span>
-      <button type="button" id="discard">Discard</button>
-      <button class="primary" type="submit">Save</button>
-      <span class="muted">Ctrl+S</span>
+    <p class="st-results" id="st-results" hidden></p>
+
+    {% for pane in panes %}
+    <section class="st-pane" id="{{ pane.id }}" data-pane="{{ pane.id }}" data-title="{{ pane.title }}" aria-labelledby="h-{{ pane.id }}">
+      <div class="st-pane-head">
+        <p class="st-crumb">{{ pane.section }}{% if project %} · project {{ project }}{% endif %}</p>
+        <h1 id="h-{{ pane.id }}">{{ pane.title }}</h1>
+        {% if pane.description %}<p class="st-desc">{{ pane.description }}</p>{% endif %}
+      </div>
+      {% for group in pane.groups %}
+        <div class="st-group">
+          {% if pane.groups | length > 1 or group.note %}<h2>{{ group.title }}</h2>{% endif %}
+          {% if group.note %}<p class="st-note">{{ group.note | prose }}</p>{% endif %}
+          <div class="st-card">
+            {% for f in group.fields %}{{ row(f) }}{% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+      {% if pane.rule_sets %}
+        <div class="st-group">
+          <h2>Starter sets</h2>
+          <p class="st-note">The lists start empty, so every step goes to a checker. A set appends the patterns a list does not have yet; afterwards they are ordinary rules you can edit or delete.</p>
+          <div class="st-card">
+            {% for set in pane.rule_sets %}
+              <div class="st-row st-row--inline" data-search="{{ set.name }} {{ set.what | lower }} rule set">
+                <div class="st-row-text">
+                  <div class="st-row-title"><span class="st-label">{{ set.name }}</span></div>
+                  <div class="st-help">{{ set.what | capitalize }}.</div>
+                  <code class="st-key">calu rules add-set {{ set.name }}</code>
+                </div>
+                <div class="st-row-control">
+                  <button type="submit" name="add_set" value="{{ set.name }}">Add {{ set.name }}</button>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    </section>
+    {% endfor %}
+
+    <p class="st-empty" id="st-empty" hidden>No setting matches. <button type="button" class="st-link" id="st-clear">Clear the search</button></p>
+
+    <div class="st-save" id="st-save" hidden>
+      <div class="st-save-text"><strong id="st-dirty-count">0</strong> unsaved <span id="st-dirty-word">changes</span> <span class="st-save-where" id="st-dirty-where"></span></div>
+      <button type="button" id="st-discard">Discard</button>
+      <button class="primary" type="submit" id="st-submit">Save changes <kbd>Ctrl S</kbd></button>
     </div>
+    <noscript><p><button class="primary" type="submit">Save changes</button></p></noscript>
   </form>
 </div>
-
-<script>
-(() => {
-  const form = document.getElementById("settings");
-  const rows = [...document.querySelectorAll(".setting")];
-  const sections = [...document.querySelectorAll(".settings-section")];
-  const links = [...document.querySelectorAll(".settings-index a[data-section]")];
-  const filter = document.getElementById("settings-filter");
-  const onlyChanged = document.getElementById("only-changed");
-  const bar = document.getElementById("save-bar");
-  const count = document.getElementById("dirty-count");
-  const noMatch = document.getElementById("no-match");
-
-  // What each control held when the page loaded, so "unsaved" means "different from that".
-  const initial = new Map();
-  const valueOf = (el) => (el.type === "checkbox" ? String(el.checked) : el.value);
-  for (const el of form.elements) if (el.name) initial.set(el, valueOf(el));
-
-  const refreshDirty = () => {
-    let dirty = 0;
-    for (const [el, value] of initial) {
-      const changed = valueOf(el) !== value;
-      el.closest(".setting")?.classList.toggle("is-dirty", changed);
-      dirty += changed ? 1 : 0;
-    }
-    count.textContent = dirty;
-    bar.hidden = dirty === 0;
-  };
-  form.addEventListener("input", refreshDirty);
-  form.addEventListener("change", refreshDirty);
-  document.getElementById("discard").addEventListener("click", () => {
-    form.reset();
-    refreshDirty();
-  });
-
-  const applyFilter = () => {
-    const words = filter.value.toLowerCase().split(/\s+/).filter(Boolean);
-    let shown = 0;
-    for (const row of rows) {
-      const text = row.dataset.search;
-      const visible = words.every((w) => text.includes(w))
-        && (!onlyChanged.checked || row.classList.contains("is-changed"));
-      row.hidden = !visible;
-      shown += visible ? 1 : 0;
-    }
-    for (const section of sections) {
-      const any = section.querySelector(".setting:not([hidden])");
-      section.hidden = !any;
-      const link = links.find((a) => a.dataset.section === section.dataset.section);
-      if (link) link.classList.toggle("is-empty", !any);
-    }
-    noMatch.hidden = shown !== 0;
-  };
-  filter.addEventListener("input", applyFilter);
-  onlyChanged.addEventListener("change", applyFilter);
-
-  // The section in view is marked in the index.
-  const seen = new IntersectionObserver((entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      for (const a of links) a.toggleAttribute("aria-current", a.dataset.section === entry.target.dataset.section);
-    }
-  }, { rootMargin: "-20% 0px -70% 0px" });
-  sections.forEach((s) => seen.observe(s));
-
-  addEventListener("keydown", (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key === "s") {
-      event.preventDefault();
-      form.requestSubmit();
-    }
-  });
-  addEventListener("beforeunload", (event) => {
-    if (!bar.hidden) { event.preventDefault(); event.returnValue = ""; }
-  });
-  form.addEventListener("submit", () => { bar.hidden = true; });
-})();
-</script>
+<script src="{{ url_for('static', path='/settings.js') }}" defer></script>
 {% endblock %}
