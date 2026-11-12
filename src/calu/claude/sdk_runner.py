@@ -597,6 +597,33 @@ class SdkRunner:
             await self._send_note(note)
             return {}
 
+        async def post_edit(
+            input_data: Any, tool_use_id: str | None, context: Any
+        ) -> dict[str, Any]:
+            """PostToolUse hook for the edit tools: tell the gate that the edit has run.
+
+            Claude Code calls this hook after a tool call that succeeded, and Claude waits
+            while it runs, so the gate has applied the edit's result before the next call is
+            judged (`ToolGate.tool_succeeded`).
+
+            Args:
+                input_data: Hook input (`tool_name`, `tool_input`, `cwd`).
+                tool_use_id: Id of the edit call.
+                context: SDK hook context (unused).
+
+            Returns:
+                An empty hook output.
+            """
+            step = Step(
+                tool_name=str(input_data.get("tool_name", "Edit")),
+                tool_input=input_data.get("tool_input") or {},
+                tool_use_id=tool_use_id,
+                agent_id=input_data.get("agent_id"),
+                cwd=str(input_data.get("cwd") or self.workspace),
+            )
+            await gate.tool_succeeded(step)
+            return {}
+
         async def subagent_stop(
             input_data: Any, tool_use_id: str | None, context: Any
         ) -> dict[str, Any]:
@@ -716,6 +743,11 @@ class SdkRunner:
                         matcher="Bash",
                         hooks=[post_command],  # type: ignore[list-item]
                         timeout=REVIEW_HOOK_TIMEOUT_S,
+                    ),
+                    HookMatcher(
+                        matcher="Edit|Write|MultiEdit|NotebookEdit",
+                        hooks=[post_edit],  # type: ignore[list-item]
+                        timeout=HOOK_TIMEOUT_S,
                     ),
                 ],
                 "SubagentStop": [

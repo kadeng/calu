@@ -1,32 +1,17 @@
-"""The honesty register: code that says something other than what it does (PLAN.md §13).
+"""Code honesty: which code was verified to say what it does (specification of 2026-11-12).
 
-A complex change makes a codebase temporarily dishonest on purpose: a signature changes in one
-step and its callers and its documentation follow in the next five. A checker that objected to
-every such step would produce noise, and one that denied them would stop the work. So a checker
-**records** the spot instead (`CheckDecision.marks_dirty`), clears it when the code and what it
-says about itself agree again (`marks_clean`), and calu enforces the record at the one point
-where temporary dishonesty becomes a risk: a step that would **run** the dirty code is denied
-(D83).
-
-    edit   ──► checker marks src/parser.py:fields dirty
-    edit   ──► still dirty (the callers are not updated yet)
-    edit   ──► clean: the docstring matches again
-    `pytest tests/test_parser.py`  ──► denied while dirty, allowed once clean
-
-Dirty code may always be edited and may not be run. That asymmetry is the point: fixing the
-dishonesty is an edit, so a register that blocked edits would deadlock.
-
-This module holds the parts that need no database and no model: what a mark is, which open marks
-a step would run, and how the register is put in front of a checker.
-
-The second half of the module is the **honesty state** of the redesign (trusted commits, the
-owner's decisions of 2026-11-12). calu tracks which code was verified to be honest:
+Code is honest when its names and documentation say what it does (the honesty rules,
+`calu/defaults/checkers/honesty-rules.md`). Checkers and people judge call sites and commands
+by names and documentation, which is sound only for code that was verified. calu therefore
+tracks which code is verified:
 
     trusted commit   a commit a person or calu certified (database table `trusted_commits`)
     source           who established a trust: user > review > check (`calu.store.trust`);
                      `honesty.sufficient_trust` names the weakest source that counts
     baseline         the nearest ancestor of HEAD that is trusted by a sufficient source
                      (`find_baseline`)
+    mark             a function, method, class or file a checker found dishonest
+                     (`HonestyMark`); a file is dishonest while it has an open mark
     HonestyState     per session, in memory: the marks, the verified contents (path ->
                      SHA-256 and source), the stored trust of file contents it was given,
                      the files to watch that git does not list, "review required"
@@ -35,8 +20,10 @@ owner's decisions of 2026-11-12). calu tracks which code was verified to be hone
                      from it
 
 `HonestyState` reads git and files and nothing else; the database is asked by its caller
-(`find_baseline` takes the lookup as a function). The session still enforces the register
-above; the state replaces it in a later step.
+(`find_baseline` takes the lookup as a function). The session (`calu.session`) applies a
+checker's marks and verifications to the state after the tool call succeeded, and the gate
+(`calu.gate`) decides from a snapshot whether a step may run while `honesty.mode` is
+"enforce". Editing dishonest code is never blocked: fixing it is an edit.
 """
 
 from __future__ import annotations
@@ -45,7 +32,6 @@ import functools
 import hashlib
 import os
 import re
-import shlex
 import stat
 import subprocess
 import threading
@@ -59,20 +45,17 @@ from typing import Any, Concatenate
 
 import anyio.to_thread
 
-from calu.checkers import CodeMark, Step
+from calu.checkers import CodeMark
 from calu.checkers.changeset import GIT_OPTIONS, HEAD_ID
-from calu.checkers.policy import SHELL_TOOLS
-from calu.checkers.shell import parse_command
 from calu.checkers.symbols import definition_names
 from calu.store.trust import TrustSource, stronger, sufficient, weakest
 
 
 @dataclass(frozen=True)
 class HonestyMark:
-    """An open or closed entry of the register, as the database holds it.
+    """One mark of a session's honesty state: a spot a checker or a review found dishonest.
 
-    `symbol` is empty when the whole file is meant. `closed_at` is None while the mark is open,
-    which is what blocks the code from being run.
+    `symbol` is empty when the whole file is meant. `closed_at` is None while the mark is open.
     """
 
     id: int
@@ -80,54 +63,10 @@ class HonestyMark:
     symbol: str
     reason: str
     opened_at: datetime
-    git_branch: str | None = None
     opened_by: str | None = None
-    """Name of the checker whose verdict opened it, or None for a row written before the author
-    was recorded (PLAN.md D87)."""
-    files: dict[str, str] = field(default_factory=dict)
-    """The file this mark was opened on, as it was then, so that an evaluation case built from
-    the mark can be reproduced (D95). Empty for a mark on a step that is not an edit."""
+    """Name of the checker whose answer opened it, or "the honesty review"."""
     closed_at: datetime | None = None
     closed_by: str | None = None
-    workspace: str | None = None
-    """Project directory of the session that opened the mark, or None for a row whose session
-    is gone. `judged_here` uses it: whether a marked file still exists can only be answered
-    where that project is (PLAN.md D126)."""
-    hostname: str | None = None
-    """Host of that session, for the same reason: the same path on another machine is another
-    file."""
-    beyond_step: bool | None = None
-    """True when the mark names a file that the step which opened it did not touch, False when
-    it names one of that step's files, None when the step named no file or the row predates the
-    record (PLAN.md D141, Q20). Only shown, never enforced differently."""
-
-    @property
-    def reach(self) -> str:
-        """Say that the mark reaches beyond its step, if it does.
-
-        Returns:
-            "not a file of its step" for a mark with `beyond_step` True, else "".
-        """
-        return "not a file of its step" if self.beyond_step else ""
-
-    def judged_here(self, workspace: Path, hostname: str) -> bool:
-        """Tell whether this mark's file can be looked at from here.
-
-        An operator reads the register from wherever they are, usually not from the machine the
-        session ran on. "Is the marked file still there?" is then unanswerable, and answering it
-        from the current directory says "the file is gone" about every mark of every other
-        project -- which invites clearing marks that are perfectly valid (D126).
-
-        Args:
-            workspace: The directory the command is being run in.
-            hostname: The host it is being run on.
-
-        Returns:
-            True only when this mark was opened for that directory on that host.
-        """
-        if not self.workspace or not self.hostname:
-            return False
-        return self.hostname == hostname and Path(self.workspace) == workspace
 
     @property
     def open(self) -> bool:
@@ -146,259 +85,14 @@ class HonestyMark:
         """
         return f"{self.path}:{self.symbol}" if self.symbol else self.path
 
-    def stale(self, workspace: Path | None = None, branch: str | None = None) -> str:
-        """Say why this mark looks stale, if it does (PLAN.md D91).
-
-        An open mark blocks every command that would run its code, so a mark that cannot be
-        right any more is pure obstruction. Two cases are recognisable without a model:
-
-        - the **file is gone**: nothing can run it, so the mark only blocks commands that
-          mention the path, and the checker that would clear it will never see that file again;
-        - the mark was made on **another branch**: the file there may be a different file, which
-          is the half of Q19 that does not need the owner's decision -- it is reported, not
-          acted on.
-
-        Args:
-            workspace: The project root, to look for the file; None skips that check, which is
-                the right answer away from the project itself (`judged_here`).
-            branch: The branch the project is on now; None skips that check.
-
-        Returns:
-            A short phrase for the report, or "" when nothing looks wrong. A closed mark is
-            never stale: it blocks nothing.
-        """
-        if not self.open:
-            return ""
-        reasons: list[str] = []
-        if workspace is not None and not (workspace / self.path).exists():
-            reasons.append("the file is gone")
-        if branch and self.git_branch and branch != self.git_branch:
-            reasons.append(f"made on {self.git_branch}, now on {branch}")
-        return "; ".join(reasons)
-
-    def line(self, workspace: Path | None = None, branch: str | None = None) -> str:
-        """Render the mark as one terminal line.
-
-        Args:
-            workspace: The project root, so that a mark whose file is gone can be flagged;
-                None leaves that unchecked.
-            branch: The branch the project is on now, so that a mark from another branch can
-                be flagged; None leaves that unchecked.
-
-        Returns:
-            The spot, the branch, which checker opened it, the reason and -- for a closed mark
-            -- who closed it. The author is named because several checkers may write to the
-            register (PLAN.md D87), so "which of them thinks this" is part of reading a mark.
-            A mark that looks stale says why (`stale`), because an open mark that cannot be
-            right any more only costs the user steps (D91). A mark on a file its step did not
-            touch says so (`reach`, D141).
-        """
-        state = "" if self.open else f"  (closed by {self.closed_by or 'somebody'})"
-        branch_part = f"  [{self.git_branch}]" if self.git_branch else ""
-        author = f"  ({self.opened_by})" if self.opened_by else ""
-        why = self.stale(workspace, branch)
-        flag = f"  <stale: {why}>" if why else ""
-        reach = f"  <{self.reach}>" if self.reach else ""
-        return f"{self.label()}{branch_part}{author}: {self.reason}{state}{reach}{flag}"
-
-    def mark(self) -> CodeMark:
-        """Return this entry as the mark a checker would have written.
-
-        Returns:
-            A `CodeMark` with the same spot and reason, for comparing a checker's marks with
-            the register.
-        """
-        return CodeMark(path=self.path, symbol=self.symbol, reason=self.reason)
-
-
-def command_paths(command: str, cwd: Path, workspace: Path) -> set[str]:
-    """Return the project-relative paths a shell command names.
-
-    Each word of the command is read as a path and normalized the way the register stores one:
-    relative to the project root, without `./` and without a `..` segment. A word that resolves
-    outside the project is dropped, and so is one that names nothing. Two suffixes are cut
-    first, because they name a place *inside* a file and not another file: pytest's
-    `file.py::test_name` and the `file.py:12` of a grep or an editor.
-
-    A **module** argument is read as well (PLAN.md D89): `python -m myapp` and
-    `python -m pkg.module` run project code without naming a file, which is the common way
-    dirty code actually gets executed. The dotted name is turned into the files it could be --
-    `pkg/module.py` and `pkg/module/__init__.py` -- and those are kept when they exist in the
-    project. `-m` is only read after an interpreter (`python`, `python3`, `uv`, `poetry`,
-    `pipenv`), so a `-m` that means something else to another program is ignored.
-
-    The paths the shell splitter resolves are added as well, so a `cd` earlier in the command
-    and a glob are followed (D150).
-
-    Args:
-        command: The shell command as Claude sent it.
-        cwd: The directory the command runs in; a relative word resolves against it.
-        workspace: The project root that the register's paths are relative to.
-
-    Returns:
-        The paths of files that exist in the project, project-relative with forward slashes.
-        Empty when the command names none. A word that normalizes to a path with no file
-        behind it is left out, because every word of a command normalizes to something.
-    """
-    try:
-        words = shlex.split(command)
-    except ValueError:  # an unbalanced quote: fall back to whitespace
-        words = command.split()
-    root = workspace.resolve()
-    base = Path(cwd) if cwd else root
-    if not base.is_absolute():
-        base = root / base
-    found: set[str] = set()
-    for index, word in enumerate(words):
-        if word == "-m" and index + 1 < len(words) and _after_interpreter(words, index):
-            found |= _module_files(words[index + 1], root)
-            continue
-        text = word.split("::", 1)[0]
-        text = re.sub(r":\d+(:\d+)?$", "", text)
-        if not text or text.startswith("-"):
-            continue
-        try:
-            resolved = (
-                (base / text).resolve() if not Path(text).is_absolute() else Path(text).resolve()
-            )
-            relative = resolved.relative_to(root).as_posix()
-        except ValueError, OSError:
-            continue  # outside the project, or not a usable path
-        # Only a file that is really there: every word of a command normalizes to some path,
-        # so `make test` would otherwise report "make" and "test" as paths of the project. A
-        # mark is always on a file a checker read, so requiring the file loses no true match --
-        # and a mark on a file that has since been deleted cannot be run anyway.
-        if (root / relative).is_file():
-            found.add(relative)
-    # The shell splitter follows `cd` and expands globs, which a word-by-word reading cannot:
-    # `cd src && python parser.py` and `python src/pars*.py` run src/parser.py too (D150).
-    for used in parse_command(command, base).paths:
-        for path in used.paths:
-            if path is None:
-                continue
-            try:
-                relative = path.relative_to(root).as_posix()
-            except ValueError:
-                continue
-            if (root / relative).is_file():
-                found.add(relative)
-    return found
-
-
-INTERPRETERS = frozenset({"python", "python3", "python3.14", "uv", "poetry", "pipenv", "pdm"})
-"""Programs whose `-m` argument names a Python module (PLAN.md D89). Another program's `-m`
-means something else, so the module is only read after one of these."""
-
-
-def _after_interpreter(words: Sequence[str], index: int) -> bool:
-    """Tell whether the `-m` at `index` belongs to a Python interpreter.
-
-    Args:
-        words: The words of the command.
-        index: Position of the `-m`.
-
-    Returns:
-        True if an earlier word is an interpreter, by its base name, so that `/usr/bin/python3`
-        and `.venv/bin/python` count as well.
-    """
-    return any(Path(word).name in INTERPRETERS for word in words[:index])
-
-
-def _module_files(module: str, root: Path) -> set[str]:
-    """Return the project files a dotted module name could be (PLAN.md D89).
-
-    Args:
-        module: The module as `-m` names it, e.g. `pkg.module`; a `:` suffix is cut, because
-            `python -m pytest tests/x.py::t` puts the node id elsewhere.
-        root: The project root.
-
-    Returns:
-        The project-relative paths of `pkg/module.py` and `pkg/module/__init__.py` that exist,
-        plus the same under a `src/` layout. Empty when the module names nothing in the project
-        -- an installed dependency is not this project's code.
-    """
-    name = module.split(":", 1)[0].strip()
-    if not name or name.startswith("-"):
-        return set()
-    stem = Path(*name.split("."))
-    candidates = [stem.with_suffix(".py"), stem / "__init__.py"]
-    candidates += [Path("src") / candidate for candidate in list(candidates)]
-    return {candidate.as_posix() for candidate in candidates if (root / candidate).is_file()}
-
-
-def blocking_marks(step: Step, marks: Sequence[HonestyMark], workspace: Path) -> list[HonestyMark]:
-    """Return the open marks that `step` would run.
-
-    Only a command can run code, so only a `Bash` step is matched, and it is matched by path and
-    not by text: every word of the command is normalized to a project-relative path
-    (`command_paths`), so `./src/parser.py` and `/home/me/project/src/parser.py` match a mark on
-    `src/parser.py` while `vendor/src/parser.py` does not. A command that names no marked path
-    -- `make test`, `python -m myapp` -- is not matched here; the register is also put in front
-    of the checker, whose judgement covers those (§13.4).
-
-    An edit or a read is never matched, however dirty the file is: editing the dishonest code is
-    how it gets fixed.
-
-    Args:
-        step: The tool call about to run.
-        marks: The marks to consider; closed ones are ignored.
-        workspace: The project root that the marks' paths are relative to.
-
-    Returns:
-        The open marks the command names, in the order given; empty for every tool other than
-        `Bash` and for a command that names none of them.
-    """
-    if step.tool_name not in SHELL_TOOLS:
-        return []
-    command = str(step.tool_input.get("command", ""))
-    if not command:
-        return []
-    named = command_paths(command, Path(step.cwd) if step.cwd else workspace, workspace)
-    return [entry for entry in marks if entry.open and entry.path and entry.path in named]
-
-
-def marks_of_step(step: Step, marks: Sequence[HonestyMark], workspace: Path) -> list[HonestyMark]:
-    """Return the open marks on the files this step touches (PLAN.md D88).
-
-    For an edit or a read that is the file named in the tool input; for a command it is every
-    path the command names. The caller uses this to tell a checker what the register already
-    says about the code in front of it, which is what lets the checker clear a mark.
-
-    Args:
-        step: The tool call.
-        marks: The marks to consider; closed ones are ignored.
-        workspace: The project root the marks' paths are relative to.
-
-    Returns:
-        The open marks on the step's own files, in the order given.
-    """
-    named: set[str] = set()
-    for key in ("file_path", "notebook_path", "path"):
-        value = step.tool_input.get(key)
-        if isinstance(value, str) and value:
-            candidate = Path(value)
-            base = Path(step.cwd) if step.cwd else workspace
-            try:
-                resolved = candidate if candidate.is_absolute() else base / candidate
-                named.add(resolved.resolve().relative_to(workspace.resolve()).as_posix())
-            except ValueError, OSError:
-                continue
-    if step.tool_name in SHELL_TOOLS:
-        named |= command_paths(
-            str(step.tool_input.get("command", "")),
-            Path(step.cwd) if step.cwd else workspace,
-            workspace,
-        )
-    return [entry for entry in marks if entry.open and entry.path in named]
-
 
 def diff_paths(diff: str) -> set[str]:
-    """Return the project-relative paths a `git diff` text touches (PLAN.md D88).
+    """Return the project-relative paths a `git diff` text touches.
 
-    A commit names no file in its command, so this is how the changeset checker is told which
-    of the files it is about to record are in the register. Only the `diff --git a/x b/x`
-    headers are read, and the `b/` side is taken, because that is the file as it will be after
-    the commit (a rename's `a/` side no longer exists).
+    A commit names no file in its command, so the gate uses this to tell the checkers which
+    open marks are on the files the commit records. Only the `diff --git a/x b/x` headers are
+    read, and the `b/` side is taken, because that is the file as it will be after the commit
+    (a rename's `a/` side no longer exists).
 
     Args:
         diff: The diff as `git diff` prints it; may be empty or a placeholder.
@@ -417,216 +111,25 @@ def diff_paths(diff: str) -> set[str]:
     return found
 
 
-def register_note(
-    marks: Sequence[HonestyMark], own: Sequence[HonestyMark] = (), limit: int = 20
-) -> str:
-    """Render the register as a note for a checker (§13.4, D88).
-
-    The note travels in `Step.notes`, where the rule hints already are, so every checker of the
-    step sees it. It has two parts, because the two routes need different things:
-
-    - the marks on **this step's own files** (`own`), named with their reasons, because an edit
-      checker judging that file is the one that can clear them;
-    - the rest, counted and named up to `limit`, because a command that names no path at all
-      (`make test`) can still reach them and only the checker can tell.
-
-    Args:
-        marks: Every open mark of the project; closed ones are left out.
-        own: The marks on the files this step touches (`marks_of_step`), which are named first.
-        limit: How many of the rest are named before they are only counted.
-
-    Returns:
-        The note, or "" when nothing is open.
-    """
-    standing = [entry for entry in marks if entry.open]
-    if not standing:
-        return ""
-    mine = [entry for entry in own if entry.open]
-    keys = {entry.mark().key() for entry in mine}
-    others = [entry for entry in standing if entry.mark().key() not in keys]
-    parts: list[str] = []
-    if mine:
-        spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in mine)
-        parts.append(
-            "This step's own code is recorded as dishonest: "
-            f"{spots}. If this step makes the code and its documentation agree, say so in "
-            "`marks_clean`; if it leaves them disagreeing, keep the mark in `marks_dirty`."
-        )
-    if others:
-        shown = others[:limit]
-        spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in shown)
-        rest = f" and {len(others) - len(shown)} more" if len(others) > len(shown) else ""
-        parts.append(
-            "Other code recorded as dishonest, which must not be run until it is fixed: "
-            f"{spots}{rest}. A step that would run one of these is a DENY; editing them to "
-            "make the code and its documentation agree is what clears the record."
-        )
-    return " ".join(parts)
-
-
-class Register:
-    """The honesty register of one session, held in memory only (PLAN.md D180).
-
-    Dirty and clean are transient states of the code a session is working on: the owner's
-    answer to Q19 is that they are kept in memory and persisted nowhere -- certainly not in a
-    place as easy to change as a database table. A register therefore lives as long as its
-    session and starts empty; another session of the same project has its own.
-
-        apply(dirty, clean)  ->  opens or refreshes a mark per dirty spot, closes clean ones
-        clear(id)            ->  a person's override: closes one open mark
-        marks                ->  every mark of the session, open and closed, oldest first
-    """
-
-    def __init__(self) -> None:
-        """Create an empty register."""
-        self.marks: list[HonestyMark] = []
-        self._next_id = 1
-
-    @property
-    def open(self) -> list[HonestyMark]:
-        """The open marks, oldest first.
-
-        Returns:
-            The marks nothing has closed yet; these are what blocks a step.
-        """
-        return [mark for mark in self.marks if mark.open]
-
-    def apply(
-        self,
-        dirty: Sequence[CodeMark],
-        clean: Sequence[CodeMark],
-        by: str = "",
-        files: dict[str, str] | None = None,
-        step_paths: Collection[str] = (),
-    ) -> tuple[int, int]:
-        """Open and close marks as a checker's verdict asked (D82).
-
-        A dirty mark for a spot that is already open refreshes its reason, author and reach
-        instead of adding a mark. A clean mark closes the open mark of its spot; one that
-        matches nothing open changes nothing and is not counted.
-
-        Args:
-            dirty: Spots the step left dishonest.
-            clean: Spots that say what they do again.
-            by: Name of the checker whose verdict carried the marks (D87).
-            files: The file the step edits, as it was, kept with a mark it opens (D95).
-            step_paths: The paths the step is about, to record each mark's reach (D141).
-
-        Returns:
-            How many marks were opened or refreshed, and how many were closed.
-        """
-        opened = 0
-        for entry in dirty:
-            reach = beyond_step(entry.path, step_paths)
-            existing = next((m for m in self.open if m.mark().key() == entry.key()), None)
-            if existing is not None:
-                self.marks[self.marks.index(existing)] = replace(
-                    existing, reason=entry.reason, opened_by=by or None, beyond_step=reach
-                )
-            else:
-                self.marks.append(
-                    HonestyMark(
-                        id=self._next_id,
-                        path=entry.path,
-                        symbol=entry.symbol,
-                        reason=entry.reason,
-                        opened_at=datetime.now(UTC),
-                        opened_by=by or None,
-                        files=dict(files or {}),
-                        beyond_step=reach,
-                    )
-                )
-                self._next_id += 1
-            opened += 1
-        closed = 0
-        for entry in clean:
-            existing = next((m for m in self.open if m.mark().key() == entry.key()), None)
-            if existing is None:
-                continue
-            self.marks[self.marks.index(existing)] = replace(
-                existing, closed_at=datetime.now(UTC), closed_by="a checker"
-            )
-            closed += 1
-        return opened, closed
-
-    def clear(self, mark_id: int, by: str) -> HonestyMark | None:
-        """Close one open mark by hand -- the override when a checker is wrong (D83).
-
-        Args:
-            mark_id: The mark's id, as the session reported it.
-            by: Who closed it, for the session's log.
-
-        Returns:
-            The closed mark, or None if no open mark has that id.
-        """
-        for index, mark in enumerate(self.marks):
-            if mark.id == mark_id and mark.open:
-                self.marks[index] = replace(mark, closed_at=datetime.now(UTC), closed_by=by)
-                return self.marks[index]
-        return None
-
-
-def beyond_step(path: str, step_paths: Collection[str]) -> bool | None:
-    """Tell whether a mark's file lies outside the files of the step that produced it (D141).
-
-    Q20 asks the owner whether a checker may mark a file the step did not touch. Until that is
-    decided calu allows it (D112) and records the reach, so a person can see it.
-
-    Args:
-        path: The project-relative path of the mark, as `checked_marks` normalised it.
-        step_paths: The project-relative paths the step is about.
-
-    Returns:
-        None when the step names no file, so that nothing can be said; otherwise whether
-        `path` is not one of them.
-
-    Example:
-        beyond_step("README.md", {"src/parser.py"}) is True;
-        beyond_step("src/parser.py", {"src/parser.py"}) is False;
-        beyond_step("src/parser.py", ()) is None.
-    """
-    if not step_paths:
-        return None
-    return path not in step_paths
-
-
 def checked_marks(
-    marks: Sequence[CodeMark],
-    workspace: Path,
-    step_paths: Collection[str] = (),
-    *,
-    must_exist: bool,
+    marks: Sequence[CodeMark], workspace: Path, *, must_exist: bool
 ) -> tuple[list[CodeMark], list[str]]:
-    """Keep the marks whose path calu may put in the register, and name the rest (PLAN.md D112).
+    """Keep the marks whose path calu may record, and name the rest.
 
-    A mark is not a tool call: it is a field of the checker's structured answer, so the model
-    writes the path as text and nothing checked it. An invented path has two bad outcomes --
-    `../../etc/passwd` or `/tmp/x` sits in the register forever, because only a person can
-    clear it, and a plausible but unrelated project file **blocks commands that run that file**
-    although no checker ever looked at it. Both are filtered here, at the one place that knows
-    the workspace.
-
-    What is required of a path: relative, no `..` component, not absolute, and -- for a mark
-    that opens a spot -- a file that either exists in the workspace or is one of the paths the
-    step itself is about (`step_paths`). The second half matters because a checker judges a
-    step **before** it runs: a mark about the file a `Write` is creating names a file that is
-    not there yet, and rejecting it would throw away the one judgement the checker was asked
-    for.
-
-    A mark that **clears** a spot is checked for shape only. Deleting a dishonest file is a
-    legitimate way to make the register true again, and the file is then gone.
+    A mark is a field of a checker's structured answer: the model writes the path as text.
+    calu records a mark only for a path that is relative to the project and has no `..`
+    component. A mark that opens a spot must also name an existing file; marks are applied
+    after the tool call succeeded, so a file the step created exists by then. A mark that
+    clears a spot is checked for its shape only, because the file may have been deleted.
 
     Args:
         marks: The marks as the checker wrote them.
         workspace: The project root; paths are read relative to it.
-        step_paths: Project-relative paths the step itself touches, which count as existing.
         must_exist: Whether the file has to exist (True for dirty marks, False for clean ones).
 
     Returns:
-        (the marks to use, one message per rejected mark saying which mark and why). The
-        messages are for the log and for `calu checker stats`; a rejected mark is dropped, not
-        escalated, because a checker that names a wrong file has not said anything about the
-        step.
+        (the marks to use, one message per rejected mark saying which mark and why). A
+        rejected mark is dropped and reported in the session's log.
     """
     kept: list[CodeMark] = []
     rejected: list[str] = []
@@ -639,16 +142,12 @@ def checked_marks(
         if candidate.is_absolute() or path.startswith("~") or ".." in candidate.parts:
             rejected.append(f"{mark.label()}: the path must be relative to the project")
             continue
-        if must_exist and path not in step_paths and not (workspace / path).is_file():
+        if must_exist and not (workspace / path).is_file():
             rejected.append(f"{mark.label()}: there is no such file in the project")
             continue
         kept.append(mark.model_copy(update={"path": str(candidate)}))
     return kept, rejected
 
-
-# ---------------------------------------------------------------------------------------------
-# The honesty state: trusted commits, the baseline, verified contents, unreviewed files.
-# ---------------------------------------------------------------------------------------------
 
 BASELINE_SEARCH_LIMIT = 5000
 """How many commits `find_baseline` reads from HEAD backwards. A trusted commit further back is

@@ -66,6 +66,7 @@ from calu.credentials import wipe
 from calu.db import (
     CONFIG_CHANGED,
     ESCALATION_RESOLVED,
+    TRUST_CHANGED,
     ConnectionSource,
     Db,
     Dirty,
@@ -81,6 +82,7 @@ from calu.protocol.messages import (
     EscalationRequest,
     EscalationResolved,
     Event,
+    HonestyInfo,
     HonestyUpdate,
     Log,
     SessionState,
@@ -169,6 +171,49 @@ class RunOptions:
     Code's background tasks still run (D170). None (the default) waits as long as they run."""
 
 
+def honesty_lines(info: HonestyInfo) -> list[str]:
+    """Render the code honesty state of a session as terminal lines.
+
+    Args:
+        info: The state, from `honesty.update` or from the snapshot of `state.get`.
+
+    Returns:
+        One line with the mode, whether the state is clean, the baseline (12 characters of its
+        id and the source of its trust) and the counts; then one line per open mark with its
+        id, and one line naming the first unreviewed files. For the mode "off": one line.
+    """
+    if info.mode == "off":
+        return ["*** code honesty: off"]
+    base = (
+        f"baseline {info.baseline[:12]} ({info.baseline_source})"
+        if info.baseline
+        else "no baseline (certify a commit with /trust)"
+    )
+    unreviewed = (
+        "every file unreviewed"
+        if info.unreviewed_all
+        else f"{info.unreviewed_count} unreviewed file(s)"
+    )
+    parts = [base, f"{len(info.marks)} open mark(s)", unreviewed]
+    if info.review_required:
+        parts.append("review required")
+    if info.review_running:
+        parts.append("a review is running")
+    lines = [
+        f"*** code honesty ({info.mode}): {'clean' if info.clean else 'not clean'}: "
+        + ", ".join(parts)
+    ]
+    lines += [
+        f"    mark {mark.id}: {one_line(mark.label())}: {one_line(mark.reason)}"
+        for mark in info.marks
+    ]
+    if info.unreviewed:
+        rest = info.unreviewed_count - len(info.unreviewed)
+        names = ", ".join(one_line(path) for path in info.unreviewed)
+        lines.append(f"    unreviewed: {names}" + (f", and {rest} more" if rest > 0 else ""))
+    return lines
+
+
 def format_event(event: Event) -> str | None:
     """Render one session event as one terminal line.
 
@@ -227,12 +272,7 @@ def format_event(event: Event) -> str | None:
             )
             return f"[turn ended: {event.subtype}{waiting}]"
         case HonestyUpdate():
-            if not event.marks:
-                return "*** the honesty register is clear again"
-            spots = ", ".join(mark.label() for mark in event.marks[:5])
-            rest = f" and {len(event.marks) - 5} more" if len(event.marks) > 5 else ""
-            verb = "cannot be run" if event.mode == "enforce" else "are recorded (not blocked)"
-            return f"*** dishonest code that {verb}: {spots}{rest}"
+            return "\n".join(honesty_lines(event))
         case AutoEscalateChanged():
             on = [name for name, held in event.settings.model_dump().items() if held]
             waits = ", ".join(on) if on else "nothing beyond what the checkers escalate"
@@ -723,7 +763,8 @@ async def _run(
         # The chat summary is a row like the rules and the instructions, and an operator may
         # have corrected it (D40), so the same notification re-reads it.
         await session.reload_summary()
-        # A changed honesty.mode has to reach the clients (D113).
+        # A changed honesty.mode, or a changed honesty.sufficient_trust, changes the honesty
+        # state that the clients show.
         await session.announce_honesty()
         await console(Log(level="info", message="configuration reloaded"))
 
@@ -769,6 +810,10 @@ async def _run(
     notifier.on(ESCALATION_RESOLVED, lambda payload: _note(session, payload))
     dirty = Dirty()
     notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
+    # A commit or a file content that was certified or removed elsewhere changes the baseline
+    # of this session; the session reads the stored trust again at its next step.
+    notifier.on(TRUST_CHANGED, lambda _payload: session.trust_changed())
+    notifier.on_listening(session.trust_changed)
     # A change committed before LISTEN took effect, or while the listening connection was away,
     # was never announced to this session: look once each time the subscription is in force.
     notifier.on_listening(dirty.hint)

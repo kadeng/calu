@@ -14,6 +14,11 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       system have something to see; the call is
                                                       then reviewed like a command of the real
                                                       runner (`review_write_set`)
+    {"tool": "Bash", "run": ["git", "commit", ...]}   ... and the call really runs that program
+                                                      in the workspace, after its "writes"
+                                                      (no shell; its exit code is ignored)
+    {"tool": "Edit", "input": {...}, "fails": true}   ... the approved call fails: it writes
+                                                      nothing and reports an error result
     {"sleep": 0.5}                                    pause (lets tests inject messages)
     {"background_tasks": 2}                           the turn ends with 2 background tasks
                                                       running; like Claude Code (D158), the
@@ -336,14 +341,17 @@ class FakeRunner:
         """Run one scripted tool call through the gate and report `ToolUse` and `ToolResult`.
 
         An allowed call reports the scripted "result"; a denied call reports the denial
-        message as an error result.
+        message as an error result, and an allowed call with "fails" reports its "result" as an
+        error result without writing anything.
 
-        Side effect: an action with "writes" writes (or deletes) those files in the workspace
-        after the gate approved the call, which is how a scripted command stands in for one that
+        Side effect: an action with "writes" writes (or deletes) those files in the workspace,
+        and an action with "run" runs that program in the workspace, after the gate approved
+        the call, which is how a scripted command stands in for one that
         edits files (`sed -i`, a formatter, a script).
 
         Args:
-            action: The action dict with "tool", optional "input", "writes" and "result".
+            action: The action dict with "tool", optional "input", "writes", "run", "fails"
+                and "result".
             agent: Protocol id of the calling subagent, or None for the main agent.
             gate: Decides about the call; `ask` is awaited for an ASK verdict.
             sink: Receives the events.
@@ -367,9 +375,16 @@ class FakeRunner:
             allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
             message = gate_result.reason
         note = ""
-        if allowed:
+        if allowed and action.get("fails"):
+            content, is_error = str(action.get("result", "The tool call failed.")), True
+        elif allowed:
             _write_files(self.workspace, action.get("writes") or {})
+            if action.get("run"):
+                await anyio.run_process(
+                    [str(word) for word in action["run"]], cwd=self.workspace, check=False
+                )
             content, is_error = str(action.get("result", "")), False
+            await gate.tool_succeeded(step)  # as the PostToolUse hook does for edits
             note = await gate.review_write_set(step)  # as the PostToolUse hook does for Bash
         else:
             content, is_error = message, True

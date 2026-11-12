@@ -48,6 +48,9 @@ CONFIG_CHANGED = "config_changed"
 ESCALATION_RESOLVED = "escalation_resolved"
 """Channel of escalations resolved by an operator."""
 
+TRUST_CHANGED = "trust_changed"
+"""Channel of changes to the trusted commits and trusted file contents (migration 0027)."""
+
 
 async def listen(conn: psycopg.AsyncConnection, channels: Iterable[str]) -> None:
     """Subscribe a connection to notification channels.

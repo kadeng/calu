@@ -149,17 +149,21 @@ def marking_checker(
     dirty: Sequence[tuple[str, str, str]] = (),
     clean: Sequence[tuple[str, str, str]] = (),
     decision: str = "PASS",
+    executes: Sequence[str] | None = None,
 ) -> Model:
-    """Create a checker model that passes the step and writes honesty marks (PLAN.md §13).
+    """Create a checker model that answers with fixed honesty marks.
 
-    Stands in for the honesty checker, whose judgement needs a capable model: the test decides
-    what it finds, so that the register, its enforcement and the reporting can be tested without
+    Stands in for a checker whose judgement needs a capable model: the test decides what it
+    finds, so that the honesty state, its enforcement and the reporting can be tested without
     one.
 
     Args:
         dirty: (path, symbol, reason) of each spot the step leaves dishonest.
         clean: (path, symbol, reason) of each spot that says what it does again.
         decision: What it answers about the step itself; "PASS" leaves the step to the others.
+        executes: None leaves `executes_project_code` out of the answer. Otherwise the answer
+            says true if the "# Step to check" part of the prompt contains one of these
+            texts, and false if it contains none (an empty sequence always says false).
 
     Returns:
         A `FunctionModel` named "marking-checker".
@@ -169,17 +173,22 @@ def marking_checker(
         """Return the fixed decision with the fixed marks.
 
         Args:
-            messages: The message history (unused).
+            messages: The message history; the step is read for `executes`.
             info: Agent information; its first output tool receives the decision.
 
         Returns:
             A response that calls the output tool.
         """
+        step = _last_prompt(messages).rsplit("# Step to check", 1)[-1]
+        extra: dict[str, bool] = {}
+        if executes is not None:
+            extra["executes_project_code"] = any(text in step for text in executes)
         return ModelResponse(
             parts=[
                 ToolCallPart(
                     info.output_tools[0].name,
                     {
+                        **extra,
                         "decision": decision,
                         "reason": "" if decision == "PASS" else "the marking fake checker",
                         "step_summary": "Fixed summary of the step.",

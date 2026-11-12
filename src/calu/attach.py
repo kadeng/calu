@@ -25,6 +25,11 @@ Commands typed instead of a message:
     /answer <id> TEXT     answer a question Claude asked (its options are in the event)
     /inject <text>        send the text so Claude reads it after its running tool calls
     /state                print the state again
+    /honesty              print the code honesty state (baseline, marks, unreviewed files)
+    /trust [REV]          certify a commit or a branch's present head as honest (default HEAD)
+    /trust-file PATH      certify the present content of one file as honest
+    /honesty-review       ask for an honesty review of the unreviewed and marked files
+    /clear-mark <id>      close one open honesty mark by hand
     /context              print the conversation as the checkers see it
     /sessions             list the stored sessions of this project
     /history [CLAUDE ID]  the recorded conversation of a session, from the database
@@ -48,8 +53,8 @@ from calu.protocol.client import (
     first_set,
     single_error,
 )
-from calu.protocol.messages import EVENTS, Event
-from calu.run import format_event, one_line, read_lines
+from calu.protocol.messages import EVENTS, Event, HonestyInfo
+from calu.run import format_event, honesty_lines, one_line, read_lines
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +65,8 @@ HELP = (
     "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  "
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
-    "/checkers  /sessions  /history [id]  /clear-mark <id>  /shutdown"
+    "/checkers  /sessions  /history [id]  /honesty  /trust [commit-or-branch]  "
+    "/trust-file <path>  /honesty-review  /clear-mark <id>  /shutdown"
 )
 """One line listing the commands, printed on connect and for an unknown command.
 
@@ -125,6 +131,22 @@ def describe_state(snapshot: dict[str, Any]) -> str:
         f"[state] {snapshot.get('state')} · {snapshot.get('workspace')} · "
         f"model {snapshot.get('model')}" + (f" · {waiting} escalation(s) open" if waiting else "")
     )
+
+
+def describe_honesty(info: dict[str, Any]) -> str:
+    """Render the code honesty state of a `state.get` result for the terminal.
+
+    Args:
+        info: The `honesty` object of the snapshot (`calu.protocol.messages.HonestyInfo`).
+
+    Returns:
+        The lines `calu.run.honesty_lines` renders for that state; one line saying so if the
+        object cannot be read.
+    """
+    try:
+        return "\n".join(honesty_lines(HonestyInfo.model_validate(info)))
+    except ValueError:
+        return f"[honesty] {info}"
 
 
 class Console:
@@ -218,9 +240,34 @@ class Console:
                 await self._answer(rest)
             case "/allow" | "/deny":
                 await self._decide(command.removeprefix("/"), rest)
+            case "/trust":
+                # A person certifies a commit; a branch means the commit it points at now.
+                done = await self.client.request("honesty.trust", {"rev": rest or "HEAD"})
+                state = "certified" if done.get("recorded") else "was already certified"
+                print(f"[honesty] commit {str(done.get('commit_id'))[:12]} {state}", flush=True)
+            case "/trust-file":
+                if not rest:
+                    print("[error] /trust-file needs a path", flush=True)
+                    return
+                done = await self.client.request("honesty.trust", {"path": rest})
+                state = "certified" if done.get("recorded") else "was already certified"
+                print(
+                    f"[honesty] the content of {done.get('path')} "
+                    f"({str(done.get('content_sha256'))[:12]}) {state}",
+                    flush=True,
+                )
+            case "/honesty-review":
+                done = await self.client.request("honesty.review")
+                if done.get("ran"):
+                    print("[honesty] the review ran", flush=True)
+                else:
+                    print(f"[honesty] no review ran: {done.get('problem')}", flush=True)
+            case "/honesty":
+                snapshot = await self.client.request("state.get")
+                print(describe_honesty(snapshot.get("honesty") or {}), flush=True)
             case "/clear-mark":
-                # The honesty register is the session's, in memory (D180): clearing a mark is
-                # a request to the session, the override when a checker is wrong (D83).
+                # The marks are in the session's memory: clearing one is a request to the
+                # session, a person's override of a checker.
                 if not rest.strip().isdigit():
                     print("[error] /clear-mark needs a mark id", flush=True)
                 else:

@@ -528,24 +528,29 @@ class ChangesConfig(ConfigModel):
 
 
 HonestyMode = Literal["off", "track", "enforce"]
-"""What calu does with the honesty register (PLAN.md D83)."""
+"""What calu does with the code honesty state (`calu.honesty`)."""
 
 
 class HonestyConfig(ConfigModel):
-    """Whether dishonest code is recorded, and whether it may be run (PLAN.md §13).
+    """Code honesty: which code was verified to say what it does, and what that decides.
 
-    A checker whose instructions ask for it records which files or symbols say something other
-    than what they do, and clears the record when they agree again. The register is enforced
-    where temporary dishonesty becomes a risk: a step that would **run** dirty code is denied.
-    Editing it is never blocked, because fixing the dishonesty is an edit.
+    Code is honest when its names and documentation say what it does (the honesty rules).
+    calu tracks which code is verified: a trusted commit is the baseline, the checkers record
+    dishonest spots as marks, a checked edit verifies a file's content, and every other
+    changed file is unreviewed. The state is clean when there is a baseline, no open mark, no
+    unreviewed file and no review is required.
     """
 
     mode: HonestyMode = "off"
-    """`off`: a checker's marks are ignored. `track`: marks are kept in the session's memory
-    (never stored, D180) and shown in `calu attach`, the web live view and an ACP editor, and
-    nothing is blocked -- which is how to judge the checker on a real project before trusting
-    it. `enforce`: a step that would run dirty code is denied, with the mark's reason. Default
-    `off`, because the judgement needs a capable checker model (Q17)."""
+    """`off`: nothing of this runs. `track`: the state is kept in the session's memory and
+    shown in `calu attach`, the web live view and an ACP editor; the checkers are told which
+    code is marked or unreviewed; a commit made in a clean state is certified; nothing is
+    blocked or escalated because of the state. `enforce`: additionally, a command that
+    executes project code (the command checker says whether it does) and a `git commit` need a
+    clean state: with open marks the step is denied with their reasons, without a trusted
+    commit it waits for a person (`calu honesty trust`, `/trust`), and with unreviewed files
+    an honesty review decides. The allow lists do not skip the command checker while the
+    state is not clean. Editing is never blocked. Default `off`."""
     rules: str | None = None
     """The honesty standard the checkers that judge changes read: what dishonesty is and what an
     API contract must say (PLAN.md D181). Empty uses the rules calu ships
@@ -618,7 +623,8 @@ class Config(ConfigModel):
     subagent_checker: CheckerConfig = Field(default_factory=CheckerConfig)
     """The checker that reviews what a subagent hands back."""
     honesty: HonestyConfig = Field(default_factory=HonestyConfig)
-    """Whether dishonest code is recorded and whether it may be run (§13)."""
+    """Code honesty: whether calu tracks which code is verified, and whether running and
+    committing code need a clean state."""
     changeset_checker: CheckerConfig = Field(default_factory=lambda: CheckerConfig(request_limit=8))
     """The checker that reviews a whole change before a commit (PLAN.md D26). It gets more
     requests than a step checker, because judging a whole change means reading some of the

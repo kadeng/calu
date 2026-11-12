@@ -277,6 +277,16 @@ escalation resolved from the database alone.
    phrase `yes delete the db`. Paste the phrase (it arrives at once): nothing may be deleted.
    Run it again and type the phrase: `calu project list` is empty afterwards and `calu run`
    still starts with the stored session credential.
+22. Code honesty: in a git repository, `calu config set honesty.mode enforce`, then `calu run`
+   with a prompt that edits a source file and runs the project's tests. Without a trusted
+   commit the test command must wait as an escalation that names `/trust`. In `calu attach`,
+   `/trust` must print the certified commit and a `code honesty (enforce): clean` line; the
+   same test command must then run. Change a file with a shell command (`sed -i`) and run the
+   tests again: the step must wait as an escalation that names the unreviewed file. `/honesty`
+   must print the baseline, the marks and the unreviewed files; `calu honesty trusted` must list
+   the certified commit with its source. A `git commit` made in a clean state must be reported
+   as `certified as trusted`. The honesty panel of the live page of `calu web` must show the
+   same state, and its "Trust HEAD" button must ask before it certifies.
 
 ## Measuring the checkers
 

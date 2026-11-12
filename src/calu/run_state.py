@@ -25,12 +25,40 @@ import anyio
 from anyio.abc import TaskGroup
 
 from calu.changes import SnapshotStore
+from calu.checkers.model import CodeMark
 from calu.checkers.tools import StepTime
 from calu.context.narrator import ClaudeOutput
 from calu.protocol.messages import QueuedMessage
 
 STEP_TIMES_KEPT = 500
 """How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
+
+
+@dataclass
+class PendingHonesty:
+    """What one tool call changes in the session's honesty state if it succeeds.
+
+    The gate's checkers judge a step before it runs. Their marks and the verification of an
+    edit are kept here and applied to `calu.honesty.HonestyState` only after the tool result
+    arrived without error (`Session`); a denied or failed call discards the record.
+    """
+
+    marks: list[tuple[str, list[CodeMark], list[CodeMark]]] = field(
+        default_factory=list[tuple[str, list[CodeMark], list[CodeMark]]]
+    )
+    """(checker name, its `marks_dirty`, its `marks_clean`) for each checker that wrote marks."""
+    edit_path: str | None = None
+    """The file an Edit, Write, MultiEdit or NotebookEdit call targets, as the tool names it;
+    None for every other call."""
+    expected_sha256: str | None = None
+    """The SHA-256 of the content the edit produces, computed before the checkers judged it
+    (`HonestyState.expect_edit`); None if it could not be predicted."""
+    checked: bool = False
+    """True if checkers of the edit route judged the edit and every one of them approved."""
+    clean_commit: bool = False
+    """True for a plain `git commit` that the gate decided while the honesty state was clean."""
+    head_before: str | None = None
+    """HEAD before a `clean_commit` ran; the commit is certified only if HEAD moved."""
 
 
 @dataclass
@@ -60,6 +88,9 @@ class PerCall:
     pending_reason: tuple[str, str] | None = None
     """(reason, source) of an escalation the session decided on and for which `ask` has not been
     called yet; None otherwise."""
+    honesty: PendingHonesty | None = None
+    """What the call changes in the honesty state once it succeeded; None if nothing, or once
+    it was applied or discarded."""
 
     def is_empty(self) -> bool:
         """Say whether the record holds nothing any more.

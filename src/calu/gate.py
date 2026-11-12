@@ -15,22 +15,43 @@ answer Claude Code. `Session.pre_tool_use` is the sequence around it:
     a backward clock jump nobody has seen       -> ESCALATE (source "clock")
     route QUESTION                              -> ESCALATE (source "question")
     a part matches a deny list                  -> ESCALATE (source "rules")
-    honesty mode "enforce", the step would run
-      code that is recorded as dishonest        -> DENY     (source "honesty")
     route ALLOW / DENY / ESCALATE of the tool
       policy, no check needed                   -> PASS / DENY / ESCALATE (source "policy")
     ── from here on the step needs a check: it waits while an escalation is open (`Hold.hold`) ──
-    Bash, every part allow-listed               -> PASS     (source "rules")
+    Bash, every part allow-listed, and not
+      (`honesty.mode` "enforce" with a state
+      that is not clean)                        -> PASS     (source "rules")
     a compound line with a commit               -> DENY     (source "changeset")
+    `honesty.mode` "enforce", a plain commit,
+      the honesty state is not clean            -> DENY / ESCALATE (source "honesty"), see below
     a plain commit whose change cannot be read  -> ESCALATE, or DENY with the advice to stage
                                                    first    (source "changeset")
     everything else: narration, then every checker of the route at the same time (for a plain
       commit also the changeset checkers, with the commit's diff); the verdicts are combined
       (`combine_decisions`)                     -> the combined decision (source "checker")
+    `honesty.mode` "enforce", the state is not
+      clean, the command checker answered that
+      the command executes project code         -> DENY / ESCALATE (source "honesty"), see below
     an approval of the last two kinds, where it must not stand alone (`_settle`):
       auto-escalation is on for the route       -> ESCALATE (source "auto")
       an escalation is still open after the
       step's `HOLD_BUDGET_S`                    -> ESCALATE (source "held")
+
+Code honesty (`calu.honesty`, `honesty.mode`): the session computes the honesty state
+(`HonestySnapshot`) and the gate decides from it. With "off" nothing of this runs. With "track"
+and "enforce" every checker of the step gets the state as a note. With "enforce", a step that
+executes project code (the command checker's answer `executes_project_code`; a missing answer
+counts as yes) and a plain `git commit` need a clean state:
+
+    open marks, no review required              -> DENY with the marks and their reasons
+    no baseline                                 -> ESCALATE: a person certifies a commit
+    unreviewed files or review required         -> the honesty review runs; then
+                                                   clean: the step goes on,
+                                                   marks: DENY with them,
+                                                   the review did not run or failed: ESCALATE
+
+A step that does not execute project code, and every edit, is not stopped by the honesty state.
+A DENY of the checkers stands before any of this.
 
 Invariant (fail closed): **no error path ends in an approval; every error path ends in
 ESCALATE**, so that a human decides about a step that calu could not check. The section "fail
@@ -77,7 +98,14 @@ from calu.checkers import (
     Step,
     ToolPolicy,
 )
-from calu.checkers.changeset import STAGE_FIRST, Changeset, CommitKind, changeset, classify_commit
+from calu.checkers.changeset import (
+    STAGE_FIRST,
+    Changeset,
+    CommitKind,
+    CommitLine,
+    changeset,
+    classify_commit,
+)
 from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.rules import (
     OTHER_RULED_TOOLS,
@@ -89,8 +117,9 @@ from calu.checkers.rules import (
 from calu.config import CheckerConfig, Config
 from calu.context import label_for_unchecked
 from calu.context.narrator import ClaudeOutput
-from calu.honesty import Register, blocking_marks, diff_paths, marks_of_step, register_note
+from calu.honesty import NOTE_PATH_CHARS, NOTE_REASON_CHARS, HonestySnapshot, diff_paths, shown
 from calu.markdown import fence
+from calu.steps import paths_of_step
 from calu.store import CheckerDefinition
 
 log = logging.getLogger(__name__)
@@ -151,6 +180,45 @@ UNRECORDED = (
 (`unrecorded`)."""
 
 
+HONESTY_MARKS = (
+    "calu runs and commits code only after it was verified to say what it does "
+    "(honesty.mode is enforce), and {what}. Recorded as dishonest: {spots}. Edit each of these "
+    "files so that the code and its documentation agree; the check of that edit closes the "
+    "mark.{review}"
+)
+"""Reason of the denial of a step that needs a clean honesty state while marks are open."""
+
+HONESTY_MARKS_REVIEW = (
+    " More marks are open than honesty.max_open_marks allows, so an honesty review reads the "
+    "marked files again at the next attempt."
+)
+"""Addition to `HONESTY_MARKS` while a review is required."""
+
+HONESTY_NO_BASELINE = (
+    "calu runs and commits code only after it was verified to say what it does "
+    "(honesty.mode is enforce), and {what}. This project has no trusted commit to compare "
+    "with: no ancestor of HEAD is certified by a sufficient source. A person certifies a "
+    "commit with `/trust [commit-or-branch]` in `calu attach` or `calu honesty trust "
+    "<commit-or-branch>`, or asks for an honesty review with `/honesty-review`. Allowing this "
+    "step lets it run once and certifies nothing."
+)
+"""Reason of the escalation of a step that needs a clean honesty state without a baseline."""
+
+HONESTY_UNREVIEWED = (
+    "calu runs and commits code only after it was verified to say what it does "
+    "(honesty.mode is enforce), and {what}. Not verified: {state}. {problem} Allowing this "
+    "step lets it run once and certifies nothing."
+)
+"""Reason of the escalation of a step that needs a clean honesty state when the honesty review
+did not make the state clean."""
+
+EXECUTES = "this command executes code of the project"
+"""`what` of the honesty reasons for a command."""
+
+COMMITS = "this command is a commit"
+"""`what` of the honesty reasons for a commit."""
+
+
 @dataclass
 class PendingNarration:
     """Claude's thinking and text before one tool call, and their narration once made."""
@@ -166,7 +234,8 @@ class Decided:
 
     `source` is who decided: "rules", "policy", "checker", "auto", "held", "changeset" (the
     deterministic refusal of a compound commit line, or of a commit whose diff calu could not
-    read), "honesty", "clock", "question" or "internal". `rules` is what the allow and deny
+    read), "honesty" (the honesty state stops a step that executes project code or commits),
+    "clock", "question" or "internal". `rules` is what the allow and deny
     lists found ("deny", "allow", "unlisted") or None for a tool the lists do not cover. `runs`
     holds one model call per checker that ran, in the order of the route's checkers (PLAN.md
     D81) -- for a commit followed by the changeset checkers -- and is empty when no checker
@@ -178,6 +247,11 @@ class Decided:
     source: str
     rules: str | None = None
     runs: list[tuple[Checker, CheckOutcome]] = field(default_factory=list)
+    clean_commit: bool = False
+    """True for a plain `git commit` that was decided while the honesty state was clean (a
+    baseline, no open mark, no unreviewed file, no review required). Only then does the session
+    certify the commit it creates (`Session`, specification section 5). Always False while
+    `honesty.mode` is "off"."""
 
 
 class Hold(Protocol):
@@ -318,7 +392,6 @@ class StepGate:
     def __init__(
         self,
         workspace: Path,
-        register: Register,
         hold: Hold,
         *,
         policy: Callable[[], ToolPolicy],
@@ -333,12 +406,13 @@ class StepGate:
         own_agent: Callable[[Step], bool],
         take_clock_alarm: Callable[[], str | None],
         keep_changeset: Callable[[str, str], None],
+        honesty: Callable[[], Awaitable[HonestySnapshot | None]],
+        honesty_review: Callable[[Step], Awaitable[str]],
     ) -> None:
         """Create the gate of one session.
 
         Args:
             workspace: Workspace root; the directory a command runs in if the step names none.
-            register: The honesty register of the session; its open marks are read per step.
             hold: The hold on steps while an escalation is open or being opened.
             policy: Returns the tool policy as it is at the moment of the call.
             rules: Returns the allow and deny lists as they are at the moment of the call.
@@ -357,9 +431,14 @@ class StepGate:
                 shown to a human yet and forgets it, or returns None if there is none.
             keep_changeset: Remembers the rendered changeset of a commit for the escalation's
                 row: (the call's `tool_use_id`, the text).
+            honesty: Computes the honesty state of the session as it is now; returns None
+                while `honesty.mode` is "off". It may raise; the step is then escalated
+                (`decide`).
+            honesty_review: Runs the honesty review for a step that needs a clean state.
+                Returns "" if the review ran (the gate then reads the state again), otherwise
+                one sentence saying why it did not run or failed; never raises.
         """
         self._workspace = workspace
-        self._register = register
         self._desk = hold
         self._policy = policy
         self._rules = rules
@@ -373,6 +452,8 @@ class StepGate:
         self._own_agent = own_agent
         self._take_clock_alarm = take_clock_alarm
         self._keep_changeset = keep_changeset
+        self._honesty = honesty
+        self._honesty_review = honesty_review
 
     # ------------------------------------------------------------------ fail closed
 
@@ -590,8 +671,15 @@ class StepGate:
         A commit whose changeset calu could not read is not shown to a model: it is escalated,
         or denied with the advice to stage first where that makes it readable.
 
+        While `honesty.mode` is not "off", the honesty state is computed for a step that a
+        checker judges and given to the checkers as a note. With "enforce" and a state that is
+        not clean, the allow lists do not let a command skip the command checker, a compound
+        commit line is denied, and a plain commit and a command that executes project code are
+        decided by `_needs_clean` (see the module docstring).
+
         Side effects: a step that needs a check waits while an escalation is open or being
-        opened, before the check and again after an approval (`_hold`, `_settle`).
+        opened, before the check and again after an approval (`_hold`, `_settle`). May run the
+        honesty review (`_needs_clean`).
         If a checker runs, narrates `pending` first (sets `pending.text`) and passes the
         narration to the checker.
 
@@ -647,37 +735,6 @@ class StepGate:
                 source="rules",
                 rules=rules,
             )
-        # Asking git for the branch costs a process; with the register off there is no reason to.
-        marks = list(self._register.open) if self._config().honesty.mode != "off" else []
-        if marks:
-            # After the deny lists and before the checkers: a rule the user wrote is a
-            # stronger statement than honesty debt, so a step that matches one escalates with
-            # that reason, and the register is only asked when the lists said nothing. Like
-            # the lists, this needs no model call. Editing dirty code is never blocked (D83).
-            blocked = (
-                blocking_marks(step, marks, self._workspace)
-                if self._config().honesty.mode == "enforce"
-                else []
-            )
-            if blocked:
-                spots = "; ".join(f"{entry.label()} ({entry.reason})" for entry in blocked)
-                return Decided(
-                    route=route,
-                    decision=CheckDecision(
-                        decision=Decision.DENY,
-                        reason=(
-                            "This would run code that is recorded as dishonest: "
-                            f"{spots}. Make the code and its documentation agree first -- "
-                            "either change the code or document what it really does -- and "
-                            "the record clears itself."
-                        ),
-                        step_summary=label,
-                    ),
-                    source="honesty",
-                    rules=rules,
-                )
-            # The note itself is attached after the route is final, because a commit names no
-            # file in its command and has to be told about the files in its diff (D88).
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
             route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
         if route is Route.ALLOW and step.tool_name == "SendMessage" and not self._own_agent(step):
@@ -695,16 +752,46 @@ class StepGate:
             hold_started = anyio.current_time()
             held = await self._hold(step, budget)
             hold_left -= anyio.current_time() - hold_started
-        if route is Route.COMMAND and step.tool_name in SHELL_TOOLS and outcome.allowed:
+        command = str(step.tool_input.get("command") or "")
+        cwd = Path(step.cwd or self._workspace)
+        mode = self._config().honesty.mode
+        commit: CommitLine | None = None
+        if route is Route.COMMAND and step.tool_name in SHELL_TOOLS and command:
+            if self._checks_changesets() or mode != "off":
+                commit = classify_commit(command, cwd)
+        plain_commit = commit is not None and commit.kind is CommitKind.PLAIN
+        listed = route is Route.COMMAND and step.tool_name in SHELL_TOOLS and outcome.allowed
+        # The honesty state is computed once per step that a checker judges, and again only
+        # after an honesty review. With the mode "off" it is None and nothing below uses it.
+        # An allow-listed command under "track" passes without a checker, so the state is
+        # computed for it only if it is a commit (which may be certified).
+        state: HonestySnapshot | None = None
+        if (
+            mode != "off"
+            and route in (Route.COMMAND, Route.EDIT, Route.CHANGESET)
+            and (mode == "enforce" or not listed or plain_commit)
+        ):
+            state = await self._honesty()
+        # Only "enforce" stops a step, and only while the state is not clean.
+        unclean = mode == "enforce" and state is not None and not state.clean
+        if listed and not unclean:
             # The allow lists say "no check needed", not "run this whatever the harness
             # thinks": the step passes, and Claude Code's auto mode still sees it (D21).
+            # While the honesty state is not clean under "enforce", the lists do not apply:
+            # the command checker has to say whether the command executes project code.
             allowed = CheckDecision(
                 decision=Decision.PASS,
                 reason="Every command and path is on the user's allowlists.",
                 step_summary=label,
             )
             return await self._settle(
-                Decided(route=route, decision=allowed, source="rules", rules=rules),
+                Decided(
+                    route=route,
+                    decision=allowed,
+                    source="rules",
+                    rules=rules,
+                    clean_commit=plain_commit and state is not None and state.clean,
+                ),
                 held,
                 step,
                 budget,
@@ -726,18 +813,12 @@ class StepGate:
             )
         diff: str | None = None
         diff_text, diff_cut = "", False
-        command = str(step.tool_input.get("command") or "")
-        if (
-            route is Route.COMMAND
-            and step.tool_name in SHELL_TOOLS
-            and command
-            and self._checks_changesets()
-        ):
-            cwd = Path(step.cwd or self._workspace)
-            commit = classify_commit(command, cwd)
-            if commit.kind is CommitKind.COMPOUND:
+        if commit is not None and commit.kind is CommitKind.COMPOUND:
+            if self._checks_changesets() or unclean:
                 # calu takes the diff before the line runs, so it is the commit's content only
-                # if nothing else in the line can change it. One retry makes it exact.
+                # if nothing else in the line can change it. One retry makes it exact. The
+                # commit gate of the honesty state needs the same: a commit that is the whole
+                # line.
                 return Decided(
                     route=route,
                     decision=CheckDecision(
@@ -746,44 +827,40 @@ class StepGate:
                     source="changeset",
                     rules=rules,
                 )
-            if commit.kind is CommitKind.PLAIN:
-                change = await self._changeset(cwd, command)
-                plain = f"# Changeset of this commit\n\n{change.shown()}"
-                if step.tool_use_id:
-                    # for the escalation's row
-                    self._keep_changeset(step.tool_use_id, plain)
-                if change.problem:
-                    # Nothing a model could judge: its approval would cover a change that
-                    # nobody has seen. Where staging first makes the change readable, Claude
-                    # can do that itself; otherwise a human decides.
-                    unread = CheckDecision(
-                        decision=Decision.DENY if change.stage_first else Decision.ESCALATE,
-                        reason=(
-                            CHANGESET_STAGE_FIRST.format(problem=change.problem, advice=STAGE_FIRST)
-                            if change.stage_first
-                            else CHANGESET_UNREAD.format(problem=change.problem)
-                        ),
-                        step_summary=label,
-                    )
-                    return Decided(route=route, decision=unread, source="changeset", rules=rules)
-                diff, diff_cut = _changeset_block(change), change.cut
-                diff_text = change.text
-        if marks:
-            # Not blocked deterministically, but the checkers have to know: a command that
-            # names no path at all (`make test`) is theirs to judge, and a commit has to be
-            # told which of the files it records are dishonest (§13.4, D88).
-            own = marks_of_step(step, marks, self._workspace)
-            if diff is not None:
-                touched = diff_paths(diff_text)
-                seen = {mark.mark().key() for mark in own}
-                own = own + [
-                    mark
-                    for mark in marks
-                    if mark.open and mark.path in touched and mark.mark().key() not in seen
-                ]
-            note = register_note(marks, own)
-            if note:
-                step = step.model_copy(update={"notes": [*step.notes, note]})
+        if plain_commit and unclean and state is not None:
+            # Committing needs a clean state. Open marks and a missing baseline are answered
+            # without a model call; otherwise the honesty review decides.
+            stopped, state = await self._needs_clean(step, state, COMMITS, label)
+            if stopped is not None:
+                return Decided(route=route, decision=stopped, source="honesty", rules=rules)
+            unclean = state is not None and not state.clean
+        if plain_commit and self._checks_changesets():
+            change = await self._changeset(cwd, command)
+            plain = f"# Changeset of this commit\n\n{change.shown()}"
+            if step.tool_use_id:
+                # for the escalation's row
+                self._keep_changeset(step.tool_use_id, plain)
+            if change.problem:
+                # Nothing a model could judge: its approval would cover a change that
+                # nobody has seen. Where staging first makes the change readable, Claude
+                # can do that itself; otherwise a human decides.
+                unread = CheckDecision(
+                    decision=Decision.DENY if change.stage_first else Decision.ESCALATE,
+                    reason=(
+                        CHANGESET_STAGE_FIRST.format(problem=change.problem, advice=STAGE_FIRST)
+                        if change.stage_first
+                        else CHANGESET_UNREAD.format(problem=change.problem)
+                    ),
+                    step_summary=label,
+                )
+                return Decided(route=route, decision=unread, source="changeset", rules=rules)
+            diff, diff_cut = _changeset_block(change), change.cut
+            diff_text = change.text
+        if state is not None:
+            # Every checker of the step gets the state calu computed, with the marks on the
+            # step's own files first; a commit names its files in its diff.
+            own = paths_of_step(step, self._workspace) | diff_paths(diff_text)
+            step = step.model_copy(update={"notes": [*step.notes, state.note(own)]})
         if route is Route.EDIT:
             await self._emit_edit_diff(step)
         if pending is not None:
@@ -798,12 +875,160 @@ class StepGate:
             changeset_diff=diff,
             changeset_cut=diff_cut,
         )
+        source = "checker"
+        if (
+            unclean
+            and state is not None
+            and route is Route.COMMAND
+            and not plain_commit
+            and decision.decision is not Decision.DENY
+            and self._executes(route, runs, decision)
+        ):
+            stopped, state = await self._needs_clean(
+                step, state, EXECUTES, decision.step_summary or label
+            )
+            if stopped is not None:
+                if decision.decision is Decision.ESCALATE and decision.reason.strip():
+                    stopped = stopped.model_copy(
+                        update={
+                            "reason": f"{stopped.reason}\n\nThe checkers also escalated: "
+                            f"{decision.reason.strip()}"
+                        }
+                    )
+                decision, source = stopped, "honesty"
         return await self._settle(
-            Decided(route=route, decision=decision, source="checker", rules=rules, runs=runs),
+            Decided(
+                route=route,
+                decision=decision,
+                source=source,
+                rules=rules,
+                runs=runs,
+                clean_commit=plain_commit and state is not None and state.clean,
+            ),
             held,
             step,
             budget,
             hold_left,
+        )
+
+    def _executes(
+        self, route: Route, runs: list[tuple[Checker, CheckOutcome]], combined: CheckDecision
+    ) -> bool:
+        """Tell whether a command counts as executing project code, from the checkers' answers.
+
+        The checkers of the step's own route answer `CheckDecision.executes_project_code`. The
+        command counts as executing project code unless the route's first checker (the command
+        checker) answered False and no other checker of the route answered True. One case is
+        left to the checkers' own decision: the command checker gave no answer and the
+        combined decision is an ESCALATE (a checker that failed or timed out); a person then
+        decides about the step anyway.
+
+        Args:
+            route: The step's route.
+            runs: The checkers that ran, with their outcomes.
+            combined: The combined decision of those checkers.
+
+        Returns:
+            True if the step is to be treated as executing project code.
+        """
+        own = self._checkers().get(route, [])
+        answers = [
+            outcome.decision.executes_project_code
+            for checker, outcome in runs
+            if any(checker is one for one in own)
+        ]
+        if not answers:
+            return True
+        if True in answers:
+            return True
+        if answers[0] is None:
+            return combined.decision is not Decision.ESCALATE
+        return False
+
+    async def _needs_clean(
+        self, step: Step, state: HonestySnapshot, what: str, summary: str
+    ) -> tuple[CheckDecision | None, HonestySnapshot | None]:
+        """Decide about a step that needs a clean honesty state while the state is not clean.
+
+        Specification section 5, for a command that executes project code and for a commit:
+
+            open marks, no review required      -> DENY with the marks and their reasons
+            no baseline                         -> ESCALATE
+            otherwise (unreviewed files, or a
+            review is required)                 -> the honesty review runs, then by the new
+                                                   state: clean -> no objection; marks -> DENY;
+                                                   else ESCALATE with the review's problem
+
+        Side effects: may run the honesty review (`honesty_review`), which takes time and
+        changes the session's honesty state.
+
+        Args:
+            step: The tool call.
+            state: The honesty state, not clean.
+            what: `EXECUTES` or `COMMITS`, for the reason.
+            summary: The summary of the step for the decision.
+
+        Returns:
+            (the DENY or ESCALATE decision, or None if the state is clean after the review;
+            the honesty state as it is now, None if `honesty.mode` was switched off
+            meanwhile).
+        """
+        if state.marks and not state.review_required:
+            return self._marks_denial(state, what, summary), state
+        if state.baseline is None:
+            return (
+                CheckDecision(
+                    decision=Decision.ESCALATE,
+                    reason=HONESTY_NO_BASELINE.format(what=what),
+                    step_summary=summary,
+                ),
+                state,
+            )
+        problem = await self._honesty_review(step)
+        after = await self._honesty()
+        if after is None or after.clean:
+            return None, after
+        if not problem and after.marks:
+            return self._marks_denial(after, what, summary), after
+        return (
+            CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=HONESTY_UNREVIEWED.format(
+                    what=what,
+                    state=_unverified(after),
+                    problem=problem or "The honesty review ran and did not verify all of it.",
+                ),
+                step_summary=summary,
+            ),
+            after,
+        )
+
+    def _marks_denial(self, state: HonestySnapshot, what: str, summary: str) -> CheckDecision:
+        """Build the denial of a step that needs a clean state while marks are open.
+
+        Args:
+            state: The honesty state, with at least one open mark.
+            what: `EXECUTES` or `COMMITS`.
+            summary: The summary of the step.
+
+        Returns:
+            A DENY whose reason names every open mark with its reason (the first 20) and says
+            how a mark is closed.
+        """
+        spots = "; ".join(
+            f"{shown(mark.label(), NOTE_PATH_CHARS)} ({shown(mark.reason, NOTE_REASON_CHARS)})"
+            for mark in state.marks[:20]
+        )
+        if len(state.marks) > 20:
+            spots += f"; and {len(state.marks) - 20} more"
+        return CheckDecision(
+            decision=Decision.DENY,
+            reason=HONESTY_MARKS.format(
+                what=what,
+                spots=spots,
+                review=HONESTY_MARKS_REVIEW if state.review_required else "",
+            ),
+            step_summary=summary,
         )
 
     async def _settle(
@@ -982,6 +1207,31 @@ def _rules_outcome(step: Step, outcome: RuleOutcome) -> str | None:
     if outcome.ask:
         return "deny"
     return "allow" if outcome.allowed else "unlisted"
+
+
+def _unverified(state: HonestySnapshot) -> str:
+    """Say in one clause what of an honesty state is not verified.
+
+    Args:
+        state: A state that is not clean.
+
+    Returns:
+        E.g. "3 unreviewed file(s) (a.py, b.py, c.py); a review is required", naming at most
+        five files.
+    """
+    parts: list[str] = []
+    if state.marks:
+        parts.append(f"{len(state.marks)} open mark(s)")
+    if state.unreviewed.everything:
+        parts.append("every file (the files could not be compared with the baseline)")
+    elif state.unreviewed.paths:
+        paths = state.unreviewed.paths
+        names = ", ".join(shown(path, NOTE_PATH_CHARS) for path in paths[:5])
+        rest = f", and {len(paths) - 5} more" if len(paths) > 5 else ""
+        parts.append(f"{len(paths)} unreviewed file(s) ({names}{rest})")
+    if state.review_required:
+        parts.append("a review is required")
+    return "; ".join(parts) or "nothing is named"
 
 
 def _changeset_block(change: Changeset) -> str:

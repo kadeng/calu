@@ -37,12 +37,11 @@ class Decision(StrEnum):
 
 
 class CodeMark(BaseModel):
-    """A file or a symbol that a checker calls dishonest, or honest again (PLAN.md D82).
+    """A file or a symbol that a checker calls dishonest, or honest again.
 
     "Dishonest" means that the code and what it says about itself disagree: a name, a docstring
-    or a document promises something the code does not do. A complex change makes that true on
-    purpose for a few steps, so a checker records it instead of objecting to every step, and
-    calu stops the dirty code from being **run** until the record is cleared (D83).
+    or a document promises something the code does not do. A checker records the spot, and calu
+    keeps it in the session's honesty state (`calu.honesty.HonestyState`) after the step ran.
     """
 
     path: str = Field(
@@ -62,7 +61,7 @@ class CodeMark(BaseModel):
         description=(
             "What disagrees with what, in one or two sentences, and what would settle it: "
             '"the docstring promises a sorted list, the code returns insertion order; either '
-            'sort or document the order". Claude reads this when a step is blocked.'
+            'sort or document the order". Claude reads this when a step is refused.'
         )
     )
 
@@ -126,8 +125,7 @@ class CheckDecision(BaseModel):
         default_factory=list,
         description=(
             "Only for a checker whose instructions ask for it: code that this step leaves "
-            "dishonest, so that it cannot be run until it is honest again. Leave empty "
-            "otherwise."
+            "dishonest. Leave empty otherwise."
         ),
     )
     marks_clean: list[CodeMark] = Field(
@@ -137,6 +135,19 @@ class CheckDecision(BaseModel):
             "dishonest and now says what it does. Leave empty otherwise."
         ),
     )
+    executes_project_code: bool | None = Field(
+        default=None,
+        description=(
+            "Only when the step is a command and its notes hold the code honesty state "
+            "computed by calu: true if the command executes code of this project (tests, a "
+            "build that runs code, a script, an interpreter, a package script, a make "
+            "target), false if it does not (reading, searching, editing, git, formatting). "
+            "Leave empty otherwise."
+        ),
+    )
+    """Whether the command executes code of the project. The gate reads it while
+    `honesty.mode` is "enforce" and the honesty state is not clean (`calu.gate`); an answer
+    without it counts as true there."""
 
 
 class Step(BaseModel):

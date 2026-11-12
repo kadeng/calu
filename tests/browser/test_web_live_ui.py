@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from calu.checkers import CodeMark
+from calu.config import HonestyConfig
 from tests.db.test_web_live import running
 
 pytestmark = [pytest.mark.browser, pytest.mark.db, pytest.mark.anyio]
@@ -136,3 +138,35 @@ async def test_the_live_view_says_when_background_tasks_still_run(
         stream = await page.inner_text("#stream")
         assert "1 background task(s) still running" in stream
         assert stream.index("still running") < stream.index("The build finished.")
+
+
+async def test_the_live_view_shows_the_honesty_state_and_clears_a_mark(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """The honesty panel shows the state of `honesty.update`, and "Clear" asks the session."""
+    (tmp_path / "parser.py").write_text("def fields():\n    return []\n", encoding="utf-8")
+    async with running(db_url, tmp_path, [[]]) as (base, session_id, session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        assert await page.locator("#honesty").count() == 0, "honesty.mode is off: no panel"
+
+        session.config = session.config.model_copy(update={"honesty": HonestyConfig(mode="track")})
+        session.honesty.record(
+            [CodeMark(path="parser.py", symbol="fields", reason="the docstring is missing")],
+            [],
+            "edit",
+        )
+        await session.announce_honesty()
+        await page.wait_for_selector("#honesty")
+        panel = await page.inner_text("#honesty")
+        assert "Code honesty (track): not clean" in panel
+        assert "no baseline" in panel and "every file unreviewed" in panel
+        assert "parser.py:fields -- the docstring is missing" in panel
+        assert await page.get_by_role("button", name="Trust HEAD").count() == 1
+        assert await page.get_by_role("button", name="Review now").count() == 1
+
+        await page.get_by_role("button", name="Clear").click()
+        await page.wait_for_function(
+            "document.getElementById('honesty').textContent.includes('0 open mark(s)')"
+        )
+        assert session.honesty_marks == []

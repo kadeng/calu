@@ -77,6 +77,7 @@ from calu.protocol.messages import (
     EventsSubscribeParams,
     EventsSubscribeResult,
     HonestyClearParams,
+    HonestyTrustParams,
     InitializeParams,
     SessionHistoryParams,
     SessionListParams,
@@ -1139,6 +1140,13 @@ class Client:
                 assert isinstance(params, HonestyClearParams)
                 await session.clear_mark(params.mark_id, client=self.name or "unknown")
                 return {}
+            case "honesty.trust":
+                assert isinstance(params, HonestyTrustParams)
+                return await session.trust(
+                    params.rev, params.path, params.note, client=self.name or "unknown"
+                )
+            case "honesty.review":
+                return await session.request_review(client=self.name or "unknown")
             case "interrupt":
                 await session.interrupt()
                 return {}

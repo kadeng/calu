@@ -68,7 +68,7 @@ phases.
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
 | `src/calu/model_choice.py` | Which model the checkers get when none is named: the first provider whose credentials are found (D129) |
 | `src/calu/claude_model.py` | The `claude:` model type: a check answered by the `claude` CLI on this machine's own account, no tools (D117) |
-| `src/calu/honesty.py` | Code honesty: the register the gate uses today (marks, which commands would run a marked file, path checks, §13), and the honesty state that replaces it (`HonestyState`: baseline from the trusted commits, marks, verified contents, unreviewed files, the note for checkers) |
+| `src/calu/honesty.py` | Code honesty: which code was verified to say what it does. Marks and the checks of their paths; the honesty state of a session (`HonestyState`: baseline from the trusted commits, marks, verified contents, unreviewed files, the note for checkers, whether a commit may be certified). The session applies a step's marks and verifications after its tool result; the gate decides from a snapshot |
 | `src/calu/configdoc.py` | Walks `calu.config.Config` for `docs/CONFIGURATION.md` and `calu config list` |
 | `src/calu/markdown.py` | Code fences that the quoted text cannot close (commands, diffs, file excerpts) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |

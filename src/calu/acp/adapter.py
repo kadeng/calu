@@ -44,6 +44,7 @@ from calu.acp import messages as acp
 from calu.acp import modes
 from calu.acp.peer import Peer, RpcError
 from calu.config import AutoEscalate
+from calu.protocol.messages import HonestyInfo
 
 log = logging.getLogger(__name__)
 
@@ -652,33 +653,44 @@ class Adapter:
                 )
 
     async def _on_honesty(self, params: dict[str, Any]) -> None:
-        """Tell the editor what the honesty register holds (PLAN.md D86).
+        """Tell the editor the code honesty state of the session.
 
-        ACP has no shape for "this code may not be run", so it goes as a message chunk, the way
-        the "always" hint does: while the register stands, commands that would run that code are
-        refused, and a refusal the editor cannot explain looks arbitrary. Only a change is sent,
-        because the event is only emitted when a checker changed the register.
+        ACP has no shape for this state, so it goes as a message chunk, the way the "always"
+        hint does: with `honesty.mode` "enforce", a command that executes project code and a
+        commit are refused or escalated while the state is not clean, and the editor's user
+        has to be able to see why. The event is only emitted when the state changed.
 
         Args:
             params: The `honesty.update` event.
         """
-        marks = params.get("marks") or []
-        if not isinstance(marks, list):
+        try:
+            info = HonestyInfo.model_validate(params)
+        except ValueError:
             return
-        if not marks:
-            text = "[calu: the honesty register is clear again.]"
+        if info.mode == "off":
+            return
+        if info.clean:
+            text = "[calu: code honesty: clean.]"
         else:
-            spots = ", ".join(
-                str(mark.get("path", "")) + (f":{mark['symbol']}" if mark.get("symbol") else "")
-                for mark in marks
-                if isinstance(mark, dict)
+            parts: list[str] = []
+            if info.marks:
+                spots = ", ".join(mark.label() for mark in info.marks[:5])
+                rest = f" and {len(info.marks) - 5} more" if len(info.marks) > 5 else ""
+                parts.append(f"recorded as dishonest: {spots}{rest}")
+            if info.baseline is None:
+                parts.append("no trusted commit to compare with (`calu honesty trust <commit>`)")
+            elif info.unreviewed_all:
+                parts.append("every file is unreviewed")
+            elif info.unreviewed_count:
+                parts.append(f"{info.unreviewed_count} unreviewed file(s)")
+            if info.review_required:
+                parts.append("an honesty review is required")
+            effect = (
+                "Commands that execute project code and commits wait until this is settled."
+                if info.mode == "enforce"
+                else "Nothing is blocked: honesty.mode is 'track'."
             )
-            verb = (
-                "cannot be run until the code and its documentation agree"
-                if params.get("mode") == "enforce"
-                else "is recorded as dishonest (not blocked: honesty.mode is 'track')"
-            )
-            text = f"[calu: {spots} {verb}. `calu honesty list` shows why.]"
+            text = f"[calu: code honesty: {'; '.join(parts) or 'not clean'}. {effect}]"
         await self._update(acp.message_chunk("agent_message_chunk", f"{text}\n", None))
 
     async def _on_state(self, params: dict[str, Any]) -> None:

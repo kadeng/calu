@@ -155,6 +155,19 @@ class ToolGate(Protocol):
         """
         ...
 
+    async def tool_succeeded(self, step: Step) -> None:
+        """Take note that an edit has run without error, before the agent goes on.
+
+        The runner calls this after a successful Edit, Write, MultiEdit or NotebookEdit call,
+        while the agent waits; for a command, `review_write_set` is called instead. The gate
+        then applies what the call's checkers recorded for the case that it succeeds. A runner
+        may call it for every successful tool call: a call nothing was recorded for is ignored.
+
+        Args:
+            step: The tool call that has just run.
+        """
+        ...
+
     async def review_subagent_result(self, result: SubagentResult) -> str:
         """Review a subagent's final result before the main agent acts on it.
 

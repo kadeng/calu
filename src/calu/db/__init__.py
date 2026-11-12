@@ -13,6 +13,7 @@ from calu.db.connection import (
 from calu.db.notify import (
     CONFIG_CHANGED,
     ESCALATION_RESOLVED,
+    TRUST_CHANGED,
     Dirty,
     Notifier,
     listen,
@@ -21,6 +22,7 @@ from calu.db.notify import (
 __all__ = [
     "CONFIG_CHANGED",
     "ESCALATION_RESOLVED",
+    "TRUST_CHANGED",
     "ConnectionSource",
     "Db",
     "Dirty",
