@@ -37,7 +37,8 @@ phases.
 | `src/calu/credentials.py` | Encrypted credential store (Argon2id, AES-GCM) |
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
 | `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
-| `src/calu/attach.py` | `calu attach`: terminal client of a running session |
+| `src/calu/attach.py` | `calu attach --plain`: the line-oriented terminal client of a running session (also used when input or output is a pipe) |
+| `src/calu/tui/` | `calu attach` on a terminal: the full-screen client (Textual, the optional `tui` extra). `model.py` is the state as a reducer over the protocol's events (no Textual import); `connection.py` keeps the connection and reconnects; `actions.py` sends the user's requests; `fake.py` and `scenarios.py` are a scripted session for tests, screenshots and the demo; `app.py`, `widgets/`, `screens/` and `tui.tcss` render the model |
 | `src/calu/protocol/schema.py` | `calu protocol`: JSON Schema of the protocol, for clients in other languages |
 | `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
@@ -94,7 +95,7 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
   regenerated `docs/CONFIGURATION.md`; `tests/unit/test_configdoc.py` says how.
 - `uv run ruff format .`, `uv run ruff check .`, `uv run pyright`
 - `scripts/wsl-test.sh [pytest args]`: all of the above
-- Sync with `uv sync --all-extras`: the web interface is the optional `web` extra, and its tests skip without it.
+- Sync with `uv sync --all-extras`: the web interface is the optional `web` extra and the full-screen terminal client the optional `tui` extra; their tests skip without them.
 - CI runs the same checks on every push and pull request, plus the browser layer and the installed wheel (`.github/workflows/checks.yml`). The live layer never runs in CI.
 - Every `calu ...` line in the documentation's code blocks is parsed by the real parser in a test (`tests/unit/test_documented_commands.py`), so a renamed flag or a stale example fails the suite rather than a reader's terminal.
 

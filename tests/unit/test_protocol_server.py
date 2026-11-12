@@ -1036,6 +1036,8 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "auto_escalate.set",
         "honesty.clear",
         "interrupt",
+        "side.ask",
+        "model.set",
         "shutdown",
     }, "a new request is checked against the token unless it is listed as read-only: decide"
 

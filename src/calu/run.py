@@ -83,11 +83,13 @@ from calu.protocol.messages import (
     Event,
     HonestyUpdate,
     Log,
+    RateLimit,
     SessionState,
     State,
     ToolResult,
     ToolUse,
     TurnResult,
+    UsageUpdate,
     UserInput,
 )
 from calu.protocol.server import SessionServer
@@ -169,6 +171,34 @@ class RunOptions:
     Code's background tasks still run (D170). None (the default) waits as long as they run."""
 
 
+def limit_text(limit: RateLimit) -> str:
+    """Put the state of one usage limit into a few words.
+
+    Args:
+        limit: The limit as Claude Code reported it.
+
+    Returns:
+        For example `5-hour limit 82 % used (close to the limit), resets 14:00 UTC`.
+    """
+    names = {
+        "five_hour": "5-hour limit",
+        "seven_day": "weekly limit",
+        "seven_day_opus": "weekly Opus limit",
+        "seven_day_sonnet": "weekly Sonnet limit",
+        "overage": "extra usage",
+    }
+    text = names.get(limit.type, limit.type or "usage limit")
+    if limit.utilization is not None:
+        text += f" {round(limit.utilization * 100)} % used"
+    if limit.status == "allowed_warning":
+        text += " (close to the limit)"
+    elif limit.status == "rejected":
+        text += " (reached)"
+    if limit.resets_at is not None:
+        text += f", resets {limit.resets_at:%a %H:%M} UTC"
+    return text
+
+
 def format_event(event: Event) -> str | None:
     """Render one session event as one terminal line.
 
@@ -237,6 +267,12 @@ def format_event(event: Event) -> str | None:
             on = [name for name, held in event.settings.model_dump().items() if held]
             waits = ", ".join(on) if on else "nothing beyond what the checkers escalate"
             return f"*** what waits for a human: {waits}"
+        case UsageUpdate():
+            if not event.rate_limits:
+                return None
+            return "*** usage limits: " + ", ".join(
+                limit_text(limit) for limit in event.rate_limits
+            )
         case Log():
             return f"[{event.level}] {event.message}"
         case _:
