@@ -80,6 +80,21 @@ class Rule:
 _CALU_CONFIG = re.compile(r"(^|/)\.config/calu(/|$)")
 BUILT_IN_WRITE_DENY = (Rule(_CALU_CONFIG, "built-in"),)
 BUILT_IN_READ_DENY = (Rule(_CALU_CONFIG, "built-in"),)
+BUILT_IN_COMMAND_DENY = (
+    Rule(
+        re.compile(
+            r"^((uv|pipx|poetry|pdm|hatch) (run|exec) |uv tool run |uvx |python[0-9.]* -m )?"
+            r"calu( |$)"
+        ),
+        "built-in",
+    ),
+)
+"""Claude running calu itself always asks (PLAN.md D160). calu runs as the same OS user as
+Claude, and `calu resolve`, `calu config set`, `calu rules`, `calu checker` or a `calu attach`
+that mints its own token (D105) would let Claude decide its own escalations or switch off the
+checks. With the sandbox on, `~/.config/calu` is unreadable to Claude's commands and such a
+call fails anyway; without it, this rule is what stops it. Built in, like the `~/.config/calu`
+path rules, so that no rule list can drop it and existing installations get it at once."""
 
 
 def parse_rules(text: str, name: str) -> tuple[list[Rule], list[str]]:
@@ -293,7 +308,7 @@ class Rules:
         # Also the forms without leading assignments, wrappers (`env`, `nohup`, `timeout 5`)
         # and a path before the program name: deny rules are anchored at the start (D145).
         for variant in command_variants(command):
-            rule = _first_match(self.lists("command-deny")[0], variant)
+            rule = _first_match([*BUILT_IN_COMMAND_DENY, *self.lists("command-deny")[0]], variant)
             if rule is None:
                 continue
             seen = "" if variant == command else f" (as `{variant}`)"

@@ -476,3 +476,29 @@ def test_a_monitor_command_meets_the_same_rules_as_bash(tmp_path: Path) -> None:
     assert not rules.evaluate(websocket).allowed, "no command: the checker decides"
     # Routed to the command checker on purpose, even when unknown tools are allowed.
     assert ToolPolicy(default=Route.ALLOW).route("Monitor") is Route.COMMAND
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "calu resolve 1 allow",
+        "uv run calu resolve 1 allow",
+        "uvx calu resolve 1 allow",
+        "python3 -m calu config set honesty.mode off",
+        "/home/u/.local/bin/calu rules remove 3",
+        "X=1 nohup calu attach",
+    ],
+)
+def test_claude_running_calu_itself_always_asks(tmp_path: Path, command: str) -> None:
+    """D160: calu runs as Claude's OS user; without the sandbox, `calu resolve` from Claude's
+    Bash would decide its own escalation. A built-in rule, so no rule list can drop it."""
+    rules = Rules.from_texts(tmp_path, {})  # no lists at all: the built-in rule still holds
+    outcome = rules.evaluate(bash(command, str(tmp_path)))
+    assert outcome.ask and "built-in" in outcome.ask[0], command
+
+
+def test_a_command_that_only_mentions_calu_is_not_refused(tmp_path: Path) -> None:
+    """D160: only an invocation of calu asks, not a word that contains or names it."""
+    rules = default_rules(tmp_path)
+    for command in ("echo calu", "grep -rn calu src", "calucheck", "uv run pytest"):
+        assert not rules.evaluate(bash(command, str(tmp_path))).ask, command

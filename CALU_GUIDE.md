@@ -584,6 +584,11 @@ design (REQUIREMENTS 17), and it asks once per session rather than several times
 `calu doctor` lists an unprotected credential and calls it a problem for `admin`, which owns
 the schema. `calu credential set operator` without the switch puts a password back on it.
 
+Claude runs as your user too, so it could use that credential the same way: `calu resolve 1
+allow` from its own Bash. Two things stop it. With the sandbox on, `~/.config/calu` is
+unreadable to Claude's commands; and a built-in rule makes every `calu` command Claude runs
+(`calu …`, `uv run calu …`, `uvx calu …`, `python -m calu …`) ask you first, sandbox or not.
+
 The operator login reads every table, resolves escalations and mints or revokes client tokens,
 and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu
 sessions`, `calu escalations`, `calu escalation`, `calu resolve`, `calu token` and `calu evals`
