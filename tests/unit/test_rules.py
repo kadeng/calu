@@ -1139,3 +1139,23 @@ def test_a_diff_too_large_to_check_asks(tmp_path: Path) -> None:
     small = default_rules(tmp_path)
     (tmp_path / "ok.diff").write_text("--- a/f.py\n+++ b/f.py\n", encoding="utf-8")
     assert not small.evaluate(bash("git apply ok.diff", str(tmp_path))).ask
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("python3 <<< \"open('.env')\"", True),
+        ("echo \"open('.env')\" | python3", True),
+        ("COMPOSE_FILE=src/calu/db/local-compose.yml docker compose down -v", True),
+        ("echo hello | python3 count.py", False),
+        ("python3 <<< 'print(1)'", False),
+        ("COMPOSE_FILE=other.yml docker compose up", False),
+    ],
+)
+def test_here_strings_pipes_and_compose_file(tmp_path: Path, command: str, asks: bool) -> None:
+    """D176: the three gaps D175 left to the checker."""
+    (tmp_path / "src" / "calu" / "db").mkdir(parents=True)
+    (tmp_path / "src" / "calu" / "db" / "local-compose.yml").write_text(
+        "name: calu-db\n", encoding="utf-8"
+    )
+    assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks

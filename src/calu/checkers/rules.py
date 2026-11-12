@@ -337,6 +337,15 @@ class Rules:
                 )
                 for line in command.splitlines():
                     self._deny_command(line.strip(), outcome)
+            for compose_file in re.findall(r"(?:^|\s)COMPOSE_FILE=['\"]?([^\s'\":]+)", command):
+                # `COMPOSE_FILE=local-compose.yml docker compose down -v` (D176)
+                candidate = _absolute(compose_file, cwd)
+                if candidate is not None and _is_calu_compose(candidate):
+                    all_allowed = False
+                    outcome.ask.append(
+                        f"`{command[:60]}` uses calu's own compose file through COMPOSE_FILE "
+                        "(built-in, D171, D176)."
+                    )
             for used in parsed.paths:
                 if not re.match(
                     r"(argument|value of an option) of (docker|podman|nerdctl|docker-compose|"
@@ -829,6 +838,15 @@ def inline_code_paths(command: str) -> list[str]:
         inline_code_paths("node -e \"fs.readFileSync('.env')\"") == [".env"]
     """
     found: list[str] = []
+    interpreter = (
+        r"([\w./-]*/)?(python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|pypy[0-9.]*|ipython)"
+    )
+    # A here-string read by an interpreter (`python3 <<< "open('.env')"`), and text piped
+    # into one (`echo "open('.env')" | python3`): both are code (D176).
+    for match in re.finditer(r"(^|[;&|(]\s*)" + interpreter + r"\b[^;&|<]*<<<\s*(.*)", command):
+        found += _path_literals(match.group(4).split("\n")[0])
+    for match in re.finditer(r"([^|;&\n]*)\|\s*" + interpreter + r"(\s|$)", command):
+        found += _path_literals(match.group(1))
     for line_number, line in enumerate(command.splitlines()):
         # A heredoc read by an interpreter (`python3 - <<EOF`): its lines are code like
         # `-c CODE` (D174). Only when the interpreter is the program of the command that
