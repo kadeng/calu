@@ -34,7 +34,9 @@ invalid pattern makes every checked call ask the human until it is fixed, so a b
 never lets a call through.
 """
 
+import os
 import re
+import shlex
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -313,6 +315,18 @@ class Rules:
                 )
                 for line in command.splitlines():
                     self._deny_command(line.strip(), outcome)
+            for literal in inline_code_paths(command):
+                # A path written into an interpreter's inline code is read like an argument
+                # (D167); without this `node -e "...readFileSync('.env')"` never met the read
+                # deny list. From the raw command: the splitter's form has lost the quotes.
+                path = Path(literal).expanduser()
+                path = (path if path.is_absolute() else cwd / path).resolve()
+                if self.read_denied(path):
+                    all_allowed = False
+                    outcome.ask.append(
+                        f"Inline code in `{command[:60]}` names `{self.display(path)}`, which "
+                        "the read deny list protects."
+                    )
             for simple in parsed.commands:
                 parts += 1
                 if self._deny_command(simple, outcome):
@@ -692,3 +706,52 @@ def _named_paths(value: Any, key: str = "", depth: int = 0) -> list[str]:
         return []
     looks = value.startswith(("/", "~/", "./", "../", "file://")) or value == "~"
     return [value] if key in PATH_KEYS or looks else []
+
+
+INTERPRETERS = frozenset(
+    {"python", "python3", "node", "nodejs", "deno", "bun", "perl", "ruby", "php", "lua", "Rscript"}
+)
+"""Programs whose `-c`/`-e`/`--eval` argument is code (D167)."""
+
+_CODE_OPTIONS = frozenset({"-c", "-e", "-E", "--eval", "-r", "eval", "-p", "--print"})
+_LITERAL = re.compile(r"""(['"`])((?:(?!\1).){1,4096}?)\1""")
+
+
+def inline_code_paths(command: str) -> list[str]:
+    r"""Return the string literals of an interpreter's inline code that could be paths (D167).
+
+    `python3 -c "open('.env').read()"` reads `.env`, but the rules saw only one long argument,
+    which a deny rule anchored at the end of a path (`.env`, `.aws/credentials`) cannot match.
+    The quoted literals of the code are taken out and returned when they look like a path:
+    they contain "/" or start with "." or "~". Code that builds its path at run time is still
+    the checker's to judge.
+
+    Args:
+        command: The command as Claude wrote it, quotes included; every interpreter in it
+            (after `&&`, `|`, `;` too) is looked at.
+
+    Returns:
+        The literals, in order; [] when no interpreter with inline code is in it.
+
+    Example:
+        inline_code_paths("node -e \"fs.readFileSync('.env')\"") == [".env"]
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return []
+    found: list[str] = []
+    seen_interpreter = False
+    for index, word in enumerate(words[:-1]):
+        name = os.path.basename(word)
+        if name in INTERPRETERS or re.fullmatch(r"python[0-9.]*", name):
+            seen_interpreter = True
+        elif word in ("&&", "||", "|", ";"):
+            seen_interpreter = False
+        elif seen_interpreter and word in _CODE_OPTIONS:
+            code = words[index + 1]
+            for match in _LITERAL.finditer(code):
+                literal = match.group(2)
+                if "\n" not in literal and ("/" in literal or literal.startswith((".", "~"))):
+                    found.append(literal)
+    return found

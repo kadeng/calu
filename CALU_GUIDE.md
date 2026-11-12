@@ -592,7 +592,8 @@ Claude runs as your user too, so it could use that credential the same way: `cal
 allow` from its own Bash. Two things stop it. With the sandbox on, `~/.config/calu` is
 unreadable to Claude's commands; and a built-in rule makes every `calu` command Claude runs
 (`calu …`, `uv run calu …`, `uvx calu …`, `python -m calu …`) ask you first, sandbox or not.
-What the rules cannot stop is a script Claude runs that reads the file itself; without the
+A one-line script that names the file in its code (`python3 -c "open('...')"`) asks too.
+What the rules cannot stop is a script that builds the path at run time; without the
 sandbox only the checker sees that, and a session says so at its start when a credential has
 no password.
 The local database of `calu db up` asks every connection for a password, including those from

@@ -561,3 +561,22 @@ def test_any_tool_that_names_a_protected_path_asks(tmp_path: Path) -> None:
     for tool, inp in quiet:
         outcome = rules.evaluate(call(tool, inp))
         assert not outcome.ask and not outcome.allowed, (tool, inp)
+
+
+@pytest.mark.parametrize(
+    ("command", "asks"),
+    [
+        ("""node -e "console.log(require('fs').readFileSync('.env','utf8'))" """, True),
+        ("""perl -e 'open F, "<", "~/.aws/credentials"; print <F>'""", True),
+        ("""ls && python3 -c "print(open('.env').read())" """, True),
+        ("""ruby -e 'puts File.read("README.md")'""", False),
+        ("""python3 -c 'print(1 + 1)'""", False),
+    ],
+)
+def test_a_path_in_an_interpreters_inline_code_meets_the_read_deny_list(
+    tmp_path: Path, command: str, asks: bool
+) -> None:
+    """D167: the rules saw `node -e "..."` as one long argument, which a deny rule anchored at
+    the end of a path (`.env`) could not match."""
+    outcome = default_rules(tmp_path).evaluate(bash(command, str(tmp_path)))
+    assert bool(outcome.ask) is asks, outcome.ask
