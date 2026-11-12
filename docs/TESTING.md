@@ -125,6 +125,12 @@ The checker model for live tests is Nemotron Lightning on Fireworks;
 machine, so a `claude` that works in a terminal works here. If Mistral is used: small models
 only.
 
+`tests/unit/test_runner_live.py` needs no key, only the logged-in `claude`, `bwrap` and `socat`:
+it sends a prompt, an injected and a queued message through the real runner and checks that
+exactly these three are recorded as the user's input, while calu's own note and a command's
+output are not (`spikes/RESULTS.md`, "Whose words a user-role message is"). Run it after every
+update of the CLI or of `claude-agent-sdk`; it takes about half a minute on haiku.
+
 ## The spikes: what Claude Code actually does
 
 calu's design rests on measured behaviour, not on documentation. Every assumption about Claude
@@ -134,7 +140,7 @@ them by hand; they use throwaway directories and databases.
 | Spike | Question it answers | Re-run when |
 |---|---|---|
 | `spike_q1a_cc_sandbox.sh`, `spike_q1a_precedence.sh` | Does Claude Code's own sandbox isolate Bash, and can project settings switch it off? (D15) | the CLI changes |
-| `spike_settings_widen.sh` | Can `sandbox.filesystem.allowRead` or `sandbox.network.allowedDomains` of the project's settings files widen the sandbox calu passes with `--settings`? (measured 2026-11-12, CLI 2.1.319: no; alone, the same entries do work) | **every CLI update**: `calu.preflight.settings_file_sandbox_warnings` only warns about such entries |
+| `spike_settings_widen.sh` | Do `sandbox.filesystem.allowRead`, `sandbox.network.allowedDomains` or `sandbox.excludedCommands` of the project's settings files take effect next to the sandbox document calu passes with `--settings`, and does the CLI accept that complete document? (measured 2026-11-12, CLI 2.1.319: no effect, accepted; alone, the same entries do work) | **every CLI update**. calu does not rest on it: with `claude.sandbox.fail_if_unavailable` a session does not start, and a Bash step waits for a human, while a settings file holds such an entry (`calu.preflight.settings_file_sandbox_blockers`) |
 | `spike_q1b_shell_prefix.sh` | Can `CLAUDE_CODE_SHELL_PREFIX` wrap every command? (the fallback) | the CLI changes |
 | `spike_q7_structured_check.sh` | Can `claude -p --json-schema` serve as a checker model? (D16) | considering that model type |
 | `spike_hook_timeout.py` | Does a hook that misses its timeout let the call run? (D23) | **every CLI update: the whole gate rests on it** |
@@ -258,6 +264,17 @@ escalation resolved from the database alone.
    `calu run --project demoo` must refuse to start and list the registered projects; `calu run`
    in an unregistered directory must print `[project] none`.
 >>>>>>> fix/db-lifecycle
+17. A sandbox entry in a settings file: put `{"sandbox": {"excludedCommands": ["make"]}}` into
+   the project's `.claude/settings.local.json` and start `calu run` there. The start must be
+   refused with a message that names the file and the entry. Remove the file, start a session
+   with a prompt that runs a slow command and then a second one, and put the file back while
+   the first command runs: the second command must wait as an escalation that names the file.
+   `calu doctor <directory>` must name the entry too.
+18. The permission mode: `calu run` with `claude.permission_mode` unset on a machine whose
+   Claude Code settings do not set `permissions.defaultMode` must print, among the start-up
+   warnings, that auto mode's classifier is NOT active; with `calu config set
+   claude.permission_mode auto` the session must report the mode "auto" when it starts.
+   `calu doctor` must show an `auto mode` line in both cases.
 
 ## Measuring the checkers
 

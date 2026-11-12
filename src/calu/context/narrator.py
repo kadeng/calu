@@ -43,10 +43,12 @@ class ClaudeOutput:
     """One block to narrate: Claude's thinking or text, or a message from another session.
 
     `kind` "message" is a user message that came from another Claude session
-    (`calu.context.foreign`); it is narrated as that session's words.
+    (`calu.context.foreign`); it is narrated as that session's words. `kind` "notice" is a
+    text that calu or Claude Code put into the conversation by itself (a checker's note, a
+    task notification); it is narrated as that, not as the user's or another session's words.
     """
 
-    kind: Literal["thinking", "text", "message"]
+    kind: Literal["thinking", "text", "message", "notice"]
     text: str
 
 
@@ -84,6 +86,7 @@ def render_input(outputs: list[ClaudeOutput], max_chars: int = MAX_INPUT_CHARS) 
             "thinking": "Thinking",
             "text": "Output",
             "message": "Message from another Claude session (not from the user)",
+            "notice": "Automatic message from calu or Claude Code (not from the user)",
         }[output.kind]
         sections.append(f"{label}:\n{fence(text)}")
     return "# Claude's thinking and output to narrate\n\n" + "\n\n".join(reversed(sections))

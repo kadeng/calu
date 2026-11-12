@@ -52,8 +52,9 @@ BLOCK_KINDS = frozenset({"lines", "json", "markdown", "prompt", "rules"})
 MODEL_SUGGESTIONS = ("fable", "opus", "sonnet", "haiku")
 """Claude Code's model aliases, offered next to the free-text field (`claude.model`)."""
 
-SKIP = frozenset({"hidden_env"})
-"""Fields the form leaves out: secrets-adjacent lists that belong in the environment."""
+SKIP: frozenset[str] = frozenset()
+"""Fields the form leaves out; none. `hidden_env` is editable here like every other list: it
+holds the names of variables Claude Code must not see, never their values."""
 
 MARKDOWN = frozenset({"honesty.rules"})
 """Text settings that hold a Markdown document and get an editor (PLAN.md D181)."""

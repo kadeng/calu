@@ -72,3 +72,12 @@ def test_the_configuration_wins_over_a_checker_definition() -> None:
     )
     assert layered.command_checker.model == "project:command"
     assert layered.command_checker.max_tokens == 1
+
+
+def test_hidden_env_holds_variable_names_only() -> None:
+    assert Config(hidden_env=["XAI_API_KEY", "HF_TOKEN"]).hidden_env == ["XAI_API_KEY", "HF_TOKEN"]
+    for entry in ("A=B", "", "MY KEY", "A\0B"):
+        with pytest.raises(pydantic.ValidationError, match="hidden_env"):
+            Config(hidden_env=[entry])
+        with pytest.raises(pydantic.ValidationError):
+            build_config([{"hidden_env": [entry]}])

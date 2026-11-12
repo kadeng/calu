@@ -54,3 +54,9 @@ def test_a_value_is_rendered_the_way_it_is_typed() -> None:
     assert default_of(fields["check_subagent_results"]) == "`true`"
     assert default_of(fields["claude"]) == "see below"
     assert default_of(fields["tool_routes"]) == "(empty)"
+
+
+def test_hidden_env_can_be_looked_up() -> None:
+    """A warning tells the user to set it, so the reference and `calu config list` show it."""
+    assert "hidden_env" not in SKIP
+    assert "| `hidden_env` |" in configuration_markdown()

@@ -11,7 +11,12 @@ The SDK runs Claude Code headless (stream-json over stdin/stdout). This runner
   text that the session sent for a human through `send`; calu's own notes, task notifications
   and everything else Claude Code puts into the conversation are reported as not from the user,
 - reports the effective permission mode, because outside the auto mode the checkers decide
-  alone (PLAN.md D5, D21).
+  alone (PLAN.md D5, D21),
+- does not start, and makes a Bash step wait for a human, while a settings file of Claude Code
+  holds a sandbox entry beyond calu's configuration and `claude.sandbox.fail_if_unavailable`
+  is set (`calu.preflight.settings_file_sandbox_blockers`),
+- calls the event sink for every event and never stops the stream because the sink raised;
+  every turn Claude Code ends is reported with a `turn.result` (`_forward`, `_emit`).
 
 Verified behaviour of these mechanisms: `.claude/skills/claude-code-integration/references/
 spike-results.md`.
@@ -47,13 +52,14 @@ from claude_agent_sdk.types import (
 )
 
 from calu.checkers.model import Step
-from calu.checkers.policy import Route, unknown_tools
+from calu.checkers.policy import SHELL_TOOLS, Route, unknown_tools
 from calu.checkers.result_checker import SubagentResult
 from calu.claude.runner import (
     NOT_FROM_USER,
     EventSink,
     Fork,
     Priority,
+    StartRefused,
     ToolGate,
     Verdict,
 )
@@ -64,6 +70,7 @@ from calu.context.foreign import (
     user_message_source,
 )
 from calu.files import skill_file
+from calu.preflight import settings_file_sandbox_blockers
 from calu.protocol.messages import (
     AgentInfo,
     AgentsUpdate,
@@ -176,6 +183,11 @@ class SdkRunner:
     instance for another session.
     """
 
+    home: Path | None = None
+    """The home directory whose `.claude/settings.json` is inspected for sandbox entries; None
+    uses the real one. The unit tests point it at an empty directory, so that they do not
+    depend on the settings of whoever runs them."""
+
     def __init__(
         self,
         workspace: Path,
@@ -212,7 +224,8 @@ class SdkRunner:
         self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
         self._sink: EventSink | None = None  # set by `run`; hooks report through it
-        self._sink_failures = 0
+        self.sink_failures = 0
+        """How often the sink raised on an event; each time is logged (`_emit`)."""
         self.background_tasks = 0
         """Claude Code's background tasks now running, from `background_tasks_changed` (D158)."""
         self.session_id: str | None = None
@@ -228,20 +241,32 @@ class SdkRunner:
     ) -> None:
         """Connect, then translate messages to events until `stop` is called.
 
+        Before anything is started, Claude Code's settings files are inspected: with
+        `claude.sandbox.fail_if_unavailable`, a sandbox entry in them that goes beyond calu's
+        configuration refuses the start (`calu.preflight.settings_file_sandbox_blockers`).
+
+        The sink contract (`calu.claude.runner.EventSink`): `sink` is called once for every
+        event, in order. A message that cannot be translated and an event on which `sink`
+        raises are logged at level "error" and do not stop the stream (`_forward`, `_emit`);
+        a result message that cannot be translated still gives a `turn.result`, so the end of
+        a turn is always reported. Only an error of the SDK's own transport ends the loop.
+
         Args:
             gate: Decides about every tool call (PreToolUse hook and `can_use_tool`).
             sink: Receives the translated events.
             resume_id: Claude session id to resume, or None for a new session.
             fork: Where to branch off the resumed conversation (PLAN.md D36).
 
-        A message that cannot be translated and an event that `sink` refuses are logged and
-        skipped (`_forward`); only an error of the SDK's own transport ends the loop.
-
         Raises:
+            StartRefused: If a loaded settings file holds sandbox entries beyond calu's
+                configuration; nothing was started.
             claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails, including a
                 fork point the CLI refuses ("Resume rejected by --resume-drops-turn:").
         """
         self._sink = sink
+        blockers = self._sandbox_blockers()
+        if blockers:
+            raise StartRefused(" ".join(blockers))
         options = self._options(gate, resume_id, fork)
         with anyio.CancelScope() as scope:
             self._cancel = scope
@@ -254,20 +279,37 @@ class SdkRunner:
                     await self._forward(msg, sink)
         self._client = None
 
+    def _sandbox_blockers(self) -> list[str]:
+        """Return why calu cannot be sure of the sandbox right now; reads the settings files.
+
+        Returns:
+            `calu.preflight.settings_file_sandbox_blockers` for this runner's configuration,
+            workspace and home directory: [] when nothing stands against running a command.
+        """
+        return settings_file_sandbox_blockers(self.config, self.home, self.workspace)
+
     async def _forward(self, msg: object, sink: EventSink) -> None:
         """Translate one SDK message and hand its events to `sink`; never raises `Exception`.
 
         The stream carries text the model wrote, and the sink ends in a terminal or a pipe.
-        Neither may end an unsupervised session: a failing translation becomes one `log` event
-        of level "error" that names the message type, and an event the sink refuses is logged
-        and dropped while the following events are still delivered. Tool calls are not affected
-        either way, because they are decided in the hooks, not here. Cancellation passes
-        through.
+        Neither may end an unsupervised session, and neither may leave it waiting for the end
+        of a turn that has already ended:
+
+        - A failing translation becomes one `log` event of level "error" that names the
+          message type. If the message was the result of a turn, a `turn.result` with
+          `is_error` true and the subtype "untranslated" follows, so that the turn ends for
+          the session as it has ended for Claude Code.
+        - Every event is handed to the sink, also after the sink raised on an earlier one
+          (`_emit`).
+
+        Tool calls are not affected either way, because they are decided in the hooks, not
+        here. Cancellation passes through.
 
         Args:
             msg: A message from `ClaudeSDKClient.receive_messages`.
             sink: Receives the events.
         """
+        events: list[Event]
         try:
             events = self._translate(msg)
         except Exception as exc:
@@ -281,14 +323,34 @@ class SdkRunner:
                     ),
                 )
             ]
+            if isinstance(msg, ResultMessage):
+                session_id = getattr(msg, "session_id", None)
+                events.append(
+                    TurnResult(
+                        session_id=session_id if isinstance(session_id, str) else None,
+                        is_error=True,
+                        subtype="untranslated",
+                        result=(
+                            "Claude Code ended the turn, and calu could not read the "
+                            f"result ({type(exc).__name__}: {exc})."
+                        ),
+                        background_tasks=self.background_tasks,
+                    )
+                )
         for event in events:
             await self._emit(event, sink)
 
     async def _emit(self, event: Event, sink: EventSink | None = None) -> None:
-        """Hand one event to the sink; a sink that raises is logged, not propagated.
+        """Hand one event to the sink; a sink that raises is logged, never propagated.
 
-        The first three failures are logged with their traceback, later ones at debug level,
-        so that a closed terminal does not fill the log during a long run.
+        This is the runner's half of the sink contract (`calu.claude.runner.EventSink`): the
+        stream goes on, the next event is delivered, and the failed event is not delivered
+        again. `sink_failures` counts the failures. Each one is logged at level "error". The
+        traceback is included for the first three and for every `turn.result`, because a sink
+        that fails on the end of a turn can leave its own state behind (a session that still
+        reads "running") and whoever looks into that needs the cause; further failures on
+        other events are one line each, so that a closed terminal does not fill the log with
+        tracebacks during a long run.
 
         Args:
             event: The event.
@@ -300,12 +362,18 @@ class SdkRunner:
             return
         try:
             await sink(event)
-        except Exception:
-            self._sink_failures += 1
-            if self._sink_failures <= 3:
-                log.exception("the event sink refused a %s event", event.method)
-            else:
-                log.debug("the event sink refused a %s event", event.method, exc_info=True)
+        except Exception as exc:
+            self.sink_failures += 1
+            end_of_turn = isinstance(event, TurnResult)
+            log.error(
+                "the event sink raised on a %s event (%s: %s; failure %d of this session)%s",
+                event.method,
+                type(exc).__name__,
+                exc,
+                self.sink_failures,
+                ": the end of this turn may not have reached every client" if end_of_turn else "",
+                exc_info=end_of_turn or self.sink_failures <= 3,
+            )
 
     async def wait_ready(self) -> None:
         """Return once the SDK client is connected and `send` may be called."""
@@ -380,8 +448,8 @@ class SdkRunner:
 
         Claude Code authenticates as configured on this machine; only checker keys are hidden
         from it (`_claude_env`). The sandbox settings of `config.sandbox` are passed as a
-        `--settings` JSON document, which overrides the settings files of the project and of the
-        user (PLAN.md D15).
+        `--settings` JSON document, which has precedence over the settings files of the project
+        and of the user (PLAN.md D15; what was measured of that: `SandboxConfig`).
 
         Args:
             gate: Used by the PreToolUse hook and by `can_use_tool`.
@@ -403,7 +471,11 @@ class SdkRunner:
             (the permission mode of the hook input, whatever set it), so that the auto mode
             classifier decides as well (PLAN.md D5, D21); where there is no auto mode to defer
             to, PASS becomes "allow" -- or, with `claude.require_auto_mode`, "ask", so that a
-            human decides in the classifier's place. ALLOW always answers "allow".
+            human decides in the classifier's place. ALLOW answers "allow". One case overrides
+            both PASS and ALLOW: a shell command (`SHELL_TOOLS`) is answered "ask" while a
+            settings file holds a sandbox entry beyond calu's configuration
+            (`_sandbox_blockers`, read again for every command), so a human decides whether
+            it runs.
 
             Side effect: the first mode seen for the calling agent, and every change of it, is
             reported as a `log` event (`_mode_events`).
@@ -427,6 +499,18 @@ class SdkRunner:
             output: dict[str, Any] = {"hookEventName": "PreToolUse"}
             if result.context:
                 output["additionalContext"] = result.context  # verified: Claude reads it
+            if result.verdict in (Verdict.PASS, Verdict.ALLOW) and step.tool_name in SHELL_TOOLS:
+                # The settings files can change while a session runs, and Claude Code reads
+                # them again. A command runs only while calu is sure of the sandbox.
+                blockers = self._sandbox_blockers()
+                if blockers:
+                    reason = " ".join(blockers)
+                    if step.tool_use_id:
+                        self._steps[step.tool_use_id] = step
+                        self._ask_reasons[step.tool_use_id] = reason
+                    output["permissionDecision"] = "ask"
+                    output["permissionDecisionReason"] = reason
+                    return {"hookSpecificOutput": output}
             if result.verdict is Verdict.PASS and mode == "auto":
                 # No decision: Claude Code's auto mode classifier decides as well (checkers AND
                 # auto mode). "allow" would skip the classifier (verified, spike_auto_mode.py).
@@ -567,7 +651,8 @@ class SdkRunner:
 
             Uses the step stored by `pre_tool_use` if there is one, else builds it from the
             arguments. Waits without a time limit. A reason the runner itself had for making
-            the step wait (`claude.require_auto_mode`) is put in front of what Claude Code
+            the step wait (`claude.require_auto_mode`, a settings file's sandbox entries) is
+            put in front of what Claude Code
             says it is asking about. The user's note on an allowed step is sent to Claude as
             a message of the user.
 
@@ -642,8 +727,7 @@ class SdkRunner:
             },
             setting_sources=self.config.setting_sources,  # type: ignore[arg-type]
             # `--settings` as a JSON document: it overrides the project's and the user's
-            # settings files, so the agent cannot switch the sandbox off (PLAN.md D15). Every
-            # widening key is written, also when empty (`SandboxConfig.settings`).
+            # settings files (PLAN.md D15). The keys it holds: `PINNED_SANDBOX_KEYS`.
             settings=json.dumps(self.config.sandbox.settings()),
             extra_args={
                 "replay-user-messages": None,
@@ -686,7 +770,9 @@ class SdkRunner:
         except Exception:
             log.exception("sending a note to Claude failed")
 
-    def _user_source(self, text: str, origin: Any = None) -> Literal["user", "cross_session"]:
+    def _user_source(
+        self, text: str, origin: Any = None
+    ) -> Literal["user", "cross_session", "system"]:
         """Decide whether a user-role text on the stream is the human user's.
 
         The checkers accept only the user's messages as authorization, so the default is "not
@@ -710,7 +796,11 @@ class SdkRunner:
 
         Example:
             After `send("Fix it.", "later")`, `_user_source("Fix it.")` is "user" and a second
-            `_user_source("Fix it.")` is "cross_session".
+            `_user_source("Fix it.")` is "system".
+
+        Measured with CLI 2.1.319 (`tests/unit/test_runner_live.py`): a prompt, a message
+        queued for the next turn and a message injected into a running turn are each replayed
+        once, with the text unchanged and no other origin, so all three are recognised.
         """
         if origin is not None and not (isinstance(origin, dict) and origin.get("kind") == "human"):
             return NOT_FROM_USER
@@ -736,14 +826,19 @@ class SdkRunner:
 
         Returns:
             One `Log` (level "info" for "auto", else "warning") if the mode is new for that
-            agent, else [].
+            agent, else []. A subagent whose first mode is the one the main agent runs in
+            gives no event: the line about the main agent already says it, and a run with
+            many subagents would repeat it for each.
         """
         if not isinstance(mode, str) or not mode:
             return []
         agent = sdk_agent_id if isinstance(sdk_agent_id, str) and sdk_agent_id else None
         if self._modes.get(agent) == mode:
             return []
+        first = agent not in self._modes
         self._modes[agent] = mode
+        if agent is not None and first and self._modes.get(None) == mode:
+            return []
         who = f"The subagent {agent}" if agent else "Claude Code"
         if mode == "auto":
             return [

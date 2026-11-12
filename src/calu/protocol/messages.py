@@ -591,12 +591,15 @@ class UserInput(Event):
 
     `source` "cross_session": the message came from another Claude session on the same machine
     (`calu.context.foreign`), not from the user; front ends show it as such, and the
-    checkers see it only narrated, never as the user's words.
+    checkers see it only narrated, never as the user's words. `source` "system": calu or
+    Claude Code put the text into the conversation (a checker's note, the notification of a
+    finished background task, hook feedback); it is treated like a "cross_session" message
+    and labelled as what it is.
     """
 
     method: ClassVar[str] = "user.input"
     text: str
-    source: Literal["user", "cross_session"] = "user"
+    source: Literal["user", "cross_session", "system"] = "user"
     uuid: str = ""
     """The transcript entry's uuid, when Claude Code replays it (`replay-user-messages`). calu
     records it with the turn so that a later session can be forked before this prompt (D36)."""
