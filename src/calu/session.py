@@ -1291,10 +1291,10 @@ class Session:
     async def accepts_token(self, token: str) -> bool:
         """Tell whether a client may attach to this session with `token` (PLAN.md D30).
 
-        The protocol server checks the token it printed itself and asks this only for a token it
-        does not know, so that attaching with the printed token keeps working even if the
-        database is unreachable. Every token an operator minted for this session counts
-        (`calu token mint`), until it is revoked.
+        Every token of this session counts until it is revoked: the one `calu run` printed and
+        every one an operator minted (`calu token mint`). The protocol server asks the store
+        the same question by hash (`SessionServer.observe`), for every token, and falls back to
+        the printed token it holds in memory only when the database cannot be asked.
 
         Args:
             token: The token the client sent in `initialize`.
@@ -1729,6 +1729,7 @@ class Session:
         note: str | None,
         client: str = "",
         answer: str | None = None,
+        token_sha256: str | None = None,
     ) -> None:
         """Resolve an open escalation from a client. Only the first decision counts.
 
@@ -1746,6 +1747,9 @@ class Session:
             answer: The answer to a question of the agent (`escalation.request` with
                 `questions`, PLAN.md D35). The call does not run; Claude receives this text as
                 its result, and the row is recorded as "answered".
+            token_sha256: SHA-256 of the token the deciding client authenticated with, which
+                the database checks before it records the decision; None uses a token of this
+                session that the store remembers.
 
         Raises:
             SessionError: If no escalation with this id is open (unknown, or already decided).
@@ -1766,12 +1770,22 @@ class Session:
             esc.done.set()
         if esc.db_id is not None:
             if answer is not None:
-                await self._record_decision(esc.db_id, False, answer, client, answered=True)
+                await self._record_decision(
+                    esc.db_id, False, answer, client, answered=True, token_sha256=token_sha256
+                )
             else:
-                await self._record_decision(esc.db_id, decision == "allow", note or "", client)
+                await self._record_decision(
+                    esc.db_id, decision == "allow", note or "", client, token_sha256=token_sha256
+                )
 
     async def _record_decision(
-        self, escalation_id: int, allow: bool, note: str, client: str, answered: bool = False
+        self,
+        escalation_id: int,
+        allow: bool,
+        note: str,
+        client: str,
+        answered: bool = False,
+        token_sha256: str | None = None,
     ) -> None:
         """Write a client's decision to the `escalations` row; never raises.
 
@@ -1786,10 +1800,12 @@ class Session:
             client: Name of the client that decided.
             answered: True for the answer to a question of the agent, which is recorded as
                 "answered" rather than allowed or denied (D35).
+            token_sha256: SHA-256 of the deciding client's token, or None (see
+                `decide_escalation`).
         """
         try:
             recorded = await self.store.decide_escalation(
-                escalation_id, allow, note, client, answered=answered
+                escalation_id, allow, note, client, answered=answered, token_sha256=token_sha256
             )
         except Exception as exc:
             log.exception("recording a client decision failed")

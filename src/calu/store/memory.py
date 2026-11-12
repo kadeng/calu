@@ -71,6 +71,7 @@ class MemorySessionStore:
     """What `recent_sessions` returns (a test sets it)."""
     comments: list[tuple[int, Comment, int | None]] = field(default_factory=list)
     client_tokens: list[tuple[str, str]] = field(default_factory=list)
+    decided_with: dict[int, str | None] = field(default_factory=dict)
     write_sets: dict[int, dict[str, Any]] = field(default_factory=dict)
     """What each step wrote, as `record_changes` recorded it (PLAN.md D31)."""
     address: str = ""
@@ -441,6 +442,7 @@ class MemorySessionStore:
         note: str = "",
         actor: str = "",
         answered: bool = False,
+        token_sha256: str | None = None,
     ) -> bool:
         """Record a client's decision on an open escalation.
 
@@ -450,6 +452,8 @@ class MemorySessionStore:
             note: The human's note, or the answer to a question.
             actor: Name of the client that decided.
             answered: True for the answer to a question of the agent (D35).
+            token_sha256: SHA-256 of the deciding client's token; kept in `decided_with` and
+                not checked, because this store has no revoked tokens.
 
         Returns:
             True if the escalation was open; False otherwise.
@@ -457,6 +461,7 @@ class MemorySessionStore:
         current = self.escalations.get(escalation_id)
         if current is None or not current.open:
             return False
+        self.decided_with[escalation_id] = token_sha256
         self.escalations[escalation_id] = Escalation(
             id=escalation_id,
             state="answered" if answered else ("allowed" if allow else "denied"),

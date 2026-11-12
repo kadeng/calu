@@ -1286,9 +1286,9 @@ async def list_tokens(db: Db, session_id: str | None = None) -> list[TokenRow]:
 async def revoke_token(db: Db, token_id: int) -> bool:
     """Revoke a client token, so that no client can attach with it any more.
 
-    A client that is already connected keeps its connection: the token is checked at
-    `initialize`, not per request. Stopping such a client needs `session.stop` or the end of the
-    calu process.
+    A client that is already connected with it loses its connection as well: the session checks
+    the token again before every request that changes something and on a schedule of a few
+    seconds (`calu.protocol.server`), and closes the connection of a revoked token.
 
     Args:
         db: The connection (owner or `calu_operator`).

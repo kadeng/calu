@@ -35,6 +35,16 @@ __all__ = ["AutoEscalate"]  # defined in `calu.config`, which Config embeds it i
 
 PROTOCOL_VERSION = 1
 
+CLOSE_TOKEN_REVOKED = 4001
+"""WebSocket close code: the session closed the connection because the client's token was
+revoked (`calu token revoke`). Reconnecting with the same token is refused."""
+
+CLOSE_FELL_BEHIND = 4002
+"""WebSocket close code: the session closed the connection because the client fell more than
+`calu.bus.CLIENT_QUEUE` events behind. Nothing is wrong with the token: the client should
+connect again and subscribe with the last sequence number it received (`events.subscribe`);
+if the answer says `complete: false`, it takes a fresh `state.get` as well."""
+
 # --------------------------------------------------------------------------- requests (FE -> core)
 
 

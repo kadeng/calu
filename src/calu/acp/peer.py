@@ -91,8 +91,23 @@ class Peer:
         self._next_id = 1
         self._pending: dict[int, tuple[anyio.Event, list[dict[str, Any]]]] = {}
         self._tasks: anyio.abc.TaskGroup | None = None
+        self._handling = 0
+        self._idle = anyio.Event()
+        self._idle.set()
         self.closed = anyio.Event()
         """Set when the input ended, so callers can stop."""
+        self.after_response: Callable[[str], Awaitable[None]] | None = None
+        """Awaited with the method name after the successful response to an inbound request
+        was written. For work that must follow the response on the wire, such as a request to
+        the client that refers to an id the response has just handed out."""
+
+    async def idle(self) -> None:
+        """Wait until no inbound request is being handled and every response is written.
+
+        A request that arrives later is not waited for. Used before the process ends, so that
+        the answers to the requests that were just finished still reach the client.
+        """
+        await self._idle.wait()
 
     async def serve(self) -> None:
         """Read and dispatch messages until end of input.
@@ -187,6 +202,22 @@ class Peer:
         Args:
             line: The received line, without its newline.
         """
+        if not self._handling:
+            self._idle = anyio.Event()
+        self._handling += 1
+        try:
+            await self._dispatch_line(line)
+        finally:
+            self._handling -= 1
+            if not self._handling:
+                self._idle.set()
+
+    async def _dispatch_line(self, line: str) -> None:
+        """Handle one received line (see `_dispatch`, which counts the lines in work).
+
+        Args:
+            line: The received line, without its newline.
+        """
         try:
             message = json.loads(line)
         except ValueError:
@@ -224,6 +255,11 @@ class Peer:
             return
         if request_id is not None:
             await self._send({"jsonrpc": "2.0", "id": request_id, "result": result or {}})
+            if self.after_response is not None:
+                try:
+                    await self.after_response(str(method))
+                except Exception:
+                    log.exception("the work after the response to %s failed", method)
 
     def _resolve(self, message: dict[str, Any]) -> None:
         """Hand a response to the `request` call that waits for it.

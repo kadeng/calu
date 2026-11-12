@@ -202,6 +202,18 @@ escalation resolved from the database alone.
    `calu sessions` and `calu escalations` must run without a prompt, `calu credential list`
    must mark it "file mode only", and `calu doctor` must report it -- as a note for `operator`,
    as a problem if `admin` or `session` is stored that way. Verified by hand on 2026-11-10.
+15. Revoking a token that is in use: attach with the address and the printed token
+   (`calu attach ws://... --token=...`), then `calu token revoke <id>` for that row. Within
+   about fifteen seconds, or at the next thing typed, the attached terminal must print
+   `[detached] the session closed the connection: the client token was revoked`, and attaching
+   again with that token must be refused. `tests/db/test_protocol_tokens.py` covers the same
+   path with a fake Claude.
+16. An editor opened on a session that already waits: let a session stop on an escalation with
+   no client attached, then open the ACP editor on the project. Its permission dialog for the
+   waiting step must appear right after the session is created, and answering it must let the
+   session continue. Then end the `calu run` process while a prompt is open in the editor: the
+   prompt must end with a line that says the connection ended, and the agent process must
+   exit, so that the editor offers to restart it.
 
 ## Measuring the checkers
 

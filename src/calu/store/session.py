@@ -496,6 +496,7 @@ class SessionStore(Protocol):
         note: str = "",
         actor: str = "",
         answered: bool = False,
+        token_sha256: str | None = None,
     ) -> bool:
         """Record the decision of a client of this session (PLAN.md D28).
 
@@ -508,6 +509,9 @@ class SessionStore(Protocol):
             answered: True if this was a question of the agent and `note` holds its answer
                 (PLAN.md D35); the row is then recorded as "answered", because the step neither
                 ran nor was refused.
+            token_sha256: SHA-256 of the token the deciding client authenticated with. The
+                database records the decision only for a non-revoked token of this session.
+                None uses a token hash the store remembers (the first one it saw accepted).
 
         Returns:
             True if the escalation was open and is now resolved; False if it was already
@@ -1324,6 +1328,7 @@ class DatabaseSessionStore:
         note: str = "",
         actor: str = "",
         answered: bool = False,
+        token_sha256: str | None = None,
     ) -> bool:
         """Record a client's decision (see `SessionStore.decide_escalation`).
 
@@ -1333,16 +1338,21 @@ class DatabaseSessionStore:
             note: The human's note, or the answer to a question.
             actor: Name of the client that decided.
             answered: True for the answer to a question of the agent (D35).
+            token_sha256: SHA-256 of the deciding client's own token. Each client's decision
+                is checked against its own token, so that revoking one token (the printed one
+                included) does not make the database refuse the decisions of the others. None
+                uses the hash this store remembers.
 
         Returns:
-            True if the escalation is now resolved; False if it was already resolved, if this
-            session has no client token recorded, or if the escalation belongs to another
-            session.
+            True if the escalation is now resolved; False if it was already resolved, if no
+            token hash is given and none is remembered, if the token is revoked or not this
+            session's, or if the escalation belongs to another session.
 
         Raises:
             psycopg.Error: On database errors.
         """
-        if self._token_hash is None:
+        token_sha256 = token_sha256 or self._token_hash
+        if token_sha256 is None:
             return False
         state = "answered" if answered else ("allowed" if allow else "denied")
         return bool(
@@ -1351,7 +1361,7 @@ class DatabaseSessionStore:
                 (
                     escalation_id,
                     self._require_session(),
-                    self._token_hash,
+                    token_sha256,
                     state,
                     note or None,
                     actor or "unknown",

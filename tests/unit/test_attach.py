@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 
 from calu import attach
@@ -404,3 +405,84 @@ def test_a_token_can_always_be_passed_on_a_command_line():
     # And the plain form works for every token the generator now makes.
     token = new_token()
     assert parser.parse_args(["attach", "ws://127.0.0.1:1/", "--token", token]).token == token
+
+
+async def test_attach_connects_again_after_falling_behind(tmp_path, monkeypatch, capsys):
+    """A terminal that did not take the output fast enough is disconnected by the session. It
+    must not sit there looking attached: it connects again and shows what it missed."""
+    import calu.attach as attach_module
+    from calu import bus as bus_module
+    from calu.attach import attach
+    from calu.protocol.messages import Log
+    from tests.unit.test_protocol_server import served
+
+    typed_quit = anyio.Event()
+
+    async def read_lines(send):
+        await typed_quit.wait()  # the user types nothing until the end, then /quit
+
+    monkeypatch.setattr(attach_module, "read_lines", read_lines)
+    codes: list[int] = []
+    async with served(tmp_path) as run:
+        bus = run.server.bus
+        async with anyio.create_task_group() as tg:
+
+            async def attached() -> None:
+                codes.append(await attach(run.address, run.token))
+
+            tg.start_soon(attached)
+            with anyio.fail_after(10):
+                while bus.clients != 1:
+                    await anyio.sleep(0.01)
+            monkeypatch.setattr(bus_module, "CLIENT_QUEUE", 3)
+            for number in range(10):
+                await bus.publish(Log(level="info", message=f"line {number}"))
+            assert bus.clients == 0
+            monkeypatch.setattr(bus_module, "CLIENT_QUEUE", 1000)
+            with anyio.fail_after(10):
+                while bus.clients != 1:
+                    await anyio.sleep(0.01)
+            await bus.publish(Log(level="info", message="after the gap"))
+            shown = ""
+            with anyio.fail_after(10):
+                while "after the gap" not in shown:
+                    shown += capsys.readouterr().out
+                    await anyio.sleep(0.02)
+            assert "[reconnecting]" in shown and "[attached again]" in shown
+            assert "line 9" in shown  # replayed after the reconnect
+            typed_quit.set()
+    assert codes == [0]
+
+
+async def test_attach_says_why_the_session_closed_the_connection(tmp_path, monkeypatch, capsys):
+    """A revoked token ends the client with the reason, and without connecting again."""
+    import calu.attach as attach_module
+    from calu.attach import attach
+    from calu.tokens import token_hash
+    from tests.unit.test_protocol_server import Events, client, revoke, served
+
+    async def read_lines(send):
+        await anyio.sleep_forever()
+
+    monkeypatch.setattr(attach_module, "read_lines", read_lines)
+    async with served(tmp_path, [[{"text": "hi"}]]) as run:
+        await run.store.add_client_token(token_hash("minted"), run.address)
+        async with client(run, Events()) as owner:
+            await owner.request("session.start", {})
+            codes: list[int] = []
+            async with anyio.create_task_group() as tg:
+
+                async def attached() -> None:
+                    codes.append(await attach(run.address, "minted"))
+
+                tg.start_soon(attached)
+                with anyio.fail_after(10):
+                    while run.server.bus.clients != 2:
+                        await anyio.sleep(0.01)
+                await run.server.sweep()
+                revoke(run.store, "minted")
+                await run.server.sweep()
+            assert codes == [0]
+    out = capsys.readouterr().out
+    assert "[detached] the session closed the connection: the client token was revoked" in out
+    assert "[reconnecting]" not in out
