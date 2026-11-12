@@ -53,6 +53,10 @@ from calu.protocol.messages import (
     UserInput,
 )
 
+FOLLOW_UP_DELAY_S = 0.2
+"""Pause before the scripted follow-up turn of `{"background_tasks": N}`, standing in for the
+time the background tasks take; the session is idle during it, as with Claude Code."""
+
 
 class FakeScript(BaseModel):
     """The script: a list of turns, each a list of action dicts (see module docstring)."""
@@ -99,6 +103,7 @@ class FakeRunner:
         self.agents: dict[str, AgentInfo] = {}
         self.fork: Fork | None = None
         """The fork point `run` was called with, for tests (PLAN.md D36)."""
+        self._follow_up = False
 
     async def run(
         self,
@@ -130,6 +135,12 @@ class FakeRunner:
             async for text in self._receive:
                 await sink(UserInput(text=text, source=user_message_source(text)))
                 await self._turn(text, gate, sink)
+                while self._follow_up:
+                    # Like Claude Code (D158): the turn has ended and the session is idle; when
+                    # the background tasks "finish", the next turn starts without a message.
+                    self._follow_up = False
+                    await anyio.sleep(FOLLOW_UP_DELAY_S)
+                    await self._turn("background tasks finished", gate, sink)
 
     async def wait_ready(self) -> None:
         """Return once `run` has started."""
@@ -194,9 +205,9 @@ class FakeRunner:
                 background_tasks=0 if self._interrupted else background,
             )
         )
-        if background and not self._interrupted:
-            # Claude Code continues by itself once its background tasks finished (D158).
-            await self._turn("background tasks finished", gate, sink)
+        # Claude Code continues by itself once its background tasks finished (D158); `run`
+        # starts that turn after a pause, so that the session is idle in between.
+        self._follow_up = bool(background) and not self._interrupted
 
     async def _actions(
         self, actions: list[dict[str, Any]], agent: str | None, gate: ToolGate, sink: EventSink
