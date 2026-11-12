@@ -79,7 +79,6 @@ import platform
 import shutil
 import socket
 import time
-from collections import deque
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
@@ -185,6 +184,8 @@ from calu.protocol.messages import (
     UserInput,
 )
 from calu.protocol.messages import CheckResult as CheckResultEvent
+from calu.run_state import STEP_TIMES_KEPT as STEP_TIMES_KEPT
+from calu.run_state import Escalation, Outcome, RunState
 from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
 from calu.store import StepRow as StoredStep
 from calu.tokens import token_hash
@@ -261,9 +262,6 @@ ANSWER_TEMPLATE = (
 )
 """What Claude receives when a human answers its question (PLAN.md D35). It travels as the
 message of the refusal that keeps the call from running, which the spike showed Claude acts on."""
-
-STEP_TIMES_KEPT = 500
-"""How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
 
 CHECKER_DEADLINE_S = 300
 """Upper bound for one checker model call; on timeout the step is escalated."""
@@ -410,43 +408,6 @@ class _PendingNarration:
     outputs: list[ClaudeOutput]
     text: str | None = None
     """None until narrated; "" if there was nothing to narrate or narrating failed."""
-
-
-Outcome = Literal[
-    "allowed", "denied", "answered", "interrupted", "cancelled", "timed_out", "unstorable"
-]
-"""How an escalation ended. A human decided for "allowed", "denied" and "answered" (the answer
-to a question of the agent). Nobody decided for the others: the turn was interrupted or the wait
-cancelled ("interrupted"), the session stopped or the row was cancelled in the database
-("cancelled"), the escalation timeout ran out, or the escalation could not be stored."""
-
-
-@dataclass
-class _Escalation:
-    """An open escalation: the step, its database row and, once decided, the human's answer."""
-
-    step: Step
-    reason: str = ""
-    source: str = "checker"
-    """Who escalated: the `source` of the step's `_Decided` ("checker", "policy", "rules",
-    "auto", "held", "changeset", "clock", "question", "internal"), or "harness" (Claude Code
-    asked by itself, D38), "write_set" or "subagent_result" (the reviews after a step). A
-    "question" is the only source that does not hold other steps (`Session._holding`)."""
-    db_id: int | None = None
-    """Id of the `escalations` row, or None if it could not be stored."""
-    request: EscalationRequest | None = None
-    """The event that asked the human, kept so that a client which connects later sees it."""
-    done: anyio.Event = field(default_factory=anyio.Event)
-    wake: anyio.Event = field(default_factory=anyio.Event)
-    """Set by `note_resolution` so the waiting session reads the row at once."""
-    answer: HumanAnswer | None = None
-    answered: bool = False
-    """True if this was a question of the agent and `answer` carries the human's answer (D35)."""
-    outcome: Outcome = "interrupted"
-    """How the escalation ended; set together with `answer`. While `answer` is None it reads
-    "interrupted", which is what an escalation is whose wait was cancelled before any answer."""
-    deciding: bool = False
-    """True while a client's decision is being written to the database (`decide_escalation`)."""
 
 
 @dataclass(frozen=True)
@@ -643,49 +604,35 @@ class Session:
             on_summary=self._store_summary,
         )
         self.narrator: Narrator | None = self._narrator()
-        # agent id (None = main agent) -> thinking and text since that agent's last tool call
-        self._claude_outputs: dict[str | None, list[ClaudeOutput]] = {}
-        self.session_id: str | None = None
-        """Claude Code's own session id, once known."""
+        self._run_state = RunState.before_first_run()
+        """Everything that describes one run; `start` replaces it (`calu.run_state`)."""
         self.state: State = "stopped"
-        self._escalations: dict[str, _Escalation] = {}
-        self._escalation_closed = anyio.Event()
-        """Set, and replaced by a new event, each time an escalation leaves `_escalations` or
-        stops being opened (`_wake_held`); `_hold` waits for it."""
-        self._asking: dict[str, float] = {}
-        """Steps whose gate verdict was ASK and for which `ask` has not been called yet: key
-        (the tool_use_id, or a generated one) -> the `anyio.current_time()` at which the entry
-        stops counting (`ASK_PENDING_S`)."""
-        self._opening = 0
-        """Calls of `_ask` that are storing their escalation and have not registered it yet."""
         self._local_ids = itertools.count(1)
-        self._step_seq = itertools.count(1)
-        self._step_ids: dict[str, int] = {}  # tool_use_id -> `steps` row id
-        self._times: deque[StepTime] = deque(maxlen=STEP_TIMES_KEPT)
-        self._time_index: dict[str, int] = {}  # tool_use_id -> position in `_times`
-        self._clock_alarm: str | None = None  # a backward clock jump nobody has seen yet (D32)
-        self._snapshots: SnapshotStore | None = None  # the optional write-set snapshot (D31)
-        self._before: dict[str, tuple[str, int | None, str]] = {}
-        self._overlapped: set[str] = set()
-        self._changesets: dict[str, str] = {}  # tool_use_id -> the diff a commit would record
-        self._running_tools: set[str] = set()  # tool_use_ids of approved, unfinished calls
-        self._checking = 0  # checker and narrator calls in flight
-        self._busy = False  # Claude works on a turn
         self._git_head_value: str | None = None
         self._git_head_time = float("-inf")
-        self._pending_reasons: dict[str, tuple[str, str]] = {}
-        self._tg: TaskGroup | None = None
-        self._store_failures = 0  # database writes that failed in a row (D59)
-        self._stopping = False  # a stop was already started, so it is not started twice
         self._pending = 0  # background tasks (narration, turn storage, folding)
         self._quiet = anyio.Event()
         self._quiet.set()
-        self._run_done = anyio.Event()
-        self._run_done.set()
-        self._run_error: str | None = None
-        self._queue: list[tuple[QueuedMessage, str]] = []
         self._queue_ids = itertools.count(1)
         self._login_hint_sent = False
+
+    @property
+    def session_id(self) -> str | None:
+        """Claude Code's own session id, once known.
+
+        Returns:
+            The id, or None before the runner of the current run has reported it.
+        """
+        return self._run_state.session_id
+
+    @session_id.setter
+    def session_id(self, value: str | None) -> None:
+        """Set Claude Code's own session id in the state of the current run.
+
+        Args:
+            value: The id, or None if it is not known.
+        """
+        self._run_state.session_id = value
 
     # ------------------------------------------------------------------ settings
 
@@ -785,12 +732,12 @@ class Session:
         Yields:
             Nothing; the count is raised while the block runs.
         """
-        self._checking += 1
+        self._run_state.checking += 1
         try:
             await self._refresh_state()
             yield
         finally:
-            self._checking -= 1
+            self._run_state.checking -= 1
             with anyio.CancelScope(shield=True):
                 await self._refresh_state()
 
@@ -1147,7 +1094,7 @@ class Session:
         Returns:
             The steps, oldest first; empty before the first tool call.
         """
-        return tuple(self._times)
+        return tuple(self._run_state.times)
 
     def _finish_time(self, tool_use_id: str) -> None:
         """Note that a tool call ended, so its time window is closed.
@@ -1156,12 +1103,14 @@ class Session:
             tool_use_id: Claude's id of the call; an unknown id is ignored (its step may have
                 fallen out of the kept window).
         """
-        seq = self._time_index.pop(tool_use_id, None)
+        call = self._run_state.peek(tool_use_id)
+        seq, call.time_seq = call.time_seq, None
+        self._run_state.release(tool_use_id)
         if seq is None:
             return
-        for index, step in enumerate(self._times):
+        for index, step in enumerate(self._run_state.times):
             if step.seq == seq:
-                self._times[index] = replace(step, finished_at=datetime.now(UTC))
+                self._run_state.times[index] = replace(step, finished_at=datetime.now(UTC))
                 return
 
     def _summarize_time(self, seq: int, summary: str) -> None:
@@ -1173,19 +1122,19 @@ class Session:
         """
         if not summary:
             return
-        for index, step in enumerate(self._times):
+        for index, step in enumerate(self._run_state.times):
             if step.seq == seq:
-                self._times[index] = replace(step, summary=summary)
+                self._run_state.times[index] = replace(step, summary=summary)
                 return
 
     async def _prepare_snapshots(self) -> None:
         """Create this session's snapshot repository if the write-set snapshot is on (D31).
 
-        Side effects: sets `_snapshots`, creates a git directory under `snapshot_root` named
+        Side effects: sets `RunState.snapshots`, creates a git directory under `snapshot_root` named
         after the process, and takes no snapshot yet. A failure is reported as a warning and
         leaves the session without snapshots, because a missing write set must not stop a run.
         """
-        self._snapshots = None
+        self._run_state.snapshots = None
         if not self.config.changes.snapshot:
             return
         changes = self.config.changes
@@ -1203,7 +1152,7 @@ class Session:
                 Log(level="warning", message=f"no write sets in this session: {exc}")
             )
             return
-        self._snapshots = store
+        self._run_state.snapshots = store
 
     async def _discard_snapshots(self) -> None:
         """Delete this session's snapshot repository when the session ends (D31).
@@ -1212,9 +1161,10 @@ class Session:
         session is over, and keeping them would let `snapshot_root` grow without bound. The
         write sets themselves stay in the database.
 
-        Side effects: removes the directory and clears `_snapshots`. A failure is logged only.
+        Side effects: removes the directory and clears `RunState.snapshots`. A failure is logged
+        only.
         """
-        store, self._snapshots = self._snapshots, None
+        store, self._run_state.snapshots = self._run_state.snapshots, None
         if store is None:
             return
         try:
@@ -1234,17 +1184,20 @@ class Session:
             step_id: Its `steps` row, or None if it could not be stored.
             summary: What the checker said the step does, for the honesty comparison.
         """
-        if self._snapshots is None or not step.tool_use_id:
+        if self._run_state.snapshots is None or not step.tool_use_id:
             return
         try:
-            tree = await self._snapshots.take()
+            tree = await self._run_state.snapshots.take()
         except SnapshotError as exc:
             log.warning("no snapshot before %s: %s", step.tool_name, exc)
             return
-        if self._before:
-            self._overlapped.update(self._before)
-            self._overlapped.add(step.tool_use_id)
-        self._before[step.tool_use_id] = (tree, step_id, summary)
+        call = self._run_state.call(step.tool_use_id)
+        open_calls = [c for c in self._run_state.calls.values() if c.before is not None]
+        if open_calls:
+            for open_call in open_calls:
+                open_call.overlapped = True
+            call.overlapped = True
+        call.before = (tree, step_id, summary)
 
     async def _snapshot_after(self, tool_use_id: str) -> None:
         """Measure a finished command's write set if the review has not done it already (D31).
@@ -1277,15 +1230,16 @@ class Session:
             the comparison failed, the result has `error` set and an empty change: the caller
             must not read that as "nothing was written".
         """
-        opened = self._before.pop(tool_use_id, None)
-        overlapping = tool_use_id in self._overlapped
-        self._overlapped.discard(tool_use_id)
-        if opened is None or self._snapshots is None:
+        call = self._run_state.peek(tool_use_id)
+        opened, call.before = call.before, None
+        overlapping, call.overlapped = call.overlapped, False
+        self._run_state.release(tool_use_id)
+        if opened is None or self._run_state.snapshots is None:
             return None
         before, step_id, summary = opened
         try:
-            after = await self._snapshots.take()
-            change = await self._snapshots.changes(before, after)
+            after = await self._run_state.snapshots.take()
+            change = await self._run_state.snapshots.changes(before, after)
         except SnapshotError as exc:
             log.warning("no write set for %s: %s", tool_use_id, exc)
             await self._emit_safely(
@@ -1367,13 +1321,13 @@ class Session:
         if measured is None or not self.config.changes.review:
             return ""
         change = measured.change
-        if change.overlapping or self._snapshots is None:
+        if change.overlapping or self._run_state.snapshots is None:
             # Overlapping windows hold the writes of more than one call, so a review of them
             # could blame or revert the wrong command.
             return ""
         if measured.error:
             reason = WRITE_SET_UNMEASURED.format(error=measured.error)
-            self._pending_reasons[step.tool_use_id or ""] = (reason, "write_set")
+            self._run_state.call(step.tool_use_id or "").pending_reason = (reason, "write_set")
             asked = await self._ask(step)
             answer = asked.answer
             if asked.outcome == "allowed":
@@ -1392,7 +1346,10 @@ class Session:
         outcome = await self._review_change(step, change, measured.step_id)
         decision = outcome.decision
         if decision is Decision.ESCALATE:
-            self._pending_reasons[step.tool_use_id or ""] = (outcome.reason, "write_set")
+            self._run_state.call(step.tool_use_id or "").pending_reason = (
+                outcome.reason,
+                "write_set",
+            )
             asked = await self._ask(step)
             answer = asked.answer
             if asked.outcome == "allowed":
@@ -1485,10 +1442,10 @@ class Session:
         """
         change = measured.change
         reverted = False
-        if self._snapshots is not None:
+        if self._run_state.snapshots is not None:
             try:
                 with anyio.CancelScope(shield=True):
-                    reverted = await self._snapshots.revert(
+                    reverted = await self._run_state.snapshots.revert(
                         measured.before, measured.after, change.paths
                     )
             except SnapshotError as exc:
@@ -1566,7 +1523,7 @@ class Session:
                 Log(level="warning", message=f"clock: {jump.describe()} (not an escalation)")
             )
             return
-        self._clock_alarm = (
+        self._run_state.clock_alarm = (
             f"The clock of the calu host was moved: {jump.describe()}. Until a human has seen "
             "this, calu cannot tell which step changed which file, because that attribution "
             "compares a file's change time with the times of the steps. Check what moved the "
@@ -1629,9 +1586,11 @@ class Session:
             effort=self.config.claude.effort,
             agents=list(self.runner.agents.values()) if self.runner else [],
             escalations=[
-                esc.request for esc in self._escalations.values() if esc.request is not None
+                esc.request
+                for esc in self._run_state.escalations.values()
+                if esc.request is not None
             ],
-            queue=[message for message, _ in self._queue],
+            queue=[message for message, _ in self._run_state.queue],
             auto_escalate=self.config.auto_escalate,
             honesty_mode=self.config.honesty.mode,
             honesty_marks=[_mark_info(mark) for mark in self.honesty_marks],
@@ -1770,8 +1729,8 @@ class Session:
                 ready (the message names the runner's error), or if it was not ready within
                 `START_TIMEOUT_S` seconds (the runner is stopped then).
         """
-        self._claude_outputs.clear()  # text of an earlier session must not reach this one
-        if self.state not in ("stopped", "failed") or not self._run_done.is_set():
+        self._run_state.claude_outputs.clear()  # text of an earlier session must not reach this one
+        if self.state not in ("stopped", "failed") or not self._run_state.run_done.is_set():
             raise SessionError(f"a session is already {self.state}")
         overrides: dict[str, str | None] = {}
         if model is not None:
@@ -1780,22 +1739,10 @@ class Session:
             overrides["effort"] = None if effort == "default" else effort
         if overrides:
             self.config.claude = self.config.claude.model_copy(update=overrides)
-        self._tg = tg
-        self._run_done = anyio.Event()
-        self._run_error = None
-        self.session_id = None
-        self._busy = False
-        self._running_tools.clear()
-        self._step_ids.clear()
-        self._times.clear()
-        self._time_index.clear()
-        self._before.clear()
-        self._overlapped.clear()
-        self._changesets.clear()
+        # A run begins: everything that describes one run starts from its default, except
+        # what `RunState.following` carries over.
+        self._run_state = self._run_state.following(tg)
         await self._prepare_snapshots()
-        self._pending_reasons.clear()
-        self._step_seq = itertools.count(1)
-        self._checking = 0
         self.state = "stopped"
         await self._store_call("creating the session row", self.store.start(self._identity()))
         await self._set_state("starting")
@@ -1815,11 +1762,13 @@ class Session:
         async with anyio.create_task_group() as waiters:
             waiters.start_soon(wait_ready)
             with anyio.move_on_after(START_TIMEOUT_S):
-                await _first_of(ready, self._run_done)
+                await _first_of(ready, self._run_state.run_done)
             waiters.cancel_scope.cancel()
 
-        if self._run_done.is_set():
-            raise SessionError(f"Claude session ended during start: {self._run_error or 'exit'}")
+        if self._run_state.run_done.is_set():
+            raise SessionError(
+                f"Claude session ended during start: {self._run_state.run_error or 'exit'}"
+            )
         if not ready.is_set():
             await runner.stop()
             raise SessionError(f"Claude session was not ready within {START_TIMEOUT_S} s")
@@ -1844,7 +1793,7 @@ class Session:
             await runner.run(self, self._on_runner_event, resume_id, fork)
         except Exception as exc:
             log.exception("Claude session failed")
-            self._run_error = f"{type(exc).__name__}: {exc}"
+            self._run_state.run_error = f"{type(exc).__name__}: {exc}"
             hints = CLAUDE_SETUP_HINT
             if not self.config.claude.use_bedrock:
                 hints += f" {BEDROCK_HINT}"
@@ -1856,14 +1805,14 @@ class Session:
                 Log(level="error", message=f"Claude session failed: {exc} {hints}")
             )
         finally:
-            self._run_done.set()  # first, so that `stop` never waits for a broken client
+            self._run_state.run_done.set()  # first, so that `stop` never waits for a broken client
             with anyio.CancelScope(shield=True):
                 await self._cancel_escalations("The Claude session ended.")
-                if self._queue:  # messages Claude did not read are lost with the session
-                    self._queue.clear()
+                if self._run_state.queue:  # messages Claude did not read are lost with the session
+                    self._run_state.queue.clear()
                     await self._emit_safely(ChatQueue(messages=[]))
                 await self._wait_quiet()  # the last turn is recorded before the session ends
-                final: State = "failed" if self._run_error else "stopped"
+                final: State = "failed" if self._run_state.run_error else "stopped"
                 await self._set_state_safely(final)
                 await self._store_call("recording the end of the session", self.store.end(final))
                 await self._discard_snapshots()
@@ -1876,12 +1825,12 @@ class Session:
         storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds. Does nothing if no
         session runs and nothing is pending.
         """
-        self._claude_outputs.clear()
-        if not self._run_done.is_set():
+        self._run_state.claude_outputs.clear()
+        if not self._run_state.run_done.is_set():
             await self._cancel_escalations("The session was stopped.")
             assert self.runner is not None
             await self.runner.stop()
-            await self._run_done.wait()
+            await self._run_state.run_done.wait()
         await self._wait_quiet()
         if self.state not in ("stopped", "failed"):
             await self._set_state_safely("stopped")
@@ -1893,16 +1842,17 @@ class Session:
             SessionError: If no session runs.
         """
         runner = self._require_running()
-        self._claude_outputs.pop(None, None)  # the main agent's text of the interrupted turn
+        # the main agent's text of the interrupted turn
+        self._run_state.claude_outputs.pop(None, None)
         # The interrupt cancels the hooks, so no `ask` follows for the verdicts they carried.
-        self._asking.clear()
+        self._run_state.asking.clear()
         self._wake_held()
         # Pending reviews of foreground subagent results belong to the interrupted turn; the
         # hooks that wait for them may not be cancelled by Claude Code, so they are ended here
         # (as cancelled: no note is sent to Claude). Background subagents keep running.
-        for esc_id, esc in list(self._escalations.items()):
+        for esc_id, esc in list(self._run_state.escalations.items()):
             if esc.step.tool_name == "SubagentResult" and not esc.step.tool_input.get("background"):
-                self._escalations.pop(esc_id, None)
+                self._run_state.escalations.pop(esc_id, None)
                 esc.answer = HumanAnswer(
                     allow=False, message="The turn was interrupted.", cancelled=True
                 )
@@ -1944,13 +1894,13 @@ class Session:
         queued = QueuedMessage(
             id=f"q{next(self._queue_ids)}", text=params.text, delivery=params.delivery, to=params.to
         )
-        self._queue.append((queued, text))
+        self._run_state.queue.append((queued, text))
         await self._emit_queue()
         await self._mark_busy()
 
     async def _emit_queue(self) -> None:
         """Send `chat.queue` with the messages that Claude has not taken in yet."""
-        await self.emit(ChatQueue(messages=[message for message, _ in self._queue]))
+        await self.emit(ChatQueue(messages=[message for message, _ in self._run_state.queue]))
 
     async def _take_from_queue(self, text: str) -> None:
         """Remove the oldest queued message whose sent text is `text`, then send `chat.queue`.
@@ -1960,9 +1910,9 @@ class Session:
         Args:
             text: The text of a user message that Claude took in.
         """
-        for i, (_, sent) in enumerate(self._queue):
+        for i, (_, sent) in enumerate(self._run_state.queue):
             if sent.strip() == text.strip():
-                del self._queue[i]
+                del self._run_state.queue[i]
                 await self._emit_queue()
                 return
 
@@ -2063,7 +2013,7 @@ class Session:
                 step has not been released. Also if the escalation was cancelled (stop,
                 timeout, interrupt) while the decision was written: the step did not run.
         """
-        esc = self._escalations.get(escalation_id)
+        esc = self._run_state.escalations.get(escalation_id)
         if esc is None or esc.answer is not None:
             raise SessionError(f"no open escalation {escalation_id!r}")
         if esc.deciding:
@@ -2134,7 +2084,7 @@ class Session:
         Args:
             escalation_id: Id of the resolved `escalations` row.
         """
-        for esc in self._escalations.values():
+        for esc in self._run_state.escalations.values():
             if esc.db_id == escalation_id:
                 esc.wake.set()
 
@@ -2167,7 +2117,7 @@ class Session:
             ALLOW, DENY (with the reason for Claude) or ASK. Any internal error yields ASK, so
             a human decides instead of the call running unchecked.
         """
-        pending = _PendingNarration(self._claude_outputs.pop(step.agent_id, []))
+        pending = _PendingNarration(self._run_state.claude_outputs.pop(step.agent_id, []))
         step_id: int | None = None
         try:
             step_id = await self._add_step(step)
@@ -2208,7 +2158,8 @@ class Session:
                     step_summary=result.step_summary,
                 )
                 source = "internal"
-                self._running_tools.discard(step.tool_use_id or "")
+                self._run_state.peek(step.tool_use_id or "").running = False
+                self._run_state.release(step.tool_use_id or "")
         if result.decision.approves and source != "policy" and (holding := self._holding()):
             # `_decide` looked last before the decision was recorded, and recording takes time.
             # No await stands between this look and the answer to Claude Code.
@@ -2222,11 +2173,12 @@ class Session:
                 step_summary=result.step_summary,
             )
             source, comment = "held", ""
-            self._running_tools.discard(step.tool_use_id or "")
+            self._run_state.peek(step.tool_use_id or "").running = False
+            self._run_state.release(step.tool_use_id or "")
         if result.decision is Decision.ESCALATE:
             self._expect_ask(step, source)
             if step.tool_use_id:
-                self._pending_reasons[step.tool_use_id] = (result.reason, source)
+                self._run_state.call(step.tool_use_id).pending_reason = (result.reason, source)
         verdict = {
             Decision.PASS: Verdict.PASS,
             Decision.ALLOW: Verdict.ALLOW,
@@ -2298,8 +2250,15 @@ class Session:
         )
         self.context.step(record)
         if step.tool_use_id:
-            self._summarize_time(self._time_index.get(step.tool_use_id, 0), result.step_summary)
-        if pending.outputs and pending.text is None and self.narrator and self._tg is not None:
+            self._summarize_time(
+                self._run_state.peek(step.tool_use_id).time_seq or 0, result.step_summary
+            )
+        if (
+            pending.outputs
+            and pending.text is None
+            and self.narrator
+            and self._run_state.tg is not None
+        ):
             # No checker ran (rules, policy): narrate for the context without delaying the call.
             self._spawn(self._narrate_record, record, pending.outputs)
         if step_id is not None:
@@ -2339,7 +2298,7 @@ class Session:
             )
         )
         if result.decision.approves and step.tool_use_id:
-            self._running_tools.add(step.tool_use_id)
+            self._run_state.call(step.tool_use_id).running = True
         await self._refresh_state()
         if result.decision.approves and route in (Route.COMMAND, Route.CHANGESET):
             # The command runs as soon as this returns, so this is the "before" of its write set
@@ -2396,9 +2355,9 @@ class Session:
         try:
             with anyio.move_on_after(limit):
                 while self._holding():
-                    closed = self._escalation_closed
+                    closed = self._run_state.escalation_closed
                     # An expected `ask` that never comes stops counting without an event.
-                    expiry = min(self._asking.values(), default=None)
+                    expiry = min(self._run_state.asking.values(), default=None)
                     with anyio.move_on_after(
                         None if expiry is None else max(expiry - anyio.current_time(), 0.0)
                     ):
@@ -2420,15 +2379,15 @@ class Session:
             ASK and its escalation is not registered yet (`_expect_ask`, `_ask`).
         """
         now = anyio.current_time()
-        for key in [key for key, until in self._asking.items() if until <= now]:
-            del self._asking[key]
+        for key in [key for key, until in self._run_state.asking.items() if until <= now]:
+            del self._run_state.asking[key]
         ids = [
             escalation_id
-            for escalation_id, esc in self._escalations.items()
+            for escalation_id, esc in self._run_state.escalations.items()
             if esc.source != "question"
         ]
         parts = [f"escalation {', '.join(ids)}"] if ids else []
-        if self._opening or self._asking:
+        if self._run_state.opening or self._run_state.asking:
             parts.append("an escalation that is being opened")
         return " and ".join(parts)
 
@@ -2448,11 +2407,11 @@ class Session:
         if source == "question":
             return
         key = step.tool_use_id or f"unnamed-{next(self._local_ids)}"
-        self._asking[key] = anyio.current_time() + ASK_PENDING_S
+        self._run_state.asking[key] = anyio.current_time() + ASK_PENDING_S
 
     def _wake_held(self) -> None:
         """Wake the tool calls that `_hold` keeps waiting, so they look at `_holding` again."""
-        closed, self._escalation_closed = self._escalation_closed, anyio.Event()
+        closed, self._run_state.escalation_closed = self._run_state.escalation_closed, anyio.Event()
         closed.set()
 
     async def ask(self, step: Step) -> HumanAnswer:
@@ -2492,16 +2451,17 @@ class Session:
             The answer and the outcome (see `Outcome`). The outcome is what the reviews after a
             step act on: only "denied" is a refusal by a human.
         """
-        reason, source = self._pending_reasons.pop(
-            step.tool_use_id or "", (HARNESS_ASKED, "harness")
-        )
-        # Until the escalation is in `_escalations`, this call is what holds other steps: the
-        # count goes up before the entry of `_expect_ask` goes, and down only after the
+        call = self._run_state.peek(step.tool_use_id or "")
+        pending_reason, call.pending_reason = call.pending_reason, None
+        self._run_state.release(step.tool_use_id or "")
+        reason, source = pending_reason or (HARNESS_ASKED, "harness")
+        # Until the escalation is in `RunState.escalations`, this call is what holds other steps:
+        # the count goes up before the entry of `_expect_ask` goes, and down only after the
         # registration, with no await in between.
         holds = source != "question"
-        self._opening += 1 if holds else 0
-        self._asking.pop(step.tool_use_id or "", None)
-        esc: _Escalation | None = None
+        self._run_state.opening += 1 if holds else 0
+        self._run_state.asking.pop(step.tool_use_id or "", None)
+        esc: Escalation | None = None
         try:
             if source == "harness" and step.asked_about:
                 # Claude Code's own prompt sentence first, then why it reached a human: for a
@@ -2515,7 +2475,7 @@ class Session:
                     "unstorable",
                 )
             escalation_id = str(db_id)
-            esc = _Escalation(step=step, reason=reason, source=source, db_id=db_id)
+            esc = Escalation(step=step, reason=reason, source=source, db_id=db_id)
             esc.request = EscalationRequest(
                 escalation_id=escalation_id,
                 questions=_questions(step),
@@ -2526,9 +2486,9 @@ class Session:
                 reason=reason,
                 rendered=rendered,
             )
-            self._escalations[escalation_id] = esc
+            self._run_state.escalations[escalation_id] = esc
         finally:
-            self._opening -= 1 if holds else 0
+            self._run_state.opening -= 1 if holds else 0
             if esc is None:
                 self._wake_held()  # nothing was opened: the held calls look again
         assert esc is not None and esc.request is not None
@@ -2538,7 +2498,7 @@ class Session:
             await self._refresh_state()
             await self._wait_for_decision(esc)
         finally:
-            self._escalations.pop(escalation_id, None)
+            self._run_state.escalations.pop(escalation_id, None)
             self._wake_held()  # the tool calls that `_hold` keeps waiting for this escalation
             with anyio.CancelScope(shield=True):
                 answer = esc.answer
@@ -2565,7 +2525,7 @@ class Session:
                 await self._refresh_state()
         assert esc.answer is not None
         if esc.answer.allow and step.tool_use_id:
-            self._running_tools.add(step.tool_use_id)
+            self._run_state.call(step.tool_use_id).running = True
             await self._refresh_state()
         return _Asked(esc.answer, esc.outcome)
 
@@ -2585,7 +2545,7 @@ class Session:
                 db_id, "cancelled: the wait for a decision was interrupted"
             )
 
-    async def _wait_for_decision(self, esc: _Escalation) -> None:
+    async def _wait_for_decision(self, esc: Escalation) -> None:
         """Wait until `esc` is decided locally or in the database.
 
         Reads the escalation row every `ESCALATION_POLL_S` seconds, and at once when
@@ -2655,7 +2615,7 @@ class Session:
         if esc.answer is None:
             await self._escalation_timed_out(esc)
 
-    async def _escalation_timed_out(self, esc: _Escalation) -> None:
+    async def _escalation_timed_out(self, esc: Escalation) -> None:
         """Deny the step of an escalation nobody answered, and stop the session (D27).
 
         The session gives the machine and the Claude session back instead of waiting for ever.
@@ -2681,9 +2641,9 @@ class Session:
                 "cancelling an escalation", self.store.close_escalation(esc.db_id, message)
             )
         await self._emit_safely(Log(level="error", message=message))
-        if self._tg is not None:
+        if self._run_state.tg is not None:
             # Not a tracked background task: `stop` waits for those, and this one calls it.
-            self._tg.start_soon(self._stop_after_timeout)
+            self._run_state.tg.start_soon(self._stop_after_timeout)
 
     async def _stop_after_timeout(self) -> None:
         """Stop the session after an escalation timed out; never raises."""
@@ -2709,7 +2669,7 @@ class Session:
             review is disabled by `check_subagent_results = false`).
         """
         # The subagent's text after its last tool call is its result, reviewed below.
-        self._claude_outputs.pop(result.agent_id, None)
+        self._run_state.claude_outputs.pop(result.agent_id, None)
         if not self.config.check_subagent_results:
             return ""
         label = result.description or "subagent"
@@ -2794,7 +2754,10 @@ class Session:
                 self.store.finish_step(step_id, note or "accepted"),
             )
         if escalated:
-            self._pending_reasons[step.tool_use_id or ""] = (note, "subagent_result")
+            self._run_state.call(step.tool_use_id or "").pending_reason = (
+                note,
+                "subagent_result",
+            )
             asked = await self._ask(step)
             answer = asked.answer
             if asked.outcome in ("interrupted", "cancelled"):
@@ -2883,11 +2846,11 @@ class Session:
         outcome = await anyio.to_thread.run_sync(self.rules.evaluate, step)
         rules = _rules_outcome(step, outcome)
         label = label_for_unchecked(step.tool_name, step.tool_input)
-        if self._clock_alarm is not None:
+        if self._run_state.clock_alarm is not None:
             # A backward clock jump makes the attribution of file changes unreliable (D32), so a
             # human decides before anything else runs. The alarm is cleared either way: the
             # answer to this escalation is the answer to the jump.
-            alarm, self._clock_alarm = self._clock_alarm, None
+            alarm, self._run_state.clock_alarm = self._run_state.clock_alarm, None
             return _Decided(
                 route=route,
                 decision=CheckDecision(
@@ -3021,7 +2984,8 @@ class Session:
                 change = await self._changeset(cwd, command)
                 plain = f"# Changeset of this commit\n\n{change.shown()}"
                 if step.tool_use_id:
-                    self._changesets[step.tool_use_id] = plain  # for the escalation's row
+                    # for the escalation's row
+                    self._run_state.call(step.tool_use_id).changeset = plain
                 if change.problem:
                     # Nothing a model could judge: its approval would cover a change that
                     # nobody has seen. Where staging first makes the change readable, Claude
@@ -3270,12 +3234,12 @@ class Session:
                     # also wants this event, so this branch records and falls through to it.
                     self.context.assistant_entry(event.uuid)
                     if self.narrator is not None:
-                        outputs = self._claude_outputs.setdefault(event.agent_id, [])
+                        outputs = self._run_state.claude_outputs.setdefault(event.agent_id, [])
                         outputs.append(ClaudeOutput("text", event.text))
                         del outputs[:-MAX_PENDING_OUTPUTS]
                 case AssistantText() | AssistantThinking() if self.narrator is not None:
                     kind = "thinking" if isinstance(event, AssistantThinking) else "text"
-                    outputs = self._claude_outputs.setdefault(event.agent_id, [])
+                    outputs = self._run_state.claude_outputs.setdefault(event.agent_id, [])
                     outputs.append(ClaudeOutput(kind, event.text))
                     del outputs[:-MAX_PENDING_OUTPUTS]
                 case ToolUse() if event.name in AGENT_TOOLS:
@@ -3295,12 +3259,16 @@ class Session:
                         # The call is over whatever the measurement did: it must not stay
                         # "running" in the state.
                         self._finish_time(event.tool_use_id)
-                        self._pending_reasons.pop(event.tool_use_id, None)
-                        self._running_tools.discard(event.tool_use_id)
-                        self._changesets.pop(event.tool_use_id, None)
-                        if self._asking.pop(event.tool_use_id, None) is not None:
+                        call = self._run_state.peek(event.tool_use_id)
+                        call.pending_reason = None
+                        call.running = False
+                        call.changeset = None
+                        self._run_state.release(event.tool_use_id)
+                        if self._run_state.asking.pop(event.tool_use_id, None) is not None:
                             self._wake_held()  # the call ended without `ask`
-                    step_id = self._step_ids.pop(event.tool_use_id, None)
+                    call = self._run_state.peek(event.tool_use_id)
+                    step_id, call.step_id = call.step_id, None
+                    self._run_state.release(event.tool_use_id)
                     if step_id is not None:
                         await self._store_call(
                             "recording a step result",
@@ -3318,7 +3286,7 @@ class Session:
                 log.exception("the follow-up of %s failed", event.method)
             finally:
                 if isinstance(event, TurnResult):
-                    self._busy = False
+                    self._run_state.busy = False
                     await self._refresh_state()
                 else:
                     await self._mark_busy()
@@ -3343,12 +3311,12 @@ class Session:
             event: The turn result.
         """
         await self._record_claude_session(event.session_id)
-        outputs = self._claude_outputs.pop(None, [])
+        outputs = self._run_state.claude_outputs.pop(None, [])
         if self.context.current is not None:
             # Recorded (and persisted) with the turn: never show the verbatim answer.
             self.context.current.narrated = self.narrator is not None
         turn = self.context.end_turn(event.result)
-        if turn is not None and self._tg is not None:
+        if turn is not None and self._run_state.tg is not None:
             self._spawn(self._finish_turn, turn, outputs)
 
     async def _record_claude_session(self, claude_session_id: str | None) -> None:
@@ -3452,7 +3420,7 @@ class Session:
         if self.narrator is None:
             record.summary = CROSS_SESSION_HIDDEN
         self.context.step(record)
-        if self.narrator is not None and self._tg is not None:
+        if self.narrator is not None and self._run_state.tg is not None:
             self._spawn(self._narrate_cross_session, record, text, "message" if cross else "notice")
 
     async def _narrate_cross_session(
@@ -3601,7 +3569,7 @@ class Session:
             still checked; only its history is lost).
         """
         row = StoredStep(
-            seq=next(self._step_seq),
+            seq=next(self._run_state.step_seq),
             tool_name=step.tool_name,
             tool_input=step.tool_input,
             turn=self.context.turn_number,
@@ -3614,8 +3582,8 @@ class Session:
         except Exception as exc:
             await self._store_failed("recording a step in the database", exc)
             return None
-        self._store_failures = 0
-        self._times.append(
+        self._run_state.store_failures = 0
+        self._run_state.times.append(
             StepTime(
                 seq=row.seq,
                 tool_name=step.tool_name,
@@ -3624,8 +3592,9 @@ class Session:
             )
         )
         if step.tool_use_id:
-            self._time_index[step.tool_use_id] = row.seq
-            self._step_ids[step.tool_use_id] = step_id
+            call = self._run_state.call(step.tool_use_id)
+            call.time_seq = row.seq
+            call.step_id = step_id
         return step_id
 
     async def _open_escalation(self, step: Step, reason: str, rendered: str) -> int | None:
@@ -3651,7 +3620,7 @@ class Session:
             "tool_input": workspace_relative_input(step.tool_input, self.workspace),
             "agent_id": step.agent_id,
             "files": files_before(step, self.workspace),
-            "changeset": self._changesets.get(step.tool_use_id or "", ""),
+            "changeset": self._run_state.peek(step.tool_use_id or "").changeset or "",
             "recent": self.context.recent(),
             "chat_summary": self.context.summary,
             "calu_version": __version__,
@@ -3660,7 +3629,7 @@ class Session:
         for pause in pauses:
             try:
                 stored = await self.store.open_escalation(
-                    reason, context, self._step_ids.get(step.tool_use_id or "")
+                    reason, context, self._run_state.peek(step.tool_use_id or "").step_id
                 )
             except Exception as exc:
                 if pause is None:
@@ -3669,7 +3638,7 @@ class Session:
                 log.warning("storing an escalation failed, trying again in %s s: %s", pause, exc)
                 await anyio.sleep(pause)
             else:
-                self._store_failures = 0
+                self._run_state.store_failures = 0
                 return stored
         return None
 
@@ -3689,7 +3658,7 @@ class Session:
         except Exception as exc:
             await self._store_failed(what, exc)
         else:
-            self._store_failures = 0
+            self._run_state.store_failures = 0
 
     async def _store_value[T](self, what: str, call: Awaitable[T]) -> T | None:
         """Await a store call that has a result, and report its failure; never raises.
@@ -3713,7 +3682,7 @@ class Session:
         except Exception as exc:
             await self._store_failed(what, exc)
             return None
-        self._store_failures = 0
+        self._run_state.store_failures = 0
         return value
 
     async def _store_failed(self, what: str, exc: BaseException) -> None:
@@ -3734,26 +3703,26 @@ class Session:
             task (this runs inside whatever call failed, so it must not wait for the stop).
         """
         log.exception("%s failed", what, exc_info=exc)
-        self._store_failures += 1
+        self._run_state.store_failures += 1
         await self._emit_safely(Log(level="error", message=f"{what} failed: {exc}"))
         limit = self.config.store_failures_before_stop
-        if limit <= 0 or self._store_failures < limit or self._stopping:
+        if limit <= 0 or self._run_state.store_failures < limit or self._run_state.stopping:
             return
-        self._stopping = True
+        self._run_state.stopping = True
         resume = f"calu run --resume {self.session_id}" if self.session_id else "calu sessions"
         await self._emit_safely(
             Log(
                 level="error",
                 message=(
-                    f"{self._store_failures} database writes failed in a row, so nobody can "
-                    f"watch or unblock this session: it stops. Take it up again with "
+                    f"{self._run_state.store_failures} database writes failed in a row, so "
+                    f"nobody can watch or unblock this session: it stops. Take it up again with "
                     f"`{resume}` once the database answers."
                 ),
             )
         )
-        if self._tg is not None:
+        if self._run_state.tg is not None:
             # Not a tracked task: `stop` waits for those, and this one calls it.
-            self._tg.start_soon(self._stop_after_timeout)
+            self._run_state.tg.start_soon(self._stop_after_timeout)
 
     async def _cancel_escalations(self, message: str) -> None:
         """Deny all open escalations with `message` (their `ask` calls then return).
@@ -3764,7 +3733,7 @@ class Session:
         Args:
             message: The text Claude receives with the denial.
         """
-        for esc in list(self._escalations.values()):
+        for esc in list(self._run_state.escalations.values()):
             if esc.answer is None:
                 esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
                 esc.outcome = "cancelled"
@@ -3773,8 +3742,8 @@ class Session:
                 await self._store_call(
                     "cancelling an escalation", self.store.close_escalation(esc.db_id, message)
                 )
-        self._escalations.clear()
-        self._asking.clear()
+        self._run_state.escalations.clear()
+        self._run_state.asking.clear()
         self._wake_held()
 
     # ------------------------------------------------------------------ state and events
@@ -3790,12 +3759,12 @@ class Session:
             func: The coroutine function to run.
             *args: Its arguments.
         """
-        if self._tg is None:
+        if self._run_state.tg is None:
             return
         if self._pending == 0:
             self._quiet = anyio.Event()
         self._pending += 1
-        self._tg.start_soon(self._tracked, func, *args)
+        self._run_state.tg.start_soon(self._tracked, func, *args)
 
     async def _tracked(self, func: Callable[..., Awaitable[None]], *args: Any) -> None:
         """Run a background task and report when the last one has finished.
@@ -3837,13 +3806,13 @@ class Session:
         Returns:
             "escalated", "checking", "tool_call", "running" or "idle".
         """
-        if self._escalations:
+        if self._run_state.escalations:
             return "escalated"
-        if self._checking > 0:
+        if self._run_state.checking > 0:
             return "checking"
-        if self._running_tools:
+        if self._run_state.any_running():
             return "tool_call"
-        return "running" if self._busy else "idle"
+        return "running" if self._run_state.busy else "idle"
 
     async def _refresh_state(self) -> None:
         """Set the state to what the running work implies, unless the session is not active."""
@@ -3889,7 +3858,7 @@ class Session:
 
     async def _mark_busy(self) -> None:
         """Note that Claude is working and update the state."""
-        self._busy = True
+        self._run_state.busy = True
         await self._refresh_state()
 
     async def _emit_safely(self, event: Event) -> None:

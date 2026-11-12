@@ -42,6 +42,7 @@ phases.
 | `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
 | `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |
+| `src/calu/run_state.py` | What the session knows about one run (`RunState`) and about one tool call (`PerCall`); a start replaces it, so each run begins from the defaults |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |
 | `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve`, `calu token` (database only) |
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |

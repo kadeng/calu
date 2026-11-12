@@ -198,10 +198,10 @@ async def test_the_checking_count_is_zero_after_a_write_set_review(tmp_path: Pat
         await session.start(tg)
         await session.send_chat(ChatSendParams(text="generate it"))
         await rec.wait_for(TurnResult)
-        assert session._checking == 0
+        assert session._run_state.checking == 0
         async with session._checking_scope():
             assert session._derived_state() == "checking"
-        assert session._checking == 0
+        assert session._run_state.checking == 0
         await session.stop()
         tg.cancel_scope.cancel()
 
@@ -235,7 +235,7 @@ async def test_a_check_that_does_not_finish_in_its_budget_escalates(
     assert "did not finish" in result.reason
     (check,) = rec.of(CheckResult)
     assert check.decision == "ESCALATE"
-    assert session._checking == 0
+    assert session._run_state.checking == 0
 
 
 # ------------------------------------------------------------------ ci4
@@ -252,9 +252,10 @@ async def test_a_bookkeeping_error_after_a_pass_asks_a_human(tmp_path: Path):
     result = await session.pre_tool_use(bash("ls", "t1", tmp_path))
     assert result.verdict is Verdict.ASK
     assert "internal error" in result.reason and "context is broken" in result.reason
-    assert "t1" not in session._running_tools
+    assert not session._run_state.peek("t1").running
     # The human who is asked reads the same reason.
-    assert session._pending_reasons["t1"][0] == result.reason
+    pending_reason = session._run_state.peek("t1").pending_reason
+    assert pending_reason is not None and pending_reason[0] == result.reason
 
 
 async def test_a_bookkeeping_error_never_weakens_a_denial(tmp_path: Path):
@@ -497,12 +498,12 @@ async def test_a_write_set_that_cannot_be_measured_is_escalated_not_skipped(tmp_
     )
     async with anyio.create_task_group() as tg:
         await session.start(tg)
-        assert session._snapshots is not None
+        assert session._run_state.snapshots is not None
 
         async def broken(before: str, after: str) -> None:
             raise SnapshotError("the patch leaves out 1 changed path(s): payload.py")
 
-        session._snapshots.changes = broken  # type: ignore[method-assign,assignment]
+        session._run_state.snapshots.changes = broken  # type: ignore[method-assign,assignment]
         await session.send_chat(ChatSendParams(text="generate it"))
         request = (await rec.wait_for(EscalationRequest))[0]
         assert "could not be measured" in request.reason and "payload.py" in request.reason
@@ -551,7 +552,8 @@ async def test_a_step_whose_check_ends_while_an_escalation_is_open_is_not_approv
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         tg.start_soon(gate, bash("ls -la /nowhere", "t2", tmp_path, agent_id="agent-b"))
-        await wait_until(lambda: session._checking > 0)  # agent-b's step is with its checker
+        # agent-b's step is with its checker
+        await wait_until(lambda: session._run_state.checking > 0)
         assert (await session.pre_tool_use(first)).verdict is Verdict.ASK
         tg.start_soon(session.ask, first)
         request = (await rec.wait_for(EscalationRequest))[0]
@@ -577,7 +579,7 @@ async def test_no_step_is_approved_between_an_ask_verdict_and_its_escalation(tmp
         await session.start(tg)
         assert (await session.pre_tool_use(first)).verdict is Verdict.ASK
         # Claude Code has not called `ask` yet: no row, no entry in `_escalations`.
-        assert not session._escalations
+        assert not session._run_state.escalations
         tg.start_soon(gate, bash("ls", "t2", tmp_path, agent_id="agent-b"))
         await anyio.sleep(0.3)
         assert not results, "a step was approved while an escalation was being opened"
@@ -694,7 +696,7 @@ async def test_an_approval_does_not_stand_if_an_escalation_opens_while_it_is_rec
         result = await session.pre_tool_use(bash("ls", "t2", tmp_path, agent_id="agent-b"))
         assert result.verdict is Verdict.ASK
         assert "No step is approved while a human decides" in result.reason
-        assert "t2" not in session._running_tools
+        assert not session._run_state.peek("t2").running
         await session.stop()
         tg.cancel_scope.cancel()
 
@@ -787,7 +789,7 @@ async def test_a_client_sink_that_fails_on_the_turn_result_leaves_the_session_id
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         await session.send_chat(ChatSendParams(text="go"))
-        await wait_until(lambda: session.state == "idle" and not session._busy)
+        await wait_until(lambda: session.state == "idle" and not session._run_state.busy)
         await session.stop()
         tg.cancel_scope.cancel()
 
@@ -804,13 +806,13 @@ async def test_a_failure_while_recording_the_turn_result_still_ends_the_turn(
     monkeypatch.setattr(session, "_on_turn_result", broken)
     async with anyio.create_task_group() as tg:
         await session.start(tg)
-        session._busy = True
+        session._run_state.busy = True
         await session._refresh_state()
         assert session.state == "running"
         event = TurnResult(result="done", is_error=False, session_id="s")
         with pytest.raises(RuntimeError):
             await session._on_runner_event(event)
-        assert not session._busy and session.state == "idle"
+        assert not session._run_state.busy and session.state == "idle"
         assert rec.of(TurnResult)
         await session.stop()
         tg.cancel_scope.cancel()

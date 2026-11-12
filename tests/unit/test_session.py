@@ -1058,7 +1058,7 @@ async def test_a_single_failure_does_not_end_an_overnight_run(tmp_path: Path) ->
     # so nothing says the session is giving up and the counter is back at zero.
     assert calls["n"] == 8
     assert not [m for m in (e.message for e in rec.of(Log)) if "in a row" in m]
-    assert session._store_failures == 0
+    assert session._run_state.store_failures == 0
     # Each failure was still reported, because a silent failure is worse than a noisy one.
     assert len([m for m in (e.message for e in rec.of(Log)) if "a hiccup" in m]) == 4
 
