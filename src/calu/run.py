@@ -442,7 +442,7 @@ async def _run(
         store,
         lambda: (
             runner_factory or functools.partial(SdkRunner, tool_routes=session.config.tool_routes)
-        )(options.workspace, session.config.claude, hidden),
+        )(options.workspace, session.config.claude, hidden | set(session.config.hidden_env)),
         both(bus.publish, both(console, idle)),
         project=options.project,
         checker_models=checker_models,

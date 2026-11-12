@@ -39,7 +39,7 @@ from pydantic import BaseModel, Field
 
 from calu.checkers.model import Step
 from calu.checkers.result_checker import SubagentResult
-from calu.claude.runner import EventSink, Fork, Priority, ToolGate, Verdict
+from calu.claude.runner import NOT_FROM_USER, EventSink, Fork, Priority, ToolGate, Verdict
 from calu.context.foreign import user_message_source
 from calu.protocol.messages import (
     AgentInfo,
@@ -302,7 +302,8 @@ class FakeRunner:
             )
             await sink(ToolResult(agent_id=agent, tool_use_id=tool_use_id, content=result_text))
             if note:
-                await sink(UserInput(text=note))  # stands for the injected priority-"next" note
+                # Stands for the injected priority-"next" note: calu's text, not the user's.
+                await sink(UserInput(text=note, source=NOT_FROM_USER))
         else:
             raise ValueError(f"unknown fake action: {action!r}")
 
@@ -353,7 +354,8 @@ class FakeRunner:
             ToolResult(agent_id=agent, tool_use_id=tool_use_id, is_error=is_error, content=content)
         )
         if note:
-            await sink(UserInput(text=note))  # stands for the injected priority-"next" note
+            # Stands for the injected priority-"next" note: calu's text, not the user's.
+            await sink(UserInput(text=note, source=NOT_FROM_USER))
 
 
 def _write_files(workspace: Path, writes: dict[str, str]) -> None:

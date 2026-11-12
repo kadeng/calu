@@ -265,9 +265,8 @@ async def test_a_projects_network_policy_shapes_the_sandbox(db_url: str) -> None
         await admin.set_network_policy(db, "narrow", "none")
         closed = await ConfigStore(db, Path("/w"), "narrow").load()
         assert closed.config.claude.sandbox.allowed_domains == []
-        assert "allowedDomains" not in closed.config.claude.sandbox.settings()["sandbox"].get(
-            "network", {}
-        )
+        network = closed.config.claude.sandbox.settings()["sandbox"]["network"]
+        assert network["allowedDomains"] == []
 
         # "full" is the wildcard the spike verified against the real CLI.
         await admin.set_network_policy(db, "narrow", "full")

@@ -26,8 +26,16 @@ def test_sandbox_settings_document_matches_the_spike():
     assert settings["autoAllowBashIfSandboxed"] is False
     assert "~/.config/calu" in settings["filesystem"]["denyRead"]
     assert "~/.claude/.credentials.json" in settings["filesystem"]["denyRead"]
-    assert "network" not in settings  # no allowed domains: the sandbox blocks the network
-    assert "excludedCommands" not in settings
+    # Every key that could widen the sandbox is written, also when empty (finding cs0): a key
+    # calu left out would be one that only Claude Code's settings files define.
+    assert settings["network"] == {
+        "allowedDomains": [],  # no allowed domains: the sandbox blocks the network
+        "allowAllUnixSockets": False,
+        "allowLocalBinding": False,
+    }
+    assert settings["excludedCommands"] == []
+    assert settings["filesystem"]["allowRead"] == []
+    assert settings["enableWeakerNestedSandbox"] is False
 
 
 def test_sandbox_settings_carry_network_and_exclusions():
@@ -35,7 +43,7 @@ def test_sandbox_settings_carry_network_and_exclusions():
         allowed_domains=["pypi.org"], excluded_commands=["docker"], weaker_nested_sandbox=True
     )
     settings = config.settings()["sandbox"]
-    assert settings["network"] == {"allowedDomains": ["pypi.org"]}
+    assert settings["network"]["allowedDomains"] == ["pypi.org"]
     assert settings["excludedCommands"] == ["docker"]
     assert settings["enableWeakerNestedSandbox"] is True
 
@@ -98,11 +106,11 @@ def test_a_review_without_a_snapshot_is_reported() -> None:
 
 
 def test_the_three_network_policies_are_expressed_in_the_sandbox_settings() -> None:
-    """D39: measured against the real CLI — no network key, an allow list, or the wildcard."""
+    """D39: measured against the real CLI — an empty allow list, a list, or the wildcard."""
     configured = SandboxConfig(allowed_domains=["pypi.org"], denied_domains=["evil.example"])
 
     nothing = configured.with_policy("none").settings()["sandbox"]
-    assert "allowedDomains" not in nothing.get("network", {})
+    assert nothing["network"]["allowedDomains"] == []
     assert nothing["network"]["deniedDomains"] == ["evil.example"]  # the deny list is kept
 
     only_listed = configured.with_policy("proxy").settings()["sandbox"]
@@ -303,3 +311,123 @@ def test_a_password_free_credential_without_a_sandbox_is_named(tmp_path: Path) -
 
     store.save("operator", "postgresql://op@localhost/calu", "pw")
     assert preflight.self_approval_warnings(off, store) == [], "a password: fine"
+
+
+# ---------------------------------------------------------------- cs1: calu's own directories
+
+
+def test_calus_own_directories_follow_the_xdg_variables(tmp_path: Path, monkeypatch) -> None:
+    """The credential store and the env file move with XDG_CONFIG_HOME; so must the deny list."""
+    from calu import changes, credentials
+    from calu.config import calu_private_paths, user_env_file
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    denied = SandboxConfig().settings()["sandbox"]["filesystem"]["denyRead"]
+    assert str(credentials.default_path().parent) in denied
+    assert str(user_env_file().parent) in denied
+    assert str(changes.default_root().parent) in denied
+    # The literal defaults stay, in case the variable is set for calu only.
+    assert "~/.config/calu" in denied and "~/.local/state/calu" in denied
+    assert calu_private_paths() == denied[: len(calu_private_paths())]
+
+
+def test_calus_own_directories_cannot_be_removed_from_the_deny_list(monkeypatch) -> None:
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    for configured in ([], ["~/.ssh"]):
+        denied = SandboxConfig(deny_read=configured).settings()["sandbox"]["filesystem"]["denyRead"]
+        assert denied == ["~/.config/calu", "~/.local/state/calu", *configured]
+
+
+def test_a_config_home_below_the_home_directory_is_written_with_a_tilde(monkeypatch) -> None:
+    from calu.config import calu_private_paths
+
+    environ = {"XDG_CONFIG_HOME": str(Path.home() / ".cfg")}
+    assert calu_private_paths(environ) == ["~/.config/calu", "~/.local/state/calu", "~/.cfg/calu"]
+
+
+# ---------------------------------------------------------------- cs0: the settings files
+
+
+def test_sandbox_entries_of_the_settings_files_are_named(tmp_path: Path) -> None:
+    import json
+
+    home, workspace = tmp_path / "home", tmp_path / "ws"
+    (home / ".claude").mkdir(parents=True)
+    (workspace / ".claude").mkdir(parents=True)
+    (workspace / ".claude" / "settings.local.json").write_text(
+        json.dumps(
+            {
+                "sandbox": {
+                    "filesystem": {"allowRead": ["~/.config/calu/.env"]},
+                    "excludedCommands": ["python3", "docker"],
+                    "network": {"allowedDomains": ["pypi.org", "evil.example"]},
+                    "allowUnsandboxedCommands": True,
+                }
+            }
+        )
+    )
+    (workspace / ".claude" / "settings.json").write_text('{"sandbox": {"enabled": false}}')
+    (home / ".claude" / "settings.json").write_text('{"sandbox": {"enabled": true}}')
+    sandbox = SandboxConfig(allowed_domains=["pypi.org"], excluded_commands=["docker"])
+    config = Config(claude=ClaudeConfig(sandbox=sandbox))
+
+    project, local = preflight.settings_file_sandbox_warnings(config, home, workspace)
+    assert project.startswith(".claude/settings.json") and "enabled: false" in project
+    assert local.startswith(".claude/settings.local.json")
+    assert "filesystem.allowRead: ~/.config/calu/.env" in local
+    assert "excludedCommands: python3;" in local  # docker is in calu's own list
+    assert "network.allowedDomains: evil.example;" in local
+    assert "allowUnsandboxedCommands: true" in local
+    assert local in preflight.warnings(config, {}, workspace=workspace)
+
+    # A source calu does not load cannot widen anything, and neither can a file that says
+    # nothing beyond calu's own configuration.
+    narrowed = Config(claude=ClaudeConfig(sandbox=sandbox, setting_sources=["user"]))
+    assert preflight.settings_file_sandbox_warnings(narrowed, home, workspace) == []
+    everything = Config(
+        claude=ClaudeConfig(
+            sandbox=SandboxConfig(
+                allowed_domains=["*"],
+                excluded_commands=["python3", "docker"],
+                allow_unsandboxed_commands=True,
+            ),
+            setting_sources=["local"],
+        )
+    )
+    (only,) = preflight.settings_file_sandbox_warnings(everything, home, workspace)
+    assert "allowedDomains" not in only and "excludedCommands" not in only
+    assert "allowUnsandboxedCommands" not in only and "filesystem.allowRead" in only
+
+
+def test_a_broken_settings_file_gives_no_sandbox_warning(tmp_path: Path) -> None:
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{not json")
+    (tmp_path / ".claude" / "settings.local.json").write_text('{"sandbox": ["x"]}')
+    assert preflight.settings_file_sandbox_warnings(Config(), tmp_path, tmp_path) == []
+
+
+# ---------------------------------------------------------------- ci1: keys calu cannot hide
+
+
+def test_a_provider_with_an_unknown_key_variable_is_named(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    config = Config().with_model("openrouter:some/model")
+    (warning,) = preflight.unknown_provider_warnings(config, env_file)
+    assert "'openrouter'" in warning and "calu config add hidden_env OPENROUTER_API_KEY" in warning
+    # Named in the setting, or kept in calu's env file: the runner hides it.
+    listed = config.model_copy(update={"hidden_env": ["OPENROUTER_API_KEY"]})
+    assert preflight.unknown_provider_warnings(listed, env_file) == []
+    env_file.write_text("OPENROUTER_API_KEY=k\n")
+    assert preflight.unknown_provider_warnings(config, env_file) == []
+    # Providers calu knows, and those without a key variable, are not named.
+    for model in ("mistral:m", "bedrock:m", "claude:haiku", "test:model", "ollama:m"):
+        assert preflight.unknown_provider_warnings(Config().with_model(model), tmp_path / "x") == []
+
+
+def test_a_name_from_hidden_env_is_blanked_for_claude_code(tmp_path: Path) -> None:
+    """What `calu run` builds: the loaded secrets plus the `hidden_env` setting."""
+    config = Config(hidden_env=["OPENROUTER_API_KEY"])
+    runner = SdkRunner(tmp_path, config.claude, {"MISTRAL_API_KEY"} | set(config.hidden_env))
+    assert runner._claude_env() == {"MISTRAL_API_KEY": "", "OPENROUTER_API_KEY": ""}

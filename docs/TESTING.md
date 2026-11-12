@@ -105,6 +105,7 @@ them by hand; they use throwaway directories and databases.
 | Spike | Question it answers | Re-run when |
 |---|---|---|
 | `spike_q1a_cc_sandbox.sh`, `spike_q1a_precedence.sh` | Does Claude Code's own sandbox isolate Bash, and can project settings switch it off? (D15) | the CLI changes |
+| `spike_settings_widen.sh` | Can `sandbox.filesystem.allowRead` or `sandbox.network.allowedDomains` of the project's settings files widen the sandbox calu passes with `--settings`? (measured 2026-11-12, CLI 2.1.319: no; alone, the same entries do work) | **every CLI update**: `calu.preflight.settings_file_sandbox_warnings` only warns about such entries |
 | `spike_q1b_shell_prefix.sh` | Can `CLAUDE_CODE_SHELL_PREFIX` wrap every command? (the fallback) | the CLI changes |
 | `spike_q7_structured_check.sh` | Can `claude -p --json-schema` serve as a checker model? (D16) | considering that model type |
 | `spike_hook_timeout.py` | Does a hook that misses its timeout let the call run? (D23) | **every CLI update: the whole gate rests on it** |

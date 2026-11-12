@@ -6,7 +6,12 @@ The SDK runs Claude Code headless (stream-json over stdin/stdout). This runner
 - installs `can_use_tool`, which Claude Code calls for "ask" verdicts; it waits for `ToolGate.ask`
   without a time limit,
 - translates SDK messages into protocol events and keeps the list of subagents,
-- sends user messages with an explicit `priority` ("next" or "later").
+- sends user messages with an explicit `priority` ("next" or "later"),
+- decides which user-role messages of the stream are the user's words (`_user_source`): only a
+  text that the session sent for a human through `send`; calu's own notes, task notifications
+  and everything else Claude Code puts into the conversation are reported as not from the user,
+- reports the effective permission mode, because outside the auto mode the checkers decide
+  alone (PLAN.md D5, D21).
 
 Verified behaviour of these mechanisms: `.claude/skills/claude-code-integration/references/
 spike-results.md`.
@@ -16,7 +21,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anyio
 from claude_agent_sdk import (
@@ -44,7 +49,14 @@ from claude_agent_sdk.types import (
 from calu.checkers.model import Step
 from calu.checkers.policy import Route, unknown_tools
 from calu.checkers.result_checker import SubagentResult
-from calu.claude.runner import EventSink, Fork, Priority, ToolGate, Verdict
+from calu.claude.runner import (
+    NOT_FROM_USER,
+    EventSink,
+    Fork,
+    Priority,
+    ToolGate,
+    Verdict,
+)
 from calu.config import ClaudeConfig
 from calu.context.foreign import (
     SkillContentFilter,
@@ -80,6 +92,10 @@ minutes and not hours."""
 MAX_RESULT_CHARS = 4_000
 SUBAGENT_RESULT_CHARS = 60_000
 """Upper bound for a subagent result passed to the result checker."""
+MAX_PENDING_HUMAN_TEXTS = 256
+"""How many texts sent for a human the runner remembers until Claude Code replays them. A text
+that is never replayed (the session was interrupted first) would otherwise stay for ever; the
+oldest is dropped beyond this number, and its late replay is then not counted as user input."""
 REVIEW_HOOK_TIMEOUT_S = 24 * 3600
 """Timeout of the two hooks that review a subagent's result: they may wait for a human, because
 an escalated result is decided inside the hook."""
@@ -192,6 +208,11 @@ class SdkRunner:
         self._skills = SkillContentFilter()  # skill text after Skill calls is no user input
         self.agents: dict[str, AgentInfo] = {}  # by Agent tool call id
         self._task_to_tool_use: dict[str, str] = {}  # SDK task/agent id -> tool call id
+        self._human_texts: list[str] = []  # sent for a human, not yet replayed (stripped)
+        self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
+        self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
+        self._sink: EventSink | None = None  # set by `run`; hooks report through it
+        self._sink_failures = 0
         self.background_tasks = 0
         """Claude Code's background tasks now running, from `background_tasks_changed` (D158)."""
         self.session_id: str | None = None
@@ -213,10 +234,14 @@ class SdkRunner:
             resume_id: Claude session id to resume, or None for a new session.
             fork: Where to branch off the resumed conversation (PLAN.md D36).
 
+        A message that cannot be translated and an event that `sink` refuses are logged and
+        skipped (`_forward`); only an error of the SDK's own transport ends the loop.
+
         Raises:
             claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails, including a
                 fork point the CLI refuses ("Resume rejected by --resume-drops-turn:").
         """
+        self._sink = sink
         options = self._options(gate, resume_id, fork)
         with anyio.CancelScope() as scope:
             self._cancel = scope
@@ -226,18 +251,86 @@ class SdkRunner:
                 self._client = client
                 self._ready.set()
                 async for msg in client.receive_messages():
-                    for event in self._translate(msg):
-                        await sink(event)
+                    await self._forward(msg, sink)
         self._client = None
+
+    async def _forward(self, msg: object, sink: EventSink) -> None:
+        """Translate one SDK message and hand its events to `sink`; never raises `Exception`.
+
+        The stream carries text the model wrote, and the sink ends in a terminal or a pipe.
+        Neither may end an unsupervised session: a failing translation becomes one `log` event
+        of level "error" that names the message type, and an event the sink refuses is logged
+        and dropped while the following events are still delivered. Tool calls are not affected
+        either way, because they are decided in the hooks, not here. Cancellation passes
+        through.
+
+        Args:
+            msg: A message from `ClaudeSDKClient.receive_messages`.
+            sink: Receives the events.
+        """
+        try:
+            events = self._translate(msg)
+        except Exception as exc:
+            log.exception("translating a %s failed", type(msg).__name__)
+            events = [
+                Log(
+                    level="error",
+                    message=(
+                        f"calu could not translate a {type(msg).__name__} of Claude Code "
+                        f"({type(exc).__name__}: {exc}); the message is not shown."
+                    ),
+                )
+            ]
+        for event in events:
+            await self._emit(event, sink)
+
+    async def _emit(self, event: Event, sink: EventSink | None = None) -> None:
+        """Hand one event to the sink; a sink that raises is logged, not propagated.
+
+        The first three failures are logged with their traceback, later ones at debug level,
+        so that a closed terminal does not fill the log during a long run.
+
+        Args:
+            event: The event.
+            sink: The sink; None uses the one `run` was called with (nothing happens before
+                `run`).
+        """
+        sink = sink or self._sink
+        if sink is None:
+            return
+        try:
+            await sink(event)
+        except Exception:
+            self._sink_failures += 1
+            if self._sink_failures <= 3:
+                log.exception("the event sink refused a %s event", event.method)
+            else:
+                log.debug("the event sink refused a %s event", event.method, exc_info=True)
 
     async def wait_ready(self) -> None:
         """Return once the SDK client is connected and `send` may be called."""
         await self._ready.wait()
 
     async def send(self, text: str, priority: Priority) -> None:
-        """Write a user message to Claude's input.
+        """Write a message **of the human user** to Claude's input.
 
         Precondition: `wait_ready` has returned and `run` is still active.
+
+        Side effect: the text is remembered, so that its replay on the stream is reported as
+        `UserInput` with source "user" (`_user_source`). Callers therefore pass only text a
+        human client sent (a prompt, a queued or injected chat message, a comment); calu's own
+        notes go through `_send_note`.
+
+        Args:
+            text: The message text.
+            priority: "next" (read after the running tool calls) or "later" (after the turn).
+        """
+        self._human_texts.append(text.strip())
+        del self._human_texts[:-MAX_PENDING_HUMAN_TEXTS]
+        await self._write(text, priority)
+
+    async def _write(self, text: str, priority: Priority) -> None:
+        """Write a user-role message to Claude's input without marking it as the user's.
 
         Args:
             text: The message text.
@@ -309,7 +402,11 @@ class SdkRunner:
             verdict is answered without a decision where Claude Code's auto mode is in effect
             (the permission mode of the hook input, whatever set it), so that the auto mode
             classifier decides as well (PLAN.md D5, D21); where there is no auto mode to defer
-            to, PASS becomes "allow". ALLOW always answers "allow".
+            to, PASS becomes "allow" -- or, with `claude.require_auto_mode`, "ask", so that a
+            human decides in the classifier's place. ALLOW always answers "allow".
+
+            Side effect: the first mode seen for the calling agent, and every change of it, is
+            reported as a `log` event (`_mode_events`).
 
             Args:
                 input_data: The hook input (dict with tool_name, tool_input, agent_id, cwd...).
@@ -321,16 +418,32 @@ class SdkRunner:
                 a decision for PASS under auto mode.
             """
             step = self._step_from_hook(input_data, tool_use_id)
+            mode = input_data.get("permission_mode")
+            for event in self._mode_events(mode, input_data.get("agent_id")):
+                await self._emit(event)
             result = await gate.pre_tool_use(step)
             if step.tool_use_id and result.verdict is Verdict.ASK:
                 self._steps[step.tool_use_id] = step  # taken again by can_use_tool
             output: dict[str, Any] = {"hookEventName": "PreToolUse"}
             if result.context:
                 output["additionalContext"] = result.context  # verified: Claude reads it
-            auto = input_data.get("permission_mode") == "auto"
-            if result.verdict is Verdict.PASS and auto:
+            if result.verdict is Verdict.PASS and mode == "auto":
                 # No decision: Claude Code's auto mode classifier decides as well (checkers AND
                 # auto mode). "allow" would skip the classifier (verified, spike_auto_mode.py).
+                return {"hookSpecificOutput": output}
+            if result.verdict is Verdict.PASS and self.config.require_auto_mode:
+                # The checkers have no objection, but the second approval is missing, and the
+                # configuration says a step needs both: a human decides in its place.
+                reason = (
+                    "calu's checkers passed this step, but auto mode's classifier is not "
+                    f"active (Claude Code reports the permission mode {_quoted(mode)}) and "
+                    "claude.require_auto_mode is set, so a human decides."
+                )
+                if step.tool_use_id:
+                    self._steps[step.tool_use_id] = step
+                    self._ask_reasons[step.tool_use_id] = reason
+                output["permissionDecision"] = "ask"
+                output["permissionDecisionReason"] = reason
                 return {"hookSpecificOutput": output}
             decision = "allow" if result.verdict is Verdict.PASS else result.verdict.value
             output["permissionDecision"] = decision
@@ -453,7 +566,10 @@ class SdkRunner:
             """Permission callback for "ask" verdicts: wait for the human via `gate.ask`.
 
             Uses the step stored by `pre_tool_use` if there is one, else builds it from the
-            arguments. Waits without a time limit.
+            arguments. Waits without a time limit. A reason the runner itself had for making
+            the step wait (`claude.require_auto_mode`) is put in front of what Claude Code
+            says it is asking about. The user's note on an allowed step is sent to Claude as
+            a message of the user.
 
             Args:
                 tool_name: Name of the tool.
@@ -475,12 +591,14 @@ class SdkRunner:
             # `SandboxNetworkAccess` for a command that wants an unlisted domain -- reaches the
             # human as a tool name and an empty input, and says neither the domain nor the
             # command (D60).
-            step = step.model_copy(update={"asked_about": permission_prompt(ctx)})
+            asked = [self._ask_reasons.pop(tool_use_id or "", ""), permission_prompt(ctx)]
+            step = step.model_copy(update={"asked_about": " — ".join(a for a in asked if a)})
             answer = await gate.ask(step)
             if answer.allow:
                 if answer.note:
                     await self._send_note(
-                        f"Note from the user on the step they allowed: {answer.note}"
+                        f"Note from the user on the step they allowed: {answer.note}",
+                        human=True,
                     )
                 return PermissionResultAllow(updated_input=tool_input)
             return PermissionResultDeny(message=answer.message or "The user denied this step.")
@@ -490,8 +608,8 @@ class SdkRunner:
             model=self.config.model,
             effort=self.config.effort,
             cli_path=self.config.cli_path,
-            # None: Claude Code decides, and its default is the auto mode (D5). calu does not
-            # take that choice away from the user.
+            # None: Claude Code takes the mode from its own settings (D5); calu does not take
+            # that choice away from the user. The effective mode is reported (`_mode_events`).
             permission_mode=self.config.permission_mode,
             can_use_tool=can_use_tool,
             hooks={
@@ -524,7 +642,8 @@ class SdkRunner:
             },
             setting_sources=self.config.setting_sources,  # type: ignore[arg-type]
             # `--settings` as a JSON document: it overrides the project's and the user's
-            # settings files, so the agent cannot switch the sandbox off (PLAN.md D15).
+            # settings files, so the agent cannot switch the sandbox off (PLAN.md D15). Every
+            # widening key is written, also when empty (`SandboxConfig.settings`).
             settings=json.dumps(self.config.sandbox.settings()),
             extra_args={
                 "replay-user-messages": None,
@@ -544,20 +663,113 @@ class SdkRunner:
             stderr=lambda line: log.debug("claude stderr: %s", line),
         )
 
-    async def _send_note(self, note: str) -> None:
+    async def _send_note(self, note: str, human: bool = False) -> None:
         """Send `note` as a priority "next" message; empty notes and send errors are ignored.
 
-        Used from hooks, which may still run after the session was stopped.
+        Used from hooks, which may still run after the session was stopped. A note is calu's
+        own text (a checker's remark on a subagent result or on a write set, which may
+        paraphrase what an untrusted tool result said), so its replay on the stream is **not**
+        reported as the user's words unless `human` is set.
 
         Args:
             note: The text, or "".
+            human: True only for text a human wrote (the note of whoever resolved an
+                escalation); its replay then counts as user input.
         """
         if not note or self._client is None:
             return
         try:
-            await self.send(note, "next")
+            if human:
+                await self.send(note, "next")
+            else:
+                await self._write(note, "next")
         except Exception:
             log.exception("sending a note to Claude failed")
+
+    def _user_source(self, text: str, origin: Any = None) -> Literal["user", "cross_session"]:
+        """Decide whether a user-role text on the stream is the human user's.
+
+        The checkers accept only the user's messages as authorization, so the default is "not
+        the user". A text is the user's only if both hold:
+
+        - Claude Code does not attribute it to another origin (`UserMessage.origin` is None or
+          of kind "human"; task notifications, channel and peer messages and every unknown
+          kind are not human), and
+        - the session sent exactly this text (ignoring surrounding white space) through `send`
+          and its replay has not been seen yet. Each sent text is matched once.
+
+        Side effect: a matched text is removed from the pending texts.
+
+        Args:
+            text: The text as Claude Code reports it.
+            origin: The message's `origin`, or None.
+
+        Returns:
+            "user" for the user's text (or "cross_session" where it carries the marker of a
+            message from another Claude session, `user_message_source`), else `NOT_FROM_USER`.
+
+        Example:
+            After `send("Fix it.", "later")`, `_user_source("Fix it.")` is "user" and a second
+            `_user_source("Fix it.")` is "cross_session".
+        """
+        if origin is not None and not (isinstance(origin, dict) and origin.get("kind") == "human"):
+            return NOT_FROM_USER
+        try:
+            self._human_texts.remove(text.strip())
+        except ValueError:
+            return NOT_FROM_USER
+        return user_message_source(text)
+
+    def _mode_events(self, mode: Any, sdk_agent_id: Any = None) -> list[Event]:
+        """Report the permission mode of an agent when it is first seen and when it changes.
+
+        Outside the auto mode a step the checkers pass runs without the classifier's second
+        approval (PLAN.md D21). That is allowed, but it must not happen unnoticed: Claude Code
+        falls back to another mode without a word for a model that has no auto mode, and a
+        tool call (`EnterPlanMode`) changes the mode during a session.
+
+        Args:
+            mode: `permission_mode` of a hook input or `permissionMode` of the init message;
+                anything that is not a non-empty string is ignored.
+            sdk_agent_id: The SDK's id of the agent the mode belongs to; None for the main
+                agent.
+
+        Returns:
+            One `Log` (level "info" for "auto", else "warning") if the mode is new for that
+            agent, else [].
+        """
+        if not isinstance(mode, str) or not mode:
+            return []
+        agent = sdk_agent_id if isinstance(sdk_agent_id, str) and sdk_agent_id else None
+        if self._modes.get(agent) == mode:
+            return []
+        self._modes[agent] = mode
+        who = f"The subagent {agent}" if agent else "Claude Code"
+        if mode == "auto":
+            return [
+                Log(
+                    message=(
+                        f'{who} runs in the permission mode "auto": a step needs calu\'s '
+                        "checkers and auto mode's classifier."
+                    )
+                )
+            ]
+        consequence = (
+            "a step the checkers pass waits for a human (claude.require_auto_mode)"
+            if self.config.require_auto_mode
+            else "a step the checkers pass runs on their word alone. Set "
+            'claude.permission_mode to "auto" for the second approval, or '
+            "claude.require_auto_mode to make such steps wait for a human"
+        )
+        return [
+            Log(
+                level="warning",
+                message=(
+                    f'{who} runs in the permission mode "{mode}", not "auto": auto mode\'s '
+                    f"classifier is not active, so {consequence}."
+                ),
+            )
+        ]
 
     def _claude_env(self) -> dict[str, str]:
         """Return the environment overrides for the Claude Code process.
@@ -620,7 +832,13 @@ class SdkRunner:
     def _translate(self, msg: object) -> list[Event]:
         """Return the protocol events for one SDK message (possibly none).
 
-        Side effects: updates `agents`, the SDK-id mapping and `session_id`.
+        Side effects: updates `agents`, the SDK-id mapping and `session_id`; consumes a
+        pending human text when its replay arrives (`_user_source`).
+
+        A user-role text of the main agent becomes `UserInput` with source "user" only if the
+        session sent it for a human; every other one (calu's own notes, task notifications,
+        hook feedback) gets `NOT_FROM_USER`, which the session records narrated and never as
+        the user's words.
 
         Args:
             msg: A message from `ClaudeSDKClient.receive_messages`; unknown types are ignored.
@@ -663,22 +881,26 @@ class SdkRunner:
                             )
                         )
                         if block.name in AGENT_TOOLS:
+                            # The model wrote these fields and nothing has validated them
+                            # yet, so each is coerced to the type the record needs.
+                            kind = block.input.get("subagent_type")
                             self._agent_prompts[block.id] = str(block.input.get("prompt", ""))
                             self.agents[block.id] = AgentInfo(
                                 agent_id=block.id,
                                 description=str(block.input.get("description", "")),
-                                subagent_type=block.input.get("subagent_type"),
+                                subagent_type=kind if isinstance(kind, str) else None,
                                 background=bool(block.input.get("run_in_background", False)),
                             )
                             events.append(self._agents_update())
             case UserMessage():
                 agent = msg.parent_tool_use_id
+                origin = getattr(msg, "origin", None)
                 if isinstance(msg.content, str):
                     if agent is None and not self._skill_text(msg.content, events):
                         events.append(
                             UserInput(
                                 text=msg.content,
-                                source=user_message_source(msg.content),
+                                source=self._user_source(msg.content, origin),
                                 # Claude Code replays the prompt with its transcript uuid
                                 # (`replay-user-messages`), which is the fork point of the turn
                                 # that starts here (D36).
@@ -703,7 +925,9 @@ class SdkRunner:
                             and not self._skill_text(block.text, events)
                         ):
                             events.append(
-                                UserInput(text=block.text, source=user_message_source(block.text))
+                                UserInput(
+                                    text=block.text, source=self._user_source(block.text, origin)
+                                )
                             )
             case TaskStartedMessage():
                 if msg.tool_use_id:
@@ -744,6 +968,7 @@ class SdkRunner:
             case SystemMessage() if msg.subtype == "init":
                 self.session_id = msg.data.get("session_id", self.session_id)
                 events += self._unknown_tools_warning(msg.data.get("tools"))
+                events += self._mode_events(msg.data.get("permissionMode"))
             case _:
                 pass
         return events
@@ -857,6 +1082,18 @@ class SdkRunner:
         if status == "completed":
             info.status = "completed"
         return [self._agents_update()]
+
+
+def _quoted(mode: Any) -> str:
+    """Return a permission mode for a message.
+
+    Args:
+        mode: The mode a hook input reports, or anything else when it reports none.
+
+    Returns:
+        The mode in double quotes, or "none" (unquoted) when it is not a non-empty string.
+    """
+    return f'"{mode}"' if isinstance(mode, str) and mode else "none"
 
 
 def first_prompt(transcript_path: Any, limit: int = 20_000) -> str:
