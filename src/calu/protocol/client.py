@@ -10,7 +10,13 @@ itself (with the token) and subscribes to the events, so a caller only sends the
 needs. `params["seq"]` numbers the events; `last_seq` holds the highest one received, which a
 reconnecting client passes as `after_seq`.
 
-Used by `calu attach` and by the end-to-end tests.
+When the connection ends, `closed` is set and `close_code` and `close_reason` say why. The
+session closes a connection itself with `CLOSE_FELL_BEHIND` (the client did not read its events
+fast enough; connect again with `after_seq=last_seq`) and with `CLOSE_TOKEN_REVOKED`
+(`calu.protocol.messages`). `fell_behind` tells the first case apart, which is the one where
+connecting again is the right answer.
+
+Used by `calu attach`, `calu acp` and by the end-to-end tests.
 """
 
 import json
@@ -23,6 +29,8 @@ import anyio
 from websockets.asyncio.client import ClientConnection, unix_connect
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
+
+from calu.protocol.messages import CLOSE_FELL_BEHIND
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +79,12 @@ class ProtocolClient:
         self.last_seq = 0
         """Highest sequence number received so far."""
         self.closed = anyio.Event()
+        """Set when the connection has ended, whoever ended it."""
+        self.close_code: int | None = None
+        """WebSocket close code once `closed` is set; None if the connection ended without a
+        close frame (the process died, the network dropped)."""
+        self.close_reason = ""
+        """The reason text the other side gave with the close, once `closed` is set."""
         self.initialize: dict[str, Any] = {}
         """The result of the `initialize` request, once `connect` has sent it."""
         self.complete = True
@@ -122,7 +136,11 @@ class ProtocolClient:
         return response.get("result")
 
     async def _read(self) -> None:
-        """Read messages until the connection closes, dispatching responses and events."""
+        """Read messages until the connection closes, dispatching responses and events.
+
+        Side effects at the end: records `close_code` and `close_reason`, sets `closed` and
+        wakes every waiting `request`.
+        """
         try:
             async for message in self.connection:
                 text = message if isinstance(message, str) else message.decode()
@@ -136,9 +154,31 @@ class ProtocolClient:
         except ConnectionClosed:
             pass
         finally:
+            self.close_code = self.connection.close_code
+            self.close_reason = self.connection.close_reason or ""
             self.closed.set()
             for done, _ in list(self._pending.values()):
                 done.set()
+
+    @property
+    def fell_behind(self) -> bool:
+        """Whether the session closed this connection because the client fell behind.
+
+        Returns:
+            True once `closed` is set with the close code `CLOSE_FELL_BEHIND`. The session then
+            still runs and the token still works, so the caller connects again with
+            `after_seq=last_seq`.
+        """
+        return self.closed.is_set() and self.close_code == CLOSE_FELL_BEHIND
+
+    def describe_close(self) -> str:
+        """Say why the connection ended, for a message to the user.
+
+        Returns:
+            The reason the session gave, or "no reason given" for a connection that ended
+            without one (the calu process ended, or the network dropped).
+        """
+        return self.close_reason or "no reason given"
 
     async def _dispatch(self, message: dict[str, Any]) -> None:
         """Deliver one received message to the waiting request or to `on_event`.
@@ -166,7 +206,7 @@ class ProtocolClient:
             await self.on_event(str(method), params)
 
 
-def _single(group: BaseExceptionGroup[BaseException]) -> BaseException:
+def single_error(group: BaseExceptionGroup[BaseException]) -> BaseException:
     """Return the one exception of a (possibly nested) group, or the group itself.
 
     Args:
@@ -178,7 +218,28 @@ def _single(group: BaseExceptionGroup[BaseException]) -> BaseException:
     if len(group.exceptions) != 1:
         return group
     inner = group.exceptions[0]
-    return _single(inner) if isinstance(inner, BaseExceptionGroup) else inner
+    return single_error(inner) if isinstance(inner, BaseExceptionGroup) else inner
+
+
+async def first_set(*events: anyio.Event) -> None:
+    """Wait until at least one of the events is set.
+
+    Args:
+        *events: The events to wait for.
+    """
+    async with anyio.create_task_group() as tg:
+
+        async def wait(event: anyio.Event) -> None:
+            """End the wait for all events when this one is set.
+
+            Args:
+                event: The event to wait for.
+            """
+            await event.wait()
+            tg.cancel_scope.cancel()
+
+        for event in events:
+            tg.start_soon(wait, event)
 
 
 UNIX_PREFIX = "unix:"
@@ -260,5 +321,5 @@ async def connect(
         except BaseExceptionGroup as group:
             # The reader runs in a task group, which wraps every error in a group; a caller
             # should see the error it caused (a refused token, its own exception), not a group.
-            error = _single(group)
+            error = single_error(group)
             raise error from None

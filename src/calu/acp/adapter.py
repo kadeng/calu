@@ -19,6 +19,12 @@ What maps onto what:
 | `tool_call`, `tool_call_update` | `tool.use`, `check.result`, `edit.diff`, `tool.result` |
 | `session/request_permission` | `escalation.request` -> `escalation.decide` |
 
+Escalations that are already open when the editor attaches are asked as well: the adapter keeps
+every open escalation it hears of (from the events, the replay at connect and the `state.get`
+snapshot) and opens the permission dialogs once the editor has a session id, that is after the
+answer to `session/new` or `session/load`, and again at each `session/prompt` for those whose
+dialog the editor closed without a decision.
+
 Deliberately not translated, because ACP has no slot for them and a calu-aware client reads them
 from calu's own protocol instead (§6.2): the checker verdicts as structure (they travel as tool
 call content here), the herd overview, the checker definitions and the chat summary. Events
@@ -27,7 +33,7 @@ goes to the adapter's own log, not to the editor.
 """
 
 import logging
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -94,8 +100,14 @@ class CaluSession(Protocol):
 class Turn:
     """The prompt turn a `session/prompt` call waits for."""
 
-    def __init__(self) -> None:
-        """Create a turn that nothing has finished yet."""
+    def __init__(self, text: str = "") -> None:
+        """Create a turn that nothing has finished yet.
+
+        Args:
+            text: The message the prompt sent to the session, as `chat.queue` lists it while
+                Claude has not taken it in.
+        """
+        self.text = text
         self.done = anyio.Event()
         self.stop_reason: acp.StopReason = "end_turn"
 
@@ -114,7 +126,9 @@ class Adapter:
     """Translates one editor's ACP connection to one calu session.
 
     Lifecycle: create it, create the `Peer` with `handle` as its handler, then `attach` the peer
-    and a task group, then run the peer and feed the session's events to `on_event`.
+    and a task group, then run the peer and feed the session's events to `on_event`. Events may
+    be fed before the peer runs and before `session/new`: they update what the adapter knows
+    (tool calls, open escalations) and nothing is sent to the editor yet.
     """
 
     def __init__(
@@ -144,7 +158,14 @@ class Adapter:
         """Whether the client takes boolean config options (set by `initialize`)."""
         self._peer: Peer | None = None
         self._tasks: anyio.abc.TaskGroup | None = None
-        self._turn: Turn | None = None
+        self._turns: list[Turn] = []
+        """The prompts that wait for their turn to end, oldest first."""
+        self._queued: list[str] = []
+        """Texts of the messages Claude has not taken in yet (the last `chat.queue` event)."""
+        self._open: dict[str, dict[str, Any]] = {}
+        """Open escalations by id, each as its `escalation.request` params."""
+        self._asking: set[str] = set()
+        """Ids of the escalations whose permission dialog is open in the editor."""
         self._deltas: set[str] = set()
         self._calls: dict[str, dict[str, Any]] = {}
         self._content: dict[str, list[dict[str, Any]]] = {}
@@ -161,6 +182,71 @@ class Adapter:
         """
         self._peer = peer
         self._tasks = tasks
+        peer.after_response = self._after_response
+
+    async def _after_response(self, method: str) -> None:
+        """Open the permission dialogs of the open escalations once the editor has its session.
+
+        Called by the peer after the response to an inbound request was written. A permission
+        request names the session id, which the editor only knows from the answer to
+        `session/new` (or has confirmed by the answer to `session/load`), so the dialogs must
+        not be sent before that answer.
+
+        Args:
+            method: The method of the request that was just answered.
+        """
+        if method in ("session/new", "session/load"):
+            self._ask_open()
+
+    def sync(self, snapshot: dict[str, Any], complete: bool = True) -> None:
+        """Take over what a `state.get` snapshot says: state, session mode, open escalations.
+
+        Side effects: remembers every open escalation of the snapshot and, if the editor
+        already has a session, opens the permission dialogs that are not open yet. With
+        `complete` False (events were lost while the adapter was reconnecting) and a session
+        that is not working, the waiting prompts are answered, because the `turn.result` that
+        would have ended them may be among the lost events.
+
+        Args:
+            snapshot: The result of `state.get`.
+            complete: Whether the adapter has seen every event up to this snapshot.
+        """
+        self.state = str(snapshot.get("state", self.state))
+        self._read_auto(snapshot)
+        for request in snapshot.get("escalations") or ():
+            if isinstance(request, dict):
+                self._remember(request)
+        self._ask_open()
+        if not complete and self.state in ("idle", "stopped", "failed"):
+            self.finish_turns("end_turn")
+
+    def finish_turns(self, reason: acp.StopReason) -> None:
+        """Answer every waiting `session/prompt`.
+
+        Args:
+            reason: The ACP stop reason to answer them with.
+        """
+        for turn in list(self._turns):
+            turn.finish(reason)
+
+    async def connection_lost(self, reason: str) -> None:
+        """Tell the editor that the calu session is gone and answer the waiting prompts.
+
+        Without this a prompt would wait for a `turn.result` that can no longer arrive, and the
+        editor would show the agent as working for ever.
+
+        Args:
+            reason: Why the connection ended, for the message in the editor.
+        """
+        await self._update(
+            acp.message_chunk(
+                "agent_message_chunk",
+                f"\n[calu: the connection to the calu session ended ({reason}). "
+                "Restart the agent to connect again.]\n",
+                None,
+            )
+        )
+        self.finish_turns("end_turn")
 
     # ------------------------------------------------------------------ ACP -> calu
 
@@ -255,10 +341,21 @@ class Adapter:
                 len(request.mcp_servers),
             )
         snapshot = await self.calu.request("state.get")
-        self.state = str(snapshot.get("state", "starting"))
         self.session_id = str(snapshot.get("calu_session_id") or "calu")
+        self.state = str(snapshot.get("state", "starting"))
         self._read_auto(snapshot)
+        self._remember_open(snapshot)  # asked after the answer, see `_after_response`
         return {"sessionId": self.session_id, **self._mode_fields()}
+
+    def _remember_open(self, snapshot: dict[str, Any]) -> None:
+        """Remember the open escalations of a `state.get` snapshot, without asking yet.
+
+        Args:
+            snapshot: The result of `state.get`.
+        """
+        for request in snapshot.get("escalations") or ():
+            if isinstance(request, dict):
+                self._remember(request)
 
     async def _load_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `session/load` by replaying the recorded conversation.
@@ -287,6 +384,7 @@ class Adapter:
         snapshot = await self.calu.request("state.get")
         self.state = str(snapshot.get("state", self.state))
         self._read_auto(snapshot)
+        self._remember_open(snapshot)  # asked after the answer, see `_after_response`
         history = await self.calu.request("session.history", {})
         await self._replay(history)
         return self._mode_fields()
@@ -297,6 +395,11 @@ class Adapter:
         Starts the Claude session first if it is not running, so that an editor can begin a
         conversation in a calu process whose session was stopped (for example after the
         escalation timeout of D27).
+
+        Several prompts may wait at once; each waits for its own turn (`_on_turn_result`).
+        Side effect: opens the permission dialog of every open escalation that has none in the
+        editor, because the message would otherwise wait behind a blocked step with nothing on
+        screen that says so.
 
         Args:
             params: The `session/prompt` params.
@@ -314,18 +417,21 @@ class Adapter:
             raise RpcError(acp.INVALID_PARAMS, "the prompt holds no text")
         if self.state in ("stopped", "failed"):
             await self.calu.request("session.start", {})
-        turn = Turn()
-        self._turn = turn
-        self._echo.append(text)
-        await self.calu.request("chat.send", {"text": text, "delivery": "queued"})
-        await turn.done.wait()
-        self._turn = None
+        self._ask_open()
+        turn = Turn(text)
+        self._turns.append(turn)
+        try:
+            self._echo.append(text)
+            await self.calu.request("chat.send", {"text": text, "delivery": "queued"})
+            await turn.done.wait()
+        finally:
+            self._turns.remove(turn)
         return {"stopReason": turn.stop_reason}
 
     async def _cancel(self, params: dict[str, Any]) -> None:
         """Handle `session/cancel` (and `session/close`): interrupt Claude's turn.
 
-        The pending prompt answers `cancelled`, as the protocol requires.
+        Every pending prompt answers `cancelled`, as the protocol requires.
 
         Args:
             params: The params holding the session id.
@@ -334,8 +440,7 @@ class Adapter:
         if self.session_id is not None and request.session_id != self.session_id:
             log.warning("ignoring a cancel for the unknown session %s", request.session_id)
             return
-        if self._turn is not None:
-            self._turn.finish("cancelled")
+        self.finish_turns("cancelled")
         await self.calu.request("interrupt", {})
 
     def _check_cwd(self, cwd: str) -> None:
@@ -529,6 +634,8 @@ class Adapter:
                 await self._on_result(params)
             case "escalation.request":
                 self._ask(params)
+            case "chat.queue":
+                self._on_queue(params)
             case "escalation.resolved":
                 await self._on_resolved(params)
             case "turn.result":
@@ -575,19 +682,30 @@ class Adapter:
         await self._update(acp.message_chunk("agent_message_chunk", f"{text}\n", None))
 
     async def _on_state(self, params: dict[str, Any]) -> None:
-        """Remember the session state and end a waiting prompt if the session ended.
+        """Remember the session state and end the waiting prompts if the session ended.
 
         Args:
             params: The `session.state` event.
         """
         self.state = str(params.get("state", self.state))
-        if self.state in ("stopped", "failed") and self._turn is not None:
+        if self.state in ("stopped", "failed") and self._turns:
             await self._update(
                 acp.message_chunk(
                     "agent_message_chunk", f"[the calu session is {self.state}]", None
                 )
             )
-            self._turn.finish("end_turn")
+            self.finish_turns("end_turn")
+
+    def _on_queue(self, params: dict[str, Any]) -> None:
+        """Remember which messages Claude has not taken in yet.
+
+        Args:
+            params: The `chat.queue` event.
+        """
+        messages = params.get("messages") or []
+        self._queued = [
+            str(message.get("text", "")) for message in messages if isinstance(message, dict)
+        ]
 
     async def _on_user_input(self, params: dict[str, Any]) -> None:
         """Forward a user message of another client, but not the echo of our own prompt.
@@ -710,9 +828,14 @@ class Adapter:
         escalation_id = str(params.get("escalation_id", ""))
         if escalation_id:
             self._resolved.add(escalation_id)
+            self._open.pop(escalation_id, None)
 
     async def _on_turn_result(self, params: dict[str, Any]) -> None:
-        """End the prompt turn the editor is waiting for, once no background task is left.
+        """End the prompt turns the editor is waiting for, once no background task is left.
+
+        A prompt whose message is still in the session's queue (`chat.queue`) stays open: the
+        turn that just ended was started by an earlier message, of this editor or of another
+        client, and Claude has not read this one yet.
 
         A Claude turn can end while background tasks still run (a background command, a
         Monitor, a Workflow); Claude Code then starts another turn by itself when they finish
@@ -737,33 +860,67 @@ class Adapter:
                 )
             )
             return
-        if self._turn is not None:
-            self._turn.finish("end_turn")
+        waiting_texts = Counter(text.strip() for text in self._queued)
+        for turn in reversed(self._turns):  # of two equal texts, the newer one is the queued one
+            if waiting_texts[turn.text.strip()] > 0:
+                waiting_texts[turn.text.strip()] -= 1
+            else:
+                turn.finish("end_turn")
 
     # ------------------------------------------------------------------ escalations
 
-    def _ask(self, params: dict[str, Any]) -> None:
-        """Start asking the editor's user about an escalated step.
+    def _remember(self, params: dict[str, Any]) -> None:
+        """Keep an open escalation, so that it can be asked now or once the editor is ready.
 
-        The question runs in its own task: a human may take hours, while the event stream and
-        `session/cancel` must keep working.
+        Args:
+            params: The `escalation.request` event, or the same shape from a snapshot.
+        """
+        escalation_id = str(params.get("escalation_id", ""))
+        if escalation_id and escalation_id not in self._resolved:
+            self._open.setdefault(escalation_id, params)
+
+    def _ask(self, params: dict[str, Any]) -> None:
+        """Remember an escalated step and ask the editor's user about it as soon as possible.
 
         Args:
             params: The `escalation.request` event.
         """
-        if self._tasks is None:
-            log.warning(
-                "no task group: cannot ask about escalation %s", params.get("escalation_id")
-            )
+        self._remember(params)
+        self._ask_open()
+
+    def _ask_open(self) -> None:
+        """Open a permission dialog for every open escalation that has none.
+
+        Nothing is asked before `session/new` or `session/load`, because a permission request
+        names the session id and an editor refuses one it does not know; the escalations stay
+        remembered and are asked then. Each question runs in its own task: a human may take
+        hours, while the event stream and `session/cancel` must keep working.
+        """
+        if self._tasks is None or self._peer is None or self.session_id is None:
             return
-        self._tasks.start_soon(self._ask_permission, params)
+        for escalation_id, params in list(self._open.items()):
+            if escalation_id not in self._asking:
+                self._asking.add(escalation_id)
+                self._tasks.start_soon(self._ask_permission, params)
 
     async def _ask_permission(self, params: dict[str, Any]) -> None:
         """Ask the editor's user about an escalated step and pass the answer to calu.
 
         Nothing is decided if the user's client answers `cancelled`, or if the escalation was
         already resolved elsewhere: calu refuses a second decision anyway, and a cancelled
-        dialog is not a decision.
+        dialog is not a decision. An escalation that is still open after its dialog ended
+        without a decision is asked again at the next `session/prompt`.
+
+        Args:
+            params: The `escalation.request` event.
+        """
+        try:
+            await self._ask_and_decide(params)
+        finally:
+            self._asking.discard(str(params.get("escalation_id", "")))
+
+    async def _ask_and_decide(self, params: dict[str, Any]) -> None:
+        """Send one permission request and turn its answer into `escalation.decide`.
 
         Args:
             params: The `escalation.request` event.

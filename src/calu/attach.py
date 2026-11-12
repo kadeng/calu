@@ -41,7 +41,13 @@ from typing import Any
 
 import anyio
 
-from calu.protocol.client import ProtocolClient, RequestFailed, connect
+from calu.protocol.client import (
+    ProtocolClient,
+    RequestFailed,
+    connect,
+    first_set,
+    single_error,
+)
 from calu.protocol.messages import EVENTS, Event
 from calu.run import format_event, one_line, read_lines
 
@@ -128,7 +134,8 @@ class Console:
         """Create the console for a connected client.
 
         Args:
-            client: The connected protocol client.
+            client: The connected protocol client. `attach` replaces `client` when it had to
+                connect again.
             workspace: The session's project directory, which `/comment` reads files from;
                 None refuses `/comment`.
         """
@@ -139,6 +146,10 @@ class Console:
     async def line(self, text: str) -> None:
         """Handle one typed line: a command, or a chat message. Never raises for a failed request.
 
+        A request that fails because the connection is gone ends the console (`quit`), unless
+        the session closed the connection because this client fell behind: `attach` is then
+        connecting again, and the user is told that the line was not sent.
+
         Args:
             text: The line without its line end.
         """
@@ -148,7 +159,12 @@ class Console:
             print(f"[error] {exc}", flush=True)
         except ConnectionError as exc:  # before OSError, of which it is a subclass
             print(f"[error] {exc}", flush=True)
-            self.quit.set()
+            if getattr(self.client, "fell_behind", False):
+                # `attach` is connecting again (the session closed the connection because this
+                # client fell behind); the line was not sent and can be typed once more.
+                print("[error] not sent: connecting again, type it once more", flush=True)
+            else:
+                self.quit.set()
         except OSError as exc:  # /comment could not read the file
             print(f"[error] {exc}", flush=True)
 
@@ -372,6 +388,13 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
     Side effects: connects to `address`, prints the state and every event, and reads lines
     from stdin as chat messages or commands.
 
+    If the session closes the connection because this client fell behind
+    (`CLOSE_FELL_BEHIND`: the terminal did not take the output fast enough), the client
+    connects again, continues after the last event it printed and says so. If the session can
+    no longer replay all the events in between, the state and the open escalations are printed
+    again. At most `MAX_RECONNECTS` such reconnects follow each other without an event in
+    between.
+
     Args:
         address: The WebSocket address that `calu run` printed.
         token: The client token that `calu run` printed.
@@ -386,32 +409,81 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
         RequestFailed: If the token is refused.
     """
     printer = Printer(show_thinking)
-    async with connect(address, token, "calu attach", printer, after_seq=after_seq) as client:
-        snapshot = await client.request("state.get")
-        print(describe_state(snapshot), flush=True)
-        for escalation in snapshot.get("escalations") or ():
-            print(
-                f"*** escalation {escalation['escalation_id']} waits: {escalation['reason']}",
-                flush=True,
-            )
-        print(f"[attached] {HELP}", flush=True)
-        directory = snapshot.get("workspace")
-        console = Console(client, Path(directory) if isinstance(directory, str) else None)
+    quit_event = anyio.Event()
+    console: Console | None = None
+    reconnects = 0
+    try:
         async with anyio.create_task_group() as tg:
 
-            async def input_lines() -> None:
-                """Read typed lines until the user detaches or stdin ends."""
+            async def input_lines(console: Console) -> None:
+                """Read typed lines until the user detaches or stdin ends.
+
+                Args:
+                    console: The console that handles the lines.
+                """
                 await read_lines(console.line)  # returns at end of input or on /quit
-                console.quit.set()
+                quit_event.set()
 
-            async def until_closed() -> None:
-                """Detach when the session closes the connection."""
-                await client.closed.wait()
-                print("[detached] the session closed the connection", flush=True)
-                console.quit.set()
-
-            tg.start_soon(input_lines)
-            tg.start_soon(until_closed)
-            await console.quit.wait()
+            while not quit_event.is_set():
+                async with connect(
+                    address, token, "calu attach", printer, after_seq=after_seq
+                ) as client:
+                    snapshot = await client.request("state.get")
+                    if console is None or not client.complete:
+                        print_snapshot(snapshot)
+                    if console is None:
+                        print(f"[attached] {HELP}", flush=True)
+                        directory = snapshot.get("workspace")
+                        console = Console(
+                            client, Path(directory) if isinstance(directory, str) else None
+                        )
+                        console.quit = quit_event
+                        tg.start_soon(input_lines, console)
+                    else:
+                        console.client = client
+                        print("[attached again] continuing after the last event shown", flush=True)
+                    await first_set(quit_event, client.closed)
+                    if client.last_seq > after_seq:
+                        reconnects = 0
+                    after_seq = client.last_seq
+                    if quit_event.is_set():
+                        break
+                    if client.fell_behind and reconnects < MAX_RECONNECTS:
+                        reconnects += 1
+                        print(
+                            "[reconnecting] the session closed the connection because this client "
+                            "fell behind",
+                            flush=True,
+                        )
+                        continue
+                    print(
+                        f"[detached] the session closed the connection: {client.describe_close()}",
+                        flush=True,
+                    )
+                    quit_event.set()
             tg.cancel_scope.cancel()
+    except BaseExceptionGroup as group:
+        # The task group wraps every error in a group; the caller handles the error itself
+        # (a refused token, an unreachable address), as this function's contract says.
+        error = single_error(group)
+        raise error from None
     return 0
+
+
+MAX_RECONNECTS = 3
+"""How often `attach` connects again after falling behind without having received an event in
+between; after that it detaches instead of looping against a session it cannot keep up with."""
+
+
+def print_snapshot(snapshot: dict[str, Any]) -> None:
+    """Print the state line of a `state.get` result and one line per open escalation.
+
+    Args:
+        snapshot: The snapshot as the session returned it.
+    """
+    print(describe_state(snapshot), flush=True)
+    for escalation in snapshot.get("escalations") or ():
+        print(
+            f"*** escalation {escalation['escalation_id']} waits: {escalation['reason']}",
+            flush=True,
+        )

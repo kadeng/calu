@@ -76,6 +76,10 @@ async def test_a_client_that_falls_behind_is_cut_off(monkeypatch: pytest.MonkeyP
         await bus.publish(log(str(i)))
     assert client.overflowed
     assert [e async for e in client.events()] == []
+    # It receives nothing any more, so it must not count as an attached client either:
+    # `calu run` keeps an otherwise finished run alive for as long as one is attached.
+    assert bus.clients == 0
+    assert bus.no_clients.is_set()
     assert bus.last_seq == 5  # publishing never fails because of a slow client
 
 

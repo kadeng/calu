@@ -15,7 +15,9 @@ where an event lives after it was sent; it is lost when the process ends. What a
 after a restart (steps, turns, escalations) is in the database.
 
 A slow client must not slow the session down: each client has a bounded queue, and a client
-whose queue is full is disconnected (`Subscription.overflowed`) instead of blocking `publish`.
+whose queue is full is taken out of the fan-out at once (`Subscription.overflowed`) instead of
+blocking `publish`. The protocol server then closes that client's connection with the close code
+`CLOSE_FELL_BEHIND`, so the client connects again and replays what it missed.
 """
 
 import logging
@@ -40,8 +42,9 @@ CLIENT_QUEUE = 1_000
 class Subscription:
     """One client's view of the stream. Iterate `events()` and stop when it ends.
 
-    `overflowed` is True if the client fell more than `CLIENT_QUEUE` events behind; the stream
-    then ends and the client must reconnect and take a fresh snapshot.
+    `overflowed` is True if the client fell more than `CLIENT_QUEUE` events behind. The
+    subscription is then no longer part of the bus (`Bus.clients` does not count it), the
+    stream ends, and the client must reconnect and replay or take a fresh snapshot.
     """
 
     bus: Bus
@@ -51,7 +54,11 @@ class Subscription:
     _ready: anyio.Event = field(default_factory=anyio.Event)
 
     def _push(self, event: Event) -> None:
-        """Add an event to the client's queue, or mark the subscription as overflowed.
+        """Add an event to the client's queue, or end the subscription as overflowed.
+
+        Side effects on overflow: the queue is emptied and the subscription is removed from the
+        bus, so a client that no longer receives anything does not count as attached
+        (`Bus.clients`, `Bus.no_clients`).
 
         Args:
             event: The event to deliver.
@@ -61,6 +68,7 @@ class Subscription:
         if len(self.queue) >= CLIENT_QUEUE:
             self.overflowed = True
             self.queue.clear()
+            self.bus.unsubscribe(self)
         else:
             self.queue.append(event)
         self._ready.set()
@@ -109,8 +117,8 @@ class Bus:
         """Number `event`, keep it for replay and hand it to every client. Never raises.
 
         This is the session's event sink (`Session(emit=bus.publish)`). It does not wait for any
-        client: an event for a client that has fallen behind is dropped and the client's
-        subscription is marked as overflowed.
+        client: an event for a client that has fallen behind is dropped, and the client's
+        subscription is marked as overflowed and removed from the fan-out.
 
         Args:
             event: The event; its `seq` is set to the next sequence number.

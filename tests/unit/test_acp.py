@@ -1047,3 +1047,385 @@ async def test_an_always_choice_is_answered_once_and_the_editor_is_told(tmp_path
         assert any("calu rules add" in text for text in texts)
 
     await run_adapter(calu, body)
+
+
+# ------------------------------------------------------------ escalations open at attach (pc2)
+
+OPEN_ESCALATION = {
+    "escalation_id": "7",
+    "tool_use_id": "t1",
+    "tool_name": "Bash",
+    "tool_input": {"command": "sudo ls"},
+    "reason": "the deny list matched",
+    "rendered": "## Step\n\n    sudo ls",
+}
+"""An `escalation.request`, as an event carries it and as `state.get` lists it."""
+
+
+async def test_an_escalation_that_is_open_at_session_new_is_asked() -> None:
+    """The session stopped on an escalation overnight; the editor is opened in the morning."""
+    calu = FakeCalu(
+        {
+            "state.get": {
+                "state": "escalated",
+                "calu_session_id": "s1",
+                "escalations": [OPEN_ESCALATION],
+            }
+        }
+    )
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        question = await h.editor.expect("session/request_permission")
+        assert question["params"]["sessionId"] == session
+        assert question["params"]["toolCall"]["toolCallId"] == "t1"
+        assert "the deny list matched" in json.dumps(question["params"]["toolCall"]["content"])
+        # The tool call the dialog refers to was announced first.
+        assert [u["sessionUpdate"] for u in h.editor.updates()] == ["tool_call"]
+        await h.editor.send(
+            {
+                "jsonrpc": "2.0",
+                "id": question["id"],
+                "result": {"outcome": {"outcome": "selected", "optionId": "reject-once"}},
+            }
+        )
+        while not h.calu.sent("escalation.decide"):
+            await anyio.sleep(0.01)
+        assert h.calu.sent("escalation.decide")[0]["decision"] == "deny"
+
+    await run_adapter(calu, body)
+
+
+async def test_an_escalation_that_arrives_before_session_new_is_asked_once_the_session_exists() -> (
+    None
+):
+    """Before `session/new` there is no session id to ask under; the question must wait, not
+    be sent with `sessionId: null` and lost."""
+    calu = FakeCalu({"state.get": {"state": "escalated", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        await h.adapter.on_event("escalation.request", OPEN_ESCALATION)
+        await anyio.sleep(0.05)
+        assert h.editor.inbox == [], "asked before the editor had a session"
+        answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        question = await h.editor.expect("session/request_permission")
+        assert question["params"]["sessionId"] == answer["result"]["sessionId"]
+        # The same escalation in the snapshot and in the events is one dialog, not two.
+        await h.adapter.on_event("escalation.request", OPEN_ESCALATION)
+        await anyio.sleep(0.05)
+        assert not [m for m in h.editor.inbox if m["method"] == "session/request_permission"]
+
+    await run_adapter(calu, body)
+
+
+async def test_an_escalation_resolved_before_session_new_is_not_asked() -> None:
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        await h.adapter.on_event("escalation.request", OPEN_ESCALATION)
+        await h.adapter.on_event("escalation.resolved", {"escalation_id": "7", "decision": "allow"})
+        await handshake(h.editor, h.calu)
+        await anyio.sleep(0.05)
+        assert not [m for m in h.editor.inbox if m["method"] == "session/request_permission"]
+
+    await run_adapter(calu, body)
+
+
+async def test_session_load_asks_the_open_escalations_after_the_replay() -> None:
+    calu = FakeCalu(
+        {
+            "state.get": {"state": "escalated", "escalations": [OPEN_ESCALATION]},
+            "session.history": {"turns": [{"index": 1, "user_inputs": ["hello"]}], "steps": []},
+        }
+    )
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        await h.editor.call(
+            "session/load", {"sessionId": "s1", "cwd": str(WORKSPACE), "mcpServers": []}
+        )
+        question = await h.editor.expect("session/request_permission")
+        assert question["params"]["sessionId"] == "s1"
+        kinds = [u["sessionUpdate"] for u in h.editor.updates()]
+        assert kinds == ["user_message_chunk", "tool_call"]  # the replay, then the dialog's call
+
+    await run_adapter(calu, body)
+
+
+async def test_a_dialog_the_editor_closed_is_asked_again_with_the_next_prompt() -> None:
+    """A prompt would wait behind the blocked step with nothing on screen that says so."""
+    calu = FakeCalu({"state.get": {"state": "escalated", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        await h.adapter.on_event("escalation.request", OPEN_ESCALATION)
+        question = await h.editor.expect("session/request_permission")
+        await h.editor.send(
+            {
+                "jsonrpc": "2.0",
+                "id": question["id"],
+                "result": {"outcome": {"outcome": "cancelled"}},
+            }
+        )
+        await anyio.sleep(0.05)
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(
+                h.editor.call,
+                "session/prompt",
+                {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]},
+            )
+            again = await h.editor.expect("session/request_permission")
+            assert again["params"]["toolCall"]["toolCallId"] == "t1"
+            await h.adapter.on_event("turn.result", {})
+
+    await run_adapter(calu, body)
+
+
+# ------------------------------------------------------------------ several prompts (pc5)
+
+
+async def test_two_prompts_are_each_answered_by_their_own_turn() -> None:
+    """A second prompt must not orphan the first, and a turn that ends while a prompt's
+    message is still queued is not that prompt's turn."""
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        answers: dict[str, dict[str, Any]] = {}
+        async with anyio.create_task_group() as tasks:
+
+            async def prompt(text: str) -> None:
+                answers[text] = await h.editor.call(
+                    "session/prompt",
+                    {"sessionId": session, "prompt": [{"type": "text", "text": text}]},
+                )
+
+            tasks.start_soon(prompt, "first")
+            while len(h.calu.sent("chat.send")) < 1:
+                await anyio.sleep(0.01)
+            tasks.start_soon(prompt, "second")
+            while len(h.calu.sent("chat.send")) < 2:
+                await anyio.sleep(0.01)
+            # Claude took "first" in; "second" still waits in the session's queue.
+            await h.adapter.on_event("chat.queue", {"messages": [{"id": "q2", "text": "second"}]})
+            await h.adapter.on_event("turn.result", {})
+            with anyio.fail_after(5):
+                while "first" not in answers:
+                    await anyio.sleep(0.01)
+            await anyio.sleep(0.05)
+            assert "second" not in answers, "answered by the turn of another message"
+            await h.adapter.on_event("chat.queue", {"messages": []})
+            await h.adapter.on_event("turn.result", {})
+        assert answers["first"]["result"] == {"stopReason": "end_turn"}
+        assert answers["second"]["result"] == {"stopReason": "end_turn"}
+
+    await run_adapter(calu, body)
+
+
+async def test_the_turn_of_another_client_does_not_answer_a_queued_prompt() -> None:
+    calu = FakeCalu({"state.get": {"state": "running", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        answers: list[dict[str, Any]] = []
+        async with anyio.create_task_group() as tasks:
+
+            async def prompt() -> None:
+                answers.append(
+                    await h.editor.call(
+                        "session/prompt",
+                        {"sessionId": session, "prompt": [{"type": "text", "text": "mine"}]},
+                    )
+                )
+
+            tasks.start_soon(prompt)
+            while not h.calu.sent("chat.send"):
+                await anyio.sleep(0.01)
+            await h.adapter.on_event("chat.queue", {"messages": [{"id": "q1", "text": "mine"}]})
+            await h.adapter.on_event("turn.result", {})  # the other client's turn
+            await anyio.sleep(0.05)
+            assert answers == []
+            await h.adapter.on_event("user.input", {"text": "mine"})
+            await h.adapter.on_event("chat.queue", {"messages": []})
+            await h.adapter.on_event("turn.result", {})
+        assert answers[0]["result"] == {"stopReason": "end_turn"}
+
+    await run_adapter(calu, body)
+
+
+# ------------------------------------------------------------------ the bridge (pc2, pc3, pc5)
+
+
+class Bridged:
+    """`calu acp` without stdio: `bridge` between a real session and an in-memory editor."""
+
+    def __init__(self, editor: Editor, adapter: Adapter) -> None:
+        self.editor = editor
+        self.adapter = adapter
+        self.code: int | None = None
+
+
+async def run_bridge(address: str, token: str, workspace: Path, body: Any) -> Bridged:
+    """Run `bridge` against a served session and call `body(bridged)` next to it."""
+    from calu.acp.serve import Link, bridge
+
+    to_agent_send, to_agent_receive = anyio.create_memory_object_stream[str](100)
+    from_agent_send, from_agent_receive = anyio.create_memory_object_stream[str](1000)
+
+    async def read_line() -> str:
+        try:
+            return await to_agent_receive.receive()
+        except anyio.EndOfStream:
+            return ""
+
+    async def write_line(line: str) -> None:
+        await from_agent_send.send(line)
+
+    link = Link()
+    adapter = Adapter(link, workspace, name="calu", version="test")
+    peer = Peer(read_line, write_line, adapter.handle)
+    bridged = Bridged(Editor(to_agent_send, from_agent_receive), adapter)
+    with anyio.fail_after(30):
+        async with anyio.create_task_group() as tasks:
+
+            async def serve() -> None:
+                bridged.code = await bridge(address, token, link, adapter, peer)
+
+            tasks.start_soon(serve)
+            tasks.start_soon(bridged.editor.pump)
+            await body(bridged)
+            await to_agent_send.aclose()  # the editor ends its input
+            while bridged.code is None:
+                await anyio.sleep(0.01)
+            tasks.cancel_scope.cancel()
+    return bridged
+
+
+async def test_an_editor_that_attaches_to_an_escalated_session_gets_the_dialog(
+    tmp_path: Path,
+) -> None:
+    """End to end: the session waits on an escalation before any editor exists. The adapter
+    that attaches then shows the dialog, and its answer lets the session go on."""
+    turns = [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"}]]
+    async with served(tmp_path, turns) as run:
+        from tests.unit.test_protocol_server import Events
+
+        events = Events()
+        async with connect(run.address, run.token, "the night before", events) as first:
+            await first.request("session.start", {})
+            await first.request("chat.send", {"text": "ship it"})
+            await events.wait_for("escalation.request")
+
+            async def body(b: Bridged) -> None:
+                await b.editor.call("initialize", {"protocolVersion": 1})
+                created = await b.editor.call(
+                    "session/new", {"cwd": str(tmp_path), "mcpServers": []}
+                )
+                question = await b.editor.expect("session/request_permission")
+                assert question["params"]["sessionId"] == created["result"]["sessionId"]
+                await b.editor.send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": question["id"],
+                        "result": {"outcome": {"outcome": "selected", "optionId": "allow-once"}},
+                    }
+                )
+                await events.wait_for("turn.result")
+
+            bridged = await run_bridge(run.address, run.token, tmp_path, body)
+        assert bridged.code == 0
+        assert [row.state for row in run.store.escalations.values()] == ["allowed"]
+
+
+async def test_the_adapter_ends_and_answers_the_prompt_when_the_session_goes_away(
+    tmp_path: Path,
+) -> None:
+    """The calu process is killed while the editor waits on a prompt: the prompt must be
+    answered and the adapter must end, so the editor can start a new one."""
+    from calu.protocol.server import SessionServer
+    from calu.tokens import new_token, token_hash
+
+    # The turn never ends by itself: its step waits for a decision nobody gives.
+    turns = [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"}]]
+    async with served(tmp_path, turns) as run:
+        token = new_token()
+        going_away = anyio.CancelScope()
+        async with anyio.create_task_group() as outer:
+            # A second server on the same session, which this test can take down by itself.
+            server = SessionServer(run.session, run.server.bus, token_hash(token), outer)
+
+            async def listen() -> None:
+                with going_away:
+                    await server.listen("127.0.0.1", 0)
+
+            outer.start_soon(listen)
+            with anyio.fail_after(10):
+                await server.ready.wait()
+            answers: list[dict[str, Any]] = []
+
+            async def body(b: Bridged) -> None:
+                await b.editor.call("initialize", {"protocolVersion": 1})
+                created = await b.editor.call(
+                    "session/new", {"cwd": str(tmp_path), "mcpServers": []}
+                )
+                session = created["result"]["sessionId"]
+
+                async def prompt() -> None:
+                    answers.append(
+                        await b.editor.call(
+                            "session/prompt",
+                            {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]},
+                        )
+                    )
+
+                async with anyio.create_task_group() as tasks:
+                    tasks.start_soon(prompt)
+                    await b.editor.expect("session/request_permission")
+                    going_away.cancel()  # the session's server is gone
+                    with anyio.fail_after(10):
+                        while b.code is None:
+                            await anyio.sleep(0.01)
+                assert answers[0]["result"] == {"stopReason": "end_turn"}
+                texts = json.dumps(b.editor.updates())
+                assert "the connection to the calu session ended" in texts
+
+            bridged = await run_bridge(server.address, token, tmp_path, body)
+            assert bridged.code == 1
+            outer.cancel_scope.cancel()
+
+
+async def test_the_adapter_connects_again_after_falling_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session that closes the connection because the adapter fell behind still runs: the
+    adapter connects again, replays, and the editor's prompt ends with its turn."""
+    from calu import bus as bus_module
+    from calu.protocol.messages import Log
+
+    async with served(tmp_path, [[{"text": "done"}]]) as run:
+
+        async def body(b: Bridged) -> None:
+            await b.editor.call("initialize", {"protocolVersion": 1})
+            created = await b.editor.call("session/new", {"cwd": str(tmp_path), "mcpServers": []})
+            session = created["result"]["sessionId"]
+            with anyio.fail_after(5):
+                while run.server.bus.clients != 1:
+                    await anyio.sleep(0.01)
+            monkeypatch.setattr(bus_module, "CLIENT_QUEUE", 3)
+            for number in range(10):
+                await run.server.bus.publish(Log(level="info", message=f"line {number}"))
+            assert run.server.bus.clients == 0
+            monkeypatch.setattr(bus_module, "CLIENT_QUEUE", 1000)
+            with anyio.fail_after(10):  # ... and it is back
+                while run.server.bus.clients != 1:
+                    await anyio.sleep(0.01)
+            answer = await b.editor.call(
+                "session/prompt",
+                {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]},
+            )
+            assert answer["result"] == {"stopReason": "end_turn"}
+            assert "done" in json.dumps(b.editor.updates())
+
+        bridged = await run_bridge(run.address, run.token, tmp_path, body)
+    assert bridged.code == 0
