@@ -47,10 +47,10 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1332 tests pass** (plus 15 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 348 commits, ~39.5k lines of Python in `src` (~43k with the SQL, templates and
-default instructions), ~26.5k of tests, 28 migrations, 21 CLI commands, 17 protocol requests,
-18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+**1617 tests pass** (plus 15 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 386 commits, ~58k lines of Python in `src` (~62k with the SQL, templates and
+default instructions), ~32k of tests, 28 migrations, 21 CLI commands, 20 protocol requests,
+19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
 
