@@ -53,6 +53,12 @@ BINARY_PROBE = 8_000
 """Bytes of a file that are read to tell whether its content is binary (git's own heuristic: a
 NUL byte within the first 8000 bytes)."""
 
+DIFF_OPTIONS = ("--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--text")
+"""Options of the `git diff` that makes the patch for a checker. `--text` shows the content of a
+file that a `.gitattributes` in the project declares binary (`payload.py -diff`): which files
+are binary is decided by `_measure`, not by a file the agent can write. `--no-renames` keeps one
+entry per path, as `diff-tree` lists them."""
+
 STATUS_NAMES = {"A": "added", "M": "changed", "D": "deleted", "R": "renamed", "T": "type changed"}
 """Letter of `git diff-tree --name-status` -> word for a human and for a checker prompt."""
 
@@ -232,10 +238,13 @@ class SnapshotStore:
 
         Returns:
             The write set: one `Change` per path, and a patch cut to `max_patch_bytes` that
-            leaves out binary files and files above `max_file_bytes`.
+            leaves out binary files and files above `max_file_bytes`. Unless `cut` is True, the
+            patch holds the diff of every other path: file names are passed to git as literal
+            paths, and a `.gitattributes` entry cannot hide content (`DIFF_OPTIONS`).
 
         Raises:
-            SnapshotError: If a git call failed.
+            SnapshotError: If a git call failed, or if git left a path out of the patch that it
+                was asked for. The caller must then treat the write set as not measured.
         """
         if before == after:
             return ChangeSet()
@@ -250,7 +259,18 @@ class SnapshotStore:
         ]
         patch, cut = "", len(small) != len(changes)
         if small:
-            patch = await self._git(["diff", "--no-color", before, after, "--", *small])
+            patch = await self._git(["diff", *DIFF_OPTIONS, before, after, "--", *small])
+            # The patch is what a checker judges, so it must hold every path it was asked for.
+            # Asking git for the names with the same arguments shows what it really selected.
+            names = await self._git(
+                ["diff", *DIFF_OPTIONS, "--name-only", "-z", before, after, "--", *small]
+            )
+            missing = sorted(set(small) - {name for name in names.split("\0") if name})
+            if missing:
+                raise SnapshotError(
+                    f"the patch leaves out {len(missing)} changed path(s): "
+                    + ", ".join(missing[:5])
+                )
             if len(patch) > self.max_patch_bytes:
                 patch, cut = patch[: self.max_patch_bytes] + "\n[... the diff was cut]\n", True
         return ChangeSet(changes=tuple(changes), patch=patch, cut=cut)
@@ -266,7 +286,8 @@ class SnapshotStore:
         Args:
             before: Tree id of the state to go back to.
             after: Tree id of the current state.
-            paths: Which paths to revert; empty reverts all of them.
+            paths: Which paths to revert; empty reverts all of them. They are literal file
+                names: git's pathspec magic (`:!name`, `:(glob)...`) is switched off.
 
         Returns:
             True if the revert applied. False means the working tree was left untouched, which
@@ -276,7 +297,8 @@ class SnapshotStore:
         Raises:
             SnapshotError: If git could not be run at all.
         """
-        arguments = ["diff", "--no-color", "--binary", before, after]
+        arguments = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--binary"]
+        arguments += [before, after]
         if paths:
             arguments += ["--", *paths]
         patch = await self._git(arguments)
@@ -320,6 +342,9 @@ class SnapshotStore:
     async def _git(self, arguments: list[str], *, in_root: bool = True, stdin: str = "") -> str:
         """Run one git command against the snapshot repository.
 
+        Git reads neither the user's nor the system's configuration, and every path argument
+        is a literal file name (`GIT_LITERAL_PATHSPECS`).
+
         Args:
             arguments: The git arguments, e.g. `["write-tree"]`.
             in_root: Whether to point git at the snapshot directory and the work tree (False for
@@ -356,6 +381,10 @@ class SnapshotStore:
                         **os.environ,
                         "GIT_CONFIG_GLOBAL": "/dev/null",
                         "GIT_CONFIG_SYSTEM": "/dev/null",
+                        # File names come from the project, which the agent writes: a file
+                        # called `:!other.py` must name itself and not "everything but
+                        # other.py" (pathspec magic also applies after `--`).
+                        "GIT_LITERAL_PATHSPECS": "1",
                     },
                 )
         except (OSError, TimeoutError) as exc:

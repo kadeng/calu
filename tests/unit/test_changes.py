@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from calu.changes import SnapshotStore
+from calu.changes import SnapshotError, SnapshotStore
 
 pytestmark = pytest.mark.anyio
 
@@ -156,3 +156,77 @@ async def test_taking_a_snapshot_before_prepare_is_an_error(tmp_path: Path):
     snapshots = store(tmp_path)
     with pytest.raises(Exception, match="prepare"):
         await snapshots.take()
+
+
+@pytest.mark.parametrize(
+    "magic", [":!payload.py", ":(exclude)payload.py", ":(glob)**", ":^payload.py"]
+)
+async def test_a_file_named_like_pathspec_magic_hides_nothing_from_the_patch(
+    tmp_path: Path, magic: str
+):
+    """wa1: git reads `:!x` after `--` as "exclude x" unless pathspecs are literal.
+
+    A command that creates a file with such a name used to remove the diff of another file from
+    the patch the write-set checker sees, with `cut` still False.
+    """
+    snapshots = store(tmp_path)
+    project = snapshots.workspace
+    (project / "a.py").write_text("a = 1\n", encoding="utf-8")
+    (project / "payload.py").write_text("safe = 1\n", encoding="utf-8")
+    await snapshots.prepare()
+    before = await snapshots.take()
+
+    (project / "a.py").write_text("a = 2\n", encoding="utf-8")
+    (project / "payload.py").write_text("evil = 1\n", encoding="utf-8")
+    (project / magic).write_text("decoy\n", encoding="utf-8")
+
+    after = await snapshots.take()
+    change = await snapshots.changes(before, after)
+    assert set(change.paths) == {"a.py", "payload.py", magic}
+    assert "+evil = 1" in change.patch and "+a = 2" in change.patch and "+decoy" in change.patch
+    assert not change.cut
+
+    # A revert of chosen paths takes exactly those, also when one of them is named like magic.
+    assert await snapshots.revert(before, after, [magic, "a.py"]) is True
+    assert not (project / magic).exists()
+    assert (project / "a.py").read_text() == "a = 1\n"
+    assert (project / "payload.py").read_text() == "evil = 1\n"
+
+
+async def test_a_patch_that_does_not_cover_its_paths_is_an_error(tmp_path: Path, monkeypatch):
+    """wa1: whatever makes git leave a path out, the checker must not get a partial patch."""
+    snapshots = store(tmp_path)
+    project = snapshots.workspace
+    (project / "a.py").write_text("a = 1\n", encoding="utf-8")
+    (project / "b.py").write_text("b = 1\n", encoding="utf-8")
+    await snapshots.prepare()
+    before = await snapshots.take()
+    (project / "a.py").write_text("a = 2\n", encoding="utf-8")
+    (project / "b.py").write_text("b = 2\n", encoding="utf-8")
+    after = await snapshots.take()
+
+    original = snapshots._git
+
+    async def partial(arguments: list[str], **kwargs: object) -> str:
+        """Answer the patch and name listing as if git had skipped b.py."""
+        if arguments[0] == "diff":
+            arguments = [a for a in arguments if a != "b.py"]
+        return await original(arguments, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(snapshots, "_git", partial)
+    with pytest.raises(SnapshotError, match=r"b\.py"):
+        await snapshots.changes(before, after)
+
+
+async def test_a_gitattributes_entry_cannot_hide_a_files_content_from_the_patch(tmp_path: Path):
+    """wa1, second spelling: `payload.py -diff` would turn the diff into "Binary files differ"."""
+    snapshots = store(tmp_path)
+    project = snapshots.workspace
+    (project / "payload.py").write_text("safe = 1\n", encoding="utf-8")
+    await snapshots.prepare()
+    before = await snapshots.take()
+    (project / "payload.py").write_text("evil = 1\n", encoding="utf-8")
+    (project / ".gitattributes").write_text("payload.py -diff\n", encoding="utf-8")
+    after = await snapshots.take()
+    change = await snapshots.changes(before, after)
+    assert "+evil = 1" in change.patch and not change.cut
