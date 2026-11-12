@@ -9,15 +9,18 @@ The program, by priority:
 
 1. the environment variable `CALU_GIT_TOOL` (a command line, e.g. `lazygit` or `tig status`);
 2. `git_tool` in `tui.toml`;
-3. the first of `KNOWN` that is installed: lazygit, gitui, tig;
-4. `git diff` through git's pager, if git is installed.
+3. lazygit, the default, if it is installed (on the search path or in `~/.local/bin`);
+4. `git diff` through git's pager, if git is installed, after the client offered to install
+   lazygit.
 
-lazygit is the recommended program: staging, the diff of the working copy, log and branches
-on one screen. When none of `KNOWN` is installed, `install_plan` names the command that
-installs lazygit with the package manager of this machine. A command that needs the rights of
-the administrator is only shown; the client never runs `sudo`.
+lazygit is the default: staging, the diff of the working copy, log and branches on one
+screen. Another program (gitui, tig, ...) is used only when it is configured. When lazygit is
+not installed, `install_plan` names a command that installs it on this machine. The client
+runs such a command only after an explicit yes and only if it needs no rights of the
+administrator; a command with `sudo` is only shown.
 """
 
+import platform
 import shlex
 import shutil
 from collections.abc import Callable, Mapping
@@ -27,7 +30,7 @@ from pathlib import Path
 ENV = "CALU_GIT_TOOL"
 """The environment variable that names the program as a command line."""
 
-KNOWN = ("lazygit", "gitui", "tig")
+KNOWN = ("lazygit",)
 """The programs tried when none is configured, in this order."""
 
 RECOMMENDED = "lazygit"
@@ -81,7 +84,6 @@ class InstallPlan:
 
 
 _PLANS: tuple[tuple[str, str, bool, str], ...] = (
-    ("brew", "brew install lazygit", True, ""),
     ("pacman", "sudo pacman -S lazygit", False, ""),
     ("dnf", "sudo dnf install lazygit", False, "Fedora 41 and later carry the package."),
     ("zypper", "sudo zypper install lazygit", False, ""),
@@ -95,7 +97,8 @@ _PLANS: tuple[tuple[str, str, bool, str], ...] = (
     ("go", "go install github.com/jesseduffield/lazygit@latest", True, ""),
 )
 """Package manager, command, whether the client may run it, a note; the first installed one
-is used. `go install` writes into the user's own directory and comes last."""
+is used when neither brew nor the release command applies. `go install` writes into the
+user's own directory and comes last."""
 
 
 def configured(environ: Mapping[str, str], setting: str = "") -> tuple[str, str]:
@@ -144,6 +147,10 @@ def choose(
     for name in KNOWN:
         if which(name) is not None:
             return GitTool((name,), "installed")
+        local = LOCAL_BIN / name
+        if which(str(local)) is not None:
+            # Installed by `install_plan`'s release command, with ~/.local/bin not on the PATH.
+            return GitTool((str(local),), "installed")
     if which("git") is not None:
         return GitTool(("git", "-c", "core.pager=less -R", "diff"), "fallback")
     return Missing("git is not installed on this machine")
@@ -156,10 +163,23 @@ def install_plan(which: Which = shutil.which) -> InstallPlan:
         which: Finds a program on the search path; used to detect the package manager.
 
     Returns:
-        The command of the first package manager found (brew, pacman, dnf, zypper, apt, then
-        `go install`), or the download page of the release binaries when none is found. Only
-        a command without `sudo` is marked `runnable`.
+        `brew install lazygit` where brew is installed; else, on Linux with curl and tar, a
+        command that puts lazygit's release binary into `~/.local/bin` (`release_command`);
+        else the command of the first package manager found (pacman, dnf, zypper, apt, then
+        `go install`); else the download page of the release binaries. Only a command without
+        `sudo` is marked `runnable`.
     """
+    if which("brew") is not None:
+        return InstallPlan("brew install lazygit", "brew", True)
+    release = release_command(which)
+    if release is not None:
+        return InstallPlan(
+            release,
+            "release",
+            True,
+            f"This downloads lazygit's release binary from GitHub into {LOCAL_BIN}; your "
+            "package manager may have it as well.",
+        )
     for manager, command, runnable, note in _PLANS:
         if which(manager) is not None:
             return InstallPlan(command, manager, runnable, note)
@@ -168,6 +188,45 @@ def install_plan(which: Which = shutil.which) -> InstallPlan:
         "release",
         False,
     )
+
+
+LOCAL_BIN = Path.home() / ".local" / "bin"
+"""Where the release command puts lazygit: a directory of the user, so no `sudo` is needed."""
+
+RELEASE_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "arm64", "arm64": "arm64"}
+"""`platform.machine()` -> the architecture name in lazygit's release file names."""
+
+
+def release_command(which: Which = shutil.which) -> str | None:
+    """Build the command that installs lazygit's newest release binary for this user.
+
+    The command asks GitHub for the newest release, downloads its Linux archive for this
+    machine's architecture and unpacks the one file `lazygit` into `LOCAL_BIN`. It changes
+    nothing outside that directory and needs no rights of the administrator.
+
+    Args:
+        which: Finds a program on the search path.
+
+    Returns:
+        The command line (`sh -c '...'`), or None where it would not work: not Linux, an
+        architecture lazygit publishes no archive under that name for, or no curl or tar.
+    """
+    arch = RELEASE_ARCH.get(platform.machine().lower())
+    if platform.system() != "Linux" or arch is None:
+        return None
+    if which("curl") is None or which("tar") is None or which("sh") is None:
+        return None
+    api = "https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
+    base = "https://github.com/jesseduffield/lazygit/releases/download"
+    script = (
+        "set -e; "
+        f'v=$(curl -fsSL {api} | sed -n \'s/.*"tag_name": *"v\\([^"]*\\)".*/\\1/p\'); '
+        'test -n "$v"; '
+        f'mkdir -p "{LOCAL_BIN}"; '
+        f'curl -fsSL "{base}/v$v/lazygit_${{v}}_Linux_{arch}.tar.gz" '
+        f'| tar -xz -C "{LOCAL_BIN}" lazygit'
+    )
+    return "sh -c " + shlex.quote(script)
 
 
 def usable_directory(workspace: str) -> str | None:

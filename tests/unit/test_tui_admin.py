@@ -60,8 +60,9 @@ def test_the_git_program_is_chosen_by_environment_then_setting_then_what_is_inst
     )
     assert gittool.choose({}, "gitui", which) == gittool.GitTool(("gitui",), "tui.toml")
     assert gittool.choose({}, "", which) == gittool.GitTool(("lazygit",), "installed")
-    assert gittool.choose({}, "", installed("tig", "git")) == gittool.GitTool(("tig",), "installed")
-    fallback = gittool.choose({}, "", installed("git"))
+    # lazygit is the default (the owner's decision): another program counts only when it is
+    # configured, so without lazygit the client falls back to git diff and offers to install it.
+    fallback = gittool.choose({}, "", installed("gitui", "tig", "git"))
     assert isinstance(fallback, gittool.GitTool) and fallback.source == "fallback"
     assert fallback.argv[0] == "git" and fallback.argv[-1] == "diff" and fallback.name == "git"
 
@@ -79,7 +80,6 @@ def test_a_configured_program_that_is_missing_is_named_and_nothing_else_is_tried
 @pytest.mark.parametrize(
     ("manager", "command", "runnable"),
     [
-        ("brew", "brew install lazygit", True),
         ("pacman", "sudo pacman -S lazygit", False),
         ("dnf", "sudo dnf install lazygit", False),
         ("zypper", "sudo zypper install lazygit", False),
@@ -98,6 +98,29 @@ def test_the_install_command_fits_the_package_manager(
 def test_without_a_package_manager_the_release_page_is_named() -> None:
     plan = gittool.install_plan(installed())
     assert plan.manager == "release" and not plan.runnable and gittool.RELEASES in plan.command
+
+
+def test_the_install_offer_prefers_a_command_the_client_may_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lazygit is offered with a command that needs no administrator rights where one exists."""
+    monkeypatch.setattr(gittool.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(gittool.platform, "machine", lambda: "x86_64")
+    assert gittool.install_plan(installed("brew", "curl", "tar", "sh")).command == (
+        "brew install lazygit"
+    )
+    plan = gittool.install_plan(installed("apt", "curl", "tar", "sh"))
+    assert plan.runnable and "sudo" not in plan.command
+    assert "lazygit_${v}_Linux_x86_64.tar.gz" in plan.command
+    assert str(gittool.LOCAL_BIN) in plan.command and str(gittool.LOCAL_BIN) in plan.note
+    # Another system, or an architecture lazygit has no archive for: the package manager's way.
+    monkeypatch.setattr(gittool.platform, "machine", lambda: "riscv64")
+    assert gittool.install_plan(installed("apt", "curl", "tar", "sh")).command == (
+        "sudo apt install lazygit"
+    )
+    # After that install the program is found although ~/.local/bin is not on the PATH.
+    local = str(gittool.LOCAL_BIN / "lazygit")
+    assert gittool.choose({}, "", installed(local, "git")) == gittool.GitTool((local,), "installed")
 
 
 def test_the_git_program_needs_the_project_directory_on_this_machine(tmp_path: Path) -> None:
@@ -596,18 +619,18 @@ async def test_f4_starts_the_installed_git_program_in_the_project_directory(
     async with running("simple_turn", session=FakeSession(workspace=str(tmp_path))) as run:
         programs = Programs()
         run.app.run_program = programs
-        run.app.which = installed("gitui", "tig", "git")
+        run.app.which = installed("lazygit", "tig", "git")
         assert "f4 git" in run.line("footer")
         await run.press("f4")
-        assert programs.runs == [(("gitui",), str(tmp_path))]
-        assert "back from gitui" in run.line("composer-head")
+        assert programs.runs == [(("lazygit",), str(tmp_path))]
+        assert "back from lazygit" in run.line("composer-head")
         run.app.environ = {"CALU_GIT_TOOL": "tig status"}
         await command(run, "/git")
         assert programs.runs[-1] == (("tig", "status"), str(tmp_path))
-        run.app.environ = {"CALU_GIT_TOOL": "lazygit"}
+        run.app.environ = {"CALU_GIT_TOOL": "gitui"}
         await run.press("f4")
         assert len(programs.runs) == 2
-        assert "CALU_GIT_TOOL names lazygit, which is not installed" in run.line("composer-head")
+        assert "CALU_GIT_TOOL names gitui, which is not installed" in run.line("composer-head")
 
 
 async def test_f4_needs_the_project_directory_on_this_machine() -> None:
@@ -698,7 +721,7 @@ async def test_help_and_palette_name_the_new_commands() -> None:
             "/honesty [off | track | enforce]",
             "/git",
             "f4",
-            "lazygit (recommended)",
+            "lazygit by default",
             "CALU_GIT_TOOL",
         ):
             assert expected in text

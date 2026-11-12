@@ -259,9 +259,9 @@ COMMANDS: tuple[Command, ...] = (
         "f4",
         "/git",
         group="View",
-        about="In the project directory: the first installed of lazygit (recommended), "
-        "gitui, tig, else git diff. CALU_GIT_TOOL or git_tool in tui.toml name another. "
-        "Without one, f4 shows the command that installs lazygit on this machine.",
+        about="In the project directory: lazygit by default. CALU_GIT_TOOL or git_tool in "
+        "tui.toml name another program. Without lazygit, f4 offers to install it and opens "
+        "git diff meanwhile.",
     ),
     Command(
         "search",

@@ -3445,9 +3445,9 @@ class CaluApp(App[None]):
     def _cmd_git(self, rest: str) -> None:
         """Open a terminal git program in the session's project directory (`f4`, `/git`).
 
-        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or the first installed of
-        lazygit, gitui and tig; without any of them `git diff` through the pager, after a
-        notice (once per run) that names the command which installs lazygit. That command is
+        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or lazygit, the default.
+        Without lazygit, the client offers to install it (once per run) and opens `git diff`
+        through the pager if the answer is no. That command is
         run only after a yes and only if it needs no administrator rights; otherwise it is
         shown for the user to run. The client has no git viewer of its own.
 
@@ -3515,7 +3515,7 @@ class CaluApp(App[None]):
 
         self.push_screen(
             ConfirmScreen(
-                "No terminal git program (lazygit, gitui, tig) is installed",
+                "lazygit is not installed",
                 lines,
                 self.palette,
                 notice=not plan.runnable,
@@ -4109,8 +4109,8 @@ def help_lines(
         + ", tab-0 to tab-9 (alt+0 to alt+9). The same file holds theme, bell, toasts, "
         "thinking, panel_width and git_tool: the program f4 starts in the project directory "
         "(the environment variable CALU_GIT_TOOL overrides it). Left unset, f4 starts the "
-        "first installed of lazygit (recommended), gitui and tig, else git diff through the "
-        "pager. While that program has the terminal the client reads nothing; if the session "
+        "lazygit, and offers to install it when it is missing (else git diff through the "
+        "pager). While that program has the terminal the client reads nothing; if the session "
         "closes the connection meanwhile, the client attaches again when the program ends."
     )
     paragraphs.append(("Settings and other keys", rebind))
