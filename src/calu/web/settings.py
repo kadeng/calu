@@ -35,7 +35,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
-from calu import admin
+from calu import admin, herd
 from calu.checkers.rules import RULE_LISTS
 from calu.config import CheckerConfig, Config
 from calu.db import Db
@@ -139,6 +139,12 @@ RULE_KINDS = (
     ("write", "File writes", "a path a tool writes"),
 )
 """The three kinds of rule list: (kind, pane title, what one pattern matches)."""
+
+MISSES_READ = 40
+"""How many of the newest approved-then-denied steps the page reads in all."""
+
+MISSES_SHOWN = 5
+"""How many of them one checker's pane shows."""
 
 CHECKER_COLUMNS = ("enabled", "model", "request_limit", "output_tokens_limit", "max_tokens")
 """The columns of an extra checker type the page edits, in display order."""
@@ -290,6 +296,14 @@ class Pane:
     description: str = ""
     groups: list[Group] = field(default_factory=list)
     rule_sets: list[RuleSet] = field(default_factory=list)
+    facts: list[tuple[str, str, bool]] = field(default_factory=list)
+    """The record shown on the pane, read-only: (label, value, whether to mark it as a
+    problem). For a checker: what it decided, where a human disagreed, what it cost."""
+    links: list[tuple[str, str, str]] = field(default_factory=list)
+    """Other panes this one points to: (pane id, title, one-line summary)."""
+    misses: list[herd.CheckerMiss] = field(default_factory=list)
+    """Steps this pane's checker approved and a human then denied, newest first: the cases to
+    correct its instructions against."""
 
     @property
     def fields(self) -> list[Field]:
@@ -324,6 +338,12 @@ class Sources:
     """Checker type name -> its instructions."""
     rules: Sequence[admin.RuleRow]
     """The rules of the global scope and, for a project, of that project."""
+    stats: Mapping[str, herd.CheckerStats] = field(default_factory=dict)
+    """Checker name -> what it decided so far, across every project."""
+    misses: Sequence[herd.CheckerMiss] = ()
+    """The newest steps a checker approved that a human then denied."""
+    step_lines: Sequence[str] = ()
+    """What `herd.StepStats.lines` says about all steps: paths through the gate and delays."""
 
 
 @dataclass
@@ -336,12 +356,15 @@ class Saved:
     """Form field name -> why its value was refused. Fields not named here were stored."""
 
 
-async def load(db: Db, project: str | None) -> Sources:
+async def load(db: Db, project: str | None, record: bool = True) -> Sources:
     """Read everything the settings page shows for one scope.
 
     Args:
-        db: A connection that may read `config`, `checker_types`, `rules` and `projects`.
+        db: A connection that may read `config`, `checker_types`, `rules` and `projects`, and
+            for the record `steps`, `checker_runs` and `escalations`.
         project: The project whose scope to show, or None for the global scope.
+        record: Whether to read what the checkers decided so far as well; False where only
+            the editable values are needed.
 
     Returns:
         The sources of the page.
@@ -358,6 +381,9 @@ async def load(db: Db, project: str | None) -> Sources:
         checkers=checkers,
         instructions={row.name: await admin.instructions(db, row.name) for row in checkers},
         rules=await admin.rules(db, project),
+        stats={row.checker_name: row for row in await herd.checker_stats(db)} if record else {},
+        misses=await herd.checker_misses(db, limit=MISSES_READ) if record else (),
+        step_lines=(await herd.step_stats(db)).lines() if record else (),
     )
 
 
@@ -380,7 +406,7 @@ def panes(src: Sources) -> list[Pane]:
     ]
     for pane in found:
         pane.groups = [group for group in pane.groups if group.fields]
-    return [pane for pane in found if pane.groups]
+    return [pane for pane in found if pane.groups or pane.facts or pane.links]
 
 
 def overlay(found: Sequence[Pane], posted: Mapping[str, str], errors: Mapping[str, str]) -> None:
@@ -429,7 +455,7 @@ async def save(
         admin.AdminError: If the project does not exist.
         psycopg.Error: On database errors.
     """
-    src = await load(db, project)
+    src = await load(db, project, record=False)
     result = Saved()
     checker_changes: dict[str, dict[str, Any]] = {}
     for pane in panes(src):
@@ -657,7 +683,61 @@ def _checker_panes(src: Sources, used: set[str]) -> list[Pane]:
                 ],
             )
         )
+    overview = Pane(
+        id="checkers",
+        section="Checkers",
+        title="Overview",
+        description=(
+            "What the checkers decided so far, in every project. This is the record, not a"
+            " measurement: an escalation a human allowed cost an interruption for nothing, and"
+            " a step a checker approved that a human then denied is a miss. `calu evals`"
+            " measures the checkers against a case set instead."
+        ),
+        facts=[("All steps", line, False) for line in src.step_lines],
+    )
+    for pane in found:
+        name = "honesty" if pane.id == "honesty" else pane.id.removeprefix("checker-")
+        stats = src.stats.get(name)
+        pane.facts = _record(stats)
+        pane.misses = [miss for miss in src.misses if miss.checker_name == name][:MISSES_SHOWN]
+        summary = f"{stats.runs} run(s), {stats.passed_then_denied} miss(es)" if stats else ""
+        overview.links.append((pane.id, pane.title, summary or "no runs recorded yet"))
+    found.insert(0, overview)
     return found
+
+
+def _record(stats: herd.CheckerStats | None) -> list[tuple[str, str, bool]]:
+    """Describe what one checker decided so far.
+
+    Args:
+        stats: The checker's record, or None if it never ran.
+
+    Returns:
+        (label, value, whether to mark it as a problem) lines: what it decided, where a human
+        disagreed, and what it cost; [] for a checker without a run.
+    """
+    if stats is None or not stats.runs:
+        return []
+    decided = f"{stats.runs} run(s): {stats.passed} pass, {stats.escalated} escalate"
+    if stats.allowed or stats.denied:
+        decided += f", {stats.allowed} allow, {stats.denied} deny"
+    facts = [("Decided", decided, False)]
+    if stats.escalated_then_allowed:
+        facts.append(
+            (
+                "Escalated, then allowed by a human",
+                f"{stats.escalated_then_allowed} (an interruption that was not needed)",
+                False,
+            )
+        )
+    if stats.passed_then_denied:
+        facts.append(
+            ("Approved, then denied by a human", f"{stats.passed_then_denied} (a miss)", True)
+        )
+    if stats.tokens_text:
+        facts.append(("Tokens", stats.tokens_text, False))
+        facts.append(("Cache", stats.cache_text, stats.cache_is_cold))
+    return facts
 
 
 def _rule_panes(src: Sources) -> list[Pane]:

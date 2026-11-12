@@ -29,7 +29,6 @@ CHECKERS = ["command", "edit", "changeset", "narrator", "subagent-result"]
 
 PAGES = [
     "base.html",
-    "checkers.html",
     "escalation.html",
     "escalations.html",
     "fleet.html",

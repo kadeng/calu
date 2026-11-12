@@ -819,10 +819,10 @@ async def test_the_checkers_page_shows_the_cases_to_fix_the_instructions_against
         db = Db(conn)
         _session_id, escalation = await populate(db)
         async with await client_for(db) as client:
-            page = (await client.get("/checkers")).text
+            page = (await client.get("/settings")).text
             # The fixture's checker escalated once, so there is a record but no miss.
-            assert "Decided" in page and "Humans disagreed" in page
-            assert "approved that a human denied" not in page
+            assert "Decided" in page and "1 run(s)" in page
+            assert "Approved, then denied by a human" not in page
 
             # Make it a miss and the page shows the case, with both one-click destinations.
             # The fixture's checker run sits on the first step and the escalation on the
@@ -839,13 +839,16 @@ async def test_the_checkers_page_shows_the_cases_to_fix_the_instructions_against
                 " resolved_at = now() WHERE id = %s",
                 (escalation,),
             )
-            page = (await client.get("/checkers")).text
-            assert "Steps a checker approved that a human denied (1)" in page
-            assert "looked routine" in page and "not that one" in page
-            assert f"/escalations/{escalation}" in page
-            assert (
-                "edit command&#39;s instructions" in page or "edit command's instructions" in page
-            )
+            page = (await client.get("/settings")).text
+            # The miss is on the command checker's pane, beside the instructions to correct.
+            pane = page.split('id="checker-command"')[1].split("</section>")[0]
+            assert "Approved, then denied by a human" in pane and "1 (a miss)" in pane
+            assert "looked routine" in pane and "not that one" in pane
+            assert f"/escalations/{escalation}" in pane
+            assert 'name="prompt:command"' in pane
+            # The old address of the checkers page leads to the overview.
+            old = await client.get("/checkers", follow_redirects=False)
+            assert old.headers["location"].endswith("/settings#checkers")
     finally:
         await conn.close()
 
@@ -878,23 +881,23 @@ async def test_the_checkers_page_shows_what_they_cost(db_url: str) -> None:
 
         async with await client_for(db) as client:
             # A checker that has never run says nothing about tokens rather than "0".
-            assert "Tokens" in (await client.get("/checkers")).text
+            assert ">Tokens<" not in (await client.get("/settings")).text
 
             await check(1, 19_000)
             await check(2, 19_000)
-            warm = (await client.get("/checkers")).text
+            warm = (await client.get("/settings")).text
             # The same page says how many steps reached a checker at all (D64).
             assert "2 step(s): 2 went to a checker, 0 (0%) did not" in warm
             assert "40k in / 100 out" in warm
             assert "95% of the input from cache" in warm
-            assert "decision deny" not in warm, "a working cache must not be flagged"
+            assert "st-fact is-warn" not in warm, "a working cache must not be flagged"
 
             # With the prefix missing from the cache the share is marked, because the checks
             # then cost several times what they should.
             await db.execute("UPDATE checker_runs SET cache_read_tokens = 0")
-            cold = (await client.get("/checkers")).text
+            cold = (await client.get("/settings")).text
             assert "0% of the input from cache" in cold
-            assert "decision deny" in cold
+            assert "st-fact is-warn" in cold
     finally:
         await conn.close()
 

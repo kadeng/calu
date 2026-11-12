@@ -144,8 +144,47 @@
       <div class="st-pane-head">
         <p class="st-crumb">{{ pane.section }}{% if project %} · project {{ project }}{% endif %}</p>
         <h1 id="h-{{ pane.id }}">{{ pane.title }}</h1>
-        {% if pane.description %}<p class="st-desc">{{ pane.description }}</p>{% endif %}
+        {% if pane.description %}<p class="st-desc">{{ pane.description | prose }}</p>{% endif %}
       </div>
+      {% if pane.facts or pane.links or pane.misses %}
+        <div class="st-group">
+          {% if pane.groups %}<h2>Record</h2>{% endif %}
+          {% if pane.facts or pane.links %}
+          <div class="st-card">
+            {% for label, value, warn in pane.facts %}
+              <div class="st-row st-row--inline" data-search="record {{ label | lower }} {{ value | lower }}">
+                <div class="st-row-text"><span class="st-label">{{ label }}</span></div>
+                <div class="st-row-control st-fact{{ ' is-warn' if warn }}">{{ value }}</div>
+              </div>
+            {% endfor %}
+            {% for target, title, summary in pane.links %}
+              <div class="st-row st-row--inline" data-search="record {{ title | lower }}">
+                <div class="st-row-text"><a class="st-label" href="#{{ target }}" data-goto="{{ target }}">{{ title }}</a></div>
+                <div class="st-row-control st-fact">{{ summary }}</div>
+              </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if pane.misses %}
+          <p class="st-note">Steps this checker approved that a human then denied, newest first: the cases to correct its instructions against.</p>
+          <div class="st-card">
+            {% for m in pane.misses %}
+              <div class="st-row st-row--block" data-search="record miss {{ (m.command or m.summary or m.tool_name) | lower }}">
+                <div class="st-row-text">
+                  <div class="st-row-title">
+                    <a class="st-label" href="{{ url_for('escalation', escalation_id=m.escalation_id) }}">Escalation {{ m.escalation_id }}</a>
+                    <span class="st-meta">said {{ m.decision }}{% if m.at %} · {{ m.at.strftime('%Y-%m-%d %H:%M') }}{% endif %}</span>
+                  </div>
+                </div>
+                <pre class="st-miss">{{ m.command or m.summary or m.tool_name }}</pre>
+                <div class="st-help"><strong>The checker said:</strong> {{ m.checker_reason or '(no reason)' }}</div>
+                <div class="st-help"><strong>The human denied it:</strong> {{ m.human_note or '(no note)' }}</div>
+              </div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      {% endif %}
       {% for group in pane.groups %}
         <div class="st-group">
           {% if pane.groups | length > 1 or group.note %}<h2>{{ group.title }}</h2>{% endif %}

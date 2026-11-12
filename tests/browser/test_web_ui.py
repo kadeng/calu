@@ -248,6 +248,13 @@ async def test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_un
             shown = "[...document.querySelectorAll('.st-pane')].filter(p => p.offsetParent).length"
             rows = "[...document.querySelectorAll('.st-row')].filter(r => r.offsetParent).length"
             assert await page.evaluate(shown) == 1, "one pane at a time"
+            # The checkers have no page of their own any more: their record is the first pane.
+            assert await page.inner_text(".st-pane.is-active h1") == "Overview"
+            assert await page.locator("header nav a", has_text="Checkers").count() == 0
+            await (
+                page.locator(".st-pane.is-active").get_by_role("link", name="Edit checker").click()
+            )
+            assert await page.inner_text(".st-pane.is-active h1") == "Edit checker"
 
             # The sidebar opens a pane; the rule lists are editors, not tables.
             await page.get_by_role("link", name="Commands", exact=True).click()

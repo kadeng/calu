@@ -19,9 +19,9 @@ Pages:
     /triage               one escalation at a time, with the queue behind it
     /api/sessions         the fleet as JSON, for the jump palette and the attention badge
     /escalations/{id}     what the checker saw when it escalated the step
-    /checkers             what the checkers decided and where a human disagreed
     /settings             everything that steers a session: the configuration, the checker
-                          instructions and the allow and deny lists, per scope
+                          instructions with each checker's record, and the allow and deny
+                          lists, per scope
 
 **The login is the token `calu web` prints** (`TokenGate`, D161); there are no user accounts
 (PLAN.md Q4 is open), so the server refuses to bind anything but the loopback interface: reach
@@ -258,7 +258,7 @@ def create_app(
             methods=["POST"],
             name="resolve",
         ),
-        Route("/checkers", _page(checkers, state), name="checkers"),
+        Route("/checkers", _page(checkers_redirect, state), name="checkers"),
         Route("/checkers/{name}", _page(checker_redirect, state), name="checker"),
         Route("/rules", _page(rules_redirect, state), name="rules"),
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
@@ -1512,31 +1512,17 @@ async def resolve_json(request: Request, state: _State) -> Response:
     return JSONResponse({"ok": True, "remembered": remembered})
 
 
-async def checkers(request: Request, state: _State) -> Response:
-    """Show the checker definitions: name, route, model, version.
+async def checkers_redirect(request: Request, state: _State) -> Response:
+    """Send an old link to the checkers page to the checkers' overview on the settings page.
 
     Args:
         request: The request.
         state: The shared state.
 
     Returns:
-        The checkers page, with each checker's record beside its definition.
+        A redirect to the pane that shows what the checkers decided.
     """
-    return _render(
-        request,
-        "checkers.html",
-        {
-            "checkers": await admin.checkers(state.db),
-            # What they decided and where a human disagreed, read from the record rather than
-            # measured by running them again (D61).
-            "stats": {row.checker_name: row for row in await herd.checker_stats(state.db)},
-            # And the rows behind the counts, because this is the page where the instructions
-            # are edited: the case to fix them against is one click away (D62).
-            "misses": await herd.checker_misses(state.db, limit=10),
-            # How many steps reached a checker at all, and what the gate costs in time (D64).
-            "steps": await herd.step_stats(state.db),
-        },
-    )
+    return RedirectResponse(f"{request.url_for('settings')}#checkers", 307)
 
 
 async def checker_redirect(request: Request, state: _State) -> Response:

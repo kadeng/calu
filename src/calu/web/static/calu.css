@@ -830,3 +830,6 @@ main.st-shell { max-width: 84rem; padding-top: 0; padding-bottom: 0; }
   .st-save kbd { display: none; }
 }
 .st-flash a { margin-right: .6rem; }
+.st-fact { max-width: 34rem; text-align: right; font-size: .9rem; color: var(--fg-soft); font-variant-numeric: tabular-nums; }
+.st-fact.is-warn { color: var(--bad); font-weight: 600; }
+.st-miss { margin: 0; max-height: 9rem; overflow: auto; white-space: pre-wrap; font-size: .8rem; }

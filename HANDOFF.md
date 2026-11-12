@@ -56,7 +56,7 @@ there.
 
 ### What exists
 
-- **Checker record** (D61): `calu checker stats [--days N]` and the web checkers page report,
+- **Checker record** (D61): `calu checker stats [--days N]` and each checker's pane of the web settings page report,
   per checker, what it decided and where a human disagreed -- escalations that were allowed
   (caution for nothing) and steps it approved that were then denied (misses). Read from the
   record, no model called. `calu checker misses [NAME]` lists the rows behind those counts,
