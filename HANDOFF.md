@@ -3,21 +3,32 @@
 State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
 the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
 with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D199, open questions §11, phases §12).
+`PLAN.md` (decisions D1-D201, open questions §11, phases §12).
 
 ## Pick up here
 
 **`main` is green and pushed** (1784 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
-1. **Finish the honesty redesign (D196). It is merged into `main`** (the branch
-   `feature/honesty-certification` is history now): trusted commits and file contents in the
-   database (migrations 0029 and 0030), the computed state, the honesty review, enforcement
-   on running and committing, the clients. All test layers pass. Still to do:
-   - It has **never run against a real model**: the reviewer's prompt
-     (`src/calu/defaults/checkers/system/honesty-review.md`) and the command checker's new
-     answer field (whether a command executes project code). Do one live run in `track` and
-     one in `enforce` mode (manual checklist in `docs/TESTING.md`) and fix what that shows.
+1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
+   model** (the branch `feature/honesty-certification` is history now): trusted commits and
+   file contents in the database (migrations 0029 and 0030), the computed state, the honesty
+   review, enforcement on running and committing, the clients.
+   - Four live runs on 2026-11-12 with `spikes/smoke_session.py --honesty MODE --checker-model
+     ...` (a real `claude` on haiku, checkers and reviewer on Nemotron Lightning), each as
+     the specification says: `track` (two checked edits, the tests and a commit ran
+     unblocked; the commit was certified with the source `check`); `enforce` with an honest
+     docstring change made by `sed` (the test command started the review, which verified the
+     file; the commit was certified with the source `review`); `enforce` with a function
+     changed by `sed` so that it contradicts its docstring (the review recorded the right
+     finding and the test command was denied with it); `enforce` without a trusted commit
+     (the test command waited as an escalation that names `/trust`). The command checker
+     answered the new field (whether a command executes project code) correctly in every
+     step. The commands and what to expect are in `docs/TESTING.md`.
+   - **Not run live:** `/trust`, `/trust-file` and `/honesty-review` typed by a person in
+     `calu attach`, the honesty panel of the web live view, a review of more than one batch,
+     a review that fails, and the reviewer on a large change. The manual checklist
+     (`docs/TESTING.md`, item 25) covers the first two.
    - The specification is `docs/notes/honesty-spec.md`. Where the build deviated from it, and
      what each step left out, is in `docs/notes/reports-2026-11-12.md`; several deviations
      are stricter than the specification on purpose. Read them before changing the feature.
@@ -45,22 +56,31 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    between agents; chatting with a subagent; `/btw`; escalations with a full-screen detail;
    user input visually distinct; thinking shown; checker instructions readable and editable;
    the honesty view; `/trust` with a yes/no question; `/honesty off|track|enforce`; `f4`.
-5. **Write the user documentation of the honesty redesign** after step 1 (README's "Code
-   honesty", the guide's "Code honesty enforcement", which both still describe the old
-   register), from the reports in `docs/notes/`.
+5. **Done: the user documentation of the honesty redesign** (README "Code honesty";
+   `CALU_GUIDE.md` "Code honesty enforcement" with "Verified code, ..." and "Judging the
+   checkers before you let them block"). Written from the reports in `docs/notes/` and checked
+   against the live runs of item 1 and the command line's own help. `PLAN.md` §13 still
+   describes the register of 2026-11-10 as history; D196 is what holds.
 6. **Defects the split of `session.py` found and left as they were**
    (`docs/notes/reports-2026-11-12.md`, "defects found"). Fixed since: the store failure count
    and the stopping flag are reset at a new run. Still open, most important first: the state
    stays "tool_call" after a human accepts an escalated subagent result; a clock alarm is
    forgotten when its escalation ends without a human decision; a rejected second start drops
    the running session's not yet narrated text.
-7. **One timing-sensitive browser test.**
+7. **Two timing-sensitive tests.**
+   `tests/unit/test_protocol_server.py::test_subscribing_again_does_not_send_an_event_twice`
+   failed once in CI with a `TimeoutError` (run of commit `50ae9ab`) and passes locally.
    `tests/browser/test_web_ui.py::test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_unsaved`
    failed once inside the full run of `-m 'not live'` (which includes the browser layer when
    the browser is installed) and passes on its own every time. Find the step that does not
    wait for the page (probably a navigation after a save) and make it wait for a condition.
 8. Smaller open work, no decision needed: `herd.close_gone` trusts the hostname alone (below);
    a checker's model and limits live in two stores (below); `cli.py` should become a package.
+9. **Later, not now: plugins for VSCode and the JetBrains IDEs, and a git browser in the web
+   interface** (the owner on 2026-11-12, requirement 23 and soft goal 6; `PLAN.md` D200, D201
+   and phase 9). Both plugins must work in the IDE's most modern remote development mode.
+   The owner's order: only after the full-screen terminal client, the web interface and
+   standalone use work well. Nothing is built.
 
 Decisions of the owner on 2026-11-12 that are implemented and recorded: D178-D198 and Q22 in
 `PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
@@ -105,7 +125,7 @@ in `calu/` only.
 | 5 Sandboxing | Built: the settings (D15), the per-project network policy (D39) with a proposed default for new projects (D45, Q5 asks the owner to confirm it), `calu evals`. Untested: what `weaker_nested_sandbox` changes, which needs a logged-in `claude` inside a container (the rest of Q1 is measured). |
 | 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
 | 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format with the single-file binary buildable beside it (D41, `scripts/build-binary.sh`). Driven as a real process over real pipes for the handshake, a prompt, a denied step and `session/load`'s replay (`tests/unit/test_acp_process.py`) |
-| 8 Honesty enforcement and checker families | Done (the owner's brief of 2026-11-10, §13): several checkers on one route run in parallel with most-restrictive-wins (D81), the honesty register with its three modes and the deterministic layer that refuses to run dishonest code (D82, D83) -- since D180 in the session's memory, cleared with `/clear-mark` or the live view's Clear button, the checker's own instructions shipped and seeded off (D85), and the register carried to every front end (D86). What is **not** done is the judgement: it needs a capable checker model (Q17), and whether honesty, security and over-engineering are one agent or several is Q18 |
+| 8 Honesty enforcement and checker families | Done (the owner's brief of 2026-11-10, §13): several checkers on one route run in parallel with most-restrictive-wins (D81); code honesty as redesigned on 2026-11-12 (D196): trusted commits and file contents in the database, a state computed against the baseline (marks, unreviewed files, review required), the honesty review, and in `enforce` mode a clean state before project code runs or is committed; the honesty checker's own instructions shipped and seeded off (D85); the state carried to every front end. Run against a real model on 2026-11-12 ("Pick up here", item 1). Whether honesty, security and over-engineering are one agent or several is Q18 |
 
 All eight phases are **implemented**; what is left is listed under "Next steps" and "Open
 questions" and is either the owner's decision, a proposal of mine to confirm, or something this
@@ -652,7 +672,7 @@ work for a developer without the owner. In short:
 | 4. Smaller gaps | **done** (by design, or D44) | -- |
 | 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
-| 7. Honesty enforcement | **rebuilt and merged** (D196); never run against a real model: see "Pick up here" | a live run |
+| 7. Honesty enforcement | **rebuilt and merged** (D196), run against a real model in `track` and `enforce` mode: see "Pick up here" | -- |
 | 8. Splitting `session.py` | **done**: `run_state.py`, `escalations.py` (EscalationDesk), `gate.py` (StepGate), `write_sets.py`, `recorder.py`, `steps.py`; `session.py` holds the lifecycle, runner events and wiring (about 2,500 lines). Still in it: the subagent result review and the honesty bookkeeping | -- |
 | 9. Auto mode by default | **decided** (Q22): calu does not override Claude Code's permission mode | -- |
 | 10. Full-screen terminal client | **built and merged** (`src/calu/tui/`, Textual, extra `tui`): `calu attach` on a terminal; documentation and a run against a real session are open, see "Pick up here" | -- |

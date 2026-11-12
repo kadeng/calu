@@ -173,29 +173,154 @@ Honesty is hard to keep up by hand, because it costs attention on every single e
 decays silently. That is precisely the kind of rule an agent applies well: calu's edit checker
 sees the function and its documentation together, in the same step, and can refuse the edit.
 
-### The register, because a change is honest only when it is finished
+The reverse also holds: judging a call site by names and documentation is only sound for code
+that was verified to be honest. So calu tracks which code is verified, tells every checker
+which code it must not judge by its documentation, and can refuse to run or commit code that
+is not verified.
+
+### Verified code, because a change is honest only when it is finished
 
 Edits come in steps, and a change of any size makes the codebase dishonest **on purpose** for a
 while: a signature changes in one step, its callers and its documentation follow in the next
 five. A checker that objected to every one of those steps would be noise, and one that refused
 them would stop the work.
 
-So the honesty checker does not judge each step in isolation. It **records** the spot — a file,
-or one function in it — with what disagrees, and it clears the record when the code and its
-documentation agree again. calu enforces that record at the one point where temporary
-dishonesty becomes a risk: a command that would **run** the recorded code is refused, with the
-reason, until the record is clear.
+So calu does not stop edits. It keeps track of **which code is verified to be honest**, tells
+every checker which code is not, and, when honesty is enforced, requires a clean state at the
+two points where unverified code becomes a risk: before a command **runs** code of the project,
+and before a **commit**.
 
-Editing recorded code is never refused. That is the way out, and it has to stay open: fixing
-the dishonesty is an edit.
+**Trusted commits and the baseline.** A commit that a person or calu certified as honest is a
+*trusted commit*; calu stores them in its database. The *baseline* of a session is the nearest
+trusted ancestor of `HEAD` (`HEAD` included, searched over the last 5000 commits). Everything
+is measured against it. A commit also counts as trusted when the tree it records is certified,
+so a reworded or rebased commit with the same content keeps its trust.
 
-Switching it on is two steps, because both halves are deliberate: the checker that judges, and
-what calu does with its judgement. calu ships the checker's instructions but leaves the
-definition disabled.
+**The state of a session** has three parts:
+
+| Part | What it means | How it goes away |
+|---|---|---|
+| **Marks** | a checker or the honesty review found a function, a class or a whole file dishonest, with a reason | an edit of that file that the checkers accept closes the mark; a person clears a wrong one |
+| **Unreviewed files** | the content differs from the baseline and nobody verified it: changed by a shell command or from outside, by an edit a person allowed after an escalation, or staged with another content than the working file | an honesty review verifies them, or a person certifies the file |
+| **Review required** | more marks are open than `honesty.max_open_marks` (3); single marks can then no longer be closed one by one | an honesty review that leaves no mark |
+
+The state is **clean** when there is a baseline, no open mark, no unreviewed file and no review
+is required. An `Edit`, `Write` or `MultiEdit` that every checker of the edit route approved
+verifies its file at the content it wrote, provided the content it started from was verified;
+this is how normal work stays clean without any review. Marks and verifications take effect
+when the tool call has succeeded; a denied or failed edit changes nothing.
+
+**The modes** (`honesty.mode`):
+
+- `off`, the default: none of this runs.
+- `track`: the state is kept and shown, the checkers are told which code is not verified, and a
+  commit made in a clean state is certified. Nothing is blocked or escalated because of the
+  state.
+- `enforce`: additionally, a command that executes code of the project (tests, a build that
+  runs code, a script, an interpreter) and a `git commit` need a clean state:
+
+  | State | What happens to the step |
+  |---|---|
+  | clean | it runs |
+  | open marks | it is denied, with the marks and their reasons; Claude fixes each file with an edit |
+  | unreviewed files, or review required | calu runs the honesty review and decides by its result |
+  | no baseline | it waits for a person, who certifies a commit |
+
+  Whether a command executes project code is a judgement about the command, so the command
+  checker makes it; without an answer a shell command counts as executing. Reading, searching,
+  editing, git and formatting are not stopped, and **editing is never blocked**: fixing
+  dishonest code is an edit. While the state is not clean, an allow-listed command is judged by
+  the command checker too, and a commit must be a command line of its own. A person's allow on
+  such an escalation lets the step run once and certifies nothing.
+
+**The honesty review.** A reviewer agent judges the files that are unreviewed or carry marks
+against the honesty rules: for each file it gets the change against the baseline, or the whole
+file where the baseline does not hold it, and it may read other files. A file it finds honest
+is verified at the content it was shown; its findings become that file's marks. A change that
+is only trailing whitespace, line endings or blank lines is verified without a model.
+
+- It runs by itself under `enforce`, when a step needs a clean state and the only problem is
+  unreviewed files or a required review. You ask for one with `/honesty-review` in `calu
+  attach` or "Review now" in the web interface's live view, in `track` and `enforce` mode.
+- One review runs at a time. calu does not start another one by itself while nothing changed
+  since the last, and after a failed review not within 60 seconds; `/honesty-review` always
+  runs one.
+- A step waits for a review for at most about seven minutes less the time its checkers took. A
+  longer review continues, the step waits for a person meanwhile, and the result is there at
+  the next attempt.
+- A review that fails, more files than `honesty.review_max_files` (300), and files the review
+  cannot judge make the step wait for a person, with the reason. Not judged are a file over
+  2,000,000 bytes, a file whose text for the reviewer is over 200,000 bytes, a file that is not
+  UTF-8 text, a symbolic link, a submodule, and a staged content that differs from the working
+  file. A person certifies those (below) or stages the file again.
+- In a repository without a trusted commit, a review that a person asks for judges every file
+  git lists, up to the cap. If every file `HEAD` records is then verified and the working tree
+  holds nothing else, `HEAD` is certified and becomes the baseline. A review calu starts by
+  itself never certifies a commit.
+- The reviewer uses `honesty.reviewer_model` (blank: the checkers' default model) and needs
+  that provider's key; the start-up warnings of `calu run` name it. Its limits are the other `honesty.review*`
+  settings ([configuration reference](docs/CONFIGURATION.md)).
+
+**Who established trust.** Every trusted commit and every stored file content records its
+source: `user` (a person certified it), `review` (the honesty review verified it) or `check`
+(the step checkers approved the edit). The order is user > review > check, and a stronger
+certification replaces a weaker record, never the reverse. `honesty.sufficient_trust` (`check`
+by default) names the weakest source that counts: with `review`, a checked edit alone leaves
+its file unreviewed until a review judged it; with `user`, only a person's certification
+counts and calu starts no review by itself. Raising the setting deletes nothing, and lowering
+it makes the weaker records count again.
+
+A plain `git commit` made in a clean state is certified by the session, with the weakest source
+among the verifications it contains (`check` or `review`, never `user`), and becomes the new
+baseline. Other commands that move `HEAD` (merge, rebase, cherry-pick) are not certified; calu
+looks the baseline up again after them.
+
+**Certifying by hand.** In a client attached to the session:
+
+    /honesty                           # baseline, marks, unreviewed files
+    /trust                             # certify HEAD; or /trust <commit-or-branch>
+    /trust-file path/to/file           # certify the present content of one file
+    /honesty-review                    # run the review now
+    /clear-mark 3                      # the override for a wrong mark
+
+On the command line, with the `operator` or `admin` credential:
+
+    calu honesty trust main --note "reviewed before the release"
+    calu honesty trust --file data/table.bin
+    calu honesty trusted               # what is certified, with source and who; --all for everything
+    calu honesty untrust 9f2c1b7       # or: calu honesty untrust --file data/table.bin
+    calu honesty prune --days 90       # remove check and review records older than that, never user records
+
+A branch or tag means the commit it points at now; later commits are not covered. A file is
+certified by the SHA-256 of its content: the trust ends when the content changes and holds
+wherever a file with that content lies. `calu honesty trust`, `untrust` and `prune` refuse to
+run inside a calu session, so that they are typed by a person in a terminal of their own.
+Clearing a mark by hand verifies nothing and stores nothing. Certifications are global to the
+database and written to its audit log.
+
+Details worth knowing:
+
+- When a file is marked, calu withdraws the stored verification (`check` or `review`) of that
+  content, so that it does not count as verified after a restart. A person's certification is
+  never withdrawn by a session.
+- Marks live in the session's memory and end with it; verified contents and trusted commits
+  are stored, so a restart does not make verified files unreviewed.
+- Files git ignores and files outside the repository are tracked only when the session wrote
+  them or a person named them; calu does not scan ignored directories.
+- An edit through a symbolic link, of a file that is not UTF-8 or is over 8 MB, is not verified
+  by the edit check; a review or a person verifies it.
+- calu hashes file contents itself and runs no content filter of the repository. In a
+  repository that converts line endings or applies filters on checkout, the converted files are
+  unreviewed until verified, and commits of them are certified only by a person. The same holds
+  for a commit that adds or moves a submodule.
+
+Switching it on is two steps, because both halves are deliberate: the checker that judges edits
+for honesty alone, and what calu does with the state. calu ships that checker's instructions
+but leaves the definition disabled.
 
     calu checker set honesty --enable       # the checker that judges honesty
-    calu config set honesty.mode track      # record and report, block nothing
-    calu config set honesty.mode enforce    # ... and refuse to run recorded code
+    calu config set honesty.mode track      # keep and show the state, block nothing
+    calu config set honesty.mode enforce    # ... and require a clean state to run or commit
     calu config set honesty.mode off        # the default
 
     calu checker show honesty               # read its instructions
@@ -205,43 +330,41 @@ definition disabled.
     calu honesty edit [--project NAME]      # adapt them to your documentation standard
     calu honesty reset [--project NAME]     # back to the rules calu ships
 
+Before the first session under `enforce`, certify a commit you consider honest (`calu honesty
+trust HEAD`, or `/trust` in the session); otherwise the first command that runs code waits for
+you. After an upgrade, apply the migrations (`calu db migrate` or `calu setup`) before starting
+sessions.
+
 The **honesty rules** say what an API contract must contain and what counts as dishonest. The
-command, edit and changeset checkers read them too, whether or not honesty marks are on. They
-are the setting `honesty.rules` (empty: calu's text), editable so that a project can use its
-own documentation standard -- NumPy docstrings instead of Google style, say -- but not meant to
-change often.
+command, edit and changeset checkers and the honesty reviewer read them, whether or not the
+state is kept. They are the setting `honesty.rules` (empty: calu's text), editable so that a
+project can use its own documentation standard -- NumPy docstrings instead of Google style,
+say -- but not meant to change often.
 
-`track` is how to judge the checker on your own project before trusting it to block anything:
-the marks appear, nothing stops.
+You see the state where you watch the session: `calu run` and `calu attach` print a line that
+starts with `*** code honesty` whenever it changes, the full-screen client has a HONESTY panel
+and the `/honesty` page, the web interface's live view has a "Code honesty" panel with "Trust
+HEAD", "Review now" and a Clear button per mark, and an ACP editor shows the state. The
+judgement needs a capable model; give the honesty checker one of its own with `calu checker set
+honesty --model ...` and the reviewer one with `honesty.reviewer_model`.
 
-**The marks are transient.** Dirty and clean describe the code a session is working on right
-now, so the register lives in the session's memory and is stored nowhere: a session starts
-with an empty register, and its marks end with it. You see them where you watch the session --
-`calu attach` prints every change of the register, the web interface's live view lists the open
-marks, and an ACP editor shows them -- and you clear one there when the checker is wrong:
+### Judging the checkers before you let them block
 
-    /clear-mark 3                      # in calu attach: the override for a wrong mark
-
-or with the Clear button next to the mark in the live view. The judgement needs a capable
-checker model; give this checker one of its own with `calu checker set honesty --model ...`.
-
-### Judging the checker before you let it block
-
-`track` records without blocking, which is what makes the decision measurable instead of a
-guess. Watch a few sessions in `track` mode: a mark the checker **clears itself** is one it
-opened and closed correctly -- the code was dishonest for a few steps and then was not; a mark
-**you** have to clear is a refusal nobody agreed with, which under `enforce` would have stopped
-work for no reason. Mostly self-cleared marks: switch `enforce` on. A steady stream you clear
-by hand: the checker's judgement does not match yours yet -- change its instructions
-(`calu checker edit honesty`) or give it a stronger model. `calu evals` measures a checker
-against the built-in cases, whose honesty cases say which marks a step should and should not
-produce.
+`track` keeps the state without blocking, which is what makes the decision measurable instead
+of a guess. Watch a few sessions in `track` mode: a mark that an edit **closes** is one the
+checker opened and closed correctly -- the code was dishonest for a few steps and then was
+not; a mark **you** have to clear is a refusal nobody agreed with, which under `enforce` would
+have stopped work for no reason. The same holds for the review: read its findings
+(`/honesty-review`, then `/honesty`) and see whether you agree. Mostly marks that close
+themselves: switch `enforce` on. A steady stream you clear by hand: the judgement does not
+match yours yet -- change the instructions (`calu checker edit honesty`, `calu honesty edit`)
+or use a stronger model. `calu evals` measures a checker against the built-in cases, whose
+honesty cases say which marks a step should and should not produce.
 
 A checker may mark a file other than the one the step edits, because an edit to
 `src/parser.py` can be what makes `README.md` wrong, and a command can change many files at
-once -- but that should be the exception. Such a mark is tagged `<not a file of its step>`, so
-you can see which marks are a checker's judgement about code it did not see being changed. It
-blocks like any other mark.
+once -- but that should be the exception. Such a mark can only be closed by an edit of the
+marked file, by a review, or by a person.
 
 ## calu does not replace Claude Code
 
@@ -427,12 +550,12 @@ reaches the checker fenced and labelled as data.
 
 The one thing a checker *changes* is calu's own state, and it does so by **answering**, not by
 calling a tool: its structured answer carries the decision, a reason, a one-line summary and —
-for the honesty checker — the spots it found dishonest and the spots it considers honest again.
-Those mark the honesty register in calu's database; they touch no file. Because the paths in
+for code honesty — the spots it found dishonest and the spots it considers honest again.
+Those become marks in the session's honesty state; they touch no file. Because the paths in
 them are text a model wrote, calu checks each one before it is recorded: a path must be
 relative, must stay inside the project, and must name a file that exists or that the step
 itself is creating. Anything else is dropped and said in the log (PLAN.md D112), so an invented
-path cannot sit in your register or block the commands that run an unrelated file.
+path cannot become a mark.
 
 With that, the worst a broken or compromised checker model can do is answer wrongly, and the
 two directions of a wrong answer are bounded differently:
@@ -481,10 +604,10 @@ it:
   rephrase or probe the system while a human decides. A question Claude asks you through its
   question tool is not an objection and holds nothing.
 - **Code honesty closes the long game.** The supervised model's cheapest route past a reviewer
-  is to make the code *look* like something else than it is. With honesty enforcement on, the
-  honesty checker records which files no longer say what they do, and the deterministic layer
-  refuses to **run** them until the names and the documentation line up again — no model call
-  needed for that refusal. Misdescribed code therefore cannot be executed, let alone built on.
+  is to make the code *look* like something else than it is. With honesty enforcement on,
+  calu tracks which code was verified to say what it does, and a command that executes project
+  code, and a commit, need a state in which every changed file is verified and no file is
+  recorded as dishonest. Misdescribed code is therefore not executed, let alone built on.
 - **Thinking is watched, not trusted.** Claude's thinking and output reach the checkers, so a
   plan stated in the open is material for the next decision rather than something only the
   model knows.

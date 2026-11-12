@@ -54,9 +54,10 @@ Two things can only be had this way, at the step itself:
 - **Code honesty.** A name or a docstring that no longer matches the code is a lie the next
   reader believes, and no review after the fact can enforce it: while a change is in progress
   the code *is* legitimately out of step with its documentation. What can be enforced is that it
-  does not stay that way. calu's honesty checker records which files are out of step and refuses
-  to run them until the names and the documentation line up again — which takes a watcher at
-  every step, holding that record.
+  does not stay that way. calu tracks which code was verified to say what it does — against a
+  commit you certified, edit by edit, and with a review of whatever changed some other way — and
+  refuses to run or commit the code until all of it is verified. That takes a watcher at every
+  step, holding that record.
 
 Claude Code already asks you before it does something risky, and its auto mode can make that
 decision on its own. Other harnesses work the same way. calu replaces none of it: it keeps that
@@ -137,8 +138,8 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
 - **A mid-sized model can supervise a frontier model.** It answers one narrow question about one
   step, with instructions for that question and an answer out of four. What is hard to slip past
   is the arrangement, not the checker's IQ: a violation **freezes** the agent until a human
-  answers, so there is no second attempt to probe with; with code honesty enforced, misdescribed
-  code may not even be *run*; and the instructions the checkers judge by live in a database the
+  answers, so there is no second attempt to probe with; with code honesty enforced, code that
+  is not verified to say what it does may not even be *run*; and the instructions the checkers judge by live in a database the
   session cannot write. Claude's own words reach a checker only as indirect speech, retold by a
   separate narrator — "Claude claimed that the user had already allowed pushing" — so an
   imperative smuggled in through a web page or a dependency's README arrives as a report that
