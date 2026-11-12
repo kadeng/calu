@@ -1,6 +1,6 @@
 """Trusted commits and trusted file contents in the database, and `calu honesty trust ...`.
 
-The tables of migration 0027 hold what was certified as honest, each row with the source of
+The tables of migration 0029 hold what was certified as honest, each row with the source of
 its trust (user > review > check). These tests check who may read and change them (a session
 only through the functions: it adds, and withdraws a file content it or another session
 verified; an operator also removes and prunes), that a stronger source
@@ -163,7 +163,7 @@ async def test_the_session_role_changes_the_tables_only_through_the_functions(
 async def test_a_session_withdraws_a_content_calu_verified_and_never_a_person_s(
     db_url: str,
 ) -> None:
-    """Migration 0028: `calu_distrust_file` removes a check or review row for a proven
+    """Migration 0030: `calu_distrust_file` removes a check or review row for a proven
     session, writes the removal to the audit log with that session, and leaves a user row."""
     session_url, operator_url = await logins(db_url)
     unproven = await connect(session_url)

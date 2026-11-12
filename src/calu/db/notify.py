@@ -49,7 +49,7 @@ ESCALATION_RESOLVED = "escalation_resolved"
 """Channel of escalations resolved by an operator."""
 
 TRUST_CHANGED = "trust_changed"
-"""Channel of changes to the trusted commits and trusted file contents (migration 0027)."""
+"""Channel of changes to the trusted commits and trusted file contents (migration 0029)."""
 
 
 async def listen(conn: psycopg.AsyncConnection, channels: Iterable[str]) -> None:

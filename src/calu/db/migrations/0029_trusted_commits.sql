@@ -41,7 +41,7 @@ LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 COMMENT ON FUNCTION calu_trust_rank(text) IS
-    'Strength of a trust method: user 3, review 2, check 1, anything else NULL (0027).';
+    'Strength of a trust method: user 3, review 2, check 1, anything else NULL (0029).';
 
 CREATE TABLE trusted_commits (
     commit_id     text PRIMARY KEY CHECK (commit_id ~ '^([0-9a-f]{40}|[0-9a-f]{64})$'),
@@ -60,7 +60,7 @@ COMMENT ON TABLE trusted_commits IS
     'Commits certified as honest. method: user (a person, certified_by names the client or OS '
     'user), review or check (a session certified a commit made in a clean state; the weakest '
     'source among the verifications of its changes). session_id: the session that recorded '
-    'it, if one did. recorded_as: the database login (0027).';
+    'it, if one did. recorded_as: the database login (0029).';
 
 CREATE TABLE trusted_files (
     content_sha256  text PRIMARY KEY CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
@@ -78,7 +78,7 @@ CREATE INDEX trusted_files_age ON trusted_files (certified_at) WHERE method <> '
 COMMENT ON TABLE trusted_files IS
     'File contents verified as honest, by SHA-256, one row per content. method: user (a '
     'person), review (an honesty review), check (an edit the step checkers judged). path is a '
-    'hint for people (0027).';
+    'hint for people (0029).';
 
 REVOKE ALL ON trusted_commits, trusted_files FROM PUBLIC;
 GRANT SELECT ON trusted_commits, trusted_files TO calu_session, calu_operator;
@@ -135,7 +135,7 @@ $$;
 
 COMMENT ON FUNCTION calu_certify_commit(text, text, text, text, text) IS
     'Records a commit as trusted, or replaces a weaker certification of it; the only way a '
-    'session adds to trusted_commits (0027).';
+    'session adds to trusted_commits (0029).';
 
 -- Removes a certification. Operators and the owner only. Returns true if a row was removed.
 CREATE FUNCTION calu_untrust_commit(p_commit text) RETURNS boolean
@@ -159,7 +159,7 @@ END
 $$;
 
 COMMENT ON FUNCTION calu_untrust_commit(text) IS
-    'Removes a trusted commit; operators and the owner only (0027).';
+    'Removes a trusted commit; operators and the owner only (0029).';
 
 -- Records a verified file content. Returns true if the hash was recorded or its row was
 -- replaced by this stronger verification; false if a row of the same or a stronger method
@@ -215,7 +215,7 @@ $$;
 
 COMMENT ON FUNCTION calu_trust_file(text, text, text, text, text) IS
     'Records a file content as trusted, or replaces a weaker verification of it; the only way '
-    'a session adds to trusted_files (0027).';
+    'a session adds to trusted_files (0029).';
 
 -- Removes the trusted contents with that hash or that path. Operators and the owner only.
 -- Returns the number of rows removed.
@@ -246,7 +246,7 @@ END
 $$;
 
 COMMENT ON FUNCTION calu_untrust_file(text) IS
-    'Removes trusted file contents by hash or path; operators and the owner only (0027).';
+    'Removes trusted file contents by hash or path; operators and the owner only (0029).';
 
 -- Removes the rows of the methods 'check' and 'review' that are older than p_days days, from
 -- both tables; rows of the method 'user' are never removed. Operators and the owner only.
@@ -297,7 +297,7 @@ $$;
 
 COMMENT ON FUNCTION calu_prune_trust(integer) IS
     'Removes check and review rows older than a number of days from trusted_commits and '
-    'trusted_files, never user rows; operators and the owner only (0027).';
+    'trusted_files, never user rows; operators and the owner only (0029).';
 
 REVOKE ALL ON FUNCTION calu_trust_rank(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION calu_certify_commit(text, text, text, text, text) FROM PUBLIC;

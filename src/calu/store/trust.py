@@ -1,4 +1,4 @@
-"""Trusted commits and trusted file contents in the database (migrations 0027, 0028).
+"""Trusted commits and trusted file contents in the database (migrations 0029, 0030).
 
     trusted_commits   commit id, tree id, when, by whom, source (user | review | check), note
     trusted_files     SHA-256 of a file content, a path as a hint, when, by whom, source, note
@@ -294,7 +294,7 @@ async def trust_file(
 async def distrust_file(db: Db, content_sha256: str, by: str) -> bool:
     """Withdraw the stored trust of a file content a session found dishonest.
 
-    Calls `calu_distrust_file` (migration 0028), which removes the row only if its method is
+    Calls `calu_distrust_file` (migration 0030), which removes the row only if its method is
     "check" or "review". A row a person recorded stays.
 
     Args:

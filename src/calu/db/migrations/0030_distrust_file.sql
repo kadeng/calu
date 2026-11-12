@@ -1,7 +1,7 @@
 -- calu schema, version 28: a session withdraws the stored trust of a file content.
 --
 -- A session stores the file contents its step checkers and its honesty review verified
--- (`trusted_files`, methods 'check' and 'review'; migration 0027). The marks that say which
+-- (`trusted_files`, methods 'check' and 'review'; migration 0029). The marks that say which
 -- code a checker found dishonest live in the session's memory only. When a checker or a review
 -- finds a content dishonest that was stored as verified, the stored row has to go, or the
 -- content would count as verified again after a restart.
@@ -9,7 +9,7 @@
 --     who                        may withdraw
 --     calu_session (a session)   a row of the method 'check' or 'review', through
 --                                calu_distrust_file; never a row of the method 'user'
---     calu_operator, the owner   any row, through calu_untrust_file (0027)
+--     calu_operator, the owner   any row, through calu_untrust_file (0029)
 --
 -- The caller must have proven which session it is (migration 0025). The removal is written to
 -- `audit_log` with that session and announced on the channel `trust_changed`.
@@ -45,7 +45,7 @@ $$;
 
 COMMENT ON FUNCTION calu_distrust_file(text, text) IS
     'Withdraws a check or review row of trusted_files for a session whose checker or review '
-    'found that content dishonest; never a user row (0028).';
+    'found that content dishonest; never a user row (0030).';
 
 REVOKE ALL ON FUNCTION calu_distrust_file(text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION calu_distrust_file(text, text) TO calu_session;

@@ -1,7 +1,7 @@
 """Code honesty of a session on the real database: certifying by hand and after a commit.
 
 `tests/unit/test_honesty_session.py` runs the same flows on the in-memory store. This file
-checks that the session's writes pass the database functions of migration 0027 with the rights
+checks that the session's writes pass the database functions of migration 0029 with the rights
 of the session login: a person's `/trust`, the stored verification of a checked edit, and the
 certification of a commit made in a clean state.
 """
