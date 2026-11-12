@@ -18,34 +18,47 @@ snapshot is the option for that), and more than the *last* change of a file, bec
 write overwrites the evidence of an earlier one — the later write is attributed in its place.
 calu watches its own clock for exactly this reason (`calu.clock`).
 
-Pydantic AI supplies the ground they stand on (`LocalWorkspace`, `pydantic_ai.workspaces`): the
-run gets a workspace pinned to one directory, wrapped read-only, so no tool can write, run a
-command or reach a path outside it even if the code below is wrong. calu adds what the library
-has no opinion about:
+The checker runs inside the calu process, outside the sandbox that confines the agent under
+review, and the agent can ask it (through a file it wrote) to read something. So every bound is
+enforced here, by calu, and none is delegated to a library (Pydantic AI's `LocalWorkspace`
+confines nothing by its own account, and is no longer used):
 
-- the read deny lists (`Rules.read_denied`): a path the user denied is refused, even inside the
-  workspace (`.env`, keys, calu's own configuration);
-- bounds on every answer, so one tool call cannot flood the checker's context;
-- the framing: a file's content is data the agent may have written, never an instruction. The
-  workspace is created with `authority="none"` for the same reason.
+- **confinement** (`CodeTools.confine`): a tool reads a file only if the path is relative, has
+  no `..` part, and its target **after resolving every symbolic link** is inside the resolved
+  project directory. The file is opened without following a final link and the opened file's
+  real location is checked again, so swapping a path for a link between check and open gains
+  nothing. The search tools never walk into a directory link;
+- the read deny lists (`Rules.read_denied`), applied to the path as written **and** to the
+  resolved one, so a link named `notes.txt` to `.env` is refused like `.env` itself; calu's own
+  configuration directory is refused wherever it is;
+- bounds on every input and answer: a file larger than `MAX_FILE_BYTES` is not read, a search
+  reads at most `MAX_GREP_BYTES`, and the regular expression of `grep_files` is compiled and
+  matched in a child process that is killed after `GREP_TIMEOUT_S`. Python's `re` backtracks
+  and holds the interpreter lock while it matches, so a slow pattern in this process (even in
+  a thread) would stop calu's event loop: no heartbeat, no answers to escalations;
+- the framing: a file's content is data the agent may have written, never an instruction.
 
 The checkers get no other tool: no writes, no commands, no network. Tools that tell a checker
 more about the code — a language server, for example — belong here as well (PLAN.md D25).
 """
 
+import fnmatch
+import json
 import logging
 import os
-import re
-from collections.abc import AsyncIterator, Callable, Sequence
+import stat
+import sys
+import time
+from collections import deque
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+import anyio
 import anyio.to_thread
-from pydantic_ai import RunContext
 from pydantic_ai.toolsets import FunctionToolset
-from pydantic_ai.workspaces import WorkspaceError
 
 from calu.checkers.rules import Rules
 
@@ -65,6 +78,47 @@ MAX_CHANGED = 200
 """Changed paths one `changed_files` call reports at most."""
 MAX_STEPS = 100
 """Steps one `step_times` call reports at most."""
+MAX_FILE_BYTES = 2_000_000
+"""Size above which a file is not read at all (a log, a data file, a bundle)."""
+MAX_GREP_BYTES = 20_000_000
+"""Bytes of file content one `grep_files` call reads at most, over all files."""
+MAX_GREP_LINE_CHARS = 2_000
+"""Characters of a line `grep_files` matches against; the rest of a longer line is not searched."""
+MAX_PATTERN_CHARS = 1_000
+"""Longest glob or regular expression a tool accepts."""
+GREP_TIMEOUT_S = 10.0
+"""Wall-clock limit of the child process that matches a `grep_files` pattern; then it is killed."""
+WALK_BUDGET_S = 10.0
+"""Wall-clock limit of the directory walk and file reads of one search call."""
+
+GREP_CHILD = r"""
+import json, re, sys
+records = sys.stdin.buffer.read().split(b"\n")
+head = json.loads(records[0])
+try:
+    expression = re.compile(head["pattern"])
+except Exception as exc:
+    print(json.dumps({"error": str(exc)}))
+    sys.exit(0)
+found = []
+for record in records[1:]:
+    if not record or len(found) >= head["limit"]:
+        continue
+    index, text = json.loads(record)
+    for number, line in enumerate(text.splitlines(), start=1):
+        if expression.search(line[: head["max_line"]]):
+            found.append([index, number, line.strip()[:200]])
+            if len(found) >= head["limit"]:
+                break
+print(json.dumps({"matches": found}))
+"""
+"""The program of the child process that matches a `grep_files` pattern.
+
+Input (standard input): one JSON object `{"pattern", "limit", "max_line"}` on the first line,
+then one JSON array `[file index, file text]` per line. Output: `{"error": message}` if the
+pattern does not compile, else `{"matches": [[file index, line number, line text], ...]}`. It
+opens no file: calu reads the files (confined) and passes their text.
+"""
 
 SKIP_DIRS = frozenset(
     {
@@ -128,13 +182,17 @@ class ReadRefused(Exception):
     """The file may not be read; the message is returned to the checker model."""
 
 
+class TooLarge(ReadRefused):
+    """The file is larger than `MAX_FILE_BYTES` (a search counts these and says so)."""
+
+
 @dataclass
 class CodeTools:
     """The read-only tools of one checker, bounded by its workspace and its rules.
 
-    `rules` is read at every call, so a changed read deny list takes effect at once. The
-    workspace comes from the run (`ctx.workspace`), which the `LocalWorkspace` capability pins
-    to the project directory and wraps read-only.
+    `rules` is read at every call, so a changed read deny list takes effect at once. Every file
+    access goes through `confine` and `read_lines`, which keep it inside `workspace` after resolving
+    symbolic links (module docstring).
     """
 
     workspace: Path
@@ -151,9 +209,9 @@ class CodeTools:
             match the contravariant parameter of `pydantic_ai.capabilities.Toolset`.
         """
         toolset: FunctionToolset[Any] = FunctionToolset()
-        toolset.add_function(self.read_file, name="read_file", takes_ctx=True)
-        toolset.add_function(self.find_files, name="find_files", takes_ctx=True)
-        toolset.add_function(self.grep_files, name="grep_files", takes_ctx=True)
+        toolset.add_function(self.read_file, name="read_file", takes_ctx=False)
+        toolset.add_function(self.find_files, name="find_files", takes_ctx=False)
+        toolset.add_function(self.grep_files, name="grep_files", takes_ctx=False)
         if self.times is not None:
             toolset.add_function(self.step_times, name="step_times", takes_ctx=False)
             toolset.add_function(self.changed_files, name="changed_files", takes_ctx=False)
@@ -161,17 +219,15 @@ class CodeTools:
 
     # ------------------------------------------------------------------ the tools
 
-    async def read_file(
-        self, ctx: RunContext[None], path: str, start_line: int = 1, end_line: int = 0
-    ) -> str:
+    async def read_file(self, path: str, start_line: int = 1, end_line: int = 0) -> str:
         """Read a text file of the project, or a range of its lines.
 
         Use this when the step alone does not say enough: the rest of a function that is being
         changed, the module around it, or the script a command runs.
 
         Args:
-            ctx: The run context (not part of the tool's schema).
-            path: Path of the file relative to the project root, e.g. "src/app.py".
+            path: Path of the file relative to the project root, e.g. "src/app.py". Absolute
+                paths, ".." and links that lead out of the project are refused.
             start_line: First line to return (1-based).
             end_line: Last line to return; 0 means "as much as fits".
 
@@ -179,9 +235,9 @@ class CodeTools:
             The numbered lines of the file, or a message saying why it cannot be read.
         """
         try:
-            lines = await self._lines(ctx, path)
+            lines = await anyio.to_thread.run_sync(self.read_lines, path)
         except ReadRefused as exc:
-            return f"cannot read {path}: {exc}"
+            return f"cannot read {_cut_line(path)}: {exc}"
         first = max(start_line, 1)
         last = len(lines) if end_line <= 0 else min(end_line, len(lines))
         shown = lines[first - 1 : last][:MAX_LINES]
@@ -194,32 +250,25 @@ class CodeTools:
         )
         return f"{DATA_NOTE}\n\n{path}:\n{body}{more}"
 
-    async def find_files(
-        self, ctx: RunContext[None], pattern: str = "**/*", limit: int = 50
-    ) -> str:
+    async def find_files(self, pattern: str = "**/*", limit: int = 50) -> str:
         """List the project files whose path matches a glob.
 
         Args:
-            ctx: The run context (not part of the tool's schema).
             pattern: A glob relative to the project root, e.g. "src/**/*.py" or "**/test_*.py".
             limit: Maximum number of paths to return.
 
         Returns:
             One path per line, or a message saying that nothing matched.
         """
-        found: list[str] = []
-        async for relative in self._walk(ctx):
-            if _matches(relative, pattern):
-                found.append(relative)
-                if len(found) >= min(limit, MAX_PATHS):
-                    break
+        if len(pattern) > MAX_PATTERN_CHARS:
+            return f"the pattern is longer than {MAX_PATTERN_CHARS} characters"
+        found = await anyio.to_thread.run_sync(self._find, pattern, max(1, min(limit, MAX_PATHS)))
         if not found:
             return f"no project file matches {pattern!r}"
         return "\n".join(found)
 
     async def grep_files(
         self,
-        ctx: RunContext[None],
         pattern: str,
         path_glob: str = "**/*",
         limit: int = 30,
@@ -227,37 +276,52 @@ class CodeTools:
         """Search the project files for lines matching a regular expression.
 
         Use it to see who calls a function, where a name is used, or whether a rule is already
-        broken elsewhere.
+        broken elsewhere. Files larger than 2 MB are skipped, and only the first 2,000
+        characters of a line are searched.
 
         Args:
-            ctx: The run context (not part of the tool's schema).
-            pattern: A Python regular expression, matched per line with `re.search`.
+            pattern: A Python regular expression, matched per line with `re.search`. Keep it
+                simple: a pattern that takes longer than a few seconds is stopped.
             path_glob: Only files whose path matches this glob, e.g. "src/**/*.py".
             limit: Maximum number of matching lines to return.
 
         Returns:
-            "path:line: text" per match, or a message saying that nothing matched.
+            "path:line: text" per match, or a message saying that nothing matched or why the
+            search could not be done.
         """
+        if len(pattern) > MAX_PATTERN_CHARS or len(path_glob) > MAX_PATTERN_CHARS:
+            return f"the pattern is longer than {MAX_PATTERN_CHARS} characters"
+        wanted = max(1, min(limit, MAX_MATCHES))
+        names, payload, notes = await anyio.to_thread.run_sync(
+            self._collect, pattern, path_glob, wanted
+        )
         try:
-            expression = re.compile(pattern)
-        except re.error as exc:
-            return f"not a valid regular expression: {exc}"
-        matches: list[str] = []
-        async for relative in self._walk(ctx):
-            if not _matches(relative, path_glob):
-                continue
-            try:
-                lines = await self._lines(ctx, relative)
-            except ReadRefused:
-                continue
-            for number, line in enumerate(lines, start=1):
-                if expression.search(line):
-                    matches.append(f"{relative}:{number}: {line.strip()[:200]}")
-                    if len(matches) >= min(limit, MAX_MATCHES):
-                        return f"{DATA_NOTE}\n\n" + _cut("\n".join(matches))
+            with anyio.fail_after(GREP_TIMEOUT_S):
+                # The pattern is compiled and matched in a child process: `re` can backtrack
+                # for hours and holds the interpreter lock meanwhile. `run_process` kills the
+                # child when the deadline (or the checker's own) cancels this call.
+                done = await anyio.run_process(
+                    [sys.executable, "-I", "-S", "-c", GREP_CHILD], input=payload, check=False
+                )
+            answer = json.loads(done.stdout.decode("utf-8"))
+        except TimeoutError:
+            return (
+                f"the search was stopped after {GREP_TIMEOUT_S:g} s: the regular expression "
+                "takes too long on these files. Use a simpler pattern (no nested repetition) "
+                "or a narrower path_glob."
+            )
+        except (OSError, ValueError, anyio.BrokenResourceError) as exc:
+            log.warning("grep_files: the matching process failed: %s", exc)
+            return f"the search could not be run ({type(exc).__name__})"
+        if "error" in answer:
+            return f"not a valid regular expression: {answer['error']}"
+        matches = [
+            f"{names[index]}:{number}: {text}" for index, number, text in answer.get("matches", [])
+        ]
+        tail = "".join(f"\n[{note}]" for note in notes)
         if not matches:
-            return f"no line matches {pattern!r} in files matching {path_glob!r}"
-        return f"{DATA_NOTE}\n\n" + _cut("\n".join(matches))
+            return f"no line matches {pattern!r} in files matching {path_glob!r}{tail}"
+        return f"{DATA_NOTE}\n\n" + _cut("\n".join(matches)) + tail
 
     async def step_times(self, limit: int = 20) -> str:
         """Report when the recent tool calls of this session ran.
@@ -339,73 +403,274 @@ class CodeTools:
 
     # ------------------------------------------------------------------ helpers
 
-    async def _lines(self, ctx: RunContext[None], path: str) -> list[str]:
-        """Return the lines of a project file.
+    def confine(self, path: str) -> Path:
+        """Check that a path names something a checker may read, and resolve it.
+
+        This is the one place that decides what the checker's tools reach. Reads the file
+        system (link targets) and the rules; opens nothing.
 
         Args:
-            ctx: The run context, for its workspace.
+            path: A path relative to the project root, as the checker model gave it or as a
+                directory walk produced it.
+
+        Returns:
+            The resolved absolute path (no symbolic link left in it), which is the project
+            directory or inside it.
+
+        Raises:
+            ReadRefused: If the path is empty, holds a NUL character, is absolute, has a ".."
+                part, resolves (through symbolic links) to a place outside the project
+                directory or inside calu's own configuration directory, or is covered by a read
+                deny rule in its written or its resolved form.
+
+        Example:
+            In the project `/w` with the link `/w/cfg -> /home/u/.config/calu`:
+            `confine("src/app.py")` is `/w/src/app.py`; `confine("/etc/passwd")`,
+            `confine("../x")` and `confine("cfg/credentials.json")` raise `ReadRefused`.
+        """
+        if not path.strip():
+            raise ReadRefused("no path given")
+        if "\x00" in path:
+            raise ReadRefused("the path holds a NUL character")
+        written = PurePosixPath(path)
+        if written.is_absolute():
+            raise ReadRefused(
+                "only paths relative to the project root can be read; nothing outside the "
+                "project is readable"
+            )
+        if ".." in written.parts:
+            raise ReadRefused("a path with '..' is not accepted; nothing outside the project")
+        root = Path(os.path.realpath(self.workspace))
+        real = Path(os.path.realpath(root / path))
+        self._check_resolved(root, real)
+        if self.rules is not None and self.rules.read_denied(self.workspace / written):
+            raise ReadRefused("the user's read deny list covers this path")
+        return real
+
+    def _check_resolved(self, root: Path, real: Path) -> None:
+        """Check a resolved path against the project directory, calu's own files and the rules.
+
+        Args:
+            root: The resolved project directory.
+            real: A resolved absolute path (from `os.path.realpath`, or the location of an
+                opened file).
+
+        Raises:
+            ReadRefused: If `real` is outside `root`, inside calu's configuration directory, or
+                covered by a read deny rule.
+        """
+        if real != root and root not in real.parents:
+            raise ReadRefused(
+                "it leads outside the project directory (a symbolic link); nothing outside "
+                "the project is readable"
+            )
+        own = _calu_config_dir()
+        if real == own or own in real.parents:
+            raise ReadRefused("calu's own configuration is never readable")
+        if self.rules is not None and (
+            # Once as the rules name project files (relative to the workspace as configured,
+            # which may itself be reached through a link), once as the absolute location.
+            self.rules.read_denied(self.workspace / real.relative_to(root))
+            or self.rules.read_denied(real)
+        ):
+            raise ReadRefused("the user's read deny list covers this path (through a link)")
+
+    def read_lines(self, path: str) -> list[str]:
+        """Return the lines of a project file. Blocking: call it in a worker thread.
+
+        The file is opened by its resolved path without following a final symbolic link and
+        without blocking on a FIFO; then the location of the **opened** file is checked again
+        (`/proc/self/fd`), so replacing a path component by a link between `confine` and the
+        open does not get a file outside the bounds read.
+
+        Args:
             path: Path relative to the project root.
 
         Returns:
             The file's lines without their line ends.
 
         Raises:
-            ReadRefused: If the path is empty, read-denied by the rules, outside the workspace,
-                not a file, or not UTF-8 text.
+            TooLarge: If the file is larger than `MAX_FILE_BYTES` (a `ReadRefused`).
+            ReadRefused: If `confine` refuses the path, or the target is not a regular file,
+                cannot be opened, cannot be located after opening (no `/proc`), or is not UTF-8
+                text.
         """
-        if not path.strip():
-            raise ReadRefused("no path given")
-        if self.rules is not None and self.rules.read_denied(self.workspace / path):
-            raise ReadRefused("the user's read deny list covers this path")
+        real = self.confine(path)
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
         try:
-            text = await ctx.workspace.read_text(path)
-        except WorkspaceError as exc:
-            raise ReadRefused(f"{type(exc).__name__}: {exc}") from exc
-        except (OSError, UnicodeDecodeError) as exc:
-            raise ReadRefused(f"not readable as text ({type(exc).__name__})") from exc
+            descriptor = os.open(real, flags)
+        except OSError as exc:
+            raise ReadRefused(f"not readable ({type(exc).__name__})") from exc
+        try:
+            status = os.fstat(descriptor)
+            if not stat.S_ISREG(status.st_mode):
+                raise ReadRefused("not a regular file")
+            if status.st_size > MAX_FILE_BYTES:
+                raise TooLarge(
+                    f"the file has {status.st_size} bytes; files over {MAX_FILE_BYTES} bytes "
+                    "are not read"
+                )
+            try:
+                opened = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+            except OSError as exc:
+                raise ReadRefused("the opened file could not be located") from exc
+            if opened != real:
+                self._check_resolved(Path(os.path.realpath(self.workspace)), opened)
+            data = b""
+            while len(data) <= MAX_FILE_BYTES:
+                chunk = os.read(descriptor, MAX_FILE_BYTES + 1 - len(data))
+                if not chunk:
+                    break
+                data += chunk
+        except OSError as exc:
+            raise ReadRefused(f"not readable ({type(exc).__name__})") from exc
+        finally:
+            os.close(descriptor)
+        if len(data) > MAX_FILE_BYTES:
+            raise TooLarge(f"the file grew over {MAX_FILE_BYTES} bytes while it was read")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ReadRefused("not readable as text (not UTF-8)") from exc
         if "\x00" in text:
             raise ReadRefused("not text (it holds NUL bytes)")
         return text.splitlines()
 
-    async def _walk(self, ctx: RunContext[None]) -> AsyncIterator[str]:
-        """Yield the project-relative paths of the files of the workspace.
+    def _walk(self) -> Iterator[str]:
+        """Yield the project-relative paths of the files a checker may read.
 
-        Directories of `SKIP_DIRS` and paths the read deny lists cover are left out, and at most
-        `MAX_SCAN` files are visited, so one call cannot walk a huge tree.
-
-        Args:
-            ctx: The run context, for its workspace.
+        Blocking (directory listings): iterate it in a worker thread. Directories of
+        `SKIP_DIRS` are left out. A symbolic link to a directory is never walked into; a link
+        to a file is yielded only if `confine` accepts it, like every other entry, so nothing
+        outside the project and nothing the read deny lists cover is yielded. At most
+        `MAX_SCAN` entries are visited, so one call cannot walk a huge tree.
 
         Yields:
-            Each file's path relative to the project root, with "/" separators.
+            Each regular file's path relative to the project root, with "/" separators,
+            directory by directory (breadth first), sorted by name within one.
         """
+        root = os.path.realpath(self.workspace)
         seen = 0
-        pending = [""]
+        pending = deque([""])
         while pending:
-            directory = pending.pop(0)
+            directory = pending.popleft()
             try:
-                entries = list(await ctx.workspace.list_dir(directory or "."))
-            except WorkspaceError, OSError:
+                with os.scandir(os.path.join(root, directory)) as listing:
+                    entries = sorted(listing, key=lambda entry: entry.name)
+            except OSError:
                 continue
-            for entry in sorted(entries, key=lambda e: e.name):
+            for entry in entries:
                 relative = f"{directory}/{entry.name}" if directory else entry.name
-                if entry.is_dir:
-                    if entry.name not in SKIP_DIRS:
-                        pending.append(relative)
-                    continue
-                seen += 1
-                if seen > MAX_SCAN:
-                    return
-                if self.rules is not None and self.rules.read_denied(self.workspace / relative):
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in SKIP_DIRS:
+                            pending.append(relative)
+                        continue
+                    seen += 1
+                    if seen > MAX_SCAN:
+                        return
+                    if not self.confine(relative).is_file():
+                        continue  # a link to a directory, a FIFO, a socket, a dangling link
+                except OSError, ReadRefused:
                     continue
                 yield relative
+
+    def _find(self, pattern: str, limit: int) -> list[str]:
+        """Collect the paths `find_files` returns. Blocking: call it in a worker thread.
+
+        Args:
+            pattern: The glob the paths must match.
+            limit: Maximum number of paths.
+
+        Returns:
+            Up to `limit` matching paths, in walk order; fewer if the walk took longer than
+            `WALK_BUDGET_S`.
+        """
+        deadline = time.monotonic() + WALK_BUDGET_S
+        found: list[str] = []
+        for relative in self._walk():
+            if len(found) >= limit or time.monotonic() > deadline:
+                break
+            if _matches(relative, pattern):
+                found.append(relative)
+        return found
+
+    def _collect(
+        self, pattern: str, path_glob: str, limit: int
+    ) -> tuple[list[str], bytes, list[str]]:
+        """Read the files a `grep_files` call searches and build the child's input.
+
+        Blocking: call it in a worker thread. It does not compile or run the pattern.
+
+        Args:
+            pattern: The regular expression, passed on to the child unread.
+            path_glob: Only files whose path matches this glob are read.
+            limit: Maximum number of matching lines the child returns.
+
+        Returns:
+            `(names, payload, notes)`: the paths of the files read (the child refers to them by
+            index), the bytes for the child's standard input (`GREP_CHILD`), and notes for the
+            checker about what was left out (files over `MAX_FILE_BYTES`, the `MAX_GREP_BYTES`
+            or `WALK_BUDGET_S` limit reached). Files `read_lines` refuses are left out silently:
+            they are binary, denied or gone.
+        """
+        deadline = time.monotonic() + WALK_BUDGET_S
+        head = {"pattern": pattern, "limit": limit, "max_line": MAX_GREP_LINE_CHARS}
+        records = [json.dumps(head).encode("utf-8")]
+        names: list[str] = []
+        notes: list[str] = []
+        total = large = 0
+        for relative in self._walk():
+            if not _matches(relative, path_glob):
+                continue
+            if time.monotonic() > deadline:
+                notes.append(f"the search stopped reading files after {WALK_BUDGET_S:g} s")
+                break
+            try:
+                lines = self.read_lines(relative)
+            except TooLarge:
+                large += 1
+                continue
+            except ReadRefused:
+                continue
+            text = "\n".join(lines)
+            total += len(text)
+            if total > MAX_GREP_BYTES:
+                notes.append(
+                    f"the search stopped after {len(names)} files: more than "
+                    f"{MAX_GREP_BYTES} characters to search; narrow path_glob"
+                )
+                break
+            records.append(json.dumps([len(names), text]).encode("utf-8"))
+            names.append(relative)
+        if large:
+            notes.append(f"{large} files over {MAX_FILE_BYTES} bytes were not searched")
+        return names, b"\n".join(records), notes
+
+
+def _calu_config_dir() -> Path:
+    """Return calu's own configuration directory, resolved.
+
+    Returns:
+        `$XDG_CONFIG_HOME/calu` or `~/.config/calu` with symbolic links resolved: where the
+        credential store and the checker API keys are (`calu.config.user_env_file`).
+    """
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(os.path.realpath(Path(base) / "calu"))
 
 
 def _matches(relative: str, pattern: str) -> bool:
     """Tell whether a project-relative path matches a glob.
 
     A pattern without a slash matches at any depth, so `"*.py"` finds `src/app.py` as well:
-    a checker that asks for the Python files means all of them.
+    a checker that asks for the Python files means all of them. A segment `**` stands for any
+    number of directories (also none); within a segment `*`, `?` and `[...]` match as in
+    `fnmatch`, case-sensitively and including a leading dot.
+
+    The match is done segment by segment with `fnmatch` (whose translation does not backtrack
+    across `*`) and a table over the segments, so its cost is bounded by
+    `len(path segments) * len(pattern segments)` matches however the checker model wrote the
+    pattern.
 
     Args:
         relative: The path relative to the project root, with "/" separators.
@@ -413,14 +678,30 @@ def _matches(relative: str, pattern: str) -> bool:
 
     Returns:
         True if the path matches the pattern, or the pattern at any depth.
+
+    Example:
+        `_matches("src/a/b.py", "src/**/*.py")` and `_matches("src/b.py", "src/**/*.py")` are
+        True; `_matches("src/b.py", "*.md")` is False.
     """
-    path = PurePosixPath(relative)
-    try:
-        if path.full_match(pattern):
-            return True
-        return "/" not in pattern and path.full_match(f"**/{pattern}")
-    except ValueError:
+    wanted = [segment for segment in pattern.split("/") if segment not in ("", ".")]
+    if not wanted:
         return False
+    if "/" not in pattern:
+        wanted = ["**", *wanted]
+    names = relative.split("/")
+    # reachable[j] after i names: the first i names can match the first j pattern segments.
+    reachable = [True] + [False] * len(wanted)
+    for j, segment in enumerate(wanted, start=1):
+        reachable[j] = reachable[j - 1] and segment == "**"
+    for name in names:
+        following = [False] * (len(wanted) + 1)
+        for j, segment in enumerate(wanted, start=1):
+            if segment == "**":
+                following[j] = following[j - 1] or reachable[j]
+            else:
+                following[j] = reachable[j - 1] and fnmatch.fnmatchcase(name, segment)
+        reachable = following
+    return reachable[-1]
 
 
 def _cut(text: str, limit: int = MAX_CHARS) -> str:
@@ -527,11 +808,10 @@ def _scan_changed(
 ) -> list[tuple[str, float, bool]]:
     """Walk the project directory and collect the paths whose ctime is newer than `since`.
 
-    This tool reads file **metadata**, which the workspace API of Pydantic AI does not expose,
-    so it walks the directory itself instead of going through `ctx.workspace`. It therefore
-    keeps the same bounds by hand: it stays inside `root`, does not follow symbolic links, skips
-    `SKIP_DIRS` and everything the read deny lists cover, looks at no more than `MAX_SCAN`
-    entries, and never opens a file.
+    This tool reads file **metadata** only. It stays inside `root`, does not follow symbolic
+    links (a link is reported as itself, with its own change time), skips `SKIP_DIRS` and
+    everything the read deny lists cover, looks at no more than `MAX_SCAN` entries, and never
+    opens a file.
 
     Runs synchronously in a worker thread (one `os.stat` per entry would otherwise block the
     event loop).

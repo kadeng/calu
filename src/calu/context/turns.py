@@ -4,13 +4,28 @@ A turn starts with a user input to the main agent and ends with Claude's turn re
 the user inputs verbatim, a one-line record per tool call (with the checker's step summary when
 the call was checked, and the narration of Claude's thinking and text before the call) and
 Claude's final answer (narrated if narration is on; see `calu.context.narrator`).
+
+The rendered turn is the record a checker trusts: a "**User:**" block is the user speaking. So
+only calu writes its structure. Every text that the agent under review chose or influenced (a
+tool name, a label built from tool input, a summary or comment written by a checker model, a
+narration) is put on one line after a label of calu's, without line breaks and without `**`
+(`calu.checkers.render.inline`); user inputs and answers are indented on every line. A tool
+input that holds "## Turn 4" and "**User:**" lines therefore cannot add a turn or a user input.
 """
 
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
+from calu.checkers.render import inline, safe_name
+
 MAX_ANSWER_CHARS = 1_500
+MAX_SUMMARY_CHARS = 4_000
+"""Characters of a step summary shown in a turn (a checker's summary has up to about 400 words)."""
+MAX_COMMENT_CHARS = 1_500
+"""Characters of a checker comment shown in a turn."""
+MAX_NARRATION_CHARS = 6_000
+"""Characters of one narration shown in a turn (the narrator's input has the same bound)."""
 
 
 class StepRecord(BaseModel):
@@ -57,7 +72,9 @@ class TurnRecord(BaseModel):
 
         The result is valid CommonMark: labels are bold, blocks are separated by blank lines,
         and user inputs and answers are indented code blocks, so Markdown inside them (e.g. a
-        "## ..." line typed by the user) stays literal text and cannot add sections. Example:
+        "## ..." line typed by the user) stays literal text and cannot add sections. Step lines
+        hold their texts on one line without `**` (module docstring), so the only lines that
+        are exactly "**User:**" are the ones calu wrote, one per user input. Example:
 
             ## Turn 3
 
@@ -100,13 +117,19 @@ class TurnRecord(BaseModel):
         if self.steps:
             parts.append("\n\n".join([*blocks, "**Steps:**\n\n"]))
             for i, s in enumerate(self.steps):
-                who = f" (subagent {s.agent_id})" if s.agent_id else ""
+                who = f" (subagent {safe_name(s.agent_id)})" if s.agent_id else ""
                 lines: list[str] = []
                 if s.narration:
-                    lines.append(f"- **Narration{who}:** {_one_line(s.narration)}")
-                decision = f", {s.decision}" if s.decision else ""
-                comment = f" (**checker comment sent:** {s.comment})" if s.comment else ""
-                lines.append(f"- [{s.tool_name}{decision}]{who} {s.summary}{comment}")
+                    narration = inline(s.narration, MAX_NARRATION_CHARS)
+                    lines.append(f"- **Narration{who}:** {narration}")
+                decision = f", {safe_name(s.decision)}" if s.decision else ""
+                comment = (
+                    f" (**checker comment sent:** {inline(s.comment, MAX_COMMENT_CHARS)})"
+                    if s.comment
+                    else ""
+                )
+                summary = inline(s.summary, MAX_SUMMARY_CHARS)
+                lines.append(f"- [{safe_name(s.tool_name)}{decision}]{who} {summary}{comment}")
                 parts.append(("\n" if i else "") + "\n".join(lines))
         else:
             parts.append("\n\n".join(blocks))
@@ -140,7 +163,11 @@ def _indent(text: str) -> str:
 
 
 def label_for_unchecked(tool_name: str, tool_input: dict) -> str:
-    """Return a short label for a tool call that was not checked, e.g. "Read src/a.py".
+    r"""Return a short label for a tool call that was not checked, e.g. "Read src/a.py".
+
+    The label becomes the step's summary in the turn record and in the database, and no
+    checker has read the call. It is therefore always one line without `**`
+    (`calu.checkers.render.inline`), whatever the tool input holds.
 
     Args:
         tool_name: Name of the tool.
@@ -149,21 +176,13 @@ def label_for_unchecked(tool_name: str, tool_input: dict) -> str:
 
     Returns:
         "<tool_name> <value>", or only the tool name if no such key has a value.
+
+    Example:
+        `label_for_unchecked("ToolSearch", {"query": "x\n\n## Turn 4\n\n**User:**"})` is
+        `"ToolSearch x ## Turn 4 *User:*"`.
     """
     for key in ("file_path", "notebook_path", "path", "pattern", "url", "query", "description"):
         value = tool_input.get(key)
         if value:
-            return f"{tool_name} {str(value)[:200]}"
-    return tool_name
-
-
-def _one_line(text: str) -> str:
-    """Join the lines of `text` with spaces.
-
-    Args:
-        text: The text.
-
-    Returns:
-        The text on one line, runs of whitespace collapsed.
-    """
-    return " ".join(text.split())
+            return f"{safe_name(tool_name)} {inline(str(value), 200)}"
+    return safe_name(tool_name)

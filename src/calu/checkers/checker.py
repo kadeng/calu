@@ -20,26 +20,84 @@ maximum. Providers with automatic prefix caching (Mistral, OpenAI) use the stabl
 by a per-checker routing key (`calu.models.cache_settings`); hybrid-SSM models such as
 Nemotron on Fireworks only reuse a cache for identical prompts. The context comes from the
 ContextBuilder (`calu.context`).
+
+A step that is not shown whole cannot be approved. calu cuts a command, diff or input that is
+longer than `calu.checkers.render.MAX_CHARS`, and the commit diff and the write-set patch have
+limits of their own. The model still judges the visible part (its DENY and ESCALATE stand, and
+its summary is kept), but `Checker.run` turns its PASS or ALLOW into ESCALATE (`escalate_if_cut`):
+no model has seen the rest, so a human decides.
 """
 
 import logging
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
-from pydantic_ai.capabilities import Caching, LocalWorkspace, Toolset
+from pydantic_ai.capabilities import Caching, Toolset
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
 from calu.checkers.model import CheckDecision, CheckerEffort, Decision, Step
-from calu.checkers.render import render_step
+from calu.checkers.render import render_step_cut
 from calu.checkers.rules import Rules
 from calu.checkers.tools import CodeTools, StepTimes
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
 
 log = logging.getLogger(__name__)
+
+EXTRA_CUT = re.compile(
+    r"^\[\.\.\. the diff (is cut here; the summary above is whole|was cut)\]$", re.MULTILINE
+)
+"""The lines with which calu marks a diff it cut before handing it to a checker as `extra`:
+the commit diff (`calu.checkers.changeset.changeset`) and the write-set patch
+(`calu.changes`). Every line of a git diff starts with a space, "+", "-", "@", "\\" or a
+keyword, never with "[", so a line that **is** one of these notes was written by calu; a diff
+that merely contains the words does not match. A test pins the two spellings to their sources.
+"""
+
+
+class CheckPrompt(list[str | CachePoint]):
+    """The user prompt parts of one check, with what the checker cannot see of the step."""
+
+    unseen_chars: int = 0
+    """Characters cut from the rendered step (`RenderedStep.unseen_chars`); 0 if it is whole."""
+
+
+def escalate_if_cut(decision: CheckDecision, unseen_chars: int, checker: str) -> CheckDecision:
+    """Turn an approval of a step that the checker saw only in part into an escalation.
+
+    Args:
+        decision: The checker model's decision.
+        unseen_chars: Characters of the step that were cut from the prompt; -1 if a part is
+            known to be missing but its size is not; 0 if the checker saw everything.
+        checker: The checker's name, for the reason.
+
+    Returns:
+        `decision` unchanged if nothing was cut or if it does not approve (a DENY or ESCALATE
+        on the visible part stands). Otherwise a copy with the decision ESCALATE, a reason that
+        says how much was not shown, no comment and no cleared honesty marks: an approval of a
+        part is not an approval, and it must not clear a record either.
+    """
+    if unseen_chars == 0 or not decision.decision.approves:
+        return decision
+    amount = f"{unseen_chars} characters" if unseen_chars > 0 else "A part"
+    said = f" Its reason: {decision.reason.strip()}" if decision.reason.strip() else ""
+    return decision.model_copy(
+        update={
+            "decision": Decision.ESCALATE,
+            "reason": (
+                f"{amount} of this step were not shown to the {checker} checker, because the "
+                "step is longer than what calu puts in front of a checker. Its "
+                f"{decision.decision.value} covers the visible part only, so a human has to "
+                f"look at the whole step.{said}"
+            ),
+            "comment": "",
+            "marks_clean": [],
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -141,9 +199,9 @@ class Checker:
     its lines, finding files by glob, grepping, and, if `times` is given, the times of the
     session's steps and which step last changed a file — with which it can find out what the
     code actually does, and who did it, when the step alone does not say enough (PLAN.md D22,
-    D25, D32). The run's
-    workspace is pinned to `workspace` and wrapped read-only by Pydantic AI, and the read deny
-    lists of `rules` bound it further. It has no other tool: no writes, no commands, no network.
+    D25, D32). Those tools confine every read to `workspace` after resolving symbolic links
+    and apply the read deny lists of `rules` (`CodeTools.confine`); calu enforces this itself
+    and relies on no library for it. It has no other tool: no writes, no commands, no network.
     """
 
     name: str
@@ -184,11 +242,8 @@ class Checker:
                 name=f"{self.name}-checker",
                 capabilities=[
                     Caching(messages=False),
-                    # The run's workspace: this directory only, read-only, and its files carry
-                    # no authority, because the agent under review may have written them.
-                    LocalWorkspace(
-                        self.workspace, read_only=True, authority="none", id="calu-project"
-                    ),
+                    # The only tools: calu's own read-only ones, which confine every read to
+                    # the project directory themselves (`CodeTools.confine`).
                     Toolset(tools.toolset()),
                 ],
             )
@@ -196,9 +251,7 @@ class Checker:
             self._agent, self._built_for = agent, instructions
         return self._agent
 
-    def build_prompt(
-        self, step: Step, context: CheckContext, extra: str = ""
-    ) -> list[str | CachePoint]:
+    def build_prompt(self, step: Step, context: CheckContext, extra: str = "") -> CheckPrompt:
         """Return the user prompt parts for checking `step` with `context`.
 
         Empty context parts and their cache points are left out (layout: module docstring).
@@ -211,21 +264,29 @@ class Checker:
                 for the step checkers.
 
         Returns:
-            Prompt texts with `CachePoint`s (layout: module docstring).
+            Prompt texts with `CachePoint`s (layout: module docstring), and in `unseen_chars`
+            the number of characters that were cut from the step.
 
         Raises:
-            ValueError: From `render_step`, for a target path with a NUL character.
-            AttributeError: From `render_step`, for malformed MultiEdit input.
-            TypeError: From `render_step`, for tool input that is not JSON-serializable.
+            ValueError: From `render_step_cut`, for a target path with a NUL character.
+            AttributeError: From `render_step_cut`, for malformed MultiEdit input.
+            TypeError: From `render_step_cut`, for tool input that is not JSON-serializable.
         """
-        parts = context_parts(context, "# Project context")
-        parts.append("# Step to check\n\n" + render_step(step, self.workspace))
+        rendered = render_step_cut(step, self.workspace)
+        parts = CheckPrompt(context_parts(context, "# Project context"))
+        parts.unseen_chars = rendered.unseen_chars
+        parts.append("# Step to check\n\n" + rendered.text)
         if extra:
             parts.append(extra)
         return parts
 
     async def check(
-        self, step: Step, context: CheckContext, raise_errors: bool = False, extra: str = ""
+        self,
+        step: Step,
+        context: CheckContext,
+        raise_errors: bool = False,
+        extra: str = "",
+        extra_cut: bool = False,
     ) -> CheckDecision:
         """Review `step` with the checker model and return its decision.
 
@@ -237,6 +298,7 @@ class Checker:
             raise_errors: If True, failures are raised instead (evaluation counts them as
                 errors, not as escalations).
             extra: A further prompt block after the step (see `build_prompt`).
+            extra_cut: True if `extra` leaves out a part of what it describes (see `run`).
 
         Returns:
             The model's decision, or the ESCALATE decision described in `run`.
@@ -244,7 +306,7 @@ class Checker:
         Raises:
             Exception: Only with `raise_errors`: whatever the model call or rendering raised.
         """
-        return (await self.run(step, context, raise_errors, extra)).decision
+        return (await self.run(step, context, raise_errors, extra, extra_cut)).decision
 
     def settings(self) -> ModelSettings:
         """Build the model settings of one check: the cache routing key and the effort.
@@ -265,8 +327,14 @@ class Checker:
         context: CheckContext,
         raise_errors: bool = False,
         extra: str = "",
+        extra_cut: bool = False,
     ) -> CheckOutcome:
         """Review `step` and return the decision with the cost of the model call.
+
+        A PASS or ALLOW becomes ESCALATE if the checker did not see the whole step
+        (`escalate_if_cut`): the rendered command, diff or input was cut
+        (`RenderedStep.unseen_chars`), `extra` holds one of calu's cut notes (`EXTRA_CUT`), or
+        the caller says so with `extra_cut`.
 
         By default it never raises (except cancellation): any failure, including instructions
         the model rejects or a step that cannot be rendered, yields an ESCALATE decision whose
@@ -279,6 +347,9 @@ class Checker:
             raise_errors: If True, failures are raised instead (evaluation counts them as
                 errors, not as escalations).
             extra: A further prompt block after the step (see `build_prompt`).
+            extra_cut: True if `extra` leaves out a part of what it describes without one of
+                the notes of `EXTRA_CUT`, e.g. a write set whose binary or oversized files are
+                not in the patch (`calu.changes.ChangeSet.cut`).
 
         Returns:
             The decision, the token counts (None after a failure) and the duration in
@@ -289,9 +360,17 @@ class Checker:
         """
         started = time.monotonic()
         try:
+            prompt = self.build_prompt(step, context, extra)
+            # One rendering gives both the prompt and the size of the cut: the diff of an edit
+            # is computed from the file on disk, which can change between two renderings.
+            unseen = (
+                prompt.unseen_chars
+                if isinstance(prompt, CheckPrompt)
+                else render_step_cut(step, self.workspace).unseen_chars
+            )
             result = await run_bounded(
                 self.agent,
-                self.build_prompt(step, context, extra),
+                prompt,
                 model=self.model,
                 usage_limits=self.usage_limits,
                 model_settings=self.settings(),
@@ -319,8 +398,9 @@ class Checker:
                 ),
                 duration_ms=elapsed_ms(started),
             )
+        unseen = unseen or (-1 if extra_cut or EXTRA_CUT.search(extra) else 0)
         return CheckOutcome(
-            decision=result.output,
+            decision=escalate_if_cut(result.output, unseen, self.name),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cache_read_tokens=usage.cache_read_tokens,

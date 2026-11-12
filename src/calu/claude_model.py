@@ -8,13 +8,32 @@ box, and an API client cannot use it: a claude.ai subscription authenticates the
 not arbitrary API calls. So a checker whose model string starts with `claude:` is not an API
 client at all -- each check runs the CLI once in headless mode and reads its structured answer:
 
-    claude -p "<the whole prompt>" --output-format json --json-schema '<the schema>'
-           --model <alias> --tools "" --no-session-persistence
+    claude -p --system-prompt-file <instructions> --output-format json
+           --json-schema '<the schema>' --model <alias> --tools "" --no-session-persistence
+           --strict-mcp-config --disable-slash-commands          < <the content to judge>
 
 Measured against CLI 2.1.319 (D16, re-measured 2026-11-10): the answer comes back in the
 `structured_output` field of the result JSON, with `usage` and `total_cost_usd` beside it, so a
 check costs and reports like any other. `--json-schema` takes the schema **inline**, not a path
 -- a path is refused with "not valid JSON".
+
+How the prompt reaches the CLI (measured 2026-11-12 against the same version):
+
+- **The content to judge goes in on standard input**, which `claude -p` reads when no prompt
+  argument is given. As an argument it was limited to 128 KiB by the kernel (`MAX_ARG_STRLEN`:
+  "Argument list too long" for a large commit), and it was readable in the process list.
+- **The checker's instructions are the system prompt**, from a file of mode 0600 passed with
+  `--system-prompt-file`. They used to be the first paragraphs of the same user text as the
+  step written by the agent under review; now the two are in different roles, as they are for
+  an API checker. The flag replaces Claude Code's own system prompt; the structured answer
+  works without it (about 2.9k instead of 5.9k tokens of fixed prompt per call).
+- `--strict-mcp-config` and `--disable-slash-commands`: no MCP server and no skill of the
+  user's Claude Code setup is loaded into a reviewer.
+
+Not done, on purpose: `--setting-sources ""` would keep the user-level `~/.claude` settings
+out of the call, but those settings are also where an installation says how to authenticate
+(`apiKeyHelper`, the Bedrock or Vertex variables in `env`), and a checker that cannot sign in
+escalates every step. The user-level `CLAUDE.md` is therefore still read by the CLI.
 
 What this model type cannot do, and why it is not the default:
 
@@ -23,8 +42,9 @@ What this model type cannot do, and why it is not the default:
   instructions tell it to go and look will do worse here than on an API model, which is why
   `calu.preflight` warns when one is configured.
 - **One process per check**, so about 1-3 s of start-up on top of the model's own time.
-- **Claude Code's own system prompt** is part of every call (about 6k tokens, cached by the CLI
-  between calls), so the token numbers are larger than an API checker's for the same context.
+- **A fixed part of Claude Code's own prompt** (tool-less, about 3k tokens, cached by the CLI
+  between calls) is part of every call, so the token numbers are larger than an API checker's
+  for the same context.
 
 The CLI runs in an **empty temporary directory**, never in the project: Claude Code reads the
 working directory's `CLAUDE.md` and settings, and that would let the project under review write
@@ -33,8 +53,10 @@ instructions straight into the prompt of the agent reviewing it.
 
 import json
 import logging
+import os
 import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -80,41 +102,44 @@ def alias_of(model: str) -> str:
     return model[len(PREFIX) :].strip()
 
 
-def prompt_of(messages: Sequence[ModelMessage], info: AgentInfo) -> str:
-    """Flatten what the agent would have sent to an API into one text prompt.
+def split_prompt(messages: Sequence[ModelMessage], info: AgentInfo) -> tuple[str, str]:
+    """Split what the agent would have sent to an API into instructions and content.
 
-    The instructions come first, then every system and user part in order. `CachePoint` markers
-    are dropped: they are instructions to an API provider, and the CLI does its own caching.
-    Binary content is replaced by a note rather than skipped silently, so a checker that was
-    given an image learns that it did not get it.
+    The instructions are the agent's instructions and every system part, in order: text the
+    operator wrote. The content is every user part in order: the context and the step, which
+    hold text of the agent under review. `CachePoint` markers are dropped: they are
+    instructions to an API provider, and the CLI does its own caching. Binary content is
+    replaced by a note rather than skipped silently, so a checker that was given an image
+    learns that it did not get it.
 
     Args:
         messages: The conversation as Pydantic AI built it.
         info: The agent's own description; `info.instructions` holds the system instructions.
 
     Returns:
-        The prompt text.
+        `(instructions, content)`, each joined with blank lines; either may be "".
     """
-    parts: list[str] = []
-    if info.instructions:
-        parts.append(info.instructions)
+    instructions: list[str] = [info.instructions] if info.instructions else []
+    content: list[str] = []
     for message in messages:
         if not isinstance(message, ModelRequest):
             continue
         for part in message.parts:
             if isinstance(part, SystemPromptPart):
-                parts.append(str(part.content))
+                instructions.append(str(part.content))
             elif isinstance(part, UserPromptPart):
-                content = part.content
-                if isinstance(content, str):
-                    parts.append(content)
+                if isinstance(part.content, str):
+                    content.append(part.content)
                     continue
-                for piece in content:
+                for piece in part.content:
                     if isinstance(piece, str):
-                        parts.append(piece)
+                        content.append(piece)
                     elif type(piece).__name__ != "CachePoint":
-                        parts.append(f"[a {type(piece).__name__} that this model cannot read]")
-    return "\n\n".join(part for part in parts if part.strip())
+                        content.append(f"[a {type(piece).__name__} that this model cannot read]")
+    return (
+        "\n\n".join(part for part in instructions if part.strip()),
+        "\n\n".join(part for part in content if part.strip()),
+    )
 
 
 def _usage_of(answer: dict[str, Any]) -> RequestUsage:
@@ -159,8 +184,10 @@ def claude_cli_model(
 ) -> FunctionModel:
     """Build the model that answers a check by running the Claude Code CLI once.
 
-    Side effects (per call): creates a temporary directory, starts `claude` in it as a
-    subprocess with its standard input closed, and removes the directory afterwards.
+    Side effects (per call): creates a temporary directory (mode 0700) with the instructions
+    file (mode 0600) and an empty working directory, starts `claude` in the latter as a
+    subprocess with the content to judge on its standard input, and removes the directory
+    afterwards. Nothing of the prompt is on the command line.
 
     Args:
         model: The configured model string, e.g. `claude:haiku`.
@@ -189,18 +216,18 @@ def claude_cli_model(
             A response holding the structured answer as a call of that output tool.
 
         Raises:
-            ClaudeCliError: If the CLI is missing, fails, times out, or answers without the
-                structured output.
+            ClaudeCliError: If the CLI is missing or cannot be started, fails, times out, or
+                answers with something that is not its result JSON.
         """
         if not info.output_tools:
             raise ClaudeCliError(
                 "a claude: checker needs a structured output type; this agent asked for free text"
             )
         tool = info.output_tools[0]
+        instructions, content = split_prompt(messages, info)
         command = [
             cli_path or "claude",
             "-p",
-            prompt_of(messages, info),
             "--output-format",
             "json",
             # Inline, not a path: a path is refused with "--json-schema is not valid JSON".
@@ -211,14 +238,28 @@ def claude_cli_model(
             "--tools",
             "",
             "--no-session-persistence",
+            # Nothing of the user's Claude Code setup that could act or speak in a reviewer:
+            # no MCP servers, no skills or commands.
+            "--strict-mcp-config",
+            "--disable-slash-commands",
         ]
         if alias:
             command += ["--model", alias]
-        with tempfile.TemporaryDirectory(prefix="calu-checker-") as empty:
+        with tempfile.TemporaryDirectory(prefix="calu-checker-") as scratch:
+            empty = Path(scratch) / "empty"
+            empty.mkdir()
+            if instructions:
+                # The instructions as the system prompt, in a file only this user can read: in
+                # another role than the content, and not in the process list.
+                system_file = Path(scratch) / "instructions.md"
+                descriptor = os.open(system_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(instructions)
+                command += ["--system-prompt-file", str(system_file)]
             try:
                 with anyio.fail_after(timeout_s):
                     done = await anyio.run_process(
-                        command, cwd=empty, check=False, input=b"", stdin=None
+                        command, cwd=empty, check=False, input=content.encode("utf-8")
                     )
             except FileNotFoundError as exc:
                 raise ClaudeCliError(
@@ -227,6 +268,11 @@ def claude_cli_model(
                 ) from exc
             except TimeoutError as exc:
                 raise ClaudeCliError(f"the check did not answer within {timeout_s:g} s") from exc
+            except (OSError, anyio.BrokenResourceError) as exc:
+                raise ClaudeCliError(
+                    f"the Claude Code CLI could not be run ({type(exc).__name__}: {exc}); "
+                    f"the prompt was {len(content)} characters, passed on standard input"
+                ) from exc
         if done.returncode != 0:
             raise ClaudeCliError(
                 f"claude -p exited with {done.returncode}: "
@@ -236,6 +282,8 @@ def claude_cli_model(
             answer = json.loads(done.stdout.decode(errors="replace"))
         except json.JSONDecodeError as exc:
             raise ClaudeCliError(f"the CLI's answer was not JSON: {exc}") from exc
+        if not isinstance(answer, dict):
+            raise ClaudeCliError("the CLI's answer was not a JSON object")
         if answer.get("is_error"):
             raise ClaudeCliError(f"the CLI reported an error: {answer.get('result') or answer}")
         structured = answer.get("structured_output")
