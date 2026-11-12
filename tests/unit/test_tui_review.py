@@ -632,7 +632,7 @@ async def test_the_client_attaches_again_after_a_long_stay_in_the_git_program(
             return 0
 
         run.app.run_program = stay
-        run.app.which = lambda name: f"/usr/bin/{name}" if name in {"lazygit", "git"} else None
+        run.app.which = lambda name: f"/usr/bin/{name}" if name in {"gitui", "git"} else None
         await run.press("f4")
         with anyio.fail_after(5):
             while session.connects < 2 or run.app.model.connection.status != "attached":
@@ -660,7 +660,7 @@ async def test_a_revoked_token_ends_the_link_also_during_a_stay(tmp_path: Path) 
             return 0
 
         run.app.run_program = stay
-        run.app.which = lambda name: f"/usr/bin/{name}" if name in {"lazygit", "git"} else None
+        run.app.which = lambda name: f"/usr/bin/{name}" if name in {"gitui", "git"} else None
         await run.press("f4")
         with anyio.fail_after(5):
             while run.app.model.connection.status != "detached":
@@ -1001,7 +1001,7 @@ def test_the_help_fits_eighty_columns_and_can_be_filtered() -> None:
     lines = [line.plain for line in help_lines(DARK_PALETTE, caps, 74)]
     keyed = [line for line in lines if line.startswith("  a,a · alt+a")]
     assert keyed and keyed[0].index("Allow the step") <= 26, "the key column is not half the page"
-    found = [line.plain for line in help_lines(DARK_PALETTE, caps, 74, "lazygit")]
+    found = [line.plain for line in help_lines(DARK_PALETTE, caps, 74, "gitui")]
     assert any(line.startswith("  f4") for line in found)
     assert not any("Allow the step" in line for line in found)
     assert any("CALU_GIT_TOOL" in line for line in found)

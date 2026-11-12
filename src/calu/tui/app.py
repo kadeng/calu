@@ -3445,8 +3445,8 @@ class CaluApp(App[None]):
     def _cmd_git(self, rest: str) -> None:
         """Open a terminal git program in the session's project directory (`f4`, `/git`).
 
-        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or lazygit, the default.
-        Without lazygit, the client offers to install it (once per run) and opens `git diff`
+        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or gitui, the default.
+        Without gitui, the client offers to install it (once per run) and opens `git diff`
         through the pager if the answer is no. That command is
         run only after a yes and only if it needs no administrator rights; otherwise it is
         shown for the user to run. The client has no git viewer of its own.
@@ -3472,7 +3472,7 @@ class CaluApp(App[None]):
             code = self._launch(chosen.argv, chosen.name)
             if code is not None and code != 127:
                 hint = (
-                    " · that was git diff; lazygit shows staging, log and branches too"
+                    " · that was git diff; gitui shows staging, log and branches too"
                     if chosen.source == "fallback"
                     else ""
                 )
@@ -3484,7 +3484,7 @@ class CaluApp(App[None]):
         self._install_shown = True
         plan = gittool.install_plan(self.which)
         lines = [
-            "f4 opens one in the project directory; lazygit is recommended: the diff of "
+            "f4 opens one in the project directory; gitui is the default: the diff of "
             "the working copy, staging, log and branches on one screen. Install it with:"
         ]
         footnote = "another program: CALU_GIT_TOOL or git_tool in tui.toml (f1 says more)"
@@ -3515,7 +3515,7 @@ class CaluApp(App[None]):
 
         self.push_screen(
             ConfirmScreen(
-                "lazygit is not installed",
+                "gitui is not installed",
                 lines,
                 self.palette,
                 notice=not plan.runnable,
@@ -4109,7 +4109,7 @@ def help_lines(
         + ", tab-0 to tab-9 (alt+0 to alt+9). The same file holds theme, bell, toasts, "
         "thinking, panel_width and git_tool: the program f4 starts in the project directory "
         "(the environment variable CALU_GIT_TOOL overrides it). Left unset, f4 starts the "
-        "lazygit, and offers to install it when it is missing (else git diff through the "
+        "gitui, and offers to install it when it is missing (else git diff through the "
         "pager). While that program has the terminal the client reads nothing; if the session "
         "closes the connection meanwhile, the client attaches again when the program ends."
     )

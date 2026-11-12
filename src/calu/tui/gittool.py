@@ -9,15 +9,16 @@ The program, by priority:
 
 1. the environment variable `CALU_GIT_TOOL` (a command line, e.g. `lazygit` or `tig status`);
 2. `git_tool` in `tui.toml`;
-3. lazygit, the default, if it is installed (on the search path or in `~/.local/bin`);
+3. gitui, the default, if it is installed (on the search path or in `~/.local/bin`);
 4. `git diff` through git's pager, if git is installed, after the client offered to install
-   lazygit.
+   gitui.
 
-lazygit is the default: staging, the diff of the working copy, log and branches on one
-screen. Another program (gitui, tig, ...) is used only when it is configured. When lazygit is
-not installed, `install_plan` names a command that installs it on this machine. The client
-runs such a command only after an explicit yes and only if it needs no rights of the
-administrator; a command with `sudo` is only shown.
+gitui (https://github.com/gitui-org/gitui) is the default, the owner's choice: the diff of the
+working copy, staging, log and branches in a fast terminal program. Another program (lazygit,
+tig, ...) is used only when it is configured. When gitui is not installed, `install_plan`
+names a command that installs it on this machine. The client runs such a command only after
+an explicit yes and only if it needs no rights of the administrator; a command with `sudo` is
+only shown.
 """
 
 import platform
@@ -30,13 +31,13 @@ from pathlib import Path
 ENV = "CALU_GIT_TOOL"
 """The environment variable that names the program as a command line."""
 
-KNOWN = ("lazygit",)
+KNOWN = ("gitui",)
 """The programs tried when none is configured, in this order."""
 
-RECOMMENDED = "lazygit"
+RECOMMENDED = "gitui"
 """The program the help text and the install hint name."""
 
-RELEASES = "https://github.com/jesseduffield/lazygit/releases"
+RELEASES = "https://github.com/gitui-org/gitui/releases"
 """Where the release binaries of the recommended program are."""
 
 Which = Callable[[str], str | None]
@@ -84,21 +85,14 @@ class InstallPlan:
 
 
 _PLANS: tuple[tuple[str, str, bool, str], ...] = (
-    ("pacman", "sudo pacman -S lazygit", False, ""),
-    ("dnf", "sudo dnf install lazygit", False, "Fedora 41 and later carry the package."),
-    ("zypper", "sudo zypper install lazygit", False, ""),
-    (
-        "apt",
-        "sudo apt install lazygit",
-        False,
-        "Debian 13 and Ubuntu 25.10 and later carry the package; on older releases "
-        "sudo apt install tig works.",
-    ),
-    ("go", "go install github.com/jesseduffield/lazygit@latest", True, ""),
+    ("pacman", "sudo pacman -S gitui", False, ""),
+    ("zypper", "sudo zypper install gitui", False, ""),
+    ("cargo", "cargo install gitui --locked", True, "This compiles gitui, which takes minutes."),
 )
 """Package manager, command, whether the client may run it, a note; the first installed one
-is used when neither brew nor the release command applies. `go install` writes into the
-user's own directory and comes last."""
+is used when neither brew nor the release command applies. Debian, Ubuntu and Fedora carry no
+gitui package, so they are not listed. `cargo install` writes into the user's own directory
+and comes last."""
 
 
 def configured(environ: Mapping[str, str], setting: str = "") -> tuple[str, str]:
@@ -163,21 +157,21 @@ def install_plan(which: Which = shutil.which) -> InstallPlan:
         which: Finds a program on the search path; used to detect the package manager.
 
     Returns:
-        `brew install lazygit` where brew is installed; else, on Linux with curl and tar, a
-        command that puts lazygit's release binary into `~/.local/bin` (`release_command`);
-        else the command of the first package manager found (pacman, dnf, zypper, apt, then
-        `go install`); else the download page of the release binaries. Only a command without
+        `brew install gitui` where brew is installed; else, on Linux with curl and tar, a
+        command that puts gitui's release binary into `~/.local/bin` (`release_command`);
+        else the command of the first package manager found (pacman, zypper, then
+        `cargo install`); else the download page of the release binaries. Only a command without
         `sudo` is marked `runnable`.
     """
     if which("brew") is not None:
-        return InstallPlan("brew install lazygit", "brew", True)
+        return InstallPlan("brew install gitui", "brew", True)
     release = release_command(which)
     if release is not None:
         return InstallPlan(
             release,
             "release",
             True,
-            f"This downloads lazygit's release binary from GitHub into {LOCAL_BIN}; your "
+            f"This downloads gitui's release binary from GitHub into {LOCAL_BIN}; your "
             "package manager may have it as well.",
         )
     for manager, command, runnable, note in _PLANS:
@@ -191,17 +185,17 @@ def install_plan(which: Which = shutil.which) -> InstallPlan:
 
 
 LOCAL_BIN = Path.home() / ".local" / "bin"
-"""Where the release command puts lazygit: a directory of the user, so no `sudo` is needed."""
+"""Where the release command puts gitui: a directory of the user, so no `sudo` is needed."""
 
-RELEASE_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "arm64", "arm64": "arm64"}
-"""`platform.machine()` -> the architecture name in lazygit's release file names."""
+RELEASE_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
+"""`platform.machine()` -> the architecture name in gitui's release file names."""
 
 
 def release_command(which: Which = shutil.which) -> str | None:
-    """Build the command that installs lazygit's newest release binary for this user.
+    """Build the command that installs gitui's newest release binary for this user.
 
-    The command asks GitHub for the newest release, downloads its Linux archive for this
-    machine's architecture and unpacks the one file `lazygit` into `LOCAL_BIN`. It changes
+    The command downloads the Linux archive of gitui's newest release for this machine's
+    architecture from GitHub and unpacks the one file `gitui` into `LOCAL_BIN`. It changes
     nothing outside that directory and needs no rights of the administrator.
 
     Args:
@@ -209,22 +203,16 @@ def release_command(which: Which = shutil.which) -> str | None:
 
     Returns:
         The command line (`sh -c '...'`), or None where it would not work: not Linux, an
-        architecture lazygit publishes no archive under that name for, or no curl or tar.
+        architecture gitui publishes no archive under that name for, or no curl or tar.
     """
     arch = RELEASE_ARCH.get(platform.machine().lower())
     if platform.system() != "Linux" or arch is None:
         return None
     if which("curl") is None or which("tar") is None or which("sh") is None:
         return None
-    api = "https://api.github.com/repos/jesseduffield/lazygit/releases/latest"
-    base = "https://github.com/jesseduffield/lazygit/releases/download"
+    archive = f"{RELEASES}/latest/download/gitui-linux-{arch}.tar.gz"
     script = (
-        "set -e; "
-        f'v=$(curl -fsSL {api} | sed -n \'s/.*"tag_name": *"v\\([^"]*\\)".*/\\1/p\'); '
-        'test -n "$v"; '
-        f'mkdir -p "{LOCAL_BIN}"; '
-        f'curl -fsSL "{base}/v$v/lazygit_${{v}}_Linux_{arch}.tar.gz" '
-        f'| tar -xz -C "{LOCAL_BIN}" lazygit'
+        f'set -e; mkdir -p "{LOCAL_BIN}"; curl -fsSL "{archive}" | tar -xz -C "{LOCAL_BIN}" ./gitui'
     )
     return "sh -c " + shlex.quote(script)
 

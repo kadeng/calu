@@ -25,15 +25,13 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
      and were reconciled with it at the merge (`src/calu/tui/model.py: honesty_from`, the
      scripted session in `src/calu/tui/fake.py`). The protocol does not carry a commit's
      subject line, so the client shows the baseline's id and source only.
-2. **The owner prefers gitui to lazygit** (https://github.com/gitui-org/gitui) as the program
-   the full-screen client starts with `f4`. Today the default is lazygit
-   (`src/calu/tui/gittool.py`: `KNOWN`, `RECOMMENDED`, `RELEASES`, `release_command`, the plans
-   per package manager; the texts in `app.py` and `commands.py`; tests in
-   `tests/unit/test_tui_admin.py`). Make gitui the default, keep it configurable
-   (`CALU_GIT_TOOL`, `git_tool` in `tui.toml`), and keep the offer to install it when it is
-   missing, with a command that needs no `sudo` where one exists (gitui publishes release
-   archives; check their names for this machine before writing the command, and run it once
-   into a scratch directory as was done for lazygit).
+2. **Done: gitui is the default git program of the full-screen client** (the owner's choice,
+   https://github.com/gitui-org/gitui). `f4` starts it in the session's project directory;
+   `CALU_GIT_TOOL` or `git_tool` in `tui.toml` name another program; without gitui the client
+   offers to install it (`src/calu/tui/gittool.py`: brew, else the release binary into
+   `~/.local/bin`, which was run once into a scratch directory, else the package manager's
+   command, shown and not run when it needs `sudo`). Not yet tried in a real terminal session:
+   pressing `f4`, quitting gitui, and the install offer on a machine without it.
 3. **Write the user documentation of the full-screen client.** README ("Four front ends",
    "Four ways to work with a running session") and `CALU_GUIDE.md` ("Attached to a session")
    still describe only the line client. `calu attach` on a terminal now starts the

@@ -367,12 +367,13 @@ escalation resolved from the database alone.
    id and subject of HEAD; Enter certifies nothing); `t`, `r`, `x`, `m` on the honesty page;
    with `calu attach ws://other-host ...` and a local `admin` credential for another database,
    save a checker and `/honesty track` (both must say that the attached session does not show
-   the change); `f4` with lazygit installed (lazygit opens
+   the change); `f4` with gitui installed (gitui opens
    in the project directory, `q` returns to the client); stay in it for more than a minute (the
    status bar shows `reconnecting` and then `attached`, and what happened meanwhile is in the
    transcript); `CALU_GIT_TOOL='git log' calu attach`, `f4`, ctrl+c in the pager (the client
-   is still there); `CALU_GIT_TOOL=tig calu attach`; `f4` without lazygit, gitui and tig (the
-   notice shows the install command for this machine and runs nothing that needs `sudo`).
+   is still there); `CALU_GIT_TOOL=tig calu attach`; `f4` without gitui (the
+   client offers to install it, shows the command for this machine and runs nothing that
+   needs `sudo`).
 25. Code honesty: in a git repository, `calu config set honesty.mode enforce`, then `calu run`
    with a prompt that edits a source file and runs the project's tests. Without a trusted
    commit the test command must wait as an escalation that names `/trust`. In `calu attach`,

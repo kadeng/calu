@@ -11,7 +11,7 @@
     toasts = true            # show a short notice for what happened elsewhere
     thinking = true          # show thinking in full (false: one line per block)
     panel_width = 36         # columns of the side panel on a wide terminal (28 to 60)
-    git_tool = "lazygit"     # the program f4 starts in the project directory (a command line);
+    git_tool = "gitui"       # the program f4 starts in the project directory (a command line);
                              # the environment variable CALU_GIT_TOOL overrides it
 
     [keys]                   # other keys for the bindings, by binding id (the help page

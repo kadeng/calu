@@ -259,8 +259,8 @@ COMMANDS: tuple[Command, ...] = (
         "f4",
         "/git",
         group="View",
-        about="In the project directory: lazygit by default. CALU_GIT_TOOL or git_tool in "
-        "tui.toml name another program. Without lazygit, f4 offers to install it and opens "
+        about="In the project directory: gitui by default. CALU_GIT_TOOL or git_tool in "
+        "tui.toml name another program. Without gitui, f4 offers to install it and opens "
         "git diff meanwhile.",
     ),
     Command(
@@ -317,6 +317,7 @@ ALIASES = {
     "/find": "/search",
     "/resume": "/sessions",
     "/lazygit": "/git",
+    "/gitui": "/git",
 }
 """Other words for a slash command."""
 
