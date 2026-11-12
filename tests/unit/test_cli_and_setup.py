@@ -20,11 +20,11 @@ def test_parse_rule_file_attaches_adjacent_comments_only() -> None:
     ]
 
 
-def test_no_rules_are_shipped_and_the_recommended_set_covers_all_lists() -> None:
-    """D179 (the owner's Q16): every list starts empty; the former defaults are a set."""
+def test_no_rules_are_shipped_and_the_recommended_set_allows_no_command() -> None:
+    """D179, D198: every list starts empty; the optional set has no command allow list."""
     assert default_rules() == []
     rows = recommended_rules()
-    assert {r.list for r in rows} == set(RULE_LISTS)
+    assert {r.list for r in rows} == set(RULE_LISTS) - {"command-allow"}
     assert any(r.pattern.startswith("^git( -[Cc] \\S+)* push") for r in rows)
 
 

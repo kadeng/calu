@@ -115,15 +115,21 @@ def default_rules() -> list[RuleRow]:
     return []
 
 
+RECOMMENDED_LISTS = tuple(name for name in RULE_LISTS if name != "command-allow")
+"""The lists the `recommended` set has rules for. There is no shipped command allow list: an
+allow rule matches a command by its text, so it also matches another program of that name, and
+a match skips the checker (PLAN.md D198)."""
+
+
 def recommended_rules() -> list[RuleRow]:
-    """Return the recommended rules of all six lists, the former defaults (D179).
+    """Return the rules of the optional `recommended` set (D179, D198).
 
     Returns:
-        The rows parsed from `calu/defaults/rules/<list>.txt`.
+        The rows parsed from `calu/defaults/rules/<list>.txt` for `RECOMMENDED_LISTS`.
     """
     base = resources.files("calu.defaults").joinpath("rules")
     rows: list[RuleRow] = []
-    for name in RULE_LISTS:
+    for name in RECOMMENDED_LISTS:
         rows += parse_rule_file(name, base.joinpath(f"{name}.txt").read_text(encoding="utf-8"))
     return rows
 

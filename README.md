@@ -91,10 +91,11 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   into the checker instructions.
 - **Comments, not only verdicts.** A checker can let a step through and still tell Claude to keep
   the names and the documentation honest, or to stop widening the task.
-- **Allow and deny lists before the models, if you want them.** The lists start empty, so every
-  step goes to a checker. `calu rules add-set recommended` adds a ready-made set: `ls` and
-  `git status` then run without a model call, and `sudo`, force pushes and reads of your
-  credentials always ask a human.
+- **Allow and deny lists as overrides, for the exception.** The lists start empty and are
+  meant to stay that way in most projects: every step goes to a checker. A rule overrides the
+  checkers, and an allow rule matches a command by its text, whatever program that text
+  starts. If you want fixed stops, `calu rules add-set recommended` makes `sudo`, force pushes
+  and reads of your credentials always ask a human; it allows no command.
 - **A review of the whole change before the commit.** The command checkers judge a `git commit`
   like every command. A `git commit` that runs as a command of its own is also held while the
   complete diff goes to a checker of its own: is it complete, is there work nobody asked for,

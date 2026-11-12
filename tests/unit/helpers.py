@@ -20,7 +20,7 @@ from calu.testing import fake_models
 
 
 def default_rules(workspace: Path, replace: dict[str, str] | None = None) -> Rules:
-    """Return the built-in rules for `workspace`, as `calu setup` loads them.
+    """Return the `recommended` rule set for `workspace`, plus a command allow list for tests.
 
     Args:
         workspace: The workspace root.
@@ -29,6 +29,12 @@ def default_rules(workspace: Path, replace: dict[str, str] | None = None) -> Rul
     rules = Rules.from_rows(
         workspace, ((r.list, r.pattern, r.position) for r in default_rule_rows())
     )
+    # calu ships no command allow list (D198); the engine's tests keep one as a fixture.
+    allowed = (Path(__file__).parent / "fixtures" / "command-allow.txt").read_text(encoding="utf-8")
+    with_allow = {name: rules.lists(name) for name in rules._lists}
+    fixture = Rules.from_texts(workspace, {"command-allow": allowed})
+    with_allow["command-allow"] = fixture.lists("command-allow")
+    rules.replace(with_allow)
     if replace:
         lists = {name: rules.lists(name) for name in rules._lists}
         lists.update(Rules.from_texts(workspace, replace)._lists)
