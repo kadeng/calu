@@ -14,14 +14,22 @@
   let waiting = 0;
   let seen = Number(sessionStorage.getItem("calu-waiting") || "0");
 
+  // Polls that failed in a row. One can be a restart; from the second on the badge says that
+  // the count is not known, because "nothing waiting" would be a guess.
+  let failed = 0;
+
   async function poll() {
     let data;
     try {
       const answer = await fetch(api, { headers: { accept: "application/json" } });
+      if (!answer.ok) throw new Error(`status ${answer.status}`);
       data = await answer.json();
     } catch (error) {
-      return;  // the server went away; the next tick tries again
+      failed += 1;  // the server or its database went away; the next tick tries again
+      render();
+      return;
     }
+    failed = 0;
     sessions = data.sessions || [];
     waiting = data.waiting || 0;
     render();
@@ -30,6 +38,11 @@
   function render() {
     document.title = waiting ? `(${waiting}) ${base}` : base;
     if (!badge) return;
+    if (failed >= 2) {
+      badge.textContent = "not connected";
+      badge.title = "calu web or its database cannot be reached; what waits is not known";
+      return;
+    }
     if (!waiting) {
       badge.textContent = "";
       badge.removeAttribute("title");
@@ -120,6 +133,29 @@
 
   poll();
   setInterval(poll, 4000);
+})();
+
+// The key of this browser's login (login.js stored it). The server changes nothing for a request
+// without it, so every form that posts gets it as the hidden field `_key`: once when the page
+// has loaded, which also covers `form.submit()`, and again at submit for a form added later.
+// The scripts that post with fetch send it as the header `X-Calu-Key` themselves.
+(() => {
+  let key = "";
+  try { key = localStorage.getItem("calu-key") || ""; } catch (e) { /* storage blocked */ }
+  if (!key) return;
+  const give = (form) => {
+    if ((form.getAttribute("method") || "").toLowerCase() !== "post") return;
+    let field = form.querySelector('input[type="hidden"][name="_key"]');
+    if (!field) {
+      field = document.createElement("input");
+      field.type = "hidden";
+      field.name = "_key";
+      form.appendChild(field);
+    }
+    field.value = key;
+  };
+  document.querySelectorAll("form").forEach(give);
+  document.addEventListener("submit", (event) => give(event.target), true);
 })();
 
 // The theme switch in the header: the system's theme, then light, then dark, then the system's

@@ -1,6 +1,7 @@
 """The web interface against a real database: the pages, resolving, minting, editing."""
 
 import httpx
+import psycopg
 import pytest
 
 from calu import admin, herd
@@ -965,7 +966,7 @@ def test_the_guard_closes_a_websocket_from_another_site() -> None:
 async def test_without_the_token_nothing_is_served_and_nothing_decided(db_url: str) -> None:
     """D161: `LocalOnly` stops other websites, not other local processes -- Claude's own
     `curl -X POST .../resolve` included. `calu web` therefore prints a token, and only a
-    request carrying it (as `?token=` once, then as a cookie) gets through."""
+    browser that logged in with it (`?token=` once) gets through."""
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
@@ -985,20 +986,208 @@ async def test_without_the_token_nothing_is_served_and_nothing_decided(db_url: s
                 assert css.status_code == 401
 
             entered = await plain.get("/?token=s3cret&project=x")
-            assert entered.status_code == 303
-            assert entered.headers["location"] == "/?project=x", "the token leaves the URL"
+            assert entered.status_code == 200
+            assert 'content="/?project=x"' in entered.text, "the token leaves the URL"
             cookie = entered.headers["set-cookie"]
             assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
-
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://127.0.0.1", cookies={"calu_web_token": "s3cret"}
-        ) as browser:
-            assert (await browser.get("/")).status_code == 200
+            assert "s3cret" not in cookie, "the cookie is not the token"
+            # The client now holds the cookie, as the browser does.
+            assert (await plain.get("/")).status_code == 200
+            async with plain.stream("GET", "/static/login.js") as script:
+                assert script.status_code == 200, "the login page can load its script"
         # Nothing was decided by the refused POST.
         cur = await conn.execute("SELECT state FROM escalations ORDER BY id")
         assert {row[0] for row in await cur.fetchall()} == {"open"}
     finally:
         await conn.close()
+
+
+async def test_a_captured_cookie_cannot_decide_an_escalation(db_url: str) -> None:
+    """wa0: a cookie is sent to every port of its host, so a server the session starts sees it.
+
+    The session's development server, opened in the browser that is logged in to `calu web`,
+    received `Cookie: calu_web_token=<the token>`, and `curl -b` with it resolved the session's
+    own escalation. Now the cookie names a login and is enough to read; resolving, minting a
+    client token and saving settings need the key as well, which only the pages of the
+    interface's own origin can read.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, escalation = await populate(db)
+        app = create_app(db, token="s3cret", host_name="calu.localhost")
+        transport = httpx.ASGITransport(app=app)
+        base = "http://calu.localhost:8800"
+        async with httpx.AsyncClient(transport=transport, base_url=base) as browser:
+            page = await browser.get("/?token=s3cret")
+            cookie = page.headers["set-cookie"].split(";")[0].split("=", 1)[1]
+            key = page.text.split('name="calu-key" content="')[1].split('"')[0]
+
+            # What the other server can do with what it saw: the cookie, nothing else.
+            async with httpx.AsyncClient(
+                transport=transport, base_url=base, cookies={"calu_web_session": cookie}
+            ) as thief:
+                allow = {"decision": "allow", "note": "self-approved"}
+                for attempt in (
+                    await thief.post(f"/escalations/{escalation}/resolve", data=allow),
+                    await thief.post(f"/api/escalations/{escalation}/resolve", json=allow),
+                    await thief.post(f"/sessions/{session_id}/token", data={"label": "mine"}),
+                    await thief.post("/settings", data={"add_set": "recommended"}),
+                    await thief.post(f"/sessions/{session_id}/summary", data={"summary": "x"}),
+                ):
+                    assert attempt.status_code == 401, attempt.request.url
+                still = await herd.escalation(db, escalation)
+                assert still is not None and still.state == "open", "nothing was decided"
+                assert await herd.list_tokens(db, session_id) == [], "no client token minted"
+
+            # The interface's own page sends the key with its form, and that decides.
+            own = await browser.post(
+                f"/escalations/{escalation}/resolve",
+                data={"decision": "deny", "note": "from the page", "_key": key},
+                follow_redirects=True,
+            )
+            assert own.status_code == 200
+            decided = await herd.escalation(db, escalation)
+            assert decided is not None and decided.state == "denied"
+
+            # Under the bare loopback names the interface is not served at all, so the browser
+            # never holds a cookie of it for `127.0.0.1` or `localhost`.
+            for name in ("127.0.0.1:8800", "localhost:8800"):
+                bare = await browser.get("/", headers={"Host": name})
+                assert bare.status_code == 403
+                assert "http://calu.localhost:8800/" in bare.text
+    finally:
+        await conn.close()
+
+
+async def test_a_minted_token_is_in_the_answer_to_the_post_and_nowhere_else(db_url: str) -> None:
+    """wa0: the token waited in the server for the next GET of the session page.
+
+    A GET needs only the cookie, and a client token decides escalations of its session, so a
+    captured cookie that polled the page could have picked the token up.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _ = await populate(db)
+        app = create_app(db, git_url_template="")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+        ) as client:
+            minted = await client.post(f"/sessions/{session_id}/token", data={"label": "zed"})
+            assert minted.status_code == 200, "the page itself, not a redirect to a GET"
+            assert "shown once" in minted.text
+            assert minted.headers["cache-control"] == "no-store"
+            assert "shown once" not in (await client.get(f"/sessions/{session_id}")).text
+            missing = await client.post("/sessions/no-such-session/token", data={})
+            assert missing.status_code == 404
+    finally:
+        await conn.close()
+
+
+async def test_what_a_request_carries_is_never_put_into_a_page_unescaped(db_url: str) -> None:
+    """wa2: the 404 and 400 pages were built with an f-string from the path and the form.
+
+    `GET /sessions/<img src=x onerror=...>` answered with that tag in the page. The script ran
+    in the interface's origin, with the operator's login, and could allow every escalation.
+    """
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        _session_id, escalation = await populate(db)
+        attack = "<img src=x onerror=alert(1)>"
+        quoted = "%3Cimg%20src=x%20onerror=alert(1)%3E"
+        unknown = "00000000-0000-4000-8000-000000000000"
+        async with await client_for(db) as client:
+            # A session id is a UUID: anything else is no route at all, and nothing is echoed.
+            for path in ("", "/live", "/summary"):
+                no_route = await client.get(f"/sessions/{quoted}{path}")
+                assert no_route.status_code == 404
+                assert "<img" not in no_route.text and "onerror" not in no_route.text
+            no_route = await client.post(f"/sessions/{quoted}/token", data={})
+            assert no_route.status_code == 404 and "onerror" not in no_route.text
+            answers = [
+                await client.post(f"/escalations/{escalation}/resolve", data={"decision": attack}),
+                await client.get(f"/settings?project={quoted}"),
+            ]
+            for answer in answers:
+                assert answer.status_code in (400, 404), answer.request.url
+                assert "<img" not in answer.text, answer.request.url
+                assert "&lt;img src=x onerror=alert(1)&gt;" in answer.text, answer.request.url
+                assert "default-src 'self'" in answer.headers["content-security-policy"]
+            # A session that does not exist gets the same page, with its id on it.
+            answers.insert(0, await client.get(f"/sessions/{unknown}"))
+            assert answers[0].status_code == 404 and unknown in answers[0].text
+            assert (await client.post(f"/sessions/{unknown}/token", data={})).status_code == 404
+            # The error pages are pages of the interface: the way back is on them.
+            assert 'href="/"' in answers[0].text
+            still = await herd.escalation(db, escalation)
+            assert still is not None and still.state == "open"
+    finally:
+        await conn.close()
+
+
+async def test_a_database_that_is_gone_is_said_so_and_found_again(db_url: str) -> None:
+    """wa3: `calu web` held one connection for its whole life.
+
+    After a database restart every page answered 500 until `calu web` was restarted, and the
+    triage page kept showing its last queue. Now the answer says what is wrong (503, as a page
+    or as JSON), and the next request opens a new connection.
+    """
+    from calu.web.database import ReopeningDb
+
+    conn = await connect(db_url)
+    killer = await connect(db_url)
+    reachable = True
+
+    async def reopen() -> psycopg.AsyncConnection:
+        """Open the next connection, unless the test says the database is down."""
+        if not reachable:
+            raise psycopg.OperationalError("connection refused (the test's database is down)")
+        return await connect(db_url)
+
+    db = ReopeningDb(conn, reopen, probe_after=0.0)
+    try:
+        await setup(conn, db_url, "test:model")
+        await populate(db)
+        app = create_app(db, git_url_template="")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://127.0.0.1",
+        ) as client:
+            assert (await client.get("/api/escalations")).status_code == 200
+
+            # The database goes away: the server's connection is closed under it.
+            reachable = False
+            await killer.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            )
+            polled = await client.get("/api/escalations")
+            assert polled.status_code == 503
+            assert polled.json()["error"] == "database unreachable"
+            assert (await client.get("/api/sessions")).status_code == 503
+            page = await client.get("/")
+            assert page.status_code == 503
+            assert "cannot reach the database" in page.text
+            assert "location.reload" in page.text, "a watch window recovers by itself"
+            answered = await client.post(
+                "/api/escalations/1/resolve", json={"decision": "allow", "note": ""}
+            )
+            assert answered.status_code == 503, "not answered, and it says so"
+
+            # The database is back: no restart of `calu web`, the next request just works.
+            reachable = True
+            again = await client.get("/api/escalations")
+            assert again.status_code == 200
+            assert len(again.json()["escalations"]) == 1, "the escalation is still open"
+            assert (await client.get("/")).status_code == 200
+    finally:
+        await db.close()
+        await killer.close()
 
 
 async def test_a_non_ascii_token_is_refused_not_a_server_error(db_url: str) -> None:

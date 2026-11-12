@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{# Every error page of the interface. `message` may quote the request (an id from the path, a
+   form value), so it is only ever shown through autoescape, never marked safe. #}
+{% block title %}{{ title }} · calu{% endblock %}
+{% block body %}
+<h1>{{ title }}</h1>
+<p>{{ message }}</p>
+<p class="muted"><a href="{{ url_for('fleet') }}">Back to the sessions</a></p>
+{# A page that could not be read is asked for again, so a watch window recovers by itself. The
+   script is the same text as on the fleet page: the policy allows it by its hash. #}
+{% if retry %}<script>setTimeout(() => location.reload(), 5000);</script>{% endif %}
+{% endblock %}

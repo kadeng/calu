@@ -36,9 +36,42 @@ async def page() -> AsyncIterator[Any]:
         except Exception as exc:  # the browser or its libraries are missing
             pytest.skip(f"no headless browser ({type(exc).__name__}); {SETUP}")
         try:
-            yield await browser.new_page()
+            yield _under_the_policy(await browser.new_page())
         finally:
             await browser.close()
+
+
+def _under_the_policy(page: Any) -> Any:
+    """Make `page.wait_for_function` work under the interface's Content-Security-Policy.
+
+    Playwright evaluates a plain expression with `eval` inside the page, which the policy
+    forbids (no `unsafe-eval`), and the tests are to run under the real policy, not around it.
+    A function is compiled by the browser's debugger instead, so an expression is wrapped into
+    one: `"a === b"` becomes `"() => (a === b)"`.
+
+    Args:
+        page: The Playwright page.
+
+    Returns:
+        The same page, with `wait_for_function` wrapped.
+    """
+    original = page.wait_for_function
+
+    async def wait_for_function(expression: str, **options: Any) -> Any:
+        """Wait until the expression is true in the page.
+
+        Args:
+            expression: A JavaScript expression, or a function.
+            **options: Passed on to Playwright.
+
+        Returns:
+            What Playwright returns.
+        """
+        is_function = expression.lstrip().startswith(("(", "function", "async "))
+        return await original(expression if is_function else f"() => ({expression})", **options)
+
+    page.wait_for_function = wait_for_function
+    return page
 
 
 @asynccontextmanager

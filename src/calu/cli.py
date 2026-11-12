@@ -972,8 +972,14 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve the web interface: every session of every host, their history, the checkers.
 
     It needs the `admin` credential, because it also changes what steers the checkers, and it
-    serves the loopback interface only: there is no login yet (PLAN.md Q4), so reach it from
-    another machine through an SSH tunnel.
+    serves the loopback interface only: its login is the token in the address it prints, there
+    are no user accounts (PLAN.md Q4), so reach it from another machine through an SSH tunnel.
+
+    The address it prints names the host `calu.localhost` (`calu.web.app.WEB_HOST_NAME`), not
+    the bound address: the server answers to no other name, so that the browser keeps the
+    login apart from every other server on the loopback interface. The decrypted connection
+    string stays in memory until the server stops, because a lost database connection is
+    opened again with it (`calu.web.database.ReopeningDb`).
 
     Args:
         args: Parsed arguments (`host`, `port`).
@@ -986,7 +992,8 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         psycopg.Error: On database errors.
     """
     try:
-        from calu.web.app import NotLocal, check_host, create_app
+        from calu.web.app import WEB_HOST_NAME, NotLocal, check_host, create_app
+        from calu.web.database import ReopeningDb
     except ImportError as exc:  # the `web` extra is not installed
         raise CliError(
             "the web interface needs its extra dependencies: `uv tool install 'calu[web]'` "
@@ -1002,20 +1009,21 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         """Open the connection, build the app and serve until interrupted."""
         import uvicorn
 
-        conn = await connect(url.decode())
+        # A connection the database closed (a restart, a failover, an idle timeout) is opened
+        # again, so the server outlives the database's restarts.
+        db = ReopeningDb(await connect(url.decode()), lambda: connect(url.decode()))
         try:
-            db = Db(conn)
             values = await admin.settings(db)
             template = str((values.get("web") or {}).get("git_url_template") or "")
             # The login token (D161): any local process could otherwise decide escalations,
             # Claude's own `curl` included. New on every start, never stored.
             token = secrets.token_urlsafe(24)
-            app = create_app(db, git_url_template=template, token=token)
+            app = create_app(db, git_url_template=template, token=token, host_name=WEB_HOST_NAME)
             # Flushed: this is the one line a user needs, and the process then serves for
             # hours. Without it the address sits in a buffer whenever stdout is a pipe -- a
             # log file, a systemd unit, `tmux pipe-pane` -- and the user sees nothing (D125).
             print(
-                f"calu web on http://{args.host}:{args.port}/?token={token}"
+                f"calu web on http://{WEB_HOST_NAME}:{args.port}/?token={token}"
                 " (open it once per browser; the token is your login, keep it to yourself)",
                 flush=True,
             )
@@ -1024,7 +1032,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
             )
             await uvicorn.Server(config).serve()
         finally:
-            await conn.close()
+            await db.close()
 
     try:
         asyncio.run(serve())

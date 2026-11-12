@@ -102,16 +102,30 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
                 printed += await server.stdout.receive(4096)
             line = next(x for x in printed.decode().splitlines() if "?token=" in x)
             address = line.split()[3]
-            assert address.startswith(f"http://127.0.0.1:{port}/?token=")
+            # Not the bound address: the interface answers to its own host name only, so the
+            # browser keeps its login apart from every other server on loopback.
+            assert address.startswith(f"http://calu.localhost:{port}/?token=")
+            # This client does what a browser does by itself: `calu.localhost` is the loopback
+            # interface. It connects there and names the host in the request.
+            named = {"Host": f"calu.localhost:{port}"}
+            local = f"http://127.0.0.1:{port}"
             async with httpx.AsyncClient(follow_redirects=True) as client:
                 while True:
                     try:
-                        refused = await client.get(f"http://127.0.0.1:{port}/", timeout=2)
+                        refused = await client.get(f"{local}/", headers=named, timeout=2)
                         break
                     except httpx.HTTPError:
                         await anyio.sleep(0.3)
                 assert refused.status_code == 401, "no token, no page"
-                answer = await client.get(address, timeout=5)
+                bare = await client.get(f"{local}/?{address.split('?')[1]}", timeout=5)
+                assert bare.status_code == 403, "not under the bare loopback address"
+                assert f"http://calu.localhost:{port}/" in bare.text
+                login = await client.get(
+                    f"{local}/?{address.split('?')[1]}", headers=named, timeout=5
+                )
+                assert login.status_code == 200 and "calu-key" in login.text
+                # The login set the cookie, so the fleet page is served now.
+                answer = await client.get(f"{local}/", headers=named, timeout=5)
             assert answer.status_code == 200
             assert "calu" in answer.text
             # An empty database is the first thing a new user sees, so the page has to say

@@ -9,15 +9,38 @@
   let skipped = new Set();
   let busy = false;
   let asking = false;    // the one on screen is a question of the agent, not a step to judge
+  let failed = 0;        // polls that failed in a row
+  let key = "";          // the key of this browser's login (login.js), sent with every answer
+  try { key = localStorage.getItem("calu-key") || ""; } catch (e) { /* storage blocked */ }
+
+  // A poll that fails leaves the last queue on screen, which may be out of date: sessions can
+  // wait that are not shown. One failure can be a restart; from the second on the page says so,
+  // until a poll succeeds again.
+  function stale(on) {
+    const box = el("stale");
+    if (!on) { box.replaceChildren(); return; }
+    if (box.firstChild) return;
+    const card = document.createElement("div");
+    card.className = "card escalation";
+    card.textContent =
+      "calu web or its database cannot be reached: this list may be out of date, and " +
+      "sessions may wait that are not shown here. The page keeps trying.";
+    box.appendChild(card);
+  }
 
   async function poll() {
     if (busy) return;
     try {
       const answer = await fetch(api, { headers: { accept: "application/json" } });
+      if (!answer.ok) throw new Error(`status ${answer.status}`);
       queue = (await answer.json()).escalations || [];
     } catch (error) {
-      return;  // the server went away; the next tick tries again
+      failed += 1;
+      stale(failed >= 2);
+      return;
     }
+    failed = 0;
+    stale(false);
     render();
   }
 
@@ -150,7 +173,7 @@
     try {
       const answered = await fetch(`${api}/${entry.id}/resolve`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-calu-key": key },
         body: JSON.stringify({
           decision,
           note: decision === "answer" ? "" : given,
@@ -158,10 +181,24 @@
           remember: remember && remember.checked ? entry.command : "",
         }),
       });
-      const result = await answered.json();
+      // 401 (no key, or calu web was restarted) and 503 (no database) do not answer in the
+      // shape below, and the escalation is still open: it stays on screen.
+      let result = null;
+      try { result = await answered.json(); } catch (error) { result = null; }
+      if (!answered.ok && !(result && result.message)) {
+        alert(answered.status === 401
+          ? "not answered: this browser is not logged in to calu web any more. Open the " +
+            "address that `calu web` printed again."
+          : `not answered: calu web answered with status ${answered.status}`);
+        return;
+      }
       if (!result.ok) { alert(`not answered: ${result.message}`); }
+      if (answered.status === 503) return;
       queue = queue.filter((other) => other.id !== entry.id);
       shown = null;
+    } catch (error) {
+      alert("not answered: calu web cannot be reached");
+      return;
     } finally {
       busy = false;
     }
