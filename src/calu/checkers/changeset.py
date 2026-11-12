@@ -4,11 +4,13 @@ A step checker judges one edit with limited context, which is the right altitude
 documentation and local design, and the wrong one for "is this change correct and complete?".
 That question has an answer only once the change exists. The commit is the moment it does:
 
-    Claude runs a Bash line that contains `git commit`
+    Claude runs a shell line (Bash, Monitor) that contains `git commit`
         rules (deny lists)        a force push or a deletion still asks the human first
         classify_commit(line)
             COMPOUND              DENY, deterministically: "run `git commit` as its own command"
             PLAIN                 calu collects the diff: `git diff --stat` and `git diff`
+                                  not readable: ESCALATE without a model call
+                                                (DENY "stage first" where that makes it readable)
                                   the command checkers judge the line        (as for any command)
                                   the changeset checkers judge line and diff (in addition)
                                   the most restrictive verdict wins
@@ -26,11 +28,40 @@ A PLAIN line is one simple command that starts with the two words `git commit`, 
 arguments and none of the options that pick the content in the command itself (`-i`, `-o`,
 `-p`, `--pathspec-from-file`). `-a` and `--amend` are supported, because the diff they record
 can be computed: against HEAD for `-a`, against HEAD's parent for `--amend`. The message may
-come from `$(cat <<'EOF' ... EOF)`, which is how Claude Code writes commit messages.
+come from `$(cat <<'EOF' ... EOF)`, which is how Claude Code writes commit messages; a `cat`
+without arguments is therefore the one other command a PLAIN line may hold.
+
+calu reads the options as git does. git accepts a long option shortened to any prefix that
+names one option only, so `commit_options` resolves every long option against the list of
+`git commit`'s options (`COMMIT_LONG`) by the same rule. A word it cannot resolve to exactly one
+known option, an option it does not know, and a short letter it does not know make the line
+COMPOUND: the classification never rests on a guess.
 
 calu runs the git commands itself, in the directory the command starts in: it is the trusted
-side, and the agent never sees them. The repository is the agent's to write, so the calls switch
-off what a repository's configuration could make git execute (`GIT_OPTIONS`, `DIFF_OPTIONS`).
+side, and the agent never sees them. The repository is the agent's to write, so the diff is
+taken **without the repository's configuration**:
+
+    git rev-parse ...                  where the repository's files are, and what HEAD is
+    a temporary directory of calu's    `config` written by calu, an empty `refs/`
+    git diff, with GIT_COMMON_DIR = that directory, GIT_DIR and GIT_OBJECT_DIRECTORY = the
+              repository's, and no user or system configuration
+
+git reads `config` from the common directory, so no setting of the repository reaches the
+diff: no program it names is run (file system monitor, content filters, external diff, text
+conversion, a fetch of missing objects), and no setting can leave a file out of the diff or
+change how it is shown. `DIFF_OPTIONS` states the same on the command line, and `--text` shows
+the content of a file that an attribute declares binary.
+
+`-a` makes git read the files of the working tree while it commits. calu's diff reads them the
+same way, with the settings that decide how a file's content becomes a blob copied from the
+repository as plain values (`MIRRORED_CORE`). A content filter is a program, so calu does not
+run it: if a changed file has a `filter` attribute, the changeset of an `-a` commit counts as
+unreadable, and Claude is told to stage the change first (the staged content is already what
+the commit records).
+
+A changeset that calu could not read completely is never left to a model: `Changeset.problem`
+makes the session escalate the commit (or refuse it, where staging first solves it), and
+`Changeset.cut` turns a checker's approval into an escalation.
 
 Not recognised as a commit, and therefore judged by the command checkers alone: a git alias
 (`git ci`), a script or a program that commits, and a variable that expands to the command
@@ -39,11 +70,16 @@ Not recognised as a commit, and therefore judged by the command checkers alone: 
 
 import logging
 import os
+import re
+import shutil
+import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 import anyio
+import anyio.to_thread
 
 from calu.checkers.shell import command_variants, parse_command
 
@@ -55,47 +91,132 @@ MAX_DIFF_CHARS = 60_000
 GIT_TIMEOUT_S = 30.0
 """Upper bound for one git call; on a timeout the changeset is reported as unavailable."""
 
-GIT_OPTIONS = ("--no-optional-locks", "-c", "core.fsmonitor=false")
-"""Options before the git subcommand in calu's own calls. The repository is writable by the
-agent, and `core.fsmonitor` in its configuration names a program git would run; without the
-optional locks a diff does not rewrite the user's index either."""
+GIT_OPTIONS = ("--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false")
+"""Options before the git subcommand in calu's own calls: no pager, no program that watches the
+file system, and no rewrite of the user's index (without the optional locks a diff does not
+refresh it)."""
 
-DIFF_OPTIONS = ("--no-color", "--no-ext-diff", "--no-textconv")
-"""Options of calu's `git diff` calls: no external diff program and no text conversion filter,
-both of which a repository's configuration can point at any program."""
+DIFF_OPTIONS = (
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--text",
+    "--no-renames",
+    "--no-relative",
+    "--submodule=short",
+    "--ignore-submodules=dirty",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
+"""Options of calu's `git diff` calls. No external diff program and no text conversion; `--text`
+shows the content of every file, whatever an attribute says about it; one entry per path; the
+whole repository, also from a subdirectory; a submodule as its recorded commit, which is what a
+commit records of it, without asking the submodule."""
+
+GIT_ENVIRONMENT = {
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_ATTR_NOSYSTEM": "1",
+    "GIT_NO_LAZY_FETCH": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+"""Environment of calu's diff calls, next to the directories of `_diff_environment`: no user or
+system configuration, and no fetch of an object that is missing."""
+
+MIRRORED_CORE = (
+    "filemode",
+    "symlinks",
+    "ignorecase",
+    "autocrlf",
+    "eol",
+    "safecrlf",
+    "precomposeunicode",
+)
+"""`core.*` settings that decide how git turns a working file into the content it commits. For
+an `-a` commit calu copies their values into its own configuration, and only values that are a
+single word of letters (`true`, `input`, `crlf`)."""
+
+HEAD_ID = re.compile(r"[0-9a-f]{40,64}")
+"""A commit id as `git rev-parse` prints it (SHA-1 or SHA-256)."""
+
+STAGE_FIRST = (
+    "Stage the change first (`git add -u`, or `git add <files>`), then run `git commit` "
+    "without `-a`: the staged content is what the commit records, and calu can read it."
+)
+"""What Claude is told when the changeset of an `-a` commit cannot be read but the staged one
+could (`Changeset.stage_first`)."""
 
 GIT_GLOBAL_VALUED = frozenset(
     {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
 )
 """Options between `git` and the subcommand that take a separate value."""
 
-COMMIT_VALUED_LONG = frozenset(
-    {
-        "--message",
-        "--file",
-        "--reuse-message",
-        "--reedit-message",
-        "--fixup",
-        "--squash",
-        "--author",
-        "--date",
-        "--template",
-        "--cleanup",
-        "--trailer",
-    }
-)
-"""Long options of `git commit` whose value is the next word (or follows a `=`)."""
+COMMIT_LONG: Mapping[str, str] = {
+    "quiet": "flag",
+    "verbose": "flag",
+    "file": "value",
+    "author": "value",
+    "date": "value",
+    "message": "value",
+    "reedit-message": "value",
+    "reuse-message": "value",
+    "fixup": "value",
+    "squash": "value",
+    "reset-author": "flag",
+    "trailer": "value",
+    "signoff": "flag",
+    "template": "value",
+    "edit": "flag",
+    "cleanup": "value",
+    "status": "flag",
+    "gpg-sign": "optional",
+    "all": "all",
+    "include": "select",
+    "interactive": "select",
+    "patch": "select",
+    "unified": "select",
+    "inter-hunk-context": "select",
+    "only": "select",
+    "verify": "flag",
+    "dry-run": "flag",
+    "short": "flag",
+    "branch": "flag",
+    "ahead-behind": "flag",
+    "porcelain": "flag",
+    "long": "flag",
+    "null": "flag",
+    "amend": "amend",
+    "post-rewrite": "flag",
+    "untracked-files": "optional",
+    "pathspec-from-file": "select",
+    "pathspec-file-nul": "select",
+    "allow-empty": "flag",
+    "allow-empty-message": "flag",
+}
+"""Every long option of `git commit` (git 2.43 with its hidden options, and the two that later
+versions added for `--patch`), without the leading `--`, and what it means for the changeset:
+
+    flag      takes no value and does not change which content is committed
+    optional  as flag; a value is only ever attached with `=`
+    value     takes a value: the next word, or what follows a `=`
+    all       `--all`: tracked changes that were not staged are committed too
+    amend     `--amend`: the commit replaces HEAD
+    select    picks the committed content in the command itself, or belongs to an option
+              that does
+
+git also accepts each of them with `no-` in front (`--no-verify` is the option `verify` negated,
+`--no-edit` the option `edit`), and any prefix that names one spelling only. A test compares
+this list with what the installed git prints for `git commit -h`."""
+
+COMMIT_SHORT_FLAGS = frozenset("qvsenz")
+"""Short options of `git commit` that take no value and do not change the committed content."""
 
 COMMIT_VALUED_SHORT = frozenset("mFCct")
 """Short options of `git commit` whose value is the rest of the word or the next word."""
 
 COMMIT_ATTACHED_SHORT = frozenset("Su")
 """Short options of `git commit` with an optional value that is only ever attached (`-Skey`)."""
-
-COMMIT_SELECTING = frozenset(
-    {"--include", "--only", "--patch", "--interactive", "--pathspec-from-file"}
-)
-"""Long options of `git commit` that select the committed content in the command itself."""
 
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 """Programs whose `-c` argument is a command line of its own."""
@@ -113,9 +234,9 @@ COMMIT_ALONE = (
     "calu reviews the change a commit records before the commit runs, and it can only tell "
     "what that change is when `git commit` is the whole command line. {cause} Run everything "
     "else first as its own command (for example `git add <files>`), then run "
-    "`git commit -m ...` alone, in the repository's directory. `-a` and `--amend` are fine; "
-    "paths after the commit, `git -C <dir>`, `cd ... &&`, pipes and redirections into a file "
-    "are not."
+    "`git commit -m ...` alone, in the repository's directory. `-a` and `--amend` are fine, "
+    "with every option written out in full; paths after the commit, `git -C <dir>`, "
+    "`cd ... &&`, a pipe into another command and a redirection into a file are not."
 )
 """What Claude is told when a line with a commit is refused; `cause` is one sentence."""
 
@@ -138,8 +259,9 @@ class CommitOptions:
     `all_tracked` is `-a`/`--all` (tracked changes that were not staged are committed too),
     `amend` is `--amend` (the commit replaces HEAD). `problem` is "" for a commit whose content
     follows from these two and the index, and otherwise one sentence saying what in the command
-    selects the content itself (a path argument, `-i`, `-o`, `-p`, `--pathspec-from-file`, or a
-    word the shell expands, which calu cannot read).
+    selects the content itself (a path argument, `-i`, `-o`, `-p`, `--pathspec-from-file`), or
+    which word calu cannot read with certainty (a word the shell expands, an option that is
+    unknown or shortened to a prefix of several options).
     """
 
     all_tracked: bool = False
@@ -168,24 +290,63 @@ class CommitLine:
         return COMMIT_ALONE.format(cause=self.cause)
 
 
+def resolve_long_option(name: str) -> tuple[str, bool] | None:
+    """Tell which long option of `git commit` a word names, by git's own rule.
+
+    git takes a word that is an option's full name as that option, and otherwise accepts a
+    prefix that fits one spelling only, where the spellings are every option of `COMMIT_LONG`
+    and each of them with `no-` in front. This function applies the rule to that whole set, so
+    its candidates include every candidate git has for a known option.
+
+    Args:
+        name: The word without the leading `--` and without a `=value` part.
+
+    Returns:
+        `(option, negated)` with `option` a key of `COMMIT_LONG`, or None if the word names no
+        known option or fits more than one spelling.
+
+    Example:
+        resolve_long_option("amend") == ("amend", False)
+        resolve_long_option("no-verify") == ("verify", True)
+        resolve_long_option("pathspec-from-f") == ("pathspec-from-file", False)
+        resolve_long_option("a") is None  # `--all`, `--amend`, `--author`, ...
+    """
+    spellings = {
+        spelled: (option, negated)
+        for option in COMMIT_LONG
+        for spelled, negated in ((option, False), (f"no-{option}", True))
+    }
+    if name in spellings:
+        return spellings[name]
+    if not name:
+        return None
+    fitting = {found for spelled, found in spellings.items() if spelled.startswith(name)}
+    return fitting.pop() if len(fitting) == 1 else None
+
+
 def commit_options(argv: list[str]) -> CommitOptions:
-    """Read the options of one `git commit` from its own words.
+    """Read the options of one `git commit` from its own words, as git reads them.
 
     Only the words of the commit command are read, and the value of an option that takes one
     (`-m`, `-F`, `--author`, ...) is skipped, so a message that contains "-a" or "--amend" does
-    not change the result.
+    not change the result. Long options are resolved with `resolve_long_option`, so a shortened
+    option counts as the option git takes it for.
 
     Args:
         argv: The words after `git commit`, quotes removed, one entry per shell word.
 
     Returns:
         The options. `problem` is set if a word names a path, selects content (`-i`, `-o`,
-        `-p`, `--interactive`, `--pathspec-from-file`) or is expanded by the shell (`$VAR`,
-        a backtick) where an option or a path would stand.
+        `-p`, `--interactive`, `--pathspec-from-file`), is expanded by the shell (`$VAR`, a
+        backtick) where an option or a path would stand, or is an option that calu cannot
+        resolve to exactly one option it knows -- also a known option in a form whose meaning
+        calu does not know (`--no-all`, `--amend=x`).
 
     Example:
         commit_options(["-am", "add -a flag"]) == CommitOptions(all_tracked=True)
+        commit_options(["--ame"]) == CommitOptions(amend=True)
         commit_options(["-m", "x", "a.py"]).problem != ""
+        commit_options(["--a"]).problem != ""
     """
     all_tracked = amend = False
     problem = ""
@@ -203,15 +364,31 @@ def commit_options(argv: list[str]) -> CommitOptions:
                 "options or paths the commit gets."
             )
         elif word.startswith("--"):
-            name, separator, _ = word.partition("=")
-            if name == "--all":
+            spelled, separator, _ = word.partition("=")
+            resolved = resolve_long_option(spelled[2:])
+            if resolved is None:
+                problem = (
+                    f"calu cannot tell which option of `git commit` `{spelled}` is. Write "
+                    "every option out in full."
+                )
+                continue
+            option, negated = resolved
+            kind = COMMIT_LONG[option]
+            if kind == "select":
+                problem = f"This commit selects its content with `--{option}`."
+            elif kind == "optional" or (kind == "flag" and not separator):
+                pass
+            elif negated or (separator and kind != "value"):
+                problem = (
+                    f"calu does not know what `{word[:60]}` means for the content of the "
+                    f"commit. Write `--{option}` in its usual form, or leave it out."
+                )
+            elif kind == "all":
                 all_tracked = True
-            elif name == "--amend":
+            elif kind == "amend":
                 amend = True
-            elif name in COMMIT_SELECTING:
-                problem = f"This commit selects its content with `{name}`."
-            elif name in COMMIT_VALUED_LONG and not separator:
-                index += 1  # the value is the next word
+            elif not separator:
+                index += 1  # a "value" option: the value is the next word
         elif word.startswith("-") and len(word) > 1:
             for position, letter in enumerate(word[1:], start=1):
                 if letter in COMMIT_VALUED_SHORT:
@@ -224,6 +401,8 @@ def commit_options(argv: list[str]) -> CommitOptions:
                     all_tracked = True
                 elif letter in "iop":
                     problem = f"This commit selects its content with `-{letter}`."
+                elif letter not in COMMIT_SHORT_FLAGS:
+                    problem = f"calu does not know the option `-{letter}` of `git commit`."
         else:
             problem = f"This commit names a path to commit (`{word}`)."
     return CommitOptions(all_tracked=all_tracked, amend=amend, problem=problem)
@@ -355,7 +534,8 @@ def _classify(command: str, cwd: Path, depth: int) -> CommitLine:
             "This line does not start the commit with the two words `git commit` "
             f"(it runs `{' '.join(words[:4])[:60]} ...`)."
         )
-    # `cat` without arguments is the one companion allowed: `-m "$(cat <<'EOF' ... EOF)"`.
+    # `cat` without arguments is the one companion allowed, wherever it stands: it is how
+    # `-m "$(cat <<'EOF' ... EOF)"` reads the message, and it changes neither index nor files.
     others = [other for other in argvs if other is not words and other != ["cat"]]
     if others:
         return compound(
@@ -387,70 +567,325 @@ def is_commit(command: str, cwd: Path) -> bool:
     return classify_commit(command, cwd).kind is not CommitKind.NONE
 
 
-async def changeset(cwd: Path, command: str) -> str:
-    """Return the change that a plain commit command would record, as text for the checker.
+@dataclass(frozen=True)
+class Changeset:
+    """What calu read of the change a plain commit would record.
 
-    Runs `git diff --stat` and `git diff` in `cwd`. Never raises: a missing git, a directory
-    that is no repository and a timeout all come back as a line saying so, because a checker
-    that cannot see the change should say that rather than fail.
+    Exactly one of three holds: `problem` is set and `text` is "" (the change could not be
+    read); `text` is "" and `problem` is "" (the commit would record nothing); `text` holds
+    `git diff --stat` and the diff. `cut` says that the diff in `text` is not whole. Only a
+    result without `problem` and without `cut` shows a checker the complete change.
+    """
+
+    text: str = ""
+    problem: str = ""
+    """Why the change could not be read, as one sentence; "" if it was read."""
+    cut: bool = False
+    """True if the diff was longer than `MAX_DIFF_CHARS` and `text` holds its start only."""
+    stage_first: bool = False
+    """True if `problem` only concerns an `-a` commit: the same change, staged and committed
+    without `-a`, can be read (`STAGE_FIRST`)."""
+
+    def shown(self) -> str:
+        """Return the result as text for a human or a checker.
+
+        Returns:
+            `text`, or one line in parentheses saying that the change could not be read and
+            why, or that nothing would be committed.
+        """
+        if self.problem:
+            return f"(the changeset could not be read: {self.problem})"
+        return self.text or "(nothing would be committed: the diff is empty)"
+
+
+class _UnreadableError(Exception):
+    """calu could not read the change of a commit; the message says why, as one sentence."""
+
+    def __init__(self, problem: str, stage_first: bool = False) -> None:
+        """Keep the reason.
+
+        Args:
+            problem: Why the change could not be read.
+            stage_first: Whether the staged change could be read instead.
+        """
+        super().__init__(problem)
+        self.stage_first = stage_first
+
+
+async def changeset(cwd: Path, command: str) -> Changeset:
+    """Read the change that a plain commit command would record.
+
+    Runs `git rev-parse`, then `git diff --stat` and `git diff` with a configuration of calu's
+    own (module docstring), in the repository of `cwd`. Never raises: a missing git, a directory
+    that is no repository, a timeout and a line that is no plain commit come back as a result
+    with `problem` set, which the caller must not hand to a model as if it were the change.
 
     Which diff:
 
-        git commit            index against HEAD         git diff --cached
-        git commit -a         files against HEAD         git diff HEAD
-        git commit --amend    index against HEAD~1       git diff --cached HEAD~1
-        git commit -a --amend files against HEAD~1       git diff HEAD~1
+        git commit            index against HEAD         git diff --cached <HEAD>
+        git commit -a         files against HEAD         git diff <HEAD>
+        git commit --amend    index against HEAD~1       git diff --cached <HEAD>~1
+        git commit -a --amend files against HEAD~1       git diff <HEAD>~1
+
+    Side effects: creates a temporary directory and removes it again; reads the files of the
+    working tree for `-a`. Nothing in the repository is written.
 
     Args:
         cwd: The directory the command runs in, which decides the repository.
         command: The commit command line; it must be PLAIN for `classify_commit`.
 
     Returns:
-        The summary and the diff, the diff cut at `MAX_DIFF_CHARS`; "" if there is nothing to
-        commit; a "(...)" note if the line is not a plain commit or git could not be asked (no
-        repository, no git, a timeout, or an `--amend` in a repository with a single commit).
+        The result (see `Changeset`): the summary and the diff, the diff cut at
+        `MAX_DIFF_CHARS` with `cut` set; an empty result if there is nothing to commit; a
+        `problem` if the line is not a plain commit, git could not be asked (no repository, no
+        git, a timeout, an `--amend` without a commit before HEAD), or an `-a` commit changes a
+        file whose content a filter would convert (`stage_first` is set then).
     """
     line = classify_commit(command, cwd)
     if line.kind is not CommitKind.PLAIN or line.options is None:
-        return "(the changeset could not be read: the line is not a plain `git commit`)"
-    against = [] if line.options.all_tracked else ["--cached"]
-    if line.options.amend:
+        return Changeset(problem="the line is not a plain `git commit`")
+    scratch: str | None = None
+    try:
+        scratch = await anyio.to_thread.run_sync(lambda: tempfile.mkdtemp(prefix="calu-diff-"))
+        return await _read_changeset(cwd, line.options, Path(scratch))
+    except _UnreadableError as exc:
+        return Changeset(problem=str(exc), stage_first=exc.stage_first)
+    except OSError as exc:
+        log.warning("reading a changeset failed: %s", exc)
+        return Changeset(problem=f"{type(exc).__name__}: {exc}")
+    finally:
+        if scratch is not None:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(lambda: shutil.rmtree(scratch, ignore_errors=True))
+
+
+async def _read_changeset(cwd: Path, options: CommitOptions, scratch: Path) -> Changeset:
+    """Implement `changeset` for a plain commit, with a temporary directory to work in.
+
+    Args:
+        cwd: The directory the command runs in.
+        options: The commit's options.
+        scratch: An empty directory of calu's own; the caller removes it.
+
+    Returns:
+        The change, or an empty result if there is nothing to commit.
+
+    Raises:
+        _UnreadableError: If git could not be asked or the change cannot be read whole.
+        OSError: If the temporary configuration could not be written.
+    """
+    where = (
+        await _git(
+            cwd,
+            [
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-dir",
+                "--git-common-dir",
+                "--git-path",
+                "objects",
+                "--show-toplevel",
+                "--show-object-format",
+            ],
+        )
+    ).splitlines()
+    if len(where) != 5:
+        raise _UnreadableError("git did not name the repository's directories")
+    git_dir, common_dir, objects, top, object_format = where
+    head = (await _git(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"], accept=(0, 1))).strip()
+    if head and not HEAD_ID.fullmatch(head):
+        raise _UnreadableError("git did not name the commit of HEAD")
+    if not head and (options.amend or options.all_tracked):
+        raise _UnreadableError(
+            "the branch has no commit yet, and the commit uses `-a` or `--amend`",
+            stage_first=not options.amend,
+        )
+    core = {"repositoryformatversion": "0", "bare": "false"}
+    if options.all_tracked:
+        core.update(await _mirrored_core(cwd))
+    extensions = ""
+    if object_format != "sha1":
+        if not object_format.isalnum():
+            raise _UnreadableError("git did not name the repository's object format")
+        core["repositoryformatversion"] = "1"
+        extensions = f"[extensions]\n\tobjectformat = {object_format}\n"
+    config = "[core]\n" + "".join(f"\t{key} = {value}\n" for key, value in core.items())
+    await anyio.to_thread.run_sync(_write_scratch, scratch, config + extensions, Path(common_dir))
+    environment = {
+        **os.environ,
+        **GIT_ENVIRONMENT,
+        "GIT_DIR": git_dir,
+        "GIT_COMMON_DIR": str(scratch),
+        "GIT_OBJECT_DIRECTORY": objects,
+        "GIT_WORK_TREE": top,
+    }
+    against = [] if options.all_tracked else ["--cached"]
+    if head:
         # The amended commit replaces HEAD, so the change it records is the one against the
-        # previous commit's parent.
-        against.append("HEAD~1")
-    elif line.options.all_tracked:
-        against.append("HEAD")  # `-a` also takes tracked changes that were not staged
-    stat = await _git(cwd, ["diff", *DIFF_OPTIONS, "--stat", *against])
-    if stat.startswith("("):
-        return stat
-    patch = await _git(cwd, ["diff", *DIFF_OPTIONS, *against])
-    if patch.startswith("("):
-        return patch
+        # previous commit's parent. HEAD is passed as an id: calu's directory holds no refs.
+        against.append(f"{head}~1" if options.amend else head)
+    diff = ["diff", *DIFF_OPTIONS]
+    top_dir = Path(top)
+    if options.all_tracked:
+        await _refuse_filtered(top_dir, [*diff, "--name-only", "-z", *against], environment)
+    stat = await _git(top_dir, [*diff, "--stat", *against], environment)
+    patch = await _git(top_dir, [*diff, *against], environment)
     if not stat.strip() and not patch.strip():
-        return ""
-    if len(patch) > MAX_DIFF_CHARS:
+        return Changeset()
+    cut = len(patch) > MAX_DIFF_CHARS
+    if cut:
         patch = patch[:MAX_DIFF_CHARS] + "\n[... the diff is cut here; the summary above is whole]"
-    return f"{stat.rstrip()}\n\n{patch}"
+    return Changeset(text=f"{stat.rstrip()}\n\n{patch}", cut=cut)
 
 
-async def _git(cwd: Path, arguments: list[str]) -> str:
-    """Run one git command with `GIT_OPTIONS` and return its output; never raises.
+def _write_scratch(scratch: Path, config: str, common_dir: Path) -> None:
+    """Fill calu's temporary directory so that git accepts it as a common directory.
+
+    Writes `config` and an empty `refs/`, and copies the repository's `info/attributes` if it
+    has one: attributes are data (which files are text, which have a filter), and calu's diff
+    should see the files as the commit will.
+
+    Args:
+        scratch: The empty temporary directory.
+        config: The text of the configuration file.
+        common_dir: The repository's own common directory.
+
+    Raises:
+        OSError: If a file could not be written.
+    """
+    (scratch / "refs").mkdir()
+    (scratch / "config").write_text(config, encoding="utf-8")
+    try:
+        attributes = (common_dir / "info" / "attributes").read_bytes()
+    except OSError:
+        return
+    (scratch / "info").mkdir()
+    (scratch / "info" / "attributes").write_bytes(attributes)
+
+
+async def _mirrored_core(cwd: Path) -> dict[str, str]:
+    """Read the repository's values of the `MIRRORED_CORE` settings.
+
+    Args:
+        cwd: A directory inside the repository.
+
+    Returns:
+        Setting name (lower case, without `core.`) -> value, for each setting that is set to a
+        single word of letters; where a setting is set more than once, the last value, as git
+        takes it.
+
+    Raises:
+        _UnreadableError: If git could not be asked.
+    """
+    pattern = rf"^core\.({'|'.join(MIRRORED_CORE)})$"
+    listed = await _git(cwd, ["config", "-z", "--get-regexp", pattern], accept=(0, 1))
+    values: dict[str, str] = {}
+    for entry in listed.split("\0"):
+        key, _, value = entry.partition("\n")
+        name = key.lower().removeprefix("core.")
+        if name in MIRRORED_CORE and value.isascii() and value.isalpha():
+            values[name] = value
+    return values
+
+
+async def _refuse_filtered(top: Path, names: list[str], environment: Mapping[str, str]) -> None:
+    """Refuse to read an `-a` commit that changes a file with a `filter` attribute.
+
+    git would pass such a file's content through the filter program while it commits. calu
+    does not run a program the repository names, so it cannot show what would be committed.
+
+    Args:
+        top: The top directory of the working tree.
+        names: The `git diff --name-only -z` call that lists the changed paths.
+        environment: The environment of calu's diff calls.
+
+    Raises:
+        _UnreadableError: If a changed path has a `filter` attribute, or git could not be asked.
+    """
+    changed = await _git_raw(top, names, environment)
+    if not changed:
+        return
+    answer = await _git_raw(
+        top, ["check-attr", "-z", "--stdin", "filter"], environment, stdin=changed
+    )
+    fields = answer.decode(errors="replace").split("\0")
+    for path, value in zip(fields[0::3], fields[2::3], strict=False):
+        if value not in ("unspecified", "unset"):
+            raise _UnreadableError(
+                f"`-a` would commit a file whose content a filter converts ({path[:200]!r}, "
+                f"filter {value[:60]!r}), and calu does not run that program",
+                stage_first=True,
+            )
+
+
+async def _git(
+    cwd: Path,
+    arguments: list[str],
+    environment: Mapping[str, str] | None = None,
+    *,
+    accept: tuple[int, ...] = (0,),
+) -> str:
+    """Run one git command with `GIT_OPTIONS` and return its output as text.
 
     Args:
         cwd: The directory to run in.
         arguments: The git arguments, e.g. `["diff", "--cached"]`.
+        environment: The environment of the call; None for calu's own.
+        accept: The exit codes that are no error.
 
     Returns:
-        The standard output, or a line in parentheses saying why git could not be asked.
+        The standard output; bytes that are no UTF-8 are replaced.
+
+    Raises:
+        _UnreadableError: As `_git_raw`.
     """
+    output = await _git_raw(cwd, arguments, environment, accept=accept)
+    return output.decode(errors="replace")
+
+
+async def _git_raw(
+    cwd: Path,
+    arguments: list[str],
+    environment: Mapping[str, str] | None = None,
+    *,
+    stdin: bytes = b"",
+    accept: tuple[int, ...] = (0,),
+) -> bytes:
+    """Run one git command with `GIT_OPTIONS` and return its output as bytes.
+
+    Args:
+        cwd: The directory to run in.
+        arguments: The git arguments, e.g. `["diff", "--cached"]`.
+        environment: The environment of the call; None for calu's own, with fetching of
+            missing objects and prompting switched off.
+        stdin: Bytes for the command's standard input.
+        accept: The exit codes that are no error.
+
+    Returns:
+        The standard output.
+
+    Raises:
+        _UnreadableError: If git is missing, does not answer within `GIT_TIMEOUT_S` or exits
+            with a code that is not in `accept`. The message is one line.
+    """
+    if environment is None:
+        # A call that reads the repository's own configuration (where its directories are,
+        # a few `core.*` values): it must not fetch or prompt either.
+        environment = {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
     try:
         with anyio.fail_after(GIT_TIMEOUT_S):
-            done = await anyio.run_process(["git", *GIT_OPTIONS, *arguments], cwd=cwd, check=False)
+            done = await anyio.run_process(
+                ["git", *GIT_OPTIONS, *arguments],
+                cwd=cwd,
+                check=False,
+                env=environment,
+                input=stdin or None,
+            )
     except (OSError, TimeoutError) as exc:
         log.warning("git %s failed: %s", " ".join(arguments), exc)
-        return f"(the changeset could not be read: git {arguments[0]} failed)"
-    if done.returncode != 0:
+        raise _UnreadableError(f"git {arguments[0]} failed ({type(exc).__name__})") from exc
+    if done.returncode not in accept:
         message = done.stderr.decode(errors="replace").strip().splitlines()
-        reason = message[0] if message else f"exit code {done.returncode}"
-        return f"(the changeset could not be read: {reason})"
-    return done.stdout.decode(errors="replace")
+        reason = message[0][:300] if message else f"exit code {done.returncode}"
+        raise _UnreadableError(f"git {arguments[0]}: {reason}")
+    return done.stdout

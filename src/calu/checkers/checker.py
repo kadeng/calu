@@ -56,6 +56,8 @@ the commit diff (`calu.checkers.changeset.changeset`) and the write-set patch
 (`calu.changes`). Every line of a git diff starts with a space, "+", "-", "@", "\\" or a
 keyword, never with "[", so a line that **is** one of these notes was written by calu; a diff
 that merely contains the words does not match. A test pins the two spellings to their sources.
+The session also says so itself (`extra_cut`), from `Changeset.cut` and `ChangeSet.cut`; this
+pattern is the second net for a caller that passes the text alone.
 """
 
 

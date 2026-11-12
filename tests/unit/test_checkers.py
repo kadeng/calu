@@ -513,6 +513,25 @@ async def test_an_approval_of_a_cut_changeset_becomes_an_escalation(
     assert told.decision is Decision.ESCALATE and "A part of this step" in told.reason
 
 
+def test_the_target_path_of_an_edit_is_shown_whole_or_counted_as_cut(workspace: Path):
+    """cc2: a checker that approves a write has seen the name of the file it goes to."""
+    from calu.checkers.render import MAX_PATH_CHARS
+
+    long_path = "d/" * 800 + "last-segment.yml"
+    step = Step(
+        tool_name="Write", tool_input={"file_path": long_path, "content": "x\n"}, cwd=str(workspace)
+    )
+    rendered = render_step_cut(step, workspace)
+    assert "last-segment.yml`" in rendered.text and rendered.unseen_chars == 0
+    longer = "d/" * 3000 + "last-segment.yml"
+    step = Step(
+        tool_name="Write", tool_input={"file_path": longer, "content": "x\n"}, cwd=str(workspace)
+    )
+    rendered = render_step_cut(step, workspace)
+    assert rendered.unseen_chars >= len(longer) - MAX_PATH_CHARS > 0
+    assert [line for line in outside_fences(rendered.text) if line.startswith("[calu:")]
+
+
 async def test_the_cut_notes_are_the_ones_the_diff_sources_write(tmp_path: Path, monkeypatch):
     """`EXTRA_CUT` recognises the notes by their text, so the text is pinned to its sources."""
     import inspect
@@ -534,11 +553,13 @@ async def test_the_cut_notes_are_the_ones_the_diff_sources_write(tmp_path: Path,
     (tmp_path / "a.txt").write_text("line\n" * 400, encoding="utf-8")
     git("add", "a.txt")
     monkeypatch.setattr(changeset_module, "MAX_DIFF_CHARS", 500)
+    from calu.session import _changeset_block
+
     diff = await changeset_module.changeset(tmp_path, "git commit -m x")
-    assert EXTRA_CUT.search(f"# Changeset of this commit\n\n{diff}")
+    assert diff.cut and EXTRA_CUT.search(_changeset_block(diff))
     monkeypatch.setattr(changeset_module, "MAX_DIFF_CHARS", 500_000)
     whole = await changeset_module.changeset(tmp_path, "git commit -m x")
-    assert not EXTRA_CUT.search(f"# Changeset of this commit\n\n{whole}")
+    assert not whole.cut and not EXTRA_CUT.search(_changeset_block(whole))
     # The write-set patch of `calu.changes` ends a cut with this line.
     assert '"\\n[... the diff was cut]\\n"' in inspect.getsource(calu.changes)
     assert EXTRA_CUT.search("+x\n[... the diff was cut]\n")
