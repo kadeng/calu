@@ -85,7 +85,7 @@ async def test_a_turn_with_an_escalation_and_a_side_question_through_a_real_sess
             assert len(model.decisions) == 1 and model.state == "escalated"
             assert [entry.text for entry in model.queue] == []
 
-            await pilot.press("escape", "w")
+            await pilot.press("escape", "w", "w")
             await until(pilot, lambda: type(app.screen).__name__ == "DetailScreen", "the detail")
             await until(
                 pilot,
@@ -136,7 +136,7 @@ def test_calu_attach_uses_the_line_client_unless_a_terminal_is_there(
     monkeypatch.setenv("CALU_ATTACH", "plain")
     assert not wants_full_screen(plain=False)
     monkeypatch.delenv("CALU_ATTACH")
-    monkeypatch.setattr(start, "available", lambda: False)
+    monkeypatch.setattr(start, "problem", lambda: start.NOT_INSTALLED)
     assert capsys.readouterr().err == ""
     assert not wants_full_screen(plain=False)
     assert "pip install 'calu[tui]'" in capsys.readouterr().err

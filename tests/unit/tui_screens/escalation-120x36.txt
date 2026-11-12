@@ -22,15 +22,15 @@
                                                                                     ▏
                                                                                     ▏
                                                                                     ▏
-                                                                                    ▏
-                                                                                    ▏
+▌ you · waiting (after the running tool calls)  also bump the version               ▏
+▌ you · waiting (next turn)  then write the changelog entry                         ▏
  ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
  │ DECISION 1 of 1  ·  main  ·  Bash                                 waiting 0:00 │ ▏
  │   git push --force origin main                                                 │ ▏
  │   Stopped: The command `git push --force origin main` matches the deny rule    │ ▏
  │   `git push --force` (force push).                                             │ ▏
- │   a a allow · d d deny · n note · w detail (what the checker saw)              │ ▏
+ │   a,a allow · d,d deny · w,w detail · n,n note                                 │ ▏
  ╰────────────────────────────────────────────────────────────────────────────────╯ ▏
- to main · next turn  · tab changes
+ to main · next turn · tab changes
  >
- a a allow   d d deny   n note   w detail   alt+←/→ agent   f3 side question   ^p palette   f1 help
+ a,a allow   d,d deny   w,w detail   n,n note   alt+←/→ agent   f3 side question   ^p palette   f1 help

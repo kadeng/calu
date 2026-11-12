@@ -163,10 +163,17 @@ class Actions:
     async def interrupt(self) -> Outcome:
         """End Claude's current turn (`interrupt`).
 
+        Side effects: marks the interrupt as this client's own until the turn ends, so that
+        the steps it cancels are reported as cancelled by it; a refusal takes the mark back.
+
         Returns:
             The outcome.
         """
-        return await self.request("interrupt")
+        self.model.own_interrupt = True
+        outcome = await self.request("interrupt")
+        if not outcome.ok:
+            self.model.own_interrupt = False
+        return outcome
 
     async def stop(self) -> Outcome:
         """Stop the Claude session (`session.stop`). The calu process keeps running.

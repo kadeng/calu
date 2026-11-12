@@ -204,7 +204,8 @@ def test_the_stored_history_becomes_blocks_above_a_line_that_says_so() -> None:
         ("Bash", "DENY", "read a credentials file"),
     ]
     assert all(step.stored and step.duration is None for step in steps)
-    assert isinstance(model.blocks[-1], JoinBlock) and "stored history" in model.blocks[-1].text
+    last = model.blocks[-1]
+    assert isinstance(last, JoinBlock) and "stored history" in last.text
     assert model.turn == 2 and model.stored_blocks == 9
 
 

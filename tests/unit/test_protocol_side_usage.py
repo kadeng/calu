@@ -100,8 +100,14 @@ async def test_a_side_question_does_not_hold_up_the_clients_other_requests(tmp_p
                     await protocol.request("chat.send", {"text": "hello"})
                     await events.wait_for("turn.result")
                 assert answers == []
+                # One side question per client at a time: each is a model call of its own.
+                with pytest.raises(RequestFailed, match="still being answered"):
+                    await protocol.request("side.ask", {"question": "and this one?"})
                 release.set()
             assert answers == [{"answer": "late answer"}]
+            assert await protocol.request("side.ask", {"question": "again?"}) == {
+                "answer": "late answer"
+            }
 
 
 async def test_usage_reports_context_limits_cost_and_turns(tmp_path: Path):

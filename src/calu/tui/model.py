@@ -22,7 +22,8 @@ is shown only for what happened while this client was attached.
 """
 
 import difflib
-from collections.abc import Callable, Iterable
+from bisect import bisect_right
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -75,6 +76,20 @@ HANDLED: frozenset[str] = frozenset(
 """Every event method `SessionModel.apply` handles. A test compares it with the protocol's
 `EVENTS`, so a new event cannot reach this client and show nothing."""
 
+BLOCK_LIMIT = 3000
+"""How many blocks (the newest) the model keeps after it has folded older ones."""
+
+BLOCK_SLACK = 500
+"""The model folds when it holds `BLOCK_LIMIT + BLOCK_SLACK` blocks, so that folding (which
+makes the transcript lay itself out again) happens once per `BLOCK_SLACK` new blocks."""
+
+DIFF_TURNS = 20
+"""The before and after texts of an edit are kept for this many turns; after that the step
+keeps only the numbers of added and removed lines."""
+
+PENDING_DIFFS = 200
+"""How many tool calls may have diffs waiting for their `tool.use` at a time."""
+
 WORKING_STATES = frozenset({"running", "checking", "tool_call", "escalated"})
 """Session states in which Claude works on a turn (an interrupt has something to end)."""
 
@@ -102,13 +117,29 @@ class Diff:
     after: str
     start_line: int | None = None
     end_line: int | None = None
+    kept: bool = True
+    """False once `forget` has dropped the two texts; the counts stay."""
+    _counts: tuple[int, int] | None = None
+
+    def forget(self) -> None:
+        """Drop the texts before and after, keeping the numbers of changed lines.
+
+        Side effects: `before` and `after` become "", `kept` False. `counts` still answers.
+        """
+        if self.kept:
+            self._counts = self.counts()
+            self.before = self.after = ""
+            self.kept = False
 
     def counts(self) -> tuple[int, int]:
         """Count the changed lines.
 
         Returns:
-            `(added, removed)`: the number of lines only in `after` and only in `before`.
+            `(added, removed)`: the number of lines only in `after` and only in `before`; for
+            a diff whose texts were dropped (`forget`) the numbers counted before.
         """
+        if self._counts is not None:
+            return self._counts
         added = removed = 0
         matcher = difflib.SequenceMatcher(
             None, self.before.splitlines(), self.after.splitlines(), autojunk=False
@@ -142,6 +173,9 @@ class UserBlock(Block):
     """`user`, `system` (put in by calu or Claude Code) or `cross_session`."""
     relayed_to: str | None = None
     """Label of the subagent the main agent was asked to relay this message to."""
+    echo: bool = False
+    """True for the copy of a relayed message in the subagent's own tab; the view of all
+    agents leaves it out, because it shows the main agent's block already."""
 
 
 @dataclass(kw_only=True)
@@ -653,6 +687,9 @@ class Change:
     """True if the side questions changed."""
     rebuilt: bool = False
     """True if the model was reset; every view renders from scratch."""
+    trimmed: bool = False
+    """True if the model folded its oldest blocks (`SessionModel.blocks.base` grew); the
+    ids of the remaining blocks are unchanged."""
     bell: bool = False
     notices: list[Notice] = field(default_factory=list)
 
@@ -671,6 +708,7 @@ class Change:
         self.status |= other.status
         self.side |= other.side
         self.rebuilt |= other.rebuilt
+        self.trimmed |= other.trimmed
         self.bell |= other.bell
         self.notices.extend(other.notices)
 
@@ -690,6 +728,7 @@ class Change:
             or self.status
             or self.side
             or self.rebuilt
+            or self.trimmed
             or self.bell
             or self.notices
         )
@@ -709,11 +748,118 @@ def _short(text: str, limit: int) -> str:
     return joined if len(joined) <= limit else joined[: max(1, limit - 1)] + "…"
 
 
+class BlockList:
+    """The blocks of the transcript, addressed by id, of which only the newest are kept.
+
+    A block's id is its position among all blocks the model ever created. `base` is the id of
+    the oldest block that is still kept; ids below it were folded away (`drop_before`).
+
+        ids:     0 ... base-1 | base ... len-1
+                 folded       | kept (`kept`)
+
+    `len()` is the number of blocks ever created, which is also the id of the next block.
+    Iteration, comparison with a list and negative indexes work on the kept blocks.
+    """
+
+    def __init__(self) -> None:
+        """Create an empty list with nothing folded."""
+        self.base = 0
+        self.kept: list[Block] = []
+
+    def __len__(self) -> int:
+        """Count every block ever created.
+
+        Returns:
+            `base + len(kept)`: the id the next block gets.
+        """
+        return self.base + len(self.kept)
+
+    def __iter__(self) -> Iterator[Block]:
+        """Iterate over the kept blocks, oldest first.
+
+        Returns:
+            The iterator.
+        """
+        return iter(self.kept)
+
+    def __eq__(self, other: object) -> bool:
+        """Compare the kept blocks with a list or another `BlockList`.
+
+        Args:
+            other: What to compare with.
+
+        Returns:
+            True if `other` holds equal blocks in the same order.
+        """
+        if isinstance(other, BlockList):
+            return self.kept == other.kept and self.base == other.base
+        return self.kept == other
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __getitem__(self, index: int) -> Block:
+        """Return a block by id, or from the end with a negative index.
+
+        Args:
+            index: A block id (0 or above), or a negative position counted from the newest.
+
+        Returns:
+            The block.
+
+        Raises:
+            IndexError: For an id that was folded away or does not exist yet.
+        """
+        if index < 0:
+            return self.kept[index]
+        if index < self.base:
+            raise IndexError(f"block {index} is no longer kept")
+        return self.kept[index - self.base]
+
+    def get(self, index: int | None) -> Block | None:
+        """Return a block by id if it is kept.
+
+        Args:
+            index: A block id, or None.
+
+        Returns:
+            The block; None for None, a folded id or an id that does not exist.
+        """
+        if index is None or not self.base <= index < len(self):
+            return None
+        return self.kept[index - self.base]
+
+    def append(self, block: Block) -> None:
+        """Add a block at the end.
+
+        Args:
+            block: The block; its `id` must be `len(self)`.
+        """
+        self.kept.append(block)
+
+    def drop_before(self, first: int) -> list[Block]:
+        """Fold away every kept block with an id below `first`.
+
+        Args:
+            first: The id of the oldest block to keep; at most `len(self)`.
+
+        Returns:
+            The blocks that were dropped, oldest first.
+        """
+        count = max(0, min(first, len(self)) - self.base)
+        dropped, self.kept = self.kept[:count], self.kept[count:]
+        self.base += count
+        return dropped
+
+
 class SessionModel:
     """Everything the client knows about the session, built from a snapshot and events.
 
-    Invariants: `blocks[i].id == i`; a `tool_use_id` names at most one `StepBlock`; `agents`
-    always holds the main agent first; every entry of `decisions` is an open escalation.
+    Invariants: `blocks[i].id == i` for every kept block; a `tool_use_id` names at most one
+    `StepBlock`; `agents` always holds the main agent first; every entry of `decisions` is an
+    open escalation.
+
+    Memory: the model keeps the newest `BLOCK_LIMIT` blocks (plus up to `BLOCK_SLACK`); older
+    ones are folded into one line that names `/history`. Block ids stay as they were.
     """
 
     def __init__(self) -> None:
@@ -752,7 +898,12 @@ class SessionModel:
         self.honesty = Honesty()
         self.queue: list[Queued] = []
         self.usage = Usage()
-        self.blocks: list[Block] = []
+        self.blocks = BlockList()
+        self.own_interrupt = False
+        """Set by the client before it sends `interrupt`, so that steps the interrupt cancels
+        are not reported as decided elsewhere; cleared when the turn ends."""
+        self._with_diffs: list[int] = []
+        """Ids of the steps that hold diff texts, oldest first (`_forget_diffs`)."""
         self.stored_blocks = 0
         """How many blocks at the start come from the stored history (`load_history`)."""
         self.agents: dict[str, Agent] = {MAIN: Agent(MAIN, label=MAIN)}
@@ -782,7 +933,9 @@ class SessionModel:
             The blocks of that agent (all blocks for `ALL`); an empty list for an unknown tab.
         """
         if tab == ALL:
-            return self.blocks
+            return [
+                block for block in self.blocks if not (isinstance(block, UserBlock) and block.echo)
+            ]
         return [self.blocks[index] for index in self._by_agent.get(tab, ())]
 
     def block_in_tab(self, block: Block, tab: str) -> bool:
@@ -795,7 +948,20 @@ class SessionModel:
         Returns:
             True if `blocks_of(tab)` contains the block.
         """
-        return tab == ALL or (block.agent_id or MAIN) == tab
+        if tab == ALL:
+            return not (isinstance(block, UserBlock) and block.echo)
+        return (block.agent_id or MAIN) == tab
+
+    def block(self, block_id: int | None) -> Block | None:
+        """Find a block by id.
+
+        Args:
+            block_id: The id, or None.
+
+        Returns:
+            The block; None if the id was folded away or never existed.
+        """
+        return self.blocks.get(block_id)
 
     def step(self, tool_use_id: str | None) -> StepBlock | None:
         """Find the step of a tool call.
@@ -1179,7 +1345,56 @@ class SessionModel:
                     change.notices.append(Notice(_short(event.message, 200), event.level))
             case _:  # pragma: no cover - HANDLED and the match cover the same methods
                 self._log("warning", f"event {method} is not shown by this client")
+        if len(self.blocks.kept) > BLOCK_LIMIT + BLOCK_SLACK:
+            self._fold(change)
         return change
+
+    def _fold(self, change: Change) -> None:
+        """Fold the oldest blocks into one line, so that the model's size stays bounded.
+
+        Keeps the newest `BLOCK_LIMIT` blocks. The oldest of them is replaced by a line of
+        the client that names `/history`; everything before it is dropped together with its
+        entries in the indexes (`_steps`, `_by_agent`, `_streams`). Block ids do not change.
+        A step that still waits for a decision keeps its entry in `decisions`; only its line
+        in the transcript goes.
+
+        Args:
+            change: The change to mark as trimmed.
+        """
+        first = len(self.blocks) - BLOCK_LIMIT
+        self.blocks.drop_before(first)
+        self.blocks.kept[0] = JoinBlock(
+            id=first,
+            turn=self.blocks.kept[0].turn,
+            text=f"above: {first} older blocks that this view no longer keeps · /history "
+            "shows the stored steps",
+        )
+        self._steps = {key: step for key, step in self._steps.items() if step.id > first}
+        for key, ids in self._by_agent.items():
+            del ids[: bisect_right(ids, first)]
+            if key == MAIN:
+                ids.insert(0, first)
+        self._streams = {key: block for key, block in self._streams.items() if block.id > first}
+        self._with_diffs = [index for index in self._with_diffs if index > first]
+        change.blocks_added = [index for index in change.blocks_added if index >= first]
+        change.blocks_updated = {index for index in change.blocks_updated if index >= first}
+        change.trimmed = True
+
+    def _forget_diffs(self, change: Change) -> None:
+        """Drop the diff texts of steps older than `DIFF_TURNS` turns; the line counts stay.
+
+        Args:
+            change: The change to mark with the steps whose diffs were dropped.
+        """
+        while self._with_diffs:
+            step = self.blocks.get(self._with_diffs[0])
+            if isinstance(step, StepBlock) and step.turn >= self.turn - DIFF_TURNS:
+                return
+            self._with_diffs.pop(0)
+            if isinstance(step, StepBlock):
+                for diff in step.diffs:
+                    diff.forget()
+                change.blocks_updated.add(step.id)
 
     def set_usage(self, raw: dict[str, Any]) -> Change:
         """Take over the result of `usage.get`.
@@ -1491,6 +1706,8 @@ class SessionModel:
         if tool_use_id:
             self._steps[tool_use_id] = step
             step.diffs = self._pending_diffs.pop(tool_use_id, [])
+            if step.diffs:
+                self._with_diffs.append(step.id)
         self._add(step, change)
         self._agent(agent_id).steps += 1
         return step
@@ -1544,10 +1761,14 @@ class SessionModel:
         diff = Diff(event.path, event.before, event.after, event.start_line, event.end_line)
         step = self.step(event.tool_use_id)
         if step is not None:
+            if not step.diffs:
+                self._with_diffs.append(step.id)
             step.diffs.append(diff)
             change.blocks_updated.add(step.id)
         elif event.tool_use_id:
             self._pending_diffs.setdefault(event.tool_use_id, []).append(diff)
+            while len(self._pending_diffs) > PENDING_DIFFS:
+                del self._pending_diffs[next(iter(self._pending_diffs))]
 
     def _check(self, event: m.CheckResult, time: float | None, change: Change) -> None:
         """Apply `check.result`: add the check to its step.
@@ -1689,7 +1910,9 @@ class SessionModel:
             outcome = "answered"
         note = known.answer_text() if outcome == "answered" and known.own else event.note
         self._close(event.escalation_id, outcome, note, change)
-        if not known.own:
+        if outcome == "cancelled" and self.own_interrupt:
+            change.notices.append(Notice("cancelled by your interrupt"))
+        elif not known.own:
             change.notices.append(Notice(f"decided elsewhere: {outcome}"))
 
     def _queue(self, event: m.ChatQueue, change: Change) -> None:
@@ -1709,7 +1932,9 @@ class SessionModel:
 
         A message for a subagent reaches Claude as a request to relay it. `user.input` does not
         name its target, so the block is matched with the queue entry for a subagent whose text
-        the input contains, and then shows that text with "relayed to <agent>".
+        the input contains, and then shows that text with "relayed to <agent>". A copy of it
+        (`UserBlock.echo`) goes into the subagent's own tab, so that the tab shows what the
+        user sent to that agent.
 
         Args:
             event: The event.
@@ -1718,10 +1943,12 @@ class SessionModel:
         """
         text = event.text
         relayed: str | None = None
+        target: str | None = None
         if event.source == "user":
             for entry in [*self._left_queue, *self.queue]:
                 if entry.to != MAIN and entry.text and entry.text in text:
                     relayed = self.label(entry.to)
+                    target = entry.to
                     text = entry.text
                     break
         self._add(
@@ -1735,6 +1962,19 @@ class SessionModel:
             ),
             change,
         )
+        if target is not None and target in self.agents:
+            self._add(
+                UserBlock(
+                    id=len(self.blocks),
+                    agent_id=target,
+                    turn=self.turn,
+                    time=time,
+                    text=text,
+                    relayed_to=relayed,
+                    echo=True,
+                ),
+                change,
+            )
         if self.turn_started is None:
             self.turn_started = time
 
@@ -1784,5 +2024,7 @@ class SessionModel:
             change,
         )
         self.agents[MAIN].activity = ""
+        self.own_interrupt = False
+        self._forget_diffs(change)
         change.status = True
         change.agents = True

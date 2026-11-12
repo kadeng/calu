@@ -170,7 +170,7 @@ async def test_the_stored_history_stands_above_the_replayed_events() -> None:
     session = FakeSession()
     session.results["session.history"] = scenarios.stored_history()
     async with running("simple_turn", live_events=False, session=session) as run:
-        blocks = run.app.model.blocks
+        blocks = run.app.model.blocks.kept
         join = next(index for index, block in enumerate(blocks) if isinstance(block, JoinBlock))
         assert run.app.model.stored_blocks == join == 9
         stored = [block for block in blocks[:join] if isinstance(block, StepBlock)]

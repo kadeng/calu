@@ -65,6 +65,8 @@ class CheckersScreen(Screen[None]):
         self.message = "asking the session…"
         self.message_error = False
         self._leave_asked = False
+        self._base_version: int | None = None
+        """The version of the checker whose instructions the editor was opened on."""
 
     # ------------------------------------------------------------------ what tests read
 
@@ -295,7 +297,8 @@ class CheckersScreen(Screen[None]):
         """Open the selected checker's instructions in the editor.
 
         Without the `admin` credential nothing opens and the message line says how the
-        instructions are changed instead.
+        instructions are changed instead. The version the text was read at is kept, so that
+        the save can tell whether somebody changed the checker meanwhile.
         """
         checker = self.current
         if checker is None:
@@ -311,6 +314,8 @@ class CheckersScreen(Screen[None]):
             return
         editor = self.query_one("#checkers-editor", TextArea)
         editor.load_text(str(checker.get("instructions") or ""))
+        version = checker.get("version")
+        self._base_version = version if isinstance(version, int) else None
         self.editing = True
         self._leave_asked = False
         self.message = f"editing the instructions of {checker.get('name')}"
@@ -363,11 +368,15 @@ class CheckersScreen(Screen[None]):
         async def store(password: str | None) -> None:
             """Store the text and show the new version, or why it was not stored.
 
+            After the save the session is asked again. If it does not report the saved
+            text for this checker, the message says that the change went to the database of
+            this machine's credential and that the session does not show it.
+
             Args:
                 password: The credential's password, or None if it has none.
             """
             try:
-                saved = await self.admin.save_instructions(name, text, password)
+                saved = await self.admin.save_instructions(name, text, password, self._base_version)
             except PasswordNeeded as error:
                 self._store(name, text, problem=str(error))
                 return
@@ -381,12 +390,21 @@ class CheckersScreen(Screen[None]):
                 "uses it at its next step"
             )
             self.message_error = False
-            current = self.current
-            if current is not None and current.get("name") == name:
-                current["instructions"], current["version"] = text, saved.version
             self._draw()
             self.query_one("#checkers-scroll").focus()
             await self.reload(keep_message=True)
+            if not self.is_attached:
+                return
+            seen = next((c for c in self.checkers if c.get("name") == name), None)
+            if seen is None or str(seen.get("instructions") or "") != text:
+                reads = f"version {seen.get('version')}" if seen is not None else "no such checker"
+                self.message = (
+                    f"stored as version {saved.version} in the database of this machine's "
+                    f"admin credential, but the attached session reads {reads} with other "
+                    "instructions: it uses another database, or has not read the change"
+                )
+                self.message_error = True
+                self._draw()
 
         def answered(password: str | None) -> None:
             """Go on with the password, or keep the editor open after Escape.

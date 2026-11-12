@@ -234,9 +234,11 @@ def test_the_decision_card_shows_the_step_the_reason_and_the_keys() -> None:
     )
     assert lines[1] == "  git push --force origin main"
     assert lines[2].startswith("  Stopped: The command")
-    assert lines[-1] == "  a a allow · d d deny · n note · w detail (what the checker saw) · ] next"
+    assert lines[-1] == "  a,a allow · d,d deny · w,w detail · n,n note · ] next"
     armed = plain(render.card_lines(decision, model, view(76), (1, 2), armed="allow"))
-    assert armed[-1] == ("  Stopped by a deny rule: press a again to allow · any other key types")
+    wide = plain(render.card_lines(decision, model, view(100), (1, 2), armed="allow"))
+    assert wide[-1].endswith("press a again to allow · any other key types")
+    assert armed[-1] == ("  A deny rule stopped this step · press a again to allow")
     decision.note = "only this once"
     decision.error = "no open escalation e1"
     noted = "\n".join(plain(render.card_lines(decision, model, view(76), (1, 2), max_lines=12)))
@@ -262,7 +264,7 @@ def test_the_question_card_shows_tabs_options_and_what_is_chosen() -> None:
     ]
     decision.picks[2] = {1}
     done = plain(render.card_lines(decision, model, view(76), (1, 1), max_lines=12))
-    assert done[-1].startswith("  enter sends the answers")
+    assert done[-1].startswith("  enter sends: Runner: pytest · Checks: unit tests, li…")
 
 
 def test_the_agent_tabs_carry_badges_for_decisions_and_unread_output() -> None:

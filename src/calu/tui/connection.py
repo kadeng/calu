@@ -14,6 +14,11 @@ closes the connection because this client fell behind, it connects again after t
 it applied, at most `calu.attach.MAX_RECONNECTS` times in a row without an event in between;
 when the session can no longer replay the missed events, it forgets the session data, loads
 the stored history again, applies the events it did get and takes the rest from a snapshot.
+
+While the client has handed the terminal to another program (`f4`), it reads nothing, and the
+session may close the connection because its keepalive got no answer. The app announces such
+a stay (`Link.expect_drop`); a connection that closes during it or shortly after is opened
+again in the same way, unless the token was revoked.
 """
 
 from collections.abc import Callable
@@ -24,6 +29,7 @@ import anyio
 
 from calu.attach import MAX_RECONNECTS
 from calu.protocol.client import OnEvent, RequestFailed, connect, first_set
+from calu.protocol.messages import CLOSE_TOKEN_REVOKED
 from calu.tui.capabilities import Capabilities, capabilities
 from calu.tui.model import Change, Notice, SessionModel
 
@@ -32,6 +38,10 @@ HISTORY_STEPS = 500
 
 HISTORY_TIMEOUT_S = 8.0
 """How long the client waits for the stored history before it shows the session without it."""
+
+DROP_GRACE_S = 15.0
+"""After the client took the terminal back from a program it had handed it to, a closed
+connection is still put down to that stay for this many seconds."""
 
 CLIENT_NAME = "calu attach (full screen)"
 """How this client names itself in `initialize`, for the session's log."""
@@ -46,6 +56,8 @@ class Connection(Protocol):
     """Whether the replayed events continued without a gap."""
     closed: anyio.Event
     """Set when the connection has ended."""
+    close_code: int | None
+    """The WebSocket close code once `closed` is set; None without a close frame."""
 
     @property
     def fell_behind(self) -> bool:
@@ -162,6 +174,39 @@ class Link:
         self._reload = False
         self._held: list[tuple[str, dict[str, Any]]] | None = None
         """The events replayed by a reconnect, until it is known whether a gap precedes them."""
+        self._drop_expected = False
+        self._drop_until: float | None = None
+
+    def expect_drop(self) -> None:
+        """Announce that the client stops reading for a while (it hands the terminal over).
+
+        Until `drop_over` and `DROP_GRACE_S` seconds beyond it, or until the next snapshot
+        after a reconnect, a connection the session closes is opened again as after falling
+        behind. A revoked token (`CLOSE_TOKEN_REVOKED`) still ends the link.
+        """
+        self._drop_expected = True
+        self._drop_until = None
+
+    def drop_over(self) -> None:
+        """Say that the client reads again; the announcement of `expect_drop` now runs out."""
+        if self._drop_expected:
+            self._drop_until = self.clock() + DROP_GRACE_S
+
+    def _excused(self, connection: Connection) -> bool:
+        """Tell whether a closed connection is put down to an announced stay.
+
+        Args:
+            connection: The connection that closed.
+
+        Returns:
+            True if `expect_drop` is in force and the token was not revoked.
+        """
+        if not self._drop_expected or connection.close_code == CLOSE_TOKEN_REVOKED:
+            return False
+        if self._drop_until is not None and self.clock() > self._drop_until:
+            self._drop_expected = False
+            return False
+        return True
 
     def reload(self) -> None:
         """Ask `run` to forget the session data and build the view again.
@@ -296,8 +341,10 @@ class Link:
 
         Returns when the user detached (`detach`), when the first connection failed (`error`
         is then set), or when the session closed the connection for another reason than this
-        client falling behind (`closed_reason` is then set). The connection state of the model
-        says which.
+        client falling behind or an announced stay away (`closed_reason` is then set). The
+        connection state of the model says which. A connection the session closes while the
+        attach itself still asks (`state.get`, the stored history) counts like one closed
+        afterwards.
         """
         after_seq = self.after_seq
         reconnects = 0
@@ -305,6 +352,7 @@ class Link:
         while not self.stop.is_set():
             self._replaying = True
             self._held = []
+            connection: Connection | None = None
             try:
                 async with self.connector(self._on_event, after_seq) as connection:
                     self._replaying = False
@@ -312,6 +360,8 @@ class Link:
                     await self._release(connection, first)
                     await self._snapshot(connection)
                     first = False
+                    if self._drop_until is not None:
+                        self._drop_expected = False
                     self.notify(self.model.set_connection("attached"))
                     while not (self.stop.is_set() or connection.closed.is_set()):
                         await first_set(self.stop, connection.closed, self._stale)
@@ -328,20 +378,30 @@ class Link:
                     if connection.last_seq > after_seq:
                         reconnects = 0
                     after_seq = connection.last_seq
-                    fell_behind = connection.fell_behind
+                    again = connection.fell_behind or self._excused(connection)
                     reason = connection.describe_close()
             except (OSError, RequestFailed) as error:  # ConnectionError is an OSError
-                if first:
+                # The session may have closed the connection while a request of the attach
+                # was awaited (`state.get`, `session.history`): what it said still counts.
+                again = connection is not None and (
+                    connection.fell_behind
+                    or (connection.closed.is_set() and self._excused(connection))
+                )
+                if connection is not None and self._held is None:
+                    after_seq = max(after_seq, connection.last_seq)  # these were applied
+                reason = str(error)
+                if connection is not None and connection.closed.is_set():
+                    reason = connection.describe_close() or reason
+                if first and not again:
                     self.error = error
                     self.connection = None
                     self.notify(self.model.set_connection("detached", reason=str(error)))
                     return
-                fell_behind, reason = False, str(error)
             self.connection = None
             if self.stop.is_set():
                 self.notify(self.model.set_connection("detached", reason="detached by you"))
                 return
-            if fell_behind and reconnects < MAX_RECONNECTS:
+            if again and reconnects < MAX_RECONNECTS:
                 reconnects += 1
                 self.notify(self.model.set_connection("reconnecting", reconnects, MAX_RECONNECTS))
                 continue

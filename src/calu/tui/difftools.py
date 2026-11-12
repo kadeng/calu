@@ -14,10 +14,54 @@ comment (`selection_range`). This module imports nothing from Textual.
 """
 
 import difflib
+import re
 from dataclasses import dataclass
 
 CONTEXT_LINES = 3
 """Unchanged lines shown before and after each change."""
+
+WORD_RATIO = 0.4
+"""Two lines are compared word by word only if at least this share of their words agrees;
+below it the whole lines count as replaced."""
+
+_TOKEN = re.compile(r"\w+|\s+|[^\w\s]")
+
+
+def word_spans(old: str, new: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Find the words that differ between an old line and the line that replaced it.
+
+    Args:
+        old: The line before.
+        new: The line after.
+
+    Returns:
+        `(spans in old, spans in new)`, each a list of `(start, end)` character offsets of
+        the stretches only that line has. Both lists are empty when the lines are equal or
+        agree in less than `WORD_RATIO` of their words: then nothing is singled out.
+
+    Example:
+        `word_spans("x = check_step(a)", "x = judge_step(a)")` gives `([(4, 14)], [(4, 14)])`.
+    """
+    first, second = _TOKEN.findall(old), _TOKEN.findall(new)
+    matcher = difflib.SequenceMatcher(None, first, second, autojunk=False)
+    if old == new or matcher.ratio() < WORD_RATIO:
+        return [], []
+    starts_old = [0]
+    for token in first:
+        starts_old.append(starts_old[-1] + len(token))
+    starts_new = [0]
+    for token in second:
+        starts_new.append(starts_new[-1] + len(token))
+    old_spans: list[tuple[int, int]] = []
+    new_spans: list[tuple[int, int]] = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if i2 > i1:
+            old_spans.append((starts_old[i1], starts_old[i2]))
+        if j2 > j1:
+            new_spans.append((starts_new[j1], starts_new[j2]))
+    return old_spans, new_spans
 
 
 @dataclass(frozen=True)
@@ -175,3 +219,60 @@ def unified_text(path: str, before: str, after: str) -> str:
             lineterm="",
         )
     )
+
+
+def marked_rows(
+    before: str, after: str, context: int = 2
+) -> list[tuple[str, str, list[tuple[int, int]]]]:
+    """Compute the lines of a unified diff, with the changed words of replaced lines.
+
+    Args:
+        before: The old content.
+        after: The new content.
+        context: Unchanged lines kept around each change.
+
+    Returns:
+        `(sign, text, spans)` per line in reading order. `sign` is "@" for a hunk header
+        (`text` is the whole header), " " for an unchanged line, "-" for a removed and "+"
+        for an added one. Where a stretch of removed lines is followed by as many added
+        lines, the lines are compared in pairs and `spans` holds the `(start, end)` offsets
+        of the words only that line has (`word_spans`); otherwise `spans` is empty.
+    """
+    body = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            lineterm="",
+            n=context,
+            fromfile="",
+            tofile="",
+        )
+    )[2:]
+    rows: list[tuple[str, str, list[tuple[int, int]]]] = []
+    index = 0
+    while index < len(body):
+        raw = body[index]
+        if raw.startswith("@@"):
+            rows.append(("@", raw, []))
+            index += 1
+        elif raw.startswith("-"):
+            end_minus = index
+            while end_minus < len(body) and body[end_minus].startswith("-"):
+                end_minus += 1
+            end_plus = end_minus
+            while end_plus < len(body) and body[end_plus].startswith("+"):
+                end_plus += 1
+            minus = [line[1:] for line in body[index:end_minus]]
+            plus = [line[1:] for line in body[end_minus:end_plus]]
+            pairs = (
+                [word_spans(old, new) for old, new in zip(minus, plus, strict=True)]
+                if len(minus) == len(plus)
+                else []
+            )
+            rows += [("-", line, pairs[k][0] if pairs else []) for k, line in enumerate(minus)]
+            rows += [("+", line, pairs[k][1] if pairs else []) for k, line in enumerate(plus)]
+            index = end_plus
+        else:
+            rows.append((raw[:1] if raw[:1] == "+" else " ", raw[1:], []))
+            index += 1
+    return rows

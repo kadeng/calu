@@ -53,6 +53,7 @@ The client (`src/calu/tui/`) is tested in the unit layer, without a terminal, a 
 | `test_tui_tools.py` | what needs neither Textual nor a session: `calu.tui.settings` (`tui.toml`, the history of sent texts), `calu.tui.difftools` (the rows of a diff, a selection as a line range), `calu.tui.completion`, `calu.tui.export`, and the stored history in the model | nothing |
 | `test_tui_admin.py` | the checkers screen (reading through the session, saving edited instructions with the `admin` credential, the password question, a machine without the credential), code honesty (today's `honesty.update` and the one with baseline and unreviewed files, the page, `/trust` with its yes/no question, `/trust-file`, `/honesty-review`, `/honesty off\|track\|enforce` with the confirmation of a weaker mode), and `f4` (which git program is chosen, the install command per package manager, that a command with `sudo` is only shown) | the scripted session; `FakeAdmin` for the credential; `CaluApp.run_program`, `which` and `environ` for the external program |
 | `test_tui_screens.py` | the whole screen as text for six scripted sessions at 120x36 and 80x24, compared with the files in `tests/unit/tui_screens/`; the same text without colours | the scripted session |
+| `test_tui_review.py` | what two reviews found, each as a test: a long command on the card (wrapped, the cut counted, allowed from the detail only), an edit's changed lines on the card, one resize in each direction, a reply that begins with a letter of the card (typed whole), a decision bound to its escalation (the second press, the note question and the detail never reach a step that took the place; a key right after the card changed; a held key), Enter on a question set, the list of slash commands, a message on a subagent's tab, hints that fit the width, repeated notices as one toast, the keys of the honesty page, the reconnect after a stay in the git program (close code 1011) and after a close during `state.get`, the interrupt handler around the git program (also on a real pty: `f4`, ctrl+c, still attached), a save the session does not show, a save over a change made meanwhile, the bound on the model's blocks, a refused held draft, the filtered help, an unsupported Textual | the scripted session; one test starts `python -m calu.tui` on a pty |
 | `test_tui_process.py` | the app over `protocol_connector` against a real `SessionServer`, session and fake runner: a turn, an escalation, a side question, the detail view, a model change; and which client `calu attach` starts | a real WebSocket |
 | `test_protocol_side_usage.py` | the requests `side.ask`, `usage.get`, `model.set` and the event `usage.update` through the fake runner | a real WebSocket |
 
@@ -62,7 +63,7 @@ screenshots and the demo use the same ones.
 
 ```bash
 uv run python -m calu.tui showcase                 # the client on a scripted session, to look at
-uv run python scripts/tui_screenshots.py /tmp/shots   # 25 states at 120x36 and 80x24, SVG and PNG
+uv run python scripts/tui_screenshots.py /tmp/shots   # 32 states at 120x36 and 80x24, SVG and PNG
 CALU_UPDATE_TUI_SCREENS=1 uv run pytest tests/unit/test_tui_screens.py   # after a wanted layout change
 ```
 
@@ -317,7 +318,13 @@ escalation resolved from the database alone.
    colours); at 80x24 (`f2` opens the side panel over the transcript); scroll up with PageUp
    and the mouse wheel while Claude writes — the visible lines must not move, `End` returns;
    `alt+←/→` through the subagents of a session that started two; an escalation answered
-   with `a a` and one with `d d` after a note (`n`); `w` on an escalation, and back with `w`;
+   with `a a` and one with `d d` after a note (`n n`); `w w` on an escalation, and back with
+   `w`; type "no, use a branch" and "why?" while a step waits (both are typed whole and sent as
+   messages, nothing is decided); a step with a command of ten lines (the card counts what it
+   cuts, `a` opens the detail, `a a` there allows); hold `a` down on an empty input (nothing is
+   decided); with two steps waiting, press `a`, decide the first one from `calu web`, press `a`
+   again (the second step must still wait); drag the window from 120 to 80 columns and back
+   (the side panel goes and comes with the first resize);
    `/btw <question>` while a command runs — the answer appears in the side panel, the turn goes
    on, and the next turn does not know the question; `alt+c` copies (OSC 52: needs
    `set -g set-clipboard on` in tmux); kill and restart `calu run` while attached (the status
@@ -345,10 +352,15 @@ escalation resolved from the database alone.
    `calu checker list` shows the same version); the same on a machine without the credential
    (the screen says "read-only here" and names `calu checker edit`); `/honesty` (mode, marks;
    baseline and unreviewed files once the session reports them); `/honesty enforce`, then
-   `/honesty track` (a question, Enter keeps `enforce`); `/trust` (the question names the short
-   id and subject of HEAD; Enter certifies nothing); `f4` with lazygit installed (lazygit opens
-   in the project directory, `q` returns to the client, which attaches again by itself if the
-   stay was long); `CALU_GIT_TOOL=tig calu attach`; `f4` without lazygit, gitui and tig (the
+   `/honesty track` (a question, Enter keeps `enforce`); `/trust` (the box names the short
+   id and subject of HEAD; Enter certifies nothing); `t`, `r`, `x`, `m` on the honesty page;
+   with `calu attach ws://other-host ...` and a local `admin` credential for another database,
+   save a checker and `/honesty track` (both must say that the attached session does not show
+   the change); `f4` with lazygit installed (lazygit opens
+   in the project directory, `q` returns to the client); stay in it for more than a minute (the
+   status bar shows `reconnecting` and then `attached`, and what happened meanwhile is in the
+   transcript); `CALU_GIT_TOOL='git log' calu attach`, `f4`, ctrl+c in the pager (the client
+   is still there); `CALU_GIT_TOOL=tig calu attach`; `f4` without lazygit, gitui and tig (the
    notice shows the install command for this machine and runs nothing that needs `sudo`).
 
 ## Measuring the checkers

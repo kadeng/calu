@@ -4,6 +4,7 @@ This module imports nothing from Textual at import time, so `calu.cli` can impor
 installation without the extra `tui` and ask `available()`.
 """
 
+import importlib.metadata
 import importlib.util
 import os
 import sys
@@ -38,13 +39,45 @@ class TuiExit:
     """Why the connection ended, if the session closed it."""
 
 
+SUPPORTED = ((8, 2), (9, 0))
+"""The Textual versions the client is written for: from the first, below the second (the
+range of the extra `tui` in `pyproject.toml`)."""
+
+
+def problem() -> str | None:
+    """Say why the full-screen client cannot run in this installation.
+
+    Returns:
+        None if a supported Textual is installed; `NOT_INSTALLED` without Textual; a line
+        that names the installed and the supported versions for a Textual outside
+        `SUPPORTED` (one installed beside calu, not through the extra `tui`).
+    """
+    if importlib.util.find_spec("textual") is None:
+        return NOT_INSTALLED
+    try:
+        found = importlib.metadata.version("textual")
+    except importlib.metadata.PackageNotFoundError:
+        return NOT_INSTALLED
+    numbers: list[int] = []
+    for part in found.split(".")[:2]:
+        digits = "".join(char for char in part if char.isdigit())
+        numbers.append(int(digits) if digits else 0)
+    low, high = SUPPORTED
+    if not low <= tuple(numbers) < high:
+        return (
+            f"the full-screen client needs textual >= {low[0]}.{low[1]} and < {high[0]} "
+            f"(found {found}; pip install 'calu[tui]'); using the line client"
+        )
+    return None
+
+
 def available() -> bool:
     """Tell whether the full-screen client can run in this installation.
 
     Returns:
-        True if Textual is installed (the extra `tui`).
+        True if a supported Textual is installed (the extra `tui`).
     """
-    return importlib.util.find_spec("textual") is not None
+    return problem() is None
 
 
 def wants_full_screen(plain: bool) -> bool:
@@ -52,8 +85,8 @@ def wants_full_screen(plain: bool) -> bool:
 
     The line client is used, in this order: with `--plain`; when standard input or output is
     not a terminal (pipes and scripts therefore see the line client unchanged); with
-    `TERM=dumb` or `CALU_ATTACH=plain` in the environment; and when Textual is not installed,
-    after one line on stderr that says so.
+    `TERM=dumb` or `CALU_ATTACH=plain` in the environment; and when Textual is not installed
+    or is a version the client is not written for, after one line on stderr that says so.
 
     Args:
         plain: Whether `--plain` was given.
@@ -65,8 +98,9 @@ def wants_full_screen(plain: bool) -> bool:
         return False
     if os.environ.get("TERM") == "dumb" or os.environ.get("CALU_ATTACH") == "plain":
         return False
-    if not available():
-        print(NOT_INSTALLED, file=sys.stderr)
+    missing = problem()
+    if missing is not None:
+        print(missing, file=sys.stderr)
         return False
     return True
 

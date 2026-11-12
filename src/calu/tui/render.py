@@ -17,7 +17,6 @@ A line under it carries what Claude was told about the step: the checker's note,
 a denial, the reason of an escalation, the answer to a question.
 """
 
-import difflib
 import io
 import json
 from collections.abc import Sequence
@@ -25,15 +24,18 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar
 
-from rich.console import Console
-from rich.markdown import Heading, Markdown
+from rich.console import Console, ConsoleOptions, RenderResult
+from rich.markdown import CodeBlock, Heading, Markdown
+from rich.syntax import Syntax
 from rich.text import Text
 from rich.theme import Theme
 
 from calu.tui.capabilities import NOT_AVAILABLE, Capabilities
+from calu.tui.difftools import marked_rows
 from calu.tui.model import (
     AGENT_TOOLS,
     ALL,
+    DIFF_TURNS,
     MAIN,
     Agent,
     Block,
@@ -67,6 +69,13 @@ DIFF_LINES = 30
 
 RESULT_LINES = 14
 """How many lines of a tool result an expanded step shows."""
+
+INPUT_LINES = 30
+"""How many lines of a step's input the expanded step shows before it says how many more
+there are."""
+
+CHANGED_WORD = "bold underline"
+"""How the words that differ within a replaced line are set apart (also without colours)."""
 
 TOOL_SHORT = {
     "AskUserQuestion": "Ask",
@@ -102,10 +111,42 @@ class _LeftHeading(Heading):
     )
 
 
-class _TranscriptMarkdown(Markdown):
-    """Rich's Markdown with left-aligned headings."""
+class _PanelCode(CodeBlock):
+    """A code block on its own background, without the blank lines Rich puts around it."""
 
-    elements: ClassVar[dict[str, Any]] = {**Markdown.elements, "heading_open": _LeftHeading}
+    background: ClassVar[str] = "default"
+    """The background colour of code blocks; `markdown_lines` sets it before it renders."""
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions) -> RenderResult:
+        """Render the code with its syntax colours on `background`.
+
+        Args:
+            console: The console that renders.
+            options: Its options, with the width.
+
+        Yields:
+            The highlighted code, padded by one column on each side.
+        """
+        code = str(self.text).rstrip()
+        yield Syntax(
+            code,
+            self.lexer_name,
+            theme=self.theme,
+            word_wrap=True,
+            padding=(0, 1),
+            background_color=self.background,
+        )
+
+
+class _TranscriptMarkdown(Markdown):
+    """Rich's Markdown with left-aligned headings and code blocks on a background."""
+
+    elements: ClassVar[dict[str, Any]] = {
+        **Markdown.elements,
+        "heading_open": _LeftHeading,
+        "fence": _PanelCode,
+        "code_block": _PanelCode,
+    }
 
 
 @dataclass
@@ -219,6 +260,56 @@ def wrap(text: Text, width: int) -> list[Text]:
     return lines or [Text("")]
 
 
+def wrap_code(line: str, style: str, width: int, mark_style: str) -> list[Text]:
+    """Wrap one line of a command or of code, marking where a line was only wrapped.
+
+    Args:
+        line: The line; tabs count as four spaces.
+        style: Style of the text.
+        width: The width in columns.
+        mark_style: Style of the mark `↪` that begins every continuation row.
+
+    Returns:
+        The rows: the first as it is, each further one behind `↪ `, so that a wrapped line
+        is told from a new line of the command.
+    """
+    rows = wrap(Text(line.expandtabs(4), style), max(8, width - 2))
+    return [rows[0], *[Text.assemble(("↪ ", mark_style), row) for row in rows[1:]]]
+
+
+def fit_hints(hints: Sequence[tuple[int, str]], width: int, separator: str = " · ") -> str:
+    """Join key hints into one line that fits a width, without cutting inside a hint.
+
+    Args:
+        hints: `(priority, text)` in display order; a higher priority is kept longer.
+        width: The columns available.
+        separator: What stands between two hints.
+
+    Returns:
+        The hints joined in their order. While the line is too long, the hint with the
+        lowest priority is dropped (the rightmost of several with the same priority); the
+        last remaining hint is returned whole even if it is too long.
+
+    Example:
+        `fit_hints([(9, "a allow"), (5, "n note"), (8, "w detail")], 20)` gives
+        `"a allow · w detail"`.
+    """
+    kept = list(hints)
+
+    def length() -> int:
+        """Measure the joined line.
+
+        Returns:
+            Its width in columns.
+        """
+        return sum(Text(text).cell_len for _, text in kept) + len(separator) * (len(kept) - 1)
+
+    while len(kept) > 1 and length() > width:
+        lowest = min(priority for priority, _ in kept)
+        del kept[max(i for i, (priority, _) in enumerate(kept) if priority == lowest)]
+    return separator.join(text for _, text in kept)
+
+
 def markdown_lines(source: str, width: int, palette: Palette, dark: bool = True) -> list[Text]:
     """Render Markdown to lines.
 
@@ -229,7 +320,9 @@ def markdown_lines(source: str, width: int, palette: Palette, dark: bool = True)
         dark: Whether the theme is dark, for the colours of code.
 
     Returns:
-        The rendered lines without trailing spaces; one empty line for an empty text.
+        The rendered lines without trailing spaces; one empty line for an empty text. The
+        lines of a code block are the exception: they have the background `palette.surface`
+        and are padded to the width, so that the block is a rectangle.
     """
     markdown = _TranscriptMarkdown(
         source, code_theme="ansi_dark" if dark else "ansi_light", hyperlinks=False
@@ -250,14 +343,18 @@ def markdown_lines(source: str, width: int, palette: Palette, dark: bool = True)
             "markdown.h3": f"bold {palette.fg}",
         }
     )
+    _PanelCode.background = palette.surface
     with _MEASURE.use_theme(colours):
         rendered = _MEASURE.render_lines(markdown, options, pad=False)
     for segments in rendered:
         line = Text(style=palette.fg)
+        on_background = False
         for segment in segments:
             if not segment.control:
                 line.append(segment.text, segment.style)
-        line.rstrip()
+                on_background |= bool(segment.style and segment.style.bgcolor is not None)
+        if not on_background:
+            line.rstrip()  # a line of a code block keeps its padding: it carries the background
         lines.append(line)
     while lines and not lines[-1].plain:
         lines.pop()
@@ -429,7 +526,8 @@ def step_lines(step: StepBlock, model: SessionModel, view: View) -> list[Text]:
             lines.append(_under("reason", text, palette.muted, view, palette.orange))
     if step.waiting in {"allowed", "denied", "answered"} and step.note:
         label = "answer" if step.waiting == "answered" else "you"
-        lines.append(_under(label, step.note, palette.muted, view))
+        note = " · ".join(row.strip() for row in step.note.splitlines() if row.strip())
+        lines.append(_under(label, note, palette.muted, view))
     if step.is_error and step.result and step.verdict not in {"DENY", "DENIED"}:
         lines.append(_under("error", step.result, palette.muted, view, palette.red))
     started = model.agents.get(step.tool_use_id or "") if step.tool in AGENT_TOOLS else None
@@ -502,7 +600,9 @@ def diff_lines(diff: Diff, view: View, limit: int | None = DIFF_LINES) -> list[T
 
     Returns:
         A header line with the path and the counts, the diff lines (added green, removed red,
-        context muted), and a last line that says how many lines were left out.
+        context muted; within a replaced line the words that differ are set apart), and a
+        last line that says how many lines were left out. For a diff whose texts were
+        dropped (`Diff.kept` False) the header and one line that says so.
     """
     palette = view.palette
     added, removed = diff.counts()
@@ -514,66 +614,91 @@ def diff_lines(diff: Diff, view: View, limit: int | None = DIFF_LINES) -> list[T
         " ",
         (f"-{removed}", palette.red),
     )
-    body = list(
-        difflib.unified_diff(
-            diff.before.splitlines(),
-            diff.after.splitlines(),
-            lineterm="",
-            n=2,
-            fromfile="",
-            tofile="",
-        )
-    )[2:]
     lines = [header]
-    for raw in body if limit is None else body[:limit]:
-        if raw.startswith("@@"):
-            style = palette.cyan
-        elif raw.startswith("+"):
-            style = palette.green
-        elif raw.startswith("-"):
-            style = palette.red
-        else:
-            style = palette.muted
-        lines.append(Text(clip(raw, view.width - 2), style))
+    if not diff.kept:
+        lines.append(
+            Text(
+                "the text of this change is no longer kept by this view (it is older than "
+                f"{DIFF_TURNS} turns) · f4 opens the git program",
+                palette.faint,
+            )
+        )
+        return lines
+    body = marked_rows(diff.before, diff.after)
+    for sign, text, spans in body if limit is None else body[:limit]:
+        lines.append(diff_row(sign, text, spans, palette, view.width - 2))
     if limit is not None and len(body) > limit:
         lines.append(
-            Text(f"… {len(body) - limit} more lines (w on a waiting step shows all)", palette.faint)
+            Text(f"… {len(body) - limit} more lines · D shows the whole diff", palette.faint)
         )
     return lines
 
 
-def input_lines(step: StepBlock, view: View) -> list[Text]:
-    """Render the input of a tool call.
+def diff_row(
+    sign: str, text: str, spans: Sequence[tuple[int, int]], palette: Palette, width: int
+) -> Text:
+    """Render one line of a unified diff (`calu.tui.difftools.marked_rows`).
+
+    Args:
+        sign: "@", " ", "-" or "+".
+        text: The line without its sign (for "@" the whole hunk header).
+        spans: The `(start, end)` offsets in `text` of the words that differ from the line
+            this one is paired with.
+        palette: The colours.
+        width: The line is cut to this many columns.
+
+    Returns:
+        The line: added green, removed red, hunk header cyan, context muted; the differing
+        words in `CHANGED_WORD`.
+    """
+    if sign == "@":
+        return Text(clip(text, width), palette.cyan)
+    style = {"+": palette.green, "-": palette.red}.get(sign, palette.muted)
+    shown = clip(sign + text.expandtabs(4), width)
+    line = Text(shown, style)
+    if "\t" not in text:
+        for start, end in spans:
+            if start + 1 < len(shown):
+                line.stylize(CHANGED_WORD, start + 1, min(end + 1, len(shown)))
+    return line
+
+
+def input_lines(step: StepBlock, view: View, limit: int | None = INPUT_LINES) -> list[Text]:
+    """Render the input of a tool call in full, wrapped to the width.
 
     Args:
         step: The step.
         view: Width and colours.
+        limit: The most lines to show; None shows all.
 
     Returns:
-        For a command the command after `$`; otherwise one `key: value` line per input field,
-        long values cut.
+        For a command the command after `$`, every line of it wrapped; otherwise one
+        `key: value` entry per input field, wrapped as well. Beyond `limit` lines one last
+        line says how many more there are and that `alt+c` copies the whole input.
     """
     palette = view.palette
+    width = max(12, view.width - 2)
     command = step.input.get("command")
+    lines: list[Text] = []
     if isinstance(command, str) and command:
-        lines: list[Text] = []
-        for index, part in enumerate(command.splitlines() or [""]):
-            lines.append(
-                Text.assemble(
-                    ("$ " if index == 0 else "  ", palette.muted),
-                    (clip(part, view.width - 2), palette.fg),
-                )
-            )
-        return lines
-    lines = []
-    for key, value in step.input.items():
-        shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-        lines.append(
-            Text.assemble(
-                (f"{key}: ", palette.muted),
-                (cut(shown, max(20, view.width - 12 - len(key))), palette.fg),
-            )
-        )
+        first = True
+        for part in command.splitlines() or [""]:
+            for row in wrap_code(part, palette.fg, width, palette.faint):
+                lines.append(Text.assemble(("$ " if first else "  ", palette.muted), row))
+                first = False
+    else:
+        for key, value in step.input.items():
+            shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+            rows = shown.splitlines() or [""]
+            for index, part in enumerate(rows):
+                head = Text(f"{key}: " if index == 0 else "  ", palette.muted)
+                head.append(part.expandtabs(4), palette.fg)
+                wrapped = wrap(head, width)
+                lines += [wrapped[0], *[Text.assemble("  ", row) for row in wrapped[1:]]]
+    if limit is not None and len(lines) > limit:
+        more = len(lines) - limit
+        lines = lines[:limit]
+        lines.append(Text(f"… {more} more lines · alt+c copies the whole input", palette.faint))
     return lines
 
 
@@ -643,6 +768,8 @@ def user_lines(block: UserBlock, view: View) -> list[Text]:
     own = block.source == "user"
     if own:
         label = f"you → {block.relayed_to}" if block.relayed_to else "you"
+        if block.echo:
+            label += " (relayed by the main agent)"
         bar, background, label_style, text_style = (
             palette.accent,
             palette.user_bg,
@@ -708,17 +835,22 @@ def text_lines(block: TextBlock, model: SessionModel, view: View) -> list[Text]:
         view: Width and colours.
 
     Returns:
-        The lines, indented by two columns; in the view of all agents a subagent's text is
-        preceded by a line with its name.
+        The lines, indented by two columns; in the view of all agents a subagent's text
+        has the agent's name in the same gutter column as the steps have it.
     """
     palette = view.palette
     lines: list[Text] = []
-    if view.tab == ALL and block.agent_id:
-        lines.append(Text(f"  {model.label(block.agent_id)}:", palette.muted))
+    label = cut(model.label(block.agent_id), 9) if view.tab == ALL and block.agent_id else ""
+    indent = 10 if label else 0
     source = block.text.strip() + (" ▍" if block.streaming else "")
-    for index, row in enumerate(markdown_lines(source, view.width - 3, palette, view.dark)):
+    rows = markdown_lines(source, view.width - 3 - indent, palette, view.dark)
+    for index, row in enumerate(rows):
         gutter = ">" if view.cursor == block.id and index == 0 else " "
-        lines.append(Text.assemble((gutter, f"bold {palette.accent}"), " ", row))
+        line = Text.assemble((gutter, f"bold {palette.accent}"), " ")
+        if label:
+            line.append(f"{label if index == 0 else '':<10}", palette.muted)
+        line.append_text(row)
+        lines.append(line)
     return lines
 
 
@@ -782,7 +914,8 @@ def block_lines(block: Block, model: SessionModel, view: View) -> list[Text]:
         case TurnEndBlock():
             return turn_lines(block, view)
         case JoinBlock():
-            return [Text(f"  ·· {cut(block.text, view.width - 10)} ··", view.palette.faint)]
+            rows = wrap(Text(" ".join(block.text.split()), view.palette.faint), view.width - 6)
+            return [Text.assemble(("  ·· ", view.palette.faint), row) for row in rows]
         case _:
             return []
 
@@ -1013,15 +1146,16 @@ def tab_cells(model: SessionModel, selected: str) -> list[tuple[str, str]]:
 
 
 def tabs_line(
-    model: SessionModel, view: View, extra: str = ""
+    model: SessionModel, view: View, extra: str | Sequence[tuple[int, str]] = ""
 ) -> tuple[Text, list[tuple[int, int, str]]]:
     """Render the row of agent tabs.
 
     Args:
         model: The model.
         view: Width, colours and the selected tab (`view.tab`).
-        extra: A text shown right-aligned if there is room (counts of the side panel on a
-            narrow screen, the key that switches agents).
+        extra: What is shown right-aligned if there is room (the key that switches agents,
+            counts of the side panel on a narrow screen): one text, or `(priority, text)`
+            hints of which as many as fit are shown (`fit_hints`).
 
     Returns:
         The line and, for mouse clicks, `(first column, end column, tab key)` per tab.
@@ -1043,14 +1177,156 @@ def tabs_line(
             line.append(f" {label} ", style)
         spans.append((start, line.cell_len, key))
         line.append(" ")
-    if extra and line.cell_len + len(extra) + 2 <= view.width:
-        line.append(" " * (view.width - line.cell_len - len(extra) - 1))
-        line.append(extra, palette.faint)
+    room = view.width - line.cell_len - 2
+    hints = [(0, extra)] if isinstance(extra, str) else list(extra)
+    shown = fit_hints(hints, room) if hints and hints[0][1] else ""
+    if shown and Text(shown).cell_len <= room:
+        line.append(" " * (view.width - line.cell_len - Text(shown).cell_len - 1))
+        line.append(shown, palette.faint)
     line.truncate(view.width, overflow="ellipsis")
     return line, spans
 
 
 # ------------------------------------------------------------------------------ decision card
+
+
+def change_rows(
+    decision: Decision, model: SessionModel
+) -> list[tuple[str, str, list[tuple[int, int]]]] | None:
+    """Work out the changed lines of an escalated edit from what the client knows.
+
+    Args:
+        decision: The open item.
+        model: The model, for the diffs of the step if the session has sent them.
+
+    Returns:
+        The removed and added lines as `(sign, text, spans)` (`marked_rows` without
+        context and hunk headers): from the step's diffs if it has them, else from the
+        tool input (`old_string` against `new_string`, every entry of `edits`, or the
+        whole `content` or `new_source` as added lines). None if the step is no edit.
+    """
+    step = model.step(decision.tool_use_id)
+    pairs: list[tuple[str, str]] = []
+    if step is not None and any(diff.kept for diff in step.diffs):
+        pairs = [(diff.before, diff.after) for diff in step.diffs if diff.kept]
+    else:
+        given = decision.tool_input
+        listed = given.get("edits")
+        for edit in listed if isinstance(listed, list) else [given]:
+            if not isinstance(edit, dict):
+                continue
+            old, new = edit.get("old_string"), edit.get("new_string")
+            content = edit.get("content", edit.get("new_source"))
+            if isinstance(old, str) and isinstance(new, str):
+                pairs.append((old, new))
+            elif isinstance(content, str):
+                pairs.append(("", content))
+    if not pairs:
+        return None
+    rows: list[tuple[str, str, list[tuple[int, int]]]] = []
+    for before, after in pairs:
+        rows += [row for row in marked_rows(before, after, context=0) if row[0] in "+-"]
+    return rows
+
+
+def card_step(
+    decision: Decision, model: SessionModel, view: View, room: int
+) -> tuple[list[Text], int]:
+    """Render what an escalated step would do, for the card: the command or the change.
+
+    Nothing is cut silently. A command is wrapped; of an edit the path and the changed lines
+    are shown, wrapped as well. When `room` lines are not enough, the last line says in the
+    warning colour how many lines are missing and that `w` shows all.
+
+    Args:
+        decision: The open item (not a question).
+        model: The model.
+        view: Width (of the card's inside) and colours.
+        room: The most lines to use; at least 2 are used.
+
+    Returns:
+        `(lines, hidden)`: the lines, and how many lines of the command or the change the
+        card does not show (0 if it shows all).
+    """
+    palette = view.palette
+    room = max(2, room)
+    width = max(12, view.width - 4)
+    rows: list[Text] = []
+    changed = change_rows(decision, model)
+    path = decision.tool_input.get("file_path") or decision.tool_input.get("notebook_path")
+    command = decision.tool_input.get("command")
+    what = "command"
+    if isinstance(command, str) and command.strip():
+        for part in command.splitlines():
+            rows += wrap_code(part, f"bold {palette.fg}", width, palette.faint)
+    elif changed is not None:
+        what = "change"
+        added = sum(1 for sign, _, _ in changed if sign == "+")
+        head = Text(str(path or decision.tool_name), f"bold {palette.fg}")
+        head.append(f"  +{added}", palette.green)
+        head.append(f" -{len(changed) - added}", palette.red)
+        rows.append(head)
+        for sign, text, spans in changed:
+            rows += wrap(diff_row(sign, text, spans, palette, 10_000), width)
+    else:
+        step = model.step(decision.tool_use_id)
+        shown = path if isinstance(path, str) and path else (step_title(step) if step else "")
+        for part in (shown or decision.tool_name).splitlines():
+            rows += wrap(Text(part, f"bold {palette.fg}"), width)
+    hidden = 0
+    if len(rows) > room:
+        hidden = len(rows) - (room - 1)
+        rows = rows[: room - 1]
+        rows.append(
+            Text(
+                f"{what} cut: {hidden} more line{'s' if hidden != 1 else ''} · w shows all",
+                f"bold {palette.orange}",
+            )
+        )
+    return [Text.assemble("  ", row) for row in rows], hidden
+
+
+def card_hidden(decision: Decision, model: SessionModel, view: View, max_lines: int = 9) -> int:
+    """Tell how much of a step the card leaves out.
+
+    Args:
+        decision: The open item.
+        model: The model.
+        view: Width (of the card's inside) and colours.
+        max_lines: The most lines the card may take.
+
+    Returns:
+        The number of lines of the command or the change that the card does not show; 0 for
+        a question and for a step the card shows whole.
+    """
+    if decision.is_question:
+        return 0
+    return card_step(decision, model, view, _step_room(decision, max_lines))[1]
+
+
+def _step_room(decision: Decision, max_lines: int) -> int:
+    """Work out how many lines of the card the command or the change may take.
+
+    Args:
+        decision: The open item.
+        max_lines: The most lines the card may take.
+
+    Returns:
+        `max_lines` less the head, the keys, one line of the reason and the lines of the
+        note and of a refusal; the step comes before the reason.
+    """
+    return max_lines - 3 - bool(decision.note) - bool(decision.error)
+
+
+ARMED_TEXT = {
+    "allow": "press a again to allow",
+    "deny": "press d again to deny",
+    "note": "press n again or enter: write a note for Claude first",
+    "detail": "press w again or enter: everything the checker saw",
+    "own": "press o again or enter: write your own answer",
+    "send": "press enter again to send your answer",
+}
+"""What the card says after the first press of a key that needs a second one."""
 
 
 def card_lines(
@@ -1063,19 +1339,22 @@ def card_lines(
 ) -> list[Text]:
     """Render the card of the selected open escalation or question.
 
+    The command or the change comes before the reason and gets the room first: a step is
+    judged by what it does. Whatever does not fit is counted on the card (`card_step`).
+
     Args:
         decision: The open item.
         model: The model, for the agent's name.
         view: Width (of the card's inside), colours and clock.
         position: `(index from 1, number of open items)`.
         max_lines: The most lines the card may take.
-        armed: "allow" or "deny" after the first press of the key, when the card asks for the
-            second one; "" otherwise.
+        armed: A key of `ARMED_TEXT` after the first press of a key that needs a second one,
+            when the card asks for it; "" otherwise.
 
     Returns:
         The lines: a head with kind, agent, tool and waiting time; the step or the question
         with its options; the reason; the user's note and the session's refusal if any; and
-        the keys.
+        the keys, as many as fit the width.
     """
     palette = view.palette
     index, total = position
@@ -1095,28 +1374,38 @@ def card_lines(
         head.append(" " * (view.width - head.cell_len - len(waited)))
         head.append(waited, palette.orange)
     lines = [head]
+    hints: list[tuple[int, str]]
     if decision.is_question:
         lines += _question_lines(decision, view, max_lines - 3)
-        keys = "1-9 choose · o own answer · ←/→ question · enter send · alt+d decline · w detail"
         if decision.complete():
-            keys = "enter sends the answers · 1-9 change · o own answer · ←/→ question · w detail"
+            hints = [(9, f"enter sends: {cut(decision.answer_text().replace(chr(10), ' · '), 40)}")]
+            hints += [(6, "1-9 change"), (4, "o,o own answer"), (5, "←/→ question")]
+        else:
+            hints = [(9, "1-9 choose"), (8, "o,o own answer"), (7, "enter next open question")]
+            if len(decision.questions) > 1:
+                hints.append((5, "←/→ question"))
+            else:
+                hints[2] = (7, "enter send")
+        hints += [(3, "alt+d decline"), (2, "w,w detail")]
     else:
-        step = model.step(decision.tool_use_id)
-        what = decision.tool_input.get("command") or decision.tool_input.get("file_path")
-        shown = what if isinstance(what, str) and what else (step_title(step) if step else "")
-        for row in (shown.splitlines() or [""])[:2]:
-            lines.append(Text.assemble("  ", (cut(row, view.width - 4), f"bold {palette.fg}")))
+        body, hidden = card_step(decision, model, view, _step_room(decision, max_lines))
+        lines += body
         reason = Text.assemble(("Stopped: ", palette.muted), (decision.reason, palette.fg))
-        room = max(1, max_lines - len(lines) - 2)
+        room = max(1, max_lines - len(lines) - 1 - bool(decision.note) - bool(decision.error))
         wrapped = wrap(reason, view.width - 4)
         if len(wrapped) > room:
             wrapped = wrapped[:room]
             wrapped[-1].truncate(max(1, view.width - 6))
+            wrapped[-1].rstrip()
             wrapped[-1].append(" …", palette.muted)
         lines += [Text.assemble("  ", row) for row in wrapped]
-        keys = "a a allow · d d deny · n note · w detail (what the checker saw)"
+        if hidden:
+            hints = [(9, "a shows all of it (allow from there)"), (8, "d,d deny"), (6, "n,n note")]
+        else:
+            hints = [(9, "a,a allow"), (9, "d,d deny"), (8, "w,w detail"), (6, "n,n note")]
         if total > 1:
-            keys += " · ] next"
+            hints.append((7, "] next"))
+        hints.append((1, "the second press confirms, any other key types"))
     if decision.note:
         lines.append(
             Text.assemble(
@@ -1131,17 +1420,15 @@ def card_lines(
                 f"bold {palette.red}",
             )
         )
-    if armed:
-        again = "a" if armed == "allow" else "d"
-        text = f"press {again} again to {armed} · any other key types"
+    if armed in ARMED_TEXT:
+        said = [(9, ARMED_TEXT[armed]), (5, "any other key types")]
         if decision.by_rule and armed == "allow":
-            text = f"Stopped by a deny rule: {text}"
-        else:
-            text = text.capitalize()
-        style = f"bold {palette.orange if armed == 'allow' else palette.red}"
-        lines.append(Text("  " + cut(text, view.width - 4), style))
+            said.insert(0, (9, "a deny rule stopped this step"))
+        style = f"bold {palette.red if armed == 'deny' else palette.orange}"
+        text = fit_hints(said, view.width - 4)
+        lines.append(Text("  " + text[:1].upper() + text[1:], style))
     else:
-        lines.append(Text("  " + cut(keys, view.width - 4), palette.muted))
+        lines.append(Text("  " + fit_hints(hints, view.width - 4), palette.muted))
     return lines
 
 
@@ -1207,6 +1494,91 @@ def _question_lines(decision: Decision, view: View, room: int) -> list[Text]:
             )
         )
     return lines[: max(2, room)]
+
+
+def pending_lines(model: SessionModel, view: View, limit: int = 2) -> list[Text]:
+    """Render the messages of the shown tab that the session holds and Claude has not read.
+
+    A sent message thus stays visible under the transcript of the agent it is for, until
+    Claude takes it in and it appears in the transcript itself.
+
+    Args:
+        model: The model, for the queue.
+        view: Width, colours and the shown tab (`view.tab`).
+        limit: The most messages to show; one more line counts the rest.
+
+    Returns:
+        One line per message, oldest first, at most `limit`: for whom, the word `waiting`,
+        how it is delivered and the start of the text; then one line that counts the rest.
+        Empty without such messages.
+    """
+    palette = view.palette
+    entries = [entry for entry in model.queue if view.tab == ALL or entry.to == view.tab]
+    lines: list[Text] = []
+    for entry in entries[:limit]:
+        if entry.to == MAIN:
+            how = "after the running tool calls" if entry.delivery == "inject" else "next turn"
+            label = f"you · waiting ({how})"
+        else:
+            label = f"you → {model.label(entry.to)} · waiting (relayed by main)"
+        line = Text.assemble(("▌ ", palette.faint), (label, palette.muted), "  ")
+        line.append(cut(entry.text, max(4, view.width - line.cell_len - 1)), f"italic {palette.fg}")
+        line.pad_right(max(0, view.width - line.cell_len))
+        line.stylize(f"on {palette.surface}")
+        lines.append(line)
+    if len(entries) > limit:
+        more = Text(f"▌ +{len(entries) - limit} more waiting · f2 lists them", palette.faint)
+        more.pad_right(max(0, view.width - more.cell_len))
+        more.stylize(f"on {palette.surface}")
+        lines.append(more)
+    return lines
+
+
+def slash_lines(
+    entries: Sequence[tuple[str, str]], selected: int, view: View, rows: int = 8
+) -> list[Text]:
+    """Render the list of slash commands shown above the composer.
+
+    Args:
+        entries: `(slash command with its arguments, what it does)` per command, in order.
+        selected: Index of the selected entry.
+        view: Width and colours.
+        rows: The most commands to show at a time; the window follows the selection.
+
+    Returns:
+        One line per shown command (a `>` marks the selected one, on its own background)
+        and a last line with the keys and how many commands are not shown.
+    """
+    palette = view.palette
+    rows = max(1, rows)
+    first = max(0, min(selected - rows + 1, len(entries) - rows)) if selected >= rows else 0
+    shown = entries[first : first + rows]
+    column = min(34, max((len(slash) for slash, _ in shown), default=0) + 2)
+    lines: list[Text] = []
+    for index, (slash, about) in enumerate(shown, start=first):
+        chosen = index == selected
+        word, _, arguments = slash.partition(" ")
+        line = Text.assemble(
+            (" > " if chosen else "   ", f"bold {palette.accent}"),
+            (word, f"bold {palette.accent}" if chosen else palette.accent),
+            (f" {arguments}" if arguments else "", palette.faint),
+        )
+        line.truncate(column + 3, overflow="ellipsis")
+        line.pad_right(max(0, column + 3 - line.cell_len))
+        line.append(
+            cut(about, max(4, view.width - line.cell_len - 1)),
+            palette.fg if chosen else palette.muted,
+        )
+        if chosen:
+            line.pad_right(max(0, view.width - line.cell_len))
+            line.stylize(f"on {palette.user_bg}")
+        lines.append(line)
+    hints = [(9, "↑↓ select"), (8, "tab or enter completes"), (7, "esc closes")]
+    hidden = len(entries) - len(shown)
+    if hidden > 0:
+        hints.append((6, f"{hidden} more: keep typing"))
+    lines.append(Text("   " + fit_hints(hints, view.width - 4), palette.faint))
+    return lines
 
 
 # --------------------------------------------------------------------------------- side panel
@@ -1554,7 +1926,9 @@ def honesty_page(model: SessionModel, view: View) -> list[Text]:
     for entry in model.marks:
         spot = f"{entry.path}:{entry.symbol}" if entry.symbol else entry.path
         lines.append(
-            Text.assemble((f"  {entry.id:>3}  ", palette.muted), (cut(spot, width - 7), palette.fg))
+            Text.assemble(
+                (f"  {'#' + str(entry.id):>4} ", palette.muted), (cut(spot, width - 7), palette.fg)
+            )
         )
         lines += [
             Text("       " + part.plain, palette.muted)
@@ -1578,21 +1952,20 @@ def honesty_page(model: SessionModel, view: View) -> list[Text]:
             lines.append(Text("  " + cut(state.unreviewed_problem, width - 2), palette.red))
 
     commands = (
-        (
-            "/trust [commit or branch]",
-            "certify a commit (no argument: HEAD)",
-        ),
-        ("/trust-file <path>", "certify the present content of one file"),
-        ("/honesty-review", "let calu review the unreviewed files now"),
-        ("/clear-mark <id>", "close a mark by hand"),
-        ("/honesty off | track | enforce", "change the mode (admin credential)"),
+        ("t", "/trust [commit or branch]", "certify a commit, after a yes (t: HEAD)"),
+        ("", "/trust-file <path>", "certify one file as it is now"),
+        ("r", "/honesty-review", "review the unreviewed files now"),
+        ("x", "/clear-mark <id>", "close a mark by hand, after a yes"),
+        ("m", "/honesty off | track | enforce", "change the mode (admin credential)"),
     )
-    lines += [Text(""), Text("COMMANDS", f"bold {palette.fg}")]
+    lines += [Text(""), Text("KEYS ON THIS PAGE AND COMMANDS", f"bold {palette.fg}")]
     lines += [
         Text.assemble(
-            (f"  {name:<32}", palette.fg), (cut(about, max(10, width - 34)), palette.muted)
+            (f"  {key:<3}", f"bold {palette.accent}"),
+            (f"{name:<32}", palette.fg),
+            (cut(about, max(10, width - 37)), palette.muted),
         )
-        for name, about in commands
+        for key, name, about in commands
     ]
     return lines
 

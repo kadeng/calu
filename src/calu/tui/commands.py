@@ -29,7 +29,7 @@ class Command:
 
     id: str
     title: str
-    """What the palette and the help screen show."""
+    """What the palette, the slash command list and the help screen show: a few words."""
     key: str = ""
     """The key as shown to the user ("" if the command has none)."""
     slash: str = ""
@@ -40,6 +40,9 @@ class Command:
     """Non-empty for a command this client does not carry out yet: the sentence it shows."""
     group: str = "Session"
     """The heading the help screen lists the command under."""
+    about: str = ""
+    """One more sentence for the help screen and the palette's second line ("" if the title
+    says it all)."""
 
     @property
     def name(self) -> str:
@@ -69,25 +72,31 @@ class Command:
 COMMANDS: tuple[Command, ...] = (
     # ---- decisions
     Command(
-        "allow", "Allow the step that waits", "a a · alt+a", "/allow [id] [note]", group="Decisions"
+        "allow",
+        "Allow the step that waits",
+        "a,a · alt+a",
+        "/allow [id] [note]",
+        group="Decisions",
+        about="The plain letter needs a second press; any other key after it types both.",
     ),
     Command(
-        "deny", "Deny the step that waits", "d d · alt+d", "/deny [id] [note]", group="Decisions"
+        "deny", "Deny the step that waits", "d,d · alt+d", "/deny [id] [note]", group="Decisions"
     ),
-    Command("note", "Write a note for Claude, then decide", "n · alt+n", group="Decisions"),
+    Command("note", "Write a note for Claude, then decide", "n,n · alt+n", group="Decisions"),
     Command(
         "answer",
         "Answer a question of the agent",
-        "1-9 · o · enter",
+        "1-9 · o,o · enter",
         "/answer [id] <text>",
         group="Decisions",
     ),
     Command(
         "detail",
-        "Show everything the checker saw (full screen, same key returns)",
-        "w · alt+w",
+        "Detail: everything the checker saw",
+        "w,w · alt+w",
         "/why [id]",
         group="Decisions",
+        about="Full screen; the step can be decided there, and the same key returns.",
     ),
     Command("next_decision", "Next open decision", "]", group="Decisions"),
     Command("previous_decision", "Previous open decision", "[", group="Decisions"),
@@ -118,11 +127,12 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         "side",
-        "Side question: asked beside the work, not part of the conversation",
+        "Side question",
         "f3",
         "/btw [question]",
         capability="side_question",
         group="Agents and messages",
+        about="Asked beside the work; not part of the conversation.",
     ),
     Command(
         "comment",
@@ -148,48 +158,54 @@ COMMANDS: tuple[Command, ...] = (
     Command("model", "Choose the model", "", "/model [name]"),
     Command(
         "effort",
-        "Choose the effort (a running session is stopped and resumed, after a yes)",
+        "Choose the effort",
         "",
         "/effort [level]",
+        about="A running session is stopped and resumed with it, after a yes.",
     ),
     Command(
         "restart",
-        "Stop and resume this conversation with another model or effort",
+        "Stop and resume with another model or effort",
         "",
         "/restart [model] [effort]",
     ),
     Command(
         "level",
-        "Supervision level: what waits for you besides the checkers' escalations",
+        "Supervision level",
         "",
         "/level [name]",
+        about="What waits for you besides the checkers' escalations.",
     ),
     Command("usage", "Usage: cost, context fill, usage limits", "", "/usage", capability="usage"),
     Command("state", "Session state", "", "/state"),
     Command("context", "The conversation as the checkers see it", "", "/context"),
     Command(
         "checkers",
-        "The checkers: read their instructions, e edits them (admin credential)",
+        "Checkers and their instructions",
         "",
         "/checkers",
+        about="Read them; e edits and saves with the admin credential of this machine.",
     ),
     Command(
         "honesty",
-        "Code honesty: mode, baseline, marked and unreviewed files; with a mode, change it",
+        "Code honesty: state, or change the mode",
         "",
         "/honesty [off | track | enforce]",
+        about="Mode, baseline, marked and unreviewed files; t r x m act on the page.",
     ),
     Command(
         "trust",
-        "Certify a commit as honest (no argument: HEAD), after a yes",
+        "Certify a commit as honest",
         "",
         "/trust [commit or branch]",
+        about="Without an argument: HEAD. Asks first; only y certifies.",
     ),
     Command(
         "trust_file",
-        "Certify the present content of one file as honest, after a yes",
+        "Certify one file as honest",
         "",
         "/trust-file <path>",
+        about="The present content of the file. Asks first; only y certifies.",
     ),
     Command("honesty_review", "Let calu review the unreviewed files now", "", "/honesty-review"),
     Command("sessions", "Resume a stored conversation of this project", "", "/sessions"),
@@ -205,55 +221,63 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         "scroll",
         "Scroll the transcript (the input keeps the focus)",
-        "pgup pgdn · shift+↑↓ · wheel",
+        "pgup pgdn shift+↑↓",
         group="View",
+        about="Also the mouse wheel. New output does not move what is shown.",
     ),
     Command("follow", "Jump to the end and follow new output", "end · ctrl+end", group="View"),
     Command(
         "focus_transcript",
-        "Move into the transcript (j k move, enter expands, e next waiting step, D diff, "
-        "/ search, i agent task, t thinking, c copy)",
+        "Move into the transcript",
         "ctrl+↑",
         group="View",
+        about="j k move, enter expands, e next waiting step, D diff, / search, i agent "
+        "task, t thinking, c copy.",
     ),
     Command(
         "thinking", "Show thinking in full or as one line each", "alt+t", "/thinking", group="View"
     ),
     Command(
         "panel",
-        "Move into the side panel (j k move, enter opens; queue: c copy, r back to the input; "
-        "held: s send, d delete; mark: x clear)",
+        "Move into the side panel",
         "f2",
         group="View",
+        about="j k move, enter opens; queue: c copy, r back to the input; held: s send, "
+        "d delete; mark: x clear.",
     ),
     Command(
         "diff",
-        "Full-screen diff of a step, side by side when wide; v and enter comment on lines",
-        "D in the transcript",
+        "Full-screen diff of a step",
+        "D (transcript)",
         "/diff",
         group="View",
+        about="Side by side when wide; v and enter comment on lines.",
     ),
     Command(
         "git",
-        "Open a terminal git program in the project directory (lazygit, gitui, tig; "
-        "CALU_GIT_TOOL or git_tool in tui.toml choose another)",
+        "Open a terminal git program",
         "f4",
         "/git",
         group="View",
+        about="In the project directory: the first installed of lazygit (recommended), "
+        "gitui, tig, else git diff. CALU_GIT_TOOL or git_tool in tui.toml name another. "
+        "Without one, f4 shows the command that installs lazygit on this machine.",
     ),
     Command(
         "search",
-        "Search the transcript as you type (enter older, ↓ newer)",
-        "ctrl+f · / in the transcript",
+        "Search the transcript",
+        "ctrl+f",
         "/search [text]",
         group="View",
+        about="As you type; enter older, ↓ newer. Also / in the transcript.",
     ),
     Command(
         "copy",
-        "Copy the block under the cursor, or the last answer, a command, a result, a diff",
+        "Copy a block, answer, command, result or diff",
         "alt+c",
         "/copy [answer | block | command | result | diff]",
         group="View",
+        about="Without a word: the block under the cursor, or the last answer.",
     ),
     Command(
         "export", "Write the transcript to a Markdown file", "", "/export [file]", group="View"
@@ -261,16 +285,17 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         "agent_info",
         "The task a subagent was given and what it returned",
-        "i in the transcript",
+        "i (transcript)",
         "/task [agent]",
         group="Agents and messages",
     ),
     Command(
         "hold",
-        "Hold the input as a draft in this client until the session is idle",
+        "Hold the input as a draft",
         "alt+h",
         "/hold [text]",
         group="Agents and messages",
+        about="Kept in this client and sent when the session turns idle.",
     ),
     Command(
         "expand", "Show pasted texts in full in the input", "alt+e", group="Agents and messages"
@@ -342,15 +367,15 @@ class CaluCommands(Provider):
             command: The command.
 
         Returns:
-            `(display text, help text)`: the title with the key, and the slash command or the
-            sentence that says why the command is not available.
+            `(display text, help text)`: the title with the key; and the slash command with
+            the command's `about`, or the sentence that says why it is not available.
         """
         app: CaluApp = self.app  # type: ignore[assignment]
         reason = command.unavailable(app.capabilities)
         title = command.title + (f"  ({command.key})" if command.key else "")
         if reason:
             return f"{title}  [not available]", reason
-        return title, command.slash or ""
+        return title, " · ".join(part for part in (command.slash, command.about) if part)
 
     async def discover(self) -> Hits:
         """List every command when the palette opens without a query.

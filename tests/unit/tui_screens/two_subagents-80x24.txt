@@ -1,5 +1,5 @@
  calu  myproject   ● running 0:18   opus / high   Checkers decide   ctx 21%
-  main   explore bg *   tests *   all                                  f2 panel
+  main   explore bg *   tests *   all                        alt+←/→ · f2 panel
 ▌ you  Rename the helper in gate.py and run the unit tests.
 
   ┊ thinking
@@ -19,6 +19,6 @@
 
 
 
- to main · next turn  · tab changes
+ to main · next turn · tab changes
  >
  alt+←/→ agent   f3 side question   f2 panel   ^p palette   f1 help

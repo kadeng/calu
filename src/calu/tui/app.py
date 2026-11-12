@@ -15,15 +15,23 @@ composer over the full width, a line of keys. Nothing that asks for a decision t
 keyboard away: the card sits between transcript and composer, the transcript stays scrollable
 and the composer usable.
 
-Keys while the composer is empty and a decision is open: `a a` allows, `d d` denies (the second
-press confirms, any other key types), `n` writes a note first, `w` shows what the checker saw;
-for a question `1`-`9` choose and Enter sends. `alt+a`, `alt+d`, `alt+n`, `alt+w` do the same
-whatever the composer holds.
+Keys while the composer is empty and a decision is open: `a a` allows, `d d` denies, `n n`
+writes a note first, `w w` shows what the checker saw; for a question `1`-`9` choose, `o o`
+writes an own answer and Enter sends. Every letter needs a second press (for `n`, `w` and `o`
+Enter does as well) and any other key after the first one types both characters, so a reply
+that begins with one of these letters is typed, not taken as a command. `alt+a`, `alt+d`,
+`alt+n`, `alt+w` act at once whatever the composer holds.
+
+Every decision is bound to the escalation it was begun for: the second press, the answer to
+a yes-or-no question and the keys of the detail screen name that escalation's id, and do
+nothing if it is no longer open. For `CARD_SETTLE_S` after the card began to show another
+item, the keys that decide are ignored.
 """
 
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import time
 from collections.abc import Callable, Coroutine, Mapping, Sequence
@@ -32,12 +40,14 @@ from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar
 
+import anyio
 from rich.markdown import Markdown
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.geometry import Size
 from textual.widgets import Static
 
 from calu.acp.modes import LADDER
@@ -52,7 +62,7 @@ from calu.tui.adminaccess import (
     weakens,
 )
 from calu.tui.capabilities import CAPABILITIES, Capabilities
-from calu.tui.commands import COMMANDS, CaluCommands, by_slash, completions
+from calu.tui.commands import COMMANDS, CaluCommands, Command, by_slash, completions
 from calu.tui.connection import Connector, Link
 from calu.tui.difftools import unified_text
 from calu.tui.export import transcript_markdown
@@ -62,6 +72,7 @@ from calu.tui.model import (
     Block,
     Change,
     Decision,
+    Notice,
     SessionModel,
     StepBlock,
     TextBlock,
@@ -86,6 +97,34 @@ TALL = 30
 
 FLUSH_S = 0.05
 """Changes of the model are drawn at most once per this many seconds (20 times per second)."""
+
+CARD_SETTLE_S = 0.5
+"""For this long after the card began to show another item, the keys that decide (`a`, `d`,
+`alt+a`, `alt+d`, a digit, Enter on a question) are ignored: a key aimed at the item that was
+there a moment ago must not reach the one that took its place."""
+
+HOLD_S = 0.15
+"""The second press of `a` or `d` is carried out this long after it. A third press of the
+same key within that time means the key is held down and repeats: nothing is decided."""
+
+REPEAT_QUIET_S = 0.5
+"""After a held key was recognised, that letter is ignored until it has been quiet for this
+long."""
+
+RESIZE_S = 0.1
+"""The transcript is laid out again this long after the last of a burst of resizes."""
+
+TOAST_S = 10.0
+"""A notice with the same text as one shown less than this many seconds ago is counted, not
+shown again."""
+
+ARM_KEYS = {"a": "allow", "d": "deny", "n": "note", "w": "detail", "o": "own"}
+"""The plain letters of the decision card and what the second press of each does."""
+
+ARM_LETTER = {name: letter for letter, name in ARM_KEYS.items()}
+
+MODE_ANNOUNCE_S = 4.0
+"""How long the client waits for the session to announce a mode it has stored for it."""
 
 DOUBLE_ESCAPE_S = 1.0
 """Two presses of Escape within this many seconds interrupt the running turn."""
@@ -137,6 +176,12 @@ class Ask:
     prompt: str
     yes: Callable[[], None]
     no: Callable[[], None] | None = None
+    escalation_id: str | None = None
+    """The escalation the question is about; the question is dropped when it closes."""
+    enter_cancels: bool = False
+    """True if Enter answers nothing (as Escape); False if Enter means no."""
+    keys: str = "y yes · n no · esc cancels"
+    """What the keys do, shown after the question."""
 
 
 def _digit_bindings() -> list[BindingType]:
@@ -260,8 +305,38 @@ class CaluApp(App[None]):
         self.selected: str | None = None
         """The escalation the card shows; None shows the oldest open one."""
         self.armed = ""
-        """"allow" or "deny" after the first press of a decision key; "" otherwise."""
+        """A value of `ARM_KEYS` (or "send") after the first press of a key that needs a
+        second one; "" otherwise."""
         self.armed_for: str | None = None
+        """The escalation the first press was made for; the second one acts on no other."""
+        self._confirmed: tuple[str, str] | None = None
+        """`(decision, escalation id)` between the second press of `a` or `d` and the moment
+        it is carried out (`HOLD_S`)."""
+        self._repeating: tuple[str, float] | None = None
+        """`(letter, until)` while a held key is being ignored."""
+        self.defer: Callable[[float, Callable[[], None]], Any] = self._defer
+        """Calls a function after a delay; tests replace it to stand between a confirming
+        press and its effect."""
+        self._card_id: str | None = None
+        self._card_at = 0.0
+        """Which item the card shows and since when (`CARD_SETTLE_S`)."""
+        self._card_key: str | None = None
+        """The escalation whose question card got the last key (a pick or Enter)."""
+        self.slash_index = 0
+        """Which entry of the slash command list is selected."""
+        self.slash_closed = ""
+        """The input text for which Escape closed the slash command list."""
+        self._confirm_main: tuple[str, str] | None = None
+        """`(tab, text)` after Enter on the tab of an agent that takes no messages: the
+        same Enter again sends the text to the main agent."""
+        self._toasts: dict[str, tuple[float, int]] = {}
+        """Notice text -> when it was last shown and how often it came since."""
+        self._own_switch = False
+        """True until the next drawing of the card if the user chose the item it shows."""
+        self.note_for: str | None = None
+        """The escalation the note in the composer belongs to (note mode)."""
+        self.answer_for: str | None = None
+        """The question set the own answer in the composer belongs to (answer mode)."""
         self.message = ""
         self.message_error = False
         self.panel_open = False
@@ -280,8 +355,9 @@ class CaluApp(App[None]):
         """Build the screen.
 
         Yields:
-            Status bar, agent tabs, the body (transcript and decision card beside the side
-            panel), the composer with its header, and the line of keys.
+            Status bar, agent tabs, the body (transcript, the messages that wait in the
+            queue and the decision card, beside the side panel), the list of slash commands
+            (shown while one is typed), the composer with its header, and the line of keys.
         """
         yield Line("", id="status")
         yield AgentTabs(id="tabs")
@@ -290,11 +366,13 @@ class CaluApp(App[None]):
                 yield Lines(id="agent-head")
                 yield Transcript(self.model, self.palette, id="transcript")
                 yield NewBelow("", id="new-below")
+                yield Lines(id="pending")
                 yield Lines(id="card")
             with VerticalScroll(id="side"):
                 yield PanelList(id="panel-lines")
                 yield Lines(id="side-lines")
-        yield Line("", id="composer-head")
+        yield Lines(id="slash")
+        yield Lines(id="composer-head")
         with Horizontal(id="composer-row"):
             yield Static(">", id="prompt")
             yield Composer(id="composer")
@@ -306,6 +384,8 @@ class CaluApp(App[None]):
         self.register_theme(CALU_LIGHT)
         self.transcript.thinking_open = self.options.show_thinking
         self.composer.intercept = self._composer_key
+        self._honesty_changed = anyio.Event()
+        self.transcript.resize_delay = RESIZE_S if self.live else 0.0
         self.composer.cursor_blink = self.live
         if self.options.history_path is not None:
             self.composer.sent = settings.load_history(self.options.history_path)
@@ -388,26 +468,42 @@ class CaluApp(App[None]):
         self.transcript.palette = self.palette
         self.transcript.dark = self.current_theme.dark
         self.query_one("#panel-lines", PanelList).highlight = f"on {self.palette.user_bg}"
-        self.transcript.rebuild()
+        self.transcript.rebuild(fresh=True)
         self.render_all()
 
-    def _breakpoints(self) -> None:
-        """Set the classes the layout depends on: narrow, short, panel and side open."""
-        self.set_class(self.size.width < WIDE, "-narrow")
-        self.set_class(self.size.height < TALL, "-short")
+    def _breakpoints(self, size: Size | None = None) -> None:
+        """Set the classes the layout depends on: narrow, short, panel and side open.
+
+        Args:
+            size: The size of the terminal; `self.size` if None. A resize passes the size of
+                its event, because `self.size` still holds the previous one while the
+                handler runs.
+        """
+        size = size or self.size
+        self.set_class(size.width < WIDE, "-narrow")
+        self.set_class(size.height < TALL, "-short")
         self.set_class(self.panel_open, "-panel")
         self.set_class(self.side_open, "-side")
         side = self.query_one("#side")
-        if self.size.width >= WIDE:
+        if size.width >= WIDE:
             side.styles.width = self.options.panel_width + (10 if self.side_open else 0)
         else:
             side.styles.width = None
-        self.composer.max_lines = 3 if self.size.height < TALL else 8
+        self.composer.max_lines = 3 if size.height < TALL else 8
         self.composer.fit()
 
-    def on_resize(self) -> None:
-        """Adapt the layout to the new size."""
-        self._breakpoints()
+    def on_resize(self, event: events.Resize) -> None:
+        """Adapt the layout to the new size.
+
+        The classes follow at once, from the size the event carries. Everything whose text
+        depends on the width (card, tabs, header, footer) is drawn again once Textual has
+        laid the screen out for the new size: after the next refresh, and again when the
+        transcript reports its new size (`on_transcript_resized`).
+
+        Args:
+            event: The resize, with the new size of the terminal.
+        """
+        self._breakpoints(event.size)
         self.call_after_refresh(self.render_all)
 
     # ------------------------------------------------------------------ model changes
@@ -431,20 +527,33 @@ class CaluApp(App[None]):
             self.call_next(self._draw_pending)
 
     def _draw_pending(self) -> None:
-        """Draw everything that changed since the last flush."""
+        """Draw everything that changed since the last flush.
+
+        Also drops what was begun for an escalation that has closed meanwhile: the first
+        press of a decision key and a yes-or-no question about it.
+        """
         self._draw_pending_scheduled = False
         change, self._pending = self._pending, Change()
         if not self.is_running or not change:
             return
+        if self.armed and self.armed_for not in self.model.decisions:
+            self.disarm()
+        if self.ask is not None and self.ask.escalation_id is not None:
+            if self.ask.escalation_id not in self.model.decisions:
+                self.ask = None
+                self.flash("that step is no longer open: nothing was decided")
+        if change.honesty:
+            announced, self._honesty_changed = self._honesty_changed, anyio.Event()
+            announced.set()
         if change.honesty and self._honesty_page is not None and self._honesty_page.is_attached:
             self._honesty_page.set_body(render.honesty_page(self.model, self.view()))
         transcript = self.transcript
         transcript.now = self.clock()
-        if change.rebuilt:
-            transcript.rebuild()
+        if change.rebuilt or change.trimmed:
+            transcript.rebuild(fresh=change.rebuilt)
         else:
             transcript.apply(change.blocks_added, change.blocks_updated)
-        if any(isinstance(self.model.blocks[index], TurnEndBlock) for index in change.blocks_added):
+        if any(isinstance(self.model.block(index), TurnEndBlock) for index in change.blocks_added):
             self._usage_asked = False
             if not self.terminal_focused and not change.rebuilt and self.options.bell:
                 self.bell()  # a turn ended while the user looks at another window
@@ -458,13 +567,39 @@ class CaluApp(App[None]):
         self._check_target()
         self._send_held()
         self.render_all()
-        for notice in change.notices if self.options.toasts else ():
-            self.notify(notice.text, severity=notice.severity)  # type: ignore[arg-type]
+        if self.options.toasts:
+            self._toast(change.notices)
         if change.bell and self.options.bell:
             self.bell()
         screen = self.screen
         if isinstance(screen, DetailScreen) and change.decisions:
             screen.redraw()
+
+    def _toast(self, notices: Sequence[Notice]) -> None:
+        """Show notices as toasts, each text once: repeats are counted, not stacked.
+
+        Equal notices of one flush become one toast with their number. A warning or an error
+        whose text was shown less than `TOAST_S` seconds ago is only counted; the next time
+        it is shown, the toast carries the count (`(45 times)`). The log page keeps every line.
+
+        Args:
+            notices: The notices of one flush, in order.
+        """
+        now = self.clock()
+        counted: dict[str, tuple[int, str]] = {}
+        for notice in notices:
+            counted[notice.text] = (counted.get(notice.text, (0, ""))[0] + 1, notice.severity)
+        for text, (count, severity) in counted.items():
+            shown_at, waiting = self._toasts.get(text, (float("-inf"), 0))
+            if severity != "information" and now - shown_at < TOAST_S:
+                self._toasts[text] = (shown_at, waiting + count)
+                continue
+            total = waiting + count
+            self._toasts[text] = (now, 0)
+            shown = text + (f"  ({total} times)" if total > 1 else "")
+            self.notify(shown, severity=severity)  # type: ignore[arg-type]
+        for text in [key for key, (at, _) in self._toasts.items() if now - at > 6 * TOAST_S]:
+            del self._toasts[text]
 
     async def _refresh_usage(self) -> None:
         """Ask the session for cost, context fill and usage limits and draw them."""
@@ -488,6 +623,8 @@ class CaluApp(App[None]):
         self._render_status()
         self._render_card()
         self._render_panel()
+        if isinstance(self.screen, DetailScreen):
+            self.screen.redraw()
 
     def _spawn(self, work: Coroutine[Any, Any, Any]) -> None:
         """Run a request beside the UI, so that no key waits for the session.
@@ -507,11 +644,14 @@ class CaluApp(App[None]):
         self._render_tabs()
         self._render_agent_head()
         self._render_card()
+        self._render_pending()
         self._render_panel()
         self._render_side()
+        self._render_slash()
         self._render_head()
         self._render_footer()
         self._render_below()
+        self.call_after_refresh(self._fit_overlay)
 
     def _render_status(self) -> None:
         """Draw the status bar."""
@@ -519,18 +659,24 @@ class CaluApp(App[None]):
         self.query_one("#status", Line).show(render.status_line(self.model, self.view(), spinner))
 
     def _render_tabs(self) -> None:
-        """Draw the agent tabs; on a narrow screen with what the hidden side panel counts."""
-        extra = "alt+←/→ switches"
-        if self.size.width < WIDE:
-            counts = []
+        """Draw the agent tabs; on a narrow screen with what the hidden side panel counts.
+
+        The key that switches agents stays on the row whenever there is more than one tab,
+        ahead of the counts.
+        """
+        hints: list[tuple[int, str]] = []
+        if self.size.width >= WIDE:
+            hints.append((9, "alt+←/→ switches"))
+        else:
+            if len(self.model.tabs()) > 1:
+                hints.append((9, "alt+←/→"))
             if self.model.queue:
-                counts.append(f"{len(self.model.queue)} queued")
+                hints.append((5, f"{len(self.model.queue)} queued"))
             if self.model.marks:
-                counts.append(
-                    f"{len(self.model.marks)} mark{'s' if len(self.model.marks) != 1 else ''}"
-                )
-            extra = " · ".join([*counts, "f2 panel"])
-        line, spans = render.tabs_line(self.model, self.view(), extra)
+                marks = len(self.model.marks)
+                hints.append((4, f"{marks} mark{'s' if marks != 1 else ''}"))
+            hints.append((7, "f2 panel"))
+        line, spans = render.tabs_line(self.model, self.view(), hints)
         self.query_one("#tabs", AgentTabs).show(line, spans)
 
     def _render_agent_head(self) -> None:
@@ -554,14 +700,76 @@ class CaluApp(App[None]):
         self.selected = None
         return next(iter(self.model.decisions.values()), None)
 
+    def _card_view(self) -> render.View:
+        """Build the rendering parameters of the decision card.
+
+        Returns:
+            The view with the width of the card's inside.
+        """
+        return self.view(max(30, self.query_one("#main").size.width - 6))
+
+    def _card_room(self, decision: Decision) -> int:
+        """Say how many lines the card may take for an item.
+
+        Args:
+            decision: The open item.
+
+        Returns:
+            For a question up to half the screen (10 lines on a short one); for a step a
+            third of the screen, at least 9 lines (8 on a short screen).
+        """
+        short = self.size.height < TALL
+        if decision.is_question:
+            return 10 if short else self.size.height // 2 - 2
+        return 8 if short else max(9, self.size.height // 3)
+
+    def card_hidden(self, decision: Decision) -> int:
+        """Tell how many lines of a step's command or change the card does not show.
+
+        Args:
+            decision: The open item.
+
+        Returns:
+            The number of hidden lines; 0 if the card shows the step whole.
+        """
+        return render.card_hidden(
+            decision, self.model, self._card_view(), self._card_room(decision)
+        )
+
+    def _settling(self, decision: Decision) -> bool:
+        """Tell whether the card began to show an item too recently to decide it.
+
+        Args:
+            decision: The item a key is about to decide.
+
+        Returns:
+            True if the card as last drawn shows another item, or has shown this one for
+            less than `CARD_SETTLE_S`. A message then says so.
+        """
+        fresh = self.clock() - self._card_at < CARD_SETTLE_S
+        if decision.escalation_id != self._card_id or fresh:
+            self.flash("the card shows this step since a moment ago: read it, then press again")
+            return True
+        return False
+
     def _render_card(self) -> None:
-        """Draw the decision card, or hide it when nothing waits."""
+        """Draw the decision card, or hide it when nothing waits.
+
+        Side effects: notes when the card begins to show another item (`_card_at`). A
+        change the user made (`]`, a tab, the panel) does not start the settling time.
+        """
         card = self.query_one("#card", Lines)
         decision = self.current_decision()
         card.set_class(decision is not None, "-shown")
         card.set_class(decision is not None and decision.is_question, "-question")
         stopped = decision is None and self.model.state in {"stopped", "failed"}
         card.set_class(decision is not None or stopped, "-shown")
+        shown = decision.escalation_id if decision is not None else None
+        if shown != self._card_id:
+            own = self._own_switch
+            self._card_id, self._card_key = shown, None
+            self._card_at = self.clock() - (CARD_SETTLE_S if own else 0.0)
+        self._own_switch = False
         if decision is None:
             if self.armed:
                 self.disarm()
@@ -576,15 +784,41 @@ class CaluApp(App[None]):
             return
         waiting = list(self.model.decisions)
         position = (waiting.index(decision.escalation_id) + 1, len(waiting))
-        width = max(30, self.query_one("#main").size.width - 6)
-        short = self.size.height < TALL
-        room = (
-            (10 if short else self.size.height // 2 - 2)
-            if decision.is_question
-            else (6 if short else 9)
-        )
         armed = self.armed if self.armed_for == decision.escalation_id else ""
-        card.show(render.card_lines(decision, self.model, self.view(width), position, room, armed))
+        card.show(
+            render.card_lines(
+                decision,
+                self.model,
+                self._card_view(),
+                position,
+                self._card_room(decision),
+                armed,
+            )
+        )
+
+    def _fit_overlay(self) -> None:
+        """Keep the side panel above the decision card where it lies over the transcript.
+
+        On a narrow terminal the side panel and the side questions open over the body. The
+        card at the bottom of the body must stay readable, so the overlay ends above it.
+        """
+        side = self.query_one("#side")
+        over = self.size.width < WIDE and (self.panel_open or self.side_open)
+        if not over:
+            side.styles.height = None
+            return
+        body = self.query_one("#body").size.height
+        card = self.query_one("#card", Lines)
+        taken = card.outer_size.height if card.has_class("-shown") else 0
+        side.styles.height = max(4, body - taken - self.query_one("#pending").outer_size.height)
+
+    def _render_pending(self) -> None:
+        """Draw the messages of the shown agent that wait in the session's queue."""
+        pending = self.query_one("#pending", Lines)
+        width = max(30, self.query_one("#main").size.width)
+        lines = render.pending_lines(self.model, self.view(width))
+        pending.set_class(bool(lines), "-shown")
+        pending.show(lines)
 
     def _render_panel(self) -> None:
         """Draw the supervision panel."""
@@ -644,68 +878,138 @@ class CaluApp(App[None]):
             self.target = MAIN
             self.flash(f"{name} takes no more messages: sending to main")
 
+    def mode_hints(self) -> list[tuple[int, str]]:
+        """Say where the composer's text goes, as hints of which the important ones stay.
+
+        Returns:
+            `(priority, text)` in display order (`render.fit_hints`); the first says what
+            Enter does with the text.
+        """
+        decision = self.current_decision()
+        if self.mode == "search":
+            transcript = self.transcript
+            if not transcript.needle:
+                return [(9, "search the transcript"), (5, "type the text"), (7, "esc ends")]
+            if not transcript.matches:
+                return [(9, "search: no line contains this"), (7, "esc ends")]
+            return [
+                (9, f"search: match {transcript.match + 1} of {len(transcript.matches)}"),
+                (6, "enter or ↑ older"),
+                (5, "↓ newer"),
+                (7, "esc ends"),
+            ]
+        if self.model.connection.status in {"detached", "reconnecting"}:
+            return [(9, "not attached: sending is off, the text is kept")]
+        if self.mode == "note":
+            return [
+                (9, "note for Claude with the decision"),
+                (8, "alt+a allow"),
+                (8, "alt+d deny"),
+                (6, "enter keeps it"),
+                (7, "esc cancels"),
+            ]
+        if self.mode == "answer" and decision is not None and decision.is_question:
+            header = decision.questions[decision.current].header
+            return [(9, f"your own answer to: {header}"), (7, "enter keeps it"), (6, "esc cancels")]
+        if self.mode == "side":
+            return [(9, "side question"), (5, "not part of the conversation"), (7, "esc closes")]
+        if self.target != MAIN:
+            return [(9, f"to {self.model.label(self.target)}"), (5, "relayed by the main agent")]
+        hints: list[tuple[int, str]] = []
+        shown = self.model.agents.get(self.model.selected_tab)
+        if shown is not None and shown.key != MAIN and not shown.takes_messages:
+            hints.append((8, f"{shown.label} takes no messages"))
+        if self.model.state in {"stopped", "failed"} and self.composer.text.strip():
+            hints.append((9, "to main · enter starts the session and sends this"))
+        elif not self.model.working():
+            hints.append((9, "to main"))
+        elif self.delivery == "inject":
+            hints += [
+                (9, "to main · into the running turn"),
+                (4, "read after the running tool calls"),
+            ]
+        else:
+            hints.append((9, "to main · next turn"))
+        return hints
+
     def mode_text(self) -> str:
         """Say in words where the composer's text goes.
 
         Returns:
-            The text of the composer's header for the current mode.
+            The whole text of the composer's header for the current mode, or the open
+            yes-or-no question with its keys.
         """
-        decision = self.current_decision()
         if self.ask is not None:
-            return f"{self.ask.prompt}  y yes · n no · esc cancels"
-        if self.mode == "search":
-            transcript = self.transcript
-            if not transcript.needle:
-                return "search the transcript · type the text · esc ends"
-            if not transcript.matches:
-                return "search: no line contains this · esc ends"
-            return (
-                f"search: match {transcript.match + 1} of {len(transcript.matches)} · "
-                "enter or ↑ older · ↓ newer · esc ends"
+            return f"{self.ask.prompt} · {self.ask.keys}"
+        return " · ".join(text for _, text in self.mode_hints())
+
+    def _slash_entries(self) -> list[Command]:
+        """List the commands the slash command list offers for what is typed.
+
+        Returns:
+            The commands whose slash word starts with the composer's text, the one that
+            equals it first; empty unless the text is one word that starts with `/`, in chat
+            mode, and Escape has not closed the list for this text.
+        """
+        text = self.composer.text
+        if not text.startswith("/") or " " in text or "\n" in text or text == self.slash_closed:
+            return []
+        if self.ask is not None or self.mode != "chat":
+            return []
+        found = [entry for entry in COMMANDS if entry.name and entry.name.startswith(text)]
+        return sorted(found, key=lambda entry: entry.name != text)
+
+    def _render_slash(self) -> None:
+        """Draw the list of slash commands above the composer while one is being typed."""
+        box = self.query_one("#slash", Lines)
+        entries = self._slash_entries()
+        text = self.composer.text
+        unknown = (
+            not entries
+            and text.startswith("/")
+            and " " not in text
+            and "\n" not in text
+            and self.mode == "chat"
+            and by_slash(text) is None
+            and text != self.slash_closed
+            and self.ask is None
+        )
+        box.set_class(bool(entries) or unknown, "-shown")
+        if unknown:
+            box.show([Text(" no such command · /help lists them", self.palette.muted)])
+            return
+        if not entries:
+            box.show([])
+            return
+        self.slash_index = max(0, min(self.slash_index, len(entries) - 1))
+        rows = 6 if self.size.height < TALL else 8
+        box.show(
+            render.slash_lines(
+                [(entry.slash, entry.title) for entry in entries],
+                self.slash_index,
+                self.view(self.size.width - 2),
+                rows,
             )
-        if self.model.connection.status in {"detached", "reconnecting"}:
-            return "not attached: sending is off, the text is kept"
-        if self.mode == "note":
-            return (
-                "note for Claude with the decision · alt+a allow · alt+d deny · "
-                "enter keeps it · esc cancels"
-            )
-        if self.mode == "answer" and decision is not None and decision.is_question:
-            header = decision.questions[decision.current].header
-            return f"your own answer to: {header} · enter keeps it · esc cancels"
-        if self.mode == "side":
-            return "side question · not part of the conversation · esc closes"
-        if self.target != MAIN:
-            return f"to {self.model.label(self.target)} · relayed by the main agent"
-        note = ""
-        shown = self.model.agents.get(self.model.selected_tab)
-        if shown is not None and shown.key != MAIN and not shown.takes_messages:
-            note = f"{shown.label} takes no messages (only running background subagents do) · "
-        if not self.model.working():
-            return f"{note}to main"
-        if self.delivery == "inject":
-            return f"{note}to main · into the running turn (read after the running tool calls)"
-        return f"{note}to main · next turn"
+        )
 
     def _render_head(self) -> None:
-        """Draw the composer's header: the send mode, slash completions or a message."""
+        """Draw the composer's header: a question, a message, or the send mode.
+
+        The send mode is one line of hints, of which as many as fit are shown. A question
+        or a message is never cut: it wraps, to three lines at most.
+        """
         palette = self.palette
-        text = self.composer.text
+        width = max(10, self.size.width - 2)
+        head = self.query_one("#composer-head", Lines)
         line = Text()
         if self.ask is not None:
-            line.append(self.mode_text(), f"bold {palette.orange}")
+            line.append(self.ask.prompt, f"bold {palette.orange}")
+            line.append(f" · {self.ask.keys}", palette.orange)
         elif self.message:
             line.append(
                 self.message, f"bold {palette.red}" if self.message_error else palette.orange
             )
-        elif text.startswith("/") and " " not in text and "\n" not in text and self.ask is None:
-            found = completions(text)
-            line.append(
-                "  ".join(found[:8]) or "no such command (/help lists them)", palette.accent
-            )
-            if found:
-                line.append("  · tab completes", palette.faint)
-        elif self.ask is None and (paths := self._path_completions()) is not None:
+        elif (paths := self._path_completions()) is not None:
             if paths[1]:
                 line.append("  ".join(paths[1][:6]), palette.accent)
                 more = len(paths[1]) - 6
@@ -719,12 +1023,15 @@ class CaluApp(App[None]):
             else:
                 line.append("no project path starts like this", palette.faint)
         else:
-            special = self.mode != "chat" or self.target != MAIN or self.ask is not None
-            line.append(self.mode_text(), f"bold {palette.accent}" if special else palette.muted)
+            hints = self.mode_hints()
             if self.mode == "chat" and len(self._send_modes()) > 1:
-                line.append("  · tab changes", palette.faint)
-        line.truncate(max(10, self.size.width - 2), overflow="ellipsis")
-        self.query_one("#composer-head", Line).show(line)
+                hints.append((6, "tab changes"))
+            special = self.mode != "chat" or self.target != MAIN
+            shown = render.fit_hints(hints, width)
+            line.append(shown, f"bold {palette.accent}" if special else palette.muted)
+        lines = render.wrap(line, width)[:3]
+        head.show(lines)
+        head.text = line.plain
 
     def _render_footer(self) -> None:
         """Draw the line of keys: what works now, most useful first, cut to the width."""
@@ -736,6 +1043,13 @@ class CaluApp(App[None]):
             parts.append((9, "esc", "again to interrupt"))
         if self.ask is not None:
             parts += [(9, "y", "yes"), (9, "n", "no"), (9, "esc", "cancel")]
+        elif self._slash_entries():
+            parts += [
+                (9, "↑↓", "select"),
+                (9, "tab", "complete"),
+                (9, "enter", "complete, then run"),
+                (9, "esc", "close the list"),
+            ]
         elif self.mode == "search":
             parts += [(9, "enter ↑", "older"), (9, "↓", "newer"), (9, "esc", "end search")]
         elif self.focused is self.transcript:
@@ -765,20 +1079,39 @@ class CaluApp(App[None]):
                 "mark": [(9, "enter", "detail"), (9, "x", "clear mark")],
             }.get(kind, [])
             parts.append((9, "esc", "back to input"))
-        elif decision is None and self.model.state in {"stopped", "failed"} and not typed:
-            parts += [(9, "enter", "start the session")]
+        elif decision is None and self.model.state in {"stopped", "failed"}:
+            what = "start the session and send this" if typed else "start the session"
+            parts += [(9, "enter", what)]
         elif self.armed:
-            parts.append((9, self.armed[0], f"again to {self.armed}"))
-        elif decision is not None and decision.is_question:
-            parts += [(9, "1-9", "choose"), (9, "o", "own answer"), (9, "enter", "send")]
+            what = {
+                "allow": "allow",
+                "deny": "deny",
+                "note": "write a note",
+                "detail": "show the detail",
+                "own": "write an own answer",
+                "send": "send the answer",
+            }.get(self.armed, self.armed)
+            letter = ARM_LETTER.get(self.armed, "enter")
+            soft = self.armed in {"note", "detail", "own"}
+            parts.append((9, f"{letter} or enter" if soft else letter, f"again: {what}"))
+            parts.append((9, "any other key", "types"))
+        elif decision is not None and decision.is_question and not typed:
+            parts += [(9, "1-9", "choose"), (9, "o,o", "own answer"), (9, "enter", "send")]
         elif decision is not None and typed:
             parts += [(9, "alt+a", "allow"), (9, "alt+d", "deny"), (9, "alt+w", "detail")]
+        elif decision is not None and self.card_hidden(decision):
+            parts += [(9, "a", "whole step"), (9, "d,d", "deny"), (8, "n,n", "note")]
         elif decision is not None:
-            parts += [(9, "a a", "allow"), (9, "d d", "deny"), (8, "n", "note"), (9, "w", "detail")]
+            parts += [
+                (9, "a,a", "allow"),
+                (9, "d,d", "deny"),
+                (9, "w,w", "detail"),
+                (8, "n,n", "note"),
+            ]
         stopped = self.model.state in {"stopped", "failed"}
         if self.model.working():
             parts += [(5, "esc esc", "interrupt"), (3, "tab", "send mode")]
-        elif (not stopped or typed) and self.mode != "search" and self.ask is None:
+        elif not stopped and self.mode != "search" and self.ask is None:
             parts += [(5, "enter", "send"), (1, "^j", "newline")]
         parts += [(7, "alt+←/→", "agent"), (4, "pgup/pgdn", "scroll"), (6, "f3", "side question")]
         parts.append((3, "f4", "git"))
@@ -820,12 +1153,15 @@ class CaluApp(App[None]):
         """Show a message in the composer's header until the user types or sends.
 
         Args:
-            message: The message; "" clears it.
+            message: The message; "" clears it. A page of text that is open on top shows it
+                in its line of keys as well, because it covers the header.
             error: Whether it reports a failure.
         """
         self.message, self.message_error = message, error
         if self.is_running:
             self._render_head()
+            if isinstance(self.screen, TextScreen) and message:
+                self.screen.say(message, error)
 
     def report(self, outcome: Outcome, done: str = "") -> None:
         """Show the result of a request.
@@ -841,6 +1177,10 @@ class CaluApp(App[None]):
 
     # ------------------------------------------------------------------ widget messages
 
+    def on_transcript_resized(self) -> None:
+        """Draw what depends on the width again, now that the layout has the new sizes."""
+        self.render_all()
+
     def on_transcript_moved(self) -> None:
         """Update the marker for new content when the transcript scrolled."""
         self._render_below()
@@ -851,7 +1191,7 @@ class CaluApp(App[None]):
         Args:
             message: The message with the block id.
         """
-        block = self.model.blocks[message.block_id]
+        block = self.model.block(message.block_id)
         if isinstance(block, StepBlock) and block.tool_use_id in self.model.agents:
             self.select_tab(block.tool_use_id)
 
@@ -888,6 +1228,7 @@ class CaluApp(App[None]):
         kind, key, pressed = message.kind, message.key, message.pressed
         if kind == "decision" and pressed == "enter":
             self.selected = key
+            self._own_switch = True
             self.disarm()
             self.composer.focus()
         elif kind == "agent" and pressed in {"enter", "m"}:
@@ -927,7 +1268,7 @@ class CaluApp(App[None]):
                 self.flash("draft deleted")
             elif pressed == "s":
                 text = self.held.pop(index)
-                self._spawn(self._send(text, MAIN, "queued"))
+                self._spawn(self._send(text, MAIN, "queued", held=True))
         elif kind == "mark":
             mark = next((entry for entry in self.model.marks if str(entry.id) == key), None)
             if mark is None:
@@ -982,6 +1323,14 @@ class CaluApp(App[None]):
         """Redraw header and footer when the composer's text changes; search as it is typed."""
         if self.mode == "search":
             self.transcript.search(self.composer.text.strip())
+        text = self.composer.text
+        if text:
+            self._card_key = None  # typing ends "the key before was a choice on the card"
+        if text != self.slash_closed:
+            self.slash_closed = ""
+        if self._confirm_main is not None and self._confirm_main[1] != self.composer.value:
+            self._confirm_main = None
+        self._render_slash()
         self._render_head()
         self._render_footer()
 
@@ -1058,10 +1407,20 @@ class CaluApp(App[None]):
     def _composer_key(self, event: events.Key) -> bool:
         """Decide whether a key pressed in the composer is a command rather than text.
 
-        Only with an empty composer: `end` and `home` scroll the transcript, `?` opens the
-        help, and while a decision is open its keys act on the card (see the module
-        docstring). After the first `a` or `d` the next key decides: the same key confirms,
-        any other key types -- the first letter included, so no typing is lost.
+        In this order:
+
+            a yes-or-no question is open   y, n and Enter answer it (Enter means no, or
+                                           nothing where the question says so); every other
+                                           key is ignored
+            a or d repeats (held down)     ignored, and a decision it confirmed a moment
+                                           ago is taken back
+            a first press is pending       the same key (for n, w, o and a finished answer
+                                           also Enter) carries it out, for the escalation it
+                                           was made for and for no other; any other key
+                                           forgets it and types both characters
+            the slash command list shows   up and down select, Enter completes
+            the composer is empty          end and home scroll, ? opens the help, and while
+                                           a decision is open its keys act on the card
 
         Args:
             event: The key.
@@ -1076,11 +1435,15 @@ class CaluApp(App[None]):
             self._render_head()
         if self.ask is not None:
             ask = self.ask
-            if key in {"y", "n", "enter"}:  # Enter is no: the answer of a key pressed unread
+            if key in {"y", "n"} or (key == "enter" and not ask.enter_cancels):
                 self.ask = None
                 chosen = ask.yes if key == "y" else ask.no
                 if chosen is not None:
                     chosen()
+                self.render_all()
+            elif key == "enter":
+                self.ask = None
+                self.flash("nothing was decided")
                 self.render_all()
             return True
         if self.mode == "search":
@@ -1089,16 +1452,18 @@ class CaluApp(App[None]):
                 self._render_head()
                 return True
             return False
+        if not composer.text and key in {"a", "d"} and self._held_key(key):
+            return True
         if self.armed:
-            letter = self.armed[0]
-            if key == letter:
-                self.decide_now(self.armed)
-                return True
-            self.disarm()
-            if event.is_printable and event.character and self.mode == "chat":
-                composer.insert(letter)
-            self.render_all()
-            return False
+            return self._armed_key(event)
+        entries = self._slash_entries()
+        if entries and key in {"up", "down"}:
+            self.slash_index = (self.slash_index + (1 if key == "down" else -1)) % len(entries)
+            self._render_slash()
+            return True
+        if entries and key == "enter" and entries[self.slash_index].name != composer.text:
+            self._complete_slash(entries)
+            return True
         if composer.text:
             return False
         if key == "end":
@@ -1121,18 +1486,15 @@ class CaluApp(App[None]):
                 "next_decision" if key == "right_square_bracket" else "previous_decision"
             )
             return True
-        if key == "w":
-            self.run_command("detail")
-            return True
         if decision.is_question:
             question = decision.questions[decision.current]
             if key.isdigit() and key != "0" and int(key) <= len(question.options):
-                self.pick_option(decision, int(key) - 1)
+                if not self._settling(decision):
+                    self.pick_option(decision, int(key) - 1)
+                    self._card_key = decision.escalation_id
                 return True
-            if key == "o":
-                self.mode = "answer"
-                composer.set_text(decision.free[decision.current])
-                self.render_all()
+            if key in {"o", "w"}:
+                self.decision_key(key, decision.escalation_id)
                 return True
             if key in {"left", "right"} and len(decision.questions) > 1:
                 step = 1 if key == "right" else -1
@@ -1140,10 +1502,182 @@ class CaluApp(App[None]):
                 self.render_all()
                 return True
             return False
-        if key in {"a", "d", "n"}:
-            self.decision_key(key)
+        if key in {"a", "d", "n", "w"}:
+            self.decision_key(key, decision.escalation_id)
             return True
         return False
+
+    def _armed_key(self, event: events.Key) -> bool:
+        """Handle the key that follows the first press of a key which needs a second one.
+
+        The second press acts only if the card still shows the escalation the first one was
+        made for. A confirmed `a` or `d` is carried out `HOLD_S` later (`_confirm`), so that
+        a key held down decides nothing.
+
+        Args:
+            event: The key.
+
+        Returns:
+            True if the key was the second press (carried out, ignored or refused); False if
+            it was another key: the first press is then forgotten, its letter is put into
+            the composer, and the key itself is left to the composer to type.
+        """
+        armed, armed_for = self.armed, self.armed_for
+        letter = ARM_LETTER.get(armed, "")
+        soft = armed in {"note", "detail", "own", "send"}
+        confirm = (bool(letter) and event.key == letter) or (soft and event.key == "enter")
+        if confirm:
+            current = self.current_decision()
+            self.disarm()
+            if current is None or current.escalation_id != armed_for or armed_for is None:
+                self.flash("that step is no longer open: nothing was decided")
+            elif soft:
+                self._second_press(armed, armed_for)
+            else:
+                self._confirm(armed, armed_for)
+            self.render_all()
+            return True
+        self.disarm()
+        if event.is_printable and event.character and self.mode == "chat" and letter:
+            self.composer.insert(letter)
+        self.render_all()
+        return False
+
+    def _second_press(self, armed: str, escalation_id: str) -> None:
+        """Carry out what a confirmed first press stood for.
+
+        Args:
+            armed: A value of `ARM_KEYS`, or "send".
+            escalation_id: The escalation the first press was made for.
+        """
+        if armed in {"allow", "deny"}:
+            self.decide_now(armed, escalation_id)
+        elif armed == "note":
+            self.begin_note(escalation_id)
+        elif armed == "detail":
+            self.run_command("detail", escalation_id)
+        elif armed == "own":
+            self.begin_answer(escalation_id)
+        elif armed == "send":
+            self._spawn(self._answer(escalation_id))
+
+    def _arm(self, armed: str, decision: Decision) -> None:
+        """Remember the first press of a key that needs a second one.
+
+        Args:
+            armed: A value of `ARM_KEYS`, or "send".
+            decision: The open item the press was made for.
+        """
+        self.armed, self.armed_for = armed, decision.escalation_id
+        self.render_all()
+
+    def _defer(self, delay: float, work: Callable[[], None]) -> None:
+        """Call a function after a delay; at once in a client without timers (`live` False).
+
+        Args:
+            delay: Seconds to wait.
+            work: The function.
+        """
+        if self.live:
+            self.set_timer(delay, work)
+        else:
+            work()
+
+    def _confirm(self, wanted: str, escalation_id: str) -> None:
+        """Take the second press of `a` or `d`: decide `HOLD_S` later unless the key repeats.
+
+        A key that is held down sends the same letter again and again. The first two of them
+        look like the two presses of a decision. The decision is therefore sent only if no
+        third press of the letter follows within `HOLD_S` (`_held_key` sees that press).
+
+        Args:
+            wanted: "allow" or "deny".
+            escalation_id: The escalation both presses were made for.
+        """
+        self._confirmed = (wanted, escalation_id)
+
+        def carry_out() -> None:
+            """Send the decision if no further press of the letter took it back."""
+            if self._confirmed == (wanted, escalation_id):
+                self._confirmed = None
+                self.decide_now(wanted, escalation_id)
+
+        self.defer(HOLD_S, carry_out)
+
+    def _held_key(self, key: str) -> bool:
+        """Recognise a decision letter that repeats because the key is held down.
+
+        Args:
+            key: The key that was pressed.
+
+        Returns:
+            True if the key is such a repeat and must be ignored: a third press right after
+            a confirming one (which takes that confirmation back), or a further press of the
+            same letter before it has been quiet for `REPEAT_QUIET_S`.
+        """
+        now = self.clock()
+        if self._confirmed is not None and key == ARM_LETTER[self._confirmed[0]]:
+            self._confirmed = None
+            self._repeating = (key, now + REPEAT_QUIET_S)
+            self.disarm()
+            self.flash("the key repeats (is it held down?): nothing was decided")
+            self.render_all()
+            return True
+        if self._repeating is not None:
+            letter, until = self._repeating
+            if key == letter and now < until:
+                self._repeating = (letter, now + REPEAT_QUIET_S)
+                return True
+            self._repeating = None
+        return False
+
+    def _complete_slash(self, entries: list[Command]) -> None:
+        """Put the selected slash command into the composer.
+
+        Args:
+            entries: What the list shows (`_slash_entries`); must not be empty.
+        """
+        chosen = entries[self.slash_index % len(entries)]
+        takes_more = " " in chosen.slash
+        self.composer.set_text(chosen.name + (" " if takes_more else ""))
+        self.slash_index = 0
+        self.render_all()
+
+    def begin_note(self, escalation_id: str) -> None:
+        """Put the composer into note mode for one open step.
+
+        Args:
+            escalation_id: The escalation; nothing happens if it is no longer open.
+        """
+        decision = self.model.decisions.get(escalation_id)
+        self.disarm()
+        if decision is None:
+            self.flash("that step is no longer open")
+            return
+        if decision.is_question:
+            self.flash("a question is answered with 1-9 or o o; alt+d declines it")
+            return
+        self.mode, self.note_for = "note", escalation_id
+        self.composer.set_text(decision.note)
+        self.composer.focus()
+        self.render_all()
+
+    def begin_answer(self, escalation_id: str) -> None:
+        """Put the composer into answer mode for the question the card shows.
+
+        Args:
+            escalation_id: The escalation of the question set; nothing happens if it is no
+                longer open.
+        """
+        decision = self.model.decisions.get(escalation_id)
+        self.disarm()
+        if decision is None or not decision.is_question:
+            self.flash("that question is no longer open")
+            return
+        self.mode, self.answer_for = "answer", escalation_id
+        self.composer.set_text(decision.free[decision.current])
+        self.composer.focus()
+        self.render_all()
 
     def pick_option(self, decision: Decision, option: int) -> None:
         """Choose an option of the question the card shows.
@@ -1178,55 +1712,88 @@ class CaluApp(App[None]):
                 decision.current = index
                 return
 
-    def decision_key(self, letter: str) -> None:
-        """Handle `a`, `d` or `n` for the open item the card shows.
+    def decision_key(
+        self, letter: str, escalation_id: str | None = None, detail: bool = False
+    ) -> None:
+        """Handle a plain letter of the decision card for one open item.
+
+        The first press is remembered and shown on the card; the second press of the same
+        letter for the same item carries it out (`_second_press`).
+
+        An `a` for a step whose command or change the card does not show whole opens the
+        detail screen instead: such a step is allowed from there, where all of it is shown.
 
         Args:
-            letter: `a` or `d` arm the decision (the second press carries it out); `n` puts
-                the composer into note mode.
+            letter: A key of `ARM_KEYS`.
+            escalation_id: The escalation the key is meant for; the item the card shows if
+                None. If it is no longer open, nothing happens but a message.
+            detail: True from the detail screen, which shows the whole step and one fixed
+                escalation: the card's settling time and the rule for a cut step do not
+                apply there.
         """
-        decision = self.current_decision()
+        if self._held_key(letter):
+            return
+        decision = (
+            self.current_decision()
+            if escalation_id is None
+            else self.model.decisions.get(escalation_id)
+        )
         if decision is None:
-            return
-        if letter == "n":
             self.disarm()
-            if decision.is_question:
-                self.flash("a question is answered with 1-9 or o; alt+d declines it")
-                return
-            self.mode = "note"
-            self.composer.set_text(decision.note)
-            self.composer.focus()
-            self.render_all()
+            self.flash("that step is no longer open: nothing was decided")
             return
-        wanted = "allow" if letter == "a" else "deny"
-        if decision.is_question and wanted == "allow":
-            self.flash("a question is answered with 1-9 or o, then enter")
+        wanted = ARM_KEYS[letter]
+        if decision.is_question and wanted in {"allow", "note"}:
+            self.disarm()
+            self.flash("a question is answered with 1-9 or o o, then enter; alt+d declines it")
             return
-        if self.armed == wanted and self.armed_for == decision.escalation_id:
-            self.decide_now(wanted)
-        else:
-            self.armed, self.armed_for = wanted, decision.escalation_id
-            self.render_all()
+        again = self.armed == wanted and self.armed_for == decision.escalation_id
+        if wanted in {"allow", "deny"} and not detail and not again and self._settling(decision):
+            return
+        if wanted == "allow" and not detail and self.card_hidden(decision):
+            self._open_whole(decision)
+            return
+        if again:
+            self.disarm()
+            if wanted in {"allow", "deny"}:
+                self._confirm(wanted, decision.escalation_id)
+            else:
+                self._second_press(wanted, decision.escalation_id)
+            return
+        self._arm(wanted, decision)
+
+    def _open_whole(self, decision: Decision) -> None:
+        """Open the detail screen for a step the card cannot show whole, and say why.
+
+        Args:
+            decision: The open item.
+        """
+        self._show_detail(
+            decision, "the card shows only a part of this step: here is all of it · a,a allows"
+        )
 
     def disarm(self) -> None:
-        """Forget the first press of a decision key."""
+        """Forget the first press of a key that needs a second one."""
         self.armed, self.armed_for = "", None
 
-    def decide_now(self, wanted: str) -> None:
-        """Send the decision for the open item the card shows.
+    def decide_now(self, wanted: str, escalation_id: str) -> None:
+        """Send the decision for one open item, named by its id.
 
-        The note of the item goes along; in note mode the composer's text is the note.
+        The note of the item goes along; in note mode for this item the composer's text is
+        the note. If the escalation is no longer open, nothing is sent and a message says so.
 
         Args:
             wanted: "allow" or "deny".
+            escalation_id: The escalation to decide.
         """
-        decision = self.current_decision()
+        decision = self.model.decisions.get(escalation_id)
         self.disarm()
         if decision is None:
+            self.flash("that step is no longer open: nothing was decided")
             return
-        if self.mode == "note":
+        if self.mode == "note" and self.note_for == escalation_id:
             decision.note = self.composer.value.strip()
-            self.mode = "chat"
+            self.mode, self.note_for = "chat", None
             self.composer.set_text("")
         self._spawn(self._decide(decision.escalation_id, wanted, decision.note))
         self.render_all()
@@ -1247,8 +1814,15 @@ class CaluApp(App[None]):
     def action_decide(self, wanted: str) -> None:
         """Allow or deny with the chord key (`alt+a`, `alt+d`), whatever the composer holds.
 
-        A step that a deny rule stopped is allowed only by a second press; every other
-        decision is sent at once.
+            the card began to show the item just now   nothing, with a message
+            allow, and the card does not show all      the detail screen opens
+            allow of a step a deny rule stopped        needs a second alt+a
+            text in the composer (chat mode)           a question: send it as the note?
+                                                       y with it, n without it, Enter and
+                                                       Escape decide nothing
+            otherwise                                  the decision is sent
+
+        The decision is bound to the escalation the card shows when the key is pressed.
 
         Args:
             wanted: "allow" or "deny".
@@ -1258,46 +1832,66 @@ class CaluApp(App[None]):
             self.flash("nothing waits for a decision")
             return
         if decision.is_question and wanted == "allow":
-            self.flash("a question is answered with 1-9 or o, then enter")
+            self.flash("a question is answered with 1-9 or o o, then enter")
             return
-        again = self.armed == wanted and self.armed_for == decision.escalation_id
+        escalation_id = decision.escalation_id
+        again = self.armed == wanted and self.armed_for == escalation_id
+        if not again and self._settling(decision):
+            return
+        if wanted == "allow" and self.card_hidden(decision):
+            self._open_whole(decision)
+            return
         if wanted == "allow" and decision.by_rule and not again:
-            self.armed, self.armed_for = wanted, decision.escalation_id
-            self.render_all()
+            self._arm(wanted, decision)
             return
         typed = self.composer.value.strip()
         if self.mode == "chat" and typed and not typed.startswith("/") and not decision.is_question:
 
             def with_note() -> None:
                 """Decide with the composer's text as the note for Claude."""
-                current = self.current_decision()
+                current = self.model.decisions.get(escalation_id)
                 if current is not None:
                     current.note = typed
                     self.composer.set_text("")
-                    self.decide_now(wanted)
+                self.decide_now(wanted, escalation_id)
 
+            self.disarm()
             self._ask(
                 f"send the text in the input as a note with the {wanted}?",
                 with_note,
-                partial(self.decide_now, wanted),
+                partial(self.decide_now, wanted, escalation_id),
+                escalation_id=escalation_id,
+                enter_cancels=True,
+                keys="y with the note · n without it · enter or esc: decide nothing",
             )
             return
-        self.decide_now(wanted)
+        self.decide_now(wanted, escalation_id)
 
     def _ask(
-        self, prompt: str, yes: Callable[[], None], no: Callable[[], None] | None = None
+        self,
+        prompt: str,
+        yes: Callable[[], None],
+        no: Callable[[], None] | None = None,
+        escalation_id: str | None = None,
+        enter_cancels: bool = False,
+        keys: str = "y yes · n no · esc cancels",
     ) -> None:
         """Ask a yes-or-no question in the composer's header.
 
-        The next `y` or `n` answers it and is not typed; Escape cancels it. Every other key is
-        ignored while the question is open, so that an answer is never given by accident.
+        The next `y` or `n` answers it and is not typed; Escape cancels it. Enter means no,
+        or cancels with `enter_cancels`. Every other key is ignored while the question is
+        open, so that an answer is never given by accident.
 
         Args:
             prompt: The question.
             yes: Called for `y`.
-            no: Called for `n`; None does nothing.
+            no: Called for `n` (and for Enter unless `enter_cancels`); None does nothing.
+            escalation_id: The escalation the question is about; when it closes, the
+                question is dropped unanswered.
+            enter_cancels: True if Enter answers nothing.
+            keys: What the keys do, shown after the question.
         """
-        self.ask = Ask(prompt, yes, no)
+        self.ask = Ask(prompt, yes, no, escalation_id, enter_cancels, keys)
         self.composer.focus()
         self.render_all()
 
@@ -1317,27 +1911,28 @@ class CaluApp(App[None]):
             self._render_head()
             return
         if self.mode == "note":
-            if decision is not None:
-                decision.note = text
-            self.mode = "chat"
+            noted = self.model.decisions.get(self.note_for or "")
+            if noted is not None:
+                noted.note = text
+            self.mode, self.note_for = "chat", None
             composer.set_text("")
             self.render_all()
             return
         if self.mode == "answer":
-            if decision is not None and decision.is_question:
-                decision.free[decision.current] = text
-                if text and not decision.questions[decision.current].multi:
-                    decision.picks[decision.current] = set()
-                self._next_unanswered(decision)
-            self.mode = "chat"
+            asked = self.model.decisions.get(self.answer_for or "")
+            if asked is not None and asked.is_question:
+                asked.free[asked.current] = text
+                if text and not asked.questions[asked.current].multi:
+                    asked.picks[asked.current] = set()
+                self._next_unanswered(asked)
+                self._card_key = asked.escalation_id
+            self.mode, self.answer_for = "chat", None
             composer.set_text("")
             self.render_all()
             return
         if not text:
-            if decision is not None and decision.is_question and decision.complete():
-                self._spawn(self._answer(decision.escalation_id))
-            elif decision is not None and decision.is_question:
-                self.flash(f"{decision.answered()} of {len(decision.questions)} questions answered")
+            if decision is not None and decision.is_question:
+                self._enter_on_question(decision)
             elif decision is not None:
                 self.jump_to(decision)
             elif self.model.state in {"stopped", "failed"}:
@@ -1357,21 +1952,95 @@ class CaluApp(App[None]):
             composer.set_text("")
             self.run_command(command.id, rest.strip())
             return
+        shown = self.model.agents.get(self.model.selected_tab)
+        if (
+            shown is not None
+            and shown.key != MAIN
+            and not shown.takes_messages
+            and self.target == MAIN
+            and self._confirm_main != (shown.key, message.text)
+        ):
+            self._confirm_main = (shown.key, message.text)
+            self.flash(
+                f"{shown.label} takes no messages (only a running background subagent does) "
+                "· enter again sends this to main"
+            )
+            return
+        self._confirm_main = None
         composer.set_text("")
+        if self.model.state in {"stopped", "failed"}:
+            self._spawn(self._start_and_send(message.text))
+            return
         self._spawn(self._send(message.text, self.target, self.delivery))
 
-    async def _send(self, text: str, target: str, delivery: str) -> None:
-        """Send a chat message; on a refusal put the text back and say why.
+    def _enter_on_question(self, decision: Decision) -> None:
+        """Handle Enter on the question card while the composer is empty.
+
+            a question of the set has no answer   show the first such question
+            all answered, and the key before      send the answers
+            was a choice or Enter on this card
+            all answered otherwise                ask for Enter again (the card names the
+                                                  answer that would be sent)
+
+        Args:
+            decision: The open question set the card shows.
+        """
+        if self._settling(decision):
+            return
+        if not decision.complete():
+            answers = decision.answers()
+            first = next(index for index, chosen in enumerate(answers) if not chosen)
+            if first != decision.current:
+                decision.current = first
+                self.flash(
+                    f"{decision.answered()} of {len(decision.questions)} answered: this "
+                    "question is still open"
+                )
+            else:
+                self.flash("this question has no answer yet: 1-9 choose, o o writes your own")
+            self._card_key = decision.escalation_id
+            self.render_all()
+        elif self._card_key == decision.escalation_id:
+            self._spawn(self._answer(decision.escalation_id))
+        else:
+            self._arm("send", decision)
+
+    async def _start_and_send(self, text: str) -> None:
+        """Start the stopped session, then send a message; on a failure put the text back.
+
+        Args:
+            text: The message.
+        """
+        resume = self.model.claude_session_id
+        outcome = await self.actions.restart(resume, self.next_model, self.next_effort)
+        if not outcome.ok:
+            if not self.composer.text:
+                self.composer.set_text(text)
+            self.flash(f"the session did not start: {outcome.message}", error=True)
+            return
+        self.next_model = self.next_effort = None
+        await self._send(text, MAIN, "queued")
+        self.render_all()
+
+    async def _send(self, text: str, target: str, delivery: str, held: bool = False) -> None:
+        """Send a chat message; on a refusal keep the text and say why.
 
         Args:
             text: The message.
             target: `MAIN` or the id of a running background subagent.
             delivery: "queued" or "inject".
+            held: True for a held draft: a refused one goes back to the front of the held
+                drafts. Otherwise the text goes back into the composer if that is empty.
         """
         outcome = await self.actions.send(text, target, delivery)
         if outcome.ok:
             self.flash("")
             self.transcript.follow()
+            return
+        if held:
+            self.held.insert(0, text)
+            self.flash(f"{outcome.message} · the draft is held again (f2 lists it)", error=True)
+            self.render_all()
             return
         if not self.composer.text:
             self.composer.set_text(text)
@@ -1434,6 +2103,7 @@ class CaluApp(App[None]):
         own = self.model.open_decisions(key) if key != ALL else []
         if own:
             self.selected = own[0].escalation_id
+            self._own_switch = True
             self.disarm()
         self.transcript.now = self.clock()
         self.transcript.show_tab(key)
@@ -1469,6 +2139,10 @@ class CaluApp(App[None]):
             step: +1 for the next mode, -1 for the previous one.
         """
         text = self.composer.text
+        entries = self._slash_entries()
+        if entries:
+            self._complete_slash(entries)
+            return
         if text.startswith("/") and " " not in text:
             found = completions(text)
             if found:
@@ -1541,7 +2215,8 @@ class CaluApp(App[None]):
     def action_escape(self) -> None:
         """Step back once: cancel, close, return to the composer, or count towards an interrupt.
 
-        In this order: cancel a yes-or-no question; forget a first decision key; end a search;
+        In this order: cancel a yes-or-no question; forget a first decision key; close the
+        list of slash commands; end a search;
         leave note or answer mode; close the side
         questions; close the side panel on a narrow screen; return the focus to the composer;
         and while the session works, a second Escape within `DOUBLE_ESCAPE_S` interrupts the
@@ -1551,12 +2226,14 @@ class CaluApp(App[None]):
             self.ask = None
         elif self.armed:
             self.disarm()
+        elif self._slash_entries():
+            self.slash_closed = self.composer.text
         elif self.mode == "search":
             self.mode = "chat"
             self.transcript.search("")
             self.composer.set_text("")
         elif self.mode in {"note", "answer"}:
-            self.mode = "chat"
+            self.mode, self.note_for, self.answer_for = "chat", None, None
             self.composer.set_text("")
         elif self.side_open:
             self.side_open = False
@@ -1662,26 +2339,38 @@ class CaluApp(App[None]):
     def _cmd_allow(self, rest: str) -> None:
         """Allow an open step at once (`/allow [id] [note]`).
 
+        Without an id the step the card shows is meant. If the card began to show it only a
+        moment ago (`CARD_SETTLE_S`), nothing is sent and the command stays in the input.
+
         Args:
             rest: An optional escalation id and note.
         """
         decision, note = self._find_decision(rest)
+        named = rest.split(" ", 1)[0] in self.model.decisions
         if decision is None:
             self.flash("nothing waits for a decision")
         elif decision.is_question:
             self.flash("a question is answered with /answer <text>", error=True)
+        elif not named and self._settling(decision):
+            self.composer.set_text(f"/allow {rest}".rstrip())
         else:
             self._spawn(self._decide(decision.escalation_id, "allow", note or decision.note))
 
     def _cmd_deny(self, rest: str) -> None:
         """Deny an open step at once (`/deny [id] [note]`).
 
+        Without an id the step the card shows is meant. If the card began to show it only a
+        moment ago (`CARD_SETTLE_S`), nothing is sent and the command stays in the input.
+
         Args:
             rest: An optional escalation id and note.
         """
         decision, note = self._find_decision(rest)
+        named = rest.split(" ", 1)[0] in self.model.decisions
         if decision is None:
             self.flash("nothing waits for a decision")
+        elif not named and self._settling(decision):
+            self.composer.set_text(f"/deny {rest}".rstrip())
         else:
             self._spawn(self._decide(decision.escalation_id, "deny", note or decision.note))
 
@@ -1691,7 +2380,11 @@ class CaluApp(App[None]):
         Args:
             rest: Ignored.
         """
-        self.decision_key("n")
+        decision = self.current_decision()
+        if decision is None:
+            self.flash("nothing waits for a decision")
+        else:
+            self.begin_note(decision.escalation_id)
 
     def _cmd_answer(self, rest: str) -> None:
         """Answer a question in the user's own words (`/answer [id] <text>`).
@@ -1719,8 +2412,19 @@ class CaluApp(App[None]):
         if decision is None:
             self.flash("nothing waits for a decision")
             return
+        self._show_detail(decision)
+
+    def _show_detail(self, decision: Decision, notice: str = "") -> None:
+        """Open the detail screen of one open item and fetch what the checker saw.
+
+        Args:
+            decision: The open item.
+            notice: A sentence shown above the keys of the screen.
+        """
+        self.disarm()
         self.selected = decision.escalation_id
-        screen = DetailScreen(decision.escalation_id)
+        self._own_switch = True
+        screen = DetailScreen(decision.escalation_id, notice)
         self.push_screen(screen)
         self._spawn(self._load_detail(screen))
 
@@ -1747,6 +2451,7 @@ class CaluApp(App[None]):
             return
         index = waiting.index(current.escalation_id)
         self.selected = waiting[(index + step) % len(waiting)]
+        self._own_switch = True
         self.disarm()
 
     def _cmd_next_decision(self, rest: str) -> None:
@@ -2002,7 +2707,15 @@ class CaluApp(App[None]):
                 if running
                 else "used by the start (enter)"
             )
-            entries = [(name, partial(self.run_command, "model", name), how) for name in MODELS]
+            now = self.next_model or self.model.model_name or "default"
+            entries = [
+                (
+                    f"{name}{'  (now)' if name == now else ''}",
+                    partial(self.run_command, "model", name),
+                    how,
+                )
+                for name in MODELS
+            ]
             self.search_commands(entries, placeholder="model… (/model <id> takes any model id)")
             return
         if running and live:
@@ -2031,7 +2744,15 @@ class CaluApp(App[None]):
                 if running
                 else "used by the start (enter)"
             )
-            entries = [(name, partial(self.run_command, "effort", name), how) for name in EFFORTS]
+            now = self.next_effort or self.model.effort or "default"
+            entries = [
+                (
+                    f"{name}{'  (now)' if name == now else ''}",
+                    partial(self.run_command, "effort", name),
+                    how,
+                )
+                for name in EFFORTS
+            ]
             self.search_commands(entries, placeholder="effort…")
             return
         if rest not in EFFORTS:
@@ -2176,17 +2897,25 @@ class CaluApp(App[None]):
             return
         self._request(self.actions.set_level(mode.id), f"supervision level: {mode.name}")
 
-    def _page(self, title: str, body: Any) -> TextScreen:
+    def _page(
+        self,
+        title: str,
+        body: Any,
+        keys: dict[str, tuple[str, Callable[[], None]]] | None = None,
+        build: Callable[[str], list[Text]] | None = None,
+    ) -> TextScreen:
         """Open a full-screen page of text.
 
         Args:
             title: The title.
             body: Lines or a Rich renderable.
+            keys: Keys of this page: key -> `(what it does, the function)`.
+            build: Returns the body for a filter text; `/` on the page then filters.
 
         Returns:
             The screen, so that its body can be replaced when a request answers.
         """
-        screen = TextScreen(title, body)
+        screen = TextScreen(title, body, keys=keys, build=build)
         self.push_screen(screen)
         return screen
 
@@ -2362,7 +3091,14 @@ class CaluApp(App[None]):
         wanted = rest.strip().lower()
         if not wanted:
             self._honesty_page = self._page(
-                "Code honesty", render.honesty_page(self.model, self.view())
+                "Code honesty",
+                render.honesty_page(self.model, self.view()),
+                keys={
+                    "t": ("trust HEAD", partial(self.run_command, "trust")),
+                    "r": ("review now", partial(self.run_command, "honesty_review")),
+                    "x": ("clear a mark", self._pick_mark),
+                    "m": ("mode", self._pick_mode),
+                },
             )
             return
         if wanted not in MODES:
@@ -2400,10 +3136,22 @@ class CaluApp(App[None]):
                 except AdminFailed as error:
                     self.flash(f"honesty.mode not changed: {error}", error=True)
                     return
-                self.flash(
-                    f"honesty.mode is now {saved.mode} ({saved.scope} setting) · the session "
-                    "shows the mode it uses in the side panel"
-                )
+                with anyio.move_on_after(MODE_ANNOUNCE_S if self.live else 0.2):
+                    while self.model.honesty_mode != saved.mode:
+                        await self._honesty_changed.wait()
+                if self.model.honesty_mode == saved.mode:
+                    self.flash(
+                        f"honesty.mode is now {saved.mode} ({saved.scope} setting) · the "
+                        "session announced it"
+                    )
+                else:
+                    self.flash(
+                        f"stored honesty.mode = {saved.mode} ({saved.scope} setting) in the "
+                        "database of this machine's admin credential, but the attached "
+                        f"session still reports {self.model.honesty_mode}: it uses another "
+                        "database, or has not read the change",
+                        error=True,
+                    )
 
             def answered(password: str | None) -> None:
                 """Go on with the password; without one nothing is changed.
@@ -2461,9 +3209,9 @@ class CaluApp(App[None]):
     def _cmd_trust(self, rest: str) -> None:
         """Certify a commit as honest after a yes (`/trust [commit or branch]`).
 
-        The question names the commit: its short id and subject line if the project
-        directory is on this machine, else the name as typed (HEAD without one). Only `y`
-        certifies; `n`, Enter and Escape do not.
+        The question (a confirmation box) names the commit: its short id and subject line if
+        the project directory is on this machine, else the name as typed (HEAD without
+        one). Only `y` certifies; `n`, Enter and Escape do not.
 
         Args:
             rest: A commit id or a branch name; empty means HEAD.
@@ -2489,11 +3237,26 @@ class CaluApp(App[None]):
 
             self._spawn(run())
 
-        room = max(12, self.size.width - 46)
-        self._ask(
-            f"certify {render.cut(named, room)} as honest? · y yes · n no (default)",
-            certify,
-            lambda: self.flash("nothing was certified"),
+        def answered(yes: bool | None) -> None:
+            """Certify after a yes; say that nothing happened otherwise.
+
+            Args:
+                yes: The answer of the confirmation.
+            """
+            if yes:
+                certify()
+            else:
+                self.flash("nothing was certified")
+
+        self.push_screen(
+            ConfirmScreen(
+                "Certify this commit as honest?",
+                [named, "calu then counts its code as reviewed and takes it as the baseline"],
+                self.palette,
+                yes="certifies",
+                no="does not",
+            ),
+            answered,
         )
 
     def _cmd_trust_file(self, rest: str) -> None:
@@ -2506,14 +3269,105 @@ class CaluApp(App[None]):
         if not path:
             self.flash("usage: /trust-file <path>", error=True)
             return
-        room = max(12, self.size.width - 68)
-        self._ask(
-            f"certify the present content of {render.cut(path, room)} as honest? · "
-            "y yes · n no (default)",
-            lambda: self._request(
-                self.actions.trust_file(path), f"trusted: the content of {path} is certified"
+
+        def answered(yes: bool | None) -> None:
+            """Certify after a yes; say that nothing happened otherwise.
+
+            Args:
+                yes: The answer of the confirmation.
+            """
+            if yes:
+                self._request(
+                    self.actions.trust_file(path), f"trusted: the content of {path} is certified"
+                )
+            else:
+                self.flash("nothing was certified")
+
+        self.push_screen(
+            ConfirmScreen(
+                "Certify the present content of this file as honest?",
+                [path, "calu then counts the file as reviewed while its content stays the same"],
+                self.palette,
+                yes="certifies",
+                no="does not",
             ),
-            lambda: self.flash("nothing was certified"),
+            answered,
+        )
+
+    def _pick_mark(self) -> None:
+        """Choose an open honesty mark to clear (`x` on the honesty page), after a yes."""
+        marks = self.model.marks
+        if not marks:
+            self.flash("no mark is open")
+            return
+
+        def ask(mark_id: int, spot: str) -> None:
+            """Ask whether to clear one mark.
+
+            Args:
+                mark_id: The id of the mark.
+                spot: Where it is, for the question.
+            """
+
+            def answered(yes: bool | None) -> None:
+                """Clear the mark after a yes.
+
+                Args:
+                    yes: The answer of the confirmation.
+                """
+                if yes:
+                    self.run_command("clear_mark", str(mark_id))
+
+            self.push_screen(
+                ConfirmScreen(
+                    f"Clear the honesty mark #{mark_id}?",
+                    [spot, "the code is then no longer marked; a later check may mark it again"],
+                    self.palette,
+                    yes="clears it",
+                    no="keeps it",
+                ),
+                answered,
+            )
+
+        def spot_of(mark: Any) -> str:
+            """Say where a mark is.
+
+            Args:
+                mark: The mark.
+
+            Returns:
+                `path:symbol`, or the path.
+            """
+            return f"{mark.path}:{mark.symbol}" if mark.symbol else str(mark.path)
+
+        if len(marks) == 1:
+            ask(marks[0].id, spot_of(marks[0]))
+            return
+        self.search_commands(
+            [
+                (f"#{mark.id}  {spot_of(mark)}", partial(ask, mark.id, spot_of(mark)), mark.reason)
+                for mark in marks
+            ],
+            placeholder="clear which mark…",
+        )
+
+    def _pick_mode(self) -> None:
+        """Choose the honesty mode from a list (`m` on the honesty page)."""
+        about = {
+            "off": "nothing is recorded or blocked",
+            "track": "marks and unreviewed files are recorded; nothing is blocked",
+            "enforce": "marked or unreviewed code does not run and is not committed",
+        }
+        self.search_commands(
+            [
+                (
+                    f"{mode}{'  (now)' if mode == self.model.honesty_mode else ''}",
+                    partial(self.run_command, "honesty", mode),
+                    about[mode],
+                )
+                for mode in MODES
+            ],
+            placeholder="honesty mode…",
         )
 
     def _cmd_honesty_review(self, rest: str) -> None:
@@ -2529,9 +3383,14 @@ class CaluApp(App[None]):
     def _run_program(self, argv: Sequence[str], cwd: str) -> int:
         """Hand the terminal to a program and take it back when the program ends.
 
-        The client draws nothing and reads no key in the meantime. Events of the session
-        are not read either; after a long stay the session may have closed the connection,
-        and the client then attaches again and catches up, as after any lost connection.
+        The client draws nothing and reads no key in the meantime, and it reads no events of
+        the session either (`_launch` tells the connection so).
+
+        While the program has the terminal, an interrupt from the keyboard (ctrl+c) goes to
+        the whole foreground process group, this client included. The client ignores it for
+        that time, so that ctrl+c ends or interrupts the program (a pager, `tig`) and not
+        the client; the handler that was installed before is put back afterwards. The
+        program itself starts with the default handling.
 
         Args:
             argv: The command line.
@@ -2545,12 +3404,23 @@ class CaluApp(App[None]):
         """
         with self.suspend():
             try:
+                previous: Any = signal.signal(signal.SIGINT, lambda *_: None)
+            except ValueError:  # not the main thread: there is no handler to replace
+                previous = None
+            try:
                 return subprocess.call(list(argv), cwd=cwd)
             except OSError:
                 return 127
+            finally:
+                if previous is not None:
+                    signal.signal(signal.SIGINT, previous)
 
     def _launch(self, argv: Sequence[str], what: str) -> int | None:
         """Run a program in the session's project directory and redraw afterwards.
+
+        The connection is told before that the client stops reading (`Link.expect_drop`): if
+        the session closes it meanwhile because its keepalive got no answer, the client
+        attaches again afterwards and catches up on what it missed.
 
         Args:
             argv: The command line.
@@ -2559,11 +3429,14 @@ class CaluApp(App[None]):
         Returns:
             The exit code, or None if the terminal could not be handed over.
         """
+        self.link.expect_drop()
         try:
             code = self.run_program(argv, self.model.workspace)
         except SuspendNotSupported:
             self.flash(f"{what} needs a real terminal: this one cannot be handed over", error=True)
             return None
+        finally:
+            self.link.drop_over()
         self.refresh(layout=True)
         if code == 127:
             self.flash(f"{what} could not be started", error=True)
@@ -2611,22 +3484,17 @@ class CaluApp(App[None]):
         self._install_shown = True
         plan = gittool.install_plan(self.which)
         lines = [
-            "f4 opens a terminal git program in the project directory and returns here "
-            "when it ends",
-            "lazygit is recommended: the diff of the working copy, staging, log and "
-            "branches on one screen",
-            f"install it with:  {plan.command}",
+            "f4 opens one in the project directory; lazygit is recommended: the diff of "
+            "the working copy, staging, log and branches on one screen. Install it with:"
         ]
+        footnote = "another program: CALU_GIT_TOOL or git_tool in tui.toml (f1 says more)"
+        if not plan.runnable:
+            footnote = (
+                "calu runs no command with sudo: run it in a terminal of your own; until "
+                f"then f4 opens git diff · {footnote}"
+            )
         if plan.note:
-            lines.append(plan.note)
-        lines.append("another program: CALU_GIT_TOOL in the environment or git_tool in tui.toml")
-        if plan.runnable:
-            lines.append("y runs the install command now in this terminal · n opens git diff")
-        else:
-            lines += [
-                "calu does not run a command with sudo: run it in a terminal of your own",
-                "until then f4 opens git diff through the pager, also when this notice closes",
-            ]
+            footnote = f"{plan.note}\n{footnote}"
 
         def answered(yes: bool | None) -> None:
             """Install after a yes, then open what is installed.
@@ -2651,6 +3519,10 @@ class CaluApp(App[None]):
                 lines,
                 self.palette,
                 notice=not plan.runnable,
+                command=plan.command,
+                footnote=footnote,
+                yes="runs it now in this terminal",
+                no="opens git diff",
             ),
             answered,
         )
@@ -2824,7 +3696,7 @@ class CaluApp(App[None]):
         """
         transcript = self.transcript
         if transcript.cursor is not None and transcript.has_focus:
-            return self.model.blocks[transcript.cursor]
+            return self.model.block(transcript.cursor)
         return None
 
     def _last(self, wanted: Callable[[Block], bool]) -> Block | None:
@@ -3113,7 +3985,7 @@ class CaluApp(App[None]):
         self._was_working = working
         if turned_idle and self.held and self.link.connection is not None:
             text = self.held.pop(0)
-            self._spawn(self._send(text, MAIN, "queued"))
+            self._spawn(self._send(text, MAIN, "queued", held=True))
 
     def _cmd_help(self, rest: str) -> None:
         """Show every key and command, and what this session does not offer.
@@ -3121,7 +3993,12 @@ class CaluApp(App[None]):
         Args:
             rest: Ignored.
         """
-        self._page("Help", help_lines(self.palette, self.capabilities, self.size.width - 6))
+        width = self.size.width - 6
+        self._page(
+            "Help",
+            help_lines(self.palette, self.capabilities, width),
+            build=lambda wanted: help_lines(self.palette, self.capabilities, width, wanted),
+        )
 
     def _cmd_detach(self, rest: str) -> None:
         """Leave the client; the session keeps running.
@@ -3161,23 +4038,31 @@ def describe_commit(workspace: str, rev: str) -> str:
     return f"HEAD = {line}" if rev == "HEAD" else line
 
 
-def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[Text]:
+def help_lines(
+    palette: Palette, caps: Capabilities, width: int = 100, wanted: str = ""
+) -> list[Text]:
     """Render the help page from the command table.
 
     Args:
         palette: The colours.
         caps: What the attached session offers.
         width: The width to lay the lines out for.
+        wanted: A filter: only commands and paragraphs that contain this text (ignoring
+            case) are listed; "" lists everything.
 
     Returns:
         The commands by group, each with its key, what it does and its slash command; the
         rules of typing and selecting; and the functions the session does not offer, with the
-        reason for each.
+        reason for each. One line that says so if the filter matches nothing.
     """
     lines: list[Text] = []
     group = ""
-    key_width = 30
+    needle = wanted.strip().lower()
+    key_width = min(22, max(len(command.key) for command in COMMANDS)) + 2
     for command in COMMANDS:
+        whole = f"{command.key} {command.title} {command.slash} {command.about}".lower()
+        if needle and needle not in whole:
+            continue
         if command.group != group:
             group = command.group
             lines += [Text(""), Text(group, f"bold {palette.accent}")]
@@ -3187,6 +4072,8 @@ def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[T
             title.append(f"   {command.slash}", palette.faint if reason else palette.accent)
         if reason:
             title.append(f"   ({reason})", palette.faint)
+        elif command.about:
+            title.append(f"   {command.about}", palette.muted)
         for index, row in enumerate(render.wrap(title, max(20, width - key_width - 4))):
             head = f"  {command.key:<{key_width}}" if index == 0 else " " * (key_width + 2)
             lines.append(
@@ -3194,15 +4081,23 @@ def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[T
             )
     typing = (
         "enter sends · ctrl+j or alt+enter starts a new line · up/down on the first/last line "
-        "walk the history of sent texts. The decision keys (a, d, n, w, 1-9) act only while "
-        "the input is empty; a and d ask for a second press, and any other key after the first "
-        "one is typed, the first letter included. Select text with the mouse while holding "
-        "shift (option in iTerm); alt+c copies a block. @ at the start of a word completes a "
-        "path of the project with tab. A large pasted text is shown as one marker and sent in "
-        "full; alt+e shows it. alt+h holds the input as a draft until the session is idle."
+        "walk the history of sent texts. The keys of the decision card act only while the "
+        "input is empty. Each letter (a allow, d deny, n note, w detail, o own answer) needs "
+        "a second press; for n, w and o Enter does as well. Any other key after the first "
+        "press types both characters, so a reply that begins with one of these letters is "
+        "typed and nothing is decided. Both presses act on the step the first one was made "
+        "for; if another step has taken its place, nothing is sent. For half a second after "
+        "the card began to show another step, the keys that decide are ignored. A step whose "
+        "command or change does not fit on the card says how many lines are missing; a then "
+        "opens the detail, and the step is allowed from there. alt+a and alt+d decide at "
+        "once (a step that a deny rule stopped needs alt+a twice); with text in the input "
+        "they ask whether it goes along as a note: y with it, n without it, enter or esc "
+        "decide nothing. Select text with the mouse while holding shift (option in iTerm); "
+        "alt+c copies a block. @ at the start of a word completes a path of the project "
+        "with tab. A large pasted text is shown as one marker and sent in full; alt+e shows "
+        "it. alt+h holds the input as a draft until the session is idle."
     )
-    lines += [Text(""), Text("Typing and selecting", f"bold {palette.accent}")]
-    lines += [Text.assemble("  ", row) for row in render.wrap(Text(typing, palette.fg), width - 4)]
+    paragraphs = [("Typing, deciding and selecting", typing)]
     rebind = (
         "Other keys are set in the table [keys] of tui.toml in calu's configuration directory, "
         'by the name of the binding, e.g. detach = "ctrl+q". The names: '
@@ -3214,14 +4109,25 @@ def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[T
         + ", tab-0 to tab-9 (alt+0 to alt+9). The same file holds theme, bell, toasts, "
         "thinking, panel_width and git_tool: the program f4 starts in the project directory "
         "(the environment variable CALU_GIT_TOOL overrides it). Left unset, f4 starts the "
-        "first installed of lazygit (recommended), gitui and tig, else git diff."
+        "first installed of lazygit (recommended), gitui and tig, else git diff through the "
+        "pager. While that program has the terminal the client reads nothing; if the session "
+        "closes the connection meanwhile, the client attaches again when the program ends."
     )
-    lines += [Text(""), Text("Settings and other keys", f"bold {palette.accent}")]
-    lines += [Text.assemble("  ", row) for row in render.wrap(Text(rebind, palette.fg), width - 4)]
+    paragraphs.append(("Settings and other keys", rebind))
+    for heading, paragraph in paragraphs:
+        if needle and needle not in paragraph.lower():
+            continue
+        lines += [Text(""), Text(heading, f"bold {palette.accent}")]
+        lines += [
+            Text.assemble("  ", row) for row in render.wrap(Text(paragraph, palette.fg), width - 4)
+        ]
     missing = [entry for entry in CAPABILITIES if not caps.has(entry.key)]
+    missing = [e for e in missing if not needle or needle in f"{e.title} {e.reason}".lower()]
     if missing:
         lines += [Text(""), Text("Not offered by this session", f"bold {palette.accent}")]
         for entry in missing:
             text = Text(f"{entry.title}: {entry.reason}", palette.muted)
             lines += [Text.assemble("  ", row) for row in render.wrap(text, width - 4)]
+    if needle and not lines:
+        lines.append(Text(f"nothing in the help contains {wanted.strip()!r}", palette.muted))
     return lines

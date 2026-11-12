@@ -61,8 +61,14 @@ class Running:
         self.app, self.pilot, self.session, self.clock = app, pilot, session, clock
 
     async def press(self, *keys: str) -> None:
-        """Press keys one after the other and let the app settle."""
+        """Press keys one after the other and let the app settle.
+
+        The clock moves 0.6 s before each key, as a person's keys are apart: the client
+        ignores a deciding key within half a second after the card changed, and a second
+        `a` or `d` that follows the first faster than a held key repeats.
+        """
         for key in keys:
+            self.clock.advance(0.6)
             await self.pilot.press(key)
             await self.pilot.pause()
 
@@ -161,7 +167,7 @@ async def test_the_screen_shows_state_transcript_and_what_waits() -> None:
         card = run.line("card")
         assert card.startswith("DECISION 1 of 1") and "git push --force origin main" in card
         assert run.app.focused is run.app.composer
-        assert "a a allow" in run.line("footer")
+        assert "a,a allow" in run.line("footer")
         panel = run.line("panel-lines")
         assert "NEEDS YOU (1)" in panel and "QUEUE (2)" in panel
 
@@ -245,7 +251,7 @@ async def test_a_pressed_twice_allows_and_a_single_a_is_only_the_start_of_a_text
         await run.type("ll good")
         assert run.composer == "all good", "the first letter is typed with the rest"
         assert run.session.sent("escalation.decide") == []
-        assert "a a allow" in run.line("card")
+        assert "a,a allow" in run.line("card")
         await run.press("ctrl+u", "a", "a")
         assert run.session.sent("escalation.decide") == [
             {"escalation_id": "e1", "decision": "allow", "note": None}
@@ -264,6 +270,8 @@ async def test_d_pressed_twice_denies_and_escape_takes_the_first_press_back() ->
 
 async def test_a_note_goes_to_claude_with_the_decision() -> None:
     async with running("escalation") as run:
+        await run.press("n")
+        assert "n again or enter: write a note" in run.line("card")
         await run.press("n")
         assert "note for Claude with the decision" in run.line("composer-head")
         await run.type("push to a branch instead")
@@ -284,12 +292,17 @@ async def test_the_chord_keys_decide_while_a_text_is_in_the_composer() -> None:
         assert "alt+a allow" in run.line("footer")
         await run.press("alt+a")
         assert run.session.sent("escalation.decide") == [], "a deny rule stopped it: once more"
-        assert "Stopped by a deny rule: press a again to allow" in run.line("card")
+        assert "A deny rule stopped this step · press a again to allow" in run.line("card")
         await run.press("alt+a")
-        assert "send the text in the input as a note with the allow?" in run.line("composer-head")
+        head = run.line("composer-head")
+        assert "send the text in the input as a note with the allow?" in head
+        assert "enter or esc: decide nothing" in head
         await run.press("x")
         assert run.session.sent("escalation.decide") == [], "only y or n answer the question"
-        await run.press("n")
+        await run.press("enter")
+        assert run.session.sent("escalation.decide") == [], "enter decides nothing"
+        assert run.app.ask is None and run.composer == "a drafta"
+        await run.press("alt+a", "alt+a", "n")
         assert run.session.sent("escalation.decide") == [
             {"escalation_id": "e1", "decision": "allow", "note": None}
         ]
@@ -328,7 +341,7 @@ async def test_several_decisions_are_answered_in_any_order() -> None:
         await run.press("right_square_bracket")
         assert run.line("card").startswith("QUESTION 2 of 2  ·  tests")
         await run.press("1")
-        assert "(•) pytest" in run.line("card") and "enter sends the answers" in run.line("card")
+        assert "(•) pytest" in run.line("card") and "enter sends: pytest" in run.line("card")
         await run.press("enter")
         assert run.session.sent("escalation.decide") == [
             {"escalation_id": "e2", "answer": "pytest"}
@@ -344,11 +357,13 @@ async def test_a_set_of_questions_is_answered_with_digits_an_own_text_and_enter(
             and "Which test runner should the new tests use?" in card
         )
         await run.press("enter")
-        assert "0 of 3 questions answered" in run.line("composer-head")
+        assert "this question has no answer yet" in run.line("composer-head")
         await run.press("1")
         assert "Which checks should run before each commit?" in run.line("card")
         await run.press("1", "3", "right")
         assert "Where do the fixtures of the new tests go?" in run.line("card")
+        await run.press("o")
+        assert "o again or enter: write your own answer" in run.line("card")
         await run.press("o")
         assert "your own answer to: Fixtures" in run.line("composer-head")
         await run.type("in tests/fixtures")
@@ -386,6 +401,9 @@ async def test_w_toggles_the_full_screen_detail_of_what_the_checker_saw() -> Non
     }
     async with running("escalation", session=session) as run:
         await run.press("w")
+        assert not isinstance(run.app.screen, DetailScreen), "the first w only begins"
+        assert "w again or enter: everything the checker saw" in run.line("card")
+        await run.press("w")
         screen = run.app.screen
         assert isinstance(screen, DetailScreen)
         await run.pilot.pause()
@@ -405,7 +423,7 @@ async def test_w_toggles_the_full_screen_detail_of_what_the_checker_saw() -> Non
             assert part in screen.text, part
         await run.press("w")
         assert not isinstance(run.app.screen, DetailScreen), "the same key returns"
-        await run.press("w", "d", "d")
+        await run.press("w", "enter", "d", "d")
         assert session.sent("escalation.decide")[0]["decision"] == "deny"
         await run.pilot.pause()
         assert not isinstance(run.app.screen, DetailScreen), "it closes with the decision"
@@ -426,7 +444,7 @@ async def test_the_detail_of_an_edit_shows_the_whole_change() -> None:
             )
         )
         session.results["escalation.context"] = {"files": {"src/gate.py": scenarios.BEFORE}}
-        await run.press("w")
+        await run.press("w", "w")
         await run.pilot.pause()
         screen = run.app.screen
         assert isinstance(screen, DetailScreen)
@@ -654,7 +672,7 @@ async def test_the_side_panel_is_a_column_when_wide_and_opens_over_the_transcrip
     async with running("showcase", size=(80, 24)) as run:
         side = run.app.query_one("#side")
         assert not side.display
-        assert "2 queued · 1 mark · f2 panel" in run.line("tabs")
+        assert "alt+←/→ · 2 queued · f2 panel" in run.line("tabs"), "what fits, by priority"
         assert run.app.transcript.region.width == 80
         assert run.line("card").startswith("DECISION 1 of 2")
         await run.press("f2")
@@ -689,9 +707,9 @@ async def test_two_escapes_far_apart_do_not_interrupt() -> None:
 async def test_slash_commands_do_what_the_line_client_does() -> None:
     async with running("escalation") as run:
         await run.type("/al")
-        assert "/allow" in run.line("composer-head") and "tab completes" in run.line(
-            "composer-head"
-        )
+        listed = run.line("slash")
+        assert "> /allow [id] [note]" in listed and "Allow the step that waits" in listed
+        assert "tab or enter completes" in listed
         await run.press("tab")
         assert run.composer == "/allow "
         await run.press("ctrl+u")

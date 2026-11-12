@@ -213,6 +213,10 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
             raise admin.AdminError(f"no checker named {name!r}")
         return "old"
 
+    async def checkers(db: Any) -> list[admin.CheckerRow]:
+        """List the one checker at version 12."""
+        return [admin.CheckerRow("command", "command", "m", 1, 1, 1, True, 12)]
+
     async def set_checker(db: Any, name: str, instructions_text: str) -> admin.CheckerRow:
         """Record the new text."""
         calls.append(("set_checker", name, instructions_text))
@@ -230,6 +234,7 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
     monkeypatch.setattr(adminaccess, "connect", connect)
     monkeypatch.setattr(admin, "instructions", instructions)
     monkeypatch.setattr(admin, "set_checker", set_checker)
+    monkeypatch.setattr(admin, "checkers", checkers)
     monkeypatch.setattr(admin, "settings", settings)
     monkeypatch.setattr(admin, "set_setting", set_setting)
     access = StoreAdmin(store)
@@ -243,8 +248,12 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
     ]
     with pytest.raises(AdminFailed, match="no checker named 'nope'"):
         await access.save_instructions("nope", "x", None)
-
+    with pytest.raises(AdminFailed, match="changed meanwhile to version 12: press r"):
+        await access.save_instructions("command", "newer text", None, base_version=11)
+    assert ("set_checker", "command", "newer text") not in calls, "the other change is kept"
+    assert (await access.save_instructions("command", "newer text", None, 12)).version == 13
     calls.clear()
+
     assert (await access.set_honesty_mode("enforce", "myproject", None)).scope == "global"
     assert (await access.set_honesty_mode("off", "own", None)).scope == "project own"
     assert [call for call in calls if call[0] == "set_setting"] == [
@@ -465,9 +474,9 @@ async def test_trust_asks_names_the_commit_and_only_y_certifies() -> None:
         await run.session.emit("honesty.update", {"mode": "track", "marks": []})
         run.app.describe_commit = lambda workspace, rev: "HEAD = 4f2a9c1 Rename the helper"
         await command(run, "/trust")
-        head = run.line("composer-head")
-        assert "certify HEAD = 4f2a9c1 Rename the helper as honest?" in head
-        assert "n no (default)" in head
+        box = run.app.screen
+        assert isinstance(box, ConfirmScreen) and box.title_text == "Certify this commit as honest?"
+        assert box.consequences[0] == "HEAD = 4f2a9c1 Rename the helper", "never cut"
         await run.press("enter")
         assert run.session.sent("honesty.trust") == []
         assert "nothing was certified" in run.line("composer-head")
@@ -483,13 +492,15 @@ async def test_trust_of_a_branch_a_file_and_a_review() -> None:
     async with running("simple_turn") as run:
         run.session.honesty_requests = True
         await command(run, "/trust release")
-        assert "certify release as honest?" in run.line("composer-head")
+        box = run.app.screen
+        assert isinstance(box, ConfirmScreen) and box.consequences[0] == "release"
         await run.press("y")
         await run.pilot.pause()
         await command(run, "/trust-file")
         assert "usage: /trust-file <path>" in run.line("composer-head")
         await command(run, "/trust-file notes/plan.md")
-        assert "certify the present content of notes/plan.md" in run.line("composer-head")
+        box = run.app.screen
+        assert isinstance(box, ConfirmScreen) and box.consequences[0] == "notes/plan.md"
         await run.press("n")
         await command(run, "/trust-file notes/plan.md")
         await run.press("y")
@@ -503,7 +514,8 @@ async def test_trust_of_a_branch_a_file_and_a_review() -> None:
 async def test_a_session_without_certification_says_so() -> None:
     async with running("simple_turn") as run:
         await command(run, "/trust")
-        assert "certify HEAD as honest?" in run.line("composer-head")
+        box = run.app.screen
+        assert isinstance(box, ConfirmScreen) and box.consequences[0] == "HEAD"
         await run.press("y")
         await run.pilot.pause()
         assert "/trust: this session does not support it" in run.line("composer-head")
@@ -618,8 +630,12 @@ async def test_without_a_git_program_the_install_command_is_shown_and_never_run_
         await run.press("f4")
         notice = run.app.screen
         assert isinstance(notice, ConfirmScreen) and notice.notice
-        assert any("sudo apt install lazygit" in line for line in notice.consequences)
-        assert any("calu does not run a command with sudo" in line for line in notice.consequences)
+        assert notice.command == "sudo apt install lazygit", "on a line of its own"
+        assert len(notice.consequences) == 1, "one sentence, the rest is in the help"
+        assert "calu runs no command with sudo" in notice.footnote
+        assert "CALU_GIT_TOOL" in notice.footnote
+        await run.press("c")
+        assert notice.copied and run.app.screen is notice, "c copies the command"
         await run.press("y")
         assert run.app.screen is notice and programs.runs == [], "y runs nothing here"
         await run.press("enter")

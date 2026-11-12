@@ -27,9 +27,11 @@ from textual.geometry import Size
 from textual.message import Message
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
+from textual.timer import Timer
 
 from calu.tui import render
 from calu.tui.model import (
+    ALL,
     Block,
     SessionModel,
     StepBlock,
@@ -52,6 +54,13 @@ class Transcript(ScrollView, can_focus=True):
 
     class Moved(Message):
         """The view scrolled, the cursor moved or the number of new blocks below changed."""
+
+    class Resized(Message):
+        """The widget has its new size after a resize of the terminal or of the layout.
+
+        The app draws the parts whose text depends on the width when this arrives: only
+        then are the sizes of the widgets beside the transcript the new ones as well.
+        """
 
     class Opened(Message):
         """The user asked for the block under the cursor (enter on an Agent call or a step).
@@ -97,6 +106,13 @@ class Transcript(ScrollView, can_focus=True):
         self._tops: list[int] = []
         self._width = 0
         self._moving = False
+        self._cache: dict[int, tuple[tuple[object, ...], list[Strip]]] = {}
+        """Block id -> what its lines were rendered for and the lines, so that a tab change
+        or a resize back to a width seen before renders only what changed."""
+        self._resize_timer: Timer | None = None
+        self.resize_delay = 0.0
+        """Seconds to wait after a resize before the blocks are rendered for the new width
+        (the app sets it; 0 renders at once)."""
         self.needle = ""
         """The text the transcript is searched for; "" while no search is on."""
         self.matches: list[int] = []
@@ -125,7 +141,13 @@ class Transcript(ScrollView, can_focus=True):
         )
 
     def _strips(self, block: Block, previous: Block | None, view: render.View) -> list[Strip]:
-        """Render one block to the lines the widget draws.
+        """Render one block to the lines the widget draws, or take them from the cache.
+
+        The cache holds the lines of a block together with everything they depend on besides
+        the block itself: width, whether the tab shows all agents, cursor, expansion, the
+        thinking state and the blank line before it. A block that changes is rendered again
+        by `apply`, which drops its entry first. A step that waits shows a running time and
+        is never cached.
 
         Args:
             block: The block.
@@ -135,10 +157,26 @@ class Transcript(ScrollView, can_focus=True):
         Returns:
             The lines, preceded by a blank one where `render.gap_before` says so.
         """
-        lines: list[Text] = [Text("")] if render.gap_before(previous, block) else []
+        gap = render.gap_before(previous, block)
+        key = (
+            view.width,
+            view.tab == ALL,
+            view.cursor == block.id,
+            block.id in view.expanded,
+            view.thinking_open != (block.id in view.toggled),
+            gap,
+        )
+        waiting = isinstance(block, StepBlock) and block.waiting == "open"
+        cached = self._cache.get(block.id)
+        if cached is not None and cached[0] == key and not waiting:
+            return cached[1]
+        lines: list[Text] = [Text("")] if gap else []
         lines += render.block_lines(block, self.model, view)
         console = self.app.console
-        return [Strip(list(line.render(console))) for line in lines]
+        strips = [Strip(list(line.render(console))) for line in lines]
+        if not waiting:
+            self._cache[block.id] = (key, strips)
+        return strips
 
     def _layout(self, first: int = 0) -> None:
         """Recompute where the blocks start, from one entry on, and the scrollable size.
@@ -155,15 +193,25 @@ class Transcript(ScrollView, can_focus=True):
         if self.needle:
             self._find()
 
-    def rebuild(self) -> None:
-        """Render every block of the tab again: after a tab change, a resize or a reset.
+    def rebuild(self, fresh: bool = False) -> None:
+        """Lay out every block of the tab again: after a tab change, a resize or a reset.
 
+        Blocks whose lines are cached for the same width and view are not rendered again.
         Keeps the view at the end if it was following; otherwise keeps the first visible
         block where it was.
+
+        Args:
+            fresh: True forgets every cached line first: after the model was reset (block
+                ids are then used again) and after a change of the colours.
         """
         self._width = self.scrollable_content_region.width or self.size.width
         anchor = self._anchor()
         blocks = self.model.blocks_of(self.tab)
+        if fresh:
+            self._cache.clear()
+        elif self.model.blocks.base and len(self._cache) > len(self.model.blocks.kept):
+            base = self.model.blocks.base
+            self._cache = {key: value for key, value in self._cache.items() if key >= base}
         view = self._view()
         self._entries = []
         previous: Block | None = None
@@ -205,17 +253,21 @@ class Transcript(ScrollView, can_focus=True):
         first_changed: int | None = None
         for block_id in sorted(updated - set(added)):
             index = self._index.get(block_id)
-            if index is None:
+            self._cache.pop(block_id, None)
+            block = self.model.block(block_id)
+            if index is None or block is None:
                 continue
-            previous = self.model.blocks[self._entries[index - 1].block_id] if index else None
-            self._entries[index].strips = self._strips(self.model.blocks[block_id], previous, view)
+            previous = self.model.block(self._entries[index - 1].block_id) if index else None
+            self._entries[index].strips = self._strips(block, previous, view)
             first_changed = index if first_changed is None else min(first_changed, index)
         appended = 0
         for block_id in added:
-            block = self.model.blocks[block_id]
-            if not self.model.block_in_tab(block, self.tab) or block_id in self._index:
+            block = self.model.block(block_id)
+            if block is None or block_id in self._index:
                 continue
-            previous = self.model.blocks[self._entries[-1].block_id] if self._entries else None
+            if not self.model.block_in_tab(block, self.tab):
+                continue
+            previous = self.model.block(self._entries[-1].block_id) if self._entries else None
             self._index[block_id] = len(self._entries)
             self._entries.append(_Entry(block_id, strips=self._strips(block, previous, view)))
             if first_changed is None:
@@ -464,15 +516,32 @@ class Transcript(ScrollView, can_focus=True):
         self.scroll_to(y=0, animate=False, immediate=True)
 
     def on_resize(self, event: events.Resize) -> None:
-        """Render again when the width changed.
+        """Render again when the width changed, once per burst of resizes.
+
+        A window that is dragged sends many resizes. With `resize_delay` above 0 the blocks
+        are rendered `resize_delay` seconds after the last of them; until then the lines of
+        the old width are drawn, cut or padded to the new one.
 
         Args:
             event: The resize event.
         """
+        self.post_message(self.Resized())
         if self.scrollable_content_region.width != self._width:
-            self.rebuild()
+            if self._resize_timer is not None:
+                self._resize_timer.stop()
+                self._resize_timer = None
+            if self.resize_delay > 0:
+                self._resize_timer = self.set_timer(self.resize_delay, self._resized)
+            else:
+                self.rebuild()
         elif self.following:
             self.scroll_to(y=self.max_scroll_y, animate=False, immediate=True)
+
+    def _resized(self) -> None:
+        """Render for the width the widget has now, after the resizes have stopped."""
+        self._resize_timer = None
+        if self.scrollable_content_region.width != self._width:
+            self.rebuild()
 
     def on_focus(self) -> None:
         """Give the transcript a cursor on the last visible block when it gets the focus."""
@@ -504,7 +573,7 @@ class Transcript(ScrollView, can_focus=True):
             index += delta
             if not 0 <= index < len(self._entries):
                 return
-            block = self.model.blocks[self._entries[index].block_id]
+            block = self.model.block(self._entries[index].block_id)
             if not steps_only or isinstance(block, StepBlock):
                 break
         self.set_cursor(self._entries[index].block_id)
@@ -540,7 +609,7 @@ class Transcript(ScrollView, can_focus=True):
         target = self.cursor if block_id is None else block_id
         if target is None or target not in self._index:
             return
-        block = self.model.blocks[target]
+        block = self.model.block(target)
         if isinstance(block, StepBlock):
             self.expanded ^= {target}
         elif isinstance(block, ThinkingBlock):
@@ -581,7 +650,7 @@ class Transcript(ScrollView, can_focus=True):
         waiting = [
             entry.block_id
             for entry in self._entries
-            if isinstance(block := self.model.blocks[entry.block_id], StepBlock)
+            if isinstance(block := self.model.block(entry.block_id), StepBlock)
             and block.waiting == "open"
         ]
         if not waiting:
@@ -624,7 +693,7 @@ class Transcript(ScrollView, can_focus=True):
                 self.move_cursor(-1, steps_only=True)
             case "enter" | "space":
                 if self.cursor is not None:
-                    block = self.model.blocks[self.cursor]
+                    block = self.model.block(self.cursor)
                     if isinstance(block, StepBlock) and block.tool in render.AGENT_TOOLS:
                         self.post_message(self.Opened(self.cursor))
                     self.toggle()

@@ -17,8 +17,8 @@
  │   Which test runner should the new tests use?                              │
  │    1 ( ) pytest  what the existing unit tests use                          │
  │    2 ( ) unittest  standard library only                                   │
- │   1-9 choose · o own answer · ←/→ question · enter send · alt+d decline…   │
+ │   1-9 choose · o,o own answer · enter next open question · ←/→ question    │
  ╰────────────────────────────────────────────────────────────────────────────╯
- to main · next turn  · tab changes
+ to main · next turn · tab changes
  >
- 1-9 choose   o own answer   enter send   alt+←/→ agent   ^p palette   f1 help
+ 1-9 choose   o,o own answer   enter send   ^p palette   f1 help

@@ -177,6 +177,9 @@ class FakeAdmin:
         """Every `(mode, project)` stored, oldest first."""
         self.fail = ""
         """If set, every change is refused with this sentence."""
+        self.other_database = False
+        """True behaves like a credential for another database than the session reads:
+        changes are recorded and reported as stored, and the session shows none of them."""
 
     def problem(self) -> str | None:
         """Say why nothing can be changed.
@@ -211,30 +214,40 @@ class FakeAdmin:
         if self.fail:
             raise AdminFailed(self.fail)
 
-    async def save_instructions(self, name: str, text: str, password: str | None) -> SavedChecker:
+    async def save_instructions(
+        self, name: str, text: str, password: str | None, base_version: int | None = None
+    ) -> SavedChecker:
         """Record new instructions and let the scripted session show them.
 
         Args:
             name: The checker's name.
             text: The instructions.
             password: The password the client passed.
+            base_version: The version the edited text was read at; None skips the check.
 
         Returns:
             The checker with its version raised by one (1 without a session).
 
         Raises:
             PasswordNeeded: If the password is not the one of this access.
-            AdminFailed: Without a credential, with `fail` set or for an unknown checker.
+            AdminFailed: Without a credential, with `fail` set, for an unknown checker, or
+                when the session's definition has another version than `base_version`.
         """
         self._check(password)
         version = 1
+        if self.other_database:
+            self.saved.append((name, text))
+            return SavedChecker(name, (base_version or 0) + 1)
         if self.session is not None:
             listed = self.session.results.get("checkers.get", {}).get("checkers") or []
             found = next((entry for entry in listed if entry.get("name") == name), None)
             if found is None:
                 raise AdminFailed(f"no checker named {name!r}")
+            now = int(found.get("version") or 0)
+            if base_version is not None and now != base_version:
+                raise AdminFailed(f"changed meanwhile to version {now}: press r, then edit again")
             found["instructions"] = text
-            found["version"] = version = int(found.get("version") or 0) + 1
+            found["version"] = version = now + 1
         self.saved.append((name, text))
         return SavedChecker(name, version)
 
@@ -257,7 +270,7 @@ class FakeAdmin:
         """
         self._check(password)
         self.modes.append((mode, project))
-        if self.session is not None:
+        if self.session is not None and not self.other_database:
             await self.session.emit(
                 "honesty.update",
                 {

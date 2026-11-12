@@ -31,6 +31,6 @@
                                                                                     ▏
                                                                                     ▏
                                                                                     ▏
- to main · next turn  · tab changes
+ to main · next turn · tab changes
  >
  esc esc interrupt   tab send mode   alt+←/→ agent   pgup/pgdn scroll   f3 side question   ^p palette   f1 help

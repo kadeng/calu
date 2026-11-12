@@ -15,7 +15,8 @@ One `SessionServer` serves one session. Each WebSocket connection gets a `Client
 
 Control requests (`CONTROL_METHODS`) are handled next to a running request, so that
 `escalation.decide`, `interrupt` and `shutdown` work while a slow request (`session.start`) is
-still running, and a side question (`side.ask`) does not hold up the client's other requests:
+still running, and a side question (`side.ask`) does not hold up the client's other requests
+(a client has one side question answered at a time; a second one meanwhile is refused):
 the loop that reads the connection never waits for a request, it hands the ordinary ones to
 one worker task per client and starts a task for each control request.
 Requests of different clients are independent; the session itself serializes what must not
@@ -866,6 +867,8 @@ class Client:
         self._last_sent = 0  # so a replayed event is not sent twice
         self._tasks: TaskGroup | None = None
         """Runs the tasks that push events; None before `serve` and after the disconnect."""
+        self._side_asking = False
+        """True while a side question of this client is being answered (one at a time)."""
 
     def close(self) -> None:
         """End the event subscription of this client, if it has one."""
@@ -1153,8 +1156,16 @@ class Client:
                 return session.checker_context()
             case "side.ask":
                 assert isinstance(params, SideAskParams)
+                # A side question is a model call of its own and is handled next to the
+                # client's other requests; one client gets one at a time.
+                if self._side_asking:
+                    raise RpcError(-32000, "a side question of this client is still being answered")
                 history = [(entry.question, entry.answer) for entry in params.history]
-                return SideAskResult(answer=await session.ask_side(params.question, history))
+                self._side_asking = True
+                try:
+                    return SideAskResult(answer=await session.ask_side(params.question, history))
+                finally:
+                    self._side_asking = False
             case "usage.get":
                 return await session.usage()
             case "model.set":

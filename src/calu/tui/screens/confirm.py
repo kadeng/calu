@@ -6,7 +6,8 @@ another conversation, shutting calu down), never for a decision about a step: th
 answered on the card, which takes no keys away.
 """
 
-from rich.console import Group
+from rich.console import Group, RenderableType
+from rich.table import Table
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -24,7 +25,8 @@ class ConfirmScreen(ModalScreen[bool]):
     and press Enter; this is for an action that cannot be taken back. `n`, Enter (without
     `typed`) or Escape declines, so no is the answer of a key pressed without reading. With
     `notice`, the screen only tells something: Enter, `n` or Escape close it and `y` does
-    nothing. The screen is dismissed with True or False.
+    nothing. With `command`, a command line stands on its own highlighted line and `c` copies
+    it to the clipboard. The screen is dismissed with True or False.
     """
 
     def __init__(
@@ -34,6 +36,10 @@ class ConfirmScreen(ModalScreen[bool]):
         palette: Palette,
         typed: str = "",
         notice: bool = False,
+        command: str = "",
+        footnote: str = "",
+        yes: str = "yes",
+        no: str = "no",
     ) -> None:
         """Create the question.
 
@@ -44,6 +50,10 @@ class ConfirmScreen(ModalScreen[bool]):
             typed: A word the user must type to confirm; "" asks for `y`.
             notice: True shows the text without a question; the screen then always ends
                 with False.
+            command: A command line for the user, shown on its own line; `c` copies it.
+            footnote: One muted line under the command or the consequences.
+            yes: What `y` does, in a word or two.
+            no: What `n`, Enter and Escape do, in a word or two.
         """
         super().__init__()
         self.title_text = title
@@ -51,6 +61,10 @@ class ConfirmScreen(ModalScreen[bool]):
         self.palette = palette
         self.typed = typed
         self.notice = notice
+        self.command = command
+        self.footnote = footnote
+        self.yes, self.no = yes, no
+        self.copied = False
         self.entered = ""
 
     def compose(self) -> ComposeResult:
@@ -69,8 +83,25 @@ class ConfirmScreen(ModalScreen[bool]):
             The lines of the box.
         """
         palette = self.palette
-        lines = [Text(self.title_text, f"bold {palette.orange}"), Text("")]
-        lines += [Text(f"· {sentence}", palette.fg) for sentence in self.consequences]
+        lines: list[RenderableType] = [Text(self.title_text, f"bold {palette.orange}"), Text("")]
+        if self.consequences:
+            listed = Table.grid(padding=(0, 1))  # wrapped sentences hang under their text
+            listed.add_column(width=1)
+            listed.add_column()
+            for sentence in self.consequences:
+                listed.add_row(Text("·", palette.muted), Text(sentence, palette.fg))
+            lines.append(listed)
+        if self.command:
+            lines.append(Text(""))
+            lines.append(
+                Text.assemble(
+                    (f" $ {self.command} ", f"bold {palette.fg} on {palette.bg}"),
+                    ("   copied" if self.copied else "   c copies", palette.muted),
+                )
+            )
+        if self.footnote:
+            lines.append(Text(""))
+            lines.append(Text(self.footnote, palette.muted))
         lines.append(Text(""))
         if self.notice:
             lines.append(
@@ -94,13 +125,13 @@ class ConfirmScreen(ModalScreen[bool]):
             lines.append(
                 Text.assemble(
                     ("y", f"bold {palette.fg}"),
-                    (" yes   ", palette.muted),
+                    (f" {self.yes}   ", palette.muted),
                     ("n", f"bold {palette.fg}"),
                     (", ", palette.muted),
                     ("enter", f"bold {palette.fg}"),
                     (" or ", palette.muted),
                     ("esc", f"bold {palette.fg}"),
-                    (" no", palette.muted),
+                    (f" {self.no}", palette.muted),
                 )
             )
         return Group(*lines)
@@ -115,6 +146,11 @@ class ConfirmScreen(ModalScreen[bool]):
         event.prevent_default()
         if event.key == "escape":
             self.dismiss(False)
+            return
+        if event.key == "c" and self.command and not self.typed:
+            self.app.copy_to_clipboard(self.command)
+            self.copied = True
+            self.query_one("#confirm-body", Static).update(self._body())
             return
         if self.notice:
             if event.key in {"enter", "n", "q"}:

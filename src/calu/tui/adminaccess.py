@@ -14,12 +14,19 @@ asks for the credential's password when it has one. Where the machine has no suc
 
 `AdminAccess` is the interface the client uses; `StoreAdmin` is the real one, and tests pass
 their own. This module imports nothing from Textual.
+
+The database of this machine's credential need not be the one the attached session reads
+(another host, a second local database). Nothing here can tell; the client therefore compares
+what the session reports after a change with what was stored, and says so when they differ.
+A save names the version the editor was opened on (`base_version`): if the stored definition
+has another version by then, somebody changed it meanwhile and the save is refused.
 """
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+import anyio
 import psycopg
 
 from calu import admin
@@ -34,6 +41,9 @@ NO_CREDENTIAL = (
     "connection string of the database owner)"
 )
 """What `StoreAdmin.problem` says without the credential."""
+
+CONNECT_TIMEOUT_S = 10.0
+"""How long opening the database connection may take before the change is given up."""
 
 MODES = ("off", "track", "enforce")
 """The values of `honesty.mode`, from the weakest to the strictest."""
@@ -84,21 +94,26 @@ class AdminAccess(Protocol):
         """
         ...
 
-    async def save_instructions(self, name: str, text: str, password: str | None) -> SavedChecker:
+    async def save_instructions(
+        self, name: str, text: str, password: str | None, base_version: int | None = None
+    ) -> SavedChecker:
         """Store new instructions for one checker.
 
         Args:
             name: The checker's name.
             text: The Markdown instructions; must not be empty.
             password: The credential's password, or None if it has none.
+            base_version: The version the edited text was read at; None stores whatever
+                is there now.
 
         Returns:
             The checker with its new version.
 
         Raises:
             PasswordNeeded: If the password is missing or wrong.
-            AdminFailed: If there is no credential, the checker is unknown, the text is empty
-                or the database refuses.
+            AdminFailed: If there is no credential, the checker is unknown, the text is
+                empty, the stored definition no longer has `base_version`, or the database
+                refuses.
         """
         ...
 
@@ -197,14 +212,20 @@ class StoreAdmin:
         if self.store.needs_password(CREDENTIAL) and not password:
             raise PasswordNeeded("the 'admin' credential needs its password")
         try:
-            url = self.store.load(CREDENTIAL, password)
+            # deriving the key takes a noticeable time: not on the event loop
+            url = await anyio.to_thread.run_sync(self.store.load, CREDENTIAL, password)
         except WrongPassword as error:
             raise PasswordNeeded("wrong password for the 'admin' credential") from error
         except CredentialError as error:
             raise AdminFailed(str(error)) from error
         try:
             try:
-                conn = await connect(url)
+                with anyio.fail_after(CONNECT_TIMEOUT_S):
+                    conn = await connect(url)
+            except TimeoutError as error:
+                raise AdminFailed(
+                    f"the database did not answer within {CONNECT_TIMEOUT_S:.0f} seconds"
+                ) from error
             finally:
                 wipe(url)
             try:
@@ -217,21 +238,26 @@ class StoreAdmin:
             first = str(error).strip().splitlines()[0] if str(error).strip() else "no detail"
             raise AdminFailed(f"the database refused: {first}") from error
 
-    async def save_instructions(self, name: str, text: str, password: str | None) -> SavedChecker:
+    async def save_instructions(
+        self, name: str, text: str, password: str | None, base_version: int | None = None
+    ) -> SavedChecker:
         """Store new instructions for one checker (`calu.admin.set_checker`).
 
         Args:
             name: The checker's name.
             text: The Markdown instructions; must not be empty.
             password: The credential's password, or None if it has none.
+            base_version: The version the edited text was read at; None stores whatever
+                is there now.
 
         Returns:
             The checker with the version the database gave the change.
 
         Raises:
             PasswordNeeded: If the password is missing or wrong.
-            AdminFailed: If there is no credential, the checker is unknown, the text is empty
-                or the database refuses.
+            AdminFailed: If there is no credential, the checker is unknown, the text is
+                empty, the stored definition has another version than `base_version`
+                ("changed meanwhile"), or the database refuses.
         """
 
         async def work(db: Db) -> SavedChecker:
@@ -242,8 +268,17 @@ class StoreAdmin:
 
             Returns:
                 The checker after the change.
+
+            Raises:
+                AdminFailed: If the stored definition has another version than the one
+                    the edited text was read at.
             """
             await admin.instructions(db, name)  # an unknown name must not create a checker
+            stored = next((row for row in await admin.checkers(db) if row.name == name), None)
+            if base_version is not None and stored is not None and stored.version != base_version:
+                raise AdminFailed(
+                    f"changed meanwhile to version {stored.version}: press r, then edit again"
+                )
             row = await admin.set_checker(db, name, instructions_text=text)
             return SavedChecker(row.name, row.version)
 
