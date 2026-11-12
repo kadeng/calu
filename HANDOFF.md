@@ -59,7 +59,12 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    stays "tool_call" after a human accepts an escalated subagent result; a clock alarm is
    forgotten when its escalation ends without a human decision; a rejected second start drops
    the running session's not yet narrated text.
-7. Smaller open work, no decision needed: `herd.close_gone` trusts the hostname alone (below);
+7. **One timing-sensitive browser test.**
+   `tests/browser/test_web_ui.py::test_the_settings_page_shows_one_pane_searches_all_and_says_what_is_unsaved`
+   failed once inside the full run of `-m 'not live'` (which includes the browser layer when
+   the browser is installed) and passes on its own every time. Find the step that does not
+   wait for the page (probably a navigation after a save) and make it wait for a condition.
+8. Smaller open work, no decision needed: `herd.close_gone` trusts the hostname alone (below);
    a checker's model and limits live in two stores (below); `cli.py` should become a package.
 
 Decisions of the owner on 2026-11-12 that are implemented and recorded: D178-D198 and Q22 in
