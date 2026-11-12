@@ -528,6 +528,24 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
 
 ## Next steps
 
+**State on 2026-11-12:** every step below is either done or waits on the owner; none is open
+work for a developer without the owner. In short:
+
+| Step | State | Waits on |
+|---|---|---|
+| 1. `calu acp` in a real editor | adapter checked against the ACP v1 schema (D152, D159) | an editor session (Zed / JetBrains Air) |
+| 2. Publishing | release workflow built and inert | the PyPI project and the `pypi` GitHub environment |
+| 3. Phase 5 | **done** | -- |
+| 4. Smaller gaps | **done** (by design, or D44) | -- |
+| 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
+| 6. Ergonomics of auth | **done** (D104, D105) | -- |
+| 7. Honesty enforcement | built, off; options D141/D142 built | Q17-Q20 |
+
+Beyond the plan, 2026-11-12 hardened the rules engine (D145-D177, five review rounds); its
+standing conclusion is in D175: the rules are a best-effort layer, the sandbox -- required by
+default -- is the boundary.
+
+
 1. **Try `calu acp` with a real editor** (Zed or JetBrains Air). Its whole configuration is
    now `{ "command": "calu", "args": ["acp"] }` -- the adapter finds the session running in the
    editor's project directory and mints its own token (D105), which needs the operator
