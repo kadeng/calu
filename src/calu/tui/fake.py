@@ -13,7 +13,8 @@ script and the demo (`python -m calu.tui`) attach the real client to it through
 
 It answers the requests the way a session does where the client depends on it: `chat.send`
 puts the message into the queue, `escalation.decide` resolves the escalation, `interrupt`
-cancels the open escalations and ends the turn, `auto_escalate.set` announces the change. A
+cancels the open escalations and ends the turn, `auto_escalate.set` announces the change,
+`side.ask` returns a scripted answer and changes nothing else. A
 method listed in `fail` is refused with that message, which is how a test sees the client's
 error handling. `drop` closes the connections with a close code.
 """
@@ -119,6 +120,19 @@ class FakeSession:
         self.auto_escalate: dict[str, Any] = {"commands": False, "edits": False}
         self.honesty_mode = "off"
         self.honesty_marks: list[dict[str, Any]] = []
+        self.rate_limits: list[dict[str, Any]] = []
+        self.context: dict[str, Any] | None = {
+            "tokens": 212_400,
+            "max_tokens": 1_000_000,
+            "percent": 21.2,
+            "model": "claude-opus-5",
+        }
+        """What `usage.get` reports as the context fill; None for "not known"."""
+        self.cost: float | None = None
+        self.side_answers: dict[str, str] = {}
+        """Side question -> the answer to give; other questions get a fixed sentence."""
+        self.side_gate: anyio.Event | None = None
+        """If set, a side question is answered only once this event is set."""
         self.events: list[tuple[str, dict[str, Any]]] = []
         """Every event sent so far, with its `seq`, for replay."""
         self.requests: list[tuple[str, dict[str, Any]]] = []
@@ -158,6 +172,7 @@ class FakeSession:
             "auto_escalate": dict(self.auto_escalate),
             "honesty_mode": self.honesty_mode,
             "honesty_marks": [dict(mark) for mark in self.honesty_marks],
+            "rate_limits": [dict(limit) for limit in self.rate_limits],
         }
 
     def record(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -189,6 +204,10 @@ class FakeSession:
             case "honesty.update":
                 self.honesty_marks = list(stamped["marks"])
                 self.honesty_mode = stamped["mode"]
+            case "usage.update":
+                self.rate_limits = list(stamped["rate_limits"])
+            case "turn.result":
+                self.cost = stamped.get("cost_usd", self.cost)
             case _:
                 pass
         return stamped
@@ -314,6 +333,28 @@ class FakeSession:
                 if len(kept) == len(self.honesty_marks):
                     raise self._refuse(f"no open mark {params['mark_id']}")
                 await self.emit("honesty.update", {"marks": kept, "mode": self.honesty_mode})
+            case "side.ask":
+                if self.state in {"stopped", "failed", "starting"}:
+                    raise self._refuse("no Claude session is running (send session.start first)")
+                if self.side_gate is not None:
+                    await self.side_gate.wait()
+                question = params["question"]
+                return {
+                    "answer": self.side_answers.get(
+                        question, f"(scripted) a side answer to: {question}"
+                    )
+                }
+            case "usage.get":
+                return {
+                    "context": self.context if self.state not in {"stopped", "failed"} else None,
+                    "rate_limits": [dict(limit) for limit in self.rate_limits],
+                    "cost_usd": self.cost,
+                    "num_turns": 0,
+                }
+            case "model.set":
+                if self.state in {"stopped", "failed", "starting"}:
+                    raise self._refuse("no Claude session is running (send session.start first)")
+                self.model = params.get("model")
             case "shutdown":
                 self.drop(1000, "calu is shutting down")
             case _:

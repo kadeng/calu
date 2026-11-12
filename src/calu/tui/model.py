@@ -24,6 +24,7 @@ is shown only for what happened while this client was attached.
 import difflib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from pydantic import ValidationError
@@ -67,6 +68,7 @@ HANDLED: frozenset[str] = frozenset(
         "edit.diff",
         "auto_escalate.changed",
         "honesty.update",
+        "usage.update",
         "log",
     }
 )
@@ -462,18 +464,59 @@ class Mark:
 
 
 @dataclass
+class Limit:
+    """The state of one usage limit of the Claude Code account (`usage.update`)."""
+
+    type: str
+    """five_hour, seven_day, seven_day_opus, seven_day_sonnet, overage or ""."""
+    status: str = "allowed"
+    """allowed, allowed_warning or rejected."""
+    utilization: float | None = None
+    """Used part, 0.0 to 1.0; None if Claude Code did not report it."""
+    resets_at: datetime | None = None
+
+
+@dataclass
+class ContextFill:
+    """How full the context window of the main agent is (`usage.get`)."""
+
+    tokens: int
+    max_tokens: int
+    percent: float
+    model: str = ""
+    """The resolved model id the numbers were counted for."""
+
+
+@dataclass
 class Usage:
     """What the session reports about cost and use.
 
-    `context` and `rate_limits` stay None: the protocol has no field for them today. They are
-    here so that the widgets that would show them exist and only wait for the data.
+    `context` is None until a `usage.get` answered with it; `limits` is empty for an account
+    without usage limits and for a session that does not report them.
     """
 
     cost: float | None = None
     turns: int = 0
     background_tasks: int = 0
-    context: dict[str, Any] | None = None
-    rate_limits: list[dict[str, Any]] | None = None
+    context: ContextFill | None = None
+    limits: list[Limit] = field(default_factory=list)
+
+
+@dataclass
+class SideExchange:
+    """One side question of this client and what came back (`side.ask`).
+
+    A side question is answered beside the running work and is not part of the conversation;
+    the model keeps the exchanges so that the side panel can show them and a follow-up
+    question can carry them as history.
+    """
+
+    question: str
+    answer: str = ""
+    error: str = ""
+    """Why no answer came, if the session refused or failed."""
+    pending: bool = True
+    """True until the answer or the error arrived."""
 
 
 @dataclass
@@ -515,6 +558,8 @@ class Change:
     queue: bool = False
     honesty: bool = False
     status: bool = False
+    side: bool = False
+    """True if the side questions changed."""
     rebuilt: bool = False
     """True if the model was reset; every view renders from scratch."""
     bell: bool = False
@@ -533,6 +578,7 @@ class Change:
         self.queue |= other.queue
         self.honesty |= other.honesty
         self.status |= other.status
+        self.side |= other.side
         self.rebuilt |= other.rebuilt
         self.bell |= other.bell
         self.notices.extend(other.notices)
@@ -551,6 +597,7 @@ class Change:
             or self.queue
             or self.honesty
             or self.status
+            or self.side
             or self.rebuilt
             or self.bell
             or self.notices
@@ -584,6 +631,8 @@ class SessionModel:
         self.selected_tab = MAIN
         """The tab the user looks at; events of other agents set their `unread` flag."""
         self.logs: list[LogLine] = []
+        self.side: list[SideExchange] = []
+        """The side questions of this client, oldest first; they survive a rebuild."""
         self.reset()
 
     def reset(self) -> None:
@@ -823,6 +872,7 @@ class SessionModel:
         self.marks = [
             Mark(k.id, k.path, k.symbol, k.reason, k.git_branch) for k in snapshot.honesty_marks
         ]
+        self.usage.limits = self._limits(snapshot.rate_limits)
         listed = {request.escalation_id for request in snapshot.escalations}
         for escalation_id in [key for key in self.decisions if key not in listed]:
             self._close(escalation_id, "resolved", None, change)
@@ -903,6 +953,17 @@ class SessionModel:
                     Mark(k.id, k.path, k.symbol, k.reason, k.git_branch) for k in event.marks
                 ]
                 change.honesty = True
+            case m.UsageUpdate():
+                self.usage.limits = self._limits(event.rate_limits)
+                change.status = True
+                if time is not None:
+                    for limit in self.usage.limits:
+                        if limit.status == "rejected":
+                            change.notices.append(
+                                Notice(
+                                    "a usage limit of the Claude Code account is reached", "error"
+                                )
+                            )
             case m.AutoEscalateChanged():
                 self.auto_escalate = AutoEscalate.model_validate(event.settings.model_dump())
                 change.status = True
@@ -917,7 +978,66 @@ class SessionModel:
                 self._log("warning", f"event {method} is not shown by this client")
         return change
 
+    def set_usage(self, raw: dict[str, Any]) -> Change:
+        """Take over the result of `usage.get`.
+
+        Args:
+            raw: The result as the session returned it.
+
+        Returns:
+            A change that names the status line; an invalid result only adds a log line and a
+            notice.
+        """
+        try:
+            result = m.UsageResult.model_validate(raw)
+        except ValidationError as error:
+            return self._invalid("usage.get", error)
+        context = result.context
+        self.usage.context = (
+            None
+            if context is None
+            else ContextFill(context.tokens, context.max_tokens, context.percent, context.model)
+        )
+        self.usage.limits = self._limits(result.rate_limits)
+        if result.cost_usd is not None:
+            self.usage.cost = result.cost_usd
+        return Change(status=True)
+
+    def ask_side(self, question: str) -> tuple[SideExchange, Change]:
+        """Add a side question that waits for its answer.
+
+        Args:
+            question: The question.
+
+        Returns:
+            The new exchange and a change that names the side questions.
+        """
+        exchange = SideExchange(question)
+        self.side.append(exchange)
+        return exchange, Change(side=True)
+
+    def side_history(self) -> list[dict[str, str]]:
+        """Return the answered side questions, as `side.ask {history}` takes them.
+
+        Returns:
+            The newest 20 exchanges that got an answer, oldest first.
+        """
+        answered = [entry for entry in self.side if entry.answer and not entry.pending]
+        return [{"question": entry.question, "answer": entry.answer} for entry in answered[-20:]]
+
     # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _limits(listed: Iterable[m.RateLimit]) -> list[Limit]:
+        """Copy the usage limits of a snapshot, an event or a result.
+
+        Args:
+            listed: The limits as the protocol carries them.
+
+        Returns:
+            One `Limit` per entry, in the same order.
+        """
+        return [Limit(k.type, k.status, k.utilization, k.resets_at) for k in listed]
 
     def _log(self, level: str, message: str) -> None:
         """Append a line to the log view, dropping the oldest beyond `LOG_LIMIT`.

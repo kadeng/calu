@@ -1,7 +1,8 @@
 """Which optional functions the attached session offers, and what the client says otherwise.
 
-The protocol does not carry everything this client has a place for: rate limits, the fill of
-the context window, a change of model in a running session and others. Each such function is
+Not every session carries everything this client has a place for: an older calu has no side
+question, no usage figures and no change of model in a running session, and no session can
+withdraw a queued message or stop one subagent. Each such function is
 one `Capability` here, with the sentence the client shows while the session does not offer it.
 Every "not available from this session" text of the client comes from this table, so the list
 of missing functions in the help screen and the texts in the views cannot disagree, and a
@@ -27,7 +28,7 @@ class Capability:
 CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         "usage",
-        "Token counts and checker spend",
+        "Usage figures (cost, context, limits)",
         f"{NOT_AVAILABLE}: it reports the cost and the number of turns only",
     ),
     Capability(
@@ -42,13 +43,25 @@ CAPABILITIES: tuple[Capability, ...] = (
     ),
     Capability(
         "live_model_change",
-        "Change of model or effort in a running session",
-        f"{NOT_AVAILABLE}: a session applies model and effort when it starts",
+        "Change of model in a running session",
+        f"{NOT_AVAILABLE}: it applies the model when it starts",
     ),
     Capability(
         "side_question",
-        "Side question",
+        "Side question (/btw)",
         f"{NOT_AVAILABLE}: every message enters the main conversation",
+    ),
+    Capability(
+        "live_effort_change",
+        "Change of effort in a running session",
+        f"{NOT_AVAILABLE}: the effort is fixed when a session starts (/effort, then /stop and"
+        " /start)",
+    ),
+    Capability(
+        "subagent_direct",
+        "Messages to a foreground or finished subagent",
+        f"{NOT_AVAILABLE}: only a running background subagent takes messages, relayed by the"
+        " main agent",
     ),
     Capability(
         "queue_withdraw",
@@ -71,14 +84,12 @@ them."""
 
 _BY_KEY = {capability.key: capability for capability in CAPABILITIES}
 
-SNAPSHOT_FIELDS: dict[str, str] = {
-    "usage": "usage",
-    "rate_limits": "rate_limits",
-    "context_fill": "context",
-    "permission_mode": "permission_mode",
-}
-"""Capability key -> the field of the `state.get` result that switches it on once the protocol
-carries it. Capabilities that need a request rather than a field have no entry and stay off."""
+GROWN_WITH_RATE_LIMITS = frozenset(
+    {"usage", "rate_limits", "context_fill", "live_model_change", "side_question"}
+)
+"""The functions a session offers if its snapshot carries `rate_limits`: that field came into
+the protocol together with the requests `side.ask`, `usage.get` and `model.set` and the event
+`usage.update`. The protocol version did not change with them, so the field is the sign."""
 
 
 @dataclass(frozen=True)
@@ -128,8 +139,7 @@ def capabilities(snapshot: dict[str, Any]) -> Capabilities:
         snapshot: The snapshot as the session returned it.
 
     Returns:
-        The capabilities whose field (`SNAPSHOT_FIELDS`) the snapshot carries with a value.
-        With today's protocol that is none of them.
+        `GROWN_WITH_RATE_LIMITS` if the snapshot has the field `rate_limits`, else none. The
+        other capabilities need protocol additions that do not exist yet and stay off.
     """
-    found = {key for key, name in SNAPSHOT_FIELDS.items() if snapshot.get(name) is not None}
-    return Capabilities(frozenset(found))
+    return Capabilities(GROWN_WITH_RATE_LIMITS if "rate_limits" in snapshot else frozenset())

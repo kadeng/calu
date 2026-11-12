@@ -222,6 +222,76 @@ class Actions:
             return Outcome(False, str(error))
         return await self.set_switches(switches)
 
+    async def ask_side(self, question: str) -> Outcome:
+        """Ask Claude a question beside the running work (`side.ask`).
+
+        Side effects: adds the question to the model's side questions at once, as pending, and
+        fills in the answer or the session's refusal when the request returns. The earlier
+        answered side questions go along as history. Nothing is sent to the main conversation.
+
+        Args:
+            question: The question; must not be empty.
+
+        Returns:
+            The outcome, with the answer text as `data`.
+        """
+        if not question.strip():
+            return Outcome(False, "nothing to ask")
+        history = self.model.side_history()
+        exchange, _ = self.model.ask_side(question.strip())
+        outcome = await self.request("side.ask", {"question": question.strip(), "history": history})
+        exchange.pending = False
+        if outcome.ok and isinstance(outcome.data, dict):
+            exchange.answer = str(outcome.data.get("answer") or "")
+            outcome.data = exchange.answer
+        else:
+            exchange.error = outcome.message or "no answer"
+        return outcome
+
+    async def refresh_usage(self) -> Outcome:
+        """Ask for cost, context fill and usage limits and load them into the model (`usage.get`).
+
+        Returns:
+            The outcome; `ok` means the model's `usage` is current.
+        """
+        outcome = await self.request("usage.get")
+        if outcome.ok and isinstance(outcome.data, dict):
+            self.model.set_usage(outcome.data)
+        return outcome
+
+    async def set_model(self, name: str | None) -> Outcome:
+        """Change the model: in the running session (`model.set`), or by starting a stopped one.
+
+        Args:
+            name: A Claude Code alias or model id; None or "default" for the default model.
+
+        Returns:
+            The outcome, with a confirmation as its message.
+        """
+        model = None if name in (None, "", "default") else name
+        if self.model.state in {"stopped", "failed"}:
+            outcome = await self.start(self.model.claude_session_id, model=model)
+            done = f"session started with the model {model or 'default'}"
+        else:
+            outcome = await self.request("model.set", {"model": model})
+            done = f"model changed to {model or 'the default'}: it applies from Claude's next step"
+        if outcome.ok:
+            self.model.model_name = model
+            outcome.message = done
+        return outcome
+
+    async def read(self, method: str, params: dict[str, Any] | None = None) -> Outcome:
+        """Send a request that only reads (`context.get`, `checkers.get`, `session.list`, ...).
+
+        Args:
+            method: The request method.
+            params: Its params.
+
+        Returns:
+            The outcome with the result in `data`.
+        """
+        return await self.request(method, params)
+
     async def clear_mark(self, mark_id: int) -> Outcome:
         """Close one open mark of the honesty register by hand (`honesty.clear`).
 
