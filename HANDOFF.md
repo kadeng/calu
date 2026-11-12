@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**803 tests pass** (plus 10 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**804 tests pass** (plus 10 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 239 commits, ~28.5k lines of Python in `src` (~31.5k with the SQL, templates and
 default instructions), ~16.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -521,7 +521,8 @@ add|list|edit|disable|remove`, a bad pattern leaving the list untouched.
    driven as a real process over real pipes for the handshake, a prompt, a **denied** step and
    `session/load`'s replay -- but no editor has driven it yet, so expect small mismatches in
    what a client sends (the messages were checked field by field against the published v1
-   schema in D152; one gap, the `session/close` capability, is fixed). What the editor
+   schema in D152; one gap, the `session/close` capability, is fixed). A prompt now stays open while
+   Claude Code's background tasks run (D159); watch how the editor shows that. What the editor
    can drive is complete: prompts, the replay of `session/load`, permission requests for
    escalations, and the session mode -- the three auto-escalation switches are offered both as
    ACP's session modes and as its newer boolean config options, and a change made anywhere

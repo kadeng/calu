@@ -254,6 +254,36 @@ async def test_a_prompt_becomes_a_chat_message_and_ends_with_the_turn() -> None:
     await run_adapter(calu, body)
 
 
+async def test_a_prompt_stays_open_while_background_tasks_run() -> None:
+    """D159: ACP streams updates only during a prompt turn, and Claude Code continues by itself
+    when background tasks finish (D158), so the prompt is answered after that follow-up turn."""
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+    answers: list[dict] = []
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        async with anyio.create_task_group() as tasks:
+
+            async def prompt() -> None:
+                answers.append(
+                    await h.editor.call(
+                        "session/prompt",
+                        {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]},
+                    )
+                )
+
+            tasks.start_soon(prompt)
+            while not h.calu.sent("chat.send"):
+                await anyio.sleep(0.01)
+            await h.adapter.on_event("turn.result", {"background_tasks": 1})
+            await anyio.sleep(0.05)
+            assert answers == [], "answered while a background task was still running"
+            await h.adapter.on_event("turn.result", {"background_tasks": 0})
+        assert answers[0]["result"] == {"stopReason": "end_turn"}
+
+    await run_adapter(calu, body)
+
+
 async def test_a_prompt_starts_a_session_that_was_stopped() -> None:
     calu = FakeCalu({"state.get": {"state": "stopped", "calu_session_id": "s1"}})
 

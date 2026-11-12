@@ -13,7 +13,7 @@ What maps onto what:
 |---|---|
 | `session/new` | attaches to the running session; its calu session id becomes the ACP `sessionId` |
 | `session/load` | replays `session.history` from the database as `session/update` notifications |
-| `session/prompt` | `chat.send`, then waits for `turn.result` |
+| `session/prompt` | `chat.send`, then waits for a `turn.result` with no background task left |
 | `session/cancel` | `interrupt`; the prompt answers `stopReason: "cancelled"` |
 | `agent_message_chunk`, `agent_thought_chunk` | `assistant.delta`, `assistant.thinking` |
 | `tool_call`, `tool_call_update` | `tool.use`, `check.result`, `edit.diff`, `tool.result` |
@@ -712,14 +712,31 @@ class Adapter:
             self._resolved.add(escalation_id)
 
     async def _on_turn_result(self, params: dict[str, Any]) -> None:
-        """End the prompt turn the editor is waiting for.
+        """End the prompt turn the editor is waiting for, once no background task is left.
+
+        A Claude turn can end while background tasks still run (a background command, a
+        Monitor, a Workflow); Claude Code then starts another turn by itself when they finish
+        (D158). ACP streams `session/update` only *during* a prompt turn (schema v1), so the
+        prompt stays open until a turn ends with no background task, and the follow-up turn's
+        output reaches the editor inside it. `session/cancel` still ends it at once (D159).
 
         Args:
             params: The `turn.result` event.
         """
-        if bool(params.get("is_error")):
+        failed = bool(params.get("is_error"))
+        if failed:
             detail = str(params.get("result") or params.get("subtype") or "the turn failed")
             await self._update(acp.message_chunk("agent_message_chunk", f"[{detail}]"))
+        waiting = int(params.get("background_tasks") or 0)
+        if waiting and not failed:
+            await self._update(
+                acp.message_chunk(
+                    "agent_message_chunk",
+                    f"\n[{waiting} background task(s) still running; Claude continues when "
+                    "they finish]\n",
+                )
+            )
+            return
         if self._turn is not None:
             self._turn.finish("end_turn")
 
