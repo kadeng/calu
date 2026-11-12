@@ -15,7 +15,7 @@ instructions. Each checker answers one of four things:
 
 | Answer | What happens | How often |
 |---|---|---|
-| PASS | the checker has no objection; Claude Code's own approval decides as usual | almost everything |
+| PASS | the checker has no objection; in auto mode Claude Code's own approval decides as well, in any other mode the step runs | almost everything |
 | ESCALATE | Claude is paused until a human allows or denies the step | the interesting cases |
 | ALLOW | the step runs, whatever the auto-approval would have said | a deliberate exception |
 | DENY | the step does not run; Claude is told why and carries on | a deliberate exception |
@@ -24,9 +24,10 @@ The two ends of that table are the exceptions. A checker is not there to re-deci
 Code already decides well; it is there to notice the few steps that deserve a human, and to
 overrule the harness in the handful of cases where you know better.
 
-The pause matters: Claude cannot retry, rephrase or probe the system while it waits, so a
-denial cannot be worked around. You answer from any attached client or from the database
-itself, which does not require access to the machine the session runs on.
+The pause matters: while an escalation is open, the session's other tool calls that need a
+check wait too, so Claude cannot retry, rephrase or probe the system before a human has decided.
+You answer from any attached client or from the database itself, which does not require access
+to the machine the session runs on.
 
 ### Which problem does it solve?
 
@@ -67,6 +68,12 @@ dangerous and nothing about your project; a checker you write knows your project
 else. They also fail differently, so a prompt injection that talks one into approving a step
 still has to get past the other.
 
+Both opinions apply only in Claude Code's auto mode. A headless Claude Code starts in the
+permission mode `default` unless a setting says otherwise, and the checkers then decide alone.
+`calu config set claude.permission_mode auto` switches the auto mode on;
+`calu config set claude.require_auto_mode true` makes a step that the checkers pass outside the
+auto mode wait for a human. Every session start and `calu doctor` name the mode in effect.
+
 What a checker can hold Claude to is what a linter cannot see: writing that sounds like a
 language model, over-engineering, scope creep, rules from a law or a contract, and code honesty
 — every function says what it does, in its name and in its documentation. The guide lists them:
@@ -79,16 +86,21 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
 
 - **Checkers with your rules.** One reviews commands, one reviews edits. Their instructions are
   plain Markdown that you edit. They see the step, the conversation in condensed form and your
-  AGENTS.md, and they can read files, glob and grep to judge on evidence.
+  AGENTS.md, and they can read files, glob and grep in the project to judge on evidence.
+  AGENTS.md reaches them as text from the repository, not as rules: what must bind belongs in
+  the checker instructions.
 - **Comments, not only verdicts.** A checker can let a step through and still tell Claude to keep
   the names and the documentation honest, or to stop widening the task.
 - **Allow and deny lists before the models, if you want them.** The lists start empty, so every
   step goes to a checker. `calu rules add-set recommended` adds a ready-made set: `ls` and
   `git status` then run without a model call, and `sudo`, force pushes and reads of your
   credentials always ask a human.
-- **A review of the whole change before the commit.** `git commit` is held and the complete diff
-  goes to a checker of its own: is it complete, is there work nobody asked for, was a test
-  weakened to make it pass, does the message describe the change.
+- **A review of the whole change before the commit.** The command checkers judge a `git commit`
+  like every command. A `git commit` that runs as a command of its own is also held while the
+  complete diff goes to a checker of its own: is it complete, is there work nobody asked for,
+  was a test weakened to make it pass, does the message describe the change. A line that
+  combines the commit with other commands (`git add ... && git commit`) is refused, with the
+  instruction to stage first and commit alone.
 - **A readable trail.** One line per step, written by the checker that judged it. Supervising
   several agents means reading summaries, not transcripts.
 - **Unsupervised runs.** A session runs for hours, overnight, with no client attached, and stops
@@ -117,8 +129,9 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   run on the machine's own Claude Code account (`claude:haiku`), at the price of having no tools
   and a process start per check.
 - **The checkers are read-only by design**: five tools, all reads (open a file, find, grep, and
-  which files changed when). No shell, no writes, no network — the worst a broken checker can do
-  is answer wrongly, and the dangerous steps are settled by the deny lists before any model is
+  which files changed when), which calu confines to the project directory and bounds in file
+  size and search time. No shell, no writes, no network — the worst a broken checker can do is
+  answer wrongly, and a step that matches a deny rule goes to a human before any model is
   called.
 - **A mid-sized model can supervise a frontier model.** It answers one narrow question about one
   step, with instructions for that question and an answer out of four. What is hard to slip past
@@ -131,8 +144,9 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   someone wrote it, not as an instruction.
   [Each agent, and the narration, in the guide](CALU_GUIDE.md#the-models-claude-codes-account-and-the-checkers-own).
 - Quiet but necessary: calu's configuration is out of Claude's reach, the sandbox is switched on
-  and tightened, a subagent's result is checked against the conversation, a session that weakens
-  its own settings writes an audit entry.
+  and tightened, a session does not start while a Claude Code settings file changes the sandbox,
+  a subagent's result is checked against the conversation, a session that weakens its own
+  settings writes an audit entry.
   [The guide has the detail](CALU_GUIDE.md#what-the-checkers-give-you-in-detail).
 
 ## How it is put together
@@ -150,7 +164,8 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
 One `calu run` process drives one Claude Code session. Clients attach and detach over a
 WebSocket, several at once, and each gets the current state plus the events it missed. What a
 decision needs is in the database, so answering an escalation never depends on reaching the
-session's machine.
+session's machine. If the database becomes unreachable, the session reconnects by itself; until
+then its steps wait and nothing is approved.
 
 **Status: early implementation.** Everything above is built; the sandbox's defaults are still
 proposals the owner has to confirm, and calu is not published on PyPI yet. The design is in
@@ -196,10 +211,15 @@ calu project add . --name demo        # the proxy policy, with a starter domain 
 calu run -p "fix the failing test"    # a session in the current directory
 ```
 
+`calu run` uses the project registered for the working directory or for the nearest registered
+directory above it; `--project NAME` names one, and an unknown name ends the start with an
+error.
+
 `calu run -p "..." --batch` ends when Claude is done instead of waiting for your next message.
 It also waits for Claude Code's background tasks, because Claude continues by itself when they
 finish; `--background-timeout 600` stops a run whose background task (a dev server, say) never
-ends.
+ends. Without `--batch`, a closed stdin (a service unit, `nohup`) has the same effect once a
+prompt or a message was sent: the run ends when Claude is done.
 
 `calu run` stays in the foreground and prints every step as the checkers judge it. **On a server
 you put it in a detachable session**, so it keeps working after you log out:
@@ -240,7 +260,7 @@ From another machine, forward the port and open the same printed address there:
 
 **Your editor**, if it speaks the Agent Client Protocol (JetBrains Air, Zed, Neovim, Goose).
 Register calu as the agent and open the project; an escalation arrives as the editor's own
-permission dialog:
+permission dialog, including one that was already open when the editor attached:
 
 ```json
 { "command": "calu", "args": ["acp"] }

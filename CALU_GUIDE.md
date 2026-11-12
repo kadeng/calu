@@ -28,8 +28,8 @@ configuration, the web interface, the checkers and the ACP adapter.
 What a checker can do besides deciding is **comment**. It can let an edit through and still tell
 Claude to keep the names and the API documentation honest, or to stop widening the task. Claude
 receives the remark together with the approval. A checker can also **look at the code**: read a
-file, list files by glob, grep for a pattern, so that it judges on evidence rather than on the
-diff alone. That is all it can do: it cannot write, run commands or talk to the outside.
+file, list files by glob, grep for a pattern, all inside the project directory, so that it
+judges on evidence rather than on the diff alone. That is all it can do: it cannot write, run commands or talk to the outside.
 
 - **Allow and deny lists before the models, if you want them.** calu ships no rules: every
   list starts empty, and every step goes to a checker. Two ready-made sets add what most
@@ -49,9 +49,13 @@ diff alone. That is all it can do: it cannot write, run commands or talk to the 
   [what you can enforce](#what-you-can-enforce-with-a-checker)). They get the conversation in
   condensed form, your project's AGENTS.md and the step itself, and read-only tools to look
   further when they need to: read a file or a range of its lines, find files by glob, grep for a
-  pattern — so a checker can see who calls the function being changed instead of guessing. They
-  can also ask **when** things happened: the times of the session's steps, and which step last
-  changed a file. That last question is answered from the file's change time, which an
+  pattern — so a checker can see who calls the function being changed instead of guessing.
+  Project files such as AGENTS.md reach a checker labelled as untrusted text from the
+  repository: they describe the project's conventions, and nothing in them authorizes a step.
+  A rule that must bind belongs in the checker instructions, which are stored in the database.
+  A step or diff longer than 60,000 characters is shown cut, and a checker's approval of a cut
+  step becomes an escalation. They can also ask **when** things happened: the times of the
+  session's steps, and which step last changed a file. That last question is answered from the file's change time, which an
   unprivileged process cannot forge, so a command that edits more than it said it would leaves a
   trace. calu watches its own clock for the same reason: if the wall clock is moved backwards,
   the next step waits for a human, because the attribution would no longer hold. Checkers judge
@@ -76,13 +80,25 @@ diff alone. That is all it can do: it cannot write, run commands or talk to the 
   honesty rule below, applied to commands instead of to code. Switch on `changes.review` as well
   and a checker reads the actual patch after the command has run, while Claude waits: if it
   refuses, calu puts the files back as they were and tells Claude what was undone and why. A
-  refusal is then not a comment on something that already stands.
-- **A review of the whole change before it is committed.** When Claude runs `git commit`, calu
-  holds the commit and gives the complete diff to a checker of its own — the one checker that
-  sees the result rather than one step of it. It judges what the step checkers cannot: whether
-  the change is complete (a renamed function with callers left behind), whether it contains work
-  nobody asked for, whether a test was weakened to make it pass, whether the message describes
-  the change. A denial undoes nothing; it stops the commit and tells Claude what to fix first.
+  refusal is then not a comment on something that already stands. Only a denial by the checker
+  or by a human puts files back: when nobody decided (the session stopped, the escalation timed
+  out), the files stay and Claude is told that the change is unreviewed. A change that calu
+  cannot read completely goes to a human.
+- **A review of the whole change before it is committed.** The command checkers judge a line
+  with `git commit` like every other command. When the line is one plain `git commit` (`-a`,
+  `--amend` and the message options are allowed), calu also holds it and gives the complete
+  diff to a checker of its own — the one checker that sees the result rather than one step of
+  it. It judges what the step checkers cannot: whether the change is complete (a renamed
+  function with callers left behind), whether it contains work nobody asked for, whether a test
+  was weakened to make it pass, whether the message describes the change. The most restrictive
+  verdict wins. A denial undoes nothing; it stops the commit and tells Claude what to fix first.
+  calu reads the diff before the line runs, so the diff is what the commit records only if the
+  line does nothing else. A line that combines the commit with other commands or names paths
+  (`git add ... && git commit`, `cd dir && git commit`, `git commit file.py`) is therefore
+  refused without a model call, and Claude is told to run the rest first and `git commit`
+  alone. A diff that calu cannot read is escalated to a human; for a `git commit -a` that
+  changes a file with a content filter (Git LFS), Claude is told to stage the change and commit
+  without `-a`. All of this applies while the changeset checker is enabled.
 - **Claude's own questions reach you.** When Claude uses its question tool, calu holds the call
   and shows you the question with the options it offered — in the browser as buttons, in the
   terminal as a line. Your answer comes back to Claude as the result of that call, so the
@@ -96,9 +112,10 @@ diff alone. That is all it can do: it cannot write, run commands or talk to the 
   this"), so a checker cannot mistake Claude's text for an instruction from you.
 - **Comments on a selection.** Mark lines in a diff or in any project file and write a comment.
   It reaches Claude at once and is kept as potential training data for the checkers.
-- **Unsupervised runs.** Claude Code works in its auto mode (its default) with the checkers on
-  top of it, so a session can run for hours — overnight, for example — and stops only when
-  something genuinely needs you.
+- **Unsupervised runs.** The checkers judge every step, and in Claude Code's auto mode its
+  classifier judges it as well ([how to switch it on](#calu-does-not-replace-claude-code)), so
+  a session can run for hours — overnight, for example — and stops only when something
+  genuinely needs you.
 
 ## What you can enforce with a checker
 
@@ -244,12 +261,25 @@ approves by itself -- narrow it, and the session then names what it leaves out a
 calu config set claude.setting_sources '["project"]'
 ```
 
-calu changes none of those rules and does not even set the permission mode: Claude Code's own
-default is the auto mode, and calu leaves that choice with you. It only adds a layer in front of
-each tool call and a layer around the process. Running in the auto mode is the intended way to
-use calu, because a step then needs the harness **and** your checkers — a PASS from a checker
-leaves the harness's decision exactly where it was. In any other mode the checkers simply decide
-alone; nothing has to be configured either way.
+The one exception is the sandbox: a session does not start while one of these files holds a
+sandbox entry that goes beyond calu's configuration
+([the sandbox](#the-sandbox-and-what-a-command-may-reach)).
+
+calu changes none of those rules and by default does not set the permission mode. It only adds a
+layer in front of each tool call and a layer around the process. Running in the auto mode is the
+intended way to use calu, because a step then needs the harness **and** your checkers — a PASS
+from a checker leaves the harness's decision exactly where it was. In any other mode a PASS is
+the only approval of a step. A headless Claude Code starts in the mode `default` (measured with
+CLI 2.1.319) unless `claude.permission_mode` or `permissions.defaultMode` in one of Claude
+Code's settings files says otherwise, so the auto mode has to be chosen:
+
+```bash
+calu config set claude.permission_mode auto     # the classifier decides next to the checkers
+calu config set claude.require_auto_mode true   # outside the auto mode, a passed step waits for a human
+```
+
+Both apply from the next session start. A session names the mode in effect when it starts and
+whenever the mode changes, and `calu doctor` has a line for it.
 
 And it goes the other way too: calu speaks the agent side of the Agent Client Protocol
 (`calu acp`), so the same checked Claude Code session is usable from every ACP client —
@@ -272,10 +302,17 @@ it, and the more sessions run at once.
 - **The database is the centre.** Every session on every machine writes to one PostgreSQL
   database: the configuration, the checker definitions, the full history of every step (with
   host, user, directory and git commit) and the open escalations. One person can therefore watch
-  and unblock any number of sessions from one place.
+  and unblock any number of sessions from one place. When the database is unreachable, a session
+  reconnects by itself, with pauses that grow to 30 seconds; until then its steps wait and
+  nothing is approved. An error that cannot heal (the login is refused, the role or the database
+  was removed) stops the session with a message.
 - **The configuration is out of the agent's reach.** The checker instructions, the rules and
-  the settings are database rows, and the credential that reads them is wiped before Claude
-  Code starts, so an edit or a command cannot change the rules it is judged by. For the
+  the settings are database rows that a session's login may only read, so an edit or a command
+  cannot change the rules it is judged by. Before Claude Code starts, calu wipes the password
+  you typed, the key derived from it and the buffer the credential was decrypted into. The
+  connection string stays in the memory of the `calu run` process, which needs it to reconnect:
+  it is never put into the environment, a command line or a file, and `calu run` closes its
+  memory to other processes of the same user. For the
   commands themselves calu configures Claude Code's own sandbox — own process namespace, no
   write access to Claude Code's configuration, read denials for credentials. A session's
   database login reaches only its own rows, so one session cannot rewrite another session's
@@ -315,8 +352,8 @@ calu config set command_checker.model claude:haiku
 What it costs: such a checker gets **no tools**, because the CLI runs with `--tools ""`, so it
 cannot read a file, glob or grep and judges only what the context gives it -- instructions that
 tell it to go and look will not work. Each check also starts a process (a second or two), and
-Claude Code's own system prompt is part of every call, so the token counts are larger than an
-API checker's for the same context. calu says all of this at every start. The checks run in an
+the CLI adds a fixed prompt of its own to every call (about 2.9k tokens), so the token counts
+are larger than an API checker's for the same context. calu says all of this at every start. The checks run in an
 empty temporary directory, never in the project: the working directory's `CLAUDE.md` would
 otherwise let the project under review write instructions into the prompt of the agent
 reviewing it.
@@ -352,8 +389,11 @@ says which are accepted -- an expired key otherwise passes unnoticed until it es
 step.
 
 Keys belong in `~/.config/calu/.env`, and Claude Code never sees them: calu blanks every
-provider key in the environment it hands to Claude Code. So the main conversation can run on a
-subscription while the checkers bill an API — including an Anthropic Ultra subscription, which
+provider key it knows, and every variable of that file, in the environment it hands to Claude
+Code. A key that is set elsewhere under a name calu does not know is named in the setting
+`hidden_env` (`calu config add hidden_env XAI_API_KEY`) and is blanked from the next session
+start; the start-up warnings say when a checker provider needs that. So the main conversation
+can run on a subscription while the checkers bill an API — including an Anthropic Ultra subscription, which
 comes with API credits that the checkers can spend. `mistral:` models go to the EU endpoint
 unless `MISTRAL_BASE_URL` says otherwise, and `bedrock:` takes its credentials from the usual
 AWS chain.
@@ -364,6 +404,13 @@ A checker agent gets exactly five tools, and every one of them only reads: `read
 `find_files`, `grep_files`, and — for the changeset checker — `step_times` and `changed_files`.
 There is no write, no shell, no network call and no tool that can reach the session. A checker
 cannot edit your code, run a command or send your source anywhere.
+
+calu confines the tools itself. A path must be relative and without `..`, and after every
+symbolic link is resolved it must lie inside the project directory and outside calu's own
+configuration directory; the read deny rules apply to the path as written and as resolved. A
+file over 2 MB is not read, one search reads at most 20 MB, and a search is stopped after 10
+seconds. What a tool returns, like everything else that comes from Claude or from a file,
+reaches the checker fenced and labelled as data.
 
 The one thing a checker *changes* is calu's own state, and it does so by **answering**, not by
 calling a tool: its structured answer carries the decision, a reason, a one-line summary and —
@@ -378,9 +425,10 @@ With that, the worst a broken or compromised checker model can do is answer wron
 two directions of a wrong answer are bounded differently:
 
 - A wrong **escalation** costs you a question you did not need.
-- A wrong **ALLOW** cannot reach the dangerous cases at all: the deny lists are evaluated
+- A wrong **ALLOW** cannot reach a step that a deny rule covers: the deny lists are evaluated
   **before** any model is called, and a match escalates to a human at once — the checkers are
-  never asked about it, so no verdict of theirs can overrule it.
+  never asked about it, so no verdict of theirs can overrule it. An approval of a step that
+  the checker saw only in part (cut for length) becomes an escalation as well.
 
 calu works with providers that offer **zero data retention**, in a variety of cloud regions
 including the EU — pick one and configure the checker for it. The guarantee is the provider's;
@@ -414,9 +462,11 @@ What makes this hard to get around is not the checker's intelligence but the arr
 it:
 
 - **A violation freezes the agent.** An escalation suspends the session until a human answers
-  (REQUIREMENTS 12). Claude cannot retry, rephrase, probe the system or work on something else
-  while it waits, so a denial cannot be explored for a way around it. There is no sequence of
-  clever attempts, because there is no second attempt.
+  (REQUIREMENTS 12). While an escalation is open or being opened, no other tool call that needs
+  a check is approved: it waits, also when Claude started several calls at once, and a call
+  that still waits after 5 minutes becomes an escalation itself. Claude therefore cannot retry,
+  rephrase or probe the system while a human decides. A question Claude asks you through its
+  question tool is not an objection and holds nothing.
 - **Code honesty closes the long game.** The supervised model's cheapest route past a reviewer
   is to make the code *look* like something else than it is. With honesty enforcement on, the
   honesty checker records which files no longer say what they do, and the deterministic layer
@@ -457,12 +507,24 @@ words directly. The cost of that is the three properties above.
 
 Without `bubblewrap` and `socat` a session refuses to start, because the sandbox cannot be
 built; setting `claude.sandbox.enabled` to false in the configuration turns the sandbox off, at
-the cost of its protection. Read denials are a list you edit:
+the cost of its protection. The sandbox, not the rule lists, is the boundary for what a command
+can reach. Read denials are a list you edit; calu's own directories (`$XDG_CONFIG_HOME/calu`
+and `$XDG_STATE_HOME/calu`) are always denied, whatever the list holds:
 
 ```bash
 calu config add claude.sandbox.deny_read ~/secrets   # one entry, keeping the rest
 calu config remove claude.sandbox.deny_read ~/.npmrc
 ```
+
+calu passes its sandbox settings to Claude Code complete, and it has to be sure that nothing
+else changes them. A session therefore does not start while `~/.claude/settings.json`, the
+project's `.claude/settings.json` or `.claude/settings.local.json` holds a sandbox entry that
+goes beyond calu's configuration or a sandbox key calu does not know; the error names the file
+and the entry. If such an entry appears while a session runs, its Bash and Monitor commands
+wait for a human. Remove the entry and put what the session needs into calu's configuration
+(`calu config add claude.sandbox.allowed_domains <domain>`), or leave the file out with
+`claude.setting_sources`. Setting `claude.sandbox.fail_if_unavailable` to false turns the
+refusal into a warning. `calu doctor DIR` reports such entries before a session is started.
 
 What a command may reach over the network is a property of the project. A project registered
 with `calu project add` gets the policy `proxy` and a starter allow list — package registries,
@@ -533,13 +595,12 @@ one line of `/help`. The ones that matter while a step waits:
 ## From another machine
 
 Nothing calu runs binds a public interface, and that is deliberate: the web interface has only
-a local login and a session's WebSocket has no TLS. The web interface refuses what another
-site could make your browser send to it -- every request must name a loopback host, and
-anything that changes state must come from its own pages -- so a web page you happen to have
-open cannot answer an escalation for you (PLAN.md D136). And it serves only requests that carry
-the token `calu web` prints at start, so another program of yours -- Claude's own `curl`
-included -- cannot answer one either (D161). The token is new on every start and becomes a
-cookie on the first visit. Two ways to work remotely:
+a local login and a session's WebSocket has no TLS. The web interface serves only requests
+that name its own host, `calu.localhost`, from a browser that logged in with the token
+`calu web` prints at start; the token is new on every start. A request that changes state also
+needs a second secret, which only calu's own pages hold. So neither a web page you happen to
+have open nor another program on the machine can answer an escalation through the web
+interface (PLAN.md D136, D190). Two ways to work remotely:
 
 **Through the database.** The five commands above need nothing but a reachable PostgreSQL, so
 an operator anywhere can watch the fleet and answer escalations without touching the machines
@@ -569,17 +630,14 @@ design (REQUIREMENTS 17), and it asks once per session rather than several times
 `calu doctor` lists an unprotected credential and calls it a problem for `admin`, which owns
 the schema. `calu credential set operator` without the switch puts a password back on it.
 
-Claude runs as your user too, so it could use that credential the same way: `calu resolve 1
-allow` from its own Bash. Two things stop it. With the sandbox on, `~/.config/calu` is
-unreadable to Claude's commands; and a built-in rule makes every `calu` command Claude runs
-(`calu …`, `uv run calu …`, `uvx calu …`, `python -m calu …`) ask you first, sandbox or not.
-A one-line script that names the file in its code (`python3 -c "open('...')"`) asks too.
-What the rules cannot stop is a script that builds the path at run time; without the
-sandbox only the checker sees that, and a session says so at its start when a credential has
-no password.
+Claude runs as your user too, so calu keeps that credential from it in two ways. With the
+sandbox on, `~/.config/calu` is unreadable to Claude's commands; and a built-in rule makes
+every `calu` command Claude runs (`calu …`, `uv run calu …`, `uvx calu …`, `python -m calu …`)
+and every command that names the file ask you first, sandbox or not. The sandbox, not the rule,
+is the boundary for what a command can read: a session started without it says so at its start
+when a credential has no password.
 The local database of `calu db up` asks every connection for a password, including those from
-inside its container (an older one is converted at the next `calu db up`), so `docker exec`
-into it is no way around calu either.
+inside its container (an older one is converted at the next `calu db up`).
 
 The operator login reads every table, resolves escalations and mints or revokes client tokens,
 and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu
@@ -598,7 +656,7 @@ calu attach ws://127.0.0.1:8765 --token=<the token it printed>
 
 Mint the token in its own step: every command that reads the configuration asks for the `admin`
 password, so it wants a terminal, and the token is printed once and never stored. A minted token
-outlives the session you made it for and can be taken back (`calu token list|revoke`), which is
+is valid until its session ends or you take it back (`calu token list|revoke`), which is
 what makes it usable from a second machine at all. For a session that serves a Unix socket
 instead of a port, forward the socket at the path `calu sessions` shows for it (it is named
 after the session's process, `/run/user/<uid>/calu/<pid>.sock`): `ssh -L
@@ -607,14 +665,24 @@ after the session's process, `/run/user/<uid>/calu/<pid>.sock`): `ssh -L
 ## Client tokens
 
 For a client that keeps its token in its own configuration, mint one instead of passing on the
-token `calu run` printed: a minted token outlives the session you made it for, and you can take
-it back.
+token `calu run` printed: a minted token has a label and a row of its own, and you can take it
+back. A token belongs to one session and ends with it.
 
 ```bash
 calu token mint <session id> --label "zed on the laptop"   # prints the token once
 calu token list                                            # labels and last use, never a token
 calu token revoke 3
 ```
+
+A revocation also reaches a client that is connected: its requests that change the session are
+refused at once, and its connection is closed within 15 seconds. That holds for the token
+`calu run` printed too. A request that a client sent before it disconnected is still completed.
+
+For authors of other clients: the session closes a connection with the WebSocket close code
+4001 when the token was revoked or belonged to a session that has ended (connecting again with
+that token is refused), and with 4002 when the client fell more than 1000 events behind
+(connect again and subscribe after the last sequence number received). `calu attach` and
+`calu acp` reconnect by themselves after 4002.
 
 ## The web interface
 
@@ -632,9 +700,12 @@ to the hosts file. Opening the printed address logs that browser in until `calu 
 Pages that change something (answering an escalation, saving settings) need JavaScript. While
 the database is unreachable the pages say so and reload by themselves; `calu web` reconnects.
 
-A session stamps the database every few seconds, so the fleet separates the sessions that are
+A session stamps the database every 30 seconds, so the fleet separates the sessions that are
 working from the ones whose process is gone — a killed process cannot set its own state, and an
-escalation nobody can answer should not sit among the ones that need you.
+escalation nobody can answer should not sit among the ones that need you. A session that ends
+closes its open escalations, and the overview, `calu sessions` and `calu escalations` close
+those of a session whose process no longer exists on the host they run on, or that has been
+silent for 24 hours.
 
 Every page shows what needs you and jumps to any session with Ctrl+K. It leads with the
 sessions that cannot go on without you, opens one session's history at four
@@ -672,7 +743,9 @@ The adapter has no terminal, so it cannot ask for a password: store the operator
 with `calu credential set operator --no-password` (above) and the editor needs no
 configuration beyond that line. With a password on it, the adapter says so and stops rather
 than prompting -- a prompt would read the editor's first request from the protocol stream and
-treat it as the password (PLAN.md D106). A session on another machine, reached through a tunnel, is
+treat it as the password (PLAN.md D106). An editor that attaches while escalations are open
+gets a permission dialog for each of them. `calu acp` ends when the session's connection ends,
+so that the editor can start it again. A session on another machine, reached through a tunnel, is
 given its address and token instead:
 
 ```bash
@@ -688,7 +761,7 @@ session mode and, for an editor that supports the newer config options, as three
 
 ```bash
 calu config set auto_escalate.edits true      # every edit waits, even an approved one
-calu config set auto_escalate.commands true   # ... and every command
+calu config set auto_escalate.commands true   # ... and every command, commits included
 calu config set auto_escalate.subagents true  # ... and every subagent's result
 ```
 
@@ -734,7 +807,10 @@ calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.ya
 without an editor, and `calu rules add|list|remove|enable|disable` work on single rules.
 
 A running session picks up the checker instructions, the rules, the chat summary and
-`honesty.mode` within a moment, at its next step. Everything under `claude.` is different:
+`honesty.mode` within a moment, at its next step; it also reads the configuration again after
+every reconnect to the database and every 60 seconds. While the configuration cannot be read,
+the three `auto_escalate` switches are on, so every edit, command and subagent result waits
+for a human. Everything under `claude.` is different:
 Claude Code reads its model, its effort and its permission mode when the session starts, so
 those apply to the next `calu run` (or the next `/start` of an idle session).
 
@@ -757,6 +833,12 @@ not.
 `uv tool install` installs the wheel, and `calu doctor` reports what is still missing; a
 single-file binary can be built with `scripts/build-binary.sh` (70 MiB, no Python needed to run
 it) but is not published yet.
+
+An existing installation gets new schema versions with `calu db migrate` (`calu setup` applies
+them too). **Stop the running sessions first**: migration 0025 changes how a session proves its
+identity to the database, and a session that runs across it loses access to its rows and stops.
+`calu setup` also renews the session login on every run, so a session that is still running
+ends at its next reconnect to the database.
 
 Every setting with its type, its default and what it does:
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).

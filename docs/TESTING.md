@@ -238,7 +238,7 @@ escalation resolved from the database alone.
    `calu sessions` and `calu escalations` must run without a prompt, `calu credential list`
    must mark it "file mode only", and `calu doctor` must report it -- as a note for `operator`,
    as a problem if `admin` or `session` is stored that way. Verified by hand on 2026-11-10.
-<<<<<<< HEAD
+   `calu run` with a `session` entry stored that way must refuse to start.
 15. Revoking a token that is in use: attach with the address and the printed token
    (`calu attach ws://... --token=...`), then `calu token revoke <id>` for that row. Within
    about fifteen seconds, or at the next thing typed, the attached terminal must print
@@ -251,26 +251,23 @@ escalation resolved from the database alone.
    session continue. Then end the `calu run` process while a prompt is open in the editor: the
    prompt must end with a line that says the connection ended, and the agent process must
    exit, so that the editor offers to restart it.
-=======
-   `calu run` with a `session` entry stored that way must refuse to start.
-15. A database restart under a running session: start `calu run --batch -p "..."` with a prompt
+17. A database restart under a running session: start `calu run --batch -p "..."` with a prompt
    that takes a few minutes, then `docker compose restart caludb`. The session must print that
    the database connection is lost and, once the server answers, that it is back; its steps
    wait meanwhile and none is missing on the session page of `calu web` afterwards. `calu sessions`
    must not show it as SILENT once it is back. The automated tests end the connections with
    `pg_terminate_backend`; only this check has the server really away for a while.
-16. The project of a directory: `calu project add . --name demo`, then `calu run` in that
+18. The project of a directory: `calu project add . --name demo`, then `calu run` in that
    directory and in a subdirectory must print `[project] demo (registered for this directory)`;
    `calu run --project demoo` must refuse to start and list the registered projects; `calu run`
    in an unregistered directory must print `[project] none`.
->>>>>>> fix/db-lifecycle
-17. A sandbox entry in a settings file: put `{"sandbox": {"excludedCommands": ["make"]}}` into
+19. A sandbox entry in a settings file: put `{"sandbox": {"excludedCommands": ["make"]}}` into
    the project's `.claude/settings.local.json` and start `calu run` there. The start must be
    refused with a message that names the file and the entry. Remove the file, start a session
    with a prompt that runs a slow command and then a second one, and put the file back while
    the first command runs: the second command must wait as an escalation that names the file.
    `calu doctor <directory>` must name the entry too.
-18. The permission mode: `calu run` with `claude.permission_mode` unset on a machine whose
+20. The permission mode: `calu run` with `claude.permission_mode` unset on a machine whose
    Claude Code settings do not set `permissions.defaultMode` must print, among the start-up
    warnings, that auto mode's classifier is NOT active; with `calu config set
    claude.permission_mode auto` the session must report the mode "auto" when it starts.

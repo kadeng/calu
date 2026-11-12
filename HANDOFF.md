@@ -1,7 +1,8 @@
 # Handoff
 
-State on 2026-11-09, end of the third implementation session. Read this, then `AGENTS.md`,
-`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D30, open questions §11, phases §12).
+State on 2026-11-12, after the review of the whole code base and its fixes (D183-D191). Read
+this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D191, open questions §11,
+phases §12).
 
 ## Instructions from the owner
 
@@ -64,7 +65,7 @@ there.
   `calu.configdoc`; `tests/unit/test_configdoc.py` fails when the file and the model
   disagree, or a field has no docstring), `docs/TESTING.md` for the four layers and the
   manual checklist, `PLAN.md` for the decisions, `AGENTS.md` for the rules.
-- **CLI** (`src/calu/cli.py`), 20 commands: `db up|down|migrate`, `setup`,
+- **CLI** (`src/calu/cli.py`), 21 commands: `db up|down|migrate`, `setup`,
   `credential list|set|remove|new`, `run`, `attach`, `acp`, `web`, `protocol`, `sessions`,
   `escalations`, `escalation`, `resolve`, `token`, `summary`, `doctor`, `evals`, `project`,
   `config get|set|unset|add|remove`, `checker`, `rules`. Passwords via getpass, or one line
@@ -73,21 +74,30 @@ there.
   configuration needs `admin`. Every `calu ...` line in the documentation is parsed by a test
   (`tests/unit/test_documented_commands.py`), and every command is documented.
 - **`calu run [DIR]`** (`src/calu/run.py`): password → decrypt the `session` credential → two
-  connections (queries, notifications) → wipe the credential → load the settings → create the
-  `sessions` row through `calu_start_session` and take it over with `calu.session_id` (D49) →
-  start Claude Code → serve the protocol and print the address and a client token. `-p/--prompt`, `--batch` (ends when Claude is done **and** no client is attached),
+  connections (queries, notifications) → wipe the password, the derived key and the decrypted
+  buffer; the connection string stays in the process (`calu.db.ConnectionSource`) for
+  reconnects, and the process clears its dumpable flag (D187) → find the project of the
+  directory, or fail on an unknown `--project` (D188) → load the settings → create the
+  `sessions` row through `calu_start_session` and take it over with `calu.session_id` and a
+  session key (D49, migration 0025) →
+  start Claude Code → serve the protocol and print the address and a client token. A lost
+  database connection is reopened with backoff while the steps wait; a login the server
+  refuses for good stops the session. A closed stdin does not stop a session that has work. `-p/--prompt`, `--batch` (ends when Claude is done **and** no client is attached),
   `--resume`, `--model`, `--effort`, `--project`, `--thinking`. Reloads the configuration on
   `config_changed`; continues at once on `escalation_resolved`.
-- **A heartbeat** (migration 0016, D56): `sessions.last_seen`, stamped every
-  `clock.check_interval_s` seconds by `Session.beat`. `herd.SessionRow.stale` is silence beyond
+- **A heartbeat** (migration 0016, D56): `sessions.last_seen`, stamped every 30 s
+  (`herd.HEARTBEAT_S`, D187) by `Session.beat`. `herd.SessionRow.stale` is silence beyond
   180 s for a session that has not ended; `calu sessions` marks it "SILENT for N min" and the
   fleet page groups it as "Gone (no heartbeat)", out of "Needs you". The decision path says
   it too: `calu escalations`, `calu escalation <id>` and the web pages mark an escalation
   nobody is waiting for -- an answer is recorded, the step does not run -- and
   `calu resolve <id> cancel [note]` clears such an entry as a cancellation rather than as
-  a decision nothing acted on (D57).
-- **Isolation of a session's rows** (migration 0015, D49): the `calu_session` login reads and
-  writes only the rows that carry its own session id, with three owner-side functions for what
+  a decision nothing acted on (D57). A session that ends closes its own open escalations, and
+  the listings close those of a session that ended, whose process is gone on the listing host,
+  or that was silent for 24 h (`herd.close_gone`).
+- **Isolation of a session's rows** (migrations 0015, 0025, 0026; D49, D187): the
+  `calu_session` login reads and writes only the rows of the session whose key its connection
+  holds (the database stores the key's hash), with three owner-side functions for what
   a policy cannot do (`calu_start_session`, `calu_recent_sessions`, `calu_conversation_sessions`
   plus `calu_same_conversation` for a resumed or forked conversation). The owner is unaffected;
   `calu_operator` reads everything.
@@ -101,12 +111,19 @@ there.
 - **Four decisions** (D21): PASS (no objection; Claude Code's own approval decides), ESCALATE,
   ALLOW (run it whatever the harness says), DENY. PASS is the normal answer; the allow lists and
   the read-only tool routes produce PASS. calu does **not** set the permission mode (D5
-  revised): `claude.permission_mode` is None by default, Claude Code's default is auto, and the
-  hook follows the mode it is actually given.
-- **Checker tools** (D22, D25, `checkers/tools.py`): `read_file(path, start_line, end_line)`,
-  `find_files(pattern)`, `grep_files(pattern, path_glob)`, on Pydantic AI's workspace API
-  (`LocalWorkspace(read_only=True, authority="none")`), bounded by the read deny lists and by
-  size. Pydantic AI ships no file tools itself; a language server would be the next tool here.
+  revised): `claude.permission_mode` is None by default, and the hook follows the mode it is
+  actually given. Measured (D191): a headless start is in the mode "default" unless
+  `claude.permission_mode` or Claude Code's `defaultMode` says "auto", and a PASS is then the
+  only approval; with `claude.require_auto_mode` such a step waits for a human. The start line
+  and `calu doctor` name the mode. Whether calu sets "auto" itself is Q22.
+- **Checker tools** (D22, D185, `checkers/tools.py`): `read_file(path, start_line, end_line)`,
+  `find_files(pattern)`, `grep_files(pattern, path_glob)`, confined by calu itself
+  (`CodeTools.confine`: relative paths without `..` that resolve inside the project), bounded
+  by the read deny lists, 2 MB per file and 10 s per search. A language server would be the
+  next tool here.
+- **What a checker reads** (D185): text from Claude, a tool or a file is fenced data; project
+  files such as AGENTS.md are labelled untrusted repository text; a step or diff cut at 60,000
+  characters turns an approval into an escalation.
 - **What a command wrote** (D31, `src/calu/changes.py`, **off by default**): with
   `changes.snapshot` on, the session snapshots the project directory before and after every step
   the command checker judges, using git plumbing in a git directory of its own under
@@ -122,8 +139,9 @@ there.
   (also off by default), a `PostToolUse` matcher for Bash calls `ToolGate.review_write_set`
   while Claude waits: the changeset checker reads the patch, a DENY reverts the change and tells
   Claude what was undone and why — or, when the revert does not apply because the files moved
-  on, that it was **not** undone and Claude has to fix it itself. An ESCALATE asks a human, and
-  the review records a `checker_runs` row like every other check. Verified against the real CLI
+  on, that it was **not** undone and Claude has to fix it itself. An ESCALATE asks a human;
+  only a decision reverts, so a stop or a timeout leaves the files and tells Claude that nobody
+  decided (D186). The review records a `checker_runs` row like every other check. Verified against the real CLI
   (`spikes/RESULTS.md`, "PostToolUse for Bash").
 - **Times and the clock** (D32, `src/calu/clock.py`): a session keeps the start and end time of
   its recent steps (`Session.step_times`, the last 500) and gives the checkers two more
@@ -139,9 +157,14 @@ there.
   only logged, because a first time-server sync jumps forward. An idle session has no next step,
   so the jump reaches the clients as a log event at once and escalates when Claude acts again.
   No live checker model has used the two tools yet.
-- **Changeset checker** (D26, `checkers/changeset.py`): a Bash call that creates a `git commit`
-  goes to `Route.CHANGESET`; calu collects the diff (`--cached`, against HEAD for `-a`, against
-  `HEAD~1` for `--amend`) and gives it to that checker with the command and its message. A DENY
+- **Changeset checker** (D184, replaces D26's routing; `checkers/changeset.py`): a shell line
+  with a commit stays on the command route and is judged by the command checkers. For a line
+  that is one plain `git commit`, calu also collects the diff (`--cached`, against HEAD for
+  `-a`, against `HEAD~1` for `--amend`; read without the repository's, the user's or the
+  system's git configuration) and gives it to the changeset checkers; the most restrictive
+  verdict wins. Any other line with a commit is denied without a model call, with the
+  instruction to run the rest first and `git commit` alone. A diff calu cannot read is
+  escalated, or denied with "stage first" where staging makes it readable. A DENY
   stops the commit; the escalation context carries the changeset.
 - **Store** (`src/calu/store/`): `ConfigStore` (configuration, checker definitions, rules;
   reloads on `config_changed`), `DatabaseSessionStore` (session, steps, checker runs, turns,
@@ -156,12 +179,18 @@ there.
   calu's business.
 - **Bus and protocol** (phase 4): `calu.bus` numbers every event and keeps the last 5000 for
   replay; `calu.protocol.server` serves JSON-RPC over WebSocket to several clients (one token
-  per session, `calu.tokens`); `calu.protocol.client`; `calu attach [ADDRESS --token=T]` (no arguments finds the session of this directory and
+  per session, `calu.tokens`), closes a connection whose token was revoked (close code 4001)
+  or whose client fell more than 1000 events behind (4002, the client reconnects with replay),
+  and finishes a changing request even if its client disconnects (D189); `calu.protocol.client`; `calu attach [ADDRESS --token=T]` (no arguments finds the session of this directory and
   mints its own token, D105) with
   `/start /stop /interrupt /allow /deny /inject /to /comment /why /checkers /state /context
   /sessions /history /shutdown`. `calu protocol [--out FILE]` writes the JSON Schema.
-- **The web interface** (phase 6, `src/calu/web/`, the optional `web` extra): `calu web` serves
-  the loopback interface only, behind the token it prints at start (D161). The fleet page groups sessions as every such
+- **The web interface** (phase 6, `src/calu/web/`, the optional `web` extra): `calu web` binds
+  the loopback interface and answers only as `calu.localhost`. The token it prints at start is
+  exchanged for a session cookie and a key the page keeps; reading needs the cookie, every
+  change needs both (D190, replaces the cookie of D161). Every response carries a
+  Content-Security-Policy, and the server reconnects to the database and says so on its pages
+  while it is away. The fleet page groups sessions as every such
   tool does and leads with the ones that need a human (Needs you / Working / Idle / Ended), with
   a filter. A session page shows its history at four levels of detail (the narrated summary a
   checker reads, compact, detailed, full), its subagents, and ready-to-run connect commands with
@@ -202,8 +231,9 @@ there.
   editors can attach at once. Implemented: `initialize`, `session/new` (checks the editor's `cwd`
   against the session's directory), `session/load` with the replay the protocol requires,
   `session/prompt` (waits for `turn.result`), `session/cancel`, `session/close`, the
-  `session/update` stream and `session/request_permission` for escalations, whose answer becomes
-  an `escalation.decide`. "Always" is answered like "once" and recorded in the note, because a
+  `session/update` stream and `session/request_permission` for escalations (also for those
+  already open when the editor attaches, D189), whose answer becomes
+  an `escalation.decide`. `calu acp` ends when the session's connection ends. "Always" is answered like "once" and recorded in the note, because a
   rule row needs the admin credential. The editor's `fs/*` and `terminal/*` capabilities stay
   unused and its `mcpServers` are not forwarded, or tool calls would route around the checkers
   and the sandbox. Two details worth keeping in mind when changing it: a `tool_call_update`
@@ -227,6 +257,10 @@ there.
   session, which records a real resolution with `calu_client_decision` — scoped to that session,
   requiring the hash of one of its client tokens (which the role cannot read back), recorded as
   `resolved_by = 'client:<name>'`.
+- **Other tool calls wait while an escalation is open** (D186): a new tool call that needs a
+  check waits up to 300 s while an escalation of the session is open or being opened; an
+  approval still held then becomes an escalation. Deciding one step has 420 s, one checker call
+  300 s, inside the PreToolUse hook's 900 s. A question of the agent holds nothing.
 - **Escalation timeout** (D27): `escalation_timeout_s` (default 8 h, 0 = no limit). On the
   timeout the step is denied, the row is cancelled with the reason, and the session stops;
   Claude's session id is in the database from the start of the session, so
@@ -239,7 +273,8 @@ there.
   older than the unfolded turns. An empty text is refused, and the session re-reads the summary
   on the `config_changed` notification (`Session.reload_summary`), so a correction reaches the
   next check.
-- **Configuration commands** (`src/calu/admin.py`): `calu project add|list`, `calu config
+- **Configuration commands** (`src/calu/admin.py`): `calu project add|list` (`add DIR` records
+  the directory and the host, which is how `calu run` finds the project, D188), `calu config
   get|set|unset KEY` (dotted keys, values as JSON, validated against `Config` before the write),
   `calu checker list|show|set|edit`, `calu rules list|add|edit|remove|enable|disable`. `edit`
   opens the text in `$EDITOR` (`$VISUAL` first, then nano/vim/vi), stores it on close, says
@@ -253,7 +288,8 @@ there.
 - **Checker keys** (D17, D37): read from `~/.config/calu/.env` and calu's environment, and
   **every** provider key calu knows is blanked for Claude Code (not only the ones that are set),
   so the checkers can run on an Anthropic API key (an Ultra subscription includes API credits)
-  while the main chat keeps the subscription. Measured with the real CLI, and
+  while the main chat keeps the subscription. `hidden_env` names further variables to blank
+  (D191). Measured with the real CLI, and
   `tests/unit/test_credentials.py` holds the two tests for it. The one link not verified here is
   a checker actually billing the Anthropic API, which needs the owner's key.
   Bedrock needs no key here, and `claude.use_bedrock` is the separate switch for Claude itself.
@@ -270,19 +306,28 @@ there.
   could use, the socket and snapshot directories, optionally a workspace, and with `--db` that
   the database answers and whether its schema is current. It exits 1 when something a session
   cannot run without is missing, and names it.
-- **Sandbox** (D15): `SandboxConfig` passed to Claude Code as a `--settings` document;
+- **Sandbox** (D15, D191): `SandboxConfig` passed to Claude Code as a `--settings` document
+  that holds every sandbox key calu knows and always denies reads of calu's own directories;
   `calu.preflight` warns about missing `bwrap`/`socat`, a disabled sandbox and missing checker
-  API keys at every start.
+  API keys at every start. With `claude.sandbox.fail_if_unavailable` (default) a session does
+  not start while a loaded Claude Code settings file holds a sandbox entry beyond calu's
+  configuration, and a Bash or Monitor step waits for a human if one appears later.
 - **Client tokens** (D30, migration 0009): a session accepts every non-revoked token of its own
   session, not only the one it printed. `calu token mint SESSION [--label]` prints a token once,
   `calu token list [SESSION]` shows labels, address and last use but never a token, and
   `calu token revoke ID` ends one client's access. The session presents a hash and
   `calu_client_token_ok` confirms it; the role cannot read the hashes and no longer has UPDATE on
-  the table, so it cannot un-revoke one. The printed token is still checked first and without the
-  database. Verified in the tests and by hand against a real PostgreSQL.
+  the table, so it cannot un-revoke one. The database is asked for every token, the printed one
+  included, at `initialize`, before every changing request and every 15 s for open
+  connections, so a revocation closes a connected client (D189, corrects D30); the printed
+  token is accepted from memory only while the database gives no answer.
+  Verified in the tests and by hand against a real PostgreSQL.
 - **Migrations**: 0001 initial · 0002 turn records · 0003 comments · 0004 client tokens ·
   0005 the PASS decision · 0006 the changeset route · 0007 `calu_client_decision` ·
-  0008 `sessions.address` and the `agents` table · 0009 minted client tokens · 0010 write sets · 0011 the `answered` state · 0012 fork points.
+  0008 `sessions.address` and the `agents` table · 0009 minted client tokens · 0010 write sets · 0011 the `answered` state · 0012 fork points
+  · ... · 0025 session keys and the directory of a project · 0026 row-level rules per command.
+  Sessions must be stopped before 0025 is applied: a session started before it has no key and
+  loses access to its rows.
 
 ### Verified by hand with the real CLI
 
@@ -544,7 +589,10 @@ work for a developer without the owner. In short:
 
 Beyond the plan, 2026-11-12 hardened the rules engine (D145-D177, five review rounds); its
 standing conclusion is in D175: the rules are a best-effort layer, the sandbox -- required by
-default -- is the boundary.
+default -- is the boundary. A review of the whole code base against the requirements followed
+(D183), with two rounds of fixes recorded in D184 to D191: commit handling, what a checker
+reads, waiting behind an open escalation, database loss, projects by directory, client
+tokens, the web login and the pinned sandbox settings.
 
 
 1. **Try `calu acp` with a real editor** (Zed or JetBrains Air). Its whole configuration is
@@ -614,6 +662,10 @@ default -- is the boundary.
 
 Everything else is either built or recommended with its reasons. These need a person:
 
+- **Q22 — should calu put Claude Code into auto mode itself?** A headless start is in the mode
+  "default" unless `claude.permission_mode` or Claude Code's `defaultMode` says "auto" (D191),
+  and a PASS of the checkers is then the only approval. Options: calu sets "auto" by default;
+  `claude.require_auto_mode` defaults to on; or as now, off by default and stated at start.
 - **Q5 — the network default of a new project** (D45, implemented as a proposal): "proxy" with a
   starter allow list (package registries, git over HTTPS, OS packages) instead of "full". One
   flag overrules it (`calu project add --network full`) and existing projects are untouched.
@@ -649,7 +701,10 @@ Everything else is either built or recommended with its reasons. These need a pe
   judgements on the same edit. A route carries a list (D81), so both shapes are configuration
   rather than code; what calu **ships** is the owner's call, with `calu evals` as the evidence.
 - **Q19 — answered 2026-11-12**: marks are transient, kept in the session's memory and
-  persisted nowhere (D180); the stored register, `calu honesty` and `honesty.scope` are gone.
+  persisted nowhere (D180); the stored register, the old `calu honesty list|clear` and
+  `honesty.scope` are gone (`calu honesty show|edit|reset` now edits the honesty rules, D181).
+  The honesty mechanism itself is under redesign: a review found that it cannot hold for
+  changes made by a command or at scale, and a proposal is with the owner.
 - **The Mistral key on the development machine expired on 2026-11-08** (`calu doctor --keys`
   says so). Mistral is last in the automatic model order (D129), so it only matters where no
   other key is set -- but `mistral:mistral-medium-latest` is unverified until a valid key lists it.
