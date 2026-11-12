@@ -122,7 +122,7 @@ async def test_run_evals_uses_the_stored_checkers_and_reports_the_exit_code(
         # Each ran with its configured request budget: the changeset checker gets more,
         # because judging a whole change means reading files around the diff (D75).
         assert budgets["command"] == 5
-        assert budgets["changeset"] == 8
+        assert budgets["changeset"] == 40
         # And with its configured effort, so the measured checker is the one a session runs
         # (D135); nothing sets one here, so each is the provider's own default.
         assert set(efforts) == {"command", "edit", "changeset", "subagent-result"}

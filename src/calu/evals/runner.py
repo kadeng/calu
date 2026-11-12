@@ -39,9 +39,10 @@ from calu.checkers.result_checker import (
     ResultVerdict,
     SubagentResult,
 )
-from calu.checkers.rules import RULE_LISTS, Rules
+from calu.checkers.rules import Rules
 from calu.evals.cases import CheckerName, EvalCase
 from calu.models import resolve_model
+from calu.setup import RECOMMENDED_LISTS
 
 APPROVALS = (Decision.PASS, Decision.ALLOW)
 """Decisions that let the step run; a case that expects one of them accepts the other."""
@@ -123,7 +124,7 @@ def shipped_rules() -> Rules:
     """
     texts: dict[str, str] = {}
     base = resources.files("calu.defaults").joinpath("rules")
-    for name in RULE_LISTS:
+    for name in RECOMMENDED_LISTS:
         texts[name] = base.joinpath(f"{name}.txt").read_text(encoding="utf-8")
     return Rules.from_texts(Path(EVAL_CWD), texts)
 

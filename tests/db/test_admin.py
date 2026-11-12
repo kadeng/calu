@@ -437,3 +437,29 @@ async def test_setup_replaces_an_unedited_old_default_but_keeps_an_edited_text(d
         assert await admin.instructions(db, "command") == "Our own command rules."
     finally:
         await conn.close()
+
+
+async def test_the_rules_old_versions_seeded_are_removed_and_written_ones_stay(db_url: str) -> None:
+    """D198: rules are overrides the owner writes; the ones setup used to seed are removed."""
+    from calu.db import migrate, migrations
+
+    db, conn = await prepared(db_url)
+    try:
+        await admin.add_project(db, "demo")
+        await conn.execute(
+            "INSERT INTO rules (list, pattern) VALUES"
+            " ('command-allow', '^cd( |$)'), ('command-deny', '^(sudo|su|doas)( |$)'),"
+            " ('command-deny', '^deploy( |$)')"
+        )
+        await admin.replace_rule_list(db, "command-deny", "^(sudo|su|doas)( |$)\n", "demo")
+        # Run the migration again, as it meets a database that older versions had seeded.
+        seeded = next(m for m in migrations() if m.name.startswith("0028"))
+        await conn.execute("DELETE FROM schema_migrations WHERE version = %s", (seeded.version,))
+        assert [m.version for m in await migrate(conn)] == [seeded.version]
+        kept = [(r.scope, r.list, r.pattern) for r in await admin.rules(db, "demo")]
+        assert kept == [
+            ("global", "command-deny", "^deploy( |$)"),
+            ("demo", "command-deny", "^(sudo|su|doas)( |$)"),
+        ]
+    finally:
+        await conn.close()
