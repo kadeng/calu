@@ -181,65 +181,36 @@ definition disabled.
     calu checker edit honesty               # change them, in $EDITOR
 
 `track` is how to judge the checker on your own project before trusting it to block anything:
-the marks appear, nothing stops. The register belongs to the project, not to one session, so
-debt that one session leaves behind is still there for the next one, and a session with open
-marks says so when it starts.
+the marks appear, nothing stops.
 
-    calu honesty list                  # what is recorded as dishonest, and why
-    calu honesty list --all            # ... including what has been cleared again
-    calu honesty list --project demo   # only one project's
-    calu honesty clear 12              # the override when a mark is wrong
+**The marks are transient.** Dirty and clean describe the code a session is working on right
+now, so the register lives in the session's memory and is stored nowhere: a session starts
+with an empty register, and its marks end with it. You see them where you watch the session --
+`calu attach` prints every change of the register, the web interface's live view lists the open
+marks, and an ACP editor shows them -- and you clear one there when the checker is wrong:
 
-`clear` keeps the row and records that a person closed it, so the register still shows what
-happened. The judgement needs a capable checker model; give this checker one of its own with
-`calu checker set honesty --model ...`.
+    /clear-mark 3                      # in calu attach: the override for a wrong mark
+
+or with the Clear button next to the mark in the live view. The judgement needs a capable
+checker model; give this checker one of its own with `calu checker set honesty --model ...`.
 
 ### Judging the checker before you let it block
 
 `track` records without blocking, which is what makes the decision measurable instead of a
-guess. Two commands say whether the checker has earned `enforce`:
+guess. Watch a few sessions in `track` mode: a mark the checker **clears itself** is one it
+opened and closed correctly -- the code was dishonest for a few steps and then was not; a mark
+**you** have to clear is a refusal nobody agreed with, which under `enforce` would have stopped
+work for no reason. Mostly self-cleared marks: switch `enforce` on. A steady stream you clear
+by hand: the checker's judgement does not match yours yet -- change its instructions
+(`calu checker edit honesty`) or give it a stronger model. `calu evals` measures a checker
+against the built-in cases, whose honesty cases say which marks a step should and should not
+produce.
 
-    calu honesty list --all     # every mark, who opened it, and how it ended
-    calu checker stats          # per checker: marks opened, cleared, overruled by a person
-
-Read the third number first. A mark the checker **cleared itself** is one it opened and closed
-correctly: the code was dishonest for a few steps and then was not. A mark a **person
-overruled** is a refusal nobody agreed with, which under `enforce` would have stopped work for
-no reason. So:
-
-- marks opened, almost all cleared by the checker, none overruled: switch `enforce` on.
-- a steady stream of overruled marks: the checker's judgement does not match yours yet. Change
-  its instructions (`calu checker edit honesty`) or give it a stronger model, and watch the
-  numbers again -- not the other way round.
-- no marks at all after a week of real work: either the codebase is honest, which is worth
-  knowing, or the checker is not running (`calu checker list` shows whether it is enabled).
-
-Every mark you overrule also becomes an evaluation case, so the disagreements accumulate into a
-measurement instead of being lost:
-
-    calu evals --from-db        # the built-in cases plus what your own sessions produced
-
-An overruled mark becomes a case that expects the checker to record **nothing** for that step,
-and a checker that marks it again is counted as an "unwanted mark". That is the honesty
-equivalent of a critical miss, and it comes from your project rather than from examples
-somebody invented.
-
-A mark can also go stale, and the listing says so: `<stale: the file is gone>` when nothing
-can run that code any more, and `<stale: made on feature/x, now on main>` when the mark comes
-from another branch, where the file may be a different file. Neither is acted on -- an open
-mark still blocks -- because clearing somebody's mark on a guess is worse than naming it.
-If marks should follow branches instead, `calu config set honesty.scope branch` makes a mark
-apply only on the branch it was made on; on any other branch it is listed but blocks nothing. Both
-are checked against the machine the command runs on, so running it elsewhere flags nothing
-rather than flagging the wrong thing.
-
-`calu honesty list --all` names the checker that opened each mark, which matters once more
-than one checker writes to the register -- honesty, security and an over-engineering checker can
-all run on the same edit (see the note on several checkers per route in PLAN.md §13.5).
 A checker may mark a file other than the one the step edits, because an edit to
-`src/parser.py` can be what makes `README.md` wrong. Such a mark is listed with
-`<not a file of its step>` (and the web interface tags it), so you can see which marks are a
-checker's judgement about code it did not see being changed. It blocks like any other mark.
+`src/parser.py` can be what makes `README.md` wrong, and a command can change many files at
+once -- but that should be the exception. Such a mark is tagged `<not a file of its step>`, so
+you can see which marks are a checker's judgement about code it did not see being changed. It
+blocks like any other mark.
 
 ## calu does not replace Claude Code
 

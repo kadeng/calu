@@ -7,7 +7,6 @@ import anyio
 import pytest
 
 from calu.checkers import CheckDecision, CodeMark, Decision, Route, Step
-from calu.checkers.checker import Checker, CheckOutcome
 from calu.claude import FakeRunner
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
@@ -20,7 +19,6 @@ from calu.config import (
     ContextConfig,
     HonestyConfig,
 )
-from calu.honesty import blocking_marks
 from calu.protocol.messages import (
     AgentsUpdate,
     AutoEscalateChanged,
@@ -40,7 +38,6 @@ from calu.protocol.messages import (
 from calu.session import (
     Session,
     SessionError,
-    _Decided,  # the shape `_decide` returns, built directly for one test
     combine_decisions,
 )
 from calu.store.config import CheckerDefinition
@@ -1284,7 +1281,7 @@ async def test_the_honesty_register_blocks_running_dirty_code_but_not_editing_it
         version=1,
     )
     settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
-    session, rec, store = make_session(
+    session, rec, _store = make_session(
         tmp_path,
         [
             [
@@ -1310,7 +1307,7 @@ async def test_the_honesty_register_blocks_running_dirty_code_but_not_editing_it
         await session.stop()
 
     # The mark was recorded from the verdict.
-    (open_mark,) = [m for m in store.honesty_marks if m.open]
+    (open_mark,) = [m for m in session.register.marks if m.open]
     assert open_mark.label() == "src/parser.py:fields"
 
     checks = {c.tool_name: c for c in rec.of(CheckResult)}
@@ -1347,7 +1344,7 @@ async def test_tracking_honesty_records_without_blocking(tmp_path: Path):
         version=1,
     )
     settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
-    session, rec, store = make_session(
+    session, rec, _store = make_session(
         tmp_path,
         [
             [
@@ -1367,7 +1364,7 @@ async def test_tracking_honesty_records_without_blocking(tmp_path: Path):
         await rec.wait_for(TurnResult)
         await session.stop()
 
-    assert [m.label() for m in store.honesty_marks if m.open] == ["src/parser.py"]
+    assert [m.label() for m in session.register.marks if m.open] == ["src/parser.py"]
     checks = {c.tool_name: c for c in rec.of(CheckResult)}
     assert checks["Bash"].decision is not Decision.DENY, "track records, it does not block"
 
@@ -1423,114 +1420,6 @@ async def test_a_deny_rule_outranks_the_honesty_register(tmp_path: Path):
         await session.stop()
 
 
-async def test_a_cleared_mark_reaches_a_running_session(tmp_path: Path):
-    """D84: the override has to work on the session that is refusing, not only the next one.
-
-    `calu honesty clear` and the web interface close a mark for a person who disagrees with it.
-    A running session keeps the register in memory, so without re-reading it the session would
-    go on refusing the step and the override would be useless exactly when it is needed.
-    """
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
-    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
-    session, rec, store = make_session(tmp_path, [], settings=settings)
-    # As if a checker had recorded it earlier.
-    await store.apply_honesty_marks(
-        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")], [], None
-    )
-    session.honesty_marks = await store.open_honesty_marks()
-    step = Step(tool_name="Bash", tool_input={"command": "python src/parser.py"}, cwd=str(tmp_path))
-    assert blocking_marks(step, session.honesty_marks, tmp_path), "the step is refused now"
-
-    # The person clears it in the database; the session hears about it with the configuration.
-    mark_id = session.honesty_marks[0].id
-    await store.apply_honesty_marks(
-        [], [CodeMark(path="src/parser.py", symbol="fields", reason="cleared by hand")], None
-    )
-    await session.reload_register()
-
-    assert session.honesty_marks == [], "the running session dropped the cleared mark"
-    assert not blocking_marks(step, session.honesty_marks, tmp_path)
-    # Clients are told, so an editor or `calu attach` stops showing it as blocked.
-    update = rec.of(HonestyUpdate)[-1]
-    assert update.marks == [] and update.mode == "enforce"
-    assert mark_id not in {mark.id for mark in update.marks}
-
-    # Nothing is emitted when the register did not change, so a settings reload is quiet.
-    before = len(rec.of(HonestyUpdate))
-    await session.reload_register()
-    assert len(rec.of(HonestyUpdate)) == before
-
-
-async def test_a_failed_mark_write_still_leaves_the_session_with_the_marks_that_landed(
-    tmp_path: Path,
-):
-    """D111: the register has to be read back even when a write of the same step failed.
-
-    Two checkers of one route both record marks. The first write lands; the second fails. The
-    early return that used to follow left `self.honesty_marks` as it was, so the enforcement
-    layer did not know about the mark the first checker had just opened and let the very step
-    the register forbids through -- until some later step happened to produce marks and reload
-    it. The session now reads the register back anyway and says that marks of this step may be
-    missing.
-    """
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
-    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
-    session, rec, store = make_session(tmp_path, [], settings=settings)
-
-    def checker(name: str) -> Checker:
-        """A checker object; only its name is used here."""
-        return Checker(name=name, instructions="", model="test", workspace=tmp_path)
-
-    def outcome(mark: CodeMark) -> CheckOutcome:
-        """A verdict that records one dirty spot."""
-        return CheckOutcome(
-            decision=CheckDecision(
-                decision=Decision.PASS, reason="", step_summary="edited it", marks_dirty=[mark]
-            )
-        )
-
-    first = CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")
-    second = CodeMark(path="src/parser.py", symbol="rows", reason="the name says nothing")
-    decided = _Decided(
-        route=Route.EDIT,
-        decision=CheckDecision(decision=Decision.PASS, reason="", step_summary="edited it"),
-        source="checker",
-        runs=[(checker("honesty"), outcome(first)), (checker("security"), outcome(second))],
-    )
-
-    real = store.apply_honesty_marks
-    calls = 0
-
-    async def failing(*args, **kwargs):
-        """Let the first write through and fail the second."""
-        nonlocal calls
-        calls += 1
-        if calls > 1:
-            raise RuntimeError("the database went away")
-        return await real(*args, **kwargs)
-
-    store.apply_honesty_marks = failing  # type: ignore[method-assign]
-    step = Step(tool_name="Edit", tool_input={"file_path": "src/parser.py"}, cwd=str(tmp_path))
-    await session._apply_honesty(decided, 1, step)
-    store.apply_honesty_marks = real  # type: ignore[method-assign]
-
-    assert calls == 2, "it stops writing after the failure"
-    assert [mark.symbol for mark in session.honesty_marks] == ["fields"], (
-        "the mark that landed has to reach the running session, or it enforces nothing"
-    )
-    run = Step(tool_name="Bash", tool_input={"command": "python src/parser.py"}, cwd=str(tmp_path))
-    assert blocking_marks(run, session.honesty_marks, tmp_path), "and it blocks the step now"
-
-    said = [entry.message for entry in rec.of(Log)]
-    assert any("recording honesty marks failed" in message for message in said), said
-    assert any("the register may be missing marks of this step" in m for m in said), said
-    # The clean-mark line must not be printed after a failure: the clean marks of the checkers
-    # that were never reached were not offered to the register at all.
-    assert not any("matched nothing recorded" in message for message in said), said
-
-
 async def test_a_checker_cannot_mark_a_file_outside_the_project(tmp_path: Path):
     """D112: the filter has to be in the session's path, not only available to it.
 
@@ -1552,7 +1441,7 @@ async def test_a_checker_cannot_mark_a_file_outside_the_project(tmp_path: Path):
         version=1,
     )
     settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
-    session, rec, store = make_session(
+    session, rec, _store = make_session(
         tmp_path,
         [[{"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"}]],
         settings=settings,
@@ -1572,7 +1461,7 @@ async def test_a_checker_cannot_mark_a_file_outside_the_project(tmp_path: Path):
         await rec.wait_for(TurnResult)
         await session.stop()
 
-    assert [m.label() for m in store.honesty_marks if m.open] == ["src/parser.py:fields"], (
+    assert [m.label() for m in session.register.marks if m.open] == ["src/parser.py:fields"], (
         "only the mark inside the project may be recorded"
     )
     said = [entry.message for entry in rec.of(Log)]
@@ -1602,7 +1491,7 @@ async def test_a_mark_on_a_file_the_step_did_not_touch_says_so(tmp_path: Path):
         version=1,
     )
     settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
-    session, rec, store = make_session(
+    session, rec, _store = make_session(
         tmp_path,
         [[{"tool": "Write", "input": {"file_path": "src/parser.py"}, "result": "ok"}]],
         settings=settings,
@@ -1622,52 +1511,10 @@ async def test_a_mark_on_a_file_the_step_did_not_touch_says_so(tmp_path: Path):
         await rec.wait_for(TurnResult)
         await session.stop()
 
-    reach = {m.label(): m.beyond_step for m in store.honesty_marks if m.open}
+    reach = {m.label(): m.beyond_step for m in session.register.marks if m.open}
     assert reach == {"src/parser.py:fields": False, "README.md": True}
-    readme = next(m for m in store.honesty_marks if m.path == "README.md")
+    readme = next(m for m in session.register.marks if m.path == "README.md")
     assert "<not a file of its step>" in readme.line()
-
-
-@pytest.mark.parametrize(("scope", "blocked"), [("project", True), ("branch", False)])
-async def test_honesty_scope_decides_whether_a_mark_of_another_branch_blocks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str, blocked: bool
-):
-    """D142 (Q19 (a) as an option): with scope "branch" a mark only applies where it was made.
-
-    The default "project" keeps today's behaviour: a mark made on `feature/x` blocks running
-    the same path on `main`.
-    """
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "parser.py").write_text("def fields():\n    return []\n", encoding="utf-8")
-    settings = default_settings(
-        tmp_path,
-        Config(honesty=HonestyConfig(mode="enforce", scope=scope)),  # type: ignore[arg-type]
-    )
-    session, rec, store = make_session(
-        tmp_path,
-        [[{"tool": "Bash", "input": {"command": "python src/parser.py"}, "result": "ok"}]],
-        settings=settings,
-    )
-    await store.apply_honesty_marks(
-        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
-        [],
-        None,
-        "feature/x",
-    )
-
-    async def on_main() -> str:
-        return "main"
-
-    monkeypatch.setattr(session, "_git_branch", on_main)
-    async with anyio.create_task_group() as tg:
-        await session.start(tg)
-        await session.send_chat(ChatSendParams(text="go"))
-        await rec.wait_for(TurnResult)
-        await session.stop()
-
-    (check,) = [c for c in rec.of(CheckResult) if c.tool_name == "Bash"]
-    assert (check.decision is Decision.DENY) is blocked, check.reason
-    assert ("recorded as dishonest" in check.reason) is blocked
 
 
 async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_path: Path):
@@ -1681,22 +1528,21 @@ async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_p
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "parser.py").write_text("x = 1\n", encoding="utf-8")
     settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
-    session, rec, store = make_session(tmp_path, [], settings=settings)
-    await store.apply_honesty_marks(
-        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")], [], None
+    session, rec, _store = make_session(tmp_path, [], settings=settings)
+    session.register.apply(
+        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")], []
     )
-    await session.reload_register()
+    await session.announce_honesty()
     first = rec.of(HonestyUpdate)[-1]
     assert [info.reason for info in first.marks] == ["the docstring lies"]
     assert first.mode == "enforce"
 
     # Same mark, new reason: the id is unchanged, so an id comparison would stay silent.
-    await store.apply_honesty_marks(
+    session.register.apply(
         [CodeMark(path="src/parser.py", symbol="fields", reason="and the name says nothing")],
         [],
-        None,
     )
-    await session.reload_register()
+    await session.announce_honesty()
     assert [info.reason for info in rec.of(HonestyUpdate)[-1].marks] == [
         "and the name says nothing"
     ], "a refreshed reason is what Claude and the reader see; it has to be sent"
@@ -1706,13 +1552,13 @@ async def test_a_mode_switch_and_a_refreshed_reason_both_reach_the_clients(tmp_p
         update={"honesty": session.config.honesty.model_copy(update={"mode": "off"})}
     )
     before = len(rec.of(HonestyUpdate))
-    await session.reload_register()
+    await session.announce_honesty()
     after = rec.of(HonestyUpdate)
     assert len(after) == before + 1, "switching the mode off has to reach the clients"
     assert after[-1].mode == "off"
 
     # And it is sent once, not on every reload.
-    await session.reload_register()
+    await session.announce_honesty()
     assert len(rec.of(HonestyUpdate)) == before + 1
 
 
@@ -1789,45 +1635,21 @@ async def test_a_slow_rule_check_does_not_stop_the_event_loop(
     assert ticks >= 5, f"the loop kept running while the rules worked ({ticks} ticks)"
 
 
-@pytest.mark.parametrize(
-    ("branch", "command"),
-    [
-        ("main", "git checkout feature/x && python src/parser.py"),
-        ("HEAD", "python src/parser.py"),
-    ],
-)
-async def test_a_branch_switch_in_the_command_does_not_dodge_a_mark(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, branch: str, command: str
-):
-    """D168 (review): with scope "branch" the branch is read before the command runs, so
-    `git checkout A && python marked.py` ran a mark of A while on B, and a detached HEAD
-    dropped every branch's marks."""
-    (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "parser.py").write_text("def fields():\n    return []\n", encoding="utf-8")
-    settings = default_settings(
-        tmp_path,
-        Config(honesty=HonestyConfig(mode="enforce", scope="branch")),
-    )
-    session, rec, store = make_session(
-        tmp_path,
-        [[{"tool": "Bash", "input": {"command": command}, "result": "ok"}]],
-        settings=settings,
-    )
-    await store.apply_honesty_marks(
-        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
-        [],
-        None,
-        "feature/x",
-    )
+async def test_the_register_is_the_sessions_own_and_a_person_can_clear_a_mark(tmp_path: Path):
+    """D180 (the owner's Q19): marks are transient -- in the session's memory, persisted
+    nowhere; a new session starts empty, and `honesty.clear` is the override (D83)."""
+    settings = default_settings(tmp_path, Config(honesty=HonestyConfig(mode="enforce")))
+    session, rec, _store = make_session(tmp_path, [], settings=settings)
+    assert session.register.marks == [], "a session starts with an empty register"
+    session.register.apply([CodeMark(path="src/a.py", reason="the docstring lies")], [], "honesty")
+    (mark,) = session.honesty_marks
 
-    async def current() -> str:
-        return branch
+    closed = await session.clear_mark(mark.id, client="kai")
+    assert not closed.open and closed.closed_by == "kai (by hand)"
+    assert session.honesty_marks == []
+    assert rec.of(HonestyUpdate)[-1].marks == [], "every client hears that it is gone"
+    with pytest.raises(SessionError, match="no open honesty mark"):
+        await session.clear_mark(mark.id, client="kai")
 
-    monkeypatch.setattr(session, "_git_branch", current)
-    async with anyio.create_task_group() as tg:
-        await session.start(tg)
-        await session.send_chat(ChatSendParams(text="go"))
-        await rec.wait_for(TurnResult)
-        await session.stop()
-    (check,) = [c for c in rec.of(CheckResult) if c.tool_name == "Bash"]
-    assert check.decision is Decision.DENY, check.reason
+    other, _rec, _store2 = make_session(tmp_path, [], settings=settings)
+    assert other.register.marks == [], "another session has its own register"

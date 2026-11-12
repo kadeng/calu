@@ -140,6 +140,16 @@ class AutoEscalateSetParams(AutoEscalate):
     """`auto_escalate.set`: replace the auto-escalation settings of the session. Result: `{}`."""
 
 
+class HonestyClearParams(BaseModel):
+    """`honesty.clear`: close one open mark of the session's register by hand (D83, D180).
+
+    The register is in memory (D180), so this is how a person overrides a checker's mark on a
+    running session. Result: `{}`; an id that names no open mark is an error.
+    """
+
+    mark_id: int
+
+
 class EventsSubscribeParams(BaseModel):
     """`events.subscribe`: receive events from now on, with the ones since `after_seq`.
 
@@ -404,6 +414,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "escalation.context": EscalationContextParams,
     "checkers.get": EmptyParams,
     "auto_escalate.set": AutoEscalateSetParams,
+    "honesty.clear": HonestyClearParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,
     "shutdown": EmptyParams,

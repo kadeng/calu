@@ -38,7 +38,7 @@ in `calu/` only.
 | 5 Sandboxing | Built: the settings (D15), the per-project network policy (D39) with a proposed default for new projects (D45, Q5 asks the owner to confirm it), `calu evals`. Untested: what `weaker_nested_sandbox` changes, which needs a logged-in `claude` inside a container (the rest of Q1 is measured). |
 | 6 Herd management | Done: the commands, the web interface, the triage queue, the badge and the jump palette |
 | 7 Third-party UIs, packaging | Done except what needs a real editor: `calu acp` with ACP's session modes and config options (D42), the wheel as the shipping format with the single-file binary buildable beside it (D41, `scripts/build-binary.sh`). Driven as a real process over real pipes for the handshake, a prompt, a denied step and `session/load`'s replay (`tests/unit/test_acp_process.py`) |
-| 8 Honesty enforcement and checker families | Done (the owner's brief of 2026-11-10, §13): several checkers on one route run in parallel with most-restrictive-wins (D81), the `honesty_marks` register with its three modes and the deterministic layer that refuses to run dishonest code (D82, D83), `calu honesty list\|clear` and the marks on the web interface (D84), the checker's own instructions shipped and seeded off (D85), and the register carried to every front end (D86). What is **not** done is the judgement: it needs a capable checker model (Q17), and whether honesty, security and over-engineering are one agent or several is Q18 |
+| 8 Honesty enforcement and checker families | Done (the owner's brief of 2026-11-10, §13): several checkers on one route run in parallel with most-restrictive-wins (D81), the honesty register with its three modes and the deterministic layer that refuses to run dishonest code (D82, D83) -- since D180 in the session's memory, cleared with `/clear-mark` or the live view's Clear button, the checker's own instructions shipped and seeded off (D85), and the register carried to every front end (D86). What is **not** done is the judgement: it needs a capable checker model (Q17), and whether honesty, security and over-engineering are one agent or several is Q18 |
 
 All eight phases are **implemented**; what is left is listed under "Next steps" and "Open
 questions" and is either the owner's decision, a proposal of mine to confirm, or something this
@@ -48,7 +48,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **983 tests pass** (plus 11 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 239 commits, ~28.5k lines of Python in `src` (~31.5k with the SQL, templates and
-default instructions), ~16.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
+default instructions), ~16.5k of tests, 24 migrations, 20 CLI commands, 17 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
@@ -603,10 +603,11 @@ default -- is the boundary.
 
 7. **Honesty enforcement is built and switched off** (§13, D81-D86). What is left needs a
    person rather than more code: a capable checker model for it (Q17), the choice between one
-   combined checker and several (Q18), and what a mark should mean after a branch switch (Q19).
-   To try it on a real project: `calu checker set honesty --enable` and
-   `calu config set honesty.mode track`, then read `calu honesty list` for a few days before
-   switching the mode to `enforce`.
+   combined checker and several (Q18). Q19 and Q20 are answered (D180: marks are transient, in
+   the session's memory; cross-file marks allowed as the exception). To try it on a real
+   project: `calu checker set honesty --enable` and `calu config set honesty.mode track`, then
+   watch the marks in `calu attach` or the live view for a few days before switching the mode
+   to `enforce`.
 
 ## What the owner still has to decide (`PLAN.md` §11)
 
@@ -646,23 +647,16 @@ Everything else is either built or recommended with its reasons. These need a pe
 - **Q18 — one checker or several**: honesty, security and over-engineering are different
   judgements on the same edit. A route carries a list (D81), so both shapes are configuration
   rather than code; what calu **ships** is the owner's call, with `calu evals` as the evidence.
-- **Q19 — what a dirty mark means after a branch switch**: the register records the branch so
-  the question can be answered without a migration. My recommendation (a) is now an option,
-  `calu config set honesty.scope branch` (D142); the default stays `project`, today's
-  behaviour, until you choose.
+- **Q19 — answered 2026-11-12**: marks are transient, kept in the session's memory and
+  persisted nowhere (D180); the stored register, `calu honesty` and `honesty.scope` are gone.
 - **The Mistral key on the development machine expired on 2026-11-08** (`calu doctor --keys`
   says so). Mistral is last in the automatic model order (D129), so it only matters where no
   other key is set -- but `mistral:mistral-medium-latest` is unverified until a valid key lists it.
 - **The Bedrock path of D129 has never run against a real account**: this machine has no AWS
   credentials. With an account: `calu config models auto`, then `calu evals` on a few cases --
   and whether medium thinking can be switched on there (`calu.models.resolve_model`).
-- **Q20 — may a checker mark a file the step did not touch?** The paths are validated now
-  (D112), and the open part is how far a mark may reach from the step that produced it: any
-  existing project file (as built), only the step's own files (the owner's suggestion, which
-  loses cross-file dishonesty), or any file with "not from this step" shown in the register.
-  The visible half of the third option is built (D141: `<not a file of its step>` in
-  `calu honesty list`, a tag on the web pages, `beyond_step` in the protocol), because it
-  restricts nothing; whether such a mark should also **block** less is still yours to decide.
+- **Q20 — answered 2026-11-12**: yes, a checker may mark another file, as the exception;
+  such a mark is tagged `<not a file of its step>` (D141) and blocks like any other.
 - **Routes for the tools Claude Code 2.1.319 added** (D154): a session names them at start
   (CronCreate, CronDelete, CronList, EnterWorktree, ListAgents,
   PushNotification, ReportFindings, ScheduleWakeup, TaskStop, Workflow); all of them go to the

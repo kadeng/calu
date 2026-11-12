@@ -44,7 +44,6 @@ from calu.credentials import wipe
 from calu.db import (
     CONFIG_CHANGED,
     ESCALATION_RESOLVED,
-    HONESTY_CHANGED,
     Db,
     Dirty,
     Notifier,
@@ -467,27 +466,14 @@ async def _run(
         # The chat summary is a row like the rules and the instructions, and an operator may
         # have corrected it (D40), so the same notification re-reads it.
         await session.reload_summary()
-        # So is the honesty register: a mark an operator cleared has to reach the running
-        # session, or the override only works for the next one (D84).
-        await session.reload_register()
+        # A changed honesty.mode has to reach the clients (D113).
+        await session.announce_honesty()
         await console(Log(level="info", message="configuration reloaded"))
 
     notifier = Notifier(listener)
     notifier.on(ESCALATION_RESOLVED, lambda payload: _note(session, payload))
     dirty = Dirty()
     notifier.on(CONFIG_CHANGED, lambda _payload: dirty.set())
-    # The honesty register is shared by every session of the project, so a mark another
-    # session opened -- or one an operator cleared -- has to reach this one (D92). Its own
-    # writes are skipped by the session id in the payload: it already has them.
-    marks = Dirty()
-    notifier.on(
-        HONESTY_CHANGED,
-        lambda payload: (
-            None
-            if isinstance(payload, dict) and payload.get("session_id") == store.session_id
-            else marks.set()
-        ),
-    )
     failed = False
     # Before anything starts: a fork that cannot be made must not turn into a plain resume,
     # which would continue the conversation instead of branching it (PLAN.md D36).
@@ -505,7 +491,6 @@ async def _run(
     async with anyio.create_task_group() as tg:
         tg.start_soon(notifier.run)
         tg.start_soon(config_store.reload_loop, dirty, on_settings)
-        tg.start_soon(_reload_register, session, marks)
         if clock.check_interval_s > 0:
             # Watches calu's own clock: a backward jump breaks the attribution of file changes
             # to steps, so the session escalates its next tool call (D32).
@@ -688,26 +673,6 @@ async def _until_done(idle: IdleSignal, server: SessionServer, bus: Bus) -> None
 
         tg.start_soon(wait_idle)
         tg.start_soon(wait_shutdown)
-
-
-async def _reload_register(session: Session, marks: Dirty) -> None:
-    """Re-read the honesty register whenever another session or an operator changed it (D92).
-
-    The register is project-scoped, so two sessions on one project share it: without this, a
-    second session would happily run code the first has just recorded as dishonest, and an
-    operator's `calu honesty clear` would only reach the session that wrote the mark.
-
-    Runs until cancelled. A failed read is reported by the session and the loop goes on, which
-    is the safe direction: the register stays as it was, so a mark that is already cleared
-    refuses one more step rather than letting dishonest code run.
-
-    Args:
-        session: The running session.
-        marks: Set by the notification handler when the register changed.
-    """
-    while True:
-        await marks.wait()
-        await session.reload_register()
 
 
 def _note(session: Session, payload: object) -> None:

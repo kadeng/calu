@@ -21,8 +21,7 @@ from datetime import datetime
 from typing import Any
 
 from calu.context.turns import TurnRecord
-from calu.db import HONESTY_CHANGED, Db
-from calu.honesty import HonestyMark
+from calu.db import Db
 from calu.store.session import turn_record
 from calu.tokens import new_token, token_hash
 
@@ -837,15 +836,6 @@ class CheckerStats:
     calu builds the checkers' context so that the long part can be cached (the cached prefix of
     §2.4, `CachePoint`). If this stays near zero while `input_tokens` grows, the caching is not
     working and every check pays for the whole prefix again."""
-    marks_opened: int = 0
-    """Honesty marks this checker opened: code it called dishonest (PLAN.md D87)."""
-    marks_cleared: int = 0
-    """Of those, the ones a checker closed again because the code and its documentation agreed
-    once more. The normal end of a mark."""
-    marks_overridden: int = 0
-    """Of those, the ones a **person** had to close (`calu honesty clear`, the web interface).
-    This is the number that says whether the checker can be trusted to block: a mark somebody
-    overruled was a refusal nobody agreed with."""
 
     @property
     def cached_share(self) -> float | None:
@@ -921,16 +911,10 @@ class CheckerStats:
             if self.passed_then_denied
             else ""
         )
-        marks = ""
-        if self.marks_opened:
-            marks = f"  marks: {self.marks_opened} opened, {self.marks_cleared} cleared"
-            if self.marks_overridden:
-                # The number that says whether it can be trusted to block (D87).
-                marks += f", {self.marks_overridden} overruled by a person"
         return (
             f"{self.checker_name}  {self.runs} run(s): {self.passed} pass, "
             f"{self.escalated} escalate, {self.allowed} allow, {self.denied} deny{timing}"
-            f"{tokens}{cached}{agreed}{missed}{marks}"
+            f"{tokens}{cached}{agreed}{missed}"
         )
 
 
@@ -1086,20 +1070,7 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
     rows = await db.all(
         # The token sums come from their own aggregate, not from the joined rows: a step may
         # have more than one escalation, and the LEFT JOIN would then count its tokens twice.
-        # The marks each checker opened and what became of them (D87). `closed_by` is the
-        # checker's own word for a mark it cleared and a person's name otherwise, so the two
-        # ends are told apart without another column.
-        "WITH marks AS ("
-        "  SELECT opened_by,"
-        "   count(*)::int AS opened,"
-        "   count(*) FILTER (WHERE closed_at IS NOT NULL AND closed_by = 'a checker')::int"
-        "     AS cleared,"
-        "   count(*) FILTER (WHERE closed_at IS NOT NULL AND closed_by <> 'a checker')::int"
-        "     AS overridden"
-        "  FROM honesty_marks WHERE opened_by IS NOT NULL"
-        "  GROUP BY opened_by"
-        "),"
-        "tokens AS ("
+        "WITH tokens AS ("
         "  SELECT checker_name,"
         "   coalesce(sum(input_tokens), 0)::int AS input_tokens,"
         "   coalesce(sum(output_tokens), 0)::int AS output_tokens,"
@@ -1122,15 +1093,10 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
         # were recorded from the first version on and nothing read them before.
         " max(t.input_tokens),"
         " max(t.output_tokens),"
-        " max(t.cache_read_tokens),"
-        # What its honesty marks came to (D87): opened, cleared by a checker, and overruled by
-        # a person -- the last one says whether it can be trusted to block. Its own aggregate
-        # for the same reason as the tokens: the join on escalations would multiply the counts.
-        " max(m.opened), max(m.cleared), max(m.overridden)"
+        " max(t.cache_read_tokens)"
         " FROM checker_runs c"
         " LEFT JOIN escalations e ON e.step_id = c.step_id"
         " JOIN tokens t ON t.checker_name = c.checker_name"
-        " LEFT JOIN marks m ON m.opened_by = c.checker_name"
         " WHERE (%s::int IS NULL OR c.created_at > now() - make_interval(days => %s::int))"
         " GROUP BY c.checker_name ORDER BY count(*) DESC, c.checker_name",
         (since_days, since_days, since_days, since_days),
@@ -1152,9 +1118,6 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
             input_tokens=row[10],
             output_tokens=row[11],
             cache_read_tokens=row[12],
-            marks_opened=row[13] or 0,
-            marks_cleared=row[14] or 0,
-            marks_overridden=row[15] or 0,
         )
         for row in rows
     ]
@@ -1193,108 +1156,6 @@ class CheckerMiss:
             f"  {self.at:%Y-%m-%d %H:%M}\n    step: {' '.join(what.split())[:160]}"
             f"\n    checker: {said}\n    human: denied -- {note}"
         )
-
-
-async def honesty_marks(
-    db: Db, project: str | None = None, closed: bool = False, limit: int = 50
-) -> list[HonestyMark]:
-    """List the honesty register of a project, open marks first (PLAN.md D82).
-
-    The register says which code calu will not let a session run, so this is what an operator
-    reads when a session reports that it is blocked -- and what they read to see whether the
-    honesty checker is marking sensibly at all, which is the point of `honesty.mode = "track"`.
-
-    Args:
-        db: A connection that may read `honesty_marks` and `projects`.
-        project: Only the marks of this project; None reads every project's.
-        closed: True also lists the marks that were cleared, newest last; False only the open
-            ones.
-        limit: Maximum number of rows.
-
-    Returns:
-        The marks, open ones first and oldest first within each group.
-
-    Raises:
-        psycopg.Error: On database errors.
-    """
-    rows = await db.all(
-        "SELECT m.id, m.path, m.symbol, m.reason, m.opened_at, m.git_branch, m.closed_at,"
-        " m.closed_by, m.opened_by, m.files, s.directory, h.hostname, m.beyond_step"
-        " FROM honesty_marks m LEFT JOIN projects p ON p.id = m.project_id"
-        " LEFT JOIN sessions s ON s.id = m.opened_session"
-        " LEFT JOIN hosts h ON h.id = s.host_id"
-        " WHERE (%s::text IS NULL OR p.name = %s)"
-        "   AND (%s::bool OR m.closed_at IS NULL)"
-        " ORDER BY m.closed_at IS NOT NULL, m.opened_at, m.id"
-        " LIMIT %s",
-        (project, project, closed, limit),
-    )
-    return [
-        HonestyMark(
-            id=row[0],
-            path=row[1],
-            symbol=row[2],
-            reason=row[3],
-            opened_at=row[4],
-            git_branch=row[5],
-            closed_at=row[6],
-            closed_by=row[7],
-            opened_by=row[8],
-            files=dict(row[9] or {}),
-            workspace=row[10],
-            hostname=row[11],
-            beyond_step=row[12],
-        )
-        for row in rows
-    ]
-
-
-async def clear_honesty_mark(db: Db, mark_id: int, by: str = "an operator") -> HonestyMark | None:
-    """Close one open mark by hand, which is the override when a checker is wrong (D83).
-
-    A checker normally closes its own marks when the code and its documentation agree again.
-    This is the way out when it does not: a mark that blocks a step nobody agrees is dishonest
-    would otherwise stop the work with no remedy. The row is kept and recorded as closed by a
-    person, so the register still shows what happened.
-
-    Args:
-        db: A connection that may update `honesty_marks` (operator or owner).
-        mark_id: Id of the mark, as `honesty_marks` lists it.
-        by: Who closed it, for the record.
-
-    Returns:
-        The mark as it now stands, or None if there is no open mark with that id.
-
-    Raises:
-        psycopg.Error: On database errors.
-    """
-    row = await db.one(
-        "UPDATE honesty_marks SET closed_at = now(), closed_by = %s"
-        " WHERE id = %s AND closed_at IS NULL"
-        " RETURNING id, path, symbol, reason, opened_at, git_branch, closed_at, closed_by,"
-        " opened_by, beyond_step",
-        (by, mark_id),
-    )
-    if row is None:
-        return None
-    # On the register's own channel: a running session re-reads the register and stops
-    # refusing the code this mark covered (D84, D92). Without it the override would only reach
-    # the next session.
-    await db.execute(
-        "SELECT pg_notify(%s, json_build_object('session_id', '')::text)", (HONESTY_CHANGED,)
-    )
-    return HonestyMark(
-        id=row[0],
-        path=row[1],
-        symbol=row[2],
-        reason=row[3],
-        opened_at=row[4],
-        git_branch=row[5],
-        closed_at=row[6],
-        closed_by=row[7],
-        opened_by=row[8],
-        beyond_step=row[9],
-    )
 
 
 async def checker_misses(

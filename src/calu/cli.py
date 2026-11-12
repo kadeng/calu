@@ -2033,108 +2033,6 @@ def _edit_rule_list(args: argparse.Namespace, store: CredentialStore) -> None:
         wipe(url)
 
 
-def _git_branch(workspace: Path) -> str | None:
-    """Return the branch the workspace is on, for flagging a mark from another branch (D91).
-
-    Args:
-        workspace: The directory to ask about.
-
-    Returns:
-        The branch name, or None if this is not a git repository or git is not there. None
-        means "not knowable", and nothing is flagged on its account.
-    """
-    try:
-        done = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-    except OSError, subprocess.SubprocessError:
-        return None
-    return done.stdout.strip() or None if done.returncode == 0 else None
-
-
-def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
-    """List the honesty register, or clear one mark by hand (PLAN.md D82, D83).
-
-    The register holds the code a checker found dishonest -- code and documentation that
-    disagree. While `honesty.mode` is "enforce", a session will not run such code, so this is
-    what to read when a session reports that it is blocked, and `clear` is the override for a
-    mark nobody agrees with. Clearing keeps the row and records that a person closed it.
-
-    Args:
-        args: Parsed arguments (`action`, `target`, `project`, `all`, `note`).
-        store: The credential store.
-
-    Raises:
-        CliError: If `clear` is given no mark id or an id that is not open, or if there is no
-            operator or admin credential.
-        CredentialError: On a wrong password.
-        psycopg.Error: On database errors.
-    """
-
-    async def work(db: Db) -> str:
-        """Read or change the register.
-
-        Args:
-            db: The connection.
-
-        Returns:
-            The report.
-
-        Raises:
-            CliError: If the mark id is unknown or already closed.
-        """
-        if args.action == "clear":
-            mark = await herd.clear_honesty_mark(db, args.mark_id, args.note or "an operator")
-            if mark is None:
-                raise CliError(
-                    f"no open mark {args.mark_id}; `calu honesty list` shows the open ones"
-                )
-            return f"cleared mark {mark.id}: {mark.label()}"
-        marks = await herd.honesty_marks(db, args.project, closed=args.all)
-        if not marks:
-            scope = f" of {args.project}" if args.project else ""
-            return (
-                f"the honesty register{scope} is empty: no checker has recorded code whose "
-                "documentation and behaviour disagree. It stays empty while `honesty.mode` is "
-                "'off', which is the default (`calu config set honesty.mode track`)."
-            )
-        standing = sum(1 for mark in marks if mark.open)
-        head = f"{standing} open mark(s)" + (f" of {len(marks)} listed" if args.all else "")
-        # A mark whose file is gone, or that was made on another branch, is flagged as stale
-        # (D91) -- but only for a mark of **this** project on **this** host, because nowhere
-        # else is the question answerable. Judged per mark, since one listing can hold marks of
-        # several projects (D126).
-        here = Path.cwd()
-        host = socket.gethostname()
-        branch = _git_branch(here)
-        where = [(mark, here if mark.judged_here(here, host) else None) for mark in marks]
-        lines = [
-            f"  {mark.id}  {mark.line(root, branch if root else None)}" for mark, root in where
-        ]
-        stale = sum(1 for mark, root in where if mark.stale(root, branch if root else None))
-        if stale:
-            lines.append(
-                f"{stale} mark(s) look stale: an open mark blocks every command that would run "
-                "its code, so one that cannot be right any more only costs steps. Clear it with "
-                "`calu honesty clear <id>` once you agree."
-            )
-        return "\n".join([head, *lines])
-
-    if args.action == "clear":
-        if args.target is None:
-            raise CliError("honesty clear needs a mark id (see `calu honesty list`)")
-        try:
-            args.mark_id = int(args.target)
-        except ValueError as exc:
-            raise CliError(f"not a mark id: {args.target!r}") from exc
-    _herd_command(store, work)
-
-
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
     """List the allow and deny lists, add, remove, enable or disable a rule, or add a rule set.
 
@@ -2476,20 +2374,6 @@ def build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--project", help="the project's rules instead of the global ones")
     rules.add_argument("--position", type=int, help="position in the list (default: append)")
     rules.set_defaults(handler=cmd_rules)
-
-    honesty = sub.add_parser(
-        "honesty",
-        help="the register of code whose documentation and behaviour disagree",
-        description="calu honesty list [--all] [--project NAME] | clear MARK_ID [--note WHO]",
-    )
-    honesty.add_argument("action", choices=["list", "clear"])
-    honesty.add_argument("target", nargs="?", help="mark id (for clear)")
-    honesty.add_argument("--project", help="only this project's marks")
-    honesty.add_argument(
-        "--all", action="store_true", help="also the marks that were already cleared"
-    )
-    honesty.add_argument("--note", help="who clears it, for the record (default: an operator)")
-    honesty.set_defaults(handler=cmd_honesty)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")
     p.add_argument("action", choices=["list", "set", "remove", "new"])

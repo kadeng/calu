@@ -843,15 +843,6 @@ def test_the_second_review_findings(tmp_path: Path, command: str, asks: bool) ->
     assert bool(default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask) is asks
 
 
-def test_a_branch_switch_behind_git_options_is_seen() -> None:
-    """D172: `git -c x=y checkout` and `git --git-dir=.git switch` were not recognised."""
-    from calu.session import switches_branch
-
-    for command in ("git -c x=y checkout main && python m.py", "git --git-dir=.git switch b"):
-        assert switches_branch(command), command
-    assert not switches_branch("git status")
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -1057,18 +1048,6 @@ def test_calus_compose_file_is_recognised_by_its_content(tmp_path: Path) -> None
     assert not rules.evaluate(bash("docker compose -f local-compose.yml up -d", str(other))).ask
 
 
-def test_the_branch_check_does_not_backtrack() -> None:
-    """D174: the regex took 1.5 s on 30 repeated `--git-dir`; the word-based check does not."""
-    import time
-
-    from calu.session import switches_branch
-
-    assert switches_branch("git --git-dir .git checkout x")
-    started = time.monotonic()
-    switches_branch("git " + "--git-dir " * 40 + "x")
-    assert time.monotonic() - started < 0.1
-
-
 @pytest.mark.parametrize(
     "command",
     [
@@ -1176,12 +1155,3 @@ def test_a_compose_file_on_stdin_for_calus_database_asks(
     """D177: `docker compose -f -` reads the compose file from the command itself."""
     rules = Rules.from_texts(tmp_path, {})
     assert bool(rules.evaluate(bash(command, str(tmp_path))).ask) is asks
-
-
-def test_a_quoted_or_backticked_branch_switch_is_seen() -> None:
-    """D177: `"git" checkout x` and `` `git checkout x` `` switch branches too."""
-    from calu.session import switches_branch
-
-    for command in ('"git" checkout x && python m.py', "`git checkout x`", "git 'checkout' x"):
-        assert switches_branch(command), command
-    assert not switches_branch("git status")

@@ -35,9 +35,6 @@ CONFIG_CHANGED = "config_changed"
 ESCALATION_RESOLVED = "escalation_resolved"
 """Channel of escalations resolved by an operator."""
 
-HONESTY_CHANGED = "honesty_changed"
-"""Channel of the honesty register: a mark was opened or closed (PLAN.md D92)."""
-
 
 async def listen(conn: psycopg.AsyncConnection, channels: Iterable[str]) -> None:
     """Subscribe a connection to notification channels.

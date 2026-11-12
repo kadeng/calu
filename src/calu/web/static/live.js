@@ -60,6 +60,32 @@
     socket.send(JSON.stringify({ method, params: params || {} }));
   }
 
+  // The honesty register is the session's, in memory (D180): what it holds arrives with the
+  // snapshot and with every `honesty.update`, and a mark is cleared by asking the session.
+  function renderMarks(marks, mode) {
+    const box = el("marks");
+    box.replaceChildren();
+    if (!marks || !marks.length) return;
+    const card = document.createElement("div");
+    card.className = "card";
+    const title = document.createElement("h3");
+    title.textContent = `Recorded as dishonest (${marks.length}) -- honesty.mode ${mode}`;
+    card.appendChild(title);
+    for (const mark of marks) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const text = document.createElement("span");
+      text.textContent = `${mark.path}${mark.symbol ? ":" + mark.symbol : ""} -- ${mark.reason}`;
+      const clear = document.createElement("button");
+      clear.textContent = "Clear";
+      clear.title = "Override the checker: this code is honest";
+      clear.onclick = () => send("honesty.clear", { mark_id: mark.id });
+      row.append(text, clear);
+      card.appendChild(row);
+    }
+    box.appendChild(card);
+  }
+
   function renderEscalations() {
     const box = el("escalations");
     box.innerHTML = "";
@@ -170,6 +196,7 @@
         break;
       case "tool.result": line("result", (params.content || "").slice(0, 2000)); break;
       case "edit.diff": line("diff", `${params.path}: ${params.before.length} → ${params.after.length} characters`); break;
+      case "honesty.update": renderMarks(params.marks, params.mode); break;
       case "escalation.request":
         escalations.set(params.escalation_id, params);
         renderEscalations();
@@ -205,6 +232,7 @@
     const data = JSON.parse(message.data);
     if (data.type === "snapshot") {
       onState(data.snapshot.state);
+      renderMarks(data.snapshot.honesty_marks, data.snapshot.honesty_mode);
       say("attached");
       for (const request of data.snapshot.escalations || []) {
         escalations.set(request.escalation_id, request);

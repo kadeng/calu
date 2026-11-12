@@ -46,6 +46,7 @@ from calu.protocol.messages import (
     Event,
     EventsSubscribeParams,
     EventsSubscribeResult,
+    HonestyClearParams,
     InitializeParams,
     SessionHistoryParams,
     SessionListParams,
@@ -488,6 +489,10 @@ class Client:
                 await session.set_auto_escalate(
                     AutoEscalate(**params.model_dump()), client=self.name or "unknown"
                 )
+                return {}
+            case "honesty.clear":
+                assert isinstance(params, HonestyClearParams)
+                await session.clear_mark(params.mark_id, client=self.name or "unknown")
                 return {}
             case "interrupt":
                 await session.interrupt()

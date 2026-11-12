@@ -10,15 +10,14 @@ from typing import Any
 
 import pytest
 
-from calu import admin, herd
-from calu.checkers import CheckDecision, CodeMark, Decision
+from calu import admin
 from calu.db import Db, connect
-from calu.evals.cases import case_line, cases_from_marks, cases_to_yaml, load_cases
+from calu.evals.cases import case_line, cases_to_yaml, load_cases
 from calu.evals.cli import _rows_to_measure as cli_rows
 from calu.evals.cli import collect_cases, run_evals
 from calu.evals.runner import CaseResult, Report
 from calu.setup import setup
-from calu.store import ConfigStore, DatabaseSessionStore, SessionIdentity, StepRow
+from calu.store import ConfigStore, SessionIdentity
 
 IDENTITY = SessionIdentity(hostname="box", os_user="u", directory="/w", pid=7, os="Linux")
 
@@ -266,134 +265,5 @@ async def test_every_enabled_checker_is_measured_including_an_extra_one(db_url: 
         await admin.set_checker(db, "honesty", enabled=False)
         again = await ConfigStore(db, Path("/w")).load()
         assert "honesty" not in [row for _kind, row in cli_rows(again)]
-    finally:
-        await conn.close()
-
-
-async def test_an_overruled_mark_becomes_a_case_that_expects_no_mark(db_url: str) -> None:
-    """D94: a mark a person overruled is the only honesty label that comes from real work."""
-    conn = await connect(db_url)
-    try:
-        await setup(conn, db_url, "test:model")
-        db = Db(conn)
-        store = DatabaseSessionStore(db)
-        await store.start(IDENTITY)
-        step = await store.add_step(
-            StepRow(
-                seq=1,
-                tool_name="Write",
-                tool_input={"file_path": "src/parser.py", "content": "x = 1\n"},
-            )
-        )
-        await store.apply_honesty_marks(
-            [
-                CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies"),
-                CodeMark(path="src/other.py", reason="this one is right"),
-            ],
-            [],
-            step,
-            None,
-            "honesty",
-        )
-        marks = {m.path: m for m in await herd.honesty_marks(db)}
-        # A person overrules one; the checker clears the other itself.
-        await herd.clear_honesty_mark(db, marks["src/parser.py"].id, "kai")
-        await store.apply_honesty_marks([], [CodeMark(path="src/other.py", reason="fixed")], step)
-
-        cases = await cases_from_marks(db)
-        assert [c.name for c in cases] == [f"overruled-mark-{marks['src/parser.py'].id}"], (
-            "only the overruled mark is a case; one the checker cleared itself is not"
-        )
-        (case,) = cases
-        assert case.expect_no_marks is True
-        assert case.expected == [Decision.PASS]
-        assert case.checker == "edit", "a Write is judged by an edit-route checker"
-        assert case.tool_input["file_path"] == "src/parser.py"
-        assert "src/parser.py:fields" in case.context
-        assert "honesty" in case.context, "the case says whose finding was overruled"
-        assert case.source == "honesty-marks"
-
-        # And a checker that marks it again is counted as the mistake it is.
-        wrong = CaseResult(
-            case=case,
-            decision=CheckDecision(
-                decision=Decision.PASS,
-                reason="",
-                step_summary="s",
-                marks_dirty=[CodeMark(path="src/parser.py", symbol="fields", reason="still")],
-            ),
-        )
-        assert wrong.unwanted_mark
-        report = Report(checker="honesty", model="test", results=[wrong])
-        assert report.summary()["unwanted_marks"] == 1
-        text = report.render()
-        assert "unwanted marks 1" in text
-        assert "[unwanted mark]" in text and "src/parser.py:fields" in text
-
-        # A checker that records nothing is right, and nothing is reported.
-        right = CaseResult(
-            case=case,
-            decision=CheckDecision(decision=Decision.PASS, reason="", step_summary="s"),
-        )
-        assert not right.unwanted_mark
-        assert (
-            Report(checker="honesty", model="test", results=[right]).summary()["unwanted_marks"]
-            == 0
-        )
-    finally:
-        await conn.close()
-
-
-async def test_a_mark_case_carries_the_file_as_it_was(db_url: str) -> None:
-    """D95: a case about an edit can only be reproduced with the file the edit applies to."""
-    conn = await connect(db_url)
-    try:
-        await setup(conn, db_url, "test:model")
-        db = Db(conn)
-        store = DatabaseSessionStore(db)
-        await store.start(IDENTITY)
-        step = await store.add_step(
-            StepRow(
-                seq=1,
-                tool_name="Edit",
-                tool_input={
-                    "file_path": "src/parser.py",
-                    "old_string": "return 1",
-                    "new_string": "return 2",
-                },
-            )
-        )
-        before = "def fields():\n    return 1\n"
-        await store.apply_honesty_marks(
-            [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
-            [],
-            step,
-            None,
-            "honesty",
-            {"src/parser.py": before},
-        )
-        (mark,) = await herd.honesty_marks(db)
-        assert mark.files == {"src/parser.py": before}, "the register keeps what was judged"
-
-        # A repeated mark on the same spot refreshes the reason and keeps the first snapshot:
-        # that is the state the checker judged when it opened the mark.
-        await store.apply_honesty_marks(
-            [CodeMark(path="src/parser.py", symbol="fields", reason="still wrong")],
-            [],
-            step,
-            None,
-            "honesty",
-            {"src/parser.py": "something else entirely\n"},
-        )
-        (again,) = await herd.honesty_marks(db)
-        assert again.reason == "still wrong"
-        assert again.files == {"src/parser.py": before}, "the first snapshot is the one judged"
-
-        await herd.clear_honesty_mark(db, mark.id, "kai")
-        (case,) = await cases_from_marks(db)
-        # The case can be reproduced: the file is there, so the edit applies and the checker
-        # sees a diff instead of raw JSON.
-        assert case.files == {"src/parser.py": before}
-        assert case.tool_input["old_string"] == "return 1"
     finally:
         await conn.close()

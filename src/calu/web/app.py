@@ -83,6 +83,7 @@ LIVE_METHODS = frozenset(
         "session.history",
         "session.list",
         "auto_escalate.set",
+        "honesty.clear",
     }
 )
 """What a browser may ask a session to do. `shutdown` is deliberately absent: it would end the
@@ -226,12 +227,6 @@ def create_app(db: Db, git_url_template: str = "", token: str | None = None) -> 
             _page(add_rule_set, state),
             methods=["POST"],
             name="add_rule_set",
-        ),
-        Route(
-            "/honesty/{mark_id:int}/clear",
-            _page(clear_mark, state),
-            methods=["POST"],
-            name="clear_mark",
         ),
         Route("/settings", _page(settings_page, state), methods=["GET", "POST"], name="settings"),
         Mount("/static", StaticFiles(directory=str(HERE / "static")), name="static"),
@@ -585,7 +580,7 @@ async def fleet(request: Request, state: _State) -> Response:
 
 
 async def session_page(request: Request, state: _State) -> Response:
-    """Show one session: its steps, its escalations, its honesty register, how to attach.
+    """Show one session: its steps, its escalations, how to attach.
 
     Args:
         request: The request; its path holds the session id.
@@ -631,9 +626,6 @@ async def session_page(request: Request, state: _State) -> Response:
             "project_url": git.project_url(remote),
             "commit_url": lambda commit: git.commit_url(remote, commit, state.git_url_template),
             "minted": minted,
-            # The honesty register of this session's project: an operator looking at a session
-            # whose step was refused is here, not on the rules page (PLAN.md D84, D86).
-            "marks": await herd.honesty_marks(state.db, project[0] if project else None),
             "connect": _connect(row, minted[1] if minted else ""),
         },
     )
@@ -1248,10 +1240,6 @@ async def _rules_page(
                 (name, rule_list, what) for name, (rule_list, what) in admin.RULE_SETS.items()
             ],
             "set_added": request.query_params.get("set_added"),
-            # The honesty register blocks steps as the deny lists do, so it belongs on the page
-            # about what blocks a step (PLAN.md D82). Clearing one is the override for a mark
-            # nobody agrees with (D83).
-            "marks": await herd.honesty_marks(state.db),
         },
     )
     if failed is not None:
@@ -1327,27 +1315,6 @@ async def add_rule_set(request: Request, state: _State) -> Response:
     return RedirectResponse(
         str(request.url_for("rules")) + query + f"#{rule_list}", status_code=303
     )
-
-
-async def clear_mark(request: Request, state: _State) -> Response:
-    """Close one honesty mark by hand and go back to the rules page (PLAN.md D83).
-
-    The override for a mark nobody agrees with: while `honesty.mode` is "enforce" an open mark
-    stops every step that would run that code, so somebody has to be able to say "this is fine".
-    The row is kept and recorded as closed from the web interface.
-
-    Args:
-        request: The request; its path carries the mark id.
-        state: The shared state.
-
-    Returns:
-        A redirect back to the rules page, or 404 if no open mark has that id.
-    """
-    mark_id = int(request.path_params["mark_id"])
-    cleared = await herd.clear_honesty_mark(state.db, mark_id, "the web interface")
-    if cleared is None:
-        return HTMLResponse(_not_found(f"open honesty mark {mark_id}"), status_code=404)
-    return RedirectResponse(request.url_for("rules"), status_code=303)
 
 
 async def settings_page(request: Request, state: _State) -> Response:

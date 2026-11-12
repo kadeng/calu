@@ -41,7 +41,6 @@ import itertools
 import logging
 import os
 import platform
-import re
 import shutil
 import socket
 import time
@@ -105,10 +104,10 @@ from calu.defaults import default_instructions
 from calu.files import command_files
 from calu.honesty import (
     HonestyMark,
+    Register,
     blocking_marks,
     checked_marks,
     diff_paths,
-    in_force,
     marks_of_step,
     register_note,
 )
@@ -153,49 +152,6 @@ from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
 
-
-def switches_branch(command: str) -> bool:
-    """Tell whether a command changes the branch it then runs on (D168, D174).
-
-    Word-based: the regex it replaces backtracked exponentially on repeated global options.
-
-    Args:
-        command: The command as written.
-
-    Returns:
-        True if a `git` word is followed, after git's global options and their values, by
-        `checkout`, `switch` or `worktree`.
-    """
-    # Quotes and backticks removed first: `"git" checkout x` and `` `git checkout x` `` switch
-    # branches too (D177).
-    words = re.split(r"[\s;&|()]+", re.sub(r"[\"'`\\]", "", command))
-    for index, word in enumerate(words):
-        if word != "git" and not word.endswith("/git"):
-            continue
-        rest = words[index + 1 :]
-        while rest and rest[0].startswith("-"):
-            option = rest.pop(0)
-            if (
-                option
-                in (
-                    "-C",
-                    "-c",
-                    "--git-dir",
-                    "--work-tree",
-                    "--namespace",
-                    "--exec-path",
-                    "--config-env",
-                )
-                and rest
-            ):
-                rest.pop(0)
-        if rest and rest[0] in ("checkout", "switch", "worktree"):
-            return True
-    return False
-
-
-"""A command that changes the branch it then runs on (D168): with `honesty.scope = branch`
-every mark applies to it, since the branch is read before the command runs."""
 
 WRITE_SET_PROMPT = """## What the command wrote
 
@@ -502,9 +458,8 @@ class Session:
         self._sink = emit
         self._models = dict(checker_models or {})
         self.startup_warnings = tuple(startup_warnings)
-        self._git_branch_value: str | None = None
-        self._git_branch_time = float("-inf")
-        self.honesty_marks: list[HonestyMark] = []
+        self.register = Register()
+        """The honesty register of this session, in memory only (PLAN.md D180)."""
         self._honesty_sent: tuple[tuple[HonestyMarkInfo, ...], str] | None = None
         """What the last `honesty.update` said, so an unchanged one is not sent again (D113)."""
         """The open marks of the project, reloaded when a checker changes them (PLAN.md D82).
@@ -739,34 +694,48 @@ class Session:
             model=resolve_model(self._models.get("narrator") or self.config.context.narrator_model),
         )
 
-    async def reload_register(self) -> None:
-        """Read the honesty register again, in case a person cleared a mark (PLAN.md D84).
+    @property
+    def honesty_marks(self) -> list[HonestyMark]:
+        """The open marks of this session's register, oldest first (D180).
 
-        An open mark refuses every command that would run that code, and `calu honesty clear`
-        and the web interface are the override for a mark nobody agrees with. Without this the
-        override reached only the next session: the running one kept its copy of the register
-        and went on refusing, which makes the override useless exactly when it is needed.
-        Called after a `config_changed` notification, with which `clear_honesty_mark` announces
-        itself.
-
-        Side effects: replaces `honesty_marks` and emits `honesty.update` when what a client
-        would see changed -- the marks **or** the mode. Never raises: a failed read is reported
-        by `_store_value` and the register stays as it is, which is the safe direction -- a mark
-        that is already cleared refuses one more step rather than letting a dishonest one run.
-
-        With the mode "off" the register is not read at all, because nothing enforces it; the
-        switch to "off" is still announced, since a client that was told "enforce" with three
-        marks would otherwise go on showing steps as blocked (D113).
+        Returns:
+            The open marks; the register itself is `self.register`.
         """
-        if self.config.honesty.mode == "off":
-            await self._emit_honesty()
-            return
-        marks = await self._store_value(
-            "reading the honesty register", self.store.open_honesty_marks()
+        return self.register.open
+
+    async def clear_mark(self, mark_id: int, client: str = "unknown") -> HonestyMark:
+        """Close one open mark by hand, the override when a checker is wrong (D83, D180).
+
+        Side effects: closes the mark in the register, logs who did it and tells every client.
+        The register is in memory, so this is the only way to clear a mark of a running
+        session; it needs nothing but the session's own protocol.
+
+        Args:
+            mark_id: The mark's id, as `honesty.update` reported it.
+            client: Who asked, for the log.
+
+        Returns:
+            The closed mark.
+
+        Raises:
+            SessionError: If no open mark has that id.
+        """
+        closed = self.register.clear(mark_id, f"{client} (by hand)")
+        if closed is None:
+            raise SessionError(f"no open honesty mark {mark_id}")
+        await self._emit_safely(
+            Log(level="info", message=f"honesty: {client} cleared {closed.label()} by hand")
         )
-        if marks is None:
-            return
-        self.honesty_marks = marks
+        await self._emit_honesty()
+        return closed
+
+    async def announce_honesty(self) -> None:
+        """Tell the clients the register and the mode after a settings reload (D113, D180).
+
+        Switching `honesty.mode` to "off" is what a person does to unblock a session; a client
+        that was told "enforce" would otherwise go on showing steps as blocked. Sends only what
+        changed (`_emit_honesty`).
+        """
         await self._emit_honesty()
 
     async def _emit_honesty(self) -> None:
@@ -1523,30 +1492,6 @@ class Session:
         await self._store_call("creating the session row", self.store.start(self._identity()))
         await self._set_state("starting")
         await self._restore_context(resume_id)
-        if self.config.honesty.mode != "off":
-            # The register belongs to the project, so a session starts with the debt the
-            # previous ones left behind (D82).
-            self.honesty_marks = (
-                await self._store_value(
-                    "reading the honesty register", self.store.open_honesty_marks()
-                )
-                or []
-            )
-            if self.honesty_marks:
-                await self.emit(
-                    Log(
-                        level="warning",
-                        message=(
-                            f"{len(self.honesty_marks)} spot(s) are recorded as dishonest and "
-                            + (
-                                "cannot be run until they are fixed"
-                                if self.config.honesty.mode == "enforce"
-                                else "are only reported (honesty.mode is 'track')"
-                            )
-                            + f": {', '.join(m.label() for m in self.honesty_marks[:5])}"
-                        ),
-                    )
-                )
         for warning in self.startup_warnings:
             await self.emit(Log(level="warning", message=warning))
         runner = self.runner = self.runner_factory()
@@ -2335,7 +2280,7 @@ class Session:
                 rules=rules,
             )
         # Asking git for the branch costs a process; with the register off there is no reason to.
-        marks = await self._marks_in_force(step) if self.config.honesty.mode != "off" else []
+        marks = list(self.register.open) if self.config.honesty.mode != "off" else []
         if marks:
             # After the deny lists and before the checkers: a rule the user wrote is a
             # stronger statement than honesty debt, so a step that matches one escalates with
@@ -3175,12 +3120,8 @@ class Session:
         that does not exist is dropped and reported, because the path is text a model wrote and
         nothing else checks it (D112).
 
-        Side effects: writes `honesty_marks`, reloads `self.honesty_marks` and emits a `log`
-        event naming what changed. A store failure is logged by `_store_value`, not raised: a
-        session whose register cannot be written is still a session, and the next step tries
-        again. The register is read back even then, because an earlier checker of the same step
-        may already have written a mark that the enforcement layer has to know about, and it is
-        said in the log that marks of this step may be missing (D111).
+        Side effects: changes `self.register` (in memory, D180), emits a `log` event naming what
+        changed and `honesty.update` for the clients.
 
         Args:
             decided: The verdicts of the step, with the marks their checkers asked for.
@@ -3227,109 +3168,32 @@ class Session:
         if not checked:
             return
         clean = [mark for _name, _dirty, marks in checked for mark in marks]
-        branch = await self._git_branch()
         opened = closed = 0
-        failed = False
         for name, dirty, clean_marks in checked:
             # One call per checker, so that each mark records which checker opened it: with
             # several checkers on a route (D81), "12 marks are open" says nothing about any one
-            # of them (D87).
-            applied = await self._store_value(
-                "recording honesty marks",
-                self.store.apply_honesty_marks(
-                    dirty,
-                    clean_marks,
-                    step_id,
-                    branch,
-                    name,
-                    # The file as it is before the step runs, so that an evaluation case built
-                    # from this mark can be reproduced (D95), exactly as an escalation keeps it.
-                    files_before(step, self.workspace),
-                    # What the step was about, so that the register can show a mark on any
-                    # other file as reaching beyond it (D141, Q20 (c)).
-                    step_paths,
-                ),
+            # of them (D87). The register is in memory (D180): nothing to fail.
+            applied = self.register.apply(
+                dirty,
+                clean_marks,
+                name,
+                # The file as it is before the step runs (D95), and what the step was about,
+                # so that a mark on any other file shows as reaching beyond it (D141).
+                files_before(step, self.workspace),
+                step_paths,
             )
-            if applied is None:
-                # The write failed and `_store_failed` has reported it. Stop writing, but go on
-                # to read the register back: an earlier checker of this very step may already
-                # have opened a mark, and returning here would leave `self.honesty_marks`
-                # without it -- the enforcement layer would then let the step that the register
-                # now forbids through, until some later step happened to produce marks and
-                # reload it (D111).
-                failed = True
-                break
             opened += applied[0]
             closed += applied[1]
-        self.honesty_marks = (
-            await self._store_value("reading the honesty register", self.store.open_honesty_marks())
-            or []
-        )
         parts: list[str] = []
         if opened:
             parts.append(f"{opened} spot(s) recorded as dishonest")
         if closed:
             parts.append(f"{closed} cleared")
-        if len(clean) > closed and not failed:
-            # Only meaningful when every mark was written: after a failure the clean marks of
-            # the checkers that were not reached were never offered to the register.
+        if len(clean) > closed:
             parts.append(f"{len(clean) - closed} clean mark(s) matched nothing recorded")
-        if failed:
-            parts.append("a write failed, so the register may be missing marks of this step")
         if parts:
             await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
         await self._emit_honesty()
-
-    async def _marks_in_force(self, step: Step | None = None) -> list[HonestyMark]:
-        """Return the open marks that apply to a step (D142, `honesty.scope`).
-
-        Args:
-            step: The step about to run; a command that switches branch itself counts as
-                running on any branch (D168).
-
-        Returns:
-            All of `self.honesty_marks` with scope "project"; with scope "branch" only those
-            made on the current branch (or with no recorded branch) -- unless the branch is
-            unknown or a detached `HEAD`, or the step's command switches branch
-            (`git checkout`, `git switch`, `git worktree`), in which case all of them, because
-            the branch the code would run on cannot be known before it runs. Asks git for the
-            branch only when the scope needs it and there are marks; the answer is cached.
-        """
-        if self.config.honesty.scope != "branch" or not self.honesty_marks:
-            return list(self.honesty_marks)
-        command = str(step.tool_input.get("command", "")) if step is not None else ""
-        if switches_branch(command):
-            return list(self.honesty_marks)
-        branch = await self._git_branch()
-        if branch in (None, "HEAD"):
-            return list(self.honesty_marks)
-        return in_force(self.honesty_marks, "branch", branch)
-
-    async def _git_branch(self) -> str | None:
-        """Return the branch of the workspace's git HEAD, cached like `_git_head`.
-
-        The honesty register records it, because a mark means something else after a branch
-        switch (PLAN.md Q19 asks the owner which rule to apply to that).
-
-        Returns:
-            The branch name, "HEAD" on a detached head, or None if the workspace is not a git
-            repository or git fails.
-        """
-        now = anyio.current_time()
-        if now - self._git_branch_time < GIT_HEAD_TTL_S:
-            return self._git_branch_value
-        value: str | None = None
-        try:
-            with anyio.fail_after(5):
-                done = await anyio.run_process(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=self.workspace, check=False
-                )
-            if done.returncode == 0:
-                value = done.stdout.decode().strip() or None
-        except OSError, TimeoutError:
-            value = None
-        self._git_branch_value, self._git_branch_time = value, now
-        return value
 
     async def _git_head(self) -> str | None:
         """Return the commit id of the workspace's git HEAD, cached for `GIT_HEAD_TTL_S`.

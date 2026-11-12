@@ -30,7 +30,6 @@ from calu.evals.cases import (
     EvalCase,
     builtin_cases,
     cases_from_escalations,
-    cases_from_marks,
 )
 from calu.evals.cases import load_cases as load_case_file
 from calu.evals.runner import Report, run_cases
@@ -110,10 +109,9 @@ async def collect_cases(
     for name in files:
         cases += load_case_file(Path(name))
     if from_db:
-        # Two kinds of label from real work: an escalation a human decided, and a mark a
-        # person overruled (D50, D94).
+        # Labels from real work: an escalation a human decided (D50). Overruled honesty marks
+        # were a second source (D94) until the register became transient (D180).
         cases += await cases_from_escalations(db)
-        cases += await cases_from_marks(db)
     return cases
 
 

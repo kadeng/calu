@@ -183,22 +183,19 @@ async def test_a_commit_is_told_which_of_its_files_are_recorded_as_dishonest(tmp
     """
     root = repository(tmp_path)
     settings = default_settings(root, Config(honesty=HonestyConfig(mode="enforce")))
-    session, rec, store = make_session(
+    session, rec, _store = make_session(
         root,
         [[{"tool": "Bash", "input": {"command": "git commit -m 'second'"}, "result": "ok"}]],
         settings=settings,
     )
-    await store.apply_honesty_marks(
+    session.register.apply(
         [
             CodeMark(path="app.py", symbol="hello", reason="it returns 2, the docstring says 1"),
             CodeMark(path="elsewhere.py", reason="not in this commit"),
         ],
         [],
-        None,
-        None,
         "honesty",
     )
-    session.honesty_marks = await store.open_honesty_marks()
 
     seen: list[str] = []
     (checker,) = session.checkers[Route.CHANGESET]

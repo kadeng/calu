@@ -54,7 +54,7 @@ HELP = (
     "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  "
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
-    "/checkers  /sessions  /history [id]  /shutdown"
+    "/checkers  /sessions  /history [id]  /clear-mark <id>  /shutdown"
 )
 """One line listing the commands, printed on connect and for an unknown command.
 
@@ -202,6 +202,13 @@ class Console:
                 await self._answer(rest)
             case "/allow" | "/deny":
                 await self._decide(command.removeprefix("/"), rest)
+            case "/clear-mark":
+                # The honesty register is the session's, in memory (D180): clearing a mark is
+                # a request to the session, the override when a checker is wrong (D83).
+                if not rest.strip().isdigit():
+                    print("[error] /clear-mark needs a mark id", flush=True)
+                else:
+                    await self.client.request("honesty.clear", {"mark_id": int(rest.strip())})
             case "/why":
                 if not rest:
                     print("[error] /why needs an escalation id", flush=True)

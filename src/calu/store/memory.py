@@ -6,15 +6,12 @@ which stands for the operator's `calu_resolve_escalation`.
 """
 
 import itertools
-from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
-from calu.checkers import CodeMark
 from calu.comments import Comment
 from calu.context.turns import TurnRecord
-from calu.honesty import HonestyMark, beyond_step
 from calu.protocol.messages import (
     AgentInfo,
     EscalationContextResult,
@@ -79,9 +76,7 @@ class MemorySessionStore:
     address: str = ""
     heartbeats: int = 0
     """How often `heartbeat` was called (PLAN.md D56)."""
-    honesty_marks: list[HonestyMark] = field(default_factory=list)
-    """The honesty register of this store (PLAN.md D82), open and closed marks together."""
-    _mark_id: int = 0
+
     setting_changes: list[tuple[str, dict[str, Any], dict[str, Any], str]] = field(
         default_factory=list
     )
@@ -146,78 +141,6 @@ class MemorySessionStore:
             actor: Who asked for it.
         """
         self.setting_changes.append((setting, old, new, actor))
-
-    async def open_honesty_marks(self) -> list[HonestyMark]:
-        """Return the open marks held in memory (PLAN.md D82).
-
-        Returns:
-            The marks of `honesty_marks` that nothing has closed, oldest first.
-        """
-        return [entry for entry in self.honesty_marks if entry.open]
-
-    async def apply_honesty_marks(
-        self,
-        dirty: Sequence[CodeMark],
-        clean: Sequence[CodeMark],
-        step_id: int | None,
-        git_branch: str | None = None,
-        by: str = "",
-        files: Mapping[str, str] | None = None,
-        step_paths: Collection[str] = (),
-    ) -> tuple[int, int]:
-        """Open and close marks in memory, as the database store does.
-
-        Args:
-            dirty: Spots the step left dishonest; an open mark of the same spot is updated.
-            clean: Spots that say what they do again; a mark that is not open is ignored.
-            step_id: Unused here, kept for the protocol.
-            git_branch: Recorded on a new mark.
-            by: Name of the checker whose verdict carried them (D87).
-            files: The file the step edits (D95); kept on the mark it opens.
-            step_paths: The paths the step is about, to record each mark's reach (D141).
-
-        Returns:
-            How many marks were opened or updated, and how many were closed.
-        """
-        opened = 0
-        for entry in dirty:
-            existing = next(
-                (m for m in self.honesty_marks if m.open and m.mark().key() == entry.key()), None
-            )
-            if existing is not None:
-                self.honesty_marks[self.honesty_marks.index(existing)] = replace(
-                    existing,
-                    reason=entry.reason,
-                    beyond_step=beyond_step(entry.path, step_paths),
-                )
-            else:
-                self._mark_id += 1
-                self.honesty_marks.append(
-                    HonestyMark(
-                        id=self._mark_id,
-                        path=entry.path,
-                        symbol=entry.symbol,
-                        reason=entry.reason,
-                        opened_at=datetime.now(UTC),
-                        git_branch=git_branch,
-                        opened_by=by or None,
-                        files=dict(files or {}),
-                        beyond_step=beyond_step(entry.path, step_paths),
-                    )
-                )
-            opened += 1
-        closed = 0
-        for entry in clean:
-            existing = next(
-                (m for m in self.honesty_marks if m.open and m.mark().key() == entry.key()), None
-            )
-            if existing is None:
-                continue
-            self.honesty_marks[self.honesty_marks.index(existing)] = replace(
-                existing, closed_at=datetime.now(UTC), closed_by="a checker"
-            )
-            closed += 1
-        return opened, closed
 
     async def heartbeat(self) -> None:
         """Count a heartbeat in `heartbeats`."""

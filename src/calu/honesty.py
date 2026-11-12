@@ -25,8 +25,8 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from calu.checkers import CodeMark, Step
@@ -431,23 +431,106 @@ def register_note(
     return " ".join(parts)
 
 
-def in_force(marks: Sequence[HonestyMark], scope: str, branch: str | None) -> list[HonestyMark]:
-    """Return the marks that apply on the current branch under `honesty.scope` (D142, Q19).
+class Register:
+    """The honesty register of one session, held in memory only (PLAN.md D180).
 
-    Args:
-        marks: The open marks of the project.
-        scope: "project" applies every mark; "branch" only the marks made on `branch`.
-        branch: The branch the workspace is on, or None when it is unknown (not a git
-            repository, or git failed) -- then every mark applies, because guessing that a
-            mark is from another branch would let dirty code run.
+    Dirty and clean are transient states of the code a session is working on: the owner's
+    answer to Q19 is that they are kept in memory and persisted nowhere -- certainly not in a
+    place as easy to change as a database table. A register therefore lives as long as its
+    session and starts empty; another session of the same project has its own.
 
-    Returns:
-        The marks to enforce and to tell the checkers about, in their original order. A mark
-        with no recorded branch always applies.
+        apply(dirty, clean)  ->  opens or refreshes a mark per dirty spot, closes clean ones
+        clear(id)            ->  a person's override: closes one open mark
+        marks                ->  every mark of the session, open and closed, oldest first
     """
-    if scope != "branch" or branch is None:
-        return list(marks)
-    return [mark for mark in marks if mark.git_branch in (None, branch)]
+
+    def __init__(self) -> None:
+        """Create an empty register."""
+        self.marks: list[HonestyMark] = []
+        self._next_id = 1
+
+    @property
+    def open(self) -> list[HonestyMark]:
+        """The open marks, oldest first.
+
+        Returns:
+            The marks nothing has closed yet; these are what blocks a step.
+        """
+        return [mark for mark in self.marks if mark.open]
+
+    def apply(
+        self,
+        dirty: Sequence[CodeMark],
+        clean: Sequence[CodeMark],
+        by: str = "",
+        files: dict[str, str] | None = None,
+        step_paths: Collection[str] = (),
+    ) -> tuple[int, int]:
+        """Open and close marks as a checker's verdict asked (D82).
+
+        A dirty mark for a spot that is already open refreshes its reason, author and reach
+        instead of adding a mark. A clean mark closes the open mark of its spot; one that
+        matches nothing open changes nothing and is not counted.
+
+        Args:
+            dirty: Spots the step left dishonest.
+            clean: Spots that say what they do again.
+            by: Name of the checker whose verdict carried the marks (D87).
+            files: The file the step edits, as it was, kept with a mark it opens (D95).
+            step_paths: The paths the step is about, to record each mark's reach (D141).
+
+        Returns:
+            How many marks were opened or refreshed, and how many were closed.
+        """
+        opened = 0
+        for entry in dirty:
+            reach = beyond_step(entry.path, step_paths)
+            existing = next((m for m in self.open if m.mark().key() == entry.key()), None)
+            if existing is not None:
+                self.marks[self.marks.index(existing)] = replace(
+                    existing, reason=entry.reason, opened_by=by or None, beyond_step=reach
+                )
+            else:
+                self.marks.append(
+                    HonestyMark(
+                        id=self._next_id,
+                        path=entry.path,
+                        symbol=entry.symbol,
+                        reason=entry.reason,
+                        opened_at=datetime.now(UTC),
+                        opened_by=by or None,
+                        files=dict(files or {}),
+                        beyond_step=reach,
+                    )
+                )
+                self._next_id += 1
+            opened += 1
+        closed = 0
+        for entry in clean:
+            existing = next((m for m in self.open if m.mark().key() == entry.key()), None)
+            if existing is None:
+                continue
+            self.marks[self.marks.index(existing)] = replace(
+                existing, closed_at=datetime.now(UTC), closed_by="a checker"
+            )
+            closed += 1
+        return opened, closed
+
+    def clear(self, mark_id: int, by: str) -> HonestyMark | None:
+        """Close one open mark by hand -- the override when a checker is wrong (D83).
+
+        Args:
+            mark_id: The mark's id, as the session reported it.
+            by: Who closed it, for the session's log.
+
+        Returns:
+            The closed mark, or None if no open mark has that id.
+        """
+        for index, mark in enumerate(self.marks):
+            if mark.id == mark_id and mark.open:
+                self.marks[index] = replace(mark, closed_at=datetime.now(UTC), closed_by=by)
+                return self.marks[index]
+        return None
 
 
 def beyond_step(path: str, step_paths: Collection[str]) -> bool | None:

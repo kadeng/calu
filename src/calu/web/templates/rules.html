@@ -67,36 +67,7 @@
 {% endfor %}
 
 
-{% if marks %}
-<h2 id="honesty">Code recorded as dishonest <span class="muted">({{ marks | length }})</span></h2>
-<p class="muted">A checker found that these say something other than what they do. While
-  <code>honesty.mode</code> is <code>enforce</code>, a command that would run them is refused;
-  editing them is not, because that is how the record clears itself. Clear a mark by hand when
-  nobody agrees with it.</p>
-<table>
-  <thead><tr><th>#</th><th>Where</th><th>Project</th><th>What disagrees</th><th>Branch</th>
-    <th></th></tr></thead>
-  <tbody>
-  {% for m in marks %}
-    <tr>
-      <td class="muted">{{ m.id }}</td>
-      <td class="mono">{{ m.label() }}{% if m.reach %} <span class="tag" title="the checker marked a file the step it judged did not touch (D141)">{{ m.reach }}</span>{% endif %}</td>
-      {# This page lists the marks of every project in the database, so a bare `src/parser.py`
-         says nothing about which one. The session page filters by project and needs no column
-         like this (D126). #}
-      <td class="muted mono">{{ (m.hostname ~ ':' if m.hostname else '') ~ (m.workspace or '?') }}</td>
-      <td>{{ m.reason }}</td>
-      <td class="muted">{{ m.git_branch or '' }}</td>
-      <td>
-        <form method="post" action="{{ url_for('clear_mark', mark_id=m.id) }}">
-          <button type="submit">clear</button>
-        </form>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% endif %}
+
 <script>
   // Ctrl+S / Cmd+S saves the list being edited, as on the checker page.
   addEventListener("keydown", (event) => {

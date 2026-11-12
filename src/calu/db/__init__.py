@@ -4,7 +4,6 @@ from calu.db.connection import Db, Migration, applied_versions, connect, migrate
 from calu.db.notify import (
     CONFIG_CHANGED,
     ESCALATION_RESOLVED,
-    HONESTY_CHANGED,
     Dirty,
     Notifier,
     listen,
@@ -13,7 +12,6 @@ from calu.db.notify import (
 __all__ = [
     "CONFIG_CHANGED",
     "ESCALATION_RESOLVED",
-    "HONESTY_CHANGED",
     "Db",
     "Dirty",
     "Migration",
