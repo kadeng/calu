@@ -28,8 +28,11 @@ Which parts a tool call has: Bash -> its simple commands, the paths its commands
 Read, NotebookRead, Grep, Glob, LS -> the path they read; Edit, Write, MultiEdit, NotebookEdit ->
 the file they write. Other tools have no parts; the rules do not affect them.
 
-Built-in rules that the lists cannot remove: reading or writing calu's own configuration
-directory (`~/.config/calu`, which holds the encrypted credentials) always asks the human. An
+Built-in rules that the lists cannot remove: reading or writing calu's own directories always
+asks the human. These are the directory of the credentials and of the env file with the checker
+keys and the directory above the snapshots, at the place they really have on this machine
+(`calu.paths.calu_private_dirs`: `$XDG_CONFIG_HOME/calu`, `$XDG_STATE_HOME/calu` and the two
+defaults below the home directory), plus every path with a `.config/calu` component. An
 invalid pattern makes every checked call ask the human until it is fixed, so a broken deny list
 never lets a call through.
 """
@@ -46,6 +49,7 @@ from calu.checkers.model import Step
 from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.search import searched_files
 from calu.checkers.shell import ParsedCommand, ShellPath, command_variants, parse_command
+from calu.paths import calu_private_dir_of
 
 RULE_LISTS = (
     "command-allow",
@@ -83,6 +87,37 @@ class Rule:
 _CALU_CONFIG = re.compile(r"(^|/)\.config/calu(/|$)")
 BUILT_IN_WRITE_DENY = (Rule(_CALU_CONFIG, "built-in"),)
 BUILT_IN_READ_DENY = (Rule(_CALU_CONFIG, "built-in"),)
+"""The built-in path rules that are patterns: a `.config/calu` component anywhere in a path,
+whoever's home directory it is in. The rule for calu's own directories at their real location
+is not a pattern (`built_in_path_rule`); `Rules._deny_rule` applies both."""
+
+
+def built_in_path_rule(path: Path) -> Rule | None:
+    """Return the built-in rule that protects `path` as one of calu's own files, if it is one.
+
+    calu's directories are found where they are on this machine
+    (`calu.paths.calu_private_dirs`), so a configuration or state directory that
+    `XDG_CONFIG_HOME` or `XDG_STATE_HOME` moved is protected like the default one. The
+    comparison is by path components after normalisation, with and without links resolved; it
+    does not depend on the form a path is displayed in.
+
+    Args:
+        path: An absolute path that a tool call reads or writes.
+
+    Returns:
+        A rule with the source "built-in" whose pattern names the directory, for messages; None
+        if `path` is not inside one of calu's directories.
+
+    Example:
+        With `XDG_CONFIG_HOME=/srv/cfg`, `built_in_path_rule(Path("/srv/cfg/calu/.env"))`
+        describes itself as "built-in `^/srv/cfg/calu(/|$)`".
+    """
+    directory = calu_private_dir_of(path)
+    if directory is None:
+        return None
+    return Rule(re.compile("^" + re.escape(directory.as_posix()) + "(/|$)"), "built-in")
+
+
 PATH_KEYS = frozenset(
     {
         "path",
@@ -501,10 +536,8 @@ class Rules:
             True if the path matches the allow list and no deny rule.
         """
         shown = self.display(path)
-        built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY
-        deny = [*built_in, *self.lists(f"{kind}-deny")[0]]
         matched = self.match_form(path)
-        rule = _first_match(deny, matched)
+        rule = self._deny_rule(path, kind)
         if rule is not None:
             outcome.ask.append(
                 f"{'Reading' if kind == 'read' else 'Writing'} `{shown}` ({via}) matches the deny "
@@ -582,10 +615,7 @@ class Rules:
                 continue
             kinds = ("read", "write") if writes else ("read",)
             for kind in kinds:
-                built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY
-                rule = _first_match(
-                    [*built_in, *self.lists(f"{kind}-deny")[0]], self.match_form(path)
-                )
+                rule = self._deny_rule(path, kind)
                 if rule is not None:
                     outcome.ask.append(
                         f"`{step.tool_name}` names `{self.display(path)}`, which the {kind} deny "
@@ -687,10 +717,9 @@ class Rules:
             path: An absolute path.
 
         Returns:
-            True if a write deny rule matches the path's matching form (`match_form`).
+            True if a write deny rule covers the path (`_deny_rule`).
         """
-        deny = [*BUILT_IN_WRITE_DENY, *self.lists("write-deny")[0]]
-        return _first_match(deny, self.match_form(path)) is not None
+        return self._deny_rule(path, "write") is not None
 
     def read_denied(self, path: Path) -> bool:
         """Tell whether reading `path` matches a read deny rule (built-in or `read-deny`).
@@ -699,10 +728,30 @@ class Rules:
             path: An absolute path.
 
         Returns:
-            True if a read deny rule matches the path's display form (`display`).
+            True if a read deny rule covers the path (`_deny_rule`).
         """
-        deny = [*BUILT_IN_READ_DENY, *self.lists("read-deny")[0]]
-        return _first_match(deny, self.match_form(path)) is not None
+        return self._deny_rule(path, "read") is not None
+
+    def _deny_rule(self, path: Path, kind: str) -> Rule | None:
+        """Return the first deny rule that covers reading or writing `path`.
+
+        The built-in rules come first and cannot be removed by a list: calu's own directories
+        at their real location (`built_in_path_rule`), then the built-in patterns, then the
+        `read-deny` or `write-deny` list.
+
+        Args:
+            path: An absolute path.
+            kind: "read" or "write".
+
+        Returns:
+            The rule, or None if no deny rule covers the path. The patterns are matched against
+            the path's matching form (`match_form`).
+        """
+        own = built_in_path_rule(path)
+        if own is not None:
+            return own
+        built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY
+        return _first_match([*built_in, *self.lists(f"{kind}-deny")[0]], self.match_form(path))
 
     def match_form(self, path: Path) -> str:
         r"""Return the form of `path` that the path rules are matched against (PLAN.md D155).

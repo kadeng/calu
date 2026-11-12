@@ -21,9 +21,9 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from calu import __version__
+from calu import __version__, preflight
 from calu.changes import default_root
-from calu.config import PROVIDER_KEYS_BY_PREFIX, user_env_file
+from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.credentials import CredentialStore
 from calu.db import applied_versions, connect, migrations
 
@@ -400,6 +400,44 @@ def report(findings: Sequence[Finding]) -> str:
     return "\n".join(lines) + "\n" + summary
 
 
+def permission_mode_findings(
+    workspace: Path | None = None, home: Path | None = None, config: Config | None = None
+) -> list[Finding]:
+    """Say whether auto mode's classifier would decide next to the checkers (PLAN.md D5).
+
+    A step needs the checkers **and** the classifier only in Claude Code's permission mode
+    "auto"; in every other mode the checkers decide alone. Which mode a session starts in comes
+    from calu's `claude.permission_mode` or, when that is unset, from `permissions.defaultMode`
+    of Claude Code's settings files (`calu.preflight.expected_permission_mode`). `calu doctor`
+    runs without the database, so without `config` it reports what the settings files say,
+    which is what holds while `claude.permission_mode` is unset.
+
+    Args:
+        workspace: The project directory, whose `.claude/settings.json` and
+            `.claude/settings.local.json` have precedence over the user's file; None reads the
+            user's file only.
+        home: The home directory; None uses `Path.home()`.
+        config: The configuration to judge; None uses the defaults (`claude.permission_mode`
+            unset, `claude.require_auto_mode` false).
+
+    Returns:
+        One finding named "auto mode": ok when the classifier is expected to be active,
+        otherwise a note with the line of `calu.preflight.permission_mode_line` and how to
+        switch the classifier on.
+    """
+    active, line = preflight.permission_mode_line(config or Config(), home, workspace)
+    return [
+        Finding(
+            "auto mode",
+            active,
+            line + ("" if config else " (Judged with claude.permission_mode unset.)"),
+            "Switch the second approval on with `calu config set claude.permission_mode auto`, "
+            "or make a step the checkers pass wait for a human with `calu config set "
+            "claude.require_auto_mode true`.",
+        )
+    ]
+
+
 def local_findings(store: CredentialStore) -> list[Finding]:
     """Collect everything that needs no password.
 
@@ -407,10 +445,12 @@ def local_findings(store: CredentialStore) -> list[Finding]:
         store: The credential store.
 
     Returns:
-        The tool, credential, key, directory and optional-dependency findings, in that order.
+        The tool, the auto-mode, credential, key, directory and optional-dependency findings,
+        in that order.
     """
     return [
         *tool_findings(),
+        *permission_mode_findings(),
         *credential_findings(store),
         *self_approval_findings(store),
         *key_findings(),
@@ -533,9 +573,20 @@ def workspace_findings(workspace: Path) -> list[Finding]:
 
     Returns:
         Findings for the directory itself, for whether it is a git repository (which the
-        changeset checker and the commit links need), and for the sandbox the CLI would build
-        here (`posture_findings`).
+        changeset checker and the commit links need), for the sandbox the CLI would build
+        here (`posture_findings`), for sandbox entries of the settings files that would keep a
+        session from starting (`settings_file_findings`), and, when a settings file of the
+        project sets the permission mode, the auto-mode finding with that file taken into
+        account.
     """
+    mode: list[Finding] = []
+    if workspace.is_dir() and preflight.expected_permission_mode(Config(), workspace=workspace)[
+        1
+    ].startswith("permissions.defaultMode in .claude/"):
+        mode = [
+            Finding(f.name + " in this workspace", f.ok, f.detail, f.advice)
+            for f in permission_mode_findings(workspace)
+        ]
     return [
         Finding(
             "workspace",
@@ -552,6 +603,36 @@ def workspace_findings(workspace: Path) -> list[Finding]:
             "git both simply do less.",
         ),
         *posture_findings(workspace),
+        *settings_file_findings(workspace),
+        *mode,
+    ]
+
+
+def settings_file_findings(workspace: Path, home: Path | None = None) -> list[Finding]:
+    """Report sandbox entries of Claude Code's settings files that calu would not start with.
+
+    Judged against calu's default sandbox configuration, because `calu doctor` runs without
+    the database: an entry that the project's own calu configuration also holds is reported
+    here although a session would accept it.
+
+    Args:
+        workspace: The project directory a session would run in.
+        home: The home directory; None uses `Path.home()`.
+
+    Returns:
+        One finding per settings file with such entries
+        (`calu.preflight.settings_file_sandbox_findings`), else [].
+    """
+    return [
+        Finding(
+            "sandbox settings",
+            False,
+            f"{label} holds sandbox entries beyond calu's default configuration "
+            f"({'; '.join(beyond)})",
+            "A session does not start while a settings file goes beyond calu's own sandbox "
+            f"configuration (claude.sandbox.fail_if_unavailable). {preflight.SANDBOX_ENTRY_REMEDY}",
+        )
+        for label, beyond in preflight.settings_file_sandbox_findings(Config(), home, workspace)
     ]
 
 

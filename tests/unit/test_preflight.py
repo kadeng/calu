@@ -26,16 +26,47 @@ def test_sandbox_settings_document_matches_the_spike():
     assert settings["autoAllowBashIfSandboxed"] is False
     assert "~/.config/calu" in settings["filesystem"]["denyRead"]
     assert "~/.claude/.credentials.json" in settings["filesystem"]["denyRead"]
-    # Every key that could widen the sandbox is written, also when empty (finding cs0): a key
-    # calu left out would be one that only Claude Code's settings files define.
+    # No domain is allowed, so the sandbox blocks the network, and every list and switch of
+    # the network section is written with its value.
     assert settings["network"] == {
-        "allowedDomains": [],  # no allowed domains: the sandbox blocks the network
+        "allowedDomains": [],
+        "deniedDomains": [],
+        "allowUnixSockets": [],
         "allowAllUnixSockets": False,
         "allowLocalBinding": False,
     }
     assert settings["excludedCommands"] == []
     assert settings["filesystem"]["allowRead"] == []
+    assert settings["filesystem"]["allowWrite"] == []
     assert settings["enableWeakerNestedSandbox"] is False
+    assert settings["enableWeakerNetworkIsolation"] is False
+
+
+def _dotted(document: dict, prefix: str = "") -> list[str]:
+    """List the keys of a nested settings object as dotted paths."""
+    keys: list[str] = []
+    for key, value in document.items():
+        if isinstance(value, dict):
+            keys += _dotted(value, f"{prefix}{key}.")
+        else:
+            keys.append(f"{prefix}{key}")
+    return keys
+
+
+def test_the_settings_document_holds_exactly_the_keys_the_docstrings_name():
+    """`SandboxConfig` and `settings()` refer to `PINNED_SANDBOX_KEYS`; this keeps that true."""
+    from calu.config import PINNED_SANDBOX_KEYS
+
+    for config in (
+        SandboxConfig(),
+        SandboxConfig(denied_domains=["x.example"], allow_unix_sockets=["/run/pg.sock"]),
+    ):
+        assert sorted(_dotted(config.settings()["sandbox"])) == sorted(PINNED_SANDBOX_KEYS)
+    # Every key preflight treats as widening is one calu writes itself.
+    widening = [name for name, *_ in preflight.SANDBOX_LIST_KEYS + preflight.SANDBOX_SWITCH_KEYS]
+    assert set(widening) <= set(PINNED_SANDBOX_KEYS)
+    written = SandboxConfig(allow_unix_sockets=["/run/pg.sock"]).settings()["sandbox"]
+    assert written["network"]["allowUnixSockets"] == ["/run/pg.sock"]
 
 
 def test_sandbox_settings_carry_network_and_exclusions():
@@ -286,8 +317,8 @@ def test_the_users_own_claude_setup_that_a_session_leaves_out_is_named(tmp_path:
 
 
 def test_a_password_free_credential_without_a_sandbox_is_named(tmp_path: Path) -> None:
-    """D162: without a working sandbox, a credential stored without a password is readable by
-    any program Claude runs; a one-line script could resolve its own escalations."""
+    """D162: a credential stored without a password is named when no working sandbox keeps
+    it from the programs Claude runs, because such a credential can resolve escalations."""
     from calu.credentials import CredentialStore, KdfParams
 
     store = CredentialStore(
@@ -405,19 +436,67 @@ def test_a_broken_settings_file_gives_no_sandbox_warning(tmp_path: Path) -> None
 # ---------------------------------------------------------------- ci1: keys calu cannot hide
 
 
-def test_a_provider_with_an_unknown_key_variable_is_named(tmp_path: Path) -> None:
+def test_the_key_variable_of_a_provider_is_taken_from_pydantic_ai() -> None:
+    from calu.config import provider_key_variables
+
+    assert provider_key_variables("xai") == ("XAI_API_KEY",)
+    assert provider_key_variables("huggingface") == ("HF_TOKEN",)
+    assert provider_key_variables("heroku") == ("HEROKU_INFERENCE_KEY",)
+    assert "AZURE_OPENAI_API_KEY" in (provider_key_variables("azure") or ())
+    assert "VERCEL_AI_GATEWAY_API_KEY" in (provider_key_variables("vercel") or ())
+    assert provider_key_variables("openai-chat") == ("OPENAI_API_KEY",)
+    assert provider_key_variables("bedrock") == ()
+    assert provider_key_variables("no-such-provider") is None
+
+
+def test_a_key_claude_code_would_inherit_is_named_by_its_real_variable(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    config = Config().with_model("openrouter:some/model")
-    (warning,) = preflight.unknown_provider_warnings(config, env_file)
-    assert "'openrouter'" in warning and "calu config add hidden_env OPENROUTER_API_KEY" in warning
+    config = Config().with_model("xai:grok-4")
+    exported = {"XAI_API_KEY": "k"}
+    (warning,) = preflight.unknown_provider_warnings(config, env_file, exported)
+    assert "'xai'" in warning and "`calu config add hidden_env XAI_API_KEY`" in warning
+    assert "XAI_API_KEY is set" in warning
+    # The name the prefix would suggest does not hide the key, and so does not end the notice.
+    guessed = config.model_copy(update={"hidden_env": ["XAI_API_KEY_GUESS", "GROK_API_KEY"]})
+    assert preflight.unknown_provider_warnings(guessed, env_file, exported) != []
     # Named in the setting, or kept in calu's env file: the runner hides it.
-    listed = config.model_copy(update={"hidden_env": ["OPENROUTER_API_KEY"]})
-    assert preflight.unknown_provider_warnings(listed, env_file) == []
-    env_file.write_text("OPENROUTER_API_KEY=k\n")
-    assert preflight.unknown_provider_warnings(config, env_file) == []
-    # Providers calu knows, and those without a key variable, are not named.
-    for model in ("mistral:m", "bedrock:m", "claude:haiku", "test:model", "ollama:m"):
-        assert preflight.unknown_provider_warnings(Config().with_model(model), tmp_path / "x") == []
+    listed = config.model_copy(update={"hidden_env": ["XAI_API_KEY"]})
+    assert preflight.unknown_provider_warnings(listed, env_file, exported) == []
+    env_file.write_text("XAI_API_KEY=k\n")
+    assert preflight.unknown_provider_warnings(config, env_file, exported) == []
+    # A key that is not in calu's environment is not inherited by anything.
+    assert preflight.unknown_provider_warnings(config, tmp_path / "none", {}) == []
+    hf = Config().with_model("huggingface:some/model")
+    (warning,) = preflight.unknown_provider_warnings(hf, tmp_path / "none", {"HF_TOKEN": "t"})
+    assert "calu config add hidden_env HF_TOKEN" in warning and "HUGGINGFACE" not in warning
+
+
+def test_providers_calu_hides_by_itself_give_no_notice(tmp_path: Path) -> None:
+    exported = {"OPENAI_API_KEY": "k", "MISTRAL_API_KEY": "k"}
+    for model in (
+        "mistral:m",
+        "openai:gpt",
+        "openai-chat:gpt",
+        "openai-responses:gpt",
+        "bedrock:m",
+        "claude:haiku",
+        "test:model",
+        "ollama:m",
+    ):
+        config = Config().with_model(model)
+        assert preflight.unknown_provider_warnings(config, tmp_path / "x", exported) == [], model
+
+
+def test_a_provider_calu_cannot_look_up_is_named_without_a_guessed_variable(
+    tmp_path: Path,
+) -> None:
+    config = Config().with_model("acme:model-1")
+    (warning,) = preflight.unknown_provider_warnings(config, tmp_path / ".env", {})
+    assert "'acme'" in warning and "<VARIABLE>" in warning
+    assert "ACME_API_KEY" not in warning
+    # Nothing calu can check shows that the right variable is hidden, so the notice stays.
+    listed = config.model_copy(update={"hidden_env": ["ACME_API_KEY"]})
+    assert preflight.unknown_provider_warnings(listed, tmp_path / ".env", {}) != []
 
 
 def test_a_name_from_hidden_env_is_blanked_for_claude_code(tmp_path: Path) -> None:
@@ -425,3 +504,178 @@ def test_a_name_from_hidden_env_is_blanked_for_claude_code(tmp_path: Path) -> No
     config = Config(hidden_env=["OPENROUTER_API_KEY"])
     runner = SdkRunner(tmp_path, config.claude, {"MISTRAL_API_KEY"} | set(config.hidden_env))
     assert runner._claude_env() == {"MISTRAL_API_KEY": "", "OPENROUTER_API_KEY": ""}
+
+
+# ---------------------------------------------------------------- round 2: settings files
+
+
+def _settings_files(tmp_path: Path, **files: dict) -> tuple[Path, Path]:
+    """Write settings files and return (home, workspace).
+
+    Args:
+        tmp_path: Where to put them.
+        **files: "user", "project" or "local" -> the `sandbox` object of that file.
+    """
+    import json
+
+    home, workspace = tmp_path / "home", tmp_path / "ws"
+    (home / ".claude").mkdir(parents=True)
+    (workspace / ".claude").mkdir(parents=True)
+    paths = {
+        "user": home / ".claude" / "settings.json",
+        "project": workspace / ".claude" / "settings.json",
+        "local": workspace / ".claude" / "settings.local.json",
+    }
+    for scope, sandbox in files.items():
+        paths[scope].write_text(json.dumps({"sandbox": sandbox}))
+    return home, workspace
+
+
+def test_a_session_does_not_start_on_sandbox_entries_calu_did_not_configure(
+    tmp_path: Path,
+) -> None:
+    home, workspace = _settings_files(
+        tmp_path, user={"excludedCommands": ["docker"]}, project={"enabled": True}
+    )
+    (blocker,) = preflight.settings_file_sandbox_blockers(Config(), home, workspace)
+    assert blocker.startswith("~/.claude/settings.json") and "excludedCommands: docker" in blocker
+    assert "no session starts" in blocker and "fail_if_unavailable" in blocker
+    # The same sentence is a start-up warning, so the reason is read before the refusal.
+    assert preflight.settings_file_sandbox_warnings(Config(), home, workspace) == [blocker]
+    # What calu's own configuration also says is not beyond it.
+    own = Config.model_validate({"claude": {"sandbox": {"excluded_commands": ["docker"]}}})
+    assert preflight.settings_file_sandbox_blockers(own, home, workspace) == []
+    assert preflight.settings_file_sandbox_blockers(own.claude, home, workspace) == []
+    # A source that is not loaded is not read by Claude Code either.
+    narrowed = Config.model_validate({"claude": {"setting_sources": ["project", "local"]}})
+    assert preflight.settings_file_sandbox_blockers(narrowed, home, workspace) == []
+
+
+def test_without_fail_if_unavailable_the_entries_are_a_warning(tmp_path: Path) -> None:
+    home, workspace = _settings_files(tmp_path, local={"filesystem": {"allowWrite": ["/etc"]}})
+    lenient = Config.model_validate({"claude": {"sandbox": {"fail_if_unavailable": False}}})
+    assert preflight.settings_file_sandbox_blockers(lenient, home, workspace) == []
+    (warning,) = preflight.settings_file_sandbox_warnings(lenient, home, workspace)
+    assert "filesystem.allowWrite: /etc" in warning and "runs anyway" in warning
+    # With the sandbox off, calu asks for none, and there is nothing to compare with.
+    off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
+    assert preflight.settings_file_sandbox_warnings(off, home, workspace) == []
+
+
+def test_every_sandbox_key_that_weakens_is_named(tmp_path: Path) -> None:
+    home, workspace = _settings_files(
+        tmp_path,
+        project={
+            "failIfUnavailable": False,
+            "autoAllowBashIfSandboxed": True,
+            "enableWeakerNetworkIsolation": True,
+            "ignoreViolations": {"*": ["/etc"]},
+            "network": {"httpProxyPort": 8080, "socksProxyPort": 1080, "allowLocalBinding": True},
+            "filesystem": {"allowWrite": ["~/.ssh"]},
+        },
+    )
+    ((label, entries),) = preflight.settings_file_sandbox_findings(Config(), home, workspace)
+    assert label == ".claude/settings.json"
+    names = sorted(entry.partition(":")[0] for entry in entries)
+    assert names == [
+        "autoAllowBashIfSandboxed",
+        "enableWeakerNetworkIsolation",
+        "failIfUnavailable",
+        "filesystem.allowWrite",
+        "ignoreViolations",
+        "network.allowLocalBinding",
+        "network.httpProxyPort",
+        "network.socksProxyPort",
+    ]
+    # A file that only tightens the sandbox, or repeats calu's values, holds no finding.
+    home, workspace = _settings_files(
+        tmp_path / "tight",
+        project={
+            "enabled": True,
+            "failIfUnavailable": True,
+            "allowUnsandboxedCommands": False,
+            "filesystem": {"denyRead": ["~/secrets"], "allowRead": []},
+            "network": {"allowedDomains": [], "deniedDomains": ["x.example"]},
+        },
+    )
+    assert preflight.settings_file_sandbox_findings(Config(), home, workspace) == []
+
+
+# ---------------------------------------------------------------- round 2: the permission mode
+
+
+def test_the_start_says_whether_auto_modes_classifier_is_active(tmp_path: Path) -> None:
+    import json
+
+    home, workspace = _settings_files(tmp_path)
+    active, line = preflight.permission_mode_line(Config(), home, workspace)
+    assert not active and "NOT active" in line and '"default"' in line
+    assert "runs on their word alone" in line
+    assert preflight.permission_mode_warnings(Config(), home, workspace) == [line]
+
+    required = Config.model_validate({"claude": {"require_auto_mode": True}})
+    _, line = preflight.permission_mode_line(required, home, workspace)
+    assert "NOT active" in line and "waits for a human" in line
+
+    configured = Config.model_validate({"claude": {"permission_mode": "auto"}})
+    active, line = preflight.permission_mode_line(configured, home, workspace)
+    assert active and "claude.permission_mode" in line
+    assert preflight.permission_mode_warnings(configured, home, workspace) == []
+
+    # Unset in calu: Claude Code's own settings decide, the nearest file first.
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "auto"}})
+    )
+    active, line = preflight.permission_mode_line(Config(), home, workspace)
+    assert active and "~/.claude/settings.json" in line
+    (workspace / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "acceptEdits"}})
+    )
+    active, line = preflight.permission_mode_line(Config(), home, workspace)
+    assert not active and '"acceptEdits"' in line and ".claude/settings.json" in line
+    # A source that is not loaded does not count.
+    user_only = Config.model_validate({"claude": {"setting_sources": ["user"]}})
+    assert preflight.permission_mode_line(user_only, home, workspace)[0]
+    # calu's own setting has the last word.
+    plan = Config.model_validate({"claude": {"permission_mode": "plan"}})
+    assert not preflight.permission_mode_line(plan, home, workspace)[0]
+
+
+def test_the_mode_line_is_among_the_start_up_warnings(tmp_path: Path) -> None:
+    plan = Config.model_validate({"claude": {"permission_mode": "plan"}})
+    said = [w for w in preflight.warnings(plan, {}, workspace=tmp_path) if "classifier" in w]
+    assert len(said) == 1 and "NOT active" in said[0]
+    auto = Config.model_validate({"claude": {"permission_mode": "auto"}})
+    assert not any("NOT active" in w for w in preflight.warnings(auto, {}, workspace=tmp_path))
+
+
+# ---------------------------------------------------------------- round 2: calu's directories
+
+
+def test_a_relative_config_home_is_denied_by_its_absolute_path(tmp_path: Path, monkeypatch) -> None:
+    from calu.config import calu_private_paths
+    from calu.paths import calu_private_dirs
+
+    monkeypatch.chdir(tmp_path)
+    paths = calu_private_paths({"XDG_CONFIG_HOME": "cfg"})
+    assert str(tmp_path / "cfg" / "calu") in paths
+    assert all(path.startswith(("~/", "/")) for path in paths)
+    dotted = calu_private_dirs({"XDG_STATE_HOME": str(tmp_path / "a" / ".." / "state")})
+    assert tmp_path / "state" / "calu" in dotted
+    assert not any(".." in directory.parts for directory in dotted)
+
+
+def test_a_linked_config_home_is_denied_under_both_names(tmp_path: Path) -> None:
+    from calu.config import calu_private_paths
+    from calu.paths import calu_private_dir_of
+
+    real, link = tmp_path / "real", tmp_path / "link"
+    (real / "calu").mkdir(parents=True)
+    link.symlink_to(real)
+    environ = {"XDG_CONFIG_HOME": str(link)}
+    paths = calu_private_paths(environ)
+    assert str(link / "calu") in paths and str(real / "calu") in paths
+    for path in (link / "calu" / ".env", real / "calu" / "credentials.json", real / "calu"):
+        assert calu_private_dir_of(path, environ) is not None, path
+    assert calu_private_dir_of(tmp_path / "real" / "calumet" / "x", environ) is None
+    assert calu_private_dir_of(tmp_path / "elsewhere", environ) is None

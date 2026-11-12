@@ -1155,3 +1155,70 @@ def test_a_compose_file_on_stdin_for_calus_database_asks(
     """D177: `docker compose -f -` reads the compose file from the command itself."""
     rules = Rules.from_texts(tmp_path, {})
     assert bool(rules.evaluate(bash(command, str(tmp_path))).ask) is asks
+
+
+# ---------------------------------------------------------------- calu's own directories
+
+
+@pytest.mark.parametrize("tool", ["Read", "Edit", "Write", "Grep"])
+def test_calus_directories_are_protected_where_they_really_are(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    """The built-in rule follows XDG_CONFIG_HOME and XDG_STATE_HOME, with empty lists too."""
+    config_home, state_home = tmp_path / "cfg", tmp_path / "state"
+    (config_home / "calu").mkdir(parents=True)
+    (state_home / "calu" / "snapshots").mkdir(parents=True)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    rules = Rules(workspace)
+    key = "path" if tool == "Grep" else "file_path"
+    for target in (
+        config_home / "calu" / ".env",
+        config_home / "calu" / "credentials.json",
+        state_home / "calu" / "snapshots" / "1-2" / "HEAD",
+        config_home / "calu",
+    ):
+        step = Step(tool_name=tool, tool_input={key: str(target), "pattern": "x"}, cwd="")
+        outcome = rules.evaluate(step)
+        assert outcome.ask and "built-in" in outcome.reason, target
+    # A directory that only starts with the same name is not calu's.
+    elsewhere = {key: str(config_home / "calumet" / "a"), "pattern": "x"}
+    other = Step(tool_name=tool, tool_input=elsewhere, cwd="")
+    assert "built-in" not in rules.evaluate(other).reason
+
+
+def test_calus_directories_are_protected_for_commands_and_other_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_home = tmp_path / "cfg"
+    (config_home / "calu").mkdir(parents=True)
+    (config_home / "calu" / ".env").write_text("K=v\n")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    rules = default_rules(workspace)
+    assert "built-in" in rules.evaluate(bash(f"cat {config_home}/calu/.env")).reason
+    assert "built-in" in rules.evaluate(bash(f"cp x {config_home}/calu/credentials.json")).reason
+    named = Step(
+        tool_name="mcp__fs__read_file", tool_input={"path": f"{config_home}/calu/.env"}, cwd=""
+    )
+    assert "built-in" in rules.evaluate(named).reason
+    assert rules.read_denied(config_home / "calu" / ".env")
+    assert rules.write_denied(config_home / "calu" / "credentials.json")
+    assert not rules.read_denied(workspace / "src" / "a.py")
+
+
+def test_a_linked_config_home_is_protected_under_both_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real, link = tmp_path / "real", tmp_path / "link"
+    (real / "calu").mkdir(parents=True)
+    (real / "calu" / ".env").write_text("K=v\n")
+    link.symlink_to(real)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(link))
+    rules = Rules(tmp_path / "ws")
+    for target in (link / "calu" / ".env", real / "calu" / ".env"):
+        step = Step(tool_name="Read", tool_input={"file_path": str(target)}, cwd="")
+        assert "built-in" in rules.evaluate(step).reason, target

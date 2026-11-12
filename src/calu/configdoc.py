@@ -49,10 +49,10 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 """
 """What the generated file starts with, before the tables."""
 
-SKIP = {"hidden_env"}
-"""Fields left out of the reference: `hidden_env` is a security setting documented in
-CALU_GUIDE.md's section on the checker keys, and listing it as an ordinary value invites
-someone to put a key in it."""
+SKIP: set[str] = set()
+"""Fields left out of the reference; none. Every setting a warning or a document tells a user
+to change has to be one the user can look up, and that includes `hidden_env`: it holds names
+of variables, never their values, and its description says so."""
 
 
 def type_name(annotation: Any) -> str:

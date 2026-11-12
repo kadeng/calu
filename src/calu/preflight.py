@@ -1,8 +1,10 @@
-"""Checks before a session starts: sandbox tools and checker API keys.
+"""Checks before a session starts: sandbox tools, checker API keys, settings files, the mode.
 
 The warnings are reported to the clients as `log` warnings at every start
 (`Session(startup_warnings=...)`), so an operator sees why a session cannot work before Claude
-Code fails or a checker escalates every step.
+Code fails or a checker escalates every step. One of the checks is more than a warning:
+`settings_file_sandbox_blockers` returns the reasons for which the runner does not start a
+session at all (`calu.claude.sdk_runner.SdkRunner.run`).
 """
 
 import json
@@ -18,7 +20,9 @@ from calu.config import (
     KEYLESS_PREFIXES,
     PROVIDER_KEYS,
     PROVIDER_KEYS_BY_PREFIX,
+    ClaudeConfig,
     Config,
+    provider_key_variables,
     user_env_file,
 )
 from calu.credentials import CredentialError, CredentialStore
@@ -133,27 +137,35 @@ def key_warnings(config: Config, environ: Mapping[str, str] | None = None) -> li
     return warnings
 
 
-def unknown_provider_warnings(config: Config, env_file: Path | None = None) -> list[str]:
-    """Name checker model providers whose API key calu cannot hide from Claude Code by itself.
+def unknown_provider_warnings(
+    config: Config, env_file: Path | None = None, environ: Mapping[str, str] | None = None
+) -> list[str]:
+    """Name checker model providers whose API key Claude Code would inherit.
 
     calu blanks three sets of variables in the environment of the Claude Code process: the
     fixed `PROVIDER_KEYS`, every name defined in calu's env file, and the names in the
-    `hidden_env` setting. A model of another provider (Pydantic AI supports many) whose key is
-    exported in the shell that starts calu is in none of them, so Claude Code and every command
-    it runs would inherit the key. The variable is assumed to be `<PROVIDER>_API_KEY`, which is
-    what Pydantic AI's providers read; a provider with another variable name still gets the
-    warning until its name is in `hidden_env` under that assumed spelling or the key is in the
-    env file.
+    `hidden_env` setting. Pydantic AI supports many more providers than `PROVIDER_KEYS`
+    covers. For each configured one, the variables that hold its key are looked up in Pydantic
+    AI itself (`calu.config.provider_key_variables`); the name is never guessed from the
+    provider's prefix. Two cases give a warning:
+
+    - A variable of the provider is set in calu's environment and is in none of the three
+      sets. The warning names exactly that variable and the command that hides it.
+    - calu cannot find out which variable the provider reads. The warning says so and names no
+      variable; it stays until the model string is changed, because nothing calu could check
+      would show that the right variable is hidden.
 
     Args:
         config: The session configuration.
         env_file: calu's env file; None uses `user_env_file()`. A missing or unreadable file
             defines nothing.
+        environ: The environment Claude Code would inherit; None uses `os.environ`.
 
     Returns:
         One warning per provider prefix that is neither in `PROVIDER_KEYS_BY_PREFIX` nor in
-        `KEYLESS_PREFIXES` and whose assumed key variable is hidden by none of the three sets.
+        `KEYLESS_PREFIXES` and falls under one of the two cases.
     """
+    env = os.environ if environ is None else environ
     path = env_file or user_env_file()
     try:
         in_file = set(dotenv_values(path)) if path.is_file() else set()
@@ -167,16 +179,25 @@ def unknown_provider_warnings(config: Config, env_file: Path | None = None) -> l
             roles_by_provider.setdefault(prefix, []).append(role)
     warnings: list[str] = []
     for prefix, roles in roles_by_provider.items():
-        variable = prefix.upper().replace("-", "_") + "_API_KEY"
-        if variable in hidden:
+        used = f"{prefix!r} models (configured for: {', '.join(sorted(roles))})"
+        variables = provider_key_variables(prefix)
+        if variables is None:
+            warnings.append(
+                f"calu does not know which environment variable holds the API key of {used}, "
+                "so it cannot hide that key from Claude Code and its commands if the key is "
+                f"exported in calu's environment. Put the key in {path} (every variable there "
+                "is hidden), or name the variable that holds it: `calu config add hidden_env "
+                "<VARIABLE>`. calu cannot check either, so this notice stays."
+            )
             continue
-        warnings.append(
-            f"calu does not know which environment variable holds the API key of {prefix!r} "
-            f"models (configured for: {', '.join(sorted(roles))}), so it cannot hide that key "
-            "from Claude Code and its commands if the key is exported in calu's environment. "
-            f"Put the key in {path} (every variable there is hidden), or name the variable: "
-            f"`calu config add hidden_env {variable}`."
-        )
+        exposed = [name for name in variables if env.get(name) and name not in hidden]
+        if exposed:
+            commands = " and ".join(f"`calu config add hidden_env {name}`" for name in exposed)
+            warnings.append(
+                f"{' and '.join(exposed)} is set in calu's environment and holds a key of "
+                f"{used}; Claude Code and its commands would inherit it. Hide it with "
+                f"{commands}, or move the key into {path} (every variable there is hidden)."
+            )
     return warnings
 
 
@@ -365,14 +386,15 @@ def cli_model_warnings(config: Config) -> list[str]:
 
 
 def self_approval_warnings(config: Config, store: CredentialStore | None = None) -> list[str]:
-    """Warn when Claude could decide its own escalations with a one-line script (D162).
+    """Warn when a credential without a password is not shielded by a working sandbox (D162).
 
     calu runs as the same OS user as Claude. A credential stored without a password (D104) is
-    protected only by the file mode, which does not separate the two. The sandbox makes
-    `~/.config/calu` unreadable to Claude's commands; without it, the rules stop `calu ...`
-    (D160) and reads of the file by Claude's tools, but not an interpreter it runs
-    (`python -c "open(...)"`), which only the checker judges. That combination is named here,
-    with the two ways out.
+    protected only by the file mode, which does not separate the two. The sandbox makes calu's
+    own directories unreadable to Claude's commands. Without a working sandbox, the built-in
+    rules still make `calu ...` (D160) and every tool call on those directories wait for a
+    human, and what else a command does with the file is left to the checker's judgement. Such
+    a credential can resolve escalations, so that combination is named here, with the two
+    ways out.
 
     Args:
         config: The session configuration.
@@ -397,9 +419,9 @@ def self_approval_warnings(config: Config, store: CredentialStore | None = None)
         return []
     return [
         f"Without a working sandbox, the credential(s) {', '.join(unprotected)} stored without a "
-        "password can be read by any program Claude runs -- a one-line script could resolve its "
-        "own escalations; only the checker would see it. Switch the sandbox on, or put a "
-        "password back on them (`calu credential set operator`)."
+        "password are kept from the programs Claude runs only by the checkers' judgement, and "
+        "such a credential can resolve escalations. Switch the sandbox on, or put a password "
+        "back on them (`calu credential set operator`)."
     ]
 
 
@@ -470,50 +492,60 @@ the path of keys inside `sandbox`, and the `SandboxConfig` field that holds calu
 (None: calu has no such list, so every entry goes beyond its configuration)."""
 
 SANDBOX_SWITCH_KEYS = (
-    ("enabled", ("enabled",), False),
-    ("allowUnsandboxedCommands", ("allowUnsandboxedCommands",), True),
-    ("enableWeakerNestedSandbox", ("enableWeakerNestedSandbox",), True),
-    ("enableWeakerNetworkIsolation", ("enableWeakerNetworkIsolation",), True),
-    ("network.allowAllUnixSockets", ("network", "allowAllUnixSockets"), True),
-    ("network.allowLocalBinding", ("network", "allowLocalBinding"), True),
+    ("enabled", ("enabled",), False, "enabled"),
+    ("failIfUnavailable", ("failIfUnavailable",), False, "fail_if_unavailable"),
+    ("allowUnsandboxedCommands", ("allowUnsandboxedCommands",), True, "allow_unsandboxed_commands"),
+    ("autoAllowBashIfSandboxed", ("autoAllowBashIfSandboxed",), True, "auto_allow_bash"),
+    ("enableWeakerNestedSandbox", ("enableWeakerNestedSandbox",), True, "weaker_nested_sandbox"),
+    ("enableWeakerNetworkIsolation", ("enableWeakerNetworkIsolation",), True, None),
+    ("network.allowAllUnixSockets", ("network", "allowAllUnixSockets"), True, None),
+    ("network.allowLocalBinding", ("network", "allowLocalBinding"), True, None),
 )
-"""Switches of a settings file's `sandbox` object and the value of each that weakens the
-sandbox: the name for a message, the path of keys inside `sandbox`, the weakening value."""
+"""Switches of a settings file's `sandbox` object: the name for a message, the path of keys
+inside `sandbox`, the value that weakens the sandbox, and the `SandboxConfig` field that holds
+calu's own value (None: calu always writes the other value)."""
+
+SANDBOX_VALUE_KEYS = (
+    ("network.httpProxyPort", ("network", "httpProxyPort")),
+    ("network.socksProxyPort", ("network", "socksProxyPort")),
+    ("ignoreViolations", ("ignoreViolations",)),
+)
+"""Keys of a settings file's `sandbox` object that calu never writes and whose presence alone
+changes what the sandbox filters or reports: the name for a message and the path of keys."""
 
 
-def settings_file_sandbox_warnings(
-    config: Config, home: Path | None = None, workspace: Path | None = None
-) -> list[str]:
-    """Name sandbox entries of Claude Code's settings files that go beyond calu's configuration.
+def settings_file_sandbox_findings(
+    config: Config | ClaudeConfig, home: Path | None = None, workspace: Path | None = None
+) -> list[tuple[str, list[str]]]:
+    """List sandbox entries of Claude Code's settings files that go beyond calu's configuration.
 
     calu's sandbox settings come from the database and reach Claude Code as `--settings`, which
     has precedence over the settings files (PLAN.md D15). The files of the loaded sources
     (`claude.setting_sources`: `~/.claude/settings.json`, `<workspace>/.claude/settings.json`,
-    `<workspace>/.claude/settings.local.json`) may still hold a `sandbox` object, and two of
-    them are files a session can edit. Measured with CLI 2.1.319: `filesystem.allowRead` and
-    `network.allowedDomains` of the project and the local file have no effect while
-    `--settings` carries a `sandbox` object. Claude Code's documentation describes these lists
-    as merged across scopes, so another CLI version may honour them; this warning makes such
-    entries visible at every start instead of leaving that to a version check.
-
-    It reads files only; a file that is missing, unreadable or not a JSON object is skipped.
+    `<workspace>/.claude/settings.local.json`) may still hold a `sandbox` object. This reads
+    those files and compares; it changes nothing. A file that is missing, unreadable or not a
+    JSON object holds no entries.
 
     Args:
-        config: The session configuration, with the project's network policy applied.
+        config: The session configuration, or its `claude` part alone (which is all a runner
+            has), with the project's network policy applied.
         home: The home directory; None uses `Path.home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
-        One warning per file that has such entries, naming each entry; [] when the sandbox is
-        off (nothing can be widened) or no loaded file goes beyond calu's configuration. A list
-        entry counts as "beyond" when calu's own list does not hold it (for domains: unless
-        calu allows every domain); a switch counts when it has its weakening value and calu's
-        configuration does not say the same.
+        (the file as a message names it, its entries as "key: value" texts) for every loaded
+        file that has such entries; [] when the sandbox is off (calu asks for none) or no file
+        goes beyond calu's configuration. An entry of a list (`SANDBOX_LIST_KEYS`) counts when
+        calu's own list does not hold it (for domains: unless calu allows every domain); a
+        switch (`SANDBOX_SWITCH_KEYS`) counts when it has its weakening value and calu's
+        configuration does not say the same; a key of `SANDBOX_VALUE_KEYS` counts when it is
+        present with any value but null.
     """
-    sandbox = config.claude.sandbox
+    claude = config.claude if isinstance(config, Config) else config
+    sandbox = claude.sandbox
     if not sandbox.enabled:
         return []
-    sources = set(config.claude.setting_sources)
+    sources = set(claude.setting_sources)
     home = home if home is not None else Path.home()
     files: list[tuple[str, Path]] = []
     if "user" in sources:
@@ -522,11 +554,7 @@ def settings_file_sandbox_warnings(
         files.append((".claude/settings.json", workspace / ".claude" / "settings.json"))
     if workspace is not None and "local" in sources:
         files.append((".claude/settings.local.json", workspace / ".claude" / "settings.local.json"))
-    own_switches = {
-        "allowUnsandboxedCommands": sandbox.allow_unsandboxed_commands,
-        "enableWeakerNestedSandbox": sandbox.weaker_nested_sandbox,
-    }
-    warnings: list[str] = []
+    findings: list[tuple[str, list[str]]] = []
     for label, path in files:
         found = _json_object(path).get("sandbox")
         if not isinstance(found, dict):
@@ -542,20 +570,193 @@ def settings_file_sandbox_warnings(
             extra = [str(entry) for entry in value if str(entry) not in own]
             if extra:
                 beyond.append(f"{name}: {', '.join(extra)}")
-        for name, keys, weak in SANDBOX_SWITCH_KEYS:
-            if _nested(found, keys) is weak and own_switches.get(name) is not weak:
+        for name, keys, weak, field in SANDBOX_SWITCH_KEYS:
+            own_value = getattr(sandbox, field) if field else not weak
+            if _nested(found, keys) is weak and own_value is not weak:
                 beyond.append(f"{name}: {json.dumps(weak)}")
+        for name, keys in SANDBOX_VALUE_KEYS:
+            value = _nested(found, keys)
+            if value is not None:
+                beyond.append(f"{name}: {json.dumps(value)[:80]}")
         if beyond:
-            warnings.append(
-                f"{label} holds sandbox settings that go beyond calu's configuration "
-                f"({'; '.join(beyond)}). calu passes its own sandbox settings with --settings, "
-                "which has precedence, and with Claude Code 2.1.319 such entries of the "
-                "project's files were measured to have no effect; Claude Code's documentation "
-                "describes the lists as merged, so another version may honour them. Remove "
-                "them from the file, and put what the session needs into calu's configuration "
-                "(e.g. `calu config add claude.sandbox.allowed_domains <domain>`)."
-            )
-    return warnings
+            findings.append((label, beyond))
+    return findings
+
+
+SANDBOX_ENTRY_REMEDY = (
+    "Remove them from the file and put what the session needs into calu's configuration "
+    "(e.g. `calu config add claude.sandbox.allowed_domains <domain>`), or leave the file out "
+    "with claude.setting_sources."
+)
+"""What to do about a settings file's sandbox entries; the same in the warning and the refusal."""
+
+
+def settings_file_sandbox_blockers(
+    config: Config | ClaudeConfig, home: Path | None = None, workspace: Path | None = None
+) -> list[str]:
+    """Return the reasons for which a session must not start: sandbox entries of settings files.
+
+    calu passes its sandbox settings with `--settings`, and for the project's files and three
+    keys that precedence was measured (`spikes/RESULTS.md`, "Can a settings file widen the
+    pinned sandbox?"). For the user's file, the other keys and other CLI versions calu cannot
+    be sure, and with `claude.sandbox.fail_if_unavailable` a sandbox it cannot be sure of is a
+    reason not to run: the runner refuses the start, and during a session it makes a Bash step
+    wait for a human while a finding exists (the files can change while a session runs).
+
+    Args:
+        config: The session configuration, or its `claude` part alone, with the project's
+            network policy applied.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        One sentence per file of `settings_file_sandbox_findings`, naming the file and each
+        entry; [] when there is no finding, or when `claude.sandbox.fail_if_unavailable` is
+        false (the findings are then a warning, `settings_file_sandbox_warnings`).
+    """
+    claude = config.claude if isinstance(config, Config) else config
+    if not claude.sandbox.fail_if_unavailable:
+        return []
+    return [
+        f"{label} holds sandbox settings that go beyond calu's configuration "
+        f"({'; '.join(beyond)}). calu passes its own sandbox settings with --settings, but "
+        "cannot be sure that Claude Code leaves such entries of a settings file without "
+        "effect, so no session starts, and a Bash step waits for a human, while they are "
+        f"there (claude.sandbox.fail_if_unavailable). {SANDBOX_ENTRY_REMEDY}"
+        for label, beyond in settings_file_sandbox_findings(config, home, workspace)
+    ]
+
+
+def settings_file_sandbox_warnings(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> list[str]:
+    """Name sandbox entries of Claude Code's settings files that go beyond calu's configuration.
+
+    Args:
+        config: The session configuration, with the project's network policy applied.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        With `claude.sandbox.fail_if_unavailable`: `settings_file_sandbox_blockers`, so that
+        the reason is in front of the reader before the start is refused. Without it: one
+        warning per file of `settings_file_sandbox_findings` that names each entry and says
+        that calu runs anyway.
+    """
+    if config.claude.sandbox.fail_if_unavailable:
+        return settings_file_sandbox_blockers(config, home, workspace)
+    return [
+        f"{label} holds sandbox settings that go beyond calu's configuration "
+        f"({'; '.join(beyond)}). calu passes its own sandbox settings with --settings, which "
+        "has precedence; whether Claude Code leaves every such entry without effect was "
+        "measured only for the project's files, three keys and Claude Code 2.1.319. The "
+        "session runs anyway, because claude.sandbox.fail_if_unavailable is off. "
+        f"{SANDBOX_ENTRY_REMEDY}"
+        for label, beyond in settings_file_sandbox_findings(config, home, workspace)
+    ]
+
+
+AUTO_MODE = "auto"
+"""The permission mode in which Claude Code's classifier decides next to calu's checkers."""
+
+
+def expected_permission_mode(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> tuple[str, str]:
+    """Work out the permission mode a session is expected to start in, and what sets it.
+
+    `claude.permission_mode` decides when it is set. Otherwise Claude Code takes
+    `permissions.defaultMode` from its settings files; of the loaded sources
+    (`claude.setting_sources`) the local file has precedence over the project's and that over
+    the user's. Without any of them a headless start runs in the mode "default" (measured, CLI
+    2.1.319). This reads files only. It is an expectation: a managed policy or a model without
+    an auto mode can make Claude Code start in another mode, which is why the runner reports
+    the mode Claude Code really runs in when the session starts.
+
+    Args:
+        config: The session configuration.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        (the mode, where it comes from as a phrase for a message).
+
+    Example:
+        With the default configuration and no settings file: `("default", "no settings file
+        sets permissions.defaultMode")`.
+    """
+    if config.claude.permission_mode is not None:
+        return config.claude.permission_mode, "claude.permission_mode"
+    sources = set(config.claude.setting_sources)
+    home = home if home is not None else Path.home()
+    files: list[tuple[str, Path]] = []
+    if workspace is not None and "local" in sources:
+        files.append((".claude/settings.local.json", workspace / ".claude" / "settings.local.json"))
+    if workspace is not None and "project" in sources:
+        files.append((".claude/settings.json", workspace / ".claude" / "settings.json"))
+    if "user" in sources:
+        files.append(("~/.claude/settings.json", home / ".claude" / "settings.json"))
+    for label, path in files:
+        mode = _nested(_json_object(path), ("permissions", "defaultMode"))
+        if isinstance(mode, str) and mode:
+            return mode, f"permissions.defaultMode in {label}"
+    return "default", "no settings file sets permissions.defaultMode"
+
+
+def permission_mode_line(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> tuple[bool, str]:
+    """Say in one line whether auto mode's classifier is expected to decide next to the checkers.
+
+    In the mode "auto" a step runs only if calu's checkers (or the allow lists) and Claude
+    Code's classifier approve it (PLAN.md D5). In every other mode the checkers decide alone,
+    or, with `claude.require_auto_mode`, a step they pass waits for a human. Which of the three
+    holds is what a person starting an unattended run has to see.
+
+    Args:
+        config: The session configuration.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        (True if the expected mode is "auto", the line). The line names the mode, what sets it
+        (`expected_permission_mode`) and what follows for a step the checkers pass.
+    """
+    mode, source = expected_permission_mode(config, home, workspace)
+    if mode == AUTO_MODE:
+        return True, (
+            f'Auto mode\'s classifier is expected to be active (permission mode "auto": '
+            f"{source}): a step needs calu's checkers and the classifier."
+        )
+    consequence = (
+        "a step the checkers pass waits for a human (claude.require_auto_mode)"
+        if config.claude.require_auto_mode
+        else "a step the checkers pass runs on their word alone. Set claude.permission_mode "
+        'to "auto" for the second approval, or claude.require_auto_mode to make such steps '
+        "wait for a human"
+    )
+    return False, (
+        f'Auto mode\'s classifier is NOT active (permission mode "{mode}": {source}), so '
+        f"{consequence}."
+    )
+
+
+def permission_mode_warnings(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> list[str]:
+    """Return the start-up warning about a session without auto mode's classifier.
+
+    Args:
+        config: The session configuration.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        The line of `permission_mode_line` when the expected mode is not "auto", else [] (the
+        runner reports the mode "auto" itself when Claude Code confirms it at the start).
+    """
+    active, line = permission_mode_line(config, home, workspace)
+    return [] if active else [line]
 
 
 def _nested(document: dict[str, object], keys: tuple[str, ...]) -> object:
@@ -598,26 +799,29 @@ def warnings(
     checkers: Collection[str] = (),
     workspace: Path | None = None,
 ) -> list[str]:
-    """Return all start-up warnings (sandbox, API keys, write sets, network, heartbeat).
+    """Return all start-up warnings (sandbox, API keys, write sets, network, permission mode).
 
     Args:
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
         checkers: Names of the enabled checker definitions, for the checks that depend on
             which checkers exist rather than only on the configuration.
-        workspace: The project directory, for `setting_source_warnings` and
-            `settings_file_sandbox_warnings`; None skips the project's files.
+        workspace: The project directory, for `setting_source_warnings`,
+            `settings_file_sandbox_warnings` and `permission_mode_warnings`; None skips the
+            project's files.
 
     Returns:
-        The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
-        `network_warnings`, `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`,
-        `bedrock_warnings`, `setting_source_warnings`, `settings_file_sandbox_warnings`,
-        `unknown_provider_warnings` and `self_approval_warnings`.
+        The warnings of `sandbox_warnings`, `permission_mode_warnings`, `key_warnings`,
+        `unknown_provider_warnings`, `change_warnings`, `network_warnings`,
+        `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`, `bedrock_warnings`,
+        `setting_source_warnings`, `settings_file_sandbox_warnings` and
+        `self_approval_warnings`.
     """
     return (
         sandbox_warnings(config)
+        + permission_mode_warnings(config, workspace=workspace)
         + key_warnings(config, environ)
-        + unknown_provider_warnings(config)
+        + unknown_provider_warnings(config, environ=environ)
         + change_warnings(config)
         + network_warnings(config)
         + heartbeat_warnings(config)

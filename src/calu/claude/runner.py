@@ -18,17 +18,37 @@ from calu.checkers.result_checker import SubagentResult
 from calu.protocol.messages import AgentInfo, Event
 
 EventSink = Callable[[Event], Awaitable[None]]
-"""Receives events in the order Claude produced them. Must not block for long."""
+"""Receives events in the order Claude produced them. Must not block for long.
 
-NOT_FROM_USER: Literal["cross_session"] = "cross_session"
+The contract between a runner and its sink (`ClaudeRunner.run`): the runner calls the sink
+once for every event, in order, and an exception the sink raises never ends the stream and
+never keeps a later event from being delivered. The runner logs such an exception at level
+"error" with its traceback. It does not deliver the event a second time, so a sink that keeps
+state (the session's "a turn is running") has to bring that state up to date before anything
+in it can raise, or in a `finally`."""
+
+NOT_FROM_USER: Literal["system"] = "system"
 """`UserInput.source` of a user-role message that no human sent through calu.
 
 Claude Code puts more into the user role than the user's words: calu's own notes (a checker's
 remark on a subagent result or on a write set), notifications of finished background tasks,
-messages of other sessions, hook feedback. The checkers accept only the user's messages as
-authorization, so a runner reports every such text with this source; the session then records
-it narrated, as a separate turn entry, and never under "User:". The protocol has one value for
-"not the user", which is named after its first use (a message from another Claude session)."""
+hook feedback, the marker of an interrupted request. The checkers accept only the user's
+messages as authorization, so a runner reports every such text with this source; the session
+then records it narrated, as a separate turn entry under `NOT_FROM_USER_LABEL`, and never
+under "User:". A message of another Claude session keeps its own source, "cross_session"
+(`calu.context.foreign`)."""
+
+NOT_FROM_USER_LABEL = "Automatic message from calu or Claude Code, not from the user"
+"""Turn entry label of a `NOT_FROM_USER` message, as the checkers read it."""
+
+
+class StartRefused(Exception):
+    """A runner did not start the session, because calu could not be sure it would be safe.
+
+    The message says what was found and what to do about it. Nothing was started: no Claude
+    Code process runs, and no step was taken.
+    """
+
 
 Priority = Literal["next", "later"]
 """Delivery of a user message: "next" = after the running tool calls, "later" = after the turn."""
@@ -172,12 +192,22 @@ class ClaudeRunner(Protocol):
     ) -> None:
         """Start the session and forward its events to `sink` until stopped.
 
+        The runner calls `sink` once for every event, in the order Claude produced them. A
+        sink that raises does not end the session and does not stop the stream: the runner
+        logs the exception at level "error" and goes on with the next event (`EventSink`).
+        Every turn that Claude Code ends is reported with one `turn.result` event, also when
+        the runner could not read the details of the result.
+
         Args:
             gate: Asked before every tool call of the main agent and of subagents.
             sink: Receives the session's events in order.
             resume_id: Claude session id to resume, or None for a new session.
             fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
                 whole. Needs `resume_id`, and gives the new session its own id.
+
+        Raises:
+            StartRefused: If the runner did not start the session because calu could not be
+                sure of a protection it relies on; the message says which and what to do.
         """
         ...
 

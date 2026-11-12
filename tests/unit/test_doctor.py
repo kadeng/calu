@@ -283,3 +283,43 @@ def test_a_password_free_credential_where_no_sandbox_can_run_is_a_finding(
     assert not finding.ok and "socat missing" in finding.detail
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/" + name)
     assert doctor.self_approval_findings(store) == []
+
+
+def test_doctor_says_whether_auto_modes_classifier_would_be_active(tmp_path: Path) -> None:
+    import json
+
+    home, workspace = tmp_path / "home", tmp_path / "ws"
+    (home / ".claude").mkdir(parents=True)
+    (workspace / ".claude").mkdir(parents=True)
+    (finding,) = doctor.permission_mode_findings(home=home)
+    assert finding.name == "auto mode" and not finding.ok
+    assert "NOT active" in finding.detail and "claude.permission_mode auto" in finding.advice
+    assert "NOT active" in finding.line()
+
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "auto"}})
+    )
+    (finding,) = doctor.permission_mode_findings(home=home)
+    assert finding.ok and "expected to be active" in finding.line()
+    # The project's file has precedence over the user's.
+    (workspace / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "plan"}})
+    )
+    (finding,) = doctor.permission_mode_findings(workspace, home)
+    assert not finding.ok and '"plan"' in finding.detail
+
+
+def test_the_local_findings_hold_the_auto_mode_line(store: CredentialStore) -> None:
+    assert "auto mode" in [finding.name for finding in doctor.local_findings(store)]
+
+
+def test_doctor_names_sandbox_entries_a_session_would_not_start_with(tmp_path: Path) -> None:
+    home, workspace = tmp_path / "home", tmp_path / "ws"
+    (workspace / ".claude").mkdir(parents=True)
+    assert doctor.settings_file_findings(workspace, home) == []
+    (workspace / ".claude" / "settings.json").write_text(
+        '{"sandbox": {"excludedCommands": ["docker"]}}'
+    )
+    (finding,) = doctor.settings_file_findings(workspace, home)
+    assert not finding.ok and "excludedCommands: docker" in finding.detail
+    assert "does not start" in finding.advice

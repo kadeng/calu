@@ -108,6 +108,7 @@ from calu.checkers.rules import (
 )
 from calu.checkers.tools import StepTime
 from calu.claude.runner import (
+    NOT_FROM_USER_LABEL,
     ClaudeRunner,
     EventSink,
     Fork,
@@ -2991,8 +2992,8 @@ class Session:
             event: The event from the runner.
         """
         match event:
-            case UserInput() if event.source == "cross_session":
-                self._record_cross_session(event.text)
+            case UserInput() if event.source != "user":
+                self._record_cross_session(event.text, event.source)
             case UserInput():
                 self.context.user_input(event.text, event.uuid)
                 await self._take_from_queue(event.text)
@@ -3145,8 +3146,8 @@ class Session:
             log.exception("narrating Claude's output failed")
             return ""
 
-    def _record_cross_session(self, text: str) -> None:
-        """Record a message from another Claude session as a turn entry, not as user input.
+    def _record_cross_session(self, text: str, source: str = "cross_session") -> None:
+        """Record a message that is not the user's as a turn entry, not as user input.
 
         The entry's summary is a placeholder until the narrator has retold the message (in the
         background); with narration off it stays a fixed text. The message is never put into
@@ -3154,22 +3155,31 @@ class Session:
 
         Args:
             text: The message as Claude Code delivered it.
+            source: `UserInput.source` of the message: "cross_session" for a message from
+                another Claude session; every other value is recorded as an automatic message
+                of calu or Claude Code (`NOT_FROM_USER_LABEL`).
         """
-        record = StepRecord(tool_name=CROSS_SESSION_LABEL, summary=CROSS_SESSION_PENDING)
+        cross = source == "cross_session"
+        label = CROSS_SESSION_LABEL if cross else NOT_FROM_USER_LABEL
+        record = StepRecord(tool_name=label, summary=CROSS_SESSION_PENDING)
         if self.narrator is None:
             record.summary = CROSS_SESSION_HIDDEN
         self.context.step(record)
         if self.narrator is not None and self._tg is not None:
-            self._spawn(self._narrate_cross_session, record, text)
+            self._spawn(self._narrate_cross_session, record, text, "message" if cross else "notice")
 
-    async def _narrate_cross_session(self, record: StepRecord, text: str) -> None:
-        """Narrate a message from another session into its turn entry; never raises.
+    async def _narrate_cross_session(
+        self, record: StepRecord, text: str, kind: Literal["message", "notice"] = "message"
+    ) -> None:
+        """Narrate a message that is not the user's into its turn entry; never raises.
 
         Args:
             record: The turn entry created by `_record_cross_session`.
             text: The message.
+            kind: "message" for a message from another Claude session, "notice" for an
+                automatic message of calu or Claude Code.
         """
-        narration = await self._narrate_safely([ClaudeOutput("message", text)])
+        narration = await self._narrate_safely([ClaudeOutput(kind, text)])
         record.summary = narration or CROSS_SESSION_HIDDEN
 
     async def _narrate_record(self, record: StepRecord, outputs: list[ClaudeOutput]) -> None:

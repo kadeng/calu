@@ -790,3 +790,85 @@ Grep gets "No such tool available: Grep ... search file contents with `grep` via
 instead". Searches therefore reach calu as Bash commands, which D149 checks the same way
 (`grep -rn API_KEY .` in a folder with an un-ignored `.env` escalated in a real session). The
 D146 check stays for older CLIs and for clients that bring their own Grep tool.
+
+
+## Can a settings file widen the pinned sandbox? (2026-11-12, CLI 2.1.319)
+
+**Question:** calu passes its sandbox settings with `--settings`. Do sandbox entries of the
+project's own settings files still take effect next to it?
+
+**Setup:** `spikes/spike_settings_widen.sh` (model haiku). A scratch project denies reading one
+directory. Its `.claude/settings.json`, or its `.claude/settings.local.json`, holds one of two
+things: `filesystem.allowRead` for a file in that directory together with
+`network.allowedDomains: ["example.com"]`, or `excludedCommands` naming `cat`. The session then
+reads the file and fetches the domain. Each case runs twice: "alone" without `--settings` (the
+control), and "pinned" with the complete document `calu.config.SandboxConfig.settings` writes
+(every key of `PINNED_SANDBOX_KEYS`).
+
+| File | Entry | alone | pinned |
+|---|---|---|---|
+| `.claude/settings.json` | `filesystem.allowRead` | the file is read | not readable |
+| `.claude/settings.json` | `network.allowedDomains` | HTTP 200 | proxy answers 403 |
+| `.claude/settings.local.json` | `filesystem.allowRead` | the file is read | not readable |
+| `.claude/settings.local.json` | `network.allowedDomains` | HTTP 200 | proxy answers 403 |
+| `.claude/settings.json` | `excludedCommands` | the file is read | not readable |
+| `.claude/settings.local.json` | `excludedCommands` | the file is read | not readable |
+
+**Results:**
+
+- With calu's document in `--settings`, none of the three keys of the two project files had an
+  effect; each of them had one in the control.
+- The CLI accepts the complete document, including `enableWeakerNetworkIsolation: false`,
+  `filesystem.allowWrite: []`, `network.deniedDomains: []` and `network.allowUnixSockets: []`,
+  and the sandbox works with it.
+- The control for `excludedCommands` only matches a command without a redirection: the first
+  run used `cat FILE > out 2>&1` and stayed in the sandbox even alone, which proved nothing.
+  The spike now runs the plain command and reads the answer from the result.
+
+**Not measured:** the user's `~/.claude/settings.json` (measuring it means editing the file every
+other Claude Code session of that user reads, or running the CLI with a copy of the login), the
+remaining keys (`filesystem.allowWrite`, `network.allowUnixSockets`, the switches, the proxy
+ports, `ignoreViolations`), a settings file that changes during a session, and other CLI
+versions. Claude Code's documentation describes the lists as merged across scopes.
+
+**Consequence:** calu does not rest on this measurement. With
+`claude.sandbox.fail_if_unavailable` (the default), a session does not start while a loaded
+settings file holds a sandbox entry beyond calu's configuration, and a Bash step waits for a
+human when such an entry appears during a session
+(`calu.preflight.settings_file_sandbox_blockers`, `SdkRunner.run`, the PreToolUse hook).
+
+**Re-run when** the CLI is updated. If a pinned case ever reads the file or reaches the domain,
+the precedence no longer holds for that key, and the refusal above is the only protection.
+
+
+## Whose words a user-role message is (2026-11-12, CLI 2.1.319, claude-agent-sdk 0.2.179)
+
+**Question:** `SdkRunner._user_source` counts a user-role text as the user's only when the
+session sent exactly that text for a human. Does the real CLI replay a prompt, a queued message
+and a message injected into a running turn in a form that rule recognises?
+
+**Setup:** `tests/unit/test_runner_live.py` (marker `live`) drives a `Session` with the real
+runner, the sandbox on and fake checkers: a prompt that runs `sleep 12; echo <marker>`, a
+message injected while the command runs (`priority: "next"`), a queued message
+(`priority: "later"`), and a note that the write-set review returns after the command. A
+one-off probe printed `UserMessage.origin` for each user-role message, with a background
+command in place of the foreground one.
+
+**Results:**
+
+- The prompt, the injected and the queued message are each replayed once, with the text
+  unchanged, `origin` None and a transcript uuid. All three are recorded in
+  `TurnRecord.user_inputs`; the queued message starts the second turn.
+- calu's own note (sent from the PostToolUse hook) is replayed too, also with `origin` None.
+  So the origin does not tell it from a prompt; the comparison with the texts sent for a human
+  does. It is reported with the source "system" and never reaches `user_inputs`.
+- The command's output arrives as a tool result block in a user-role message and becomes
+  `tool.result`, not `user.input`.
+- A finished background command started the next turn by itself, and no user-role message
+  announced it on the stream; nothing was reported as user input for it.
+
+**Not measured:** a slash command as a prompt (Claude Code may replay it with another text; calu
+would then record it as not from the user, which keeps the checkers strict and loses the
+prompt in their context), and messages of channels or peers.
+
+**Re-run when** the CLI or the SDK is updated: `uv run pytest -m live tests/unit/test_runner_live.py`.

@@ -30,6 +30,7 @@ Messages sent with priority "next" during a turn are taken in after the current 
 """
 
 import itertools
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -47,11 +48,14 @@ from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
     AssistantThinking,
+    Event,
     ToolResult,
     ToolUse,
     TurnResult,
     UserInput,
 )
+
+log = logging.getLogger(__name__)
 
 FOLLOW_UP_DELAY_S = 0.2
 """Pause before the scripted follow-up turn of `{"background_tasks": N}`, standing in for the
@@ -101,6 +105,8 @@ class FakeRunner:
         self._cancel: anyio.CancelScope | None = None
         self._interrupted = False
         self.agents: dict[str, AgentInfo] = {}
+        self.sink_failures = 0
+        """How often the sink raised on an event; each time is logged (`run`)."""
         self.fork: Fork | None = None
         """The fork point `run` was called with, for tests (PLAN.md D36)."""
         self._follow_up = False
@@ -114,7 +120,9 @@ class FakeRunner:
     ) -> None:
         """Run one scripted turn per received message until `stop` is called.
 
-        Each message is first reported as a `UserInput` event.
+        Each message is first reported as a `UserInput` event. Like the real runner, this one
+        keeps the sink contract (`calu.claude.runner.EventSink`): a sink that raises is logged
+        at level "error", and the script goes on with the next event.
 
         Args:
             gate: Asked before every scripted tool call.
@@ -129,6 +137,21 @@ class FakeRunner:
         self.fork = fork
         if resume_id:
             self.session_id = resume_id
+        deliver = sink
+
+        async def guarded(event: Event) -> None:
+            """Hand one event to the caller's sink; an exception it raises is logged.
+
+            Args:
+                event: The event.
+            """
+            try:
+                await deliver(event)
+            except Exception:
+                self.sink_failures += 1
+                log.exception("the event sink raised on a %s event", event.method)
+
+        sink = guarded
         with anyio.CancelScope() as scope:
             self._cancel = scope
             self._ready.set()

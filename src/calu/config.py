@@ -16,16 +16,23 @@ Checker API keys are not configuration: calu reads them from its own environment
 `~/.config/calu/.env` (`load_secrets`), and hides them from Claude Code.
 """
 
+import functools
+import importlib.util
+import inspect
 import os
+import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from calu.checkers.model import CheckerEffort
 from calu.checkers.policy import Route
+from calu.paths import calu_private_paths
+
+__all__ = ["calu_private_paths"]  # re-exported: `calu.paths` holds it, callers import it here
 
 EMPTY_CHAT_SUMMARY = "# Chat summary\n\nNo turns have been folded into this summary yet.\n"
 """Chat summary of a session without folded turns."""
@@ -109,48 +116,6 @@ class ContextConfig(ConfigModel):
     skill_dirs: list[str] = Field(default_factory=lambda: [".claude/skills"])
     """Workspace-relative directories whose skills contribute their name and description to
     the context prefix."""
-
-
-def calu_private_paths(environ: Mapping[str, str] | None = None) -> list[str]:
-    """Return the directories that hold calu's own secrets and state on this machine.
-
-    These are the directory of the credential store and of the env file with the checker API
-    keys (`calu.credentials.default_path`, `user_env_file`: `$XDG_CONFIG_HOME/calu`) and the
-    directory above the snapshot repositories (`calu.changes.default_root`:
-    `$XDG_STATE_HOME/calu`). The two literal defaults `~/.config/calu` and `~/.local/state/calu`
-    are always included as well, so a variable that is set for calu and unset elsewhere cannot
-    uncover them.
-
-    `SandboxConfig.settings` adds these paths to the sandbox's read deny list whatever the
-    configured `deny_read` holds: the protection of calu's own files is not a setting.
-
-    Args:
-        environ: The environment to read `XDG_CONFIG_HOME` and `XDG_STATE_HOME` from; None
-            uses `os.environ`.
-
-    Returns:
-        The paths without duplicates, the literal defaults first. A path below the home
-        directory is written with "~", as Claude Code's settings expect.
-
-    Example:
-        With `XDG_CONFIG_HOME=/srv/cfg` and no `XDG_STATE_HOME`:
-        `["~/.config/calu", "~/.local/state/calu", "/srv/cfg/calu"]`.
-    """
-    env = os.environ if environ is None else environ
-    paths = ["~/.config/calu", "~/.local/state/calu"]
-    home = Path.home()
-    for variable, fallback in (
-        ("XDG_CONFIG_HOME", home / ".config"),
-        ("XDG_STATE_HOME", home / ".local" / "state"),
-    ):
-        directory = Path(env.get(variable) or fallback) / "calu"
-        try:
-            text = "~/" + directory.relative_to(home).as_posix()
-        except ValueError:
-            text = str(directory)
-        if text not in paths:
-            paths.append(text)
-    return paths
 
 
 DEFAULT_DENY_READ = (
@@ -240,26 +205,31 @@ policy says. So the three policies are expressed through the proxy's allow list:
 class SandboxConfig(ConfigModel):
     """Isolation of Bash commands by Claude Code's own sandbox (PLAN.md D15).
 
-    calu passes these settings with `--settings`, which overrides the project's and the user's
-    settings files, so the agent cannot switch the sandbox off by writing
-    `.claude/settings.json`. `settings()` writes every key that can widen the sandbox, also
-    when its value is empty, so that no key is left for a settings file to fill. Measured with
-    CLI 2.1.319: while `--settings` carries a `sandbox` object, `filesystem.allowRead` and
-    `network.allowedDomains` of the project's `.claude/settings.json` and
-    `.claude/settings.local.json` have no effect (alone, the same files do re-open a denied
-    path and a domain). `calu.preflight.settings_file_sandbox_warnings` names such entries at
-    every start, because Claude Code's documentation describes these lists as merged across
-    scopes and a later CLI may do that. The sandbox needs `bwrap` and `socat` on the machine
-    (`calu.preflight`).
+    calu passes these settings with `--settings`, which has precedence over the project's and
+    the user's settings files, so a settings file does not switch the sandbox off. `settings()`
+    writes each key of `PINNED_SANDBOX_KEYS`, also when its value is empty or false, so that
+    the document itself says what every one of them is. Measured with CLI 2.1.319
+    (`spikes/RESULTS.md`, "Can a settings file widen the pinned sandbox?"): while `--settings`
+    carries that document, `filesystem.allowRead`, `network.allowedDomains` and
+    `excludedCommands` of the project's `.claude/settings.json` and
+    `.claude/settings.local.json` have no effect. Not measured: the user's
+    `~/.claude/settings.json`, the other keys, and other CLI versions. calu therefore does not
+    rely on the precedence alone: with `fail_if_unavailable`, a session does not start, and a
+    Bash step waits for a human, while a loaded settings file holds a sandbox entry that goes
+    beyond calu's configuration (`calu.preflight.settings_file_sandbox_findings`); without it,
+    such entries are named in a start-up warning. The sandbox needs `bwrap` and `socat` on the
+    machine (`calu.preflight`).
 
     calu's own directories (`calu_private_paths()`) are always on the read deny list; the
     `deny_read` setting holds further paths and cannot remove them.
 
     `fail_if_unavailable` makes Claude Code refuse to start without a working sandbox, instead
-    of running commands unsandboxed. `allow_unsandboxed_commands` False stops a call from
-    leaving the sandbox with `dangerouslyDisableSandbox`. `auto_allow_bash` stays False: Claude
-    Code would otherwise approve sandboxed Bash calls by itself, which would skip the auto-mode
-    classifier that PLAN.md D5 uses as the second opinion next to the checkers.
+    of running commands unsandboxed, and makes calu refuse to start a session whose settings
+    files hold sandbox entries beyond calu's configuration. `allow_unsandboxed_commands` False
+    stops a call from leaving the sandbox with `dangerouslyDisableSandbox`. `auto_allow_bash`
+    stays False: Claude Code would otherwise approve sandboxed Bash calls by itself, which
+    would skip the auto-mode classifier that PLAN.md D5 uses as the second opinion next to the
+    checkers.
 
     `excluded_commands` run outside the sandbox and are therefore only covered by the checkers
     and the deny lists; the default is empty. `allowed_domains` and `denied_domains` configure
@@ -271,7 +241,10 @@ class SandboxConfig(ConfigModel):
     """Isolate Bash commands with Claude Code's own sandbox. Off removes that isolation and
     leaves only the checkers and the deny lists."""
     fail_if_unavailable: bool = True
-    """Refuse to start when no sandbox can be built, instead of running commands unsandboxed."""
+    """Refuse to start when calu cannot be sure of the sandbox: when none can be built
+    (Claude Code would otherwise run commands unsandboxed), and when one of Claude Code's
+    settings files holds a sandbox entry that goes beyond calu's configuration (a Bash step
+    also waits for a human while such an entry exists). False turns both into warnings."""
     allow_unsandboxed_commands: bool = False
     """Let a call leave the sandbox with `dangerouslyDisableSandbox`. False keeps it in."""
     auto_allow_bash: bool = False
@@ -338,43 +311,66 @@ class SandboxConfig(ConfigModel):
     def settings(self) -> dict[str, Any]:
         """Return the Claude Code settings document for `--settings`.
 
-        Every key that can widen the sandbox is written, also with an empty or false value:
-        `excludedCommands`, `enableWeakerNestedSandbox`, `filesystem.denyRead`,
-        `filesystem.allowRead` (always empty: calu re-opens nothing inside a denied path),
-        `network.allowedDomains`, and `network.allowAllUnixSockets` and
-        `network.allowLocalBinding` (always false: calu has no setting for them). A key calu
-        left out would be one that only the settings files define.
+        The document holds exactly the keys of `PINNED_SANDBOX_KEYS`, each of them always,
+        also with an empty or false value. Four of them have no setting in calu and a fixed
+        value: `filesystem.allowRead` and `filesystem.allowWrite` are empty (calu re-opens
+        nothing inside a denied path and adds no writable path), and
+        `enableWeakerNetworkIsolation`, `network.allowAllUnixSockets` and
+        `network.allowLocalBinding` are false. The complete document was run through CLI
+        2.1.319, which accepts it (`spikes/spike_settings_widen.sh`).
 
         Returns:
             `{"sandbox": {...}}` with the keys Claude Code expects (camel case).
-            `filesystem.denyRead` is `denied_read_paths()`. `network.deniedDomains` and
-            `network.allowUnixSockets` are left out when they are empty.
+            `filesystem.denyRead` is `denied_read_paths()`.
 
         Example:
             `SandboxConfig().settings()["sandbox"]["failIfUnavailable"]` is True, and
             `SandboxConfig(deny_read=[]).settings()["sandbox"]["filesystem"]["denyRead"]`
             still starts with "~/.config/calu".
         """
-        network: dict[str, Any] = {
-            "allowedDomains": list(self.allowed_domains),
-            "allowAllUnixSockets": False,
-            "allowLocalBinding": False,
-        }
-        if self.denied_domains:
-            network["deniedDomains"] = list(self.denied_domains)
-        if self.allow_unix_sockets:
-            network["allowUnixSockets"] = list(self.allow_unix_sockets)
         sandbox: dict[str, Any] = {
             "enabled": self.enabled,
             "failIfUnavailable": self.fail_if_unavailable,
             "allowUnsandboxedCommands": self.allow_unsandboxed_commands,
             "autoAllowBashIfSandboxed": self.auto_allow_bash,
             "enableWeakerNestedSandbox": self.weaker_nested_sandbox,
+            "enableWeakerNetworkIsolation": False,
             "excludedCommands": list(self.excluded_commands),
-            "filesystem": {"denyRead": self.denied_read_paths(), "allowRead": []},
-            "network": network,
+            "filesystem": {
+                "denyRead": self.denied_read_paths(),
+                "allowRead": [],
+                "allowWrite": [],
+            },
+            "network": {
+                "allowedDomains": list(self.allowed_domains),
+                "deniedDomains": list(self.denied_domains),
+                "allowUnixSockets": list(self.allow_unix_sockets),
+                "allowAllUnixSockets": False,
+                "allowLocalBinding": False,
+            },
         }
         return {"sandbox": sandbox}
+
+
+PINNED_SANDBOX_KEYS = (
+    "enabled",
+    "failIfUnavailable",
+    "allowUnsandboxedCommands",
+    "autoAllowBashIfSandboxed",
+    "enableWeakerNestedSandbox",
+    "enableWeakerNetworkIsolation",
+    "excludedCommands",
+    "filesystem.denyRead",
+    "filesystem.allowRead",
+    "filesystem.allowWrite",
+    "network.allowedDomains",
+    "network.deniedDomains",
+    "network.allowUnixSockets",
+    "network.allowAllUnixSockets",
+    "network.allowLocalBinding",
+)
+"""The keys of the `sandbox` object that `SandboxConfig.settings` writes, as dotted paths. A
+test compares this list with the document, so the docstrings that refer to it stay true."""
 
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
@@ -405,7 +401,9 @@ class ClaudeConfig(ConfigModel):
     reads the effective mode from its input, defers a PASS to the classifier where the mode is
     "auto", and otherwise answers "allow" itself, so that the checkers decide alone (D21). The
     runner reports the effective mode as a `log` event at the start and whenever it changes,
-    as a warning while it is not "auto".
+    as a warning while it is not "auto". Before that, the start-up warnings and `calu doctor`
+    say which mode is expected and whether the classifier will be active
+    (`calu.preflight.permission_mode_line`).
 
     `require_auto_mode`: if true, a step the checkers PASS while the effective mode is not
     "auto" waits for a human instead of running on the checkers' word alone.
@@ -414,7 +412,7 @@ class ClaudeConfig(ConfigModel):
     (`assistant.delta` events); otherwise they arrive per completed block only.
 
     `sandbox`: how Bash commands are isolated (`SandboxConfig`); calu passes it to Claude Code
-    with `--settings`, which overrides the settings files in the project.
+    with `--settings`, which has precedence over the settings files in the project.
     """
 
     use_bedrock: bool = False
@@ -452,8 +450,10 @@ class ClaudeConfig(ConfigModel):
     them by default, as a plain `claude` does: calu wraps Claude Code and leaves how it loads
     its configuration, skills, MCP servers, plugins and auth alone (D178, the owner's answer
     to Q21). A narrower list is possible; the start-up warning then names what it leaves out.
-    calu's `--settings` document overrides them for the sandbox either way, and the start-up
-    warnings name sandbox entries of these files that go beyond calu's own configuration."""
+    calu's `--settings` document has precedence over them for the sandbox either way; a
+    sandbox entry of these files that goes beyond calu's own configuration keeps a session
+    from starting (`claude.sandbox.fail_if_unavailable`), or is named in a start-up warning
+    when that setting is off."""
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     """Isolation of Bash commands (PLAN.md D15, D4)."""
 
@@ -599,7 +599,9 @@ class Config(ConfigModel):
     """Further environment variables (e.g. API keys of other checker providers) that Claude
     Code must not see, in addition to the ones from the env files and `PROVIDER_KEYS`. The
     runner blanks them in the environment of the Claude Code process, so its commands do not
-    inherit them either. A changed list applies to the next session start."""
+    inherit them either. A changed list applies to the next session start. Each entry is the
+    name of one variable (e.g. `XAI_API_KEY`), without a value. Add or remove single names
+    with `calu config add|remove hidden_env <NAME>`."""
     tool_routes: dict[str, Route] = Field(default_factory=dict)
     """Route per tool name, overriding the built-in table (`calu.checkers.policy`), e.g.
     `{"mcp__deploy__ship": "escalate"}`."""
@@ -616,6 +618,31 @@ class Config(ConfigModel):
     """Measuring what a command wrote, and reviewing it afterwards (PLAN.md D31)."""
     web: WebConfig = Field(default_factory=WebConfig)
     """Settings of the web interface."""
+
+    @field_validator("hidden_env")
+    @classmethod
+    def _variable_names(cls, names: list[str]) -> list[str]:
+        """Accept only names an environment variable can have.
+
+        An entry such as `A=B` would otherwise fail much later, when the Claude Code process
+        is started with it, and with an error that says nothing about this setting.
+
+        Args:
+            names: The configured entries.
+
+        Returns:
+            The entries, unchanged.
+
+        Raises:
+            ValueError: If an entry is empty, or contains "=", a NUL character or white space.
+        """
+        for name in names:
+            if not name or "=" in name or "\0" in name or any(c.isspace() for c in name):
+                raise ValueError(
+                    f"hidden_env holds names of environment variables, and {name!r} is not "
+                    'one: a name is not empty and has no "=", white space or NUL character'
+                )
+        return names
 
     def with_model(self, model: str) -> Config:
         """Return a copy in which every model role uses `model`.
@@ -752,20 +779,88 @@ PROVIDER_KEYS_BY_PREFIX: dict[str, tuple[str, ...]] = {
     "mistral": ("MISTRAL_API_KEY",),
     "fireworks": ("FIREWORKS_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
+    "openai-chat": ("OPENAI_API_KEY",),
+    "openai-responses": ("OPENAI_API_KEY",),
     "anthropic": ("ANTHROPIC_API_KEY",),
     "google-gla": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
     "groq": ("GROQ_API_KEY",),
 }
 """Pydantic AI model-string prefix -> environment variables, any one of which holds the key.
-Prefixes that are not listed (e.g. "bedrock", "ollama", "test") need no key or take their
-credentials from elsewhere, so they are not checked."""
+These are the providers whose missing key `calu.preflight.key_warnings` reports. Every variable
+here except `ANTHROPIC_API_KEY` (which Claude Code itself may use) is in `PROVIDER_KEYS`."""
 
 KEYLESS_PREFIXES = frozenset({"bedrock", "claude", "function", "google-vertex", "ollama", "test"})
 """Model-string prefixes that take no API key from an environment variable of their own: AWS and
-Google application credentials, the local `claude` CLI, a local server, and the test models.
-A prefix that is neither here nor in `PROVIDER_KEYS_BY_PREFIX` is a provider whose key variable
-calu does not know, and therefore cannot hide from Claude Code by itself
-(`calu.preflight.unknown_provider_warnings`)."""
+Google application credentials, the local `claude` CLI, a local server, and the test models."""
+
+_GETENV = re.compile(r"""os\.getenv\(\s*['"]([A-Z][A-Z0-9_]*)['"]""")
+"""A variable a Pydantic AI provider module reads, as its source spells it."""
+_SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)")
+"""Which of those variables hold a credential (and not a base URL, a region or a version)."""
+
+
+@functools.cache
+def provider_key_variables(prefix: str) -> tuple[str, ...] | None:
+    """Return the environment variables that hold the API key of a model provider.
+
+    The names in `PROVIDER_KEYS_BY_PREFIX` are used where the prefix is listed. For every other
+    provider the names are taken from the installed Pydantic AI itself: the provider's module is
+    the code that reads the key, so the variables it reads with `os.getenv` and that are named
+    like a credential are the ones a key can be in. Nothing is guessed from the prefix: the
+    variable of `xai:` is `XAI_API_KEY` and that of `huggingface:` is `HF_TOKEN`.
+
+    Reads the module's source file; the provider's own SDK is not needed, and nothing of the
+    provider is called. The result is cached per prefix.
+
+    Args:
+        prefix: The part of a model string before the colon, e.g. "xai" or "azure".
+
+    Returns:
+        The variable names in the order the module reads them; an empty tuple for a prefix of
+        `KEYLESS_PREFIXES`; None when Pydantic AI has no provider of that name or its module
+        reads no credential variable, which means calu does not know the variable.
+
+    Example:
+        `provider_key_variables("xai")` is `("XAI_API_KEY",)`;
+        `provider_key_variables("no-such-provider")` is None.
+    """
+    if prefix in PROVIDER_KEYS_BY_PREFIX:
+        return PROVIDER_KEYS_BY_PREFIX[prefix]
+    if prefix in KEYLESS_PREFIXES:
+        return ()
+    source = _provider_source(prefix)
+    names = [name for name in _GETENV.findall(source) if _SECRET_NAME.search(name)]
+    return tuple(dict.fromkeys(names)) or None
+
+
+def _provider_source(prefix: str) -> str:
+    """Return the source text of the Pydantic AI module that implements a provider.
+
+    Args:
+        prefix: The provider name of a model string.
+
+    Returns:
+        The module's source, or "" when Pydantic AI knows no such provider or the source
+        cannot be read. A provider whose own SDK is not installed is still found, by the
+        module name Pydantic AI uses for it (the prefix with "-" as "_").
+    """
+    path: str | None = None
+    try:
+        from pydantic_ai.providers import infer_provider_class
+
+        path = inspect.getsourcefile(infer_provider_class(prefix))
+    except Exception:  # unknown name (ValueError), missing SDK (ImportError), no source
+        try:
+            spec = importlib.util.find_spec(f"pydantic_ai.providers.{prefix.replace('-', '_')}")
+        except ImportError, ValueError:
+            spec = None
+        path = spec.origin if spec is not None else None
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def load_secrets(env_file: Path | None = None) -> set[str]:
