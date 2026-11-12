@@ -82,9 +82,10 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
   AGENTS.md, and they can read files, glob and grep to judge on evidence.
 - **Comments, not only verdicts.** A checker can let a step through and still tell Claude to keep
   the names and the documentation honest, or to stop widening the task.
-- **Allow and deny lists before the models.** `ls` and `git status` run without a model call;
-  `sudo`, force pushes and reads of your credentials always ask a human. One model call per
-  interesting step.
+- **Allow and deny lists before the models, if you want them.** The lists start empty, so every
+  step goes to a checker. `calu rules add-set recommended` adds a ready-made set: `ls` and
+  `git status` then run without a model call, and `sudo`, force pushes and reads of your
+  credentials always ask a human.
 - **A review of the whole change before the commit.** `git commit` is held and the complete diff
   goes to a checker of its own: is it complete, is there work nobody asked for, was a test
   weakened to make it pass, does the message describe the change.

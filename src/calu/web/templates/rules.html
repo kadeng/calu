@@ -21,6 +21,17 @@
 <p class="muted">The lists of project <strong>{{ project }}</strong> apply <em>in addition to</em> the global ones.</p>
 {% endif %}
 
+{% for set_name, set_list, set_what in rule_sets if set_list == 'all' %}
+<form class="rule-set" method="post"
+      action="{{ url_for('add_rule_set', name=set_name) }}{% if project %}?project={{ project }}{% endif %}">
+  <span class="muted">The lists start empty, so every step goes to a checker. Ready-made set
+    <strong>{{ set_name }}</strong>: {{ set_what }}. Adding it appends what each list does not
+    have yet; remove any rule you do not want.</span>
+  <button type="submit">Add {{ set_name }} to every list</button>
+  {% if set_added is not none %}<span class="saved" role="status">{{ set_added }} rule(s) added from the set.</span>{% endif %}
+</form>
+{% endfor %}
+
 {% for title, kind, what in groups %}
 <h2>{{ title }}</h2>
 <div class="rule-pair">

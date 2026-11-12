@@ -9,9 +9,10 @@ from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from calu import admin
 from calu.claude import FakeRunner, FakeScript
 from calu.config import SETTINGS_KEY
-from calu.db import connect
+from calu.db import Db, connect
 from calu.db import connect as connect_db
 from calu.protocol.client import connect as connect_client
 from calu.run import RunOptions, run_session
@@ -37,6 +38,8 @@ async def prepare(db_url: str, workspace: Path) -> str:
     owner = await connect(db_url)
     try:
         _, session_url = await setup(owner, db_url, "test:model")
+        # D179: no rules are shipped; these runs are written against the recommended set.
+        await admin.add_rule_set(Db(owner), "recommended")
         # The sandbox is not available in the test environment, and the narrator would need a
         # second fake model per step; both are switched off through the stored configuration.
         await owner.execute(

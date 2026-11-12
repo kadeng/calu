@@ -22,7 +22,7 @@ from calu.db.connection import migrations
 from calu.db.local import compose_file
 from calu.defaults import default_instructions
 from calu.evals.cases import builtin_cases
-from calu.setup import default_rules
+from calu.setup import recommended_rules
 
 CHECKERS = ["command", "edit", "changeset", "narrator", "subagent-result"]
 """The checker instruction files that `calu setup` installs."""
@@ -76,7 +76,7 @@ def test_each_default_checker_instruction_ships(name: str) -> None:
 
 def test_the_default_rules_and_eval_cases_ship() -> None:
     """The deny list and the eval set are readable out of the package."""
-    assert default_rules(), "no default rule shipped with the package"
+    assert recommended_rules(), "the recommended rule set is not in the package"
     assert builtin_cases(), "no eval case shipped with the package"
 
 

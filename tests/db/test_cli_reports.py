@@ -207,8 +207,11 @@ async def test_the_configuration_commands_print_what_is_stored(prepared, capsys)
     assert "command" in said and "edit" in said and "test:model" in said
 
     assert await run(["rules", "list"]) == 0
-    said = capsys.readouterr().out
-    assert "command-deny" in said or "deny" in said
+    assert "no rules" in capsys.readouterr().out, "D179: the lists start empty"
+    assert await run(["rules", "add-set", "recommended"]) == 0
+    capsys.readouterr()
+    assert await run(["rules", "list"]) == 0
+    assert "command-deny" in capsys.readouterr().out
 
     assert await run(["project", "list"]) == 0
     assert "no projects" in capsys.readouterr().out

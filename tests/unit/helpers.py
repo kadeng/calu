@@ -14,7 +14,7 @@ from calu.defaults import default_instructions
 from calu.protocol.messages import Event
 from calu.session import Session
 from calu.setup import CHECKER_DEFAULTS
-from calu.setup import default_rules as default_rule_rows
+from calu.setup import recommended_rules as default_rule_rows
 from calu.store import CheckerDefinition, MemorySessionStore, ProjectSettings
 from calu.testing import fake_models
 

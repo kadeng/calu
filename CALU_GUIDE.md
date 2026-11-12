@@ -31,14 +31,18 @@ receives the remark together with the approval. A checker can also **look at the
 file, list files by glob, grep for a pattern, so that it judges on evidence rather than on the
 diff alone. That is all it can do: it cannot write, run commands or talk to the outside.
 
-- **Allow and deny lists before the models.** Harmless commands (`ls`, `git status`) run without
-  a model call; known-dangerous ones (`sudo`, force pushes, remote deletions, reads of your
-  credentials) always ask a human. Everything else goes to a checker. An ordinary `git push`, a
-  deploy or a package upload is left to the checker by default; `calu rules add-set publishing`
-  makes all of them ask you as well. A tool that a Claude Code update adds is checked by the
-  command checker, and the session names such tools when it starts. Any tool -- an MCP server's
-  too -- that names a protected file in its arguments asks, as reading it directly would. A search of a whole folder asks too when it would read a
-  protected file that git does not ignore, such as an un-ignored `.env` or `server.key`.
+- **Allow and deny lists before the models, if you want them.** calu ships no rules: every
+  list starts empty, and every step goes to a checker. Two ready-made sets add what most
+  projects want. `calu rules add-set recommended` lets harmless commands (`ls`, `git status`)
+  run without a model call and makes known-dangerous ones (`sudo`, force pushes, remote
+  deletions, reads of your credentials, writes to `.git`, `.claude` and `CLAUDE.md`) always ask
+  a human; `calu rules add-set publishing` makes pushes, deploys and package uploads ask as
+  well. With rules in place, the checks also follow their files through other spellings: a tool
+  -- an MCP server's too -- that names a protected file asks, as reading it directly would, and
+  so does a search of a whole folder that would read one. Independent of any list, calu always
+  protects itself: Claude may not read calu's own configuration, run `calu`, or reach calu's
+  database container without asking. A tool that a Claude Code update adds is checked by the
+  command checker, and the session names such tools when it starts.
 - **Checkers with your rules.** One checker reviews commands, one reviews edits. Their
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
   rules you would otherwise have to repeat to Claude every day (see

@@ -328,6 +328,7 @@ async def test_a_rule_list_is_edited_as_text_on_the_rules_page(db_url: str) -> N
     try:
         await setup(conn, db_url, "test:model")
         db = Db(conn)
+        await admin.add_rule_set(db, "recommended")  # D179: the lists start empty
         async with await client_for(db) as client:
             page = (await client.get("/rules")).text
             assert page.count("<textarea") == len(admin.RULE_LISTS), "one text area per list"

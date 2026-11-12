@@ -61,11 +61,20 @@ async def test_load_returns_defaults_of_a_fresh_database(db_url: str) -> None:
     assert settings.instructions("command").startswith("#")
     assert settings.instructions("nonexistent", "fallback") == "fallback"
     assert settings.checkers["command"].version == 1
-    # The default rules are in force: reading a .env file asks the human.
+    # D179: no rules are shipped, so reading a .env file goes to the checker (not free, not
+    # asked by a rule); calu's own folder stays protected by the built-in rule.
     outcome = settings.rules.evaluate(
         Step(tool_name="Read", tool_input={"file_path": "/w/.env"}, cwd="")
     )
-    assert outcome.ask and not outcome.allowed
+    assert not outcome.ask and not outcome.allowed
+    own = settings.rules.evaluate(
+        Step(
+            tool_name="Read",
+            tool_input={"file_path": "/home/u/.config/calu/credentials.json"},
+            cwd="",
+        )
+    )
+    assert own.ask
 
 
 async def test_project_settings_override_global_ones(db_url: str) -> None:

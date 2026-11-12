@@ -31,7 +31,8 @@ from calu.config import (
     merge_settings,
 )
 from calu.db import Db
-from calu.setup import parse_rule_file
+from calu.setup import RuleRow as SetupRuleRow
+from calu.setup import parse_rule_file, recommended_rules
 
 NETWORK_POLICIES = ("none", "proxy", "full")
 """Values of `projects.network_policy` (PLAN.md §7)."""
@@ -849,17 +850,23 @@ async def replace_rule_list(
 
 
 RULE_SETS: dict[str, tuple[str, str]] = {
+    "recommended": (
+        "all",
+        "harmless commands and project reads run without a model call; sudo, force pushes, "
+        "remote deletions, reads of credentials and writes to .git, .claude and CLAUDE.md ask "
+        "(the defaults before D179)",
+    ),
     "publishing": (
         "command-deny",
         "any git push, cluster and infrastructure changes, cloud deploys, package and image"
         " uploads, GitHub releases and merges",
     ),
 }
-"""Ready-made rule sets that are not in the default lists: name -> (list, what it covers).
-
-Each is the file `calu/defaults/rules/sets/<name>.txt`, in the format of the rule files. A set is
-for a decision the owner has not made for everybody (PLAN.md Q16, D143): adding it is one
-command, and afterwards its rules are ordinary rules that can be removed one by one."""
+"""Ready-made rule sets, none of them in the (empty) default lists: name -> (list, what it
+covers). A list of "all" means the set spans every list: `recommended` is the six files
+`calu/defaults/rules/<list>.txt`, the defaults before D179. Every other set is the file
+`calu/defaults/rules/sets/<name>.txt` for one list. Adding a set is one command, and afterwards
+its rules are ordinary rules that can be removed one by one (D143, D179)."""
 
 
 def rule_set(name: str) -> tuple[str, list[str], list[str]]:
@@ -877,6 +884,8 @@ def rule_set(name: str) -> tuple[str, list[str], list[str]]:
     if name not in RULE_SETS:
         raise AdminError(f"no rule set {name!r}; the sets are: {', '.join(RULE_SETS)}")
     rule_list = RULE_SETS[name][0]
+    if rule_list == "all":
+        raise AdminError(f"rule set {name!r} spans every list; use rule_set_rows")
     text = (
         resources.files("calu.defaults")
         .joinpath("rules", "sets", f"{name}.txt")
@@ -884,6 +893,29 @@ def rule_set(name: str) -> tuple[str, list[str], list[str]]:
     )
     rows = parse_rule_file(rule_list, text)
     return rule_list, [row.pattern for row in rows], [row.comment for row in rows]
+
+
+def rule_set_rows(name: str) -> list[SetupRuleRow]:
+    """Read a shipped rule set, whatever lists it spans (D179).
+
+    Args:
+        name: One of `RULE_SETS`.
+
+    Returns:
+        Its rules, list by list, in file order.
+
+    Raises:
+        AdminError: If there is no set of that name.
+    """
+    if name not in RULE_SETS:
+        raise AdminError(f"no rule set {name!r}; the sets are: {', '.join(RULE_SETS)}")
+    if RULE_SETS[name][0] == "all":
+        return recommended_rules()
+    rule_list, patterns, comments = rule_set(name)
+    return [
+        SetupRuleRow(rule_list, pattern, comment, index)
+        for index, (pattern, comment) in enumerate(zip(patterns, comments, strict=True))
+    ]
 
 
 async def add_rule_set(
@@ -907,22 +939,21 @@ async def add_rule_set(
         AdminError: If the set or the project is unknown.
         psycopg.Error: On database errors.
     """
-    rule_list, patterns, comments = rule_set(name)
+    rows = rule_set_rows(name)
     pid = await project_id(db, project)
     present = {
-        row[0]
+        (row[0], row[1])
         for row in await db.all(
-            "SELECT pattern FROM rules WHERE list = %s AND project_id IS NOT DISTINCT FROM %s",
-            (rule_list, pid),
+            "SELECT list, pattern FROM rules WHERE project_id IS NOT DISTINCT FROM %s", (pid,)
         )
     }
     added: list[RuleRow] = []
     skipped: list[str] = []
-    for pattern, comment in zip(patterns, comments, strict=True):
-        if pattern in present:
-            skipped.append(pattern)
+    for row in rows:
+        if (row.list, row.pattern) in present:
+            skipped.append(row.pattern)
             continue
-        added.append(await add_rule(db, rule_list, pattern, comment, project))
+        added.append(await add_rule(db, row.list, row.pattern, row.comment, project))
     return added, skipped
 
 

@@ -108,7 +108,7 @@ async def review_subagent_result(
 
 
 def shipped_rules() -> Rules:
-    """Return the allow and deny lists that calu ships, for the workspace of a case.
+    """Return the recommended allow and deny lists, for the workspace of a case.
 
     An evaluation measures a checker on its own, while in production the lists are asked first
     and a deny match escalates the step without any model call. Comparing a case against them

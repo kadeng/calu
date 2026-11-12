@@ -8,7 +8,7 @@ import pytest
 from calu import cli
 from calu.credentials import CredentialStore
 from calu.db import migrations
-from calu.setup import RULE_LISTS, default_rules, parse_rule_file
+from calu.setup import RULE_LISTS, default_rules, parse_rule_file, recommended_rules
 
 
 def test_parse_rule_file_attaches_adjacent_comments_only() -> None:
@@ -20,8 +20,10 @@ def test_parse_rule_file_attaches_adjacent_comments_only() -> None:
     ]
 
 
-def test_default_rules_cover_all_lists() -> None:
-    rows = default_rules()
+def test_no_rules_are_shipped_and_the_recommended_set_covers_all_lists() -> None:
+    """D179 (the owner's Q16): every list starts empty; the former defaults are a set."""
+    assert default_rules() == []
+    rows = recommended_rules()
     assert {r.list for r in rows} == set(RULE_LISTS)
     assert any(r.pattern.startswith("^git( -[Cc] \\S+)* push") for r in rows)
 

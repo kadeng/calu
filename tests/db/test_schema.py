@@ -45,7 +45,7 @@ async def test_setup_seeds_defaults_once_and_creates_session_login(db_url: str) 
         row = await cur.fetchone()
         assert row is not None
         n_rules = row[0]
-        assert n_rules > 10
+        assert n_rules == 0, "D179: calu ships no allow or deny rules"
         report, session_url = await setup(conn, db_url, "other:model")
         assert "checker types added: 0; rules added: 0" in report
     finally:

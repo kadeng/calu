@@ -99,7 +99,21 @@ def parse_rule_file(list_name: str, text: str) -> list[RuleRow]:
 
 
 def default_rules() -> list[RuleRow]:
-    """Return the built-in rules of all six lists.
+    """Return the rules a new database starts with: none (PLAN.md D179, the owner's Q16).
+
+    calu ships no allow or deny rules; every list starts empty, and every step goes to a
+    checker until someone adds rules. `recommended_rules` holds the former defaults, which
+    `calu rules add-set recommended` adds. calu's own protections (`calu.checkers.rules`
+    `BUILT_IN_*`) are not rules of a list and apply regardless.
+
+    Returns:
+        An empty list.
+    """
+    return []
+
+
+def recommended_rules() -> list[RuleRow]:
+    """Return the recommended rules of all six lists, the former defaults (D179).
 
     Returns:
         The rows parsed from `calu/defaults/rules/<list>.txt`.
@@ -114,11 +128,11 @@ def default_rules() -> list[RuleRow]:
 async def seed_defaults(
     conn: psycopg.AsyncConnection, model: str = DEFAULT_CHECKER_MODEL
 ) -> tuple[int, int]:
-    """Insert the built-in checker types and global rules where none exist yet.
+    """Insert the built-in checker types, and the default rules where no global rules exist.
 
-    A checker type is inserted only if no type of that name exists. The default rules are
-    inserted only if there are no global rules at all, so rules an administrator removed are
-    not restored.
+    A checker type is inserted only if no type of that name exists. The default rules -- none
+    since D179 -- would be inserted only if there are no global rules at all, so rules an
+    administrator removed are not restored, and a database set up earlier keeps its rules.
 
     Args:
         conn: An open connection of the database owner, schema migrated.
