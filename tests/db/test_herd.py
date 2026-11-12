@@ -7,6 +7,7 @@ import pytest
 from calu import herd
 from calu import machine as machine_module
 from calu.checkers import Decision
+from calu.context.turns import TurnRecord
 from calu.db import Db, connect
 from calu.evals import cases_from_escalations
 from calu.setup import setup
@@ -263,6 +264,92 @@ async def test_an_escalation_of_a_gone_session_says_so(db_url: str) -> None:
         )
         ended = await herd.escalation(db, escalation)
         assert ended is not None and ended.unanswerable is True
+    finally:
+        await owner.close()
+
+
+async def test_the_conversations_of_a_directory_are_listed_freshest_first(db_url: str) -> None:
+    """D203: one line per Claude session id of the directory, however many runs it took,
+    with the age of the last activity and the last input of the user."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+
+        async def run(
+            directory: str,
+            claude_id: str | None,
+            turns: dict[int, list[str]],
+            host: str = "box",
+            user: str = "u",
+        ) -> str:
+            """Store one `calu run`: a session row with a Claude id and finished turns."""
+            store = DatabaseSessionStore(db)
+            session_id = await store.start(
+                SessionIdentity(hostname=host, os_user=user, directory=directory, pid=7)
+            )
+            if claude_id is not None:
+                await store.set_claude_session(claude_id)
+            for number, inputs in turns.items():
+                await store.save_turn(TurnRecord(index=number, user_inputs=inputs))
+            return session_id
+
+        async def age(session_id: str, interval: str, ended: bool = True) -> None:
+            """Move a run and its turns into the past."""
+            await db.execute(
+                "UPDATE sessions SET started_at = now() - %s::interval,"
+                " last_seen = now() - %s::interval,"
+                " ended_at = CASE WHEN %s THEN now() - %s::interval END WHERE id = %s::uuid",
+                (interval, interval, ended, interval, session_id),
+            )
+            await db.execute(
+                "UPDATE turns SET started_at = now() - %s::interval,"
+                " ended_at = now() - %s::interval, created_at = now() - %s::interval"
+                " WHERE session_id = %s::uuid",
+                (interval, interval, interval, session_id),
+            )
+
+        # Conversation A: two runs; the second one is the fresher and holds the last input.
+        await age(await run("/w", "conv-a", {1: ["start a"]}), "3 days")
+        await age(await run("/w", "conv-a", {2: ["more a", "last of a"]}), "2 hours")
+        # Conversation B: older, and its last turn has no user input (a follow-up turn).
+        await age(await run("/w", "conv-b", {1: ["only b"], 2: []}), "5 days")
+        # Conversation C: the freshest, and its process still says it is running.
+        running = await run("/w", "conv-c", {1: ["start c"]})
+        await db.execute("UPDATE sessions SET ended_at = NULL WHERE id = %s::uuid", (running,))
+        # Not listed: another directory, a run without a Claude id, a run without a turn.
+        await run("/elsewhere", "conv-x", {1: ["other project"]})
+        await run("/w", None, {1: ["no claude id"]})
+        await run("/w", "conv-empty", {})
+        # Not listed either: the same path on another host, or of another user here. Claude
+        # Code keeps the transcript in that user's home directory on that host.
+        await run("/w", "conv-other-host", {1: ["elsewhere"]}, host="other-box")
+        await run("/w", "conv-other-user", {1: ["somebody else"]}, user="v")
+
+        async def listed(directory: str, limit: int) -> list[herd.ConversationRow]:
+            """What user `u` on host `box` is shown for a directory."""
+            return await herd.conversations(db, directory, "box", "u", limit)
+
+        rows = await listed("/w", 5)
+        assert [row.claude_session_id for row in rows] == ["conv-c", "conv-a", "conv-b"]
+        newest, a, b = rows
+        assert (newest.last_input, newest.turns, newest.running) == ("start c", 1, True)
+        assert (a.last_input, a.turns, a.running) == ("last of a", 2, False)
+        assert 7000 < a.age_s < 7400, "the age of the fresher run, not of the first one"
+        assert (b.last_input, b.turns) == ("only b", 2), "the last turn that holds an input"
+        assert 4.9 * 86_400 < b.age_s < 5.1 * 86_400
+
+        assert [r.claude_session_id for r in await listed("/w", 2)] == ["conv-c", "conv-a"]
+        assert len(await listed("/w", 0)) == 1, "at least one"
+        assert await listed("/nowhere", 5) == []
+        (elsewhere,) = await herd.conversations(db, "/w", "other-box", "u", 5)
+        assert elsewhere.claude_session_id == "conv-other-host"
+        # A process that stopped saying it runs is not "running", whatever its row says.
+        await db.execute(
+            "UPDATE sessions SET last_seen = now() - interval '10 minutes' WHERE id = %s::uuid",
+            (running,),
+        )
+        assert not (await listed("/w", 1))[0].running
     finally:
         await owner.close()
 

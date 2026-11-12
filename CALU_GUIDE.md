@@ -20,7 +20,7 @@ configuration, the web interface, the checkers and the ACP adapter.
 - [The web interface](#the-web-interface)
 - [Editors that speak ACP](#editors-that-speak-acp)
 - [Checker instructions, rules and evaluations](#checker-instructions-rules-and-evaluations)
-- [Forking a conversation](#forking-a-conversation)
+- [Resuming and forking a conversation](#resuming-and-forking-a-conversation)
 - [Installation and configuration reference](#installation-and-configuration-reference)
 
 ## What the checkers give you, in detail
@@ -1019,16 +1019,51 @@ for a human. Everything under `claude.` is different:
 Claude Code reads its model, its effort and its permission mode when the session starts, so
 those apply to the next `calu run` (or the next `/start` of an idle session).
 
-## Forking a conversation
+## Resuming and forking a conversation
 
-A session can continue a conversation from before an earlier turn instead of from its end:
+`calu run` prints the Claude session id of its conversation when it starts, on a line of its
+own, before the first turn:
+
+    [session] 2d01284d-91c7-487b-b082-2f6e8ddd99a6
+
+That id is what the commands below take. To find the conversations of a project again, run this
+in the project directory:
 
 ```bash
-calu run --resume <claude session id> --fork-before-turn 7
+calu list-sessions        # the last 5 conversations of this directory, the freshest first
+calu list-sessions 20     # the last 20
 ```
 
-The fork gets its own session id, so `calu sessions` and the web interface show it beside the
-conversation it branched from, and the web interface lists the points a fork can start at. The
+Each line shows how long ago the conversation was last active, its session id and the last
+message you sent in it; "running" marks one that a process still has (use `calu attach` for
+that one). Listed are the conversations that were run in this directory on this machine by
+your user, because that is where Claude Code keeps their transcripts. A conversation appears
+once its first turn has ended; a fork appears when it starts, with the last message of the
+conversation it copied until it has one of its own. The command reads the database with the
+`operator` or `admin` credential, like `calu sessions`, which lists the sessions of every
+directory, host and user.
+
+```bash
+calu run --resume <session id>     # continue that conversation, under the same id
+calu run --fork <session id>       # continue a copy of it, under a new id
+```
+
+A resumed session reads the turns and the folded summary of the conversation, so the checkers
+know what went before. A fork starts with everything the original has and leaves the original
+as it was: both can be continued independently afterwards, and each is listed on its own.
+
+A session can also continue a conversation from before an earlier turn instead of from its end:
+
+```bash
+calu run --resume <session id> --fork-before-turn 7
+```
+
+That fork keeps turns 1 to 6 and gets its own session id as well; `calu sessions` and the web
+interface show it beside the conversation it branched from, and the web interface lists the
+points a fork can start at. N is 2 or more. The checkers of the fork read only the turns it
+kept. If the folded summary already describes a turn the fork discards, calu says so at the
+start; correct the summary with `calu summary <session> --edit` then. `--resume` and `--fork`
+take a session id as printed, not a session title. The
 files are deliberately left as they are: Claude Code's file checkpointing only puts back what
 its own edit tools changed, so rewinding them would leave a tree that looks consistent and is
 not.

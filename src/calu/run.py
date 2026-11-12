@@ -45,6 +45,7 @@ import socket
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,6 +153,9 @@ class RunOptions:
     project: str | None = None
     prompt: str | None = None
     resume_id: str | None = None
+    fork_id: str | None = None
+    """Claude session id of a conversation to copy: the session continues the copy under a new
+    session id and leaves the original as it was (D203). Not together with `resume_id`."""
     fork_before_turn: int | None = None
     """With `resume_id`: branch the conversation off before this turn instead of continuing it
     (PLAN.md D36). The new session gets its own id, so the original stays as it was."""
@@ -857,8 +861,14 @@ async def _run(
     # Before anything starts: a fork that cannot be made must not turn into a plain resume,
     # which would continue the conversation instead of branching it (PLAN.md D36).
     fork = await _fork_point(db, options, console)
-    if options.fork_before_turn and fork is None:
+    if (options.fork_before_turn is not None or options.fork_id) and fork is None:
         return 1
+    resume_id = options.resume_id or options.fork_id
+    # calu chooses the id of a new conversation and of a fork, so that it is known before the
+    # first turn; a plain resume keeps its id (D203).
+    claude_session_id = (
+        options.resume_id if options.resume_id and fork is None else str(uuid.uuid4())
+    )
 
     clock = settings.config.clock
     watch = ClockWatch(
@@ -947,7 +957,12 @@ async def _run(
         server: SessionServer | None = None
         try:
             with work:
-                await session.start(tg, options.resume_id, options.model, options.effort, fork)
+                await session.start(
+                    tg, resume_id, options.model, options.effort, fork, claude_session_id
+                )
+                # On a line of its own and first, for a person and for a script: this is the
+                # id `calu run --resume` and `calu run --fork` take.
+                print(f"[session] {claude_session_id}", flush=True)
                 if options.serve:
                     # After the start, so that the session row and its id exist when the first
                     # client asks; the events of the start are in the bus and are replayed.
@@ -1001,9 +1016,12 @@ async def _run(
 
 
 async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | None:
-    """Resolve `--fork-before-turn` into the uuids Claude Code needs (PLAN.md D36).
+    """Say where the session branches off: `--fork`, or `--fork-before-turn` (D36, D203).
 
-    Side effect: reports why a fork cannot be made, as an error on the console.
+    `--fork ID` keeps the whole conversation and needs nothing from the database.
+    `--resume ID --fork-before-turn N` is resolved into the uuids Claude Code needs.
+
+    Side effect: reports the fork, or why it cannot be made, on the console.
 
     Args:
         db: The database connection.
@@ -1011,14 +1029,33 @@ async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | N
         console: Where to report a problem.
 
     Returns:
-        The fork point, or None — both when no fork was asked for and when it cannot be made.
-        The caller distinguishes the two by `options.fork_before_turn`.
+        The fork, or None — both when no fork was asked for and when it cannot be made. The
+        caller distinguishes the two by `options.fork_id` and `options.fork_before_turn`.
 
     Raises:
         psycopg.Error: On database errors.
     """
     turn = options.fork_before_turn
-    if not turn:
+    if options.fork_id:
+        if options.resume_id or turn is not None:
+            await console(
+                Log(
+                    level="error",
+                    message="--fork takes neither --resume nor --fork-before-turn with it",
+                )
+            )
+            return None
+        await console(
+            Log(
+                level="info",
+                message=(
+                    f"forking {options.fork_id}: this session continues a copy of that "
+                    "conversation under its own session id; the original stays as it is"
+                ),
+            )
+        )
+        return Fork()
+    if turn is None:
         return None
     if not options.resume_id:
         await console(Log(level="error", message="--fork-before-turn needs --resume <session id>"))
@@ -1054,7 +1091,7 @@ async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | N
             ),
         )
     )
-    return Fork(resume_at=point.resume_at, drops_turn=point.drops_turn)
+    return Fork(resume_at=point.resume_at, drops_turn=point.drops_turn, before_turn=turn)
 
 
 def default_socket_path() -> Path:

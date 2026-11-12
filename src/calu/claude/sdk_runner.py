@@ -259,6 +259,7 @@ class SdkRunner:
         sink: EventSink,
         resume_id: str | None = None,
         fork: Fork | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Connect, then translate messages to events until `stop` is called.
 
@@ -277,6 +278,7 @@ class SdkRunner:
             sink: Receives the translated events.
             resume_id: Claude session id to resume, or None for a new session.
             fork: Where to branch off the resumed conversation (PLAN.md D36).
+            session_id: The id a new or forked conversation gets (`ClaudeRunner.run`).
 
         Raises:
             StartRefused: If a loaded settings file holds sandbox entries beyond calu's
@@ -288,7 +290,7 @@ class SdkRunner:
         blockers = self._sandbox_blockers()
         if blockers:
             raise StartRefused(" ".join(blockers))
-        options = self._options(gate, resume_id, fork)
+        options = self._options(gate, resume_id, fork, session_id)
         with anyio.CancelScope() as scope:
             self._cancel = scope
             if self._stop_requested:
@@ -575,7 +577,11 @@ class SdkRunner:
     # ------------------------------------------------------------------ options and callbacks
 
     def _options(
-        self, gate: ToolGate, resume_id: str | None, fork: Fork | None = None
+        self,
+        gate: ToolGate,
+        resume_id: str | None,
+        fork: Fork | None = None,
+        session_id: str | None = None,
     ) -> ClaudeAgentOptions:
         """Build the SDK options: working directory, model, hooks, callbacks and environment.
 
@@ -589,6 +595,9 @@ class SdkRunner:
             resume_id: Claude session id to resume, or None.
             fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes
                 it whole.
+            session_id: The id a new or forked conversation gets (`--session-id`; measured
+                with CLI 2.1.321, `spikes/spike_session_id.py`: Claude Code reports exactly
+                this id, also for a fork). Not passed for a plain resume, which keeps its id.
 
         Returns:
             The options for `ClaudeSDKClient`.
@@ -914,9 +923,11 @@ class SdkRunner:
             },
             include_partial_messages=self.config.stream_partial,
             resume=resume_id,
-            # A fork keeps the conversation up to `resume_at` and discards the turn that
-            # starts at `drops_turn`, under a new session id, so the original stays intact
-            # (PLAN.md D36). The CLI validates the pair and refuses a mismatch.
+            session_id=session_id if resume_id is None or fork is not None else None,
+            # A fork runs under a new session id, so the original stays intact (PLAN.md D36).
+            # With a fork point it keeps the conversation up to `resume_at` and discards the
+            # turn that starts at `drops_turn`; the CLI validates the pair and refuses a
+            # mismatch. Without one it keeps the whole conversation.
             fork_session=fork is not None,
             resume_session_at=fork.resume_at if fork else None,
             resume_drops_turn=fork.drops_turn if fork else None,

@@ -212,6 +212,30 @@ def test_the_hook_timeouts_match_what_each_hook_waits_for(tmp_path: Path):
         assert hooks[event][0].timeout == REVIEW_HOOK_TIMEOUT_S
 
 
+def test_a_chosen_session_id_goes_to_a_new_conversation_and_to_a_fork_only(tmp_path: Path):
+    """D203, measured with `spikes/spike_session_id.py`: Claude Code takes the id of a new
+    conversation and of a fork from the caller. A plain resume keeps its id; passing another
+    one there would ask Claude Code for something else than calu means."""
+    from calu.claude.runner import Fork
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    gate: Any = None
+    new = runner._options(gate, None, None, "id-1")
+    assert (new.session_id, new.resume, new.fork_session) == ("id-1", None, False)
+    whole = runner._options(gate, "old", Fork(), "id-2")
+    assert (whole.session_id, whole.resume, whole.fork_session) == ("id-2", "old", True)
+    assert whole.resume_session_at is None and whole.resume_drops_turn is None
+    at = runner._options(gate, "old", Fork("entry", "prompt", 2), "id-3")
+    assert (at.session_id, at.resume_session_at, at.resume_drops_turn) == (
+        "id-3",
+        "entry",
+        "prompt",
+    )
+    resumed = runner._options(gate, "old", None, "id-4")
+    assert (resumed.session_id, resumed.resume, resumed.fork_session) == (None, "old", False)
+    assert runner._options(gate, None).session_id is None
+
+
 @pytest.mark.anyio
 async def test_a_workflow_agents_result_is_reviewed_with_its_task(tmp_path: Path):
     """D157: a Workflow script's `agent()` starts subagents without the Agent tool. Their steps

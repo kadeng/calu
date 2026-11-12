@@ -178,6 +178,8 @@ async def main(args: argparse.Namespace) -> int:
                     RunOptions(
                         workspace=Path(args.directory).resolve(),
                         prompt=args.prompt,
+                        resume_id=args.resume,
+                        fork_id=args.fork,
                         interactive=args.stay,
                         show_thinking=args.stay,
                         socket_path=Path(args.socket) if args.socket else None,
@@ -240,6 +242,18 @@ parser.add_argument(
     "--socket", metavar="PATH", help="serve the clients on a Unix socket at PATH (PLAN.md §6)"
 )
 parser.add_argument("--timeout", type=float, default=240, help="how long the operator waits")
+parser.add_argument(
+    "--resume",
+    metavar="SESSION_ID",
+    help="continue that Claude conversation (the `[session]` line of an earlier run names it)."
+    " The throwaway database of this run does not hold its turns, so the checkers start"
+    " without them; this only shows that Claude Code resumes under calu",
+)
+parser.add_argument(
+    "--fork",
+    metavar="SESSION_ID",
+    help="continue a copy of that Claude conversation under a new session id (D203)",
+)
 parser.add_argument(
     "--stay",
     action="store_true",

@@ -23,6 +23,8 @@
     calu web                       the herd overview in a browser (127.0.0.1 only)
     calu protocol [--out FILE]     JSON Schema of the client protocol, to generate client types
     calu sessions [--all]          list the sessions of all hosts
+    calu list-sessions [N]         the last N (5) Claude conversations of this directory, to
+                                   resume (`calu run --resume ID`) or fork (`calu run --fork ID`)
     calu escalations [SESSION]     list the open escalations
     calu resolve ID allow|deny [--note TEXT]
                                    resolve an escalation; the waiting session continues
@@ -60,6 +62,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -665,13 +668,15 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
     `calu.run.run_session`, which wipes it before Claude Code starts.
 
     Args:
-        args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `model`, `effort`,
-            `batch`, `thinking`).
+        args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `fork`,
+            `fork_before_turn`, `model`, `effort`, `batch`, `thinking`).
         store: The credential store.
 
     Raises:
-        CliError: If there is no `session` credential, the directory does not exist, or the
-            session could not be started.
+        CliError: If there is no `session` credential, the directory does not exist, the
+            options contradict each other (`--fork` with `--resume` or with
+            `--fork-before-turn`), `--resume` or `--fork` name no UUID, `--fork-before-turn`
+            is below 2, or the session could not be started.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -689,6 +694,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         project=args.project,
         prompt=prompt,
         resume_id=args.resume,
+        fork_id=args.fork,
         fork_before_turn=args.fork_before_turn,
         socket_path=_socket_path(args.socket),
         model=args.model,
@@ -701,6 +707,29 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         not args.batch or not math.isfinite(args.background_timeout) or args.background_timeout <= 0
     ):
         raise CliError("--background-timeout needs --batch and a number of seconds above 0")
+    if args.fork and args.resume:
+        raise CliError(
+            "--fork and --resume exclude each other: --resume ID continues that conversation, "
+            "--fork ID starts a copy of it under a new session id"
+        )
+    if args.fork and args.fork_before_turn is not None:
+        raise CliError(
+            "--fork keeps the whole conversation; to branch off before a turn use "
+            "--resume ID --fork-before-turn N"
+        )
+    if args.fork_before_turn is not None and args.fork_before_turn < 2:
+        raise CliError("--fork-before-turn takes a turn number of 2 or more")
+    for option, value in (("--resume", args.resume), ("--fork", args.fork)):
+        if value is None:
+            continue
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            # calu reads a conversation back by this id, and prints it as the session's id.
+            raise CliError(
+                f"{option} takes a Claude session id (a UUID); `calu list-sessions` shows "
+                "those of this directory"
+            ) from None
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print("Type a message for Claude; /quit ends the session.")
     if "session" in store and not store.needs_password("session"):
@@ -1305,6 +1334,60 @@ def cmd_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
         """
         rows = await herd.sessions(db, active_only=not args.all)
         return "\n".join(row.line() for row in rows) or "no sessions"
+
+    _herd_command(store, work)
+
+
+def cmd_list_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
+    """List the last Claude conversations of the current directory, the freshest first.
+
+    The directory is the resolved current directory, which is what `calu run` records for a
+    session started here; only sessions of this host and of this OS user are listed, because
+    Claude Code keeps their transcripts in that user's home directory. Each line names the
+    age of the last activity, the Claude session id and the last message of the user; the
+    lines after the list say how to continue one.
+
+    Args:
+        args: Parsed arguments (`count`).
+        store: The credential store.
+
+    Raises:
+        CliError: If `count` is below 1, or if neither an `operator` nor an `admin` credential
+            is stored.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    if args.count < 1:
+        raise CliError("the number of sessions to list must be 1 or more")
+    here = str(Path.cwd().resolve())
+    width = shutil.get_terminal_size((100, 24)).columns
+
+    async def work(db: Db) -> str:
+        """List the conversations.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            One line per conversation and how to resume or fork one, or a sentence that
+            says there is none.
+        """
+        rows = await herd.conversations(
+            db, here, socket.gethostname(), getpass.getuser(), args.count
+        )
+        if not rows:
+            return (
+                f"no stored Claude session of {here} on this host for this user\n"
+                "(a session is listed once its first turn has ended; `calu sessions --all` "
+                "lists the sessions of every directory, host and user)"
+            )
+        lines = [row.line(width) for row in rows]
+        lines.append("")
+        lines.append("continue one:  calu run --resume <session id>")
+        lines.append("copy one:      calu run --fork <session id>   (the original stays as it is)")
+        if any(row.running for row in rows):
+            lines.append("running:       a process still has that conversation; use calu attach")
+        return "\n".join(lines)
 
     _herd_command(store, work)
 
@@ -2680,7 +2763,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--project", help="name of the project row whose settings and rules apply")
     p.add_argument("-p", "--prompt", help="first message for Claude")
     p.add_argument("--prompt-file", help="read the first message from this file")
-    p.add_argument("--resume", help="Claude session id to resume")
+    p.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        help="Claude session id to resume (`calu list-sessions` shows those of this directory)",
+    )
+    p.add_argument(
+        "--fork",
+        metavar="SESSION_ID",
+        help="start a copy of that conversation under a new session id and continue the copy;"
+        " the original stays as it is. Not together with --resume",
+    )
     p.add_argument(
         "--fork-before-turn",
         type=int,
@@ -2762,6 +2855,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("sessions", help="list the sessions of all hosts")
     p.add_argument("--all", action="store_true", help="also show sessions that have ended")
     p.set_defaults(handler=cmd_sessions)
+
+    p = sub.add_parser(
+        "list-sessions",
+        help="the last Claude sessions of this directory, to resume or fork",
+    )
+    p.add_argument(
+        "count",
+        nargs="?",
+        type=int,
+        default=5,
+        metavar="N",
+        help="how many sessions to list, the freshest first (default: 5)",
+    )
+    p.set_defaults(handler=cmd_list_sessions)
 
     p = sub.add_parser("escalations", help="list the open escalations")
     p.add_argument("session", nargs="?", help="only escalations of this session id")

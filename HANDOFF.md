@@ -3,11 +3,11 @@
 State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
 the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
 with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D202, open questions §11, phases §12).
+`PLAN.md` (decisions D1-D203, open questions §11, phases §12).
 
 ## Pick up here
 
-**`main` is green and pushed** (1794 tests with `uv run pytest -q -m 'not live'`, 16 browser
+**`main` is green and pushed** (1817 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
 1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
@@ -116,6 +116,22 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    and phase 9). Both plugins must work in the IDE's most modern remote development mode.
    The owner's order: only after the full-screen terminal client, the web interface and
    standalone use work well. Nothing is built.
+10. **Done: `calu list-sessions [N]`, `calu run --fork ID`, and the `[session] ID` line**
+   (the owner on 2026-11-12, D203), run once against the real Claude Code for a new session,
+   a resume, a fork and a fork before a turn. Left open, all small: a fork cannot be forked
+   again before one of its inherited turns (the copied turns carry no transcript uuids, and
+   whether a fork's transcript keeps them is not measured); a session a client starts through
+   the protocol after a stop lets Claude Code choose its id and prints no `[session]` line;
+   a listed line with wide characters can be wider than the terminal.
+11. **Not built, decided against for now: development channels** (the owner on 2026-11-12:
+   an option to start Claude Code with `--dangerously-load-development-channels
+   server:agent-chat`, so that agents on one machine can talk to each other). Measured with
+   `spikes/spike_dev_channel.py` (`spikes/RESULTS.md`): an interactive `claude` asks for the
+   confirmation "I am using this for local development" and then delivers the channel's
+   messages; through the Agent SDK, which is how calu runs Claude Code, the flag is ignored
+   without a message, the server connects as an ordinary MCP server and what it pushes is
+   dropped. The owner: leave it, and replicate it later as a channels-enabled plugin or MCP
+   server.
 
 Decisions of the owner on 2026-11-12 that are implemented and recorded: D178-D198 and Q22 in
 `PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
@@ -168,9 +184,9 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1794 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1817 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
-default instructions), ~36k of tests, 31 migrations, 21 CLI commands, 22 protocol requests,
+default instructions), ~36k of tests, 31 migrations, 22 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

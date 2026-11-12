@@ -8,6 +8,7 @@ import pytest
 
 from calu.checkers import CheckDecision, Decision, Route, Step
 from calu.claude import FakeRunner
+from calu.claude.fake_runner import FakeScript
 from calu.claude.runner import Fork, HumanAnswer
 from calu.clock import ClockJump
 from calu.config import (
@@ -18,6 +19,7 @@ from calu.config import (
     Config,
     ContextConfig,
 )
+from calu.context.turns import TurnRecord
 from calu.protocol.messages import (
     AgentsUpdate,
     AutoEscalateChanged,
@@ -838,6 +840,112 @@ async def test_a_fork_point_reaches_the_runner_and_the_uuids_are_recorded(tmp_pa
     session.context.user_input("and this", uuid="later-uuid")
     assert session.context.current is not None
     assert session.context.current.prompt_uuid == "later-uuid"  # a new turn, its own prompt
+
+
+def _turn(index: int, text: str) -> TurnRecord:
+    """A finished turn with one user input, for the stored conversation of a test."""
+    return TurnRecord(index=index, user_inputs=[text], answer=f"did {text}")
+
+
+async def test_a_fork_of_a_whole_conversation_keeps_its_turns_under_its_own_id(tmp_path: Path):
+    """D203: `calu run --fork ID` continues a copy. The copy runs under an id calu chose, so
+    the id is known before the first turn, and it stores the turns it inherited: a
+    conversation is read back by its id, so a later resume of the fork would otherwise find
+    only the turns the fork ran itself."""
+    session, rec, store = make_session(tmp_path, [[{"text": "done"}]])
+    store.previous["claude-1"] = ([_turn(1, "first"), _turn(2, "second")], "an earlier summary")
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, resume_id="claude-1", fork=Fork(), session_id="chosen-id")
+        runner = session.runner
+        assert isinstance(runner, FakeRunner)
+        assert runner.fork == Fork() and runner.session_id == "chosen-id"
+        assert session.session_id == "chosen-id" and store.claude_session_id == "chosen-id"
+        assert sorted(store.turns) == [1, 2], "the inherited turns are stored with the fork"
+        assert [turn.index for turn in session.context.turns] == [1, 2]
+        assert session.context.summary == "an earlier summary"
+        await session.send_chat(ChatSendParams(text="go on"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+        tg.cancel_scope.cancel()
+    assert sorted(store.turns) == [1, 2, 3], "the fork's own turn continues the numbers"
+
+
+async def test_a_fork_that_does_not_start_leaves_no_conversation_behind(tmp_path: Path):
+    """A fork wrote its id and its inherited turns before Claude Code was started. When the
+    start failed, the database held a conversation that `calu list-sessions` showed first
+    and that Claude Code did not know."""
+    session, _rec, store = make_session(tmp_path, [])
+    store.previous["claude-1"] = ([_turn(1, "first")], "")
+
+    class Refusing(FakeRunner):
+        async def run(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("no transcript of that session")
+
+    session.runner_factory = lambda: Refusing(FakeScript(turns=[]), tmp_path)
+    async with anyio.create_task_group() as tg:
+        with pytest.raises(SessionError, match="ended during start"):
+            await session.start(tg, resume_id="claude-1", fork=Fork(), session_id="chosen-id")
+        assert not store.turns and store.claude_session_id != "chosen-id"
+        tg.cancel_scope.cancel()
+
+
+async def test_a_fork_before_a_turn_drops_that_turn_from_what_the_checkers_read(tmp_path: Path):
+    """The fork discards turn N in Claude's conversation; calu's context kept it, so the
+    checkers read about work the forked conversation never did."""
+    session, rec, store = make_session(tmp_path, [])
+    store.previous["claude-1"] = (
+        [_turn(1, "first"), _turn(2, "second"), _turn(3, "third")],
+        "",
+    )
+    fork = Fork(resume_at="entry-of-turn-1", drops_turn="prompt-of-turn-2", before_turn=2)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, resume_id="claude-1", fork=fork, session_id="chosen-id")
+        assert [turn.index for turn in session.context.turns] == [1]
+        assert sorted(store.turns) == [1]
+        assert session.context.turn_number == 2, "the fork's first turn takes the freed number"
+        assert not [e for e in rec.of(Log) if "chat summary" in e.message]
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_a_fork_says_when_the_summary_covers_what_it_discards(tmp_path: Path):
+    session, rec, store = make_session(tmp_path, [])
+    # Turns 1 to 3 are folded into the summary; only turn 4 is still stored unfolded.
+    store.previous["claude-1"] = ([_turn(4, "fourth")], "what turns 1 to 3 did")
+    fork = Fork(resume_at="entry-of-turn-1", drops_turn="prompt-of-turn-2", before_turn=2)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, resume_id="claude-1", fork=fork, session_id="chosen-id")
+        assert session.context.turns == [] and not store.turns
+        warnings = [e for e in rec.of(Log) if "chat summary" in e.message]
+        assert warnings and warnings[0].level == "warning"
+        assert "calu summary <session id> --edit" in warnings[0].message
+        # The fork's first turn takes the number of the first discarded one, although no
+        # kept turn is stored unfolded; numbering from 1 would hide the fork's turns behind
+        # a summary that says it covers turn 3.
+        assert session.context.turn_number == 2
+        assert store.summaries[-1] == ("what turns 1 to 3 did", 1)
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_a_chosen_session_id_names_a_new_conversation_and_never_a_resumed_one(
+    tmp_path: Path,
+):
+    """D203: calu chooses the id of a new conversation, so `calu run` can print it at once.
+    A plain resume keeps the id it resumes."""
+    session, _rec, store = make_session(tmp_path, [])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg, session_id="chosen-id")
+        runner = session.runner
+        assert isinstance(runner, FakeRunner) and runner.session_id == "chosen-id"
+        assert store.claude_session_id == "chosen-id", "recorded before the first turn"
+        await session.stop()
+        await session.start(tg, resume_id="claude-1", session_id="ignored")
+        runner = session.runner
+        assert isinstance(runner, FakeRunner) and runner.session_id == "claude-1"
+        assert session.session_id != "ignored"
+        await session.stop()
+        tg.cancel_scope.cancel()
 
 
 async def test_a_confirmation_the_harness_asks_for_escalates_even_after_a_pass(tmp_path: Path):

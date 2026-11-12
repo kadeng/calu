@@ -150,6 +150,7 @@ class FakeRunner:
         sink: EventSink,
         resume_id: str | None = None,
         fork: Fork | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Run one scripted turn per received message until `stop` is called.
 
@@ -163,6 +164,8 @@ class FakeRunner:
             resume_id: If given, becomes `session_id` (no history is restored).
             fork: Where a real runner would branch off (PLAN.md D36). The fake runner has no
                 transcript, so it only records it as `self.fork` for tests to assert on.
+            session_id: The id a new or forked conversation gets, as with the real runner: it
+                becomes `self.session_id` unless this is a plain resume.
 
         Raises:
             ValueError: If the script contains an unknown action.
@@ -170,6 +173,8 @@ class FakeRunner:
         self.fork = fork
         if resume_id:
             self.session_id = resume_id
+        if session_id and (resume_id is None or fork is not None):
+            self.session_id = session_id
         deliver = sink
 
         async def guarded(event: Event) -> None:

@@ -873,6 +873,71 @@ prompt in their context), and messages of channels or peers.
 
 **Re-run when** the CLI or the SDK is updated: `uv run pytest -m live tests/unit/test_runner_live.py`.
 
+## Development channels in the headless mode (2026-11-12, CLI 2.1.319 interactive, 2.1.321 through the SDK)
+
+**Question:** can calu start Claude Code with `--dangerously-load-development-channels
+server:<name>`, so that a local channel server (messages between agents on one machine) pushes
+into a calu session? The documentation read on 2026-10-08 said the flag is ignored with `-p`
+and through the Agent SDK.
+
+**Setup:** `spikes/spike_dev_channel.py` is a minimal channel server named `agent-chat` (it
+declares `experimental["claude/channel"]` and pushes one `notifications/claude/channel` six
+seconds after the handshake) and a session through the Agent SDK with that server in
+`mcp_servers` and the flag in `extra_args`; the turn waits 20 seconds and then says whether a
+channel message arrived. The same server was then given to an interactive `claude` in a
+terminal (`--mcp-config` and the flag).
+
+**Results:**
+
+- Through the Agent SDK: no confirmation was asked for, on the stream or anywhere else. The
+  server connected as an ordinary MCP server (debug log: "Successfully connected"), nothing in
+  the debug log mentions the flag, and the pushed message did not reach Claude ("no channel
+  message"). The flag is ignored without a message.
+- Interactive, same machine and login: after the folder's trust question, a full-screen
+  warning "Loading development channels ... for local channel development only" with the
+  choices "I am using this for local development" and "Exit". After the first choice the
+  session showed "Channels (experimental) messages from server:agent-chat inject directly in
+  this session", and the pushed message arrived as `← agent-chat: ...` and started a turn.
+
+**Conclusion:** the documentation still holds. A setting in calu that passes the flag would
+do nothing. The owner decided to leave it (2026-11-12) and to build such communication later
+as a channels-enabled plugin or MCP server; in a calu session only the tools of such a server
+work, not what it pushes.
+
+**Re-run when** the CLI is updated: `uv run python spikes/spike_dev_channel.py` (Haiku, one
+turn of about 25 seconds); `--no-flag` is the control.
+
+## Choosing the session id, and forking a whole conversation (2026-11-12, CLI 2.1.321)
+
+**Question:** `calu run` should print the session id when it starts, but Claude Code reports
+its id only with the first message of a turn. Can calu choose the id? And does a fork of a
+whole conversation (no fork point) work, also with a chosen id?
+
+**Setup:** `spikes/spike_session_id.py` runs one turn in a new session with
+`ClaudeAgentOptions.session_id` set to a fresh UUID (the CLI's `--session-id`), then forks
+that session twice with `resume` and `fork_session=True`: once with a chosen id, once without.
+
+**Results:**
+
+- New session: Claude Code reported exactly the chosen id.
+- Fork with a chosen id: reported exactly that id, and the fork knew the original
+  conversation (it named the secret word of the first turn).
+- Fork without an id: Claude Code chose a new one; the fork knew the conversation as well.
+
+- Through calu (`spikes/smoke_session.py`, then `--fork ID` and `--resume ID` with the id of
+  the `[session]` line): the new session ran under the printed id, the fork under a new
+  printed id and knew the first conversation, the resume kept the id.
+
+**Used by:** `calu run` (D203): it chooses the id of a new conversation and of a fork and
+prints it as `[session] <id>`; `SdkRunner._options` passes it for those two cases only.
+
+- A chosen id together with a fork point (`resume_session_at`, `resume_drops_turn`):
+  `spikes/spike_calu_fork.py`, which goes through `calu run` and so passes a chosen id, forked
+  before turn 2; the fork ran under its own id, remembered turn 1 and not turn 2.
+
+**Re-run when** the CLI or the SDK is updated: `uv run python spikes/spike_session_id.py`
+(Haiku, three short turns).
+
 ## Side question (`/btw`) and context usage in a headless session (2026-11-12, CLI 2.1.319, SDK 0.2.179)
 
 **Question:** can a client ask Claude something beside the running work, as Claude Code's own

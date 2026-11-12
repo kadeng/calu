@@ -312,6 +312,139 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
     return [SessionRow(*row) for row in rows]
 
 
+def age_text(seconds: float) -> str:
+    """Say how long ago something happened, in the largest unit that fits.
+
+    Args:
+        seconds: The age in seconds; a negative value counts as 0.
+
+    Returns:
+        For example "40 s", "12 min", "5 h" or "3 d". Below two minutes in seconds, below two
+        hours in minutes, below two days in hours, else in days; each rounded down.
+    """
+    seconds = max(0.0, seconds)
+    if seconds < 120:
+        return f"{int(seconds)} s"
+    if seconds < 7200:
+        return f"{int(seconds // 60)} min"
+    if seconds < 172_800:
+        return f"{int(seconds // 3600)} h"
+    return f"{int(seconds // 86_400)} d"
+
+
+@dataclass(frozen=True)
+class ConversationRow:
+    """One Claude conversation of a directory, as `calu list-sessions` shows it (D203).
+
+    A conversation is what one Claude session id names. It may span several `sessions` rows,
+    one per `calu run` that started or resumed it.
+    """
+
+    claude_session_id: str
+    """The id `calu run --resume` and `calu run --fork` take."""
+    age_s: float
+    """Seconds since the last activity, measured by the database."""
+    last_input: str
+    """The last message of the user in the conversation; "" if no turn holds one."""
+    turns: int
+    """Number of the last stored turn."""
+    running: bool
+    """Whether a session of this conversation has not ended and still says it is running
+    (silent for no longer than `STALE_AFTER_S`): attach to it instead of resuming it."""
+
+    def line(self, width: int = 100) -> str:
+        """Return the conversation as one terminal line.
+
+        Args:
+            width: The length the line is cut to; the last input is what is shortened.
+
+        Returns:
+            The age, the Claude session id, "running" if a process still has the
+            conversation, and the last user input on one line. Whitespace runs of the input
+            are one space, and a character that is not printable (control characters, escape
+            sequences) is shown as U+FFFD. The length is counted in characters, so a line
+            with wide characters can be wider than `width` columns.
+        """
+        mark = "  running" if self.running else ""
+        head = f"{age_text(self.age_s):>7}  {self.claude_session_id}{mark}  "
+        # The input is text somebody typed or pasted: no character of it may steer the
+        # terminal it is printed to.
+        text = "".join(
+            char if char.isprintable() else "\N{REPLACEMENT CHARACTER}"
+            for char in " ".join(self.last_input.split())
+        )
+        text = text or "(no user input stored)"
+        room = max(10, width - len(head))
+        if len(text) > room:
+            text = text[: room - 1] + "…"
+        return head + text
+
+
+async def conversations(
+    db: Db, directory: str, hostname: str, os_user: str, limit: int = 5
+) -> list[ConversationRow]:
+    """List the Claude conversations of one directory that have a stored turn (D203).
+
+    Only the runs of one host and one OS user count: Claude Code keeps a conversation's
+    transcript in that user's home directory on that host, so a conversation recorded for the
+    same path elsewhere cannot be resumed here.
+
+    The last activity of a conversation is the latest of: the start of one of its `calu run`s
+    and the start or end of one of its stored turns. A turn is stored when it ends, so a
+    conversation whose first turn still runs is not listed yet, and the input of a running
+    turn is not the "last input". A conversation without a stored turn has nothing to resume.
+    A fork stores the turns it inherits when it starts, so it is listed from then on, with
+    the last input of the conversation it copied until it has a turn of its own.
+
+    Args:
+        db: A connection with read access to `sessions`, `hosts` and `turns` (owner or
+            `calu_operator`).
+        directory: The project directory as `calu run` recorded it: the resolved absolute
+            path.
+        hostname: The host name `calu run` recorded (`socket.gethostname()`).
+        os_user: The OS user `calu run` recorded (`getpass.getuser()`).
+        limit: How many conversations to return at most; at least 1.
+
+    Returns:
+        The conversations, the one with the latest activity first.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "WITH runs AS ("
+        "  SELECT s.id, s.claude_session_id, s.started_at, s.ended_at, s.last_seen"
+        "    FROM sessions s JOIN hosts h ON h.id = s.host_id"
+        "   WHERE s.directory = %s AND h.hostname = %s AND s.os_user = %s"
+        "     AND s.claude_session_id IS NOT NULL),"
+        " stored AS ("
+        "  SELECT r.claude_session_id, t.number, t.user_inputs, r.started_at AS run_started,"
+        "         greatest(t.started_at, t.ended_at, t.created_at) AS at"
+        "    FROM turns t JOIN runs r ON r.id = t.session_id),"
+        " per AS ("
+        "  SELECT claude_session_id, max(at) AS last_turn, max(number) AS turns"
+        "    FROM stored GROUP BY claude_session_id),"
+        " started AS ("
+        "  SELECT claude_session_id, max(started_at) AS last_start,"
+        "         bool_or(ended_at IS NULL"
+        "                 AND last_seen > now() - make_interval(secs => %s)) AS running"
+        "    FROM runs GROUP BY claude_session_id)"
+        " SELECT per.claude_session_id,"
+        # The database measures the age, so a reader needs no clock of its own.
+        "        extract(epoch FROM (now() - greatest(per.last_turn, started.last_start)))::float8,"
+        "        coalesce((SELECT s.user_inputs->>-1 FROM stored s"
+        "                   WHERE s.claude_session_id = per.claude_session_id"
+        "                     AND jsonb_array_length(s.user_inputs) > 0"
+        "                   ORDER BY s.number DESC, s.run_started DESC LIMIT 1), ''),"
+        "        per.turns, started.running"
+        "   FROM per JOIN started USING (claude_session_id)"
+        "  ORDER BY greatest(per.last_turn, started.last_start) DESC, per.claude_session_id"
+        "  LIMIT %s",
+        (directory, hostname, os_user, STALE_AFTER_S, max(1, limit)),
+    )
+    return [ConversationRow(*row) for row in rows]
+
+
 async def escalations(db: Db, session_id: str | None = None) -> list[EscalationRow]:
     """List the open escalations, oldest first.
 

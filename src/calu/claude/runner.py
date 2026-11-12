@@ -107,16 +107,23 @@ class HumanAnswer:
 
 @dataclass(frozen=True)
 class Fork:
-    """Where a resumed session branches off (PLAN.md D36).
+    """Where a resumed session branches off (PLAN.md D36, D203).
 
-    `resume_at` is the transcript uuid of the last entry of the turn that is kept; `drops_turn`
-    the uuid of the prompt that starts the first discarded turn. Claude Code validates the pair
-    and refuses a mismatch, so both are required. A forked session gets a new session id, which
-    leaves the original conversation untouched.
+    A forked session gets a new session id, which leaves the original conversation untouched.
+
+    Without a fork point (all three fields None) the whole conversation is kept: the fork
+    continues after its last turn (`calu run --fork ID`).
+
+    With a fork point (`calu run --resume ID --fork-before-turn N`), `resume_at` is the
+    transcript uuid of the last entry of the turn that is kept, `drops_turn` the uuid of the
+    prompt that starts the first discarded turn, and `before_turn` is N. Claude Code validates
+    the pair of uuids and refuses a mismatch, so both are required together.
     """
 
-    resume_at: str
-    drops_turn: str
+    resume_at: str | None = None
+    drops_turn: str | None = None
+    before_turn: int | None = None
+    """Number of the first turn the fork discards; None keeps every turn."""
 
 
 class ToolGate(Protocol):
@@ -210,6 +217,7 @@ class ClaudeRunner(Protocol):
         sink: EventSink,
         resume_id: str | None = None,
         fork: Fork | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Start the session and forward its events to `sink` until stopped.
 
@@ -225,6 +233,10 @@ class ClaudeRunner(Protocol):
             resume_id: Claude session id to resume, or None for a new session.
             fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
                 whole. Needs `resume_id`, and gives the new session its own id.
+            session_id: The id the conversation gets, a UUID, so that the caller knows it
+                before the first turn (D203). Used for a new conversation and for a fork; a
+                plain resume keeps the id of `resume_id` and ignores it. None lets Claude Code
+                choose.
 
         Raises:
             StartRefused: If the runner did not start the session because calu could not be

@@ -267,7 +267,7 @@ def test_run_maps_every_flag_onto_the_session_options(
                 "--project",
                 "demo",
                 "--resume",
-                "claude-9",
+                "9f0c1a52-6d1e-4c3b-8a57-2b1d0e4f7a11",
                 "--fork-before-turn",
                 "3",
                 "--model",
@@ -287,7 +287,7 @@ def test_run_maps_every_flag_onto_the_session_options(
     assert options.workspace == tmp_path.resolve()
     assert options.prompt == "from a file"  # read from the file and stripped
     assert options.project == "demo"
-    assert options.resume_id == "claude-9"
+    assert options.resume_id == "9f0c1a52-6d1e-4c3b-8a57-2b1d0e4f7a11"
     assert options.fork_before_turn == 3
     assert options.model == "opus"
     assert options.effort == "high"

@@ -212,19 +212,25 @@ class ContextBuilder:
             self.on_turn_end(turn)
         return turn
 
-    def restore(self, turns: list[TurnRecord]) -> None:
+    def restore(self, turns: list[TurnRecord], next_index: int | None = None) -> None:
         """Replace the unfolded turns with the latest of `turns` (resuming a stored session).
 
         At most `fold_every - 1` turns are kept, so the next completed turn may trigger a fold;
         older ones are assumed to be covered by the chat summary. The next turn index continues
-        after the highest restored index.
+        after the highest restored index, unless `next_index` names it.
 
         Args:
             turns: Completed turns of the session, oldest first.
+            next_index: The number of the next turn, for a fork before a turn: the fork's
+                first turn takes the number of the first discarded one, also when no kept
+                turn is in `turns` because the summary covers them all. None continues after
+                the highest index in `turns`.
         """
         self.turns = list(turns[-(self.config.fold_every - 1) :])
         self.current = None
-        self._next_index = max((t.index for t in turns), default=0) + 1
+        self._next_index = (
+            next_index if next_index is not None else max((t.index for t in turns), default=0) + 1
+        )
 
     @property
     def turn_number(self) -> int:

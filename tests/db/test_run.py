@@ -1,7 +1,10 @@
 """`calu run` against the test database: one session, with an operator resolving an escalation."""
 
 import functools
+import getpass
 import json
+import socket
+import uuid
 from pathlib import Path
 
 import anyio
@@ -101,13 +104,19 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
     output = capsys.readouterr().out
     assert "All done." in output
     assert "escalation" in output and "calu resolve" in output
+    # D203: the id that `calu run --resume` takes is printed when the session starts, before
+    # the first turn, on a line of its own. calu chose it, so it is a UUID.
+    (printed,) = [line for line in output.splitlines() if line.startswith("[session] ")]
+    session_id = printed.removeprefix("[session] ")
+    assert str(uuid.UUID(session_id)) == session_id
+    assert output.index(printed) < output.index("have a look")
 
     owner = await connect(db_url)
     try:
         cur = await owner.execute(
             "SELECT state, claude_session_id, ended_at IS NOT NULL FROM sessions"
         )
-        assert await cur.fetchall() == [("stopped", "fake-session", True)]
+        assert await cur.fetchall() == [("stopped", session_id, True)]
         cur = await owner.execute(
             "SELECT seq, tool_name, decision, result_summary FROM steps ORDER BY seq"
         )
@@ -324,11 +333,24 @@ async def test_the_checkers_still_see_the_conversation_after_two_resumes(
                 workspace=tmp_path,
                 prompt="go on",
                 interactive=False,
-                resume_id="fake-session" if resume else None,
+                resume_id=await first_session_id() if resume else None,
             ),
             runner_factory=lambda workspace, _c, _h: FakeRunner(one_turn(command), workspace),
             checker_models=recording_models(),
         )
+
+    async def first_session_id() -> str:
+        """Return the Claude session id of the conversation, which the first run chose."""
+        owner = await connect(db_url)
+        try:
+            cur = await owner.execute(
+                "SELECT claude_session_id FROM sessions ORDER BY started_at LIMIT 1"
+            )
+            row = await cur.fetchone()
+        finally:
+            await owner.close()
+        assert row is not None and row[0]
+        return str(row[0])
 
     async def stored_summary() -> tuple[str, int]:
         """Return the newest stored summary and the turn number it covers."""
@@ -1018,3 +1040,80 @@ async def test_a_batch_run_finishes_after_a_message_a_client_queued(
         "Answer 1.",
         "Answer 2.",
     ]
+
+
+async def test_a_conversation_is_listed_resumed_and_forked_by_its_printed_id(
+    db_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D203 end to end: `calu run` prints the session id; `calu list-sessions` shows the
+    conversation with its last user input; `--resume ID` continues it under the same id;
+    `--fork ID` continues a copy under a new id and leaves the original as it was; and the
+    fork, resumed later, still knows the turns it inherited."""
+    from calu import herd
+
+    session_url = await prepare(db_url, tmp_path)
+
+    def one_turn(text: str) -> FakeScript:
+        """A script whose single turn only answers."""
+        return FakeScript(turns=[[{"text": text}]])
+
+    async def run(prompt: str, **how: str) -> str:
+        """Run one turn and return the session id the run printed."""
+        capsys.readouterr()
+        code = await run_session(
+            session_url,
+            RunOptions(workspace=tmp_path, prompt=prompt, interactive=False, **how),  # type: ignore[arg-type]
+            runner_factory=lambda workspace, _c, _h: FakeRunner(one_turn("ok"), workspace),
+            checker_models=fake_models(),
+        )
+        assert code == 0
+        output = capsys.readouterr().out
+        (printed,) = [line for line in output.splitlines() if line.startswith("[session] ")]
+        return printed.removeprefix("[session] ")
+
+    async def listed() -> list[herd.ConversationRow]:
+        """What `calu list-sessions` reads for the directory of the runs."""
+        owner = await connect(db_url)
+        try:
+            return await herd.conversations(
+                Db(owner), str(tmp_path.resolve()), socket.gethostname(), getpass.getuser(), 5
+            )
+        finally:
+            await owner.close()
+
+    async def stored_turns(session_id: str) -> list[tuple[int, str]]:
+        """The turns stored under the rows of one conversation: (number, first input)."""
+        owner = await connect(db_url)
+        try:
+            cur = await owner.execute(
+                "SELECT t.number, t.user_inputs->>0 FROM turns t JOIN sessions s"
+                " ON s.id = t.session_id WHERE s.claude_session_id = %s ORDER BY t.number",
+                (session_id,),
+            )
+            return [(row[0], row[1]) for row in await cur.fetchall()]
+        finally:
+            await owner.close()
+
+    original = await run("write the parser")
+    assert await run("now the tests", resume_id=original) == original, "a resume keeps its id"
+    (row,) = await listed()
+    assert (row.claude_session_id, row.last_input, row.turns) == (original, "now the tests", 2)
+    assert not row.running and row.age_s < 120
+
+    fork = await run("try another design", fork_id=original)
+    assert fork != original and str(uuid.UUID(fork)) == fork
+    assert await stored_turns(original) == [(1, "write the parser"), (2, "now the tests")]
+    assert await stored_turns(fork) == [
+        (1, "write the parser"),
+        (2, "now the tests"),
+        (3, "try another design"),
+    ]
+    rows = await listed()
+    assert [r.claude_session_id for r in rows] == [fork, original], "the freshest first"
+    assert rows[0].last_input == "try another design"
+    assert rows[1].last_input == "now the tests", "the original is as it was"
+
+    # The fork is a conversation of its own: resumed, it reads its inherited turns back.
+    assert await run("and document it", resume_id=fork) == fork
+    assert [number for number, _ in await stored_turns(fork)] == [1, 2, 3, 4]
+    assert (await listed())[0].last_input == "and document it"

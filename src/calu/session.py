@@ -2197,12 +2197,16 @@ class Session:
         model: str | None = None,
         effort: Effort | Literal["default"] | None = None,
         fork: Fork | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Start a Claude session in `tg` and return once it accepts messages.
 
         Side effects: creates a `sessions` row (state "starting"), restores the turns and the
         chat summary of the resumed session from the database, emits `startup_warnings` as
-        `log` warnings, creates a runner and starts it as a task in `tg`.
+        `log` warnings, creates a runner and starts it as a task in `tg`. Once the runner is
+        ready, the row gets the Claude session id (with `session_id`: before the first turn),
+        and a fork stores the turns it keeps under its own row (`_restore_context`). A start
+        that fails writes neither.
 
         Args:
             tg: Task group that runs the session; it must outlive the session.
@@ -2210,6 +2214,9 @@ class Session:
             fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
                 whole. Needs `resume_id`; the forked conversation gets its own session id, so
                 the one that was forked from is left untouched.
+            session_id: The Claude session id a new or forked conversation gets, a UUID
+                (D203); None lets Claude Code choose, and the id is then known with the first
+                turn. Ignored for a plain resume, which keeps `resume_id`.
             model: Claude model alias or id for this and later sessions; None keeps the
                 configured model.
             effort: Reasoning effort for this and later sessions; "default" uses Claude Code's
@@ -2239,14 +2246,15 @@ class Session:
         self.state = "stopped"
         await self.recorder.attempt("creating the session row", self.store.start(self._identity()))
         await self._set_state("starting")
-        await self._restore_context(resume_id)
+        inherited = await self._restore_context(resume_id, fork)
+        chosen = session_id if resume_id is None or fork is not None else None
         # The baseline of this run: the nearest trusted ancestor of HEAD as it is now.
         self._trust_stale = True
         await self.announce_honesty()
         for warning in self.startup_warnings:
             await self.emit(Log(level="warning", message=warning))
         runner = self.runner = self.runner_factory()
-        tg.start_soon(self._run, runner, resume_id, fork)
+        tg.start_soon(self._run, runner, resume_id, fork, chosen)
 
         ready = anyio.Event()
 
@@ -2269,12 +2277,23 @@ class Session:
             await runner.stop()
             raise SessionError(f"Claude session was not ready within {START_TIMEOUT_S} s")
         # As early as possible: a session that stops before its first turn (an escalation that
-        # timed out, for example) must still be resumable by its Claude session id (D27).
-        await self._record_claude_session(runner.session_id)
+        # timed out, for example) must still be resumable by its Claude session id (D27). An
+        # id calu chose is known now; Claude Code reports it with the first turn only.
+        await self._record_claude_session(runner.session_id or chosen)
+        # Only now, with Claude Code running: a fork whose start failed must not leave a
+        # conversation behind that is listed and cannot be resumed.
+        for turn in inherited:
+            await self.recorder.attempt(
+                "storing an inherited turn with the fork", self.store.save_turn(turn)
+            )
         await self._set_state("idle")
 
     async def _run(
-        self, runner: ClaudeRunner, resume_id: str | None = None, fork: Fork | None = None
+        self,
+        runner: ClaudeRunner,
+        resume_id: str | None = None,
+        fork: Fork | None = None,
+        session_id: str | None = None,
     ) -> None:
         """Run `runner` until it ends; then mark the session as stopped or failed.
 
@@ -2284,9 +2303,10 @@ class Session:
             runner: The runner of this session.
             resume_id: Claude session id to resume, or None.
             fork: Where to branch off the resumed conversation, or None (PLAN.md D36).
+            session_id: The id a new or forked conversation gets, or None (D203).
         """
         try:
-            await runner.run(self, self._on_runner_event, resume_id, fork)
+            await runner.run(self, self._on_runner_event, resume_id, fork, session_id)
         except Exception as exc:
             log.exception("Claude session failed")
             self._run_state.run_error = f"{type(exc).__name__}: {exc}"
@@ -3368,13 +3388,32 @@ class Session:
         )
         await self.recorder.attempt("marking folded turns", self.store.mark_folded(covered_turns))
 
-    async def _restore_context(self, resume_id: str | None) -> None:
+    async def _restore_context(
+        self, resume_id: str | None, fork: Fork | None = None
+    ) -> list[TurnRecord]:
         """Load the turns and the chat summary of the session that is resumed.
 
         A new session (or a database error) starts with no turns and the empty summary.
 
+        A fork keeps only the turns before its fork point, and its first turn takes the number
+        of the first discarded one. The fork runs under a session id of its own, and a
+        conversation is read back by that id (`SessionStore.load_previous`): the caller
+        therefore stores the returned turns under the fork's own `sessions` row once the
+        runner is ready; without that copy, resuming the fork later would find only the turns
+        the fork ran itself. The chat summary is copied by `load_previous`.
+
+        A summary that already covers a turn the fork discards cannot be unfolded. That is
+        reported as a `log` warning, and the fork's copy of the summary is recorded as
+        covering the turns before the fork point only, so that the turns the fork runs are
+        read back when it is resumed.
+
         Args:
             resume_id: Claude session id to resume, or None for a new session.
+            fork: Where the resumed conversation is branched off, or None.
+
+        Returns:
+            The turns a fork inherits and has to store under its own row; empty for a new
+            session and for a plain resume.
         """
         turns: list[TurnRecord] = []
         summary = ""
@@ -3383,8 +3422,30 @@ class Session:
                 turns, summary = await self.store.load_previous(resume_id)
             except Exception:
                 log.exception("restoring the context of %s failed", resume_id)
-        self.context.restore(turns)
+        before = fork.before_turn if fork is not None else None
+        if before is not None:
+            # `turns` are the turns the summary does not cover. If the lowest of them is
+            # above the fork point (or there is none), the summary reaches past it.
+            if summary and min((turn.index for turn in turns), default=before + 1) > before:
+                await self._emit_safely(
+                    Log(
+                        level="warning",
+                        message=(
+                            "the chat summary the checkers read also covers turns this "
+                            f"fork discards (turn {before} and later). Correct it with "
+                            "`calu summary <session id> --edit` (`calu sessions` "
+                            "shows the id)."
+                        ),
+                    )
+                )
+                await self.recorder.attempt(
+                    "recording what the fork's summary covers",
+                    self.store.save_summary(summary, before - 1),
+                )
+            turns = [turn for turn in turns if turn.index < before]
+        self.context.restore(turns, next_index=before)
         self.context.summary = summary or EMPTY_CHAT_SUMMARY
+        return turns if fork is not None else []
 
     # ------------------------------------------------------------------ store helpers
 

@@ -286,6 +286,7 @@ host, and nothing to keep open:
 
 ```bash
 calu sessions             # every session of every host, with its state
+calu list-sessions        # the last conversations of this directory, to resume or fork
 calu escalations          # steps that wait for a decision
 calu escalation 12        # everything the checker saw, so you decide on the same material
 calu resolve 12 allow --note "go ahead"
