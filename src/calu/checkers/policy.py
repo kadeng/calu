@@ -126,7 +126,7 @@ class ToolPolicy(BaseModel):
 
 
 KNOWN_TOOLS = (
-    frozenset({"AskUserQuestion", "WebFetch", "WebSearch"})
+    frozenset({"AskUserQuestion", "WebFetch", "WebSearch", "DesignSync", "ExitWorktree"})
     | SHELL_TOOLS
     | EDIT_TOOLS
     | READ_ONLY_TOOLS

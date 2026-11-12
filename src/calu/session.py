@@ -78,7 +78,12 @@ from calu.checkers import (
 from calu.checkers.changeset import changeset, is_commit
 from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
-from calu.checkers.rules import READ_PATH_TOOLS, WRITE_PATH_TOOLS, RuleOutcome
+from calu.checkers.rules import (
+    OTHER_RULED_TOOLS,
+    READ_PATH_TOOLS,
+    WRITE_PATH_TOOLS,
+    RuleOutcome,
+)
 from calu.checkers.tools import StepTime
 from calu.claude.runner import (
     ClaudeRunner,
@@ -3471,7 +3476,12 @@ def _rules_outcome(step: Step, outcome: RuleOutcome) -> str | None:
         then say nothing about it).
     """
     tool = step.tool_name
-    if tool not in SHELL_TOOLS and tool not in READ_PATH_TOOLS and tool not in WRITE_PATH_TOOLS:
+    if (
+        tool not in SHELL_TOOLS
+        and tool not in READ_PATH_TOOLS
+        and tool not in WRITE_PATH_TOOLS
+        and tool not in OTHER_RULED_TOOLS
+    ):
         return None
     if outcome.ask:
         return "deny"

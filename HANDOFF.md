@@ -46,7 +46,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**818 tests pass** (plus 11 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**820 tests pass** (plus 11 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 239 commits, ~28.5k lines of Python in `src` (~31.5k with the SQL, templates and
 default instructions), ~16.5k of tests, 22 migrations, 21 CLI commands, 16 protocol requests,
 18 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
@@ -634,10 +634,11 @@ Everything else is either built or recommended with its reasons. These need a pe
   `calu honesty list`, a tag on the web pages, `beyond_step` in the protocol), because it
   restricts nothing; whether such a mark should also **block** less is still yours to decide.
 - **Routes for the tools Claude Code 2.1.319 added** (D154): a session names them at start
-  (CronCreate, CronDelete, CronList, DesignSync, EnterWorktree, ExitWorktree, ListAgents,
+  (CronCreate, CronDelete, CronList, EnterWorktree, ListAgents,
   PushNotification, ReportFindings, ScheduleWakeup, TaskStop, Workflow); all of them go to the
   command checker. `Monitor` got its route because it runs shell commands (D156), and worktrees
-  are judged correctly (D155). Whether `EnterWorktree`, `CronCreate` or `PushNotification`
+  are judged correctly (D155); DesignSync's uploads and a discarding ExitWorktree meet the
+  rules (D165). Whether `EnterWorktree`, `CronCreate` or `PushNotification`
   (which sends text off the machine) should always ask is a default:
   `calu config set tool_routes '{"PushNotification": "escalate"}'` is the form.
 - **Q16 — whether a push, a deploy or a publish should be a deny rule** rather than a

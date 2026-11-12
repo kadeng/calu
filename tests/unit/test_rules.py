@@ -502,3 +502,35 @@ def test_a_command_that_only_mentions_calu_is_not_refused(tmp_path: Path) -> Non
     rules = default_rules(tmp_path)
     for command in ("echo calu", "grep -rn calu src", "calucheck", "uv run pytest"):
         assert not rules.evaluate(bash(command, str(tmp_path))).ask, command
+
+
+def test_designsync_uploads_meet_the_read_deny_list(tmp_path: Path) -> None:
+    """D165: DesignSync reads `localDir` and each `localPath` from disk and uploads them to
+    claude.ai -- a read the read deny list never saw."""
+    (tmp_path / "keys").mkdir()
+    (tmp_path / "keys" / "server.pem").write_text("k\n", encoding="utf-8")
+    (tmp_path / "ui").mkdir()
+    (tmp_path / "ui" / "button.html").write_text("<b>\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+
+    def sync(inp: dict) -> Step:
+        return Step(tool_name="DesignSync", tool_input=inp, cwd=str(tmp_path))
+
+    assert rules.evaluate(sync({"method": "finalize_plan", "localDir": "keys"})).ask
+    upload = {"method": "write_files", "files": [{"path": "a", "localPath": "keys/server.pem"}]}
+    assert rules.evaluate(sync(upload)).ask
+    fine = rules.evaluate(sync({"method": "finalize_plan", "localDir": "ui"}))
+    assert not fine.ask and not fine.allowed, "still the checker's: it leaves the machine"
+    assert not rules.evaluate(sync({"method": "list_projects"})).ask
+
+
+def test_discarding_a_worktrees_changes_asks(tmp_path: Path) -> None:
+    """D165: like `git reset --hard`, `ExitWorktree(remove, discard_changes)` loses work."""
+    rules = default_rules(tmp_path)
+
+    def leave(inp: dict) -> Step:
+        return Step(tool_name="ExitWorktree", tool_input=inp, cwd=str(tmp_path))
+
+    assert rules.evaluate(leave({"action": "remove", "discard_changes": True})).ask
+    assert not rules.evaluate(leave({"action": "remove"})).ask
+    assert not rules.evaluate(leave({"action": "keep"})).ask

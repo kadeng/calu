@@ -38,6 +38,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from calu.checkers.model import Step
 from calu.checkers.policy import SHELL_TOOLS
@@ -80,6 +81,10 @@ class Rule:
 _CALU_CONFIG = re.compile(r"(^|/)\.config/calu(/|$)")
 BUILT_IN_WRITE_DENY = (Rule(_CALU_CONFIG, "built-in"),)
 BUILT_IN_READ_DENY = (Rule(_CALU_CONFIG, "built-in"),)
+OTHER_RULED_TOOLS = frozenset({"DesignSync", "ExitWorktree"})
+"""Tools of CLI 2.1.319 that read files or destroy work without being a read, edit or shell
+tool; `Rules._evaluate_other` applies the rules to them (D165)."""
+
 BUILT_IN_COMMAND_DENY = (
     Rule(
         re.compile(
@@ -237,6 +242,8 @@ class Rules:
         """
         outcome = RuleOutcome()
         tool = step.tool_name
+        if tool in OTHER_RULED_TOOLS:
+            return self._evaluate_other(step, outcome)
         if tool not in SHELL_TOOLS and tool not in READ_PATH_TOOLS and tool not in WRITE_PATH_TOOLS:
             return outcome
         for name in [*RULE_LISTS, "unknown"]:
@@ -382,6 +389,61 @@ class Rules:
             )
             return False
         return True
+
+    def _evaluate_other(self, step: Step, outcome: RuleOutcome) -> RuleOutcome:
+        """Apply the rules to the tools of `OTHER_RULED_TOOLS` (PLAN.md D165).
+
+        `DesignSync` reads files from disk itself and uploads them to claude.ai: the directory
+        of `finalize_plan` (`localDir`) and each `localPath` of `write_files` are reads, so the
+        read deny list applies to them, as to a `Read`. `ExitWorktree` with
+        `discard_changes: true` deletes uncommitted work, which asks like `git reset --hard`.
+        Such a step is never free: the checker still judges what leaves the machine.
+
+        Args:
+            step: The tool call.
+            outcome: The outcome to fill.
+
+        Returns:
+            `outcome`, with `allowed` False.
+        """
+        inp = step.tool_input
+        cwd = Path(step.cwd or self.workspace)
+        if not cwd.is_absolute():
+            cwd = self.workspace / cwd
+        if step.tool_name == "ExitWorktree":
+            if inp.get("action") == "remove" and inp.get("discard_changes") is True:
+                outcome.ask.append(
+                    "Removing the worktree with `discard_changes` deletes its uncommitted work "
+                    "and unmerged commits."
+                )
+            return outcome
+        method = inp.get("method")
+        raw: list[str] = []
+        if method == "finalize_plan":
+            raw.append(str(inp.get("localDir") or "."))
+        elif method == "write_files":
+            given = inp.get("files")
+            files: list[Any] = given if isinstance(given, list) else []
+            raw += [
+                str(entry["localPath"])
+                for entry in files
+                if isinstance(entry, dict) and isinstance(entry.get("localPath"), str)
+            ]
+        for text in raw:
+            path = Path(text).expanduser()
+            path = (path if path.is_absolute() else cwd / path).resolve()
+            via = f"uploaded by DesignSync {method}"
+            self._check_path(path, "read", via, outcome)
+            if path.is_dir():
+                listed = searched_files(path, git_ignore=False, hidden=True)
+                denied = [self.display(p) for p in listed.files if self.read_denied(p)]
+                if denied:
+                    shown = ", ".join(f"`{name}`" for name in denied[:5])
+                    outcome.ask.append(
+                        f"DesignSync may upload any file of `{self.display(path)}`, which holds "
+                        f"{shown} -- files the read deny list protects."
+                    )
+        return outcome
 
     def _recursive_search_allowed(self, used: ShellPath, outcome: RuleOutcome) -> bool:
         """Apply the read deny list to the files a `grep -r` or `rg` reads (PLAN.md D149).
