@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 
 BATCH_CHARS = 120_000
 """The largest number of characters of file texts in one batch. A file whose text alone is
-longer gets a batch of its own (`calu.honesty.REVIEW_FILE_BYTES` bounds a single file)."""
+longer gets a batch of its own (`calu.honesty.REVIEW_FILE_BYTES` bounds the text of one file)."""
 
 
 class ReviewFinding(BaseModel):

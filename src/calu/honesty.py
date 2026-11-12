@@ -44,7 +44,7 @@ import stat
 import subprocess
 import threading
 import time
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -176,6 +176,10 @@ GITLINK_MODE = "160000"
 """The mode of a submodule entry in a git tree. calu does not look into submodules; it compares
 the commit a submodule is at with the commit the baseline records for it."""
 
+LINK_MODE = "120000"
+"""The mode of a symbolic link in a git tree. Its content is the link's target, not the text of
+a file, so an honesty review compares no file with it."""
+
 READ_LIMIT = 8_000_000
 """The largest file, in bytes, that `read_regular` returns. A larger file is hashed in pieces
 (`content_ids`), but an edit of it is not predicted, so it is unreviewed after the edit."""
@@ -191,8 +195,15 @@ SETTLE_NS = 2_000_000_000
 least this old, so that two writes within the clock's resolution are both seen."""
 
 REVIEW_FILE_BYTES = 200_000
-"""The largest file, in bytes, that an honesty review hands to its reviewer. A larger file is
-skipped and stays unreviewed, so a person decides about it (`calu honesty trust --file`)."""
+"""The largest text, in bytes of UTF-8, that an honesty review hands to its reviewer for one
+file: the file's diff against the baseline's content where the baseline holds the file, the
+whole file otherwise. A file with a longer text is skipped and stays unreviewed, so a person
+decides about it (`calu honesty trust --file`)."""
+
+REVIEW_READ_BYTES = 2_000_000
+"""The largest file, in bytes, that an honesty review reads to hash and to compare with the
+baseline's content, and the largest baseline content it reads. A larger file is skipped like
+one whose text for the reviewer is over `REVIEW_FILE_BYTES`."""
 
 REVIEWER = "the honesty review"
 """Who opens and closes marks for an honesty review (`HonestyMark.opened_by`)."""
@@ -337,6 +348,11 @@ class FileReview:
     `HonestyState.apply_current_review` drops a result whose file has other open marks now."""
 
 
+type FileSeen = tuple[str, tuple[int, ...]]
+"""What an honesty review saw of one file: (the SHA-256 of its content, or "" if it could not be
+hashed; the ids of its open marks, sorted)."""
+
+
 @dataclass(frozen=True)
 class ReviewFile:
     """One file an honesty review hands to its reviewer agent."""
@@ -369,9 +385,51 @@ class ReviewPlan:
     """Files verified without a model: their change against the baseline is whitespace only
     (`whitespace_only`)."""
     skipped: tuple[tuple[str, str], ...] = ()
-    """(path, why) of each file the review cannot judge; it stays as it is."""
-    fingerprint: str = ""
-    """`HonestyState.review_fingerprint()` at the time of the plan."""
+    """(path, why) of each file the review cannot judge; it stays as it is: a file that is
+    not readable text within the size limits, and, with a baseline, a file whose working
+    content is reviewed while the index holds another content for it."""
+    verified_already: int = 0
+    """Only without a baseline: how many of the files git lists have no open mark and a
+    content that is verified already. They are not part of the review and not in `count`."""
+    seen: Mapping[str, FileSeen] = field(default_factory=dict[str, FileSeen])
+    """Every file of `files`, `shortcuts` and `skipped` -> what the plan saw of it."""
+    review_required: bool = False
+    """Whether a review was required when the plan was made."""
+
+
+@dataclass(frozen=True)
+class Reviewed:
+    """What the last honesty review looked at, kept by the session (`Session._run_review`).
+
+    The session does not start a review by itself while `covers` is true for the new plan:
+    that review would read what the last one read.
+    """
+
+    baseline: str
+    """The commit id of the baseline after the review; "" if there was none."""
+    review_required: bool
+    """Whether a review was required after the review's result was applied."""
+    seen: Mapping[str, FileSeen]
+    """File -> the content the review judged and the file's open marks after its result was
+    applied; for a file the review skipped, what the plan saw. A file whose result was dropped
+    because it changed while the review ran is not in it."""
+
+    def covers(self, plan: ReviewPlan) -> bool:
+        """Tell whether the last review looked at everything a new review would read.
+
+        Args:
+            plan: The plan of the new review, without a `problem`.
+
+        Returns:
+            True if the baseline and "review required" are as they were after the last
+            review, and every file of the plan was judged or skipped by the last review with
+            the content and the open marks it has now. False for a file that changed since,
+            that became unreviewed since, or whose result the last review dropped.
+        """
+        base = plan.baseline.commit_id if plan.baseline else ""
+        if base != self.baseline or plan.review_required != self.review_required:
+            return False
+        return all(self.seen.get(key) == seen for key, seen in plan.seen.items())
 
 
 @dataclass
@@ -384,6 +442,10 @@ class MarkChanges:
     ignored: list[str] = field(default_factory=list)
     """One sentence per mark of the answer that was not applied, saying which and why. The
     session logs them and tells the checker."""
+    dropped: list[tuple[str, str]] = field(default_factory=list[tuple[str, str]])
+    """Only from `HonestyState.apply_current_review`: (path, why) of each result of an honesty
+    review that was not applied because the file or its marks changed while the review ran.
+    Such a file is as it was; the next review reads it."""
     review_required: bool = False
     """Whether a review is required after the call."""
     withdrawn: list[str] = field(default_factory=list)
@@ -1009,7 +1071,8 @@ class HonestyState:
         review_plan(max_files)             what an honesty review has to read now
         apply_current_review(results)      apply_review for the files that did not change
                                            while the review ran
-        review_fingerprint()               a hash of what a review would read
+        seen_now(paths)                    content and marks of files a review just judged,
+                                           for the session's record of the last review
         storable(path)                     the verification to store in `trusted_files`
         close_stale() / clear(id, by)      marks calu or a person closes
         watch(path) / watch_all(paths)     files git does not list that the session wrote
@@ -1535,24 +1598,57 @@ class HonestyState:
             results: Path (as `key` names it) -> what the review said about the file.
 
         Returns:
-            What `apply_review` returns for the applied results, with one sentence in
-            `ignored` per result that was dropped.
+            What `apply_review` returns for the applied results, with one entry in
+            `dropped` per result that was not applied.
         """
         current: dict[str, FileReview] = {}
-        dropped: list[str] = []
+        dropped: list[tuple[str, str]] = []
         for path, review in results.items():
             key = self.key(path)
             ids = self._content(key)
             held = tuple(sorted(mark.id for mark in self.open_marks if mark.path == key))
             if ids is None or ids.sha256 != review.sha256:
-                dropped.append(f"{key}: the file changed while the review ran")
+                dropped.append((key, "the file changed while the review ran"))
             elif review.marks is not None and tuple(sorted(review.marks)) != held:
-                dropped.append(f"{key}: its marks changed while the review ran")
+                dropped.append((key, "its marks changed while the review ran"))
             else:
                 current[key] = review
         changes = self.apply_review(current)
-        changes.ignored += dropped
+        changes.dropped += dropped
         return changes
+
+    @_locked
+    def seen_now(self, paths: Iterable[str]) -> dict[str, FileSeen]:
+        """Say what the state holds for files an honesty review just judged.
+
+        The session calls this after `apply_current_review`, for the files whose results were
+        applied, and keeps the answer in `Reviewed.seen`.
+
+        Args:
+            paths: The files, as `key` names them.
+
+        Returns:
+            File -> (the SHA-256 the state records as verified for it, the ids of its open
+            marks, sorted). A file without a recorded verification is left out.
+        """
+        seen: dict[str, FileSeen] = {}
+        for path in paths:
+            key = self.key(path)
+            held = self.verified.get(key)
+            if held is not None:
+                seen[key] = (held.sha256, self._mark_ids(key))
+        return seen
+
+    def _mark_ids(self, key: str) -> tuple[int, ...]:
+        """List the ids of the open marks on a file.
+
+        Args:
+            key: The file, as `key` names it.
+
+        Returns:
+            The ids, sorted.
+        """
+        return tuple(sorted(mark.id for mark in self.open_marks if mark.path == key))
 
     def _review_candidates(self) -> tuple[list[str], str]:
         """List the files an honesty review has to judge: unreviewed or with an open mark.
@@ -1581,38 +1677,6 @@ class HonestyState:
         found.update(key for key in self.watched if os.path.lexists(self.workspace / key))
         return sorted(found), ""
 
-    def _fingerprint(self, candidates: Sequence[str], problem: str) -> str:
-        """Hash what an honesty review would read (see `review_fingerprint`).
-
-        Args:
-            candidates: The files of `_review_candidates`.
-            problem: Its problem, or "".
-
-        Returns:
-            A SHA-256 in hexadecimal.
-        """
-        base = self._base()
-        parts: list[str] = [base.commit_id if base else "", problem, str(self.review_required)]
-        for key in candidates:
-            ids = self._content(key)
-            parts.append(f"{key}\0{ids.sha256 if ids else ''}")
-        parts += [f"{mark.id}\0{mark.reason}" for mark in self.open_marks]
-        return hashlib.sha256("\0\0".join(parts).encode(errors="surrogateescape")).hexdigest()
-
-    @_locked
-    def review_fingerprint(self) -> str:
-        """Hash everything an honesty review would read, to tell whether anything changed.
-
-        The session keeps the value after a review and does not run a review by itself again
-        while the value is the same.
-
-        Returns:
-            A SHA-256 over the baseline's commit id, the files that are unreviewed or carry
-            an open mark with the SHA-256 of their present contents, the open marks with
-            their reasons, and whether a review is required.
-        """
-        return self._fingerprint(*self._review_candidates())
-
     @_locked
     def review_plan(self, max_files: int) -> ReviewPlan:
         """Compute what an honesty review has to do now (specification section 4).
@@ -1623,16 +1687,24 @@ class HonestyState:
         shown. Per file, the first rule that applies decides:
 
             not a regular file calu can read, larger than
-            `REVIEW_FILE_BYTES`, or not UTF-8 text          -> skipped
+            `REVIEW_READ_BYTES`, or not UTF-8 text          -> skipped
             no open mark, and the present content is
-            reviewed already (only the content the index
-            holds for the path is not)                      -> skipped
-            no open mark, and the change against the
-            baseline's content is whitespace only           -> verified without a model
-            an open mark, a file the baseline does not
-            hold, or no baseline                            -> the reviewer gets the whole file
+            reviewed already:
+              without a baseline                            -> not part of the review
+                                                               (`verified_already`)
+              with a baseline (only the content the index
+              holds for the path is not reviewed)           -> skipped
+            no open mark, the baseline holds the path as
+            a file, and the change is whitespace only       -> verified without a model
+            an open mark, a path the baseline does not
+            hold as a file of at most `REVIEW_READ_BYTES`
+            of UTF-8 text, or no baseline                   -> the reviewer gets the whole file
             otherwise                                       -> the reviewer gets the diff
                                                                against the baseline's content
+
+        A file whose text for the reviewer (the diff, or the whole file) is larger than
+        `REVIEW_FILE_BYTES` is skipped. So a small change of a large file is reviewed, and a
+        large new file is not.
 
         Args:
             max_files: `honesty.review_max_files`. With more files to judge the plan has only
@@ -1666,38 +1738,53 @@ class HonestyState:
         files: list[ReviewFile] = []
         shortcuts: dict[str, FileReview] = {}
         skipped: list[tuple[str, str]] = []
+        seen: dict[str, FileSeen] = {}
+        already = 0
         for key in candidates:
             marks = tuple(mark for mark in self.open_marks if mark.path == key)
-            data = read_regular(self.workspace / key, REVIEW_FILE_BYTES)
+            mark_ids = self._mark_ids(key)
+            data = read_regular(self.workspace / key, REVIEW_READ_BYTES)
             if data is None:
-                why = f"not a readable regular file of at most {REVIEW_FILE_BYTES} bytes"
+                now = self._content(key)
+                seen[key] = (now.sha256 if now else "", mark_ids)
+                why = f"not a readable regular file of at most {REVIEW_READ_BYTES} bytes"
                 skipped.append((key, why))
                 continue
+            ids = hash_bytes(data, self._format())
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
+                seen[key] = (ids.sha256, mark_ids)
                 skipped.append((key, "not UTF-8 text"))
                 continue
-            ids = hash_bytes(data, self._format())
             if not marks and self._reviewed_source(key, ids) is not None:
+                if base is None:
+                    already += 1
+                    continue
+                seen[key] = (ids.sha256, mark_ids)
                 skipped.append((key, "the index holds another content for it than the file has"))
                 continue
+            seen[key] = (ids.sha256, mark_ids)
             before = self._baseline_text(top, tree, key) if top is not None else None
-            if before is not None and not marks:
-                if whitespace_only(before, text):
-                    shortcuts[key] = FileReview(ids.sha256, marks=())
-                    continue
-                diff = change_diff(before, text, key)
-                files.append(ReviewFile(key, ids.sha256, diff, whole=False))
+            whole = before is None or bool(marks)
+            if before is not None and not marks and whitespace_only(before, text):
+                shortcuts[key] = FileReview(ids.sha256, marks=())
                 continue
-            files.append(ReviewFile(key, ids.sha256, text, whole=True, marks=marks))
+            shown_text = text if before is None or marks else change_diff(before, text, key)
+            if len(shown_text.encode("utf-8")) > REVIEW_FILE_BYTES:
+                what = "the file" if whole else "its change against the baseline"
+                skipped.append((key, f"{what} is larger than {REVIEW_FILE_BYTES} bytes"))
+                continue
+            files.append(ReviewFile(key, ids.sha256, shown_text, whole=whole, marks=marks))
         return ReviewPlan(
             base,
-            count=len(candidates),
+            count=len(candidates) - already,
             files=tuple(files),
             shortcuts=shortcuts,
             skipped=tuple(skipped),
-            fingerprint=self._fingerprint(candidates, ""),
+            verified_already=already,
+            seen=seen,
+            review_required=self.review_required,
         )
 
     def _baseline_text(
@@ -1711,20 +1798,23 @@ class HonestyState:
             key: The file.
 
         Returns:
-            The content; None if the baseline does not hold the path as a file, the content
-            is larger than `REVIEW_FILE_BYTES` or not UTF-8, or git could not be asked.
+            The content; None if the baseline does not hold the path as a regular file (it
+            is missing, a submodule or a symbolic link), the content is larger than
+            `REVIEW_READ_BYTES` (asked from git before it is read) or not UTF-8, or git could
+            not be asked.
         """
         try:
             entry = tree.get((self.workspace / key).relative_to(top).as_posix())
         except ValueError:
             return None
-        if entry is None or entry[0] == GITLINK_MODE:
+        if entry is None or entry[0] in (GITLINK_MODE, LINK_MODE):
             return None
         try:
+            size = int(run_git(top, ["cat-file", "-s", entry[1]]).strip())
+            if size > REVIEW_READ_BYTES:
+                return None
             data = run_git(top, ["cat-file", "blob", entry[1]])
-        except GitError:
-            return None
-        if len(data) > REVIEW_FILE_BYTES:
+        except GitError, ValueError:
             return None
         try:
             return data.decode("utf-8")

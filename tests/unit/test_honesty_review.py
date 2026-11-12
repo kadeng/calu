@@ -19,6 +19,7 @@ from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from calu import session as session_module
 from calu.checkers import CodeMark, Decision
 from calu.checkers.honesty_review import (
     FileVerdict,
@@ -33,10 +34,12 @@ from calu.checkers.honesty_review import (
 from calu.defaults.instructions import honesty_rules, review_instructions
 from calu.honesty import (
     REVIEW_FILE_BYTES,
+    REVIEW_READ_BYTES,
     Baseline,
     FileReview,
     Finding,
     HonestyState,
+    Reviewed,
     ReviewFile,
     resolve_commit,
     whitespace_only,
@@ -112,9 +115,10 @@ def test_the_plan_names_the_diff_the_whole_file_and_the_shortcut(repo: Path) -> 
     (repo / "README.md").write_text("# project   \n\n\n", encoding="utf-8")
     (repo / "logo.bin").write_bytes(b"\xff\xfe\x00")
     (repo / "big.txt").write_text("x" * (REVIEW_FILE_BYTES + 1), encoding="utf-8")
+    (repo / "huge.txt").write_text("x" * (REVIEW_READ_BYTES + 1), encoding="utf-8")
 
     plan = state.review_plan(300)
-    assert plan.count == 5 and not plan.problem
+    assert plan.count == 6 and not plan.problem
     changed, new = sorted(plan.files, key=lambda one: one.whole)
     assert (changed.path, changed.whole) == ("src/parser.py", False)
     assert changed.text.startswith("--- a/src/parser.py\n+++ b/src/parser.py\n")
@@ -124,9 +128,50 @@ def test_the_plan_names_the_diff_the_whole_file_and_the_shortcut(repo: Path) -> 
     assert list(plan.shortcuts) == ["README.md"]
     assert plan.shortcuts["README.md"].sha256 == state.content_sha256("README.md")
     assert dict(plan.skipped) == {
-        "big.txt": f"not a readable regular file of at most {REVIEW_FILE_BYTES} bytes",
+        "big.txt": f"the file is larger than {REVIEW_FILE_BYTES} bytes",
+        "huge.txt": f"not a readable regular file of at most {REVIEW_READ_BYTES} bytes",
         "logo.bin": "not UTF-8 text",
     }
+    assert set(plan.seen) == {one.path for one in plan.files} | set(plan.shortcuts) | set(
+        dict(plan.skipped)
+    )
+
+
+def test_a_small_change_of_a_large_file_is_reviewed_as_its_diff(repo: Path) -> None:
+    """The size limit is for the text the reviewer gets: a lock file of 240 kB with one new
+    line is reviewed; the same file rewritten in every line is skipped."""
+    lock = "".join(f'name = "package-{number}"\n' for number in range(10_000))
+    assert len(lock) > REVIEW_FILE_BYTES
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    git(repo, "add", "uv.lock")
+    git(repo, "commit", "-q", "-m", "lock")
+    state = trusted_state(repo)
+
+    (repo / "uv.lock").write_text(lock + 'name = "one-more"\n', encoding="utf-8")
+    plan = state.review_plan(300)
+    (only,) = plan.files
+    assert (only.path, only.whole, plan.skipped) == ("uv.lock", False, ())
+    assert '+name = "one-more"' in only.text and len(only.text) < 1000
+    assert only.sha256 == state.content_sha256("uv.lock")
+
+    (repo / "uv.lock").write_text(lock.replace("package", "module"), encoding="utf-8")
+    plan = state.review_plan(300)
+    assert plan.files == () and plan.skipped == (
+        ("uv.lock", f"its change against the baseline is larger than {REVIEW_FILE_BYTES} bytes"),
+    )
+
+
+def test_a_file_in_the_place_of_a_symbolic_link_is_reviewed_whole(repo: Path) -> None:
+    """The baseline records a link's target, not a text: no diff and no shortcut apply."""
+    (repo / "link.py").symlink_to("src/parser.py")
+    git(repo, "add", "link.py")
+    git(repo, "commit", "-q", "-m", "link")
+    state = trusted_state(repo)
+    (repo / "link.py").unlink()
+    (repo / "link.py").write_text("src/parser.py\n", encoding="utf-8")
+    plan = state.review_plan(300)
+    assert plan.shortcuts == {}
+    assert [(one.path, one.whole) for one in plan.files] == [("link.py", True)]
 
 
 def test_a_marked_file_is_reviewed_whole_with_its_marks_and_never_by_the_shortcut(
@@ -173,6 +218,26 @@ def test_without_a_baseline_the_plan_holds_every_file_git_lists_whole(repo: Path
     assert all(one.whole for one in plan.files)
 
 
+def test_without_a_baseline_a_verified_file_is_not_part_of_the_next_plan(repo: Path) -> None:
+    """No baseline, second review: the plan holds only the files that are not verified or
+    carry a mark, and it counts the others instead of naming them as not judged."""
+    state = HonestyState(repo)
+    first = state.review_plan(300)
+    assert first.count == 3 and first.verified_already == 0
+    state.apply_review(
+        {
+            one.path: FileReview(
+                one.sha256, (Finding("", "stale"),) if one.path == "README.md" else ()
+            )
+            for one in first.files
+        }
+    )
+    second = state.review_plan(300)
+    assert [one.path for one in second.files] == ["README.md"]
+    assert (second.count, second.verified_already, second.skipped) == (1, 2, ())
+    assert set(second.seen) == {"README.md"}
+
+
 def test_a_file_whose_staged_content_alone_is_unreviewed_is_skipped(repo: Path) -> None:
     """The review reads working files; a content only the index holds stays unreviewed."""
     state = trusted_state(repo)
@@ -186,17 +251,30 @@ def test_a_file_whose_staged_content_alone_is_unreviewed_is_skipped(repo: Path) 
     )
 
 
-def test_the_fingerprint_follows_contents_and_marks(repo: Path) -> None:
-    """Nothing changed -> the same value; another content or another mark -> another value."""
+def test_the_last_review_covers_a_plan_only_with_the_same_contents_and_marks(
+    repo: Path,
+) -> None:
+    """`Reviewed.covers`: true while a new review would read what the last one looked at;
+    false after another content, another mark, a further file, or another baseline."""
     state = trusted_state(repo)
-    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
-    first = state.review_fingerprint()
-    assert state.review_fingerprint() == first == state.review_plan(300).fingerprint
-    (repo / "src" / "parser.py").write_text(CHANGED + "X = 1\n", encoding="utf-8")
-    second = state.review_fingerprint()
-    assert second != first
-    state.record([CodeMark(path="README.md", symbol="", reason="stale")], [], "edit")
-    assert state.review_fingerprint() != second
+    (repo / "logo.bin").write_bytes(b"\xff\xfe\x00")
+    plan = state.review_plan(300)
+    assert plan.baseline is not None
+    last = Reviewed(plan.baseline.commit_id, False, plan.seen)
+    assert last.covers(state.review_plan(300))
+    assert not Reviewed("", False, plan.seen).covers(plan)
+    assert not Reviewed(plan.baseline.commit_id, True, plan.seen).covers(plan)
+    assert not Reviewed(plan.baseline.commit_id, False, {}).covers(plan)
+
+    (repo / "logo.bin").write_bytes(b"\xff\xfe\x01")
+    assert not last.covers(state.review_plan(300))
+    (repo / "logo.bin").write_bytes(b"\xff\xfe\x00")
+    assert last.covers(state.review_plan(300))
+    state.record([CodeMark(path="logo.bin", symbol="", reason="stale")], [], "edit")
+    assert not last.covers(state.review_plan(300))
+    state.clear(state.open_marks[0].id, "tester")
+    (repo / "src" / "new.py").write_text("Y = 2\n", encoding="utf-8")
+    assert not last.covers(state.review_plan(300))
 
 
 def test_a_result_for_a_file_that_changed_meanwhile_is_dropped(repo: Path) -> None:
@@ -210,10 +288,11 @@ def test_a_result_for_a_file_that_changed_meanwhile_is_dropped(repo: Path) -> No
     (repo / "src" / "parser.py").write_text(CHANGED + "X = 1\n", encoding="utf-8")
     state.record([CodeMark(path="README.md", symbol="", reason="stale")], [], "command")
     changes = state.apply_current_review(results)
-    assert changes.ignored == [
-        "README.md: its marks changed while the review ran",
-        "src/parser.py: the file changed while the review ran",
+    assert changes.ignored == [] and changes.dropped == [
+        ("README.md", "its marks changed while the review ran"),
+        ("src/parser.py", "the file changed while the review ran"),
     ]
+    assert state.seen_now(results) == {}
     assert state.verified == {} and len(state.open_marks) == 1
 
     plan = state.review_plan(300)
@@ -221,7 +300,9 @@ def test_a_result_for_a_file_that_changed_meanwhile_is_dropped(repo: Path) -> No
         one.path: FileReview(one.sha256, marks=tuple(mark.id for mark in one.marks))
         for one in plan.files
     }
-    assert state.apply_current_review(results).ignored == []
+    done = state.apply_current_review(results)
+    assert (done.ignored, done.dropped) == ([], [])
+    assert state.seen_now(results) == {one.path: (one.sha256, ()) for one in plan.files}
     assert state.snapshot().clean
 
 
@@ -443,8 +524,12 @@ async def test_the_gate_does_not_repeat_a_review_while_nothing_changed(repo: Pat
         await session.stop()
 
 
-async def test_a_failed_review_is_not_repeated_by_the_gate_and_says_so(repo: Path) -> None:
-    """The gate gets the failure again, with the note that nothing changed since."""
+async def test_a_failed_review_is_repeated_by_the_gate_only_after_a_while(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed review judged nothing, so it is not kept as the last review: within
+    `REVIEW_RETRY_S` the gate gets the failure again without a model call, afterwards the
+    review runs again. A person's request runs one at any time."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     seen: list[str] = []
     session, _rec, _store = await session_on(
@@ -453,9 +538,158 @@ async def test_a_failed_review_is_not_repeated_by_the_gate_and_says_so(repo: Pat
     first = await session.honesty_review()
     second = await session.honesty_review()
     assert first.startswith("The honesty review failed: batch 1 of 1 failed")
-    assert second.startswith(first) and "Nothing changed since that review" in second
+    assert second.startswith(first) and "`/honesty-review` runs one now" in second
     assert len(seen) == 1
     assert not (await session.request_review()).ran and len(seen) == 2
+    assert len(seen) == 2
+    monkeypatch.setattr(session_module, "REVIEW_RETRY_S", 0.0)
+    assert await session.honesty_review() == first
+    assert len(seen) == 3, "after the waiting time the gate's request runs the review again"
+
+
+def rewriting_reviewer(path: Path, texts: list[str], seen: list[str]) -> Model:
+    """Create a reviewer model during whose calls a file changes, as a step would change it.
+
+    Args:
+        path: The file to rewrite.
+        texts: One content per call, used up from the front; no content is left for later
+            calls, which change nothing.
+        seen: Gets the request text of every call.
+
+    Returns:
+        A model that answers "honest" for every file of a request.
+    """
+    inner = fake_reviewer(seen=seen)
+    assert isinstance(inner, FunctionModel) and inner.function is not None
+    judge = inner.function
+
+    async def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Rewrite the file, then answer as `fake_reviewer` does.
+
+        Args:
+            messages: The message history.
+            info: Agent information.
+
+        Returns:
+            The fake reviewer's response.
+        """
+        if texts:
+            path.write_text(texts.pop(0), encoding="utf-8")
+        response = judge(messages, info)
+        assert isinstance(response, ModelResponse)
+        return response
+
+    return FunctionModel(answer, model_name="rewriting-reviewer")
+
+
+async def test_a_file_that_changed_during_the_review_is_reviewed_by_the_same_request(
+    repo: Path,
+) -> None:
+    """The result for a file that changed while the review ran is dropped, and the request
+    runs a further review that reads the new content: the command runs."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    seen: list[str] = []
+    reviewer = rewriting_reviewer(repo / "src" / "parser.py", [CHANGED + "X = 1\n"], seen)
+    session, rec, _store = await session_on(
+        repo, [[bash("make test")]], models={"honesty-review": reviewer}
+    )
+    await run_turns(session, rec)
+    assert len(seen) == 2 and "+X = 1" not in seen[0] and "+X = 1" in seen[1]
+    assert checks(rec)[0].decision is Decision.PASS
+    assert "0 file(s) verified, 0 finding(s), 0 file(s) not judged, 1 changed meanwhile" in (
+        logs(rec)
+    )
+    assert (await session.honesty_snapshot()).clean
+
+
+async def test_a_file_that_keeps_changing_is_not_covered_by_the_last_review(repo: Path) -> None:
+    """A request runs at most `REVIEW_PASSES` reviews; its answer names the file that changed
+    again, and the next request reviews it instead of giving the last answer again."""
+    target = repo / "src" / "parser.py"
+    target.write_text(CHANGED, encoding="utf-8")
+    seen: list[str] = []
+    texts = [CHANGED + f"X = {number}\n" for number in range(session_module.REVIEW_PASSES)]
+    session, _rec, _store = await session_on(
+        repo, [[]], models={"honesty-review": rewriting_reviewer(target, texts, seen)}
+    )
+    problem = await session.honesty_review()
+    assert len(seen) == session_module.REVIEW_PASSES
+    assert problem == (
+        "1 file(s) changed while the honesty review ran: src/parser.py (the file changed "
+        "while the review ran). The next review reads them; a step that needs it starts one."
+    )
+    assert "/trust-file" not in problem
+    assert not (await session.honesty_snapshot()).clean
+    assert await session.honesty_review() == ""
+    assert len(seen) == session_module.REVIEW_PASSES + 1
+    assert (await session.honesty_snapshot()).clean
+
+
+async def test_a_file_that_appeared_during_the_review_starts_the_next_one(repo: Path) -> None:
+    """A file that became unreviewed while the review ran was not shown to the reviewer: the
+    gate's next request runs a review of it."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    seen: list[str] = []
+    reviewer = rewriting_reviewer(repo / "src" / "new.py", ["Y = 2\n"], seen)
+    session, _rec, _store = await session_on(repo, [[]], models={"honesty-review": reviewer})
+    assert await session.honesty_review() == ""
+    assert len(seen) == 1 and not (await session.honesty_snapshot()).clean
+    assert await session.honesty_review() == ""
+    assert len(seen) == 2 and "src/new.py" in seen[1]
+    assert (await session.honesty_snapshot()).clean
+    assert await session.honesty_review() == "" and len(seen) == 2
+
+
+async def test_a_review_nobody_asked_for_does_not_run_without_a_baseline(repo: Path) -> None:
+    """Section 5: without a baseline only a person's request starts a review; the gate's
+    request calls no model and certifies no commit."""
+    seen: list[str] = []
+    session, _rec, store = await session_on(
+        repo, [[]], trusted=False, models={"honesty-review": fake_reviewer(seen=seen)}
+    )
+    problem = await session.honesty_review()
+    assert problem.startswith("The honesty review did not run: there is no baseline")
+    assert seen == [] and store.trusted_commits == {} and store.trusted_files == {}
+    assert session.honesty.verified == {}
+
+
+async def test_a_second_review_without_a_baseline_names_no_verified_file(repo: Path) -> None:
+    """No baseline: the first review finds one file dishonest; the second finds it honest,
+    judges only that file, reports no problem, and HEAD is certified."""
+    seen: list[str] = []
+    session, _rec, store = await session_on(
+        repo,
+        [[]],
+        trusted=False,
+        models={
+            "honesty-review": fake_reviewer({"README.md": [("", "says nothing true")]}, seen=seen)
+        },
+    )
+    first = await session.request_review("tester")
+    assert (first.ran, first.problem) == (True, "") and store.trusted_commits == {}
+    session._models["honesty-review"] = fake_reviewer(seen=seen)
+    second = await session.request_review("tester")
+    assert (second.ran, second.problem) == (True, "")
+    assert seen[1].count("## File ") == 1 and "README.md" in seen[1]
+    assert list(store.trusted_commits) == [git(repo, "rev-parse", "HEAD")]
+    assert (await session.honesty_snapshot()).clean
+
+
+async def test_a_small_change_of_a_large_file_does_not_stop_a_command(repo: Path) -> None:
+    """A committed lock file above the reviewer's text limit gets one more line: the review
+    reads the diff, and the command runs."""
+    lock = "".join(f'name = "package-{number}"\n' for number in range(10_000))
+    (repo / "uv.lock").write_text(lock, encoding="utf-8")
+    git(repo, "add", "uv.lock")
+    git(repo, "commit", "-q", "-m", "lock")
+    (repo / "uv.lock").write_text(lock + 'name = "one-more"\n', encoding="utf-8")
+    seen: list[str] = []
+    session, rec, _store = await session_on(
+        repo, [[bash("make test")]], models={"honesty-review": fake_reviewer(seen=seen)}
+    )
+    await run_turns(session, rec)
+    assert len(seen) == 1 and len(seen[0]) < 5000 and '+name = "one-more"' in seen[0]
+    assert checks(rec)[0].decision is Decision.PASS
 
 
 async def test_only_one_review_runs_at_a_time(repo: Path) -> None:

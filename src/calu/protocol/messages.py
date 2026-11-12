@@ -211,7 +211,7 @@ class HonestyReviewResult(BaseModel):
     """True if the reviewer judged the files and its result was applied to the state."""
     problem: str = ""
     """Why the review did not run or failed; for a review that ran, which files it could not
-    judge; "" if it judged every file."""
+    judge and which changed while it ran; "" if it judged every file."""
 
 
 class EventsSubscribeParams(BaseModel):

@@ -574,8 +574,10 @@ class HonestyConfig(ConfigModel):
     review_max_files: int = Field(default=300, ge=1)
     """The largest number of files one honesty review reads: the files that are unreviewed or
     carry a mark. With more, the review does not run, and the step that needed it is escalated
-    to a person with the counts. A file of more than 200,000 bytes and a file that is not
-    UTF-8 text are never read by the review; a person certifies them
+    to a person with the counts. The reviewer gets a file's change against the baseline, or
+    the whole file where the baseline does not hold it. The review does not judge a file
+    whose text for the reviewer is larger than 200,000 bytes, a file of more than 2,000,000
+    bytes, or a file that is not UTF-8 text; a person certifies such a file
     (`calu honesty trust --file`)."""
     reviewer_model: str = ""
     """Pydantic AI model string of the honesty reviewer; blank uses the default model (see
