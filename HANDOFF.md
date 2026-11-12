@@ -588,7 +588,7 @@ work for a developer without the owner. In short:
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
 | 7. Honesty enforcement | built, off; **under redesign**: it cannot hold for changes made by a command or at scale | the owner's answers to the redesign proposal |
 | 8. Splitting `session.py` | **done**: `run_state.py`, `escalations.py` (EscalationDesk), `gate.py` (StepGate), `write_sets.py`, `recorder.py`, `steps.py`; `session.py` holds the lifecycle, runner events and wiring (about 2,500 lines). Still in it: the subagent result review and the honesty bookkeeping | -- |
-| 9. Auto mode by default | open | Q22 |
+| 9. Auto mode by default | **decided** (Q22): calu does not override Claude Code's permission mode | -- |
 
 Open developer work that needs no decision:
 
