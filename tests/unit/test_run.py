@@ -172,7 +172,9 @@ async def test_a_queued_message_that_never_starts_does_not_keep_the_run_open(cap
     await still_waiting(watched.idle, "the queued message is given time to start")
     with anyio.fail_after(3):
         await watched.idle.wait()
-    assert "1 message(s) still count as queued" in capsys.readouterr().out
+    # The end is not silent: it is reported as an error, and the run does not exit with 0.
+    assert "1 message(s) still count as queued" in capsys.readouterr().err
+    assert watched.idle.unfinished
 
 
 async def test_read_lines_sends_messages_until_quit(monkeypatch):

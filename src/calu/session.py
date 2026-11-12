@@ -1012,12 +1012,18 @@ class Session:
         rather than summarize them.
 
         Side effects: replaces `context.summary` and emits a `log` event when it changed.
-        Never raises: a failed read is logged and the summary stays as it is.
+        Never raises: a failed read is logged and the summary stays as it is. A summary the
+        session itself replaced while the read was under way is kept.
         """
+        before = self.context.summary
         try:
             stored = await self.store.load_summary()
         except Exception as exc:
             log.warning("could not read the chat summary again: %s", exc)
+            return
+        if self.context.summary != before:
+            # The session folded turns into a new summary while the read was under way; what
+            # was read is older than what the session holds and is about to store.
             return
         wanted = stored or EMPTY_CHAT_SUMMARY
         if wanted == self.context.summary:

@@ -440,8 +440,18 @@ class SessionServer:
             with anyio.move_on_after(END_CHECK_S):
                 async with self._asking:
                     for sha in hashes:
-                        if sha not in self._revoked:
-                            await self._note_valid_at_end(sha, row)
+                        if sha in self._revoked:
+                            continue
+                        # The rule of `_judge`: a token last confirmed for an earlier row
+                        # outlives that row only if it was valid when the row ended.
+                        home = self._confirmed.get(sha)
+                        carried = home is not None and home != row
+                        if (carried and self._valid_at_end.get(sha) != home) or (
+                            home is None and self._last_ended is not None
+                        ):
+                            self._revoke(sha)
+                            continue
+                        await self._note_valid_at_end(sha, row)
         except Exception:
             log.exception("checking the client tokens at the end of the session failed")
         finally:

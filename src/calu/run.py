@@ -375,6 +375,9 @@ class IdleSignal:
         self.pickup_timeout_s = pickup_timeout_s
         self._idle_since: float | None = None
         self._reported = False
+        self.unfinished = False
+        """True once a bounded wait ended the run while a message was still queued; the run
+        then exits with a non-zero code."""
 
     async def __call__(self, event: Event) -> None:
         """Note what only events tell, and wake a waiting `wait`.
@@ -433,21 +436,30 @@ class IdleSignal:
         if now.queued or now.turn_open:
             if idle_for < self.pickup_timeout_s:
                 return False
+            what = (
+                f"{now.queued} message(s) still count as queued"
+                if now.queued
+                else "a turn still counts as open"
+            )
+            # A queued message that was never picked up is work that did not happen.
+            self.unfinished = self.unfinished or bool(now.queued)
             self._report(
-                f"[the session has been idle for {self.pickup_timeout_s:g} s although"
-                f" {now.queued} message(s) still count as queued; ending the run]"
+                f"calu: the session has been idle for {self.pickup_timeout_s:g} s although"
+                f" {what}; ending the run",
+                error=True,
             )
         return True
 
-    def _report(self, line: str) -> None:
+    def _report(self, line: str, error: bool = False) -> None:
         """Print `line` once per signal.
 
         Args:
-            line: The line for stdout.
+            line: The line to print.
+            error: Print to stderr instead of stdout, for an end that may have lost work.
         """
         if not self._reported:
             self._reported = True
-            print(line, flush=True)
+            print(line, file=sys.stderr if error else sys.stdout, flush=True)
 
     async def wait(self) -> None:
         """Wait until `finished()` holds.
@@ -904,7 +916,7 @@ async def _run(
             with anyio.CancelScope(shield=True):
                 await session.stop()
             tg.cancel_scope.cancel()
-    return 1 if failed or session.state == "failed" else 0
+    return 1 if failed or idle.unfinished or session.state == "failed" else 0
 
 
 async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | None:
