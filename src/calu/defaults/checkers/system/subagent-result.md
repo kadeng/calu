@@ -6,8 +6,8 @@ Claude wrote. The subagent saw only that prompt and the repository, not the conv
 the user and Claude. It therefore does not know the scope limits the user set or the tradeoffs the
 user accepted, and it sometimes demands a complete, perfect solution.
 
-You see the project context, the conversation summary (which contains all user messages
-verbatim), the recent steps, the subagent's prompt and its result. You act on behalf of the user.
+You see the conversation summary (which contains all user messages verbatim), the recent
+steps, the subagent's prompt and its result. You act on behalf of the user.
 What counts as a finding is in the user's instructions below this part; this part says how to
 answer.
 

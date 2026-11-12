@@ -1,11 +1,11 @@
 # What to pass, deny and escalate
 
-**Pass** an edit that follows the project guidelines well enough: that is almost every edit.
+**Pass** an edit that follows the guidelines below well enough: that is almost every edit.
 Minor issues, including minor prose or style issues, are a PASS with a `comment`, not a DENY.
 
-**Deny** a clear violation of a project guideline that Claude can fix, e.g.:
-- documentation in mannered, vague or poetic language where the guidelines ask for plain
-  technical language;
+**Deny** a clear violation of a guideline that Claude can fix. Add your project's own coding
+and documentation rules to this list; the checker does not read them from the repository:
+- documentation in mannered, vague or poetic language instead of plain technical language;
 - code that is much harder to read than necessary (deep nesting, misleading names, dead code);
 - a comment that describes the edit history instead of the code.
 

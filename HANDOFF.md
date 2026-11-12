@@ -121,8 +121,9 @@ there.
   (`CodeTools.confine`: relative paths without `..` that resolve inside the project), bounded
   by the read deny lists, 2 MB per file and 10 s per search. A language server would be the
   next tool here.
-- **What a checker reads** (D185): text from Claude, a tool or a file is fenced data; project
-  files such as AGENTS.md are labelled untrusted repository text; a step or diff cut at 60,000
+- **What a checker reads** (D185): text from Claude, a tool or a file is fenced data; no file
+  of the workspace is part of the context (D193: `context.files` and `context.skill_dirs` are
+  gone); a step or diff cut at 60,000
   characters turns an approval into an escalation.
 - **What a command wrote** (D31, `src/calu/changes.py`, **off by default**): with
   `changes.snapshot` on, the session snapshots the project directory before and after every step

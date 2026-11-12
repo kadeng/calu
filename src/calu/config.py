@@ -90,9 +90,11 @@ class CheckerConfig(ConfigModel):
 class ContextConfig(ConfigModel):
     """Context summary settings (see `calu.context`).
 
-    Every `fold_every` unfolded turns, the oldest `fold_count` turns are folded into
-    CHAT_SUMMARY.md. `files` are workspace-relative files included verbatim in the cached context
-    prefix when they exist; `skill_dirs` contribute the name and description of each skill.
+    Every `fold_every` unfolded turns, the oldest `fold_count` turns are folded into the chat
+    summary. No file of the workspace is part of a checker's context: the agent under review
+    can write there, so project rules that must bind belong in the checker instructions
+    (PLAN.md D193). A stored `context.files` or `context.skill_dirs` of an earlier version is
+    ignored.
     """
 
     fold_every: int = Field(default=30, ge=2)
@@ -108,14 +110,6 @@ class ContextConfig(ConfigModel):
     does not read it as an instruction."""
     max_recent_chars: int = Field(default=40_000, ge=1_000)
     """Upper bound in characters for the unfolded turns in a checker's context."""
-    files: list[str] = Field(
-        default_factory=lambda: ["AGENTS.md", "CLAUDE.md", "GLOSSARY.md", "MEMORY.md"]
-    )
-    """Workspace-relative files included verbatim in the cached context prefix where they
-    exist, so the checkers read the project's own instructions."""
-    skill_dirs: list[str] = Field(default_factory=lambda: [".claude/skills"])
-    """Workspace-relative directories whose skills contribute their name and description to
-    the context prefix."""
 
 
 DEFAULT_DENY_READ = (

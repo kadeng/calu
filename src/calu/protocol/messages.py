@@ -401,8 +401,8 @@ class SessionSnapshot(BaseModel):
 class CheckerContextResult(BaseModel):
     """Result of `context.get`: the conversation context as the checkers see it.
 
-    Leaves out what does not change during a conversation: the checker instructions and the
-    project files (AGENTS.md, CLAUDE.md, ...). A checker additionally sees the step it judges.
+    Leaves out what does not change during a conversation: the checker instructions. A
+    checker additionally sees the step it judges. No file of the workspace is part of it.
     """
 
     chat_summary: str

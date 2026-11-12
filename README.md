@@ -85,10 +85,10 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
 **The supervision.**
 
 - **Checkers with your rules.** One reviews commands, one reviews edits. Their instructions are
-  plain Markdown that you edit. They see the step, the conversation in condensed form and your
-  AGENTS.md, and they can read files, glob and grep in the project to judge on evidence.
-  AGENTS.md reaches them as text from the repository, not as rules: what must bind belongs in
-  the checker instructions.
+  plain Markdown that you edit. They see the step and the conversation in condensed form, and
+  they can read files, glob and grep in the project to judge on evidence. Their rules are the
+  instructions you give them, not files of the repository: put what your AGENTS.md asks for
+  into the checker instructions.
 - **Comments, not only verdicts.** A checker can let a step through and still tell Claude to keep
   the names and the documentation honest, or to stop widening the task.
 - **Allow and deny lists before the models, if you want them.** The lists start empty, so every

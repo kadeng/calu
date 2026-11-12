@@ -75,8 +75,6 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 | `context.narrate` | bool | `true` | Narrate Claude's thinking and text for the checkers (`calu.context.narrator`). |
 | `context.narrator_model` | text | `"mistral:mistral-small-2603"` | Model that narrates Claude's thinking and text in indirect speech, so that a checker does not read it as an instruction. |
 | `context.max_recent_chars` | int | `40000` | Upper bound in characters for the unfolded turns in a checker's context. |
-| `context.files` | list of text | `["AGENTS.md", "CLAUDE.md", "GLOSSARY.md", "MEMORY.md"]` | Workspace-relative files included verbatim in the cached context prefix where they exist, so the checkers read the project's own instructions. |
-| `context.skill_dirs` | list of text | `[".claude/skills"]` | Workspace-relative directories whose skills contribute their name and description to the context prefix. |
 | `claude` | ClaudeConfig | see below | The Claude Code session itself: model, effort, permission mode, sandbox. |
 | `claude.use_bedrock` | bool | `false` | Set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, so that it runs on AWS Bedrock with the environment's AWS credentials. False leaves the variable as it is; calu does not otherwise touch how Claude Code authenticates. |
 | `claude.permission_mode` | one of `default`, `auto`, `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` (or empty) | (empty) | Permission mode for Claude Code; None leaves it to Claude Code's own settings (`permissions.defaultMode`; without that setting a headless start runs in the mode "default", where the checkers decide alone). "auto" adds auto mode's classifier as the second approval next to the checkers. |

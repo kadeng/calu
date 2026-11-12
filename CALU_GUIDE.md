@@ -47,12 +47,14 @@ judges on evidence rather than on the diff alone. That is all it can do: it cann
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
   rules you would otherwise have to repeat to Claude every day (see
   [what you can enforce](#what-you-can-enforce-with-a-checker)). They get the conversation in
-  condensed form, your project's AGENTS.md and the step itself, and read-only tools to look
+  condensed form and the step itself, and read-only tools to look
   further when they need to: read a file or a range of its lines, find files by glob, grep for a
   pattern — so a checker can see who calls the function being changed instead of guessing.
-  Project files such as AGENTS.md reach a checker labelled as untrusted text from the
-  repository: they describe the project's conventions, and nothing in them authorizes a step.
-  A rule that must bind belongs in the checker instructions, which are stored in the database.
+  No file of the repository is part of what a checker is given: AGENTS.md, CLAUDE.md and skill
+  descriptions can be written by the agent under review, so they are not a source of rules.
+  What your project asks for -- its coding and documentation standard -- belongs in the checker
+  instructions, which are stored in the database. Claude Code itself reads those files as
+  always; this is only about the checkers.
   A step or diff longer than 60,000 characters is shown cut, and a checker's approval of a cut
   step becomes an escalation. They can also ask **when** things happened: the times of the
   session's steps, and which step last changed a file. That last question is answered from the file's change time, which an
@@ -446,7 +448,7 @@ and nothing else:
 | Agent | What it is asked | What it sees |
 |---|---|---|
 | command checker | may this one command run? | the command line, the rules' notes, the narrated conversation |
-| edit checker | is this one edit acceptable? | the diff, the file before it, the project's AGENTS.md |
+| edit checker | is this one edit acceptable? | the diff, the file before it, the contract of the function it changes |
 | changeset checker | is this commit complete and honest? | the full diff, the message, which files changed when |
 | subagent-result checker | may this subagent's answer be believed? | the subagent's task and result |
 | honesty checker | do the names and the documentation still match the code? | the edit and the file around it |
