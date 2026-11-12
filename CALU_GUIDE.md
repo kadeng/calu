@@ -591,7 +591,7 @@ operator` again replaces the password, which takes every copy handed out before 
 
 ```bash
 ssh the-host 'calu token mint <session id> --label laptop'   # asks for the admin password
-ssh -L 8800:127.0.0.1:8800 the-host     # then open http://127.0.0.1:8800 at home
+ssh -L 8800:127.0.0.1:8800 the-host     # then open the address `calu web` printed, at home
 ssh -L 8765:127.0.0.1:8765 the-host     # the port `calu sessions` shows for that session
 calu attach ws://127.0.0.1:8765 --token=<the token it printed>
 ```
@@ -621,8 +621,16 @@ calu token revoke 3
 A browser shows every session of every host at once:
 
 ```bash
-calu web          # prints http://127.0.0.1:8800/?token=...: open it once per browser
+calu web          # prints http://calu.localhost:8800/?token=...: open it once per browser
 ```
+
+The interface answers only under the host name `calu.localhost`, although it listens on
+127.0.0.1: a browser keeps a login per host name, and a name of its own keeps that login apart
+from whatever else runs on the machine's loopback ports. Chrome, Edge and Firefox resolve
+`*.localhost` by themselves; for a browser or tool that does not, add `127.0.0.1 calu.localhost`
+to the hosts file. Opening the printed address logs that browser in until `calu web` stops.
+Pages that change something (answering an escalation, saving settings) need JavaScript. While
+the database is unreachable the pages say so and reload by themselves; `calu web` reconnects.
 
 A session stamps the database every few seconds, so the fleet separates the sessions that are
 working from the ones whose process is gone — a killed process cannot set its own state, and an
