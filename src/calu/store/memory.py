@@ -20,6 +20,7 @@ from calu.protocol.messages import (
     State,
 )
 from calu.store.session import (
+    SESSION_ENDED_NOTE,
     CheckerRun,
     Escalation,
     EscalationState,
@@ -167,7 +168,9 @@ class MemorySessionStore:
             self.agent_parents.setdefault(agent.agent_id, None)
 
     async def end(self, state: State) -> None:
-        """Record the final state and drop the client tokens (see `SessionStore.end`).
+        """Record the final state, cancel open escalations and drop the client tokens.
+
+        See `SessionStore.end`.
 
         The tokens belong to this session alone, so they are worthless once it has ended; the
         database store marks them revoked, and here they are simply forgotten, which makes
@@ -178,6 +181,11 @@ class MemorySessionStore:
         """
         self.ended = state
         self.states.append(state)
+        for escalation_id, current in list(self.escalations.items()):
+            if current.state == "open":
+                self.escalations[escalation_id] = Escalation(
+                    id=escalation_id, state="cancelled", note=SESSION_ENDED_NOTE
+                )
         self.client_tokens.clear()
 
     async def add_step(self, step: StepRow) -> int:

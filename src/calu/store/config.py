@@ -248,6 +248,7 @@ class ConfigStore:
         debounce: float = RELOAD_DEBOUNCE_S,
         on_error: Callable[[Exception, int], Awaitable[None]] | None = None,
         reconcile_s: float = RECONCILE_S,
+        on_unchanged: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         """Keep the caller's settings equal to the database's, until cancelled.
 
@@ -276,6 +277,10 @@ class ConfigStore:
             on_error: Awaited with the error and the number of reloads that have failed in a
                 row (1 for the first), or None to only log.
             reconcile_s: Seconds without a notification after which the settings are re-read.
+            on_unchanged: Awaited after a re-read that found the rows as they were, or None.
+                A caller keeps further state from the database that the fingerprint does not
+                cover (`calu run`: the chat summary) and re-reads it here, so that this state
+                does not depend on a notification either. An exception from it propagates.
         """
         failures = 0
         while True:
@@ -299,6 +304,8 @@ class ConfigStore:
             recovered, failures = failures > 0, 0
             if notified or recovered or self.fingerprint != before:
                 await on_change(settings)
+            elif on_unchanged is not None:
+                await on_unchanged()
 
     # ------------------------------------------------------------------ single queries
 

@@ -2,14 +2,22 @@ import asyncio
 import hashlib
 import json
 import secrets
+from typing import LiteralString
 
 import psycopg
 import pytest
 
 from calu import herd
+from calu.context.turns import TurnRecord
 from calu.db import Db, connect, migrate, migrations
 from calu.setup import enable_operator_login, setup
-from calu.store import DatabaseSessionStore, SessionIdentity, StepRow
+from calu.store import (
+    CheckerRun,
+    DatabaseSessionStore,
+    SessionIdentity,
+    StepDecision,
+    StepRow,
+)
 from calu.tokens import token_hash
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -306,6 +314,130 @@ async def test_the_session_login_alone_cannot_act_for_another_session(db_url: st
         await owner.close()
         await victim_conn.close()
         await attacker.close()
+
+
+async def test_a_session_reads_its_conversation_and_writes_only_its_own_rows(db_url: str) -> None:
+    """A row belongs to the session that wrote it, for good.
+
+    Two sessions of one conversation (a resume) read each other's history, which is what a
+    resume needs. Neither can change a row of the other, give it to itself, or add a row under
+    the other: the recorded history of a session is what that session recorded. Both use the
+    real `calu_session` login.
+    """
+    conn = await connect(db_url)
+    try:
+        _, session_url = await setup(conn, db_url, "test:model")
+    finally:
+        await conn.close()
+    owner = await connect(db_url)
+    first_conn = await connect(session_url)
+    second_conn = await connect(session_url)
+    try:
+        first = DatabaseSessionStore(Db(first_conn))
+        first_id = await first.start(
+            SessionIdentity(hostname="box", os_user="u", directory="/w", pid=1, os="Linux")
+        )
+        await first.set_claude_session("conversation-1")
+        step = await first.add_step(
+            StepRow(seq=1, tool_name="Bash", tool_input={"command": "deploy"}, turn=1)
+        )
+        await first.save_turn(TurnRecord(index=1, user_inputs=["deploy it"]))
+        await first.save_summary("what happened so far", 1)
+
+        second = DatabaseSessionStore(Db(second_conn))
+        second_id = await second.start(
+            SessionIdentity(hostname="box", os_user="u", directory="/w", pid=2, os="Linux")
+        )
+        turns, summary = await second.load_previous("conversation-1")
+        assert [t.user_inputs for t in turns] == [] and summary == "what happened so far"
+        # Reading the other session's rows of the conversation is granted ...
+        for table in ("steps", "turns"):
+            cur = await second_conn.execute(
+                f"SELECT count(*) FROM {table} WHERE session_id = %s", (first_id,)
+            )
+            assert await cur.fetchone() == (1,), table
+        cur = await second_conn.execute("SELECT count(*) FROM sessions WHERE id = %s", (first_id,))
+        assert await cur.fetchone() == (1,)
+
+        # ... changing them is not, with or without a new owner in the same statement.
+        async def changes_nothing(statement: LiteralString, *params: object) -> None:
+            """Assert that `statement` is refused or leaves every row as it is."""
+            try:
+                cur = await second_conn.execute(statement, params)
+            except psycopg.errors.InsufficientPrivilege:
+                return
+            assert cur.rowcount == 0, statement
+
+        await changes_nothing(
+            "UPDATE steps SET session_id = %s, tool_input = '{}' WHERE id = %s", second_id, step
+        )
+        await changes_nothing("UPDATE steps SET tool_input = '{}' WHERE id = %s", step)
+        await changes_nothing(
+            "UPDATE turns SET session_id = %s, answer = 'x' WHERE session_id = %s",
+            second_id,
+            first_id,
+        )
+        await changes_nothing("UPDATE turns SET answer = 'x' WHERE session_id = %s", first_id)
+        await changes_nothing(
+            "UPDATE chat_summaries SET summary = 'x' WHERE session_id = %s", first_id
+        )
+        await changes_nothing(
+            "UPDATE sessions SET state = 'stopped', directory = '/x' WHERE id = %s", first_id
+        )
+        # Rows are added under the own session and its own steps only.
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await second_conn.execute(
+                "INSERT INTO checker_runs (step_id, checker_name, checker_version, model,"
+                " decision) VALUES (%s, 'command', 1, 'm', 'pass')",
+                (step,),
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await second_conn.execute(
+                "INSERT INTO escalations (session_id, step_id, reason, context)"
+                " VALUES (%s, %s, 'r', '{}')",
+                (second_id, step),
+            )
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            await second_conn.execute(
+                "INSERT INTO turns (session_id, number, user_inputs, steps)"
+                " VALUES (%s, 9, '[]', '[]')",
+                (first_id,),
+            )
+
+        cur = await owner.execute(
+            "SELECT session_id::text, tool_input FROM steps WHERE id = %s", (step,)
+        )
+        assert await cur.fetchone() == (str(first_id), {"command": "deploy"})
+        cur = await owner.execute("SELECT session_id, summary FROM chat_summaries ORDER BY 2")
+        assert [row[1] for row in await cur.fetchall()] == [
+            "what happened so far",
+            "what happened so far",
+        ]
+        cur = await owner.execute("SELECT count(*) FROM checker_runs")
+        assert await cur.fetchone() == (0,)
+        cur = await owner.execute("SELECT count(*) FROM turns WHERE session_id = %s", (first_id,))
+        assert await cur.fetchone() == (1,)
+
+        # Each session still writes its own rows, through every statement the store uses.
+        own_step = await second.add_step(StepRow(seq=1, tool_name="Bash", tool_input={}, turn=2))
+        await second.decide_step(own_step, StepDecision(decision="allow", summary="Lists."))
+        await second.add_checker_run(
+            own_step,
+            CheckerRun(checker_name="command", checker_version=1, model="m", decision="pass"),
+        )
+        await second.finish_step(own_step, "ok")
+        await second.save_turn(TurnRecord(index=2, user_inputs=["next"]))
+        await second.save_turn(TurnRecord(index=2, user_inputs=["next"], answer="done"))
+        await second.mark_folded(2)
+        await second.save_summary("more happened", 2)
+        await second.open_escalation("deploy?", {"rendered": "x"}, own_step)
+        await second.heartbeat()
+        await second.end("stopped")
+        await first.end("stopped")
+    finally:
+        await owner.close()
+        await first_conn.close()
+        await second_conn.close()
 
 
 async def test_a_session_records_its_own_setting_changes_and_cannot_forge_others(

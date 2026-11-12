@@ -3,6 +3,7 @@
 from calu.db.connection import (
     ConnectionSource,
     Db,
+    LoginRefused,
     Migration,
     applied_versions,
     connect,
@@ -23,6 +24,7 @@ __all__ = [
     "ConnectionSource",
     "Db",
     "Dirty",
+    "LoginRefused",
     "Migration",
     "Notifier",
     "applied_versions",
