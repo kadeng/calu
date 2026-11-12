@@ -2541,6 +2541,10 @@ def main(
         local_db.DockerError,
         psycopg.Error,
         ValueError,
+        # A file that cannot be read or written, a port that is taken, a server that does not
+        # answer: reported as one line, not as a traceback.
+        OSError,
+        TimeoutError,
     ) as exc:
         print(f"calu: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

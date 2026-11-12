@@ -1,6 +1,7 @@
 // The settings page (templates/settings.html): which pane is shown, the search, what is unsaved,
-// "Reset", and editors that grow with their text. The page works without this file: every pane
-// is then shown and the form saves all of them.
+// "Reset", and editors that grow with their text. Without this file every pane is shown, one
+// below the other; saving needs JavaScript in any case, because every change carries the
+// login's key (calu.js adds it).
 (() => {
   const root = document.getElementById("st");
   const form = document.getElementById("st-form");

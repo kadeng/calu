@@ -541,7 +541,7 @@ details.explain p { max-width: 80ch; }
    pane, and the pane's groups as cards of rows. A row is a label with its help on the left and
    a compact control on the right; an editor (instructions, a rule list, a list of values) sits
    below its label instead and is as wide as the pane. Without JavaScript every pane is shown,
-   one below the other, and the form still saves. */
+   one below the other. */
 
 main.st-shell { max-width: 84rem; padding-top: 0; padding-bottom: 0; }
 .st { display: grid; grid-template-columns: 16.5rem minmax(0, 1fr); gap: 0 2.5rem; align-items: start; }
