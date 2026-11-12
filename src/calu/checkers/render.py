@@ -31,6 +31,10 @@ from pathlib import Path
 from calu.checkers.model import Step
 from calu.markdown import fence
 
+MAX_PATH_CHARS = 4096
+"""Characters of an edit's target path that are shown: the longest path Linux accepts
+(`PATH_MAX`). What a longer path has beyond that counts as cut (`render_step_cut`)."""
+
 MAX_CHARS = 60_000
 """Upper bound for a rendered command, diff or tool input; longer text is cut, which makes the
 step one a checker cannot approve (`render_step_cut`). An ordinary new file of a thousand lines
@@ -358,7 +362,8 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
     `safe_name`, the working directory, the path and Claude's description as one-line code spans,
     the command, diff or input in a fence it cannot close. A command, diff or input longer than
     `MAX_CHARS` is cut; calu's note about the cut follows the fence, and `unseen_chars` holds
-    the number of characters left out (rule 2).
+    the number of characters left out (rule 2). The target path of an edit is shown whole, up
+    to `MAX_PATH_CHARS`; what a longer path has beyond that is counted in `unseen_chars` too.
 
     Unreadable or missing files do not raise. Malformed tool input can raise, e.g. a MultiEdit
     whose `edits` entries are not objects, a path with a NUL character, or input values that
@@ -447,15 +452,24 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
         contents = _edited_contents(step, resolved)
         outside = label.endswith(OUTSIDE)
         shown_path = label.removesuffix(OUTSIDE) if outside else label
-        lines.append(f"File: {code(shown_path, 1000)}{OUTSIDE if outside else ''}")
+        # The whole name is shown: where a file is written matters as much as what is written.
+        # What a path has beyond `MAX_PATH_CHARS` counts as cut, like the end of a long diff.
+        whole_path = inline(shown_path, None)
+        unseen_path = max(len(whole_path) - MAX_PATH_CHARS, 0)
+        lines.append(f"File: {code(shown_path, MAX_PATH_CHARS)}{OUTSIDE if outside else ''}")
+        if unseen_path:
+            lines.append(_cut_note("path", unseen_path))
         if contents is not None:
             before, after = contents
             if not before:
                 lines.append("The file is new (or empty).")
+            # The diff's file label is a short form; the line "File:" above holds the name.
             diff = _unified_diff(before, after, inline(shown_path, 1000).replace(" ", "_"))
             unseen = block("Diff:", "diff", diff, "diff")
-            return RenderedStep("\n".join(lines), unseen)
+            return RenderedStep("\n".join(lines), unseen + unseen_path)
         lines.append("The edit does not apply cleanly to the current file; raw input follows.")
+        unseen = block("Input:", "input", json.dumps(inp, indent=2, ensure_ascii=False), "json")
+        return RenderedStep("\n".join(lines), unseen + unseen_path)
 
     unseen = block("Input:", "input", json.dumps(inp, indent=2, ensure_ascii=False), "json")
     return RenderedStep("\n".join(lines), unseen)

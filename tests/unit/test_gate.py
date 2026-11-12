@@ -27,7 +27,7 @@ from calu.protocol.messages import (
     UserInput,
 )
 from calu.session import SessionError
-from calu.testing import fake_models
+from calu.testing import fake_models, fixed_checker
 from tests.unit.helpers import make_session
 from tests.unit.test_result_checker import agent_turn
 
@@ -508,5 +508,309 @@ async def test_a_write_set_that_cannot_be_measured_is_escalated_not_skipped(tmp_
         assert "could not be measured" in request.reason and "payload.py" in request.reason
         await session.decide_escalation(request.escalation_id, "allow", None)
         await rec.wait_for(TurnResult)
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+# ------------------------------------------------------------------ ga2, second round
+
+
+def slow_checker(delay: float, decision: str = "PASS") -> Any:
+    """A checker model that answers `decision` after `delay` seconds."""
+    from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    async def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        await anyio.sleep(delay)
+        fields = {"decision": decision, "reason": "", "step_summary": "s", "comment": ""}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, fields)])
+
+    return FunctionModel(answer)
+
+
+async def test_a_step_whose_check_ends_while_an_escalation_is_open_is_not_approved(
+    tmp_path: Path,
+):
+    """ga2: the gate looks again after the check, not only before it."""
+    session, rec, _store = make_session(
+        tmp_path, [], checker_models={**fake_models(), "command": slow_checker(0.4)}
+    )
+    results: list[GateResult] = []
+
+    async def gate(step: Step) -> None:
+        results.append(await session.pre_tool_use(step))
+
+    # The escalating step is an edit, so its own check does not wait for the slow checker.
+    first = Step(
+        tool_name="Write",
+        tool_input={"file_path": "a.txt", "content": "x # calu:escalate\n"},
+        tool_use_id="t1",
+        agent_id="agent-a",
+        cwd=str(tmp_path),
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        tg.start_soon(gate, bash("ls -la /nowhere", "t2", tmp_path, agent_id="agent-b"))
+        await wait_until(lambda: session._checking > 0)  # agent-b's step is with its checker
+        assert (await session.pre_tool_use(first)).verdict is Verdict.ASK
+        tg.start_soon(session.ask, first)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        await anyio.sleep(0.8)  # the check of agent-b's step has long ended
+        assert not results, "a step was approved while an escalation was open"
+        await session.decide_escalation(request.escalation_id, "deny", None)
+        await wait_until(lambda: results)
+        assert results[0].verdict is Verdict.PASS
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_no_step_is_approved_between_an_ask_verdict_and_its_escalation(tmp_path: Path):
+    """ga2: an escalation counts from the gate's verdict, not only once its row exists."""
+    session, rec, _store = make_session(tmp_path, [])
+    first = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
+    results: list[GateResult] = []
+
+    async def gate(step: Step) -> None:
+        results.append(await session.pre_tool_use(step))
+
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        assert (await session.pre_tool_use(first)).verdict is Verdict.ASK
+        # Claude Code has not called `ask` yet: no row, no entry in `_escalations`.
+        assert not session._escalations
+        tg.start_soon(gate, bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        await anyio.sleep(0.3)
+        assert not results, "a step was approved while an escalation was being opened"
+        tg.start_soon(session.ask, first)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        await anyio.sleep(0.2)
+        assert not results
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await wait_until(lambda: results)
+        assert results[0].verdict is Verdict.PASS
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_no_step_is_approved_while_an_escalation_is_being_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ga2: storing the row takes time (and retries); the hold covers that time."""
+    session, rec, store = make_session(tmp_path, [])
+    first = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
+    original = store.open_escalation
+    entered = anyio.Event()
+
+    async def slow(*args: Any, **kwargs: Any) -> int:
+        entered.set()
+        await anyio.sleep(0.4)
+        return await original(*args, **kwargs)
+
+    store.open_escalation = slow  # type: ignore[method-assign]
+    results: list[GateResult] = []
+
+    async def gate(step: Step) -> None:
+        results.append(await session.pre_tool_use(step))
+
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.pre_tool_use(first)
+        tg.start_soon(session.ask, first)
+        await entered.wait()
+        tg.start_soon(gate, bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert not results
+        await session.decide_escalation(request.escalation_id, "deny", None)
+        await wait_until(lambda: results)
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_ask_verdict_that_claude_code_never_follows_up_stops_holding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ga2: an unattended run must not hang behind an escalation that never opens."""
+    monkeypatch.setattr(session_module, "ASK_PENDING_S", 0.3)
+    session, _rec, _store = make_session(tmp_path, [])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.pre_tool_use(bash("git push # calu:escalate", "t1", tmp_path))
+        started = anyio.current_time()
+        with anyio.fail_after(5):
+            passed = await session.pre_tool_use(bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        assert passed.verdict is Verdict.PASS
+        assert 0.2 < anyio.current_time() - started < 3
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_escalation_that_cannot_be_stored_releases_the_held_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(session_module, "OPEN_ESCALATION_RETRY_S", (0.0, 0.0), raising=False)
+    session, _rec, store = make_session(tmp_path, [])
+    first = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
+
+    async def broken(*args: object, **kwargs: object) -> int:
+        raise RuntimeError("database gone")
+
+    store.open_escalation = broken  # type: ignore[method-assign]
+    results: list[GateResult] = []
+
+    async def gate(step: Step) -> None:
+        results.append(await session.pre_tool_use(step))
+
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.pre_tool_use(first)
+        tg.start_soon(gate, bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        await anyio.sleep(0.1)
+        assert not results
+        answer = await session.ask(first)
+        assert not answer.allow
+        await wait_until(lambda: results)
+        assert results[0].verdict is Verdict.PASS
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_approval_does_not_stand_if_an_escalation_opens_while_it_is_recorded(
+    tmp_path: Path,
+):
+    """ga2: the last look is at the moment of the answer, after the records are written."""
+    session, _rec, store = make_session(tmp_path, [])
+    original = store.decide_step
+    blocker = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
+
+    async def racing(step_id: int, decision: Any) -> None:
+        await original(step_id, decision)
+        if decision.decision == "pass":
+            # Another step's verdict becomes ASK while this approval is being recorded.
+            session._expect_ask(blocker, "checker")
+
+    store.decide_step = racing  # type: ignore[method-assign]
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        result = await session.pre_tool_use(bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        assert result.verdict is Verdict.ASK
+        assert "No step is approved while a human decides" in result.reason
+        assert "t2" not in session._running_tools
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+# ------------------------------------------------------------------ deciding, bounded
+
+
+async def test_a_database_that_does_not_answer_does_not_block_every_later_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """An unattended run must stay decidable: the shielded write of a decision has a bound."""
+    monkeypatch.setattr(session_module, "STORE_DECISION_TIMEOUT_S", 0.2)
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "deployed"}]],
+    )
+    original = store.decide_escalation
+
+    async def hanging(*args: Any, **kwargs: Any) -> bool:
+        await anyio.sleep_forever()
+        return False
+
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="ship it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        store.decide_escalation = hanging  # type: ignore[method-assign]
+        with anyio.fail_after(5), pytest.raises(SessionError, match="stays open"):
+            await session.decide_escalation(request.escalation_id, "allow", None)
+        assert not rec.of(ToolResult)
+        store.decide_escalation = original  # type: ignore[method-assign]
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (result,) = rec.of(ToolResult)
+    assert result.content == "deployed"
+
+
+# ------------------------------------------------------------------ cc2: write sets
+
+
+async def test_an_approved_write_set_with_a_file_left_out_of_the_patch_waits_for_a_human(
+    tmp_path: Path,
+):
+    """cc2: a binary file is not in the patch, so no model has seen all of the change."""
+    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
+    turn = [
+        [
+            {
+                "tool": "Bash",
+                "input": {"command": "generate"},
+                "writes": {"a.txt": "two\n", "data.bin": "a\0b"},
+                "result": "generated",
+            }
+        ]
+    ]
+    session, rec, _store = make_session(
+        tmp_path,
+        turn,
+        REVIEWED,
+        checker_models={**fake_models(), "changeset": fixed_checker("PASS")},
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="generate it"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        assert "not shown to the changeset checker" in request.reason
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await rec.wait_for(TurnResult)
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+# ------------------------------------------------------------------ ci3: state and display
+
+
+async def test_a_client_sink_that_fails_on_the_turn_result_leaves_the_session_idle(
+    tmp_path: Path,
+):
+    """ci3: the display must not decide whether the session knows that its turn has ended."""
+    session, _rec, _store = make_session(tmp_path, [[{"text": "done"}]])
+    original = session._sink
+
+    async def failing(event: Any) -> None:
+        if isinstance(event, TurnResult):
+            raise OSError(28, "No space left on device")
+        await original(event)
+
+    session._sink = failing
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await wait_until(lambda: session.state == "idle" and not session._busy)
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_a_failure_while_recording_the_turn_result_still_ends_the_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ci3: the busy flag is cleared and the event forwarded, whatever the bookkeeping does."""
+    session, rec, _store = make_session(tmp_path, [])
+
+    async def broken(event: TurnResult) -> None:
+        raise RuntimeError("bookkeeping failed")
+
+    monkeypatch.setattr(session, "_on_turn_result", broken)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        session._busy = True
+        await session._refresh_state()
+        assert session.state == "running"
+        event = TurnResult(result="done", is_error=False, session_id="s")
+        with pytest.raises(RuntimeError):
+            await session._on_runner_event(event)
+        assert not session._busy and session.state == "idle"
+        assert rec.of(TurnResult)
         await session.stop()
         tg.cancel_scope.cancel()
