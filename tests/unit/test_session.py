@@ -1053,7 +1053,7 @@ async def test_a_single_failure_does_not_end_an_overnight_run(tmp_path: Path) ->
 
     store.set_state = flaky  # type: ignore[method-assign]
     for _ in range(8):
-        await session._store_call("setting the state", store.set_state("idle"))
+        await session.recorder.attempt("setting the state", store.set_state("idle"))
     # Eight attempts, four failures, never two in a row: the limit of three is never reached,
     # so nothing says the session is giving up and the counter is back at zero.
     assert calls["n"] == 8

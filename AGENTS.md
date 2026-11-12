@@ -41,9 +41,12 @@ phases.
 | `src/calu/protocol/schema.py` | `calu protocol`: JSON Schema of the protocol, for clients in other languages |
 | `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |
-| `src/calu/session.py` | The session orchestrator: tool gate, escalations, turns, state |
+| `src/calu/session.py` | The session orchestrator: lifecycle (start, run, stop, interrupt), the runner's events, turns and narration, the clients' requests, and the wiring of the components below |
 | `src/calu/gate.py` | The decision about one tool call (`StepGate`): rules, routing, commits, running the checkers and combining their verdicts, auto-escalation, the budget; it returns the decision and writes nothing. Every error path ends in ESCALATE |
 | `src/calu/escalations.py` | Escalations of a session (`EscalationDesk`): opening a row, waiting for the decision (client, database, timeout), cancelling, and the hold on other steps while one is open or being opened |
+| `src/calu/write_sets.py` | What a command wrote (`WriteSets`, D31): the snapshots before and after it, the measured write set, its review by the changeset checkers and the undo of a refused change |
+| `src/calu/recorder.py` | The session's writes to the store (`Recorder`): a failed write is reported and counted, and too many in a row stop the session (D59); the `steps` and `checker_runs` rows; the step times (D32) |
+| `src/calu/steps.py` | Stateless helpers about one tool call: its paths relative to the project directory, the file an edit targets, the summary of its result |
 | `src/calu/run_state.py` | What the session knows about one run (`RunState`) and about one tool call (`PerCall`); a start replaces it, so each run begins from the defaults |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`) |
 | `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve`, `calu token` (database only) |

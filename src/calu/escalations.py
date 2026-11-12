@@ -120,6 +120,17 @@ class Asked:
     outcome: Outcome
 
 
+NOBODY_ASKED: dict[str, str] = {
+    "unstorable": (
+        "calu could not store the request in its database, so nobody could be asked. Tell the "
+        "user that calu's database is unreachable."
+    ),
+    "timed_out": "Nobody answered within the escalation timeout, and the session stops.",
+}
+"""Why a review after a step got no human decision, by escalation outcome (see `Asked`); any
+other outcome without a decision reads "No decision was made."."""
+
+
 class EscalationDesk:
     """The escalations of one `Session` object, and the hold they put on other steps.
 
