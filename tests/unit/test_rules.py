@@ -534,3 +534,30 @@ def test_discarding_a_worktrees_changes_asks(tmp_path: Path) -> None:
     assert rules.evaluate(leave({"action": "remove", "discard_changes": True})).ask
     assert not rules.evaluate(leave({"action": "remove"})).ask
     assert not rules.evaluate(leave({"action": "keep"})).ask
+
+
+def test_any_tool_that_names_a_protected_path_asks(tmp_path: Path) -> None:
+    """D166: an MCP filesystem server reads and writes files the rules never saw;
+    `mcp__fs__read_file(path="~/.ssh/id_rsa")` reached only the checker."""
+    rules = default_rules(tmp_path)
+
+    def call(tool: str, inp: dict) -> Step:
+        return Step(tool_name=tool, tool_input=inp, cwd=str(tmp_path))
+
+    asks = [
+        ("mcp__fs__read_file", {"path": "~/.ssh/id_rsa"}),
+        ("mcp__fs__read_file", {"path": str(tmp_path / ".env")}),
+        ("mcp__fs__read_multiple_files", {"paths": ["src/a.py", "~/.aws/credentials"]}),
+        ("mcp__fs__write_file", {"path": "CLAUDE.md", "content": "x"}),
+        ("mcp__x__open", {"uri": "file:///home/u/.ssh/id_rsa"}),
+    ]
+    for tool, inp in asks:
+        assert rules.evaluate(call(tool, inp)).ask, (tool, inp)
+    quiet = [
+        ("mcp__fs__read_file", {"path": "CLAUDE.md"}),  # reading it is fine
+        ("mcp__db__query", {"sql": "select * from t where path = '/etc/passwd-like'"}),
+        ("mcp__fs__write_file", {"path": "src/a.py", "content": "~/.ssh/id_rsa"}),
+    ]
+    for tool, inp in quiet:
+        outcome = rules.evaluate(call(tool, inp))
+        assert not outcome.ask and not outcome.allowed, (tool, inp)

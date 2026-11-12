@@ -81,6 +81,54 @@ class Rule:
 _CALU_CONFIG = re.compile(r"(^|/)\.config/calu(/|$)")
 BUILT_IN_WRITE_DENY = (Rule(_CALU_CONFIG, "built-in"),)
 BUILT_IN_READ_DENY = (Rule(_CALU_CONFIG, "built-in"),)
+PATH_KEYS = frozenset(
+    {
+        "path",
+        "paths",
+        "file",
+        "files",
+        "file_path",
+        "filepath",
+        "filename",
+        "dir",
+        "directory",
+        "source",
+        "destination",
+        "target",
+        "src",
+        "dst",
+        "uri",
+        "root",
+        "cwd",
+    }
+)
+"""Argument names whose string values are read as paths in tools without a specific rule."""
+
+CONTENT_KEYS = frozenset(
+    {
+        "content",
+        "contents",
+        "text",
+        "body",
+        "data",
+        "message",
+        "prompt",
+        "description",
+        "query",
+        "sql",
+        "code",
+        "script",
+        "new_string",
+        "old_string",
+        "command",
+        "pattern",
+    }
+)
+"""Argument names whose values are content, not a place: never read as paths (D166)."""
+
+WRITE_WORDS = ("write", "edit", "create", "delete", "remove", "move", "rename", "put", "save")
+"""Words in a tool's name that make the write deny list apply to the paths it names (D166)."""
+
 OTHER_RULED_TOOLS = frozenset({"DesignSync", "ExitWorktree"})
 """Tools of CLI 2.1.319 that read files or destroy work without being a read, edit or shell
 tool; `Rules._evaluate_other` applies the rules to them (D165)."""
@@ -245,7 +293,7 @@ class Rules:
         if tool in OTHER_RULED_TOOLS:
             return self._evaluate_other(step, outcome)
         if tool not in SHELL_TOOLS and tool not in READ_PATH_TOOLS and tool not in WRITE_PATH_TOOLS:
-            return outcome
+            return self._evaluate_named_paths(step, outcome)
         for name in [*RULE_LISTS, "unknown"]:
             for error in self.lists(name)[1]:
                 outcome.ask.append(f"The rule list {error}. Fix it to continue without asking.")
@@ -389,6 +437,49 @@ class Rules:
             )
             return False
         return True
+
+    def _evaluate_named_paths(self, step: Step, outcome: RuleOutcome) -> RuleOutcome:
+        """Apply the deny lists to the paths any other tool's input names (PLAN.md D166).
+
+        An MCP server -- a filesystem server, say -- reads and writes files the rules never see:
+        `mcp__fs__read_file(path="~/.ssh/id_rsa")` reached only the checker. For every tool the
+        rules have nothing specific for, each string argument under a path-like key
+        (`PATH_KEYS`) or that looks like a path (`/`, `~/`, `./`, `../`, `file://`) is checked:
+        against the read deny list always, and against the write deny list too when the tool's
+        name says it writes (`WRITE_WORDS`). A match asks; anything else leaves the step to the
+        checker as before, so this can make a step wait for a person, never let one through.
+
+        Args:
+            step: The tool call.
+            outcome: The outcome to fill; `allowed` stays False.
+
+        Returns:
+            `outcome`.
+        """
+        cwd = Path(step.cwd or self.workspace)
+        if not cwd.is_absolute():
+            cwd = self.workspace / cwd
+        lowered = step.tool_name.lower()
+        writes = any(word in lowered for word in WRITE_WORDS)
+        for text in _named_paths(step.tool_input):
+            path = Path(text.removeprefix("file://")).expanduser()
+            try:
+                path = (path if path.is_absolute() else cwd / path).resolve()
+            except OSError, RuntimeError:
+                continue
+            kinds = ("read", "write") if writes else ("read",)
+            for kind in kinds:
+                built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY
+                rule = _first_match(
+                    [*built_in, *self.lists(f"{kind}-deny")[0]], self.match_form(path)
+                )
+                if rule is not None:
+                    outcome.ask.append(
+                        f"`{step.tool_name}` names `{self.display(path)}`, which the {kind} deny "
+                        f"rule {rule.describe()} protects."
+                    )
+                    break
+        return outcome
 
     def _evaluate_other(self, step: Step, outcome: RuleOutcome) -> RuleOutcome:
         """Apply the rules to the tools of `OTHER_RULED_TOOLS` (PLAN.md D165).
@@ -572,3 +663,32 @@ def _tool_paths(step: Step) -> list[str]:
     if not paths and step.tool_name in READ_PATH_TOOLS:
         paths.append(".")
     return paths
+
+
+def _named_paths(value: Any, key: str = "", depth: int = 0) -> list[str]:
+    """Collect the strings of a tool input that name a path (D166).
+
+    Args:
+        value: The input, or a part of it.
+        key: The argument name `value` is under ("" at the top).
+        depth: Nesting depth; inputs deeper than 4 levels are not searched.
+
+    Returns:
+        Strings under a `PATH_KEYS` key, and strings that start like a path, without newlines
+        and at most 4096 characters long; nothing under a `CONTENT_KEYS` key.
+    """
+    if depth > 4:
+        return []
+    if isinstance(value, dict):
+        return [
+            p
+            for k, v in value.items()
+            if str(k).lower() not in CONTENT_KEYS
+            for p in _named_paths(v, str(k).lower(), depth + 1)
+        ]
+    if isinstance(value, list):
+        return [p for v in value for p in _named_paths(v, key, depth + 1)]
+    if not isinstance(value, str) or not value or "\n" in value or len(value) > 4096:
+        return []
+    looks = value.startswith(("/", "~/", "./", "../", "file://")) or value == "~"
+    return [value] if key in PATH_KEYS or looks else []

@@ -36,7 +36,8 @@ diff alone. That is all it can do: it cannot write, run commands or talk to the 
   credentials) always ask a human. Everything else goes to a checker. An ordinary `git push`, a
   deploy or a package upload is left to the checker by default; `calu rules add-set publishing`
   makes all of them ask you as well. A tool that a Claude Code update adds is checked by the
-  command checker, and the session names such tools when it starts. A search of a whole folder asks too when it would read a
+  command checker, and the session names such tools when it starts. Any tool -- an MCP server's
+  too -- that names a protected file in its arguments asks, as reading it directly would. A search of a whole folder asks too when it would read a
   protected file that git does not ignore, such as an un-ignored `.env` or `server.key`.
 - **Checkers with your rules.** One checker reviews commands, one reviews edits. Their
   instructions are plain Markdown that you edit: safety, readability, documentation, and the
