@@ -17,7 +17,7 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from calu.config import CheckerConfig
+from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
 from calu.db import migrate
 from calu.defaults.instructions import legacy_instructions
 
@@ -29,9 +29,9 @@ CHECKER_DEFAULTS = (
     ("command", "command", "checkers/command.md", None, True),
     ("edit", "edit", "checkers/edit.md", None, True),
     ("subagent-result", "subagent", "checkers/subagent-result.md", None, True),
-    # More requests than a step checker: judging a whole change means reading files around the
-    # diff, and with the common budget one check in four ran out before deciding (PLAN.md D75).
-    ("changeset", "changeset", "checkers/changeset.md", 8, True),
+    # Far more than a step checker: judging a whole change means reading files around the
+    # diff and following callers (PLAN.md D197); its token limits are set below as well.
+    ("changeset", "changeset", "checkers/changeset.md", CHANGESET_REQUEST_LIMIT, True),
     ("narrator", "narrator", "checkers/narrator.md", None, True),
     # Seeded but **off**: honesty enforcement is a feature a user switches on deliberately, its
     # judgement needs a capable model (Q17), and it is a second checker on the edit route (D81).
@@ -39,7 +39,8 @@ CHECKER_DEFAULTS = (
     ("honesty", "edit", "checkers/honesty.md", None, False),
 )
 """(checker name, route, default instructions file, request limit, enabled) of the built-in
-checker types. A request limit of None takes the column default of `checker_types`."""
+checker types. A request limit of None takes the default of `CheckerConfig`; the token limits
+are `CheckerConfig`'s too, except for the changeset checker (`changeset_limits`)."""
 
 RULE_LISTS = (
     "command-allow",
@@ -150,17 +151,19 @@ async def seed_defaults(
     checkers = 0
     async with conn.transaction():
         for name, route, path, request_limit, enabled in CHECKER_DEFAULTS:
+            limits = changeset_limits() if name == "changeset" else CheckerConfig()
             cur = await conn.execute(
-                "INSERT INTO checker_types"
-                " (name, route, instructions, model, request_limit, enabled)"
-                " VALUES (%s, %s, %s, %s, coalesce(%s, %s), %s) ON CONFLICT (name) DO NOTHING",
+                "INSERT INTO checker_types (name, route, instructions, model, request_limit,"
+                " output_tokens_limit, max_tokens, enabled)"
+                " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (name) DO NOTHING",
                 (
                     name,
                     route,
                     base.joinpath(path).read_text(encoding="utf-8"),
                     model,
-                    request_limit,
-                    CheckerConfig.model_fields["request_limit"].default,
+                    request_limit or limits.request_limit,
+                    limits.output_tokens_limit,
+                    limits.max_tokens,
                     enabled,
                 ),
             )

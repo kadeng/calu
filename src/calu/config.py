@@ -109,6 +109,29 @@ class CheckerConfig(ConfigModel):
     a lower cap makes it fail rather than decide (measured, PLAN.md D72)."""
 
 
+CHANGESET_REQUEST_LIMIT = 40
+"""Model requests of one changeset check, tool calls included (a step checker has 5)."""
+
+CHANGESET_OUTPUT_TOKENS_LIMIT = 120_000
+"""Token budget for all answers of one changeset check, thinking included."""
+
+CHANGESET_MAX_TOKENS = 16_000
+"""Token cap for one answer of the changeset checker."""
+
+
+def changeset_limits() -> CheckerConfig:
+    """Return the default limits of the changeset checker (PLAN.md D197).
+
+    Returns:
+        A `CheckerConfig` with a blank model and the three `CHANGESET_*` limits.
+    """
+    return CheckerConfig(
+        request_limit=CHANGESET_REQUEST_LIMIT,
+        output_tokens_limit=CHANGESET_OUTPUT_TOKENS_LIMIT,
+        max_tokens=CHANGESET_MAX_TOKENS,
+    )
+
+
 class ContextConfig(ConfigModel):
     """Context summary settings (see `calu.context`).
 
@@ -585,11 +608,11 @@ class Config(ConfigModel):
     """The checker that reviews what a subagent hands back."""
     honesty: HonestyConfig = Field(default_factory=HonestyConfig)
     """Whether dishonest code is recorded and whether it may be run (§13)."""
-    changeset_checker: CheckerConfig = Field(default_factory=lambda: CheckerConfig(request_limit=8))
-    """The checker that reviews a whole change before a commit (PLAN.md D26). It gets more
-    requests than a step checker, because judging a whole change means reading some of the
-    files around the diff: with five, measured, one check in four ran out before deciding
-    (D75)."""
+    changeset_checker: CheckerConfig = Field(default_factory=lambda: changeset_limits())
+    """The checker that reviews a whole change before a commit (PLAN.md D26). Its limits are
+    far above a step checker's (`changeset_limits`): judging a whole change means reading the
+    files around the diff, following callers and comparing the result with what was asked,
+    which takes many tool calls and a long answer."""
     check_subagent_results: bool = True
     """Review the final result of every subagent with the subagent checker."""
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)

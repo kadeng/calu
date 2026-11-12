@@ -55,7 +55,7 @@ judges on evidence rather than on the diff alone. That is all it can do: it cann
   What your project asks for -- its coding and documentation standard -- belongs in the checker
   instructions, which are stored in the database. Claude Code itself reads those files as
   always; this is only about the checkers.
-  A step or diff longer than 60,000 characters is shown cut, and a checker's approval of a cut
+  A step longer than 60,000 characters, or a commit's diff longer than 240,000, is shown cut, and a checker's approval of a cut
   step becomes an escalation. They can also ask **when** things happened: the times of the
   session's steps, and which step last changed a file. That last question is answered from the file's change time, which an
   unprivileged process cannot forge, so a command that edits more than it said it would leaves a
