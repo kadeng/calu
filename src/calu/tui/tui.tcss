@@ -254,3 +254,84 @@ ConfirmScreen {
     height: 1;
     background: $panel;
 }
+
+/* ---- password, checkers */
+
+PasswordScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#password-box {
+    width: 70;
+    max-width: 94%;
+    height: auto;
+    padding: 1 2;
+    border: round $warning;
+    background: $surface;
+}
+
+#password-box Static {
+    height: auto;
+}
+
+#password-input {
+    margin: 1 0;
+    border: none;
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+}
+
+CheckersScreen {
+    background: $background;
+}
+
+#checkers-title, #checkers-keys, #checkers-message {
+    height: 1;
+    background: $panel;
+}
+
+#checkers-keys {
+    color: $text-muted;
+}
+
+#checkers-body {
+    height: 1fr;
+}
+
+#checkers-list {
+    width: 30;
+    height: 1fr;
+    padding: 1 1;
+    background: $surface;
+}
+
+CheckersScreen.narrow #checkers-list {
+    width: 20;
+}
+
+#checkers-scroll {
+    height: 1fr;
+    padding: 1 2;
+    scrollbar-size-vertical: 1;
+}
+
+#checkers-text {
+    height: auto;
+}
+
+#checkers-editor {
+    display: none;
+    height: 1fr;
+    border: none;
+    padding: 1 2;
+}
+
+CheckersScreen.editing #checkers-editor {
+    display: block;
+}
+
+CheckersScreen.editing #checkers-scroll {
+    display: none;
+}

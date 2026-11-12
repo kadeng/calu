@@ -21,8 +21,12 @@ for a question `1`-`9` choose and Enter sends. `alt+a`, `alt+d`, `alt+n`, `alt+w
 whatever the composer holds.
 """
 
+import os
+import shlex
+import shutil
+import subprocess
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -31,14 +35,22 @@ from typing import Any, ClassVar
 from rich.markdown import Markdown
 from rich.text import Text
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static
 
 from calu.acp.modes import LADDER
-from calu.tui import completion, render, settings
+from calu.tui import completion, gittool, render, settings
 from calu.tui.actions import Actions, Outcome
+from calu.tui.adminaccess import (
+    MODES,
+    AdminAccess,
+    AdminFailed,
+    PasswordNeeded,
+    StoreAdmin,
+    weakens,
+)
 from calu.tui.capabilities import CAPABILITIES, Capabilities
 from calu.tui.commands import COMMANDS, CaluCommands, by_slash, completions
 from calu.tui.connection import Connector, Link
@@ -55,9 +67,11 @@ from calu.tui.model import (
     TextBlock,
     TurnEndBlock,
 )
+from calu.tui.screens.checkers import CheckersScreen
 from calu.tui.screens.confirm import ConfirmScreen
 from calu.tui.screens.detail import DetailScreen, proposed_diffs
 from calu.tui.screens.diff import DiffScreen
+from calu.tui.screens.password import PasswordScreen
 from calu.tui.screens.text import TextScreen
 from calu.tui.theme import CALU_DARK, CALU_LIGHT, DARK, Palette, palette_for
 from calu.tui.widgets.chrome import AgentTabs, Line, Lines, NewBelow, PanelList, Picked
@@ -102,6 +116,8 @@ class TuiOptions:
     warning of the session, a changed supervision level)."""
     panel_width: int = 36
     """Columns of the side panel on a wide terminal."""
+    git_tool: str = ""
+    """`git_tool` of `tui.toml`: the command line `f4` starts ("" picks an installed one)."""
     keys: dict[str, str] = field(default_factory=dict)
     """Binding id -> the keys that replace its default (`[keys]` of `tui.toml`)."""
     settings_path: Path | None = None
@@ -164,6 +180,7 @@ class CaluApp(App[None]):
         Binding("f1", "command('help')", show=False, priority=True, id="help"),
         Binding("f2", "command('panel')", show=False, priority=True, id="panel"),
         Binding("f3", "command('side')", show=False, priority=True, id="side"),
+        Binding("f4", "command('git')", show=False, priority=True, id="git"),
         Binding("alt+a", "decide('allow')", show=False, priority=True, id="allow"),
         Binding("alt+d", "decide('deny')", show=False, priority=True, id="deny"),
         Binding("alt+n", "command('note')", show=False, priority=True, id="note"),
@@ -182,6 +199,7 @@ class CaluApp(App[None]):
         options: TuiOptions | None = None,
         clock: Callable[[], float] = time.monotonic,
         live: bool = True,
+        admin: AdminAccess | None = None,
     ) -> None:
         """Create the client; `run` or `run_test` starts it.
 
@@ -192,8 +210,23 @@ class CaluApp(App[None]):
             clock: The client clock in seconds; tests pass one they control.
             live: False draws every change at once and starts no timer, so that tests and
                 screenshots are deterministic.
+            admin: Stores what the client changes in the database with the `admin`
+                credential (checker instructions, `honesty.mode`); the local credential
+                store if None.
         """
         super().__init__()
+        self.admin: AdminAccess = admin if admin is not None else StoreAdmin()
+        self.environ: Mapping[str, str] = os.environ
+        """The environment `f4` reads `CALU_GIT_TOOL` from."""
+        self.which: gittool.Which = shutil.which
+        """Finds a program on the search path; tests replace it."""
+        self.run_program: Callable[[Sequence[str], str], int] = self._run_program
+        """Hands the terminal to a program in a directory and returns its exit code; tests
+        replace it."""
+        self.describe_commit: Callable[[str, str], str] = describe_commit
+        """Names a commit of a repository for the question of `/trust`; tests replace it."""
+        self._install_shown = False
+        self._honesty_page: TextScreen | None = None
         self.options = options or TuiOptions()
         self.clock = clock
         self.live = live
@@ -403,6 +436,8 @@ class CaluApp(App[None]):
         change, self._pending = self._pending, Change()
         if not self.is_running or not change:
             return
+        if change.honesty and self._honesty_page is not None and self._honesty_page.is_attached:
+            self._honesty_page.set_body(render.honesty_page(self.model, self.view()))
         transcript = self.transcript
         transcript.now = self.clock()
         if change.rebuilt:
@@ -746,7 +781,8 @@ class CaluApp(App[None]):
         elif (not stopped or typed) and self.mode != "search" and self.ask is None:
             parts += [(5, "enter", "send"), (1, "^j", "newline")]
         parts += [(7, "alt+←/→", "agent"), (4, "pgup/pgdn", "scroll"), (6, "f3", "side question")]
-        parts.append((6 if self.size.width < WIDE else 3, "f2", "panel"))
+        parts.append((3, "f4", "git"))
+        parts.append((6 if self.size.width < WIDE else 1, "f2", "panel"))
         parts += [(8, "^p", "palette"), (8, "f1", "help"), (2, "^d", "detach")]
 
         def length() -> int:
@@ -1040,7 +1076,7 @@ class CaluApp(App[None]):
             self._render_head()
         if self.ask is not None:
             ask = self.ask
-            if key in {"y", "n"}:
+            if key in {"y", "n", "enter"}:  # Enter is no: the answer of a key pressed unread
                 self.ask = None
                 chosen = ask.yes if key == "y" else ask.no
                 if chosen is not None:
@@ -2287,34 +2323,337 @@ class CaluApp(App[None]):
         )
 
     def _cmd_checkers(self, rest: str) -> None:
-        """Show the checkers and their instructions.
+        """Open the checkers screen: their instructions, to read and to edit (`/checkers`).
+
+        The list comes from the session (`checkers.get`). Saving an edit uses the `admin`
+        credential of this machine (`self.admin`), never the session.
 
         Args:
             rest: Ignored.
         """
 
-        def shape(data: Any) -> Markdown:
-            """Render the checker definitions as Markdown.
-
-            Args:
-                data: The result of `checkers.get`.
+        async def load() -> tuple[list[dict[str, Any]], str]:
+            """Ask the session for its checkers.
 
             Returns:
-                One section per checker.
+                `(checkers, "")`, or `([], the refusal)`.
             """
-            parts = [
-                "Changed with `calu checker`, `calu rules` and `calu config`, not from a session.\n"
-            ]
-            for checker in data.get("checkers") or []:
-                state = "" if checker.get("enabled", True) else " (disabled)"
-                parts.append(
-                    f"## {checker.get('name')}{state}\n\nroute `{checker.get('route')}` · model "
-                    f"`{checker.get('model')}` · version {checker.get('version')}\n\n"
-                    f"{checker.get('instructions') or '_no instructions_'}"
-                )
-            return Markdown("\n\n".join(parts))
+            outcome = await self.actions.read("checkers.get")
+            if not outcome.ok:
+                return [], outcome.message
+            return [dict(entry) for entry in (outcome.data or {}).get("checkers") or []], ""
 
-        self._read_page("Checkers of this session", "checkers.get", shape)
+        self.push_screen(CheckersScreen(load, self.admin, self.palette))
+
+    # ------------------------------------------------------------------ honesty
+
+    def _cmd_honesty(self, rest: str) -> None:
+        """Show the honesty state, or change the mode (`/honesty [off | track | enforce]`).
+
+        Without an argument a page shows the mode, the baseline, the marked code, the
+        unreviewed files and whether a review is required or running. With a mode the
+        setting `honesty.mode` is stored with the `admin` credential of this machine, after a
+        confirmation when the new mode enforces less; the session announces the mode it
+        then uses. Without the credential the command that does the same is shown.
+
+        Args:
+            rest: Empty, or the mode.
+        """
+        wanted = rest.strip().lower()
+        if not wanted:
+            self._honesty_page = self._page(
+                "Code honesty", render.honesty_page(self.model, self.view())
+            )
+            return
+        if wanted not in MODES:
+            self.flash(f"usage: /honesty [{' | '.join(MODES)}]", error=True)
+            return
+        if wanted == self.model.honesty_mode:
+            self.flash(f"honesty.mode is {wanted} already")
+            return
+        problem = self.admin.problem()
+        if problem is not None:
+            self.flash(
+                f"not changed here; use: calu config set honesty.mode {wanted} · {problem}",
+                error=True,
+            )
+            return
+
+        def store(problem: str = "") -> None:
+            """Ask for the password if one is needed, then store the mode.
+
+            Args:
+                problem: What was wrong with the password given before, or "".
+            """
+
+            async def write(password: str | None) -> None:
+                """Store the mode and say where, or why it was not stored.
+
+                Args:
+                    password: The credential's password, or None if it has none.
+                """
+                try:
+                    saved = await self.admin.set_honesty_mode(wanted, self.model.project, password)
+                except PasswordNeeded as error:
+                    store(str(error))
+                    return
+                except AdminFailed as error:
+                    self.flash(f"honesty.mode not changed: {error}", error=True)
+                    return
+                self.flash(
+                    f"honesty.mode is now {saved.mode} ({saved.scope} setting) · the session "
+                    "shows the mode it uses in the side panel"
+                )
+
+            def answered(password: str | None) -> None:
+                """Go on with the password; without one nothing is changed.
+
+                Args:
+                    password: What the user typed, or None.
+                """
+                if password is None:
+                    self.flash("honesty.mode not changed: no password given", error=True)
+                else:
+                    self._spawn(write(password))
+
+            if self.admin.needs_password():
+                self.push_screen(
+                    PasswordScreen(f"It sets honesty.mode to {wanted}.", self.palette, problem),
+                    answered,
+                )
+            else:
+                self._spawn(write(None))
+
+        if not weakens(self.model.honesty_mode, wanted):
+            store()
+            return
+        loses = {
+            "track": [
+                "code that is marked or unreviewed may run and be committed again",
+                "marks and unreviewed files are still recorded and shown",
+            ],
+            "off": [
+                "no marks are recorded and nothing is blocked because of them",
+                "commits are no longer certified by the session",
+            ],
+        }[wanted]
+
+        def confirmed(yes: bool | None) -> None:
+            """Store the weaker mode after a yes.
+
+            Args:
+                yes: The answer of the confirmation.
+            """
+            if yes:
+                store()
+            else:
+                self.flash(f"honesty.mode stays {self.model.honesty_mode}")
+
+        self.push_screen(
+            ConfirmScreen(
+                f"Change honesty.mode from {self.model.honesty_mode} to {wanted}?",
+                loses,
+                self.palette,
+            ),
+            confirmed,
+        )
+
+    def _cmd_trust(self, rest: str) -> None:
+        """Certify a commit as honest after a yes (`/trust [commit or branch]`).
+
+        The question names the commit: its short id and subject line if the project
+        directory is on this machine, else the name as typed (HEAD without one). Only `y`
+        certifies; `n`, Enter and Escape do not.
+
+        Args:
+            rest: A commit id or a branch name; empty means HEAD.
+        """
+        rev = rest.strip()
+        if len(rev.split()) > 1:
+            self.flash("usage: /trust [commit or branch]", error=True)
+            return
+        named = self.describe_commit(self.model.workspace, rev or "HEAD") or (rev or "HEAD")
+
+        def certify() -> None:
+            """Send the certification and report what the session recorded."""
+
+            async def run() -> None:
+                """Await the request and show the trusted commit or the refusal."""
+                outcome = await self.actions.trust(rev)
+                if outcome.ok:
+                    commit = str((outcome.data or {}).get("commit_id") or "")[:10]
+                    self.flash(f"trusted: {commit or named} is certified as honest")
+                else:
+                    self.flash(f"/trust: {outcome.message}", error=True)
+                self.render_all()
+
+            self._spawn(run())
+
+        room = max(12, self.size.width - 46)
+        self._ask(
+            f"certify {render.cut(named, room)} as honest? · y yes · n no (default)",
+            certify,
+            lambda: self.flash("nothing was certified"),
+        )
+
+    def _cmd_trust_file(self, rest: str) -> None:
+        """Certify the present content of one file as honest after a yes (`/trust-file <path>`).
+
+        Args:
+            rest: The path, relative to the project directory or absolute.
+        """
+        path = rest.strip()
+        if not path:
+            self.flash("usage: /trust-file <path>", error=True)
+            return
+        room = max(12, self.size.width - 68)
+        self._ask(
+            f"certify the present content of {render.cut(path, room)} as honest? · "
+            "y yes · n no (default)",
+            lambda: self._request(
+                self.actions.trust_file(path), f"trusted: the content of {path} is certified"
+            ),
+            lambda: self.flash("nothing was certified"),
+        )
+
+    def _cmd_honesty_review(self, rest: str) -> None:
+        """Ask calu to review the unreviewed files now (`/honesty-review`).
+
+        Args:
+            rest: Ignored.
+        """
+        self._request(self.actions.honesty_review(), "the honesty review was asked for")
+
+    # ------------------------------------------------------------------ git program
+
+    def _run_program(self, argv: Sequence[str], cwd: str) -> int:
+        """Hand the terminal to a program and take it back when the program ends.
+
+        The client draws nothing and reads no key in the meantime. Events of the session
+        are not read either; after a long stay the session may have closed the connection,
+        and the client then attaches again and catches up, as after any lost connection.
+
+        Args:
+            argv: The command line.
+            cwd: The directory the program starts in.
+
+        Returns:
+            The exit code of the program; 127 if it could not be started.
+
+        Raises:
+            textual.app.SuspendNotSupported: If this terminal driver cannot be suspended.
+        """
+        with self.suspend():
+            try:
+                return subprocess.call(list(argv), cwd=cwd)
+            except OSError:
+                return 127
+
+    def _launch(self, argv: Sequence[str], what: str) -> int | None:
+        """Run a program in the session's project directory and redraw afterwards.
+
+        Args:
+            argv: The command line.
+            what: The program's name for the message.
+
+        Returns:
+            The exit code, or None if the terminal could not be handed over.
+        """
+        try:
+            code = self.run_program(argv, self.model.workspace)
+        except SuspendNotSupported:
+            self.flash(f"{what} needs a real terminal: this one cannot be handed over", error=True)
+            return None
+        self.refresh(layout=True)
+        if code == 127:
+            self.flash(f"{what} could not be started", error=True)
+        return code
+
+    def _cmd_git(self, rest: str) -> None:
+        """Open a terminal git program in the session's project directory (`f4`, `/git`).
+
+        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or the first installed of
+        lazygit, gitui and tig; without any of them `git diff` through the pager, after a
+        notice (once per run) that names the command which installs lazygit. That command is
+        run only after a yes and only if it needs no administrator rights; otherwise it is
+        shown for the user to run. The client has no git viewer of its own.
+
+        Args:
+            rest: Ignored.
+        """
+        problem = gittool.usable_directory(self.model.workspace)
+        if problem is not None:
+            self.flash(problem, error=True)
+            return
+        tool = gittool.choose(self.environ, self.options.git_tool, self.which)
+        if isinstance(tool, gittool.Missing):
+            self.flash(f"f4: {tool.reason}", error=True)
+            return
+
+        def run(chosen: gittool.GitTool) -> None:
+            """Start the program and say that the client is back.
+
+            Args:
+                chosen: The program.
+            """
+            code = self._launch(chosen.argv, chosen.name)
+            if code is not None and code != 127:
+                hint = (
+                    " · that was git diff; lazygit shows staging, log and branches too"
+                    if chosen.source == "fallback"
+                    else ""
+                )
+                self.flash(f"back from {chosen.name}{hint}")
+
+        if tool.source != "fallback" or self._install_shown:
+            run(tool)
+            return
+        self._install_shown = True
+        plan = gittool.install_plan(self.which)
+        lines = [
+            "f4 opens a terminal git program in the project directory and returns here "
+            "when it ends",
+            "lazygit is recommended: the diff of the working copy, staging, log and "
+            "branches on one screen",
+            f"install it with:  {plan.command}",
+        ]
+        if plan.note:
+            lines.append(plan.note)
+        lines.append("another program: CALU_GIT_TOOL in the environment or git_tool in tui.toml")
+        if plan.runnable:
+            lines.append("y runs the install command now in this terminal · n opens git diff")
+        else:
+            lines += [
+                "calu does not run a command with sudo: run it in a terminal of your own",
+                "until then f4 opens git diff through the pager, also when this notice closes",
+            ]
+
+        def answered(yes: bool | None) -> None:
+            """Install after a yes, then open what is installed.
+
+            Args:
+                yes: The answer; always False for a command that is only shown.
+            """
+            if yes and plan.runnable:
+                code = self._launch(shlex.split(plan.command), plan.manager)
+                if code is None:
+                    return
+                if code != 0:
+                    self.flash(f"{plan.command} ended with exit code {code}", error=True)
+                    return
+            again = gittool.choose(self.environ, self.options.git_tool, self.which)
+            if isinstance(again, gittool.GitTool):
+                run(again)
+
+        self.push_screen(
+            ConfirmScreen(
+                "No terminal git program (lazygit, gitui, tig) is installed",
+                lines,
+                self.palette,
+                notice=not plan.runnable,
+            ),
+            answered,
+        )
 
     def _cmd_sessions(self, rest: str) -> None:
         """List the stored sessions of this project and resume the chosen one (`/sessions`).
@@ -2793,6 +3132,35 @@ class CaluApp(App[None]):
         self.action_detach()
 
 
+def describe_commit(workspace: str, rev: str) -> str:
+    """Name a commit of the project for a question: short id and subject line.
+
+    Args:
+        workspace: The project directory; it does not have to exist on this machine.
+        rev: A commit id, a branch name or `HEAD`.
+
+    Returns:
+        `HEAD = 4f2a9c1 Rename the helper` for HEAD, `4f2a9c1 Rename the helper` otherwise;
+        "" if the directory is not on this machine, git is missing or does not know `rev`.
+    """
+    if not workspace or not Path(workspace).is_dir():
+        return ""
+    try:
+        done = subprocess.run(
+            ["git", "-C", workspace, "log", "-1", "--format=%h %s", rev, "--"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except OSError, subprocess.SubprocessError:
+        return ""
+    line = done.stdout.strip().splitlines()[0] if done.returncode == 0 and done.stdout else ""
+    if not line:
+        return ""
+    return f"HEAD = {line}" if rev == "HEAD" else line
+
+
 def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[Text]:
     """Render the help page from the command table.
 
@@ -2844,7 +3212,9 @@ def help_lines(palette: Palette, caps: Capabilities, width: int = 100) -> list[T
             if isinstance(binding, Binding) and binding.id and not binding.id.startswith("tab-")
         )
         + ", tab-0 to tab-9 (alt+0 to alt+9). The same file holds theme, bell, toasts, "
-        "thinking and panel_width."
+        "thinking, panel_width and git_tool: the program f4 starts in the project directory "
+        "(the environment variable CALU_GIT_TOOL overrides it). Left unset, f4 starts the "
+        "first installed of lazygit (recommended), gitui and tig, else git diff."
     )
     lines += [Text(""), Text("Settings and other keys", f"bold {palette.accent}")]
     lines += [Text.assemble("  ", row) for row in render.wrap(Text(rebind, palette.fg), width - 4)]

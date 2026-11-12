@@ -167,7 +167,31 @@ COMMANDS: tuple[Command, ...] = (
     Command("usage", "Usage: cost, context fill, usage limits", "", "/usage", capability="usage"),
     Command("state", "Session state", "", "/state"),
     Command("context", "The conversation as the checkers see it", "", "/context"),
-    Command("checkers", "The checkers and their instructions", "", "/checkers"),
+    Command(
+        "checkers",
+        "The checkers: read their instructions, e edits them (admin credential)",
+        "",
+        "/checkers",
+    ),
+    Command(
+        "honesty",
+        "Code honesty: mode, baseline, marked and unreviewed files; with a mode, change it",
+        "",
+        "/honesty [off | track | enforce]",
+    ),
+    Command(
+        "trust",
+        "Certify a commit as honest (no argument: HEAD), after a yes",
+        "",
+        "/trust [commit or branch]",
+    ),
+    Command(
+        "trust_file",
+        "Certify the present content of one file as honest, after a yes",
+        "",
+        "/trust-file <path>",
+    ),
+    Command("honesty_review", "Let calu review the unreviewed files now", "", "/honesty-review"),
     Command("sessions", "Resume a stored conversation of this project", "", "/sessions"),
     Command("history", "Stored history of a session", "", "/history [id]"),
     Command("log", "The session's log", "", "/log"),
@@ -207,6 +231,14 @@ COMMANDS: tuple[Command, ...] = (
         "Full-screen diff of a step, side by side when wide; v and enter comment on lines",
         "D in the transcript",
         "/diff",
+        group="View",
+    ),
+    Command(
+        "git",
+        "Open a terminal git program in the project directory (lazygit, gitui, tig; "
+        "CALU_GIT_TOOL or git_tool in tui.toml choose another)",
+        "f4",
+        "/git",
         group="View",
     ),
     Command(
@@ -259,6 +291,7 @@ ALIASES = {
     "/agents": "/agent",
     "/find": "/search",
     "/resume": "/sessions",
+    "/lazygit": "/git",
 }
 """Other words for a slash command."""
 

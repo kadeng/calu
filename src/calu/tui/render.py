@@ -1346,6 +1346,8 @@ def panel_lines(
             lines.append(Text("   " + cut(mark_entry.reason, width - 4), palette.muted))
         if model.marks and focused:
             lines.append(Text(" " + cut("enter detail · x clear", width - 2), palette.faint))
+        for style, sentence in honesty_notes(model, palette):
+            lines.append(Text(" " + cut(sentence, width - 2), style))
         lines.append(Text(""))
 
     lines.append(_section("SESSION", None, view))
@@ -1416,6 +1418,183 @@ def panel_lines(
     if usage.background_tasks:
         lines.append(figure("bg tasks", f"{usage.background_tasks} still running"))
     return lines, targets
+
+
+def honesty_notes(model: SessionModel, palette: Palette) -> list[tuple[str, str]]:
+    """Say in short sentences what of the honesty state is not clean, beyond the marks.
+
+    Args:
+        model: The session model.
+        palette: Colours.
+
+    Returns:
+        `(style, sentence)` per fact: the baseline, the unreviewed files, a required or
+        running review. Empty for a session that reports mode and marks only.
+    """
+    state = model.honesty
+    if not state.reported:
+        return []
+    notes: list[tuple[str, str]] = []
+    if state.baseline:
+        source = f" · by {state.baseline_source}" if state.baseline_source else ""
+        notes.append((palette.muted, f"baseline {state.baseline[:8]}{source}"))
+    else:
+        notes.append((palette.orange, "no trusted commit · /trust certifies HEAD"))
+    if state.unreviewed_all:
+        notes.append((palette.orange, "every file counts as unreviewed"))
+    elif state.unreviewed_count:
+        plural = "s" if state.unreviewed_count != 1 else ""
+        notes.append((palette.orange, f"{state.unreviewed_count} unreviewed file{plural}"))
+    if state.review_running:
+        notes.append((palette.cyan, "honesty review running"))
+    elif state.review_required:
+        notes.append((palette.orange, "review required · /honesty-review"))
+    return notes
+
+
+def honesty_clean(model: SessionModel) -> bool | None:
+    """Tell whether the honesty state is clean.
+
+    Args:
+        model: The session model.
+
+    Returns:
+        None if the session reports mode and marks only (then only the marks are known).
+        Otherwise True if there is a baseline, no open mark, no unreviewed file and no
+        review is required.
+    """
+    state = model.honesty
+    if not state.reported:
+        return None
+    return bool(
+        state.baseline
+        and not model.marks
+        and not state.unreviewed_count
+        and not state.unreviewed_all
+        and not state.review_required
+    )
+
+
+def honesty_page(model: SessionModel, view: View) -> list[Text]:
+    """Render the honesty page: mode, baseline, the files that are not clean, the commands.
+
+    Args:
+        model: The session model.
+        view: Width and colours.
+
+    Returns:
+        The lines of the page. The baseline, the unreviewed files and the review are listed
+        only for a session that reports them; for another one the page says so.
+    """
+    palette, state = view.palette, model.honesty
+    width = max(40, min(view.width - 4, 110))
+    meaning = {
+        "off": "nothing is recorded and nothing is blocked",
+        "track": "the state is kept and shown; nothing is blocked because of it",
+        "enforce": "code runs and is committed only while the state is clean",
+    }
+    clean = honesty_clean(model)
+
+    def row(name: str, value: str, style: str = "") -> Text:
+        """Render one `name value` line.
+
+        Args:
+            name: The name of the fact.
+            value: Its value.
+            style: Style of the value; the ordinary text colour if empty.
+
+        Returns:
+            The line.
+        """
+        return Text.assemble((f"{name:<10}", palette.muted), (value, style or palette.fg))
+
+    about_mode = meaning.get(model.honesty_mode, "not a mode this client knows")
+    lines = [row("mode", f"{model.honesty_mode} · {about_mode}")]
+    if clean is None:
+        if model.honesty_mode != "off":
+            lines.append(
+                row(
+                    "state", f"{len(model.marks)} open marks", palette.orange if model.marks else ""
+                )
+            )
+        lines.append(
+            row(
+                "baseline",
+                "this session reports marks only: no trusted commit, no unreviewed files",
+                palette.muted,
+            )
+        )
+    else:
+        lines.append(
+            row("state", "clean", palette.green)
+            if clean
+            else row("state", "not clean", palette.orange)
+        )
+        if state.baseline:
+            about = [state.baseline[:10]]
+            if state.baseline_subject:
+                about.append(state.baseline_subject)
+            if state.baseline_source:
+                about.append(f"trusted by {state.baseline_source}")
+            lines.append(row("baseline", cut(" · ".join(about), width - 10)))
+        else:
+            lines.append(
+                row("baseline", "none: no trusted commit among HEAD's ancestors", palette.orange)
+            )
+        if state.review_running:
+            lines.append(row("review", "running", palette.cyan))
+        elif state.review_required:
+            lines.append(row("review", "required before code runs or is committed", palette.orange))
+        else:
+            lines.append(row("review", "not required", palette.muted))
+
+    lines += [Text(""), Text(f"MARKED ({len(model.marks)})", f"bold {palette.fg}")]
+    if not model.marks:
+        lines.append(Text("  no function, class or file is marked", palette.muted))
+    for entry in model.marks:
+        spot = f"{entry.path}:{entry.symbol}" if entry.symbol else entry.path
+        lines.append(
+            Text.assemble((f"  {entry.id:>3}  ", palette.muted), (cut(spot, width - 7), palette.fg))
+        )
+        lines += [
+            Text("       " + part.plain, palette.muted)
+            for part in wrap(Text(entry.reason), width - 7)
+        ]
+
+    if clean is not None:
+        count = "all" if state.unreviewed_all else str(state.unreviewed_count)
+        lines += [Text(""), Text(f"UNREVIEWED ({count})", f"bold {palette.fg}")]
+        if state.unreviewed_all:
+            lines.append(
+                Text("  without a baseline every file counts as unreviewed", palette.orange)
+            )
+        elif not state.unreviewed_count:
+            lines.append(Text("  every changed file was verified", palette.muted))
+        lines += [Text("  " + cut(path, width - 2), palette.fg) for path in state.unreviewed]
+        more = state.unreviewed_count - len(state.unreviewed)
+        if more > 0 and not state.unreviewed_all:
+            lines.append(Text(f"  and {more} more", palette.muted))
+        if state.unreviewed_problem:
+            lines.append(Text("  " + cut(state.unreviewed_problem, width - 2), palette.red))
+
+    commands = (
+        (
+            "/trust [commit or branch]",
+            "certify a commit (no argument: HEAD)",
+        ),
+        ("/trust-file <path>", "certify the present content of one file"),
+        ("/honesty-review", "let calu review the unreviewed files now"),
+        ("/clear-mark <id>", "close a mark by hand"),
+        ("/honesty off | track | enforce", "change the mode (admin credential)"),
+    )
+    lines += [Text(""), Text("COMMANDS", f"bold {palette.fg}")]
+    lines += [
+        Text.assemble(
+            (f"  {name:<32}", palette.fg), (cut(about, max(10, width - 34)), palette.muted)
+        )
+        for name, about in commands
+    ]
+    return lines
 
 
 def start_card_lines(

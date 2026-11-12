@@ -18,6 +18,9 @@ from calu.protocol.client import RequestFailed
 from calu.tui.connection import Link
 from calu.tui.model import MAIN, Diff, SessionModel
 
+METHOD_NOT_FOUND = -32601
+"""The JSON-RPC code of a request the session does not know."""
+
 NOT_ATTACHED = "not sent: this client is not attached to the session"
 """The message of a request made while no connection is open."""
 
@@ -63,6 +66,8 @@ class Actions:
         try:
             return Outcome(True, data=await connection.request(method, params or {}))
         except RequestFailed as error:
+            if error.code == METHOD_NOT_FOUND:
+                return Outcome(False, f"this session does not support it ({method})")
             return Outcome(False, str(error.error.get("message") or error))
         except ConnectionError as error:
             return Outcome(False, f"not sent: {error}")
@@ -302,6 +307,42 @@ class Actions:
             The outcome.
         """
         return await self.request("honesty.clear", {"mark_id": mark_id})
+
+    async def trust(self, rev: str = "") -> Outcome:
+        """Certify a commit as honest (`honesty.trust`).
+
+        The session resolves the name in its project directory, records the commit as trusted
+        by the user and looks its baseline up again.
+
+        Args:
+            rev: A commit id or a branch name; "" means HEAD.
+
+        Returns:
+            The outcome; a session without this request answers "this session does not
+            support it".
+        """
+        return await self.request("honesty.trust", {"rev": rev} if rev else {})
+
+    async def trust_file(self, path: str) -> Outcome:
+        """Certify the present content of one file as honest (`honesty.trust` with `path`).
+
+        Args:
+            path: The file, relative to the project directory or absolute.
+
+        Returns:
+            The outcome; a session without this request answers "this session does not
+            support it".
+        """
+        return await self.request("honesty.trust", {"path": path})
+
+    async def honesty_review(self) -> Outcome:
+        """Ask calu to review the unreviewed files now (`honesty.review`).
+
+        Returns:
+            The outcome; a session without this request answers "this session does not
+            support it".
+        """
+        return await self.request("honesty.review", {})
 
     async def comment(self, path: str, first: int, last: int, text: str) -> Outcome:
         """Send a comment on lines of a project file (`comment.add`, kind "file").

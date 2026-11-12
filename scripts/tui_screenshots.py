@@ -27,7 +27,7 @@ from textual.pilot import Pilot
 
 from calu.tui import scenarios
 from calu.tui.app import CaluApp, TuiOptions
-from calu.tui.fake import FakeSession, fake_connector
+from calu.tui.fake import FakeAdmin, FakeSession, fake_connector
 from calu.tui.theme import LIGHT
 
 SIZES = ((120, 36), (80, 24))
@@ -262,6 +262,74 @@ def typed(*parts: str) -> Drive:
     return drive
 
 
+HONESTY_STATE: dict[str, Any] = {
+    "mode": "enforce",
+    "marks": [
+        {
+            "id": 4,
+            "path": "src/calu/gate.py",
+            "symbol": "judge_step",
+            "reason": "the docstring still names check_step and says the step is only logged",
+        }
+    ],
+    "baseline": {
+        "commit_id": "4f2a9c1d07aa",
+        "source": "user",
+        "subject": "Rename the helper in gate.py",
+    },
+    "unreviewed": ["scripts/migrate.sh", "notes/plan.md"],
+    "unreviewed_count": 2,
+    "review_required": False,
+    "review_running": False,
+}
+"""The honesty state of the honesty pictures: one mark, two unreviewed files."""
+
+
+def honesty(*parts: str) -> Drive:
+    """Build a state that reports an honesty state and then presses and types.
+
+    Args:
+        *parts: As for `typed`.
+
+    Returns:
+        The drive function.
+    """
+
+    async def drive(pilot: Pilot[None], app: CaluApp, session: FakeSession, clock: Clock) -> None:
+        """Send `honesty.update`, then press and type.
+
+        Args:
+            pilot: The pilot of the running app.
+            app: The app.
+            session: The scripted session.
+            clock: The clock.
+        """
+        session.honesty_requests = True
+        app.describe_commit = lambda workspace, rev: "HEAD = 9e8d7c6 Run the unit tests in CI"
+        await session.emit("honesty.update", HONESTY_STATE)
+        await pilot.pause()
+        await typed(*parts)(pilot, app, session, clock)
+
+    return drive
+
+
+async def git_notice(pilot: Pilot[None], app: CaluApp, session: FakeSession, clock: Clock) -> None:
+    """Press `f4` on a machine with apt and without a terminal git program.
+
+    Args:
+        pilot: The pilot of the running app.
+        app: The app.
+        session: The scripted session.
+        clock: The clock.
+    """
+    app.model.workspace = str(Path.cwd())
+    app.environ = {}
+    app.which = lambda name: f"/usr/bin/{name}" if name in {"git", "apt"} else None
+    app.run_program = lambda argv, cwd: 0
+    await pilot.press("f4")
+    await pilot.pause()
+
+
 STATES: list[tuple[str, str, Drive, str]] = [
     ("01-turn", "simple_turn", nothing, ""),
     ("02-escalation", "escalation", nothing, ""),
@@ -283,6 +351,11 @@ STATES: list[tuple[str, str, Drive, str]] = [
     ("18-confirm-restart", "simple_turn", typed("text:/effort max", "enter"), ""),
     ("19-stored-history", "history", nothing, ""),
     ("20-no-colour", "showcase", nothing, "mono"),
+    ("21-checkers", "simple_turn", typed("text:/checkers", "enter", "j"), ""),
+    ("22-checker-editor", "simple_turn", typed("text:/checkers", "enter", "e"), ""),
+    ("23-honesty", "simple_turn", honesty("text:/honesty", "enter"), ""),
+    ("24-trust-question", "simple_turn", honesty("text:/trust", "enter"), ""),
+    ("25-git-install-notice", "simple_turn", git_notice, ""),
 ]
 """`(file name, scenario, what to do after it, theme)` per state."""
 
@@ -313,7 +386,9 @@ async def shoot(name: str, scenario: str, drive: Drive, theme: str, size: tuple[
     if theme == "mono":
         os.environ["NO_COLOR"] = "1"
     try:
-        app = CaluApp(fake_connector(session), options, clock=clock, live=False)
+        app = CaluApp(
+            fake_connector(session), options, clock=clock, live=False, admin=FakeAdmin(session)
+        )
     finally:
         os.environ.pop("NO_COLOR", None)
     async with app.run_test(size=size, notifications=False) as pilot:

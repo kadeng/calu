@@ -16,7 +16,7 @@ from textual import events
 
 from calu.tui import scenarios, settings
 from calu.tui.app import CaluApp, TuiOptions
-from calu.tui.fake import FakeSession, fake_connector
+from calu.tui.fake import FakeAdmin, FakeSession, fake_connector
 from calu.tui.model import JoinBlock, StepBlock
 from calu.tui.screens.confirm import ConfirmScreen
 from calu.tui.screens.diff import DiffScreen
@@ -585,7 +585,13 @@ async def test_no_color_draws_the_screen_without_colours(monkeypatch: pytest.Mon
     monkeypatch.setenv("NO_COLOR", "1")
     session = FakeSession()
     clock = Clock()
-    app = CaluApp(fake_connector(session), TuiOptions(bell=False), clock=clock, live=False)
+    app = CaluApp(
+        fake_connector(session),
+        TuiOptions(bell=False),
+        clock=clock,
+        live=False,
+        admin=FakeAdmin(session),
+    )
     monkeypatch.delenv("NO_COLOR")
     async with app.run_test(size=(120, 36), notifications=False) as pilot:
         await pilot.pause()

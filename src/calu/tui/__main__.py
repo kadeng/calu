@@ -7,9 +7,10 @@ question gets a scripted answer). For looking at the client and for work on it.
 """
 
 import sys
+from pathlib import Path
 
 from calu.tui.app import CaluApp
-from calu.tui.fake import FakeSession, fake_connector
+from calu.tui.fake import FakeAdmin, FakeSession, fake_connector
 from calu.tui.scenarios import SCENARIOS, preload
 
 
@@ -26,9 +27,9 @@ def main(arguments: list[str]) -> int:
     if name not in SCENARIOS:
         print(f"scenarios: {', '.join(SCENARIOS)}", file=sys.stderr)
         return 2
-    session = FakeSession()
+    session = FakeSession(workspace=str(Path.cwd()))  # so that f4 and @ work on real files
     preload(session, SCENARIOS[name]())
-    CaluApp(fake_connector(session)).run()
+    CaluApp(fake_connector(session), admin=FakeAdmin(session)).run()
     return 0
 
 

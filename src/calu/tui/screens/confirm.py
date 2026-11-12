@@ -21,12 +21,19 @@ class ConfirmScreen(ModalScreen[bool]):
     """Shows what an action does and waits for yes or no.
 
     With `typed` empty, `y` confirms. With a word in `typed`, the user has to type that word
-    and press Enter; this is for an action that cannot be taken back. `n` or Escape declines
-    in both cases. The screen is dismissed with True or False.
+    and press Enter; this is for an action that cannot be taken back. `n`, Enter (without
+    `typed`) or Escape declines, so no is the answer of a key pressed without reading. With
+    `notice`, the screen only tells something: Enter, `n` or Escape close it and `y` does
+    nothing. The screen is dismissed with True or False.
     """
 
     def __init__(
-        self, title: str, consequences: list[str], palette: Palette, typed: str = ""
+        self,
+        title: str,
+        consequences: list[str],
+        palette: Palette,
+        typed: str = "",
+        notice: bool = False,
     ) -> None:
         """Create the question.
 
@@ -35,12 +42,15 @@ class ConfirmScreen(ModalScreen[bool]):
             consequences: What the action does, one sentence each.
             palette: The colours of the texts.
             typed: A word the user must type to confirm; "" asks for `y`.
+            notice: True shows the text without a question; the screen then always ends
+                with False.
         """
         super().__init__()
         self.title_text = title
         self.consequences = consequences
         self.palette = palette
         self.typed = typed
+        self.notice = notice
         self.entered = ""
 
     def compose(self) -> ComposeResult:
@@ -62,7 +72,16 @@ class ConfirmScreen(ModalScreen[bool]):
         lines = [Text(self.title_text, f"bold {palette.orange}"), Text("")]
         lines += [Text(f"· {sentence}", palette.fg) for sentence in self.consequences]
         lines.append(Text(""))
-        if self.typed:
+        if self.notice:
+            lines.append(
+                Text.assemble(
+                    ("enter", f"bold {palette.fg}"),
+                    (" or ", palette.muted),
+                    ("esc", f"bold {palette.fg}"),
+                    (" closes", palette.muted),
+                )
+            )
+        elif self.typed:
             lines.append(
                 Text.assemble(
                     (f"type {self.typed} and press enter: ", palette.muted),
@@ -77,6 +96,8 @@ class ConfirmScreen(ModalScreen[bool]):
                     ("y", f"bold {palette.fg}"),
                     (" yes   ", palette.muted),
                     ("n", f"bold {palette.fg}"),
+                    (", ", palette.muted),
+                    ("enter", f"bold {palette.fg}"),
                     (" or ", palette.muted),
                     ("esc", f"bold {palette.fg}"),
                     (" no", palette.muted),
@@ -95,10 +116,14 @@ class ConfirmScreen(ModalScreen[bool]):
         if event.key == "escape":
             self.dismiss(False)
             return
+        if self.notice:
+            if event.key in {"enter", "n", "q"}:
+                self.dismiss(False)
+            return
         if not self.typed:
             if event.key == "y":
                 self.dismiss(True)
-            elif event.key == "n":
+            elif event.key in {"n", "enter"}:
                 self.dismiss(False)
             return
         if event.key == "enter":

@@ -19,7 +19,7 @@ from textual.pilot import Pilot
 from calu.protocol.messages import CLOSE_FELL_BEHIND, CLOSE_TOKEN_REVOKED
 from calu.tui import scenarios
 from calu.tui.app import CaluApp, TuiOptions
-from calu.tui.fake import FakeSession, fake_connector
+from calu.tui.fake import FakeAdmin, FakeSession, fake_connector
 from calu.tui.model import ALL, MAIN
 from calu.tui.screens.confirm import ConfirmScreen
 from calu.tui.screens.detail import DetailScreen
@@ -110,6 +110,7 @@ async def running(
     live_events: bool = True,
     session: FakeSession | None = None,
     options: TuiOptions | None = None,
+    admin: FakeAdmin | None = None,
 ) -> AsyncGenerator[Running]:
     """Run the app on a scenario.
 
@@ -120,6 +121,7 @@ async def running(
             as history, which the app gets replayed.
         session: A prepared session to attach to instead of a new one.
         options: How the client starts; without them the bell is off.
+        admin: What stands for the `admin` credential; one without a password if None.
     """
     clock = Clock()
     session = session or FakeSession()
@@ -127,8 +129,15 @@ async def running(
     if not live_events:
         scenarios.preload(session, items)
     app = CaluApp(
-        fake_connector(session), options or TuiOptions(bell=False), clock=clock, live=False
+        fake_connector(session),
+        options or TuiOptions(bell=False),
+        clock=clock,
+        live=False,
+        admin=admin or FakeAdmin(session),
     )
+    app.which = lambda name: None  # no test starts a program of this machine
+    app.environ = {}
+    app.describe_commit = lambda workspace, rev: ""
     async with app.run_test(size=size, notifications=False) as pilot:
         await pilot.pause()
         run = Running(app, pilot, session, clock)

@@ -51,6 +51,7 @@ The client (`src/calu/tui/`) is tested in the unit layer, without a terminal, a 
 | `test_tui_app.py` | the Textual app under `App.run_test()` with `Pilot` pressing keys: sending in each mode, `a a`/`d d`/note, questions, the detail view, agent switching, side questions, the scrolling rules (the scroll offset and every visible line stay while output arrives), 80x24 and 120x36, a session of 2,000 steps | the scripted session |
 | `test_tui_more.py` | the same app for what came second: the start card of a stopped session, the confirmed stop-and-resume with another model or effort, resuming a stored conversation, the stored history above the replayed events, the diff screen (side by side, unified, jumps between changes, a comment on selected lines), the side panel as a list (queue, held drafts, marks), held drafts sent when the session turns idle, search, copy, export, `@` path completion, large pastes, the settings file, other keys, `NO_COLOR` | the scripted session |
 | `test_tui_tools.py` | what needs neither Textual nor a session: `calu.tui.settings` (`tui.toml`, the history of sent texts), `calu.tui.difftools` (the rows of a diff, a selection as a line range), `calu.tui.completion`, `calu.tui.export`, and the stored history in the model | nothing |
+| `test_tui_admin.py` | the checkers screen (reading through the session, saving edited instructions with the `admin` credential, the password question, a machine without the credential), code honesty (today's `honesty.update` and the one with baseline and unreviewed files, the page, `/trust` with its yes/no question, `/trust-file`, `/honesty-review`, `/honesty off\|track\|enforce` with the confirmation of a weaker mode), and `f4` (which git program is chosen, the install command per package manager, that a command with `sudo` is only shown) | the scripted session; `FakeAdmin` for the credential; `CaluApp.run_program`, `which` and `environ` for the external program |
 | `test_tui_screens.py` | the whole screen as text for six scripted sessions at 120x36 and 80x24, compared with the files in `tests/unit/tui_screens/`; the same text without colours | the scripted session |
 | `test_tui_process.py` | the app over `protocol_connector` against a real `SessionServer`, session and fake runner: a turn, an escalation, a side question, the detail view, a model change; and which client `calu attach` starts | a real WebSocket |
 | `test_protocol_side_usage.py` | the requests `side.ask`, `usage.get`, `model.set` and the event `usage.update` through the fake runner | a real WebSocket |
@@ -61,7 +62,7 @@ screenshots and the demo use the same ones.
 
 ```bash
 uv run python -m calu.tui showcase                 # the client on a scripted session, to look at
-uv run python scripts/tui_screenshots.py /tmp/shots   # 20 states at 120x36 and 80x24, SVG and PNG
+uv run python scripts/tui_screenshots.py /tmp/shots   # 25 states at 120x36 and 80x24, SVG and PNG
 CALU_UPDATE_TUI_SCREENS=1 uv run pytest tests/unit/test_tui_screens.py   # after a wanted layout change
 ```
 
@@ -337,6 +338,18 @@ escalation resolved from the database alone.
    `~/.config/calu/tui.toml`, the sent texts come back with the up arrow); `NO_COLOR=1 calu
    attach`; switch to another window while a turn runs (the bell rings at its end if the
    terminal reports focus changes).
+
+24. Checkers, honesty and the git program in the full-screen client, in a real terminal on the
+   session's machine: `/checkers`, `j`, `e`, change a line, `ctrl+s` (with an `admin` credential
+   that has a password the client asks for it; the message names the new version, and
+   `calu checker list` shows the same version); the same on a machine without the credential
+   (the screen says "read-only here" and names `calu checker edit`); `/honesty` (mode, marks;
+   baseline and unreviewed files once the session reports them); `/honesty enforce`, then
+   `/honesty track` (a question, Enter keeps `enforce`); `/trust` (the question names the short
+   id and subject of HEAD; Enter certifies nothing); `f4` with lazygit installed (lazygit opens
+   in the project directory, `q` returns to the client, which attaches again by itself if the
+   stay was long); `CALU_GIT_TOOL=tig calu attach`; `f4` without lazygit, gitui and tig (the
+   notice shows the install command for this machine and runs nothing that needs `sudo`).
 
 ## Measuring the checkers
 

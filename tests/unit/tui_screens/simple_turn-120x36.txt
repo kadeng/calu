@@ -33,4 +33,4 @@
                                                                                     ▏
  to main
  >
- enter send   alt+←/→ agent   pgup/pgdn scroll   f3 side question   f2 panel   ^p palette   f1 help   ^d detach
+ enter send   alt+←/→ agent   pgup/pgdn scroll   f3 side question   f4 git   ^p palette   f1 help   ^d detach

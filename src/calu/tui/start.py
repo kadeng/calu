@@ -120,6 +120,7 @@ def options_from(config: Path, history: Path, environ: Mapping[str, str]) -> Tui
         bell=stored.bell,
         toasts=stored.toasts,
         panel_width=stored.panel_width,
+        git_tool=stored.git_tool,
         keys=stored.keys,
         settings_path=config,
         history_path=history,

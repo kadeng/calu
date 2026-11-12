@@ -22,7 +22,7 @@ pytest.importorskip("textual")
 
 from calu.tui import scenarios
 from calu.tui.app import CaluApp, TuiOptions
-from calu.tui.fake import FakeSession, fake_connector
+from calu.tui.fake import FakeAdmin, FakeSession, fake_connector
 from tests.unit.test_tui_app import Clock
 
 pytestmark = pytest.mark.anyio
@@ -55,7 +55,13 @@ async def screen_text(scenario: str, size: tuple[int, int]) -> str:
     """
     clock = Clock()
     session = FakeSession()
-    app = CaluApp(fake_connector(session), TuiOptions(bell=False), clock=clock, live=False)
+    app = CaluApp(
+        fake_connector(session),
+        TuiOptions(bell=False),
+        clock=clock,
+        live=False,
+        admin=FakeAdmin(session),
+    )
     async with app.run_test(size=size, notifications=False) as pilot:
         await pilot.pause()
         await scenarios.play(session, scenarios.SCENARIOS[scenario](), clock.advance)

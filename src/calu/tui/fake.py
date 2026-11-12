@@ -27,6 +27,13 @@ import anyio
 
 from calu.protocol.client import OnEvent, RequestFailed
 from calu.protocol.messages import CLOSE_FELL_BEHIND, REQUESTS
+from calu.tui.adminaccess import (
+    NO_CREDENTIAL,
+    AdminFailed,
+    PasswordNeeded,
+    SavedChecker,
+    SavedMode,
+)
 from calu.tui.connection import Connection, Connector
 
 REFUSED = -32000
@@ -97,6 +104,171 @@ class FakeConnection:
         return await self.session.handle(method, dict(params or {}))
 
 
+def default_checkers() -> list[dict[str, Any]]:
+    """Build the checkers a scripted session answers `checkers.get` with.
+
+    Returns:
+        Three definitions (command, edit, narrator) with short instructions.
+    """
+    return [
+        {
+            "name": "command",
+            "route": "command",
+            "model": "fireworks:nemotron-lightning",
+            "version": 12,
+            "enabled": True,
+            "instructions": (
+                "# Command checker\n\nYou judge one shell command before it runs.\n\n"
+                "- **ALLOW** a command that reads, builds or tests inside the project.\n"
+                "- **DENY** a command that the task does not need, and say why in one "
+                "sentence.\n"
+                "- **ESCALATE** a command that changes something outside the project, "
+                "publishes code or cannot be undone.\n\n"
+                "Return a one-line summary of what the command does."
+            ),
+        },
+        {
+            "name": "edit",
+            "route": "edit",
+            "model": "fireworks:nemotron-lightning",
+            "version": 7,
+            "enabled": True,
+            "instructions": (
+                "# Edit checker\n\nYou judge one edit of a project file.\n\n"
+                "Every function keeps a docstring that says what it does. A name must fit "
+                "what the code does. Comment on what a reader would stumble over."
+            ),
+        },
+        {
+            "name": "narrator",
+            "route": "narrate",
+            "model": "fireworks:nemotron-lightning",
+            "version": 3,
+            "enabled": False,
+            "instructions": "Retell what the agent said in indirect speech, in one paragraph.",
+        },
+    ]
+
+
+class FakeAdmin:
+    """`calu.tui.adminaccess.AdminAccess` for tests, screenshots and the demo.
+
+    It stores nothing in a database. Saved instructions go into the scripted session's
+    answer to `checkers.get`, with the version raised by one, and a stored honesty mode is
+    announced by the session with `honesty.update`.
+    """
+
+    def __init__(
+        self, session: FakeSession | None = None, credential: bool = True, password: str = ""
+    ) -> None:
+        """Create the access.
+
+        Args:
+            session: The scripted session that shows the changes; None records them only.
+            credential: False behaves like a machine without the `admin` credential.
+            password: The credential's password; "" for a credential without one.
+        """
+        self.session = session
+        self.credential = credential
+        self.password = password
+        self.saved: list[tuple[str, str]] = []
+        """Every `(checker, instructions)` stored, oldest first."""
+        self.modes: list[tuple[str, str | None]] = []
+        """Every `(mode, project)` stored, oldest first."""
+        self.fail = ""
+        """If set, every change is refused with this sentence."""
+
+    def problem(self) -> str | None:
+        """Say why nothing can be changed.
+
+        Returns:
+            None with a credential, else `adminaccess.NO_CREDENTIAL`.
+        """
+        return None if self.credential else NO_CREDENTIAL
+
+    def needs_password(self) -> bool:
+        """Tell whether a password is asked for.
+
+        Returns:
+            True if the access was created with a password.
+        """
+        return self.credential and bool(self.password)
+
+    def _check(self, password: str | None) -> None:
+        """Refuse a missing credential, a wrong password and a scripted failure.
+
+        Args:
+            password: The password the client passed.
+
+        Raises:
+            PasswordNeeded: If the password is not the one of this access.
+            AdminFailed: Without a credential, or with `fail` set.
+        """
+        if not self.credential:
+            raise AdminFailed(NO_CREDENTIAL)
+        if self.password and password != self.password:
+            raise PasswordNeeded("wrong password for the 'admin' credential")
+        if self.fail:
+            raise AdminFailed(self.fail)
+
+    async def save_instructions(self, name: str, text: str, password: str | None) -> SavedChecker:
+        """Record new instructions and let the scripted session show them.
+
+        Args:
+            name: The checker's name.
+            text: The instructions.
+            password: The password the client passed.
+
+        Returns:
+            The checker with its version raised by one (1 without a session).
+
+        Raises:
+            PasswordNeeded: If the password is not the one of this access.
+            AdminFailed: Without a credential, with `fail` set or for an unknown checker.
+        """
+        self._check(password)
+        version = 1
+        if self.session is not None:
+            listed = self.session.results.get("checkers.get", {}).get("checkers") or []
+            found = next((entry for entry in listed if entry.get("name") == name), None)
+            if found is None:
+                raise AdminFailed(f"no checker named {name!r}")
+            found["instructions"] = text
+            found["version"] = version = int(found.get("version") or 0) + 1
+        self.saved.append((name, text))
+        return SavedChecker(name, version)
+
+    async def set_honesty_mode(
+        self, mode: str, project: str | None, password: str | None
+    ) -> SavedMode:
+        """Record the mode and let the scripted session announce it.
+
+        Args:
+            mode: The mode.
+            project: The session's project.
+            password: The password the client passed.
+
+        Returns:
+            The mode, stored in the global scope.
+
+        Raises:
+            PasswordNeeded: If the password is not the one of this access.
+            AdminFailed: Without a credential or with `fail` set.
+        """
+        self._check(password)
+        self.modes.append((mode, project))
+        if self.session is not None:
+            await self.session.emit(
+                "honesty.update",
+                {
+                    "marks": list(self.session.honesty_marks),
+                    "mode": mode,
+                    **self.session.honesty_extra,
+                },
+            )
+        return SavedMode(mode, "global")
+
+
 class FakeSession:
     """The session side of the protocol, scripted (see the module docstring)."""
 
@@ -120,6 +292,12 @@ class FakeSession:
         self.auto_escalate: dict[str, Any] = {"commands": False, "edits": False}
         self.honesty_mode = "off"
         self.honesty_marks: list[dict[str, Any]] = []
+        self.honesty_extra: dict[str, Any] = {}
+        """The fields of `honesty.update` beyond mode and marks (baseline, unreviewed,
+        review_required, review_running), as the last event carried them."""
+        self.honesty_requests = False
+        """Whether the session answers `honesty.trust` and `honesty.review`. False answers
+        them like an unknown method, as a session without certification does."""
         self.rate_limits: list[dict[str, Any]] = []
         self.context: dict[str, Any] | None = {
             "tokens": 212_400,
@@ -137,7 +315,7 @@ class FakeSession:
         """Every event sent so far, with its `seq`, for replay."""
         self.requests: list[tuple[str, dict[str, Any]]] = []
         """Every request a client made, oldest first."""
-        self.results: dict[str, Any] = {}
+        self.results: dict[str, Any] = {"checkers.get": {"checkers": default_checkers()}}
         """Method -> the result to answer with, for requests without a built-in reaction."""
         self.fail: dict[str, str] = {}
         """Method -> the message to refuse the request with."""
@@ -172,6 +350,7 @@ class FakeSession:
             "auto_escalate": dict(self.auto_escalate),
             "honesty_mode": self.honesty_mode,
             "honesty_marks": [dict(mark) for mark in self.honesty_marks],
+            **({"honesty": dict(self.honesty_extra)} if self.honesty_extra else {}),
             "rate_limits": [dict(limit) for limit in self.rate_limits],
         }
 
@@ -204,6 +383,11 @@ class FakeSession:
             case "honesty.update":
                 self.honesty_marks = list(stamped["marks"])
                 self.honesty_mode = stamped["mode"]
+                self.honesty_extra = {
+                    key: value
+                    for key, value in stamped.items()
+                    if key not in {"marks", "mode", "seq"}
+                }
             case "usage.update":
                 self.rate_limits = list(stamped["rate_limits"])
             case "turn.result":
@@ -265,6 +449,39 @@ class FakeSession:
 
     # ------------------------------------------------------------------ requests
 
+    async def _honesty(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `honesty.trust` and `honesty.review` as a session with certification does.
+
+        A trust of a commit makes it the baseline; a trust of a file and a review take files
+        off the unreviewed list. Each sends `honesty.update` with the new state.
+
+        Args:
+            method: `honesty.trust` or `honesty.review`.
+            params: `{rev}` or `{path}` for a trust; nothing for a review.
+
+        Returns:
+            `{commit_id}` for a trusted commit, `{path}` for a trusted file, `{findings: 0}`
+            for a review.
+        """
+        extra = dict(self.honesty_extra)
+        result: dict[str, Any]
+        if method == "honesty.review":
+            extra.update(unreviewed=[], unreviewed_count=0, review_required=False)
+            result = {"findings": 0}
+        elif params.get("path"):
+            kept = [path for path in extra.get("unreviewed") or [] if path != params["path"]]
+            extra.update(unreviewed=kept, unreviewed_count=len(kept))
+            result = {"path": params["path"]}
+        else:
+            commit = "4f2a9c1d07" if params.get("rev") in {None, "", "HEAD"} else "9e8d7c6b5a"
+            extra["baseline"] = {"commit_id": commit, "source": "user"}
+            result = {"commit_id": commit}
+        await self.emit(
+            "honesty.update",
+            {"marks": list(self.honesty_marks), "mode": self.honesty_mode, **extra},
+        )
+        return result
+
     def _refuse(self, message: str) -> RequestFailed:
         """Build the error of a refused request.
 
@@ -294,6 +511,8 @@ class FakeSession:
         self.requests.append((method, params))
         if method in self.fail:
             raise self._refuse(self.fail[method])
+        if self.honesty_requests and method in {"honesty.trust", "honesty.review"}:
+            return await self._honesty(method, params)
         model = REQUESTS.get(method)
         if model is None:
             raise RequestFailed({"code": -32601, "message": f"unknown method {method}"})
@@ -333,7 +552,10 @@ class FakeSession:
                 kept = [mark for mark in self.honesty_marks if mark["id"] != params["mark_id"]]
                 if len(kept) == len(self.honesty_marks):
                     raise self._refuse(f"no open mark {params['mark_id']}")
-                await self.emit("honesty.update", {"marks": kept, "mode": self.honesty_mode})
+                await self.emit(
+                    "honesty.update",
+                    {"marks": kept, "mode": self.honesty_mode, **self.honesty_extra},
+                )
             case "side.ask":
                 if self.state in {"stopped", "failed", "starting"}:
                     raise self._refuse("no Claude session is running (send session.start first)")

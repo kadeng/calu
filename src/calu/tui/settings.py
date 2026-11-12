@@ -11,6 +11,8 @@
     toasts = true            # show a short notice for what happened elsewhere
     thinking = true          # show thinking in full (false: one line per block)
     panel_width = 36         # columns of the side panel on a wide terminal (28 to 60)
+    git_tool = "lazygit"     # the program f4 starts in the project directory (a command line);
+                             # the environment variable CALU_GIT_TOOL overrides it
 
     [keys]                   # other keys for the bindings, by binding id (the help page
     detach = "ctrl+q"        # lists the ids); several keys are separated by commas
@@ -47,6 +49,8 @@ class Settings:
     toasts: bool = True
     thinking: bool = True
     panel_width: int = 36
+    git_tool: str = ""
+    """The command line `f4` starts; "" picks the first installed one (`calu.tui.gittool`)."""
     keys: dict[str, str] = field(default_factory=dict)
     """Binding id -> the keys that replace its default, separated by commas."""
     problems: list[str] = field(default_factory=list)
@@ -110,6 +114,7 @@ def load(path: Path) -> Settings:
         "toasts": bool,
         "thinking": bool,
         "panel_width": int,
+        "git_tool": str,
     }
     for name, kind in wanted.items():
         if name not in raw:

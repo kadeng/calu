@@ -466,6 +466,95 @@ class Mark:
 
 
 @dataclass
+class Honesty:
+    """The honesty state of the session beyond mode and marks (`honesty.update`).
+
+    Today's session sends mode and marks only; then `reported` is False and every other field
+    keeps its default. A session that certifies commits also sends the fields below, and
+    `honesty_from` reads each of them with a default, so that both render.
+    """
+
+    reported: bool = False
+    """True if the session sent a baseline, unreviewed files or a review flag at all."""
+    baseline: str = ""
+    """The id of the trusted commit the session measures changes against; "" for none."""
+    baseline_source: str = ""
+    """Who established the trust of the baseline: "user", "review" or "check" ("" unknown)."""
+    baseline_subject: str = ""
+    """The subject line of the baseline commit, if the session sent it."""
+    unreviewed: list[str] = field(default_factory=list)
+    """Paths whose content no checker has verified; the session may send the first ones only."""
+    unreviewed_count: int = 0
+    """How many files are unreviewed (at least `len(unreviewed)`)."""
+    unreviewed_all: bool = False
+    """True without a baseline: every file counts as unreviewed."""
+    unreviewed_problem: str = ""
+    """Why the session could not list the unreviewed files ("" if it could)."""
+    review_required: bool = False
+    """True once more marks are open than `honesty.max_open_marks` allows."""
+    review_running: bool = False
+    """True while calu's honesty review judges the unreviewed files."""
+
+
+def honesty_from(raw: dict[str, Any]) -> Honesty:
+    """Read the honesty state from the params of `honesty.update` or from a snapshot.
+
+    Every field is optional and a value of an unexpected type counts as absent. Accepted
+    spellings: in the event `baseline`, `unreviewed`, `unreviewed_count`, `review_required`,
+    `review_running`; in a snapshot the same names with the prefix `honesty_`, or one object
+    `honesty` that holds them. `baseline` is a commit id or an object with `commit_id`,
+    `source` and `subject`; `unreviewed` is a list of paths or an object with `paths`,
+    `count`, `everything` and `problem`.
+
+    Args:
+        raw: The params or the snapshot as the session sent them.
+
+    Returns:
+        The state; `reported` is False if none of the fields was there.
+    """
+    nested = raw.get("honesty")
+    source: dict[str, Any] = nested if isinstance(nested, dict) else raw
+
+    def field_of(name: str) -> Any:
+        """Look a field up under its plain and its prefixed name.
+
+        Args:
+            name: The plain name.
+
+        Returns:
+            The value, or None if the session sent neither spelling.
+        """
+        return source.get(name, raw.get(f"honesty_{name}"))
+
+    names = ("baseline", "unreviewed", "unreviewed_count", "review_required", "review_running")
+    state = Honesty(reported=any(name in source or f"honesty_{name}" in raw for name in names))
+    baseline = field_of("baseline")
+    if isinstance(baseline, str):
+        state.baseline = baseline
+    elif isinstance(baseline, dict):
+        state.baseline = str(baseline.get("commit_id") or baseline.get("commit") or "")
+        state.baseline_source = str(baseline.get("source") or "")
+        state.baseline_subject = str(baseline.get("subject") or "")
+    unreviewed = field_of("unreviewed")
+    if isinstance(unreviewed, list):
+        state.unreviewed = [str(path) for path in unreviewed]
+    elif isinstance(unreviewed, dict):
+        paths = unreviewed.get("paths")
+        state.unreviewed = [str(path) for path in paths] if isinstance(paths, list) else []
+        state.unreviewed_all = bool(unreviewed.get("everything"))
+        state.unreviewed_problem = str(unreviewed.get("problem") or "")
+        if isinstance(unreviewed.get("count"), int):
+            state.unreviewed_count = unreviewed["count"]
+    count = field_of("unreviewed_count")
+    if isinstance(count, int) and not isinstance(count, bool):
+        state.unreviewed_count = count
+    state.unreviewed_count = max(state.unreviewed_count, len(state.unreviewed))
+    state.review_required = field_of("review_required") is True
+    state.review_running = field_of("review_running") is True
+    return state
+
+
+@dataclass
 class Limit:
     """The state of one usage limit of the Claude Code account (`usage.update`)."""
 
@@ -660,6 +749,7 @@ class SessionModel:
         self.auto_escalate = AutoEscalate()
         self.honesty_mode = "off"
         self.marks: list[Mark] = []
+        self.honesty = Honesty()
         self.queue: list[Queued] = []
         self.usage = Usage()
         self.blocks: list[Block] = []
@@ -882,6 +972,7 @@ class SessionModel:
         self.marks = [
             Mark(k.id, k.path, k.symbol, k.reason, k.git_branch) for k in snapshot.honesty_marks
         ]
+        self.honesty = honesty_from(raw)
         self.usage.limits = self._limits(snapshot.rate_limits)
         listed = {request.escalation_id for request in snapshot.escalations}
         for escalation_id in [key for key in self.decisions if key not in listed]:
@@ -1063,6 +1154,7 @@ class SessionModel:
                 self.marks = [
                     Mark(k.id, k.path, k.symbol, k.reason, k.git_branch) for k in event.marks
                 ]
+                self.honesty = honesty_from(params)
                 change.honesty = True
             case m.UsageUpdate():
                 self.usage.limits = self._limits(event.rate_limits)
