@@ -187,6 +187,8 @@ class DetailScreen(Screen[None]):
         self.escalation_id = escalation_id
         self.context: dict[str, Any] | None = None
         self.error = ""
+        self.text = ""
+        """The plain text of the body as last drawn."""
 
     def compose(self) -> ComposeResult:
         """Build the screen: a scrollable body and one line of keys.
@@ -226,6 +228,7 @@ class DetailScreen(Screen[None]):
             return
         view = app.view(width=max(30, self.size.width - 4))
         lines = detail_lines(decision, app.model, self.context, view, self.error)
+        self.text = "\n".join(line.plain.rstrip() for line in lines)
         self.query_one("#detail-body", Static).update(Group(*lines))
         armed = app.armed if app.armed_for == self.escalation_id else ""
         if armed:

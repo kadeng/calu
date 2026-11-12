@@ -35,12 +35,16 @@ class Picked(Message):
 class Line(Static):
     """One line of text: the status bar, the composer's header, the footer."""
 
+    text = ""
+    """The plain text of the line as last shown."""
+
     def show(self, line: Text) -> None:
         """Replace the line.
 
         Args:
             line: The new text.
         """
+        self.text = line.plain
         self.update(line)
 
 
@@ -55,6 +59,8 @@ class AgentTabs(Static):
         """
         super().__init__("", id=id)
         self._spans: list[tuple[int, int, str]] = []
+        self.text = ""
+        """The plain text of the row as last shown."""
 
     def show(self, line: Text, spans: list[tuple[int, int, str]]) -> None:
         """Replace the row.
@@ -64,6 +70,7 @@ class AgentTabs(Static):
             spans: `(first column, end column, tab key)` per tab.
         """
         self._spans = spans
+        self.text = line.plain
         self.update(line)
 
     def on_click(self, event: events.Click) -> None:
@@ -89,6 +96,8 @@ class Lines(Static):
         """
         super().__init__("", id=id)
         self._targets: dict[int, tuple[str, str]] = {}
+        self.text = ""
+        """The plain text of the lines as last shown, joined with newlines."""
 
     def show(self, lines: list[Text], targets: dict[int, tuple[str, str]] | None = None) -> None:
         """Replace the lines.
@@ -98,6 +107,7 @@ class Lines(Static):
             targets: Line index -> `(kind, key)` of what a click on that line selects.
         """
         self._targets = dict(targets or {})
+        self.text = "\n".join(line.plain.rstrip() for line in lines)
         self.update(Group(*lines) if lines else "")
 
     def on_click(self, event: events.Click) -> None:

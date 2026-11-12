@@ -11,7 +11,8 @@ continues after a sequence number; `protocol_connector` wraps `calu.protocol.cli
 printer: on the first attach it takes the replayed events and a snapshot; when the session
 closes the connection because this client fell behind, it connects again after the last event
 it applied, at most `calu.attach.MAX_RECONNECTS` times in a row without an event in between;
-when the session can no longer replay the missed events, it rebuilds the model from a snapshot.
+when the session can no longer replay the missed events, it forgets the session data, applies
+the events it did get and takes the rest from a snapshot.
 """
 
 from collections.abc import Callable
@@ -146,6 +147,8 @@ class Link:
         self._stale = anyio.Event()
         self._replaying = False
         self._seen_event = False
+        self._held: list[tuple[str, dict[str, Any]]] | None = None
+        """The events replayed by a reconnect, until it is known whether a gap precedes them."""
 
     def detach(self) -> None:
         """Ask `run` to close the connection and return. The session keeps running."""
@@ -155,12 +158,17 @@ class Link:
         """Apply one event to the model and report the change.
 
         A replayed event gets no time. A change of the session state that involves a start
-        marks the snapshot as stale, because model and effort are not part of any event.
+        marks the snapshot as stale, because model and effort are not part of any event. While
+        a reconnect replays, the events are held back until `run` knows whether the replay
+        continues without a gap (`_release`).
 
         Args:
             method: The notification method.
             params: Its params.
         """
+        if self._held is not None:
+            self._held.append((method, params))
+            return
         change = Change()
         if not self._seen_event:
             self._seen_event = True
@@ -180,12 +188,34 @@ class Link:
         if change:
             self.notify(change)
 
-    async def _snapshot(self, connection: Connection, rebuild: bool) -> None:
+    async def _release(self, rebuild: bool) -> None:
+        """Apply the events a reconnect replayed, after a reset if a gap precedes them.
+
+        Args:
+            rebuild: The session could not replay every missed event: forget the session data
+                first and say so in the transcript; the replayed events follow that line.
+        """
+        held, self._held = self._held or [], None
+        if rebuild:
+            self.model.reset()
+            change = Change(rebuilt=True)
+            change.merge(
+                self.model.note(
+                    "the session could not replay every event this client missed: "
+                    "the view was rebuilt from the session's current state"
+                )
+            )
+            self.notify(change)
+        self._replaying = True
+        for method, params in held:
+            await self._on_event(method, params)
+        self._replaying = False
+
+    async def _snapshot(self, connection: Connection) -> None:
         """Ask for `state.get` and load it into the model.
 
         Args:
             connection: The open connection.
-            rebuild: Reset the model first, because events were lost.
 
         Raises:
             RequestFailed: If the session refused the request.
@@ -193,15 +223,6 @@ class Link:
         """
         snapshot = await connection.request("state.get")
         change = Change()
-        if rebuild:
-            self.model.reset()
-            change.rebuilt = True
-            change.merge(
-                self.model.note(
-                    "the session could not replay every event this client missed: "
-                    "the view was rebuilt from the session's current state"
-                )
-            )
         if isinstance(snapshot, dict):
             self.capabilities = capabilities(snapshot)
             change.merge(self.model.load_snapshot(snapshot, self.clock()))
@@ -220,11 +241,14 @@ class Link:
         first = True
         while not self.stop.is_set():
             self._replaying = True
+            self._held = None if first else []
             try:
                 async with self.connector(self._on_event, after_seq) as connection:
                     self._replaying = False
                     self.connection = connection
-                    await self._snapshot(connection, rebuild=not first and not connection.complete)
+                    if not first:
+                        await self._release(rebuild=not connection.complete)
+                    await self._snapshot(connection)
                     first = False
                     self.notify(self.model.set_connection("attached"))
                     while not (self.stop.is_set() or connection.closed.is_set()):
@@ -232,7 +256,7 @@ class Link:
                         if self._stale.is_set():
                             self._stale = anyio.Event()
                             if not (self.stop.is_set() or connection.closed.is_set()):
-                                await self._snapshot(connection, rebuild=False)
+                                await self._snapshot(connection)
                     if connection.last_seq > after_seq:
                         reconnects = 0
                     after_seq = connection.last_seq

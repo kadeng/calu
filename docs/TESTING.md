@@ -5,7 +5,7 @@ does. The default run needs nothing but the repository.
 
 | Layer | Marker | Needs | How long |
 |---|---|---|---|
-| Unit | none | nothing (a few spawn `python -m calu` or a stub `docker`) | ~15 s |
+| Unit | none | nothing (a few spawn `python -m calu` or a stub `docker`) | ~1.5 min |
 | Database | `db` | PostgreSQL (`docker compose up -d caludb --wait`) | ~20 s |
 | Browser | `browser` (and `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
@@ -34,8 +34,37 @@ a public address. The first three need neither Docker nor a database; coverage d
 code that runs in a child process -- `calu/acp/serve.py` and the input loop of
 `calu/attach.py` are exercised end to end while reporting as uncovered.
 
-Sync with `uv sync --all-extras`: the web interface is an optional extra (`web`), and the tests
-that need it skip without it with a message saying so, rather than failing to collect.
+Sync with `uv sync --all-extras`: the web interface and the full-screen terminal client are
+optional extras (`web`, `tui`), and the tests that need them skip without them with a message
+saying so, rather than failing to collect.
+
+### The full-screen terminal client (`calu attach`)
+
+The client (`src/calu/tui/`) is tested in the unit layer, without a terminal, a database or
+`claude`; its tests take about 40 s of the unit run.
+
+| File | What it drives | With |
+|---|---|---|
+| `test_tui_model.py` | `calu.tui.model`: the state as a reducer over protocol events (joins by tool call, questions, subagents, usage, side questions); `HANDLED` must equal the protocol's `EVENTS` | nothing |
+| `test_tui_render.py` | `calu.tui.render`: every line the client draws, compared as plain text | Rich only |
+| `test_tui_actions.py` | `calu.tui.actions` and the reconnect loop of `calu.tui.connection`: the exact request of each intention, refusals, falling behind, a revoked token; the command table against the line client's `HELP` | the scripted session `calu.tui.fake` |
+| `test_tui_app.py` | the Textual app under `App.run_test()` with `Pilot` pressing keys: sending in each mode, `a a`/`d d`/note, questions, the detail view, agent switching, side questions, the scrolling rules (the scroll offset and every visible line stay while output arrives), 80x24 and 120x36, a session of 2,000 steps | the scripted session |
+| `test_tui_process.py` | the app over `protocol_connector` against a real `SessionServer`, session and fake runner: a turn, an escalation, a side question, the detail view, a model change; and which client `calu attach` starts | a real WebSocket |
+| `test_protocol_side_usage.py` | the requests `side.ask`, `usage.get`, `model.set` and the event `usage.update` through the fake runner | a real WebSocket |
+
+`calu.tui.scenarios` holds the scripted sessions (a turn, an escalation, subagents with a
+question, a set of questions, 2,000 steps); the tests, the screenshots and the demo use the
+same ones.
+
+```bash
+uv run python -m calu.tui showcase                 # the client on a scripted session, to look at
+uv run python scripts/tui_screenshots.py /tmp/shots   # 13 states at 120x36 and 80x24, SVG and PNG
+```
+
+`scripts/tui_screenshots.py` runs the client headless with a clock it controls and writes each
+state as SVG; with the headless Chromium of the browser layer (`scripts/get-browser.sh`) it also
+renders a PNG beside each. Look at the pictures after a change to `render.py` or `tui.tcss`:
+the tests compare texts, not alignment or colour.
 
 ## Continuous integration
 
@@ -144,6 +173,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_q1b_shell_prefix.sh` | Can `CLAUDE_CODE_SHELL_PREFIX` wrap every command? (the fallback) | the CLI changes |
 | `spike_q7_structured_check.sh` | Can `claude -p --json-schema` serve as a checker model? (D16) | considering that model type |
 | `spike_hook_timeout.py` | Does a hook that misses its timeout let the call run? (D23) | **every CLI update: the whole gate rests on it** |
+| `side_question.py` | Does a headless Claude Code answer a side question (`/btw`) while a turn runs, and stay out of the conversation? Does `get_context_usage` answer in a running turn? (`side.ask`, `usage.get`) | the CLI or the SDK changes |
 | `spike_question_tool.py` | Does `AskUserQuestion` reach the hook, and can calu answer it? (D35) | the CLI changes |
 | `spike_fork_session.py` | Can a conversation be forked at an earlier turn? (D36) | the SDK changes |
 | `spike_auto_mode_ask.py` | Does auto mode ask rather than only allow or deny? (D38) | the CLI changes |
@@ -272,6 +302,18 @@ escalation resolved from the database alone.
    warnings, that auto mode's classifier is NOT active; with `calu config set
    claude.permission_mode auto` the session must report the mode "auto" when it starts.
    `calu doctor` must show an `auto mode` line in both cases.
+21. The full-screen client in a real terminal (`calu attach` beside a `calu run`): in tmux and
+   over ssh without `COLORTERM` (the verdict words and the state must stay readable in 256
+   colours); at 80x24 (`f2` opens the side panel over the transcript); scroll up with PageUp
+   and the mouse wheel while Claude writes — the visible lines must not move, `End` returns;
+   `alt+←/→` through the subagents of a session that started two; an escalation answered
+   with `a a` and one with `d d` after a note (`n`); `w` on an escalation, and back with `w`;
+   `/btw <question>` while a command runs — the answer appears in the side panel, the turn goes
+   on, and the next turn does not know the question; `alt+c` copies (OSC 52: needs
+   `set -g set-clipboard on` in tmux); kill and restart `calu run` while attached (the status
+   bar says why the connection ended; `ctrl+d` leaves); two clients on one escalation (the
+   other one reports "decided elsewhere"); `calu attach --plain` and `calu attach | cat` give
+   the line client.
 
 ## Measuring the checkers
 

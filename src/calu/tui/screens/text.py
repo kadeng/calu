@@ -27,6 +27,17 @@ class TextScreen(Screen[None]):
         self.title_text = title
         self.body = body
 
+    @property
+    def text(self) -> str:
+        """The plain text of the body, for tests.
+
+        Returns:
+            The lines joined with newlines; for another renderable its Markdown source or "".
+        """
+        if isinstance(self.body, list):
+            return "\n".join(line.plain for line in self.body)
+        return str(getattr(self.body, "markup", ""))
+
     def compose(self) -> ComposeResult:
         """Build the page: title, scrollable body, one line of keys.
 

@@ -222,6 +222,7 @@ class CaluApp(App[None]):
         self.register_theme(CALU_LIGHT)
         self.transcript.thinking_open = self.options.show_thinking
         self.composer.intercept = self._composer_key
+        self.composer.cursor_blink = self.live
         self._apply_theme(self.options.theme)
         self._breakpoints()
         self.run_worker(self._run_link(), name="link", group="link", exit_on_error=False)
@@ -705,9 +706,7 @@ class CaluApp(App[None]):
         self._render_footer()
 
     def on_text_area_changed(self) -> None:
-        """Clear a shown message and redraw header and footer when the composer's text changes."""
-        if self.composer.text:
-            self.message = ""
+        """Redraw header and footer when the composer's text changes."""
         self._render_head()
         self._render_footer()
 
@@ -782,6 +781,9 @@ class CaluApp(App[None]):
         """
         key = event.key
         composer = self.composer
+        if self.message:
+            self.message = ""  # a message stays until the next key
+            self._render_head()
         if self.armed:
             letter = self.armed[0]
             if key == letter:
@@ -1249,7 +1251,7 @@ class CaluApp(App[None]):
             return
         reason = command.unavailable(self.capabilities)
         if reason:
-            self.flash(f"{command.title}: {reason}", error=True)
+            self.flash(f"{command.name or command.title}: {reason}", error=True)
             return
         handler = getattr(self, f"_cmd_{command_id}", None)
         if handler is None:

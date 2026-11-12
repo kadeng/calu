@@ -1133,8 +1133,11 @@ def card_lines(
         )
     if armed:
         again = "a" if armed == "allow" else "d"
-        rule = "This step matched a deny rule. " if decision.by_rule and armed == "allow" else ""
-        text = f"{rule}Press {again} again to {armed}. Any other key types."
+        text = f"press {again} again to {armed} · any other key types"
+        if decision.by_rule and armed == "allow":
+            text = f"Stopped by a deny rule: {text}"
+        else:
+            text = text.capitalize()
         style = f"bold {palette.orange if armed == 'allow' else palette.red}"
         lines.append(Text("  " + cut(text, view.width - 4), style))
     else:
@@ -1339,6 +1342,7 @@ def panel_lines(
             (f" {name:<8} ", palette.muted), (cut(value, width - 11), style or palette.fg)
         )
 
+    missing = NOT_AVAILABLE if width >= len(NOT_AVAILABLE) + 11 else "not available"
     cost = cost_text(usage.cost) or "no turn has ended yet"
     lines.append(
         figure(
@@ -1352,7 +1356,7 @@ def panel_lines(
         )
     )
     if not caps.has("context_fill"):
-        lines.append(figure("context", NOT_AVAILABLE, palette.faint))
+        lines.append(figure("context", missing, palette.faint))
     elif usage.context is None:
         lines.append(figure("context", "not known yet (/usage asks)", palette.faint))
     else:
@@ -1366,7 +1370,7 @@ def panel_lines(
         )
         lines.append(Text("          " + meter(context.percent / 100, width - 12), palette.accent))
     if not caps.has("rate_limits"):
-        lines.append(figure("quota", NOT_AVAILABLE, palette.faint))
+        lines.append(figure("quota", missing, palette.faint))
     elif not usage.limits:
         lines.append(figure("quota", "no limit reported", palette.faint))
     for limit in usage.limits:

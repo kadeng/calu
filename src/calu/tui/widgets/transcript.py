@@ -286,13 +286,22 @@ class Transcript(ScrollView, can_focus=True):
             entry.strips[offset].crop_extend(0, width, self.rich_style).apply_style(self.rich_style)
         )
 
-    def first_visible_text(self) -> str:
-        """Return the text of the first visible line, for tests of the scrolling rules.
+    def visible_text(self) -> list[str]:
+        """Return the text of the visible lines, for tests of what the user sees.
 
         Returns:
-            The plain text of that line.
+            One string per line of the widget, top to bottom, without trailing spaces.
         """
-        return self.render_line(0).text
+        height = self.scrollable_content_region.height
+        return [self.render_line(y).text.rstrip() for y in range(height)]
+
+    def all_text(self) -> list[str]:
+        """Return the text of every line of the tab, visible or not.
+
+        Returns:
+            One string per line, top to bottom, without trailing spaces.
+        """
+        return [strip.text.rstrip() for entry in self._entries for strip in entry.strips]
 
     # ------------------------------------------------------------------ scrolling
 

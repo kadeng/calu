@@ -30,6 +30,7 @@ Screen {
 }
 
 #agent-head {
+    width: 100%;
     display: none;
     height: 2;
     background: $surface;
@@ -40,11 +41,11 @@ Screen {
 }
 
 #transcript {
+    width: 100%;
     height: 1fr;
     background: $background;
-    overflow-x: hidden;
-    overflow-y: scroll;
-    scrollbar-size-vertical: 1;
+    overflow: hidden scroll;
+    scrollbar-size: 0 1;
     scrollbar-background: $background;
     scrollbar-color: $panel;
     scrollbar-color-hover: $primary;
@@ -52,6 +53,7 @@ Screen {
 }
 
 #new-below {
+    width: 100%;
     height: 1;
     display: none;
     background: $background;
@@ -93,12 +95,14 @@ Screen {
 }
 
 #composer-head {
+    width: 100%;
     height: 1;
     background: $surface;
     padding: 0 1;
 }
 
 #composer-row {
+    width: 100%;
     height: auto;
     background: $surface;
     padding: 0 1 0 1;
