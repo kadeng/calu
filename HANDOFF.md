@@ -633,6 +633,13 @@ Everything else is either built or recommended with its reasons. These need a pe
   The visible half of the third option is built (D141: `<not a file of its step>` in
   `calu honesty list`, a tag on the web pages, `beyond_step` in the protocol), because it
   restricts nothing; whether such a mark should also **block** less is still yours to decide.
+- **Routes for the tools Claude Code 2.1.319 added** (D154): a session names them at start
+  (CronCreate, CronDelete, CronList, DesignSync, EnterWorktree, ExitWorktree, ListAgents,
+  PushNotification, ReportFindings, ScheduleWakeup, TaskStop, Workflow); all of them go to the
+  command checker. `Monitor` got its route because it runs shell commands (D156), and worktrees
+  are judged correctly (D155). Whether `EnterWorktree`, `CronCreate` or `PushNotification`
+  (which sends text off the machine) should always ask is a default:
+  `calu config set tool_routes '{"PushNotification": "escalate"}'` is the form.
 - **Q16 — whether a push, a deploy or a publish should be a deny rule** rather than a
   checker's judgement, which is the same finding from the other side. My recommendation (b)
   is now one command away, `calu rules add-set publishing` (D143); whether the set goes into
