@@ -11,8 +11,16 @@ import shutil
 from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 
+from dotenv import dotenv_values
+
 from calu.claude_model import is_cli_model
-from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
+from calu.config import (
+    KEYLESS_PREFIXES,
+    PROVIDER_KEYS,
+    PROVIDER_KEYS_BY_PREFIX,
+    Config,
+    user_env_file,
+)
 from calu.credentials import CredentialError, CredentialStore
 from calu.herd import STALE_AFTER_S
 
@@ -122,6 +130,53 @@ def key_warnings(config: Config, environ: Mapping[str, str] | None = None) -> li
             f"{' or '.join(keys)} is not set, but {prefix!r} models are configured for: "
             f"{', '.join(sorted(roles))}. Put the key in {user_env_file()} or in calu's "
             f"environment; until then {'; '.join(consequence)}."
+        )
+    return warnings
+
+
+def unknown_provider_warnings(config: Config, env_file: Path | None = None) -> list[str]:
+    """Name checker model providers whose API key calu cannot hide from Claude Code by itself.
+
+    calu blanks three sets of variables in the environment of the Claude Code process: the
+    fixed `PROVIDER_KEYS`, every name defined in calu's env file, and the names in the
+    `hidden_env` setting. A model of another provider (Pydantic AI supports many) whose key is
+    exported in the shell that starts calu is in none of them, so Claude Code and every command
+    it runs would inherit the key. The variable is assumed to be `<PROVIDER>_API_KEY`, which is
+    what Pydantic AI's providers read; a provider with another variable name still gets the
+    warning until its name is in `hidden_env` under that assumed spelling or the key is in the
+    env file.
+
+    Args:
+        config: The session configuration.
+        env_file: calu's env file; None uses `user_env_file()`. A missing or unreadable file
+            defines nothing.
+
+    Returns:
+        One warning per provider prefix that is neither in `PROVIDER_KEYS_BY_PREFIX` nor in
+        `KEYLESS_PREFIXES` and whose assumed key variable is hidden by none of the three sets.
+    """
+    path = env_file or user_env_file()
+    try:
+        in_file = set(dotenv_values(path)) if path.is_file() else set()
+    except OSError:
+        in_file = set()
+    hidden = PROVIDER_KEYS | in_file | set(config.hidden_env)
+    roles_by_provider: dict[str, list[str]] = {}
+    for role, model in configured_models(config).items():
+        prefix, colon, _ = model.partition(":")
+        if colon and prefix not in PROVIDER_KEYS_BY_PREFIX and prefix not in KEYLESS_PREFIXES:
+            roles_by_provider.setdefault(prefix, []).append(role)
+    warnings: list[str] = []
+    for prefix, roles in roles_by_provider.items():
+        variable = prefix.upper().replace("-", "_") + "_API_KEY"
+        if variable in hidden:
+            continue
+        warnings.append(
+            f"calu does not know which environment variable holds the API key of {prefix!r} "
+            f"models (configured for: {', '.join(sorted(roles))}), so it cannot hide that key "
+            "from Claude Code and its commands if the key is exported in calu's environment. "
+            f"Put the key in {path} (every variable there is hidden), or name the variable: "
+            f"`calu config add hidden_env {variable}`."
         )
     return warnings
 
@@ -413,6 +468,124 @@ def setting_source_warnings(
     ]
 
 
+SANDBOX_LIST_KEYS = (
+    ("excludedCommands", ("excludedCommands",), "excluded_commands"),
+    ("filesystem.allowRead", ("filesystem", "allowRead"), None),
+    ("filesystem.allowWrite", ("filesystem", "allowWrite"), None),
+    ("network.allowedDomains", ("network", "allowedDomains"), "allowed_domains"),
+    ("network.allowUnixSockets", ("network", "allowUnixSockets"), "allow_unix_sockets"),
+)
+"""Lists of a settings file's `sandbox` object that widen the sandbox: the name for a message,
+the path of keys inside `sandbox`, and the `SandboxConfig` field that holds calu's own list
+(None: calu has no such list, so every entry goes beyond its configuration)."""
+
+SANDBOX_SWITCH_KEYS = (
+    ("enabled", ("enabled",), False),
+    ("allowUnsandboxedCommands", ("allowUnsandboxedCommands",), True),
+    ("enableWeakerNestedSandbox", ("enableWeakerNestedSandbox",), True),
+    ("enableWeakerNetworkIsolation", ("enableWeakerNetworkIsolation",), True),
+    ("network.allowAllUnixSockets", ("network", "allowAllUnixSockets"), True),
+    ("network.allowLocalBinding", ("network", "allowLocalBinding"), True),
+)
+"""Switches of a settings file's `sandbox` object and the value of each that weakens the
+sandbox: the name for a message, the path of keys inside `sandbox`, the weakening value."""
+
+
+def settings_file_sandbox_warnings(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> list[str]:
+    """Name sandbox entries of Claude Code's settings files that go beyond calu's configuration.
+
+    calu's sandbox settings come from the database and reach Claude Code as `--settings`, which
+    has precedence over the settings files (PLAN.md D15). The files of the loaded sources
+    (`claude.setting_sources`: `~/.claude/settings.json`, `<workspace>/.claude/settings.json`,
+    `<workspace>/.claude/settings.local.json`) may still hold a `sandbox` object, and two of
+    them are files a session can edit. Measured with CLI 2.1.319: `filesystem.allowRead` and
+    `network.allowedDomains` of the project and the local file have no effect while
+    `--settings` carries a `sandbox` object. Claude Code's documentation describes these lists
+    as merged across scopes, so another CLI version may honour them; this warning makes such
+    entries visible at every start instead of leaving that to a version check.
+
+    It reads files only; a file that is missing, unreadable or not a JSON object is skipped.
+
+    Args:
+        config: The session configuration, with the project's network policy applied.
+        home: The home directory; None uses `Path.home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        One warning per file that has such entries, naming each entry; [] when the sandbox is
+        off (nothing can be widened) or no loaded file goes beyond calu's configuration. A list
+        entry counts as "beyond" when calu's own list does not hold it (for domains: unless
+        calu allows every domain); a switch counts when it has its weakening value and calu's
+        configuration does not say the same.
+    """
+    sandbox = config.claude.sandbox
+    if not sandbox.enabled:
+        return []
+    sources = set(config.claude.setting_sources)
+    home = home if home is not None else Path.home()
+    files: list[tuple[str, Path]] = []
+    if "user" in sources:
+        files.append(("~/.claude/settings.json", home / ".claude" / "settings.json"))
+    if workspace is not None and "project" in sources:
+        files.append((".claude/settings.json", workspace / ".claude" / "settings.json"))
+    if workspace is not None and "local" in sources:
+        files.append((".claude/settings.local.json", workspace / ".claude" / "settings.local.json"))
+    own_switches = {
+        "allowUnsandboxedCommands": sandbox.allow_unsandboxed_commands,
+        "enableWeakerNestedSandbox": sandbox.weaker_nested_sandbox,
+    }
+    warnings: list[str] = []
+    for label, path in files:
+        found = _json_object(path).get("sandbox")
+        if not isinstance(found, dict):
+            continue
+        beyond: list[str] = []
+        for name, keys, field in SANDBOX_LIST_KEYS:
+            value = _nested(found, keys)
+            if not isinstance(value, list):
+                continue
+            own = set(getattr(sandbox, field)) if field else set()
+            if name == "network.allowedDomains" and "*" in own:
+                continue
+            extra = [str(entry) for entry in value if str(entry) not in own]
+            if extra:
+                beyond.append(f"{name}: {', '.join(extra)}")
+        for name, keys, weak in SANDBOX_SWITCH_KEYS:
+            if _nested(found, keys) is weak and own_switches.get(name) is not weak:
+                beyond.append(f"{name}: {json.dumps(weak)}")
+        if beyond:
+            warnings.append(
+                f"{label} holds sandbox settings that go beyond calu's configuration "
+                f"({'; '.join(beyond)}). calu passes its own sandbox settings with --settings, "
+                "which has precedence, and with Claude Code 2.1.319 such entries of the "
+                "project's files were measured to have no effect; Claude Code's documentation "
+                "describes the lists as merged, so another version may honour them. Remove "
+                "them from the file, and put what the session needs into calu's configuration "
+                "(e.g. `calu config add claude.sandbox.allowed_domains <domain>`)."
+            )
+    return warnings
+
+
+def _nested(document: dict[str, object], keys: tuple[str, ...]) -> object:
+    """Look up a value below nested JSON objects.
+
+    Args:
+        document: The outer object.
+        keys: The keys from the outside in.
+
+    Returns:
+        The value, or None if a key is missing or a level is not an object.
+    """
+    value: object = document
+    for key in keys:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(key)
+    return value
+
+
 def _json_object(path: Path) -> dict[str, object]:
     """Read a JSON object from a file, or return {} if it is missing or not a JSON object.
 
@@ -442,17 +615,19 @@ def warnings(
         environ: The environment to inspect; None uses `os.environ`.
         checkers: Names of the enabled checker definitions, for the checks that depend on
             which checkers exist rather than only on the configuration.
-        workspace: The project directory, for `setting_source_warnings`; None skips the
-            project-local file.
+        workspace: The project directory, for `setting_source_warnings` and
+            `settings_file_sandbox_warnings`; None skips the project's files.
 
     Returns:
         The warnings of `sandbox_warnings`, `key_warnings`, `change_warnings`,
         `network_warnings`, `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`,
-        `bedrock_warnings`, `setting_source_warnings` and `self_approval_warnings`.
+        `bedrock_warnings`, `setting_source_warnings`, `settings_file_sandbox_warnings`,
+        `unknown_provider_warnings` and `self_approval_warnings`.
     """
     return (
         sandbox_warnings(config)
         + key_warnings(config, environ)
+        + unknown_provider_warnings(config)
         + change_warnings(config)
         + network_warnings(config)
         + heartbeat_warnings(config)
@@ -460,5 +635,6 @@ def warnings(
         + cli_model_warnings(config)
         + bedrock_warnings(config)
         + setting_source_warnings(config, workspace=workspace)
+        + settings_file_sandbox_warnings(config, workspace=workspace)
         + self_approval_warnings(config)
     )

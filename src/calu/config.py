@@ -111,6 +111,48 @@ class ContextConfig(ConfigModel):
     the context prefix."""
 
 
+def calu_private_paths(environ: Mapping[str, str] | None = None) -> list[str]:
+    """Return the directories that hold calu's own secrets and state on this machine.
+
+    These are the directory of the credential store and of the env file with the checker API
+    keys (`calu.credentials.default_path`, `user_env_file`: `$XDG_CONFIG_HOME/calu`) and the
+    directory above the snapshot repositories (`calu.changes.default_root`:
+    `$XDG_STATE_HOME/calu`). The two literal defaults `~/.config/calu` and `~/.local/state/calu`
+    are always included as well, so a variable that is set for calu and unset elsewhere cannot
+    uncover them.
+
+    `SandboxConfig.settings` adds these paths to the sandbox's read deny list whatever the
+    configured `deny_read` holds: the protection of calu's own files is not a setting.
+
+    Args:
+        environ: The environment to read `XDG_CONFIG_HOME` and `XDG_STATE_HOME` from; None
+            uses `os.environ`.
+
+    Returns:
+        The paths without duplicates, the literal defaults first. A path below the home
+        directory is written with "~", as Claude Code's settings expect.
+
+    Example:
+        With `XDG_CONFIG_HOME=/srv/cfg` and no `XDG_STATE_HOME`:
+        `["~/.config/calu", "~/.local/state/calu", "/srv/cfg/calu"]`.
+    """
+    env = os.environ if environ is None else environ
+    paths = ["~/.config/calu", "~/.local/state/calu"]
+    home = Path.home()
+    for variable, fallback in (
+        ("XDG_CONFIG_HOME", home / ".config"),
+        ("XDG_STATE_HOME", home / ".local" / "state"),
+    ):
+        directory = Path(env.get(variable) or fallback) / "calu"
+        try:
+            text = "~/" + directory.relative_to(home).as_posix()
+        except ValueError:
+            text = str(directory)
+        if text not in paths:
+            paths.append(text)
+    return paths
+
+
 DEFAULT_DENY_READ = (
     "~/.config/calu",
     "~/.local/state/calu",
@@ -130,7 +172,10 @@ DEFAULT_DENY_READ = (
 )
 """Paths that sandboxed commands must not read (PLAN.md D15): calu's encrypted credentials,
 Claude Code's own credentials, SSH, cloud and registry credentials. Claude Code's built-in
-defaults additionally deny the container sockets, `/run/dbus` and `/run/user`."""
+defaults additionally deny the container sockets, `/run/dbus` and `/run/user`.
+
+The two calu entries are listed for the reader of the setting; removing them changes nothing,
+because `SandboxConfig.settings` always adds `calu_private_paths()`."""
 
 
 DEFAULT_ALLOWED_DOMAINS = (
@@ -186,7 +231,7 @@ Measured with the real CLI (`spikes/RESULTS.md`, "The sandbox's network policy")
 runs a filtering HTTP proxy and exports it as `HTTPS_PROXY`, and raw TCP is blocked whatever the
 policy says. So the three policies are expressed through the proxy's allow list:
 
-    none    no `network` key at all: nothing is reachable, not even through the proxy
+    none    `allowedDomains` = []: nothing is reachable, not even through the proxy
     proxy   `allowedDomains` = the configured list: only those domains
     full    `allowedDomains` = ["*"]: everything, minus `deniedDomains`, which still wins
 """
@@ -197,8 +242,18 @@ class SandboxConfig(ConfigModel):
 
     calu passes these settings with `--settings`, which overrides the project's and the user's
     settings files, so the agent cannot switch the sandbox off by writing
-    `.claude/settings.json`. The sandbox needs `bwrap` and `socat` on the machine
+    `.claude/settings.json`. `settings()` writes every key that can widen the sandbox, also
+    when its value is empty, so that no key is left for a settings file to fill. Measured with
+    CLI 2.1.319: while `--settings` carries a `sandbox` object, `filesystem.allowRead` and
+    `network.allowedDomains` of the project's `.claude/settings.json` and
+    `.claude/settings.local.json` have no effect (alone, the same files do re-open a denied
+    path and a domain). `calu.preflight.settings_file_sandbox_warnings` names such entries at
+    every start, because Claude Code's documentation describes these lists as merged across
+    scopes and a later CLI may do that. The sandbox needs `bwrap` and `socat` on the machine
     (`calu.preflight`).
+
+    calu's own directories (`calu_private_paths()`) are always on the read deny list; the
+    `deny_read` setting holds further paths and cannot remove them.
 
     `fail_if_unavailable` makes Claude Code refuse to start without a working sandbox, instead
     of running commands unsandboxed. `allow_unsandboxed_commands` False stops a call from
@@ -234,7 +289,9 @@ class SandboxConfig(ConfigModel):
     lists."""
     deny_read: list[str] = Field(default_factory=lambda: list(DEFAULT_DENY_READ))
     """Paths a sandboxed command must not read (see `DEFAULT_DENY_READ`). Edit single
-    entries with `calu config add|remove claude.sandbox.deny_read <path>`."""
+    entries with `calu config add|remove claude.sandbox.deny_read <path>`. calu's own
+    directories (its credentials, its env file with the checker keys, its snapshots) are
+    denied whatever this list holds, also when it is empty."""
     allowed_domains: list[str] = Field(default_factory=list)
     """Domains a sandboxed command may reach through the sandbox's HTTP proxy; `["*"]` is
     every domain and an empty list is none. A project's network policy sets this
@@ -265,37 +322,58 @@ class SandboxConfig(ConfigModel):
             return self.model_copy(update={"allowed_domains": ["*"]})
         return self
 
+    def denied_read_paths(self) -> list[str]:
+        """Return the read deny list as Claude Code gets it.
+
+        Returns:
+            `calu_private_paths()` followed by the entries of `deny_read`, without duplicates.
+            Never empty: calu's own directories are denied whatever `deny_read` holds.
+        """
+        paths = calu_private_paths()
+        for path in self.deny_read:
+            if path not in paths:
+                paths.append(path)
+        return paths
+
     def settings(self) -> dict[str, Any]:
         """Return the Claude Code settings document for `--settings`.
 
+        Every key that can widen the sandbox is written, also with an empty or false value:
+        `excludedCommands`, `enableWeakerNestedSandbox`, `filesystem.denyRead`,
+        `filesystem.allowRead` (always empty: calu re-opens nothing inside a denied path),
+        `network.allowedDomains`, and `network.allowAllUnixSockets` and
+        `network.allowLocalBinding` (always false: calu has no setting for them). A key calu
+        left out would be one that only the settings files define.
+
         Returns:
-            `{"sandbox": {...}}` with the keys Claude Code expects (camel case). The `network`
-            and `filesystem` entries are left out when they would be empty.
+            `{"sandbox": {...}}` with the keys Claude Code expects (camel case).
+            `filesystem.denyRead` is `denied_read_paths()`. `network.deniedDomains` and
+            `network.allowUnixSockets` are left out when they are empty.
 
         Example:
-            `SandboxConfig().settings()["sandbox"]["failIfUnavailable"]` is True.
+            `SandboxConfig().settings()["sandbox"]["failIfUnavailable"]` is True, and
+            `SandboxConfig(deny_read=[]).settings()["sandbox"]["filesystem"]["denyRead"]`
+            still starts with "~/.config/calu".
         """
+        network: dict[str, Any] = {
+            "allowedDomains": list(self.allowed_domains),
+            "allowAllUnixSockets": False,
+            "allowLocalBinding": False,
+        }
+        if self.denied_domains:
+            network["deniedDomains"] = list(self.denied_domains)
+        if self.allow_unix_sockets:
+            network["allowUnixSockets"] = list(self.allow_unix_sockets)
         sandbox: dict[str, Any] = {
             "enabled": self.enabled,
             "failIfUnavailable": self.fail_if_unavailable,
             "allowUnsandboxedCommands": self.allow_unsandboxed_commands,
             "autoAllowBashIfSandboxed": self.auto_allow_bash,
+            "enableWeakerNestedSandbox": self.weaker_nested_sandbox,
+            "excludedCommands": list(self.excluded_commands),
+            "filesystem": {"denyRead": self.denied_read_paths(), "allowRead": []},
+            "network": network,
         }
-        if self.weaker_nested_sandbox:
-            sandbox["enableWeakerNestedSandbox"] = True
-        if self.excluded_commands:
-            sandbox["excludedCommands"] = list(self.excluded_commands)
-        if self.deny_read:
-            sandbox["filesystem"] = {"denyRead": list(self.deny_read)}
-        network: dict[str, Any] = {}
-        if self.allowed_domains:
-            network["allowedDomains"] = list(self.allowed_domains)
-        if self.denied_domains:
-            network["deniedDomains"] = list(self.denied_domains)
-        if self.allow_unix_sockets:
-            network["allowUnixSockets"] = list(self.allow_unix_sockets)
-        if network:
-            sandbox["network"] = network
         return {"sandbox": sandbox}
 
 
@@ -318,13 +396,19 @@ class ClaudeConfig(ConfigModel):
     with the AWS credentials of the environment (e.g. an EC2 instance role or `AWS_PROFILE`);
     false (default) leaves the variable as it is.
 
-    `permission_mode`: None (default) leaves the permission mode to Claude Code, whose own
-    default is the auto mode — the intended way to run calu, because then a step runs only if
-    the checkers (or the allow lists) **and** auto mode's classifier approve it (PLAN.md D5).
-    calu does not set the mode: changing it away from auto is a deliberate act of the user, in
-    Claude Code's own settings or here. Whatever the mode ends up being, the checkers work: the
-    hook reads the effective mode from its input, defers a PASS to the classifier where the mode
-    is "auto", and otherwise answers "allow" itself, so that the checkers decide alone (D21).
+    `permission_mode`: None (default) leaves the permission mode to Claude Code, which takes
+    it from its own settings (`permissions.defaultMode`). Measured with CLI 2.1.319: a headless
+    start without that setting reports the mode "default", not "auto". The auto mode is the
+    intended way to run calu, because then a step runs only if the checkers (or the allow
+    lists) **and** auto mode's classifier approve it (PLAN.md D5); set "auto" here or in Claude
+    Code's settings to get it. Whatever the mode ends up being, the checkers work: the hook
+    reads the effective mode from its input, defers a PASS to the classifier where the mode is
+    "auto", and otherwise answers "allow" itself, so that the checkers decide alone (D21). The
+    runner reports the effective mode as a `log` event at the start and whenever it changes,
+    as a warning while it is not "auto".
+
+    `require_auto_mode`: if true, a step the checkers PASS while the effective mode is not
+    "auto" waits for a human instead of running on the checkers' word alone.
 
     `stream_partial`: if true (default), text and thinking are also streamed token by token
     (`assistant.delta` events); otherwise they arrive per completed block only.
@@ -340,7 +424,15 @@ class ClaudeConfig(ConfigModel):
     permission_mode: (
         Literal["default", "auto", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] | None
     ) = None
-    """Permission mode for Claude Code; None leaves it to Claude Code (its default is "auto")."""
+    """Permission mode for Claude Code; None leaves it to Claude Code's own settings
+    (`permissions.defaultMode`; without that setting a headless start runs in the mode
+    "default", where the checkers decide alone). "auto" adds auto mode's classifier as the
+    second approval next to the checkers."""
+    require_auto_mode: bool = False
+    """Whether a step needs auto mode's classifier as well as the checkers. False (default):
+    outside the auto mode (another mode was chosen, the model has none, or a tool switched
+    the mode during the session) a step the checkers pass runs, and the session logs a
+    warning that the classifier is not active. True: such a step waits for a human instead."""
     stream_partial: bool = True
     """Stream text and thinking token by token (`assistant.delta`). False delivers completed
     blocks only."""
@@ -360,7 +452,8 @@ class ClaudeConfig(ConfigModel):
     them by default, as a plain `claude` does: calu wraps Claude Code and leaves how it loads
     its configuration, skills, MCP servers, plugins and auth alone (D178, the owner's answer
     to Q21). A narrower list is possible; the start-up warning then names what it leaves out.
-    calu's `--settings` document overrides them for the sandbox either way."""
+    calu's `--settings` document overrides them for the sandbox either way, and the start-up
+    warnings name sandbox entries of these files that go beyond calu's own configuration."""
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     """Isolation of Bash commands (PLAN.md D15, D4)."""
 
@@ -505,7 +598,9 @@ class Config(ConfigModel):
     """
     hidden_env: list[str] = Field(default_factory=list)
     """Further environment variables (e.g. API keys of other checker providers) that Claude
-    Code must not see, in addition to the ones from the env files and `PROVIDER_KEYS`."""
+    Code must not see, in addition to the ones from the env files and `PROVIDER_KEYS`. The
+    runner blanks them in the environment of the Claude Code process, so its commands do not
+    inherit them either. A changed list applies to the next session start."""
     tool_routes: dict[str, Route] = Field(default_factory=dict)
     """Route per tool name, overriding the built-in table (`calu.checkers.policy`), e.g.
     `{"mcp__deploy__ship": "escalate"}`."""
@@ -665,6 +760,13 @@ PROVIDER_KEYS_BY_PREFIX: dict[str, tuple[str, ...]] = {
 """Pydantic AI model-string prefix -> environment variables, any one of which holds the key.
 Prefixes that are not listed (e.g. "bedrock", "ollama", "test") need no key or take their
 credentials from elsewhere, so they are not checked."""
+
+KEYLESS_PREFIXES = frozenset({"bedrock", "claude", "function", "google-vertex", "ollama", "test"})
+"""Model-string prefixes that take no API key from an environment variable of their own: AWS and
+Google application credentials, the local `claude` CLI, a local server, and the test models.
+A prefix that is neither here nor in `PROVIDER_KEYS_BY_PREFIX` is a provider whose key variable
+calu does not know, and therefore cannot hide from Claude Code by itself
+(`calu.preflight.unknown_provider_warnings`)."""
 
 
 def load_secrets(env_file: Path | None = None) -> set[str]:

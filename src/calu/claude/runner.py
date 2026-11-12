@@ -20,6 +20,16 @@ from calu.protocol.messages import AgentInfo, Event
 EventSink = Callable[[Event], Awaitable[None]]
 """Receives events in the order Claude produced them. Must not block for long."""
 
+NOT_FROM_USER: Literal["cross_session"] = "cross_session"
+"""`UserInput.source` of a user-role message that no human sent through calu.
+
+Claude Code puts more into the user role than the user's words: calu's own notes (a checker's
+remark on a subagent result or on a write set), notifications of finished background tasks,
+messages of other sessions, hook feedback. The checkers accept only the user's messages as
+authorization, so a runner reports every such text with this source; the session then records
+it narrated, as a separate turn entry, and never under "User:". The protocol has one value for
+"not the user", which is named after its first use (a message from another Claude session)."""
+
 Priority = Literal["next", "later"]
 """Delivery of a user message: "next" = after the running tool calls, "later" = after the turn."""
 
@@ -176,7 +186,12 @@ class ClaudeRunner(Protocol):
         ...
 
     async def send(self, text: str, priority: Priority) -> None:
-        """Send a user message to the main agent.
+        """Send a message of the human user to the main agent.
+
+        Only text that a human client sent belongs here (a prompt, a queued or injected chat
+        message, a comment): the runner reports the replay of exactly these texts as
+        `UserInput` with source "user", and every other user-role message of the stream with
+        `NOT_FROM_USER`.
 
         Args:
             text: The message text.

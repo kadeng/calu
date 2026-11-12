@@ -43,7 +43,7 @@ def test_claude_code_authenticates_as_configured(tmp_path: Path):
     """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""
     options = SdkRunner(tmp_path, ClaudeConfig(), {"MISTRAL_API_KEY"})._options(AllowAll(), None)
     assert options.env == {"MISTRAL_API_KEY": ""}
-    # calu does not set the permission mode: Claude Code's own default (auto) applies (D5).
+    # calu does not set the permission mode: Claude Code takes it from its own settings (D5).
     assert options.permission_mode is None
     chosen = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))._options(AllowAll(), None)
     assert chosen.permission_mode == "default"
@@ -151,7 +151,7 @@ class FixedVerdict(AllowAll):
 async def run_hook(tmp_path: Path, gate, effective_mode: str, configured: Any = None) -> dict:
     runner = SdkRunner(tmp_path, ClaudeConfig(permission_mode=configured))
     options = runner._options(gate, None)
-    # calu does not set the mode unless the configuration does (Claude Code's default is auto).
+    # calu does not set the mode unless the configuration does (D5).
     assert options.permission_mode == configured
     hook: Any = options.hooks["PreToolUse"][0].hooks[0]  # type: ignore[index]
     data = {"tool_name": "Bash", "tool_input": {"command": "make"}}
