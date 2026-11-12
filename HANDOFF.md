@@ -7,36 +7,24 @@ with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUI
 
 ## Pick up here
 
-**`main` is green and pushed** (1617 tests with `uv run pytest -q -m 'not live'`, 15 browser
+**`main` is green and pushed** (1784 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
-1. **Merge the honesty redesign.** Branch `feature/honesty-certification` (pushed) holds the
-   whole redesign of D196, built in three reviewed steps, and is already merged with `main`.
-   It is **not green**: 1778 tests pass and six fail.
-   - Five are tests of the full-screen client's honesty screens, which were written against
-     the specification before the real protocol existed:
-     `tests/unit/test_tui_admin.py` (`test_trust_and_review_requests_and_a_session_without_them`,
-     `test_the_honesty_page_shows_mode_baseline_and_what_is_not_clean`,
-     `test_trust_asks_names_the_commit_and_only_y_certifies`,
-     `test_a_session_without_certification_says_so`) and `tests/unit/test_tui_review.py`
-     (`test_the_honesty_page_has_keys_for_its_commands`). Reconcile the client
-     (`src/calu/tui/model.py: honesty_from`, the honesty page, `/trust`, `/trust-file`,
-     `/honesty-review`) with the real messages in `src/calu/protocol/messages.py`
-     (`HonestyInfo`, `HonestyTrustParams`, `HonestyTrustResult`, the review request) and the
-     test's fake session with what the session really sends.
-   - One is `tests/unit/test_handoff_counts.py`: update the counts in this file after the merge.
-   - Then: run the three test layers, look at the honesty screens of the client
-     (`scripts/tui_screenshots.py`), merge into `main`, push.
-   - The migrations of that branch are 0029 and 0030 (renumbered; `main` has 0027 and 0028).
-   - The specification is `docs/notes/honesty-spec.md`; what each step deferred, where it
-     deviated and what the user documentation must say is in
-     `docs/notes/reports-2026-11-12.md`. Read the deviations before the merge: several are
-     stricter than the specification on purpose.
-   - Never run against a real model: the reviewer's prompt
+1. **Finish the honesty redesign (D196). It is merged into `main`** (the branch
+   `feature/honesty-certification` is history now): trusted commits and file contents in the
+   database (migrations 0029 and 0030), the computed state, the honesty review, enforcement
+   on running and committing, the clients. All test layers pass. Still to do:
+   - It has **never run against a real model**: the reviewer's prompt
      (`src/calu/defaults/checkers/system/honesty-review.md`) and the command checker's new
      answer field (whether a command executes project code). Do one live run in `track` and
-     one in `enforce` mode before calling the feature done (manual checklist in
-     `docs/TESTING.md`).
+     one in `enforce` mode (manual checklist in `docs/TESTING.md`) and fix what that shows.
+   - The specification is `docs/notes/honesty-spec.md`. Where the build deviated from it, and
+     what each step left out, is in `docs/notes/reports-2026-11-12.md`; several deviations
+     are stricter than the specification on purpose. Read them before changing the feature.
+   - The full-screen client's honesty screens were written before the real protocol existed
+     and were reconciled with it at the merge (`src/calu/tui/model.py: honesty_from`, the
+     scripted session in `src/calu/tui/fake.py`). The protocol does not carry a commit's
+     subject line, so the client shows the baseline's id and source only.
 2. **The owner prefers gitui to lazygit** (https://github.com/gitui-org/gitui) as the program
    the full-screen client starts with `f4`. Today the default is lazygit
    (`src/calu/tui/gittool.py`: `KNOWN`, `RECOMMENDED`, `RELEASES`, `release_command`, the plans
@@ -125,9 +113,9 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1617 tests pass** (plus 15 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
---wait`. 386 commits, ~58k lines of Python in `src` (~62k with the SQL, templates and
-default instructions), ~32k of tests, 28 migrations, 21 CLI commands, 20 protocol requests,
+**1784 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+--wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
+default instructions), ~36k of tests, 30 migrations, 21 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
@@ -664,7 +652,7 @@ work for a developer without the owner. In short:
 | 4. Smaller gaps | **done** (by design, or D44) | -- |
 | 5. Checker on the Claude Code account | **built** (D117) | the owner's choice to use it |
 | 6. Ergonomics of auth | **done** (D104, D105) | -- |
-| 7. Honesty enforcement | **rebuilt on the branch `feature/honesty-certification`** (D196), merged with `main` there, six tests failing: see "Pick up here" | the merge |
+| 7. Honesty enforcement | **rebuilt and merged** (D196); never run against a real model: see "Pick up here" | a live run |
 | 8. Splitting `session.py` | **done**: `run_state.py`, `escalations.py` (EscalationDesk), `gate.py` (StepGate), `write_sets.py`, `recorder.py`, `steps.py`; `session.py` holds the lifecycle, runner events and wiring (about 2,500 lines). Still in it: the subagent result review and the honesty bookkeeping | -- |
 | 9. Auto mode by default | **decided** (Q22): calu does not override Claude Code's permission mode | -- |
 | 10. Full-screen terminal client | **built and merged** (`src/calu/tui/`, Textual, extra `tui`): `calu attach` on a terminal; documentation and a run against a real session are open, see "Pick up here" | -- |
