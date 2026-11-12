@@ -37,7 +37,9 @@ PROTOCOL_VERSION = 1
 
 CLOSE_TOKEN_REVOKED = 4001
 """WebSocket close code: the session closed the connection because the client's token was
-revoked (`calu token revoke`). Reconnecting with the same token is refused."""
+revoked (`calu token revoke`), or because it is a minted token of a session that has ended while
+the process runs the next one. Reconnecting with the same token is refused; the close reason
+says which of the two it was."""
 
 CLOSE_FELL_BEHIND = 4002
 """WebSocket close code: the session closed the connection because the client fell more than

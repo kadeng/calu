@@ -22,7 +22,7 @@ blocking `publish`. The protocol server then closes that client's connection wit
 
 import logging
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from itertools import count
 
@@ -112,13 +112,28 @@ class Bus:
         a client is watching. The object is replaced when the first client subscribes and never
         while clients are attached, so a caller may hold on to it across a subscribe (D80)."""
         self.no_clients.set()
+        self._watchers: list[Callable[[Event], Awaitable[None]]] = []
+
+    def watch(self, watcher: Callable[[Event], Awaitable[None]]) -> None:
+        """Register a callback that `publish` awaits for every event.
+
+        The protocol server uses it to act at the moment the session reports a state, before
+        the session goes on (`calu.protocol.server.SessionServer.on_event`). A watcher delays
+        the session by as long as it takes, so it must be bounded.
+
+        Args:
+            watcher: Awaited with each event after it was numbered and handed to the clients.
+                What it raises is logged and otherwise ignored.
+        """
+        self._watchers.append(watcher)
 
     async def publish(self, event: Event) -> None:
         """Number `event`, keep it for replay and hand it to every client. Never raises.
 
         This is the session's event sink (`Session(emit=bus.publish)`). It does not wait for any
         client: an event for a client that has fallen behind is dropped, and the client's
-        subscription is marked as overflowed and removed from the fan-out.
+        subscription is marked as overflowed and removed from the fan-out. It does wait for the
+        callbacks registered with `watch`.
 
         Args:
             event: The event; its `seq` is set to the next sequence number.
@@ -129,6 +144,11 @@ class Bus:
         )
         for client in list(self._clients):
             client._push(event)
+        for watcher in self._watchers:
+            try:
+                await watcher(event)
+            except Exception:
+                log.exception("a watcher of the event bus failed")
 
     def subscribe(self) -> Subscription:
         """Add a client to the fan-out.
