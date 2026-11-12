@@ -17,17 +17,38 @@ Tool call flow (ToolGate):
       COMMAND (Bash)        -> allow if every part is allow-listed, else the checker
       COMMAND / EDIT        -> checker decision: ALLOW -> allow, DENY -> deny, ESCALATE -> ask
                                (the checker sees the rules' notes on unlisted paths)
-    any internal error      -> ask the human
+      COMMAND with a commit -> a line that is one plain `git commit`: the command checkers and,
+                               in addition, the changeset checkers with the commit's diff;
+                               any other line with a commit: deny ("commit as its own command")
+    any internal error      -> ask the human, also after the decision (it never weakens a
+                               DENY or an ASK)
+    no answer within `GATE_BUDGET_S` -> ask the human
     ask -> an `escalations` row and an `escalation.request` event; waits without a time limit
+
+While an escalation of the session is open, a new tool call that needs a check waits in the gate
+before it is judged (`Session._hold`), so that no other agent of the session gets a step approved
+while a human decides:
+
+    another call reaches the gate ── no check needed (read tools, tool policy) ──► answered
+            │ needs a check
+            ▼
+    wait until no escalation is open (decided, timed out, session stopped, turn interrupted)
+            │ released                              │ still open after `HOLD_BUDGET_S`
+            ▼                                       ▼
+    checked as usual                    checked; DENY stays DENY, ESCALATE stays ESCALATE,
+                                        an approval becomes an escalation of its own
+                                        (the hook that carries the gate cannot wait longer)
+
+Tool calls that already run are not touched, and the reviews after a step (`review_write_set`,
+`review_subagent_result`) never wait: they open escalations themselves.
 
 A human resolves an escalation in the database (`calu resolve`, a web UI, SQL); the session
 notices the resolution through `note_resolution` (a `escalation_resolved` notification) or by
 polling the row every `ESCALATION_POLL_S` seconds. An escalation nobody answers within
 `escalation_timeout_s` denies its step and stops the session, which stays resumable by Claude's
-session id (D27). `decide_escalation` is the second path: a
-client attached to the session process decides, and the session cancels the row with a note that
-records the decision, because the role `calu_session` may not allow or deny one
-(`calu.store.session`).
+session id (D27). `decide_escalation` is the second path: a client attached to the session
+process decides. The decision is written to the row first and releases the step only once the
+database accepted it, so the row never says anything else than what happened to the step.
 
 States (`calu.protocol.messages.State`, PLAN.md §3.1) follow what runs at the moment; steps of
 the main agent and of subagents overlap, so the most important one wins:
@@ -45,7 +66,8 @@ import shutil
 import socket
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,7 +97,7 @@ from calu.checkers import (
     SubagentResult,
     ToolPolicy,
 )
-from calu.checkers.changeset import changeset, is_commit
+from calu.checkers.changeset import CommitKind, changeset, classify_commit
 from calu.checkers.policy import EDIT_TOOLS, SHELL_TOOLS
 from calu.checkers.render import changed_lines, edited_file, render_step
 from calu.checkers.rules import (
@@ -179,6 +201,38 @@ WRITE_SET_REVERTED = (
 )
 """Note for Claude when a refused change was reverted."""
 
+WRITE_SET_UNREVIEWED = (
+    "A reviewer wanted a human to look at what your command changed ({paths}), but the change "
+    "was not reviewed by a human: {why} calu has **not** undone it. What the reviewer "
+    "said: {reason}\nTreat the change as unreviewed: do not build on it before a human has "
+    "seen it."
+)
+"""Note for Claude when the human review of a write set did not take place."""
+
+WRITE_SET_UNMEASURED = (
+    "What this command wrote could not be measured ({error}), so the change was not reviewed "
+    "and calu cannot undo it. Look at the working tree before the session goes on."
+)
+"""Reason of the escalation for a write set that could not be measured although the review is
+on."""
+
+WRITE_SET_UNMEASURED_REFUSED = (
+    "The change your command made to the files was refused by the user, and calu could **not** "
+    "undo it, because it could not measure what the command wrote. {message}\nUndo or fix the "
+    "change yourself before you go on."
+)
+"""Note for Claude when a human refused a write set that could not be measured."""
+
+NOBODY_ASKED: dict[str, str] = {
+    "unstorable": (
+        "calu could not store the request in its database, so nobody could be asked. Tell the "
+        "user that calu's database is unreachable."
+    ),
+    "timed_out": "Nobody answered within the escalation timeout, and the session stops.",
+}
+"""Why a review after a step got no human decision, by escalation outcome (see `_Asked`); any
+other outcome without a decision reads "No decision was made."."""
+
 WRITE_SET_NOT_REVERTED = (
     "The change your command made to the files was reviewed and refused ({paths}), but calu "
     "could **not** undo it, because the files have moved on since. Reason: {reason}\nUndo or fix "
@@ -196,10 +250,23 @@ message of the refusal that keeps the call from running, which the spike showed 
 STEP_TIMES_KEPT = 500
 """How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
 
-CHECKER_DEADLINE_S = 840
+CHECKER_DEADLINE_S = 300
 """Upper bound for one checker model call; on timeout the step is escalated."""
 NARRATOR_DEADLINE_S = 60
 """A narration that takes longer is left out; the checker then sees no narration."""
+GATE_BUDGET_S = 420
+"""Upper bound for deciding one tool call (`Session._decide`): the rules, the narration, the diff
+of a commit and the checkers together, not counting the time a call is held behind an open
+escalation. Past it the step is escalated. Narration and checkers run one after the other, so
+this is more than `NARRATOR_DEADLINE_S + CHECKER_DEADLINE_S`."""
+HOLD_BUDGET_S = 300
+"""How long a new tool call waits in the gate while an escalation of the session is open
+(`Session._hold`). The gate runs inside Claude Code's PreToolUse hook, whose timeout is
+`calu.claude.sdk_runner.HOOK_TIMEOUT_S` (900 s): `HOLD_BUDGET_S + GATE_BUDGET_S` leaves three
+minutes of it for recording the step, so the hook answers before Claude Code gives up on it."""
+OPEN_ESCALATION_RETRY_S: tuple[float, ...] = (0.5, 2.0)
+"""Pauses before the second and the third attempt to store an escalation. A step whose
+escalation cannot be stored is denied, so one failed INSERT should not decide that."""
 ESCALATION_POLL_S = 1.0
 """How often an open escalation's database row is read while the session waits for a human."""
 START_TIMEOUT_S = 120
@@ -294,6 +361,15 @@ class _PendingNarration:
     """None until narrated; "" if there was nothing to narrate or narrating failed."""
 
 
+Outcome = Literal[
+    "allowed", "denied", "answered", "interrupted", "cancelled", "timed_out", "unstorable"
+]
+"""How an escalation ended. A human decided for "allowed", "denied" and "answered" (the answer
+to a question of the agent). Nobody decided for the others: the turn was interrupted or the wait
+cancelled ("interrupted"), the session stopped or the row was cancelled in the database
+("cancelled"), the escalation timeout ran out, or the escalation could not be stored."""
+
+
 @dataclass
 class _Escalation:
     """An open escalation: the step, its database row and, once decided, the human's answer."""
@@ -312,16 +388,36 @@ class _Escalation:
     answer: HumanAnswer | None = None
     answered: bool = False
     """True if this was a question of the agent and `answer` carries the human's answer (D35)."""
+    outcome: Outcome = "interrupted"
+    """How the escalation ended; set together with `answer`. While `answer` is None it reads
+    "interrupted", which is what an escalation is whose wait was cancelled before any answer."""
+    deciding: bool = False
+    """True while a client's decision is being written to the database (`decide_escalation`)."""
+
+
+@dataclass(frozen=True)
+class _Asked:
+    """The result of asking a human: the answer for the runner and how the escalation ended.
+
+    Before a step, only `answer.allow` matters: every outcome but "allowed" keeps the step from
+    running. The reviews after a step need the outcome, because there "nobody decided" must not
+    be treated as "a human refused".
+    """
+
+    answer: HumanAnswer
+    outcome: Outcome
 
 
 @dataclass
 class _Decided:
     """The outcome of checking one tool call, as `Session._decide` reports it.
 
-    `source` is who decided: "rules", "policy", "checker", "auto" or "internal". `rules` is
-    what the allow and deny lists found ("deny", "allow", "unlisted") or None for a tool the
-    lists do not cover. `runs` holds one model call per checker that ran, in the order of the
-    route's checkers (PLAN.md D81), and is empty when no checker ran.
+    `source` is who decided: "rules", "policy", "checker", "auto", "held", "changeset" (the
+    deterministic refusal of a compound commit line), "honesty", "clock", "question" or
+    "internal". `rules` is what the allow and deny lists found ("deny", "allow", "unlisted") or
+    None for a tool the lists do not cover. `runs` holds one model call per checker that ran,
+    in the order of the route's checkers (PLAN.md D81) -- for a commit followed by the changeset
+    checkers -- and is empty when no checker ran.
     """
 
     route: Route
@@ -407,6 +503,8 @@ class _Measured:
     step_id: int | None
     summary: str
     """What the checker said the step does, for the comparison with the written paths."""
+    error: str = ""
+    """Why the write set could not be measured; `change` is empty then and `after` is ""."""
 
 
 class Session:
@@ -496,6 +594,9 @@ class Session:
         """Claude Code's own session id, once known."""
         self.state: State = "stopped"
         self._escalations: dict[str, _Escalation] = {}
+        self._escalation_closed = anyio.Event()
+        """Set, and replaced by a new event, each time an escalation leaves `_escalations`;
+        `_hold` waits for it."""
         self._local_ids = itertools.count(1)
         self._step_seq = itertools.count(1)
         self._step_ids: dict[str, int] = {}  # tool_use_id -> `steps` row id
@@ -611,8 +712,52 @@ class Session:
             max_tokens=cfg.max_tokens,
         )
 
+    @asynccontextmanager
+    async def _checking_scope(self) -> AsyncGenerator[None]:
+        """Count one checker or narrator call as in flight while the block runs.
+
+        The one place that raises and lowers the "checking" count, so that every raise has
+        exactly one lowering, also when the block is cancelled or raises.
+
+        Side effects: updates the session state on entry and on exit (`_refresh_state`).
+
+        Yields:
+            Nothing; the count is raised while the block runs.
+        """
+        self._checking += 1
+        try:
+            await self._refresh_state()
+            yield
+        finally:
+            self._checking -= 1
+            with anyio.CancelScope(shield=True):
+                await self._refresh_state()
+
+    def _checker_route(self, checker: Checker, fallback: Route) -> str:
+        """Return the route a checker belongs to, for its `checker_runs` row.
+
+        Args:
+            checker: A checker of this session.
+            fallback: The route of the step, used if the checker is in no route's list.
+
+        Returns:
+            The route's name: for a commit the changeset checkers are recorded as "changeset"
+            although the step's own route is "command".
+        """
+        if any(own is checker for own in self.checkers.get(fallback, [])):
+            return fallback.value
+        for route, checkers in self.checkers.items():
+            if any(own is checker for own in checkers):
+                return route.value
+        return fallback.value
+
     async def _run_checkers(
-        self, route: Route, step: Step, context: CheckContext, extra: str = ""
+        self,
+        route: Route,
+        step: Step,
+        context: CheckContext,
+        extra: str = "",
+        changeset_diff: str | None = None,
     ) -> tuple[CheckDecision, list[tuple[Checker, CheckOutcome]]]:
         """Run every checker of `route` at the same time and combine their verdicts (D81).
 
@@ -622,33 +767,41 @@ class Session:
         must not be able to let a step through, and must not be able to stop the others from
         being heard either.
 
-        Side effects: raises and lowers the "checking" count, which the session state and the
-        clients show.
+        Side effects: raises and lowers the "checking" count (`_checking_scope`), which the
+        session state and the clients show.
 
         Args:
             route: The step route whose checkers run.
             step: The tool call to check.
             context: The cached context for the checkers.
-            extra: A further prompt block after the step (the commit diff for the changeset
-                route, the write set for a review).
+            extra: A further prompt block after the step for the checkers of `route` (the
+                write set for a review).
+            changeset_diff: For a commit: the diff it would record. The checkers of the
+                changeset route then run as well, each with this block, next to the checkers
+                of `route`, and all verdicts are combined. None runs the checkers of `route`
+                only.
 
         Returns:
             The combined decision, and one (checker, outcome) pair per checker in the order of
-            the route's checkers, for the `checker_runs` rows.
+            the route's checkers (then the changeset checkers), for the `checker_runs` rows.
         """
-        checkers = self.checkers[route]
-        outcomes: list[CheckOutcome | None] = [None] * len(checkers)
+        jobs = [(checker, extra) for checker in self.checkers[route]]
+        if changeset_diff is not None:
+            jobs += [(checker, changeset_diff) for checker in self.checkers[Route.CHANGESET]]
+        checkers = [checker for checker, _ in jobs]
+        outcomes: list[CheckOutcome | None] = [None] * len(jobs)
 
-        async def one(index: int, checker: Checker) -> None:
+        async def one(index: int, checker: Checker, block: str) -> None:
             """Run one checker and keep its outcome at its own index.
 
             Args:
-                index: Position in the route's checker list.
+                index: Position in the list of checkers that run.
                 checker: The checker to run.
+                block: The further prompt block this checker gets.
             """
             try:
                 with anyio.fail_after(CHECKER_DEADLINE_S):
-                    outcomes[index] = await checker.run(step, context, extra=extra)
+                    outcomes[index] = await checker.run(step, context, extra=block)
             except TimeoutError:
                 outcomes[index] = CheckOutcome(
                     decision=CheckDecision(
@@ -662,15 +815,9 @@ class Session:
                     duration_ms=CHECKER_DEADLINE_S * 1000,
                 )
 
-        self._checking += 1
-        await self._refresh_state()
-        try:
-            async with anyio.create_task_group() as tg:
-                for index, checker in enumerate(checkers):
-                    tg.start_soon(one, index, checker)
-        finally:
-            self._checking -= 1
-            await self._refresh_state()
+        async with self._checking_scope(), anyio.create_task_group() as tg:
+            for index, (checker, block) in enumerate(jobs):
+                tg.start_soon(one, index, checker, block)
         runs = [
             (checker, outcome)
             for checker, outcome in zip(checkers, outcomes, strict=True)
@@ -1048,7 +1195,9 @@ class Session:
 
         Returns:
             What was measured, or None if this call had no snapshot (snapshots off, the call was
-            not one the command checker judges, or it was measured already).
+            not one the command checker judges, or it was measured already). If the snapshot or
+            the comparison failed, the result has `error` set and an empty change: the caller
+            must not read that as "nothing was written".
         """
         opened = self._before.pop(tool_use_id, None)
         overlapping = tool_use_id in self._overlapped
@@ -1061,7 +1210,17 @@ class Session:
             change = await self._snapshots.changes(before, after)
         except SnapshotError as exc:
             log.warning("no write set for %s: %s", tool_use_id, exc)
-            return None
+            await self._emit_safely(
+                Log(level="warning", message=f"the write set of a command is unknown: {exc}")
+            )
+            return _Measured(
+                change=ChangeSet(overlapping=overlapping),
+                before=before,
+                after="",
+                step_id=step_id,
+                summary=summary,
+                error=str(exc),
+            )
         change = replace(change, overlapping=overlapping)
         measured = _Measured(
             change=change, before=before, after=after, step_id=step_id, summary=summary
@@ -1104,6 +1263,19 @@ class Session:
         human, and a denial from the human reverts in the same way. A comment on an accepted
         change is passed on.
 
+        Only a decision reverts. If the human was asked and nobody decided, the files are left
+        as they are:
+
+            escalation outcome            files       note for Claude
+            allowed                       kept        the human's note, if any
+            denied                        reverted    WRITE_SET_REVERTED / _NOT_REVERTED
+            interrupted, cancelled        kept        none (the turn or the session is over)
+            timed_out, unstorable         kept        WRITE_SET_UNREVIEWED
+
+        A write set that could not be measured (`_Measured.error`) cannot be reviewed or
+        undone; with the review on, it is escalated with `WRITE_SET_UNMEASURED` instead of
+        being skipped.
+
         Side effects: measures and records the write set (see `_measure_write_set`), may change
         files in the workspace, and may open an escalation.
 
@@ -1117,20 +1289,48 @@ class Session:
         if measured is None or not self.config.changes.review:
             return ""
         change = measured.change
-        if not change.changes or change.overlapping or self._snapshots is None:
+        if change.overlapping or self._snapshots is None:
             # Overlapping windows hold the writes of more than one call, so a review of them
             # could blame or revert the wrong command.
+            return ""
+        if measured.error:
+            reason = WRITE_SET_UNMEASURED.format(error=measured.error)
+            self._pending_reasons[step.tool_use_id or ""] = (reason, "write_set")
+            asked = await self._ask(step)
+            answer = asked.answer
+            if asked.outcome == "allowed":
+                return WRITE_SET_NOTE.format(note=answer.note) if answer.note else ""
+            if asked.outcome == "denied":
+                return WRITE_SET_UNMEASURED_REFUSED.format(message=answer.message)
+            if asked.outcome in ("interrupted", "cancelled"):
+                return ""
+            return WRITE_SET_UNREVIEWED.format(
+                paths="unknown paths",
+                why=NOBODY_ASKED.get(asked.outcome, "No decision was made."),
+                reason=reason,
+            )
+        if not change.changes:
             return ""
         outcome = await self._review_change(step, change, measured.step_id)
         decision = outcome.decision
         if decision is Decision.ESCALATE:
             self._pending_reasons[step.tool_use_id or ""] = (outcome.reason, "write_set")
-            answer = await self.ask(step)
-            if answer.cancelled:
-                return ""
-            if answer.allow:
+            asked = await self._ask(step)
+            answer = asked.answer
+            if asked.outcome == "allowed":
                 return WRITE_SET_NOTE.format(note=answer.note) if answer.note else ""
-            return await self._undo(measured, answer.message or outcome.reason)
+            if asked.outcome == "denied":
+                return await self._undo(measured, answer.message or outcome.reason)
+            if asked.outcome in ("interrupted", "cancelled"):
+                return ""
+            # Nobody decided (the database refused the escalation, or nobody answered in
+            # time): that is not a refusal, so nothing is reverted, and Claude is told that
+            # the change stands unreviewed.
+            return WRITE_SET_UNREVIEWED.format(
+                paths=", ".join(change.paths[:20]),
+                why=NOBODY_ASKED.get(asked.outcome, "No decision was made."),
+                reason=outcome.reason,
+            )
         if decision is Decision.DENY:
             return await self._undo(measured, outcome.reason)
         return WRITE_SET_NOTE.format(note=outcome.comment) if outcome.comment.strip() else ""
@@ -1180,15 +1380,14 @@ class Session:
                 reason=f"The review of the write set failed ({type(exc).__name__}: {exc}).",
                 step_summary=change.summary(),
             )
-        finally:
-            self._checking -= 1
-            await self._refresh_state()
 
     async def _undo(self, measured: _Measured, reason: str) -> str:
         """Undo a command's writes and describe the outcome for Claude.
 
         Side effect: changes files in the workspace. Nothing is lost: both snapshots stay in
-        calu's snapshot repository until the session ends.
+        calu's snapshot repository until the session ends. The revert is shielded from
+        cancellation, so that a stop or an interrupt cannot leave it half applied; it is bounded
+        by the timeout of the git calls.
 
         Args:
             measured: The write set and the two snapshots.
@@ -1202,9 +1401,10 @@ class Session:
         reverted = False
         if self._snapshots is not None:
             try:
-                reverted = await self._snapshots.revert(
-                    measured.before, measured.after, change.paths
-                )
+                with anyio.CancelScope(shield=True):
+                    reverted = await self._snapshots.revert(
+                        measured.before, measured.after, change.paths
+                    )
             except SnapshotError as exc:
                 log.warning("the revert failed: %s", exc)
         await self._emit_safely(
@@ -1616,6 +1816,7 @@ class Session:
                 esc.answer = HumanAnswer(
                     allow=False, message="The turn was interrupted.", cancelled=True
                 )
+                esc.outcome = "interrupted"
                 esc.done.set()
                 if esc.db_id is not None:
                     await self._store_call(
@@ -1738,6 +1939,18 @@ class Session:
         token, and the session speaks to the database for it. An operator who resolves the row
         in the database instead reaches the session through `note_resolution` or its poll.
 
+        The database decides first, and the step is released only by a decision it accepted:
+
+            store.decide_escalation(...)    step                      this call
+            True                            released with the answer  returns
+            False (row no longer open, or   stays held; the poll      raises SessionError
+              this session may not decide)  adopts what the row says
+            raises                          stays held                raises SessionError
+
+        The write and the release happen in a scope shielded from cancellation, because the
+        request of a client that disconnects right after sending it is cancelled: the row and
+        the step must not end up saying different things.
+
         Args:
             escalation_id: Id from the `escalation.request` event.
             decision: "allow" or "deny"; ignored when `answer` is given.
@@ -1748,66 +1961,64 @@ class Session:
                 its result, and the row is recorded as "answered".
 
         Raises:
-            SessionError: If no escalation with this id is open (unknown, or already decided).
+            SessionError: If no escalation with this id is open (unknown, already decided, or
+                another decision for it is being recorded), if the database refused the
+                decision, or if the decision could not be written. In the last two cases the
+                step has not been released.
         """
-        esc = self._escalations.pop(escalation_id, None)
-        if esc is None:
+        esc = self._escalations.get(escalation_id)
+        if esc is None or esc.answer is not None:
             raise SessionError(f"no open escalation {escalation_id!r}")
+        if esc.deciding:
+            raise SessionError(f"escalation {escalation_id!r} is being decided right now")
+        allow = answer is None and decision == "allow"
         if answer is not None:
-            esc.answer = HumanAnswer(allow=False, message=ANSWER_TEMPLATE.format(answer=answer))
-            esc.answered = True
-            esc.done.set()
+            human = HumanAnswer(allow=False, message=ANSWER_TEMPLATE.format(answer=answer))
+            outcome: Outcome = "answered"
         else:
-            allow = decision == "allow"
             message = "The user denied this step."
             if note:
                 message += f" Note from the user: {note}"
-            esc.answer = HumanAnswer(allow=allow, message=message, note=note or "")
-            esc.done.set()
-        if esc.db_id is not None:
-            if answer is not None:
-                await self._record_decision(esc.db_id, False, answer, client, answered=True)
-            else:
-                await self._record_decision(esc.db_id, decision == "allow", note or "", client)
-
-    async def _record_decision(
-        self, escalation_id: int, allow: bool, note: str, client: str, answered: bool = False
-    ) -> None:
-        """Write a client's decision to the `escalations` row; never raises.
-
-        If the database refuses the decision — the row was resolved meanwhile, or this session
-        may not decide it — the row is cancelled with a note instead, so that it does not stay
-        open after the step has already run or been denied.
-
-        Args:
-            escalation_id: Id of the `escalations` row.
-            allow: Whether the step may run.
-            note: The human's note, or the answer to a question.
-            client: Name of the client that decided.
-            answered: True for the answer to a question of the agent, which is recorded as
-                "answered" rather than allowed or denied (D35).
-        """
+            human = HumanAnswer(allow=allow, message=message, note=note or "")
+            outcome = "allowed" if allow else "denied"
+        esc.deciding = True
         try:
-            recorded = await self.store.decide_escalation(
-                escalation_id, allow, note, client, answered=answered
-            )
-        except Exception as exc:
-            log.exception("recording a client decision failed")
-            await self._emit_safely(
-                Log(level="error", message=f"recording a client decision failed: {exc}")
-            )
-            return
-        if recorded:
-            return
-        decided = "answered" if answered else ("allowed" if allow else "denied")
-        await self._store_call(
-            "cancelling an escalation",
-            self.store.close_escalation(
-                escalation_id,
-                f"{decided} by the client {client or 'unknown'}, but the row could not be "
-                "resolved (already resolved, or this session may not decide it)",
-            ),
-        )
+            with anyio.CancelScope(shield=True):
+                if esc.db_id is not None:
+                    try:
+                        recorded = await self.store.decide_escalation(
+                            esc.db_id,
+                            allow,
+                            answer if answer is not None else (note or ""),
+                            client,
+                            answered=answer is not None,
+                        )
+                    except Exception as exc:
+                        log.exception("recording a client decision failed")
+                        await self._emit_safely(
+                            Log(
+                                level="error",
+                                message=f"recording a client decision failed: {exc}",
+                            )
+                        )
+                        raise SessionError(
+                            f"the decision could not be recorded, so escalation "
+                            f"{escalation_id} stays open: {exc}"
+                        ) from exc
+                    if not recorded:
+                        esc.wake.set()  # the poll reads what the row says now
+                        raise SessionError(
+                            f"escalation {escalation_id} was already resolved in the "
+                            "database, or this session may not decide it; the step follows "
+                            "what the database says"
+                        )
+                if esc.answer is None:  # the poll may have adopted a resolution meanwhile
+                    esc.answer = human
+                    esc.answered = answer is not None
+                    esc.outcome = outcome
+                    esc.done.set()
+        finally:
+            esc.deciding = False
 
     def note_resolution(self, escalation_id: int) -> None:
         """Wake the session so it reads a resolved escalation at once.
@@ -1829,7 +2040,18 @@ class Session:
         """Decide about a tool call before it runs (ToolGate).
 
         Side effects: records the step in the database and in the context, emits `edit.diff`
-        (edits) and `check.result`, and remembers the reason of an escalation for `ask`.
+        (edits) and `check.result`, and remembers the reason of an escalation for `ask`. While
+        an escalation of the session is open, a call that needs a check waits here first
+        (`_hold`).
+
+        The verdict is fixed in two guarded stages, so that no error and no hanging model can
+        let a call run unchecked:
+
+            stage                         failure                      verdict
+            record the step, `_decide`    exception                    ASK
+                                          `GATE_BUDGET_S` exceeded     ASK
+            record the decision           exception after PASS/ALLOW   ASK
+                                          exception after DENY/ASK     unchanged
 
         Args:
             step: The tool call.
@@ -1839,23 +2061,103 @@ class Session:
             a human decides instead of the call running unchecked.
         """
         pending = _PendingNarration(self._claude_outputs.pop(step.agent_id, []))
-        step_id = await self._add_step(step)
+        step_id: int | None = None
         try:
-            decided = await self._decide(step, pending)
+            step_id = await self._add_step(step)
+            decided: _Decided | None = None
+            with anyio.move_on_after(GATE_BUDGET_S) as budget:
+                decided = await self._decide(step, pending, budget)
+            if decided is None:
+                decided = self._undecided(
+                    step,
+                    f"Checking this step did not finish within {GATE_BUDGET_S} s (rules, "
+                    "narration and checkers together), so it was not checked.",
+                )
         except Exception as exc:
             log.exception("pre_tool_use failed")
-            decided = _Decided(
-                route=self.policy.route(step.tool_name),
-                decision=CheckDecision(
+            decided = self._undecided(
+                step, f"Checking failed with an internal error ({type(exc).__name__}: {exc})."
+            )
+        result, source, comment = decided.decision, decided.source, ""
+        try:
+            comment = await self._record_check(step, step_id, pending, decided)
+        except Exception as exc:
+            log.exception("recording the decision about a step failed")
+            comment = ""
+            if result.decision.approves:
+                # The verdict is known, but calu's own records of it are not complete (context,
+                # checker runs, honesty marks, snapshot). An approval does not stand on that.
+                result = CheckDecision(
                     decision=Decision.ESCALATE,
                     reason=(
-                        f"Checking failed with an internal error ({type(exc).__name__}: {exc})."
+                        f"The checkers decided {result.decision.value}, but calu then failed "
+                        f"with an internal error ({type(exc).__name__}: {exc}), so a human "
+                        "decides."
                     ),
-                    step_summary=label_for_unchecked(step.tool_name, step.tool_input),
-                ),
-                source="internal",
-            )
-        route, result, source = decided.route, decided.decision, decided.source
+                    step_summary=result.step_summary,
+                )
+                source = "internal"
+                self._running_tools.discard(step.tool_use_id or "")
+        if result.decision is Decision.ESCALATE and step.tool_use_id:
+            self._pending_reasons[step.tool_use_id] = (result.reason, source)
+        verdict = {
+            Decision.PASS: Verdict.PASS,
+            Decision.ALLOW: Verdict.ALLOW,
+            Decision.DENY: Verdict.DENY,
+            Decision.ESCALATE: Verdict.ASK,
+        }[result.decision]
+        context = ""
+        if comment:
+            context = CHECKER_COMMENT_TEMPLATE.format(route=decided.route.value, comment=comment)
+        return GateResult(verdict=verdict, reason=result.reason, context=context)
+
+    def _undecided(self, step: Step, reason: str) -> _Decided:
+        """Build the decision for a step that could not be checked: a human decides.
+
+        Args:
+            step: The tool call.
+            reason: Why it was not checked; the human reads it.
+
+        Returns:
+            An ESCALATE decision with source "internal". Never raises: the route falls back to
+            the default route if the tool policy itself fails.
+        """
+        try:
+            route = self.policy.route(step.tool_name)
+            label = label_for_unchecked(step.tool_name, step.tool_input)
+        except Exception:
+            log.exception("routing an unchecked step failed")
+            route, label = Route.COMMAND, step.tool_name
+        return _Decided(
+            route=route,
+            decision=CheckDecision(decision=Decision.ESCALATE, reason=reason, step_summary=label),
+            source="internal",
+        )
+
+    async def _record_check(
+        self, step: Step, step_id: int | None, pending: _PendingNarration, decided: _Decided
+    ) -> str:
+        """Record the decision about a step everywhere it belongs, after it was made.
+
+        Side effects: adds the step to the checkers' context, records the checker runs, the
+        honesty marks and the decision in the database, emits `check.result`, counts an
+        approved call as running, and takes the "before" snapshot of an approved command (D31).
+
+        Args:
+            step: The tool call.
+            step_id: Its `steps` row, or None if it could not be stored.
+            pending: Claude's thinking and text before the call, with the narration if made.
+            decided: What `_decide` returned.
+
+        Returns:
+            The checker's remark for Claude on an approved step, or "" if there is none or the
+            same remark was already sent in this turn.
+
+        Raises:
+            Exception: Whatever a part of the bookkeeping raises; `pre_tool_use` then turns an
+                approval into ASK.
+        """
+        route, result = decided.route, decided.decision
         comment = result.comment.strip() if result.decision.approves else ""
         if comment and self._comment_already_sent(comment, step.agent_id):
             comment = ""  # the same remark was already sent in this turn
@@ -1878,7 +2180,8 @@ class Session:
                 await self._store_call(
                     "recording a checker run",
                     self.store.add_checker_run(
-                        step_id, self._checker_run(checker, route.value, run)
+                        step_id,
+                        self._checker_run(checker, self._checker_route(checker, route), run),
                     ),
                 )
             await self._apply_honesty(decided, step_id, step)
@@ -1908,32 +2211,88 @@ class Session:
                 git_head=await self._git_head(),
             )
         )
-        if result.decision is Decision.ESCALATE and step.tool_use_id:
-            self._pending_reasons[step.tool_use_id] = (result.reason, source)
         if result.decision.approves and step.tool_use_id:
             self._running_tools.add(step.tool_use_id)
         await self._refresh_state()
-        verdict = {
-            Decision.PASS: Verdict.PASS,
-            Decision.ALLOW: Verdict.ALLOW,
-            Decision.DENY: Verdict.DENY,
-            Decision.ESCALATE: Verdict.ASK,
-        }[result.decision]
         if result.decision.approves and route in (Route.COMMAND, Route.CHANGESET):
             # The command runs as soon as this returns, so this is the "before" of its write set
-            # (D31). Edits need no snapshot: their content came through the gate.
+            # (D31). Edits need no snapshot: their content came through the gate. (The changeset
+            # route is only reached by a tool that the tool policy sends there.)
             await self._snapshot_before(step, step_id, result.step_summary)
-        context = ""
-        if comment:
-            context = CHECKER_COMMENT_TEMPLATE.format(route=route.value, comment=comment)
-        return GateResult(verdict=verdict, reason=result.reason, context=context)
+        return comment
+
+    async def _hold(self, step: Step, budget: anyio.CancelScope | None) -> str:
+        """Hold a new tool call while an escalation of this session is open.
+
+        A human is deciding about a step; until then no other step of the session is approved,
+        so that another agent of the session (a background subagent, a parallel tool call)
+        cannot try the escalated action in another spelling against a checker that judges each
+        attempt afresh. Escalations that are questions of the agent (source "question") do not
+        hold anything: nothing was objected to.
+
+        The wait ends when no holding escalation is open any more -- decided, timed out,
+        cancelled by `stop`, or its wait cancelled by an interrupt -- or after `HOLD_BUDGET_S`,
+        because the PreToolUse hook that carries this call has a timeout. It ends at once with
+        the caller's cancellation (an interrupt cancels the hook). It cannot deadlock with the
+        reviews after a step: they do not come through here.
+
+        Side effects: emits a `log` event saying that the call waits and for which escalation;
+        moves the deadline of `budget` by the time waited, so that the hold does not use up
+        the time for checking.
+
+        Args:
+            step: The tool call that reached the gate.
+            budget: The cancel scope that bounds `_decide`, or None if there is none.
+
+        Returns:
+            "" if nothing holds the step (any more); otherwise the ids of the escalations that
+            were still open when the hold ran out, for the reason of the caller's decision.
+        """
+        if not self._holding():
+            return ""
+        started = anyio.current_time()
+        if budget is not None:
+            budget.deadline += HOLD_BUDGET_S
+        who = f"subagent {step.agent_id}" if step.agent_id else "the main agent"
+        await self._emit_safely(
+            Log(
+                level="info",
+                message=(
+                    f"{step.tool_name} of {who} waits: escalation {self._holding()} is open, "
+                    "and no further step is checked until it is decided"
+                ),
+            )
+        )
+        try:
+            with anyio.move_on_after(HOLD_BUDGET_S):
+                while self._holding():
+                    await self._escalation_closed.wait()
+        finally:
+            if budget is not None:
+                budget.deadline -= HOLD_BUDGET_S - (anyio.current_time() - started)
+        return self._holding()
+
+    def _holding(self) -> str:
+        """Name the open escalations that hold new tool calls.
+
+        Returns:
+            Their ids, joined by ", " ("" if none): every open escalation except a question of
+            the agent.
+        """
+        return ", ".join(
+            escalation_id
+            for escalation_id, esc in self._escalations.items()
+            if esc.source != "question"
+        )
 
     async def ask(self, step: Step) -> HumanAnswer:
         """Ask the human about `step` and wait for the answer, without a time limit (ToolGate).
 
         Side effects: opens an `escalations` row, emits `escalation.request`, sets the state to
         `escalated`, and emits `escalation.resolved` when the escalation ends — also when it is
-        cancelled (stop, interrupt, end of the session), with decision "cancelled".
+        cancelled (stop, interrupt, end of the session), with decision "cancelled". The row is
+        closed in every case: if this call itself is cancelled while it waits (Claude Code
+        cancels the permission callback on an interrupt), the row is cancelled with a note.
 
         Args:
             step: The tool call that needs a decision.
@@ -1944,9 +2303,24 @@ class Session:
         `HARNESS_ASKED` says so instead of inventing one.
 
         Returns:
-            The human's answer. A cancelled escalation counts as a denial. If the escalation
+            The human's answer. An escalation that ended without a human decision (stop,
+            timeout, interrupt) counts as a denial and has `cancelled` set. If the escalation
             cannot be stored, the step is denied with `DB_UNREACHABLE`, because no human could
             see it.
+        """
+        return (await self._ask(step)).answer
+
+    async def _ask(self, step: Step) -> _Asked:
+        """Implement `ask`, and also say how the escalation ended.
+
+        Side effects: as `ask`.
+
+        Args:
+            step: The tool call that needs a decision.
+
+        Returns:
+            The answer and the outcome (see `Outcome`). The outcome is what the reviews after a
+            step act on: only "denied" is a refusal by a human.
         """
         reason, source = self._pending_reasons.pop(
             step.tool_use_id or "", (HARNESS_ASKED, "harness")
@@ -1958,7 +2332,9 @@ class Session:
         rendered = _render_safely(step, self.workspace)
         db_id = await self._open_escalation(step, reason, rendered)
         if db_id is None:
-            return HumanAnswer(allow=False, message=DB_UNREACHABLE)
+            return _Asked(
+                HumanAnswer(allow=False, message=DB_UNREACHABLE, cancelled=True), "unstorable"
+            )
         escalation_id = str(db_id)
         esc = _Escalation(step=step, reason=reason, source=source, db_id=db_id)
         esc.request = EscalationRequest(
@@ -1978,9 +2354,23 @@ class Session:
             await self._wait_for_decision(esc)
         finally:
             self._escalations.pop(escalation_id, None)
+            # Wake the tool calls that `_hold` keeps waiting for this escalation.
+            closed, self._escalation_closed = self._escalation_closed, anyio.Event()
+            closed.set()
             with anyio.CancelScope(shield=True):
                 answer = esc.answer
-                decision = "cancelled" if answer is None else "allow" if answer.allow else "deny"
+                if answer is None and esc.db_id is not None:
+                    # This call was cancelled while it waited, so nothing else closes the row.
+                    await self._store_call(
+                        "cancelling an escalation",
+                        self.store.close_escalation(
+                            esc.db_id, "cancelled: the wait for a decision was interrupted"
+                        ),
+                    )
+                if answer is None or esc.outcome not in ("allowed", "denied", "answered"):
+                    decision = "cancelled"
+                else:
+                    decision = "allow" if answer.allow else "deny"
                 await self._emit_safely(
                     EscalationResolved(
                         escalation_id=escalation_id,
@@ -1997,7 +2387,7 @@ class Session:
         if esc.answer.allow and step.tool_use_id:
             self._running_tools.add(step.tool_use_id)
             await self._refresh_state()
-        return esc.answer
+        return _Asked(esc.answer, esc.outcome)
 
     async def _wait_for_decision(self, esc: _Escalation) -> None:
         """Wait until `esc` is decided locally or in the database.
@@ -2034,12 +2424,15 @@ class Session:
                     continue
                 if row.open:
                     continue
+                if esc.answer is not None:
+                    return  # a client's decision was accepted while the row was being read
                 if row.answered:
                     # A question of the agent that an operator answered in the database (D35).
                     esc.answered = True
                     esc.answer = HumanAnswer(
                         allow=False, message=ANSWER_TEMPLATE.format(answer=row.note)
                     )
+                    esc.outcome = "answered"
                     esc.done.set()
                     return
                 message = (
@@ -2050,6 +2443,11 @@ class Session:
                 if row.note:
                     message += f" Note from the user: {row.note}"
                 esc.answer = HumanAnswer(allow=row.allowed, message=message, note=row.note)
+                if row.allowed:
+                    esc.outcome = "allowed"
+                else:
+                    # A row that was cancelled was decided by nobody; only "denied" is a refusal.
+                    esc.outcome = "denied" if row.state == "denied" else "cancelled"
                 esc.done.set()
                 return
 
@@ -2079,7 +2477,8 @@ class Session:
             f"No decision within {seconds / 3600:.1f} h. The step was denied and the session "
             f"stops; take the conversation up again with `{resume}`."
         )
-        esc.answer = HumanAnswer(allow=False, message=message)
+        esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
+        esc.outcome = "timed_out"
         esc.done.set()
         if esc.db_id is not None:
             await self._store_call(
@@ -2102,7 +2501,9 @@ class Session:
 
         Side effects: records a step and a checker run, emits `check.result` (route "subagent";
         the triage note in `comment`), records the review in the context, and for ESCALATE asks
-        the human like a tool call (`escalation.request` with tool name "SubagentResult").
+        the human like a tool call (`escalation.request` with tool name "SubagentResult"). The
+        note reports a "Decision of the user" only if a human allowed or denied; an escalation
+        that timed out or could not be stored is reported as undecided.
 
         Args:
             result: The subagent's task and final result.
@@ -2198,16 +2599,25 @@ class Session:
             )
         if escalated:
             self._pending_reasons[step.tool_use_id or ""] = (note, "subagent_result")
-            answer = await self.ask(step)
-            if answer.cancelled:
-                return ""
-            if answer.allow:
-                decision = "The user accepts the result; act on it as appropriate."
+            asked = await self._ask(step)
+            answer = asked.answer
+            if asked.outcome in ("interrupted", "cancelled"):
+                return ""  # the turn or the session is over; there is nobody to tell
+            if asked.outcome in ("allowed", "denied"):
+                if answer.allow:
+                    decision = "The user accepts the result; act on it as appropriate."
+                else:
+                    decision = "The user does not want you to act on this result now."
+                if answer.note:
+                    decision += f" Note from the user: {answer.note}"
+                note = f"{note}\n\nDecision of the user: {decision}".strip()
             else:
-                decision = "The user does not want you to act on this result now."
-            if answer.note:
-                decision += f" Note from the user: {answer.note}"
-            note = f"{note}\n\nDecision of the user: {decision}".strip()
+                # Nobody decided: saying "the user does not want ..." would invent a decision.
+                why = NOBODY_ASKED.get(asked.outcome, "No decision was made.")
+                note = (
+                    f"{note}\n\nNo human decided about this result: {why} Do not act on it "
+                    "until the user has seen it."
+                ).strip()
             if step_id is not None:
                 await self._store_call(
                     "recording a step result", self.store.finish_step(step_id, note)
@@ -2225,10 +2635,9 @@ class Session:
         Returns:
             The review with the cost of the call; an internal error yields an ESCALATE review.
         """
-        self._checking += 1
-        await self._refresh_state()
         try:
-            return await self.result_checker.run(result, self.context.check_context())
+            async with self._checking_scope():
+                return await self.result_checker.run(result, self.context.check_context())
         except Exception as exc:
             log.exception("reviewing a subagent result failed")
             return ResultOutcome(
@@ -2238,21 +2647,30 @@ class Session:
                     summary="Subagent result not reviewed because of an internal error.",
                 )
             )
-        finally:
-            self._checking -= 1
-            await self._refresh_state()
 
     # ------------------------------------------------------------------ deciding
 
-    async def _decide(self, step: Step, pending: _PendingNarration | None) -> _Decided:
-        """Decide about `step`: rules, tool policy, then the checker of its route.
+    async def _decide(
+        self,
+        step: Step,
+        pending: _PendingNarration | None,
+        budget: anyio.CancelScope | None = None,
+    ) -> _Decided:
+        """Decide about `step`: rules, tool policy, then the checkers of its route.
 
-        Side effect: if a checker runs, narrates `pending` first (sets `pending.text`) and
-        passes the narration to the checker.
+        A Bash line with a commit stays on the command route (`calu.checkers.changeset`): a
+        compound line is denied here without a model call, and for a plain `git commit` the
+        changeset checkers run next to the command checkers, with the commit's diff.
+
+        Side effects: a step that needs a check waits while an escalation is open (`_hold`).
+        If a checker runs, narrates `pending` first (sets `pending.text`) and passes the
+        narration to the checker.
 
         Args:
             step: The tool call.
             pending: Claude's thinking and text before the call, or None.
+            budget: The cancel scope that bounds this call (`GATE_BUDGET_S`), which `_hold`
+                extends by the time it waits; None if the caller set no bound.
 
         Returns:
             The route, the decision, who decided, what the rules found and the checker's model
@@ -2340,6 +2758,11 @@ class Session:
             route = Route.COMMAND
         if outcome.notes:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})
+        held = ""
+        if route not in (Route.ALLOW, Route.DENY, Route.ESCALATE):
+            # Everything below can approve the step, so it waits here while a human decides
+            # about another one. Steps the tool policy answers without a check are not held.
+            held = await self._hold(step, budget)
         if route is Route.COMMAND and step.tool_name in SHELL_TOOLS and outcome.allowed:
             # The allow lists say "no check needed", not "run this whatever the harness
             # thinks": the step passes, and Claude Code's auto mode still sees it (D21).
@@ -2349,7 +2772,7 @@ class Session:
                 step_summary=label,
             )
             return self._auto_escalate(
-                _Decided(route=route, decision=allowed, source="rules", rules=rules)
+                _Decided(route=route, decision=allowed, source="rules", rules=rules), held
             )
         if route in (Route.ALLOW, Route.DENY, Route.ESCALATE):
             # Route.ALLOW means "no check": the step passes to Claude Code's own approval.
@@ -2365,12 +2788,24 @@ class Session:
                 source="policy",
                 rules=rules,
             )
-        diff = ""
+        diff: str | None = None
         if route is Route.COMMAND and step.tool_name == "Bash" and self._checks_changesets():
             command = str(step.tool_input.get("command", ""))
-            if is_commit(command, Path(step.cwd or self.workspace)):
-                route = Route.CHANGESET
-                diff = await self._changeset(command)
+            cwd = Path(step.cwd or self.workspace)
+            commit = classify_commit(command, cwd)
+            if commit.kind is CommitKind.COMPOUND:
+                # calu takes the diff before the line runs, so it is the commit's content only
+                # if nothing else in the line can change it. One retry makes it exact.
+                return _Decided(
+                    route=route,
+                    decision=CheckDecision(
+                        decision=Decision.DENY, reason=commit.refusal(), step_summary=label
+                    ),
+                    source="changeset",
+                    rules=rules,
+                )
+            if commit.kind is CommitKind.PLAIN:
+                diff = await self._changeset(cwd, command)
                 if step.tool_use_id:
                     self._changesets[step.tool_use_id] = diff
         if marks:
@@ -2378,7 +2813,7 @@ class Session:
             # names no path at all (`make test`) is theirs to judge, and a commit has to be
             # told which of the files it records are dishonest (§13.4, D88).
             own = marks_of_step(step, marks, self.workspace)
-            if diff:
+            if diff is not None:
                 touched = diff_paths(diff)
                 seen = {mark.mark().key() for mark in own}
                 own = own + [
@@ -2397,21 +2832,44 @@ class Session:
             if pending.text:
                 step = step.model_copy(update={"narration": pending.text})
         decision, runs = await self._run_checkers(
-            route, step, self.context.check_context(), extra=diff
+            route, step, self.context.check_context(), changeset_diff=diff
         )
         return self._auto_escalate(
-            _Decided(route=route, decision=decision, source="checker", rules=rules, runs=runs)
+            _Decided(route=route, decision=decision, source="checker", rules=rules, runs=runs),
+            held,
         )
 
-    def _auto_escalate(self, decided: _Decided) -> _Decided:
-        """Turn an approval into an escalation if auto-escalation is on for its route.
+    def _auto_escalate(self, decided: _Decided, held: str = "") -> _Decided:
+        """Turn an approval into an escalation where an approval must not stand alone.
+
+        Two cases: auto-escalation is on for the step's route, or the step was held behind an
+        open escalation for the whole of `HOLD_BUDGET_S` and that escalation is still open
+        (`_hold`). A DENY and an ESCALATE are returned unchanged in both.
 
         Args:
             decided: The decision of the checker or of the rules.
+            held: The ids of the escalations that were still open when the hold of this step
+                ran out; "" if the step was not held or was released.
 
         Returns:
-            `decided` unchanged, or a copy with an ESCALATE decision and source "auto".
+            `decided` unchanged, or the same object with an ESCALATE decision and source "auto"
+            or "held".
         """
+        if held and decided.decision.decision.approves:
+            who = "The checkers" if decided.source == "checker" else "The rules"
+            decided.decision = CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=(
+                    f"This step arrived while escalation {held} was open and waited "
+                    f"{HOLD_BUDGET_S} s for it. No step is approved while a human decides about "
+                    f"another one, so this one waits for a human as well. {who} decided "
+                    + decided.decision.decision.value
+                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
+                ),
+                step_summary=decided.decision.step_summary,
+            )
+            decided.source = "held"
+            return decided
         auto = self.config.auto_escalate
         route, source = decided.route, decided.source
         # A checker DENY stays a DENY: auto-escalation only turns approvals into questions, so
@@ -2438,22 +2896,24 @@ class Session:
 
         Returns:
             True if the database holds an enabled checker type "changeset"; a database that has
-            none (or an administrator who disabled it) leaves commits to the command checker.
+            none (or an administrator who disabled it) leaves commits to the command checker
+            alone, and compound commit lines are then not refused either.
         """
         return "changeset" in self.settings.checkers
 
-    async def _changeset(self, command: str) -> str:
+    async def _changeset(self, cwd: Path, command: str) -> str:
         """Return the change a commit command would record, as a prompt block; never raises.
 
         Args:
-            command: The commit command line.
+            cwd: The directory the command runs in; the diff is read in its repository.
+            command: The commit command line, a plain `git commit`.
 
         Returns:
             A "# Changeset of this commit" block, or a block saying that there is nothing to
             commit or that git could not be asked.
         """
         try:
-            diff = await changeset(self.workspace, command)
+            diff = await changeset(cwd, command)
         except Exception as exc:
             log.exception("collecting the changeset failed")
             diff = f"(the changeset could not be read: {type(exc).__name__}: {exc})"
@@ -2671,17 +3131,14 @@ class Session:
         """
         if self.narrator is None or not outputs:
             return ""
-        self._checking += 1
-        await self._refresh_state()
+        narrator = self.narrator
         try:
-            with anyio.fail_after(NARRATOR_DEADLINE_S):
-                return await self.narrator.narrate(outputs)
+            async with self._checking_scope():
+                with anyio.fail_after(NARRATOR_DEADLINE_S):
+                    return await narrator.narrate(outputs)
         except Exception:
             log.exception("narrating Claude's output failed")
             return ""
-        finally:
-            self._checking -= 1
-            await self._refresh_state()
 
     def _record_cross_session(self, text: str) -> None:
         """Record a message from another Claude session as a turn entry, not as user input.
@@ -2882,7 +3339,9 @@ class Session:
             rendered: The step rendered as Markdown, for the operator.
 
         Returns:
-            The id of the row, or None if it could not be stored.
+            The id of the row, or None if it could not be stored in
+            `1 + len(OPEN_ESCALATION_RETRY_S)` attempts. Only the last failure counts as a store
+            failure (`_store_failed`).
         """
         context: dict[str, Any] = {
             "rendered": rendered,
@@ -2895,15 +3354,22 @@ class Session:
             "chat_summary": self.context.summary,
             "calu_version": __version__,
         }
-        try:
-            stored = await self.store.open_escalation(
-                reason, context, self._step_ids.get(step.tool_use_id or "")
-            )
-        except Exception as exc:
-            await self._store_failed("storing an escalation", exc)
-            return None
-        self._store_failures = 0
-        return stored
+        pauses: tuple[float | None, ...] = (*OPEN_ESCALATION_RETRY_S, None)
+        for pause in pauses:
+            try:
+                stored = await self.store.open_escalation(
+                    reason, context, self._step_ids.get(step.tool_use_id or "")
+                )
+            except Exception as exc:
+                if pause is None:
+                    await self._store_failed("storing an escalation", exc)
+                    return None
+                log.warning("storing an escalation failed, trying again in %s s: %s", pause, exc)
+                await anyio.sleep(pause)
+            else:
+                self._store_failures = 0
+                return stored
+        return None
 
     async def _store_call(self, what: str, call: Any) -> None:
         """Await a store call and report its failure as a `log` error; never raises.
@@ -2990,11 +3456,16 @@ class Session:
     async def _cancel_escalations(self, message: str) -> None:
         """Deny all open escalations with `message` (their `ask` calls then return).
 
+        The answers are marked as cancelled with the outcome "cancelled": no human decided, so a
+        review after a step neither reverts anything nor reports a decision of the user.
+
         Args:
             message: The text Claude receives with the denial.
         """
         for esc in list(self._escalations.values()):
-            esc.answer = HumanAnswer(allow=False, message=message)
+            if esc.answer is None:
+                esc.answer = HumanAnswer(allow=False, message=message, cancelled=True)
+                esc.outcome = "cancelled"
             esc.done.set()
             if esc.db_id is not None:
                 await self._store_call(
