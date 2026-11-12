@@ -32,14 +32,11 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    `~/.local/bin`, which was run once into a scratch directory, else the package manager's
    command, shown and not run when it needs `sudo`). Not yet tried in a real terminal session:
    pressing `f4`, quitting gitui, and the install offer on a machine without it.
-3. **Write the user documentation of the full-screen client.** README ("Four front ends",
-   "Four ways to work with a running session") and `CALU_GUIDE.md` ("Attached to a session")
-   still describe only the line client. `calu attach` on a terminal now starts the
-   full-screen client (extra `tui`); `calu attach --plain` and every pipe keep the line
-   client. The keys, the commands and the wording to use are in
-   `docs/notes/reports-2026-11-12.md` ("what the documentation should say"). The decision
-   is recorded as D199 in `PLAN.md`, with the three protocol requests the client added
-   (`side.ask`, `usage.get`, `model.set`) and the event `usage.update`.
+3. **Done: the user documentation of the full-screen client** (README "Four ways to work
+   with a running session", `CALU_GUIDE.md` "Attached to a session"; the decision is D199).
+   It was written from the builders' reports and checked against the command table in
+   `src/calu/tui/commands.py`, not against a session in a real terminal: correct it where
+   item 4 shows a difference.
 4. **Try the full-screen client against a real Claude Code session** and fix what that shows.
    It was driven under Textual's test pilot, in tmux against a real session server with the
    fake runner, and through screenshots; `side.ask` was measured once against the real CLI

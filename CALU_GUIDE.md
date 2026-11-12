@@ -594,8 +594,66 @@ is written, the thinking, the tool results as they arrive. That is what attachin
 
 ## Attached to a session
 
-Attached, you type at the session: a plain line is a message for Claude, and the commands are
-one line of `/help`. The ones that matter while a step waits:
+`calu attach` on a terminal starts the **full-screen client** (the optional extra `tui`:
+`uv sync --extra tui`, or `--all-extras`). `calu attach --plain`, a pipe, `TERM=dumb` or a
+missing Textual give the **line client** described at the end of this section. Detaching
+(`ctrl+d`) leaves the session running.
+
+**The screen.** A status line (state, model and effort, what waits for you, cost, context),
+the transcript, a side panel (NEEDS YOU, AGENTS, QUEUE, HONESTY, SESSION; `f2` shows it on a
+narrow terminal) and the input, which is always usable. The footer shows the keys that matter
+in the present state; `f1` lists all of them, `ctrl+p` opens the command palette, and `/` in the
+input lists the slash commands with their descriptions.
+
+**Reading.** Each tool call is one line: the checker's verdict, the tool, the checker's
+summary, the time it took. Enter on a step expands it to the command, the checks, the result
+and the diff. Your own messages are blocks with their own background and the label `you`;
+Claude's thinking is shown dimmed; `alt+t` switches between all of it and one line each. PageUp, PageDown, the mouse wheel
+and shift+arrows scroll while the input keeps the focus. When you have scrolled up, new output
+is added below and what you see does not move; a marker counts what is new, and End follows
+the output again.
+
+**Deciding.** A step that waits for you is a card between the transcript and the input, not a
+dialog over them, and several can be open at once.
+
+| Keys | What happens |
+|---|---|
+| `a a`, `d d` | allow, deny (while the input is empty; a held key decides nothing) |
+| `n n` | write a note first, then allow or deny |
+| `w w` | the full-screen detail: everything the checker saw; `w`, `q` or Escape returns |
+| `alt+a`, `alt+d`, `alt+n`, `alt+w` | the same at once, whatever the input holds |
+| `1`-`9`, `o o`, Enter | answer a question of the agent: choose, write an own answer, send |
+
+Both presses act on the step the first press was made for, and any other key after the first
+press is typed as text: a reply that begins with "a" or "n" is a message, not a decision. A
+long command is shown wrapped, and what the card cuts is counted; such a step is allowed from
+the detail screen.
+
+**Agents and messages.** `alt+←/→` switches between the main agent and its subagents, each
+with its own transcript. Tab changes where the next message goes: the next turn, into the
+running turn, or a running background subagent (typing on its tab sends to it). `/btw
+<question>` or `f3` asks Claude a side question: it is answered from the conversation as it
+stands, beside the running work, and becomes no part of it.
+
+**The rest.**
+
+- `/model`, `/effort`: the model for the session; an effort applies at the next start.
+- `/checkers`: read the checkers' instructions; `e` edits and `ctrl+s` saves, with the `admin`
+  credential of this machine (a session cannot change what it is judged by).
+- `/honesty`: the code honesty state (mode, baseline, marked and unreviewed files), with
+  `/trust [commit or branch]`, `/trust-file <path>`, `/honesty-review` and
+  `/honesty off | track | enforce`. `/trust` asks before it certifies, and only `y` does.
+- `f4` or `/git`: hands the terminal to gitui in the project directory and comes back when
+  you leave it. `CALU_GIT_TOOL` (a command line) or `git_tool` in `~/.config/calu/tui.toml`
+  name another program. Without gitui the client offers to install it; it runs no command
+  with `sudo`, it shows it.
+- `/sessions`, `/history`, `/search`, `/export`: stored sessions, the stored steps of this
+  one, search in the transcript, the transcript as Markdown.
+- Usage: the side panel shows cost, context fill and a usage limit once Claude Code reports
+  one.
+
+**The line client** (`calu attach --plain`): a plain line is a message for Claude, and the
+commands are one line of `/help`. The ones that matter while a step waits:
 
 ```
 /why 7            everything the checker saw: its verdict, the step as it rendered it,
@@ -603,6 +661,7 @@ one line of `/help`. The ones that matter while a step waits:
 /allow 7 go ahead   /deny 7 not like that   /answer 7 four spaces
 /inject <text>    reaches Claude inside the running turn instead of queueing
 /to <agent> ...   the same, to one of its subagents
+/trust [commit]   /honesty-review   /clear-mark 3     code honesty
 ```
 
 ## From another machine

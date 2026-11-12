@@ -112,8 +112,8 @@ enforcement](CALU_GUIDE.md#code-honesty-enforcement).
 - **Central fleet management.** Sessions, steps and open escalations live in one PostgreSQL
   database: watch and unblock any number of agents on any number of machines from one place,
   including machines you cannot reach.
-- **Four front ends.** A web interface for the whole fleet, a terminal client, the Agent Client
-  Protocol for JetBrains Air, Zed, Neovim and Goose, and comments on a selection of lines in
+- **Four front ends.** A web interface for the whole fleet, a full-screen terminal client, the
+  Agent Client Protocol for JetBrains Air, Zed, Neovim and Goose, and comments on a selection of lines in
   your editor. Answering the agent's questions, reading the chat, inspecting diffs and allowing
   or denying a step work in all of them; an escalation arrives in an ACP editor as its own
   permission dialog.
@@ -236,17 +236,26 @@ the database, so you only need the multiplexer to keep the session process itsel
 
 ### Four ways to work with a running session
 
-**The terminal client**, for the live stream, the thinking and the tool results as they arrive.
-In the project directory it takes no arguments — it finds the session running there:
+**The terminal client**, a full-screen interface for one session. In the project directory it
+takes no arguments — it finds the session running there:
 
 ```bash
-calu attach
+calu attach            # full screen on a terminal (needs the extra: uv sync --extra tui)
+calu attach --plain    # the line-by-line client; also what a pipe gets
 ```
 
-A plain line you type is a message for Claude, and `/help` lists the commands. While a step
-waits: `/why 7` shows everything the checker saw, `/allow 7 go ahead` and `/deny 7 not like
-that` decide it, and `/inject <text>` reaches Claude inside the running turn instead of queueing
-behind it.
+- Every step is one line with the checker's verdict and summary; Enter expands it to the
+  command, the result and the diff. Your own messages stand out as blocks, and Claude's
+  thinking is shown dimmed.
+- A step that waits for you appears as a card above the input, never as a dialog over the
+  transcript: `a a` allows, `d d` denies, `n n` adds a note, `w w` shows everything the checker
+  saw on the full screen.
+- A side panel lists what needs you, the agents, the message queue, the honesty state, cost and
+  context. `alt+←/→` switches between the main agent and its subagents.
+- Tab changes where a message goes: the next turn, into the running turn, or a background
+  subagent. `/btw <question>` (`f3`) asks Claude beside the running work.
+- Scrolling up keeps the text where it is while new output arrives; End follows again.
+- `f4` opens gitui in the project directory, `ctrl+p` the command palette, `f1` the help.
 
 **The browser**, which shows every session of every host at once, leading with the ones that
 cannot go on without you — plus each session's history, its diffs, the triage queue, the
