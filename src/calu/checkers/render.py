@@ -29,7 +29,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from calu.checkers.model import Step
+from calu.checkers.symbols import changed_definitions
 from calu.markdown import fence
+
+MAX_CONTRACTS = 6
+"""How many changed definitions a rendered edit lists with their contract."""
+
+MAX_DOCSTRING_CHARS = 2000
+"""How much of one docstring a rendered edit shows beside the diff."""
 
 MAX_PATH_CHARS = 4096
 """Characters of an edit's target path that are shown: the longest path Linux accepts
@@ -355,8 +362,10 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
     step (`Step.notes`) follow as a list, then the narration of Claude's preceding thinking and
     text (`Step.narration`) as a block quote.
     Bash steps show the command; Edit/Write/MultiEdit steps show a diff against the target file,
-    which is read from disk (relative paths resolve against `workspace`). If the file cannot be
-    read or the edit does not apply, and for all other tools, the raw tool input is shown as JSON.
+    which is read from disk (relative paths resolve against `workspace`), followed for a Python
+    file by the definitions the edit changes with their contract after the edit (`_contracts`).
+    If the file cannot be read or the edit does not apply, and for all other tools, the raw tool
+    input is shown as JSON.
 
     Everything the agent chose is shown as data (module docstring, rule 1): names through
     `safe_name`, the working directory, the path and Claude's description as one-line code spans,
@@ -466,6 +475,7 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
             # The diff's file label is a short form; the line "File:" above holds the name.
             diff = _unified_diff(before, after, inline(shown_path, 1000).replace(" ", "_"))
             unseen = block("Diff:", "diff", diff, "diff")
+            lines += _contracts(before, after, shown_path)
             return RenderedStep("\n".join(lines), unseen + unseen_path)
         lines.append("The edit does not apply cleanly to the current file; raw input follows.")
         unseen = block("Input:", "input", json.dumps(inp, indent=2, ensure_ascii=False), "json")
@@ -473,6 +483,47 @@ def render_step_cut(step: Step, workspace: Path) -> RenderedStep:
 
     unseen = block("Input:", "input", json.dumps(inp, indent=2, ensure_ascii=False), "json")
     return RenderedStep("\n".join(lines), unseen)
+
+
+def _contracts(before: str, after: str, path: str) -> list[str]:
+    """Describe the definitions an edit changes, with their contract after the edit.
+
+    The diff shows the changed lines; the signature and the docstring of the function they
+    belong to are often outside it. This adds them, so that a checker can compare what the
+    code does with what it says without a tool call (`calu.checkers.symbols`).
+
+    Args:
+        before: The file's content before the edit.
+        after: The file's content after the edit.
+        path: The file's name as the step shows it.
+
+    Returns:
+        Lines to append to the rendered step: calu's heading, then per definition one line
+        that says which parts changed and a fence with its header and docstring as they will
+        be. At most `MAX_CONTRACTS` definitions, each docstring cut at
+        `MAX_DOCSTRING_CHARS`; calu says so when it leaves something out. [] when no existing
+        definition changes or the file is not Python that parses.
+    """
+    found = changed_definitions(before, after, path)
+    if not found:
+        return []
+    lines = [
+        "Definitions this edit changes, with signature and docstring as they will be after "
+        "the edit (computed by calu; the fenced text is the file's):"
+    ]
+    for item in found[:MAX_CONTRACTS]:
+        lines.append(f"- {code(item.name, 200)}, line {item.line}: {item.what_changed}.")
+        text = item.header
+        if item.docstring is not None:
+            shown, unseen = _cut(item.docstring, MAX_DOCSTRING_CHARS)
+            text += '\n    """' + shown.replace("\n", "\n    ")
+            text += "\n    [calu: the docstring is cut here]" if unseen else '"""'
+        lines.append(fence(text, "python"))
+    if len(found) > MAX_CONTRACTS:
+        lines.append(
+            f"[calu: {len(found) - MAX_CONTRACTS} more changed definition(s) are not listed.]"
+        )
+    return lines
 
 
 def _quote(text: str) -> str:
