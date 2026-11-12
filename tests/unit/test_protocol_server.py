@@ -769,3 +769,292 @@ async def test_a_control_request_is_answered_while_an_ordinary_request_still_run
             with anyio.fail_after(10):
                 rest = [json.loads(await socket.recv())["id"] for _ in range(2)]
             assert rest == [2, 3], "ordinary requests keep the order they were sent in"
+
+
+async def test_a_request_is_finished_when_its_client_disconnects(tmp_path: Path):
+    """A client that goes away while its `session.start` runs must not leave the session
+    halfway: the start and the requests the client sent after it are completed, and the next
+    client finds a session it can use."""
+    import json
+
+    from websockets.asyncio.client import connect as ws_connect
+
+    async with served(tmp_path, [[{"text": "hi"}]]) as run:
+        entered, release = anyio.Event(), anyio.Event()
+        start = run.session.start
+
+        async def delayed_start(*args: Any, **kwargs: Any) -> None:
+            entered.set()
+            await release.wait()
+            await start(*args, **kwargs)
+
+        run.session.start = delayed_start  # type: ignore[method-assign]
+        async with ws_connect(run.address) as socket:
+            for number, (method, params) in enumerate(
+                [
+                    ("initialize", {"client": "raw", "token": run.token}),
+                    ("session.start", {}),
+                    ("auto_escalate.set", {"edits": True}),  # waits behind the start
+                ]
+            ):
+                await socket.send(json.dumps({"id": number, "method": method, "params": params}))
+            with anyio.fail_after(10):
+                await entered.wait()
+        with anyio.fail_after(10):  # the server has noticed that the client is gone
+            while run.server._clients and all(c._tasks for c in run.server._clients):
+                await anyio.sleep(0.01)
+        release.set()
+        with anyio.fail_after(10):
+            while run.session.state != "idle" or not run.session.snapshot().auto_escalate.edits:
+                await anyio.sleep(0.01)
+        with anyio.fail_after(10):  # and the connection's handler has ended
+            while run.server._clients:
+                await anyio.sleep(0.01)
+        events = Events()
+        async with client(run, events) as successor:
+            await successor.request("chat.send", {"text": "hello"})
+            await events.wait_for("turn.result")
+
+
+async def test_a_session_stop_is_finished_when_its_client_disconnects(tmp_path: Path):
+    import json
+
+    from websockets.asyncio.client import connect as ws_connect
+
+    async with served(tmp_path, [[{"text": "hi"}]]) as run:
+        entered, release = anyio.Event(), anyio.Event()
+        stop = run.session.stop
+
+        async def delayed_stop() -> None:
+            entered.set()
+            await release.wait()
+            await stop()
+
+        async with client(run, Events()) as first:
+            await first.request("session.start", {})
+        run.session.stop = delayed_stop  # type: ignore[method-assign]
+        async with ws_connect(run.address) as socket:
+            await socket.send(
+                json.dumps(
+                    {
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"client": "raw", "token": run.token},
+                    }
+                )
+            )
+            await socket.send(json.dumps({"id": 2, "method": "session.stop", "params": {}}))
+            with anyio.fail_after(10):
+                await entered.wait()
+        release.set()
+        with anyio.fail_after(10):
+            while run.session.state != "stopped":
+                await anyio.sleep(0.01)
+        run.session.stop = stop  # type: ignore[method-assign]
+
+
+# ------------------------------------------------------------------ a database without an answer
+
+
+async def psycopg_error(token_sha256: str) -> bool:
+    import psycopg
+
+    raise psycopg.OperationalError("the database is gone")
+
+
+async def statement_timeout(token_sha256: str) -> bool:
+    raise TimeoutError("the statement took too long")
+
+
+async def network_error(token_sha256: str) -> bool:
+    raise ConnectionResetError("connection reset by peer")
+
+
+async def other_error(token_sha256: str) -> bool:
+    raise LookupError("something else")
+
+
+async def no_answer(token_sha256: str) -> bool:
+    await anyio.sleep_forever()
+    return False
+
+
+@pytest.mark.parametrize(
+    "database", [psycopg_error, statement_timeout, network_error, other_error, no_answer]
+)
+async def test_without_an_answer_from_the_database_the_last_known_answer_stands(
+    tmp_path: Path, database: Any, monkeypatch: pytest.MonkeyPatch
+):
+    """D30, for every way in which the database can fail to answer: an authenticated client
+    keeps interrupting and deciding, the printed token still attaches, a minted token cannot
+    attach and is told that this is not a wrong token."""
+    turns = [[{"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"}]]
+    from calu.protocol import server as server_module
+
+    monkeypatch.setattr(server_module, "END_CHECK_S", 0.2)  # the end of the test stops the session
+    async with served(tmp_path, turns) as run:
+        run.server.check_s = 0.2
+        await run.store.add_client_token(token_hash(run.token), run.address)
+        await run.store.add_client_token(token_hash("minted"), run.address)
+        events = Events()
+        async with connect(run.address, "minted", "zed", events) as zed:
+            await zed.request("session.start", {})
+            await zed.request("chat.send", {"text": "ship it"})
+            request = (await events.wait_for("escalation.request"))[0]
+            run.store.client_token_ok = database  # type: ignore[method-assign]
+            with anyio.fail_after(5):
+                await run.server.sweep()
+                await zed.request("auto_escalate.set", {"edits": True})
+                await zed.request(
+                    "escalation.decide",
+                    {"escalation_id": request["escalation_id"], "decision": "deny"},
+                )
+                await zed.request("interrupt")
+                async with client(run, Events()) as printed:
+                    await printed.request("interrupt")
+                with pytest.raises(RequestFailed) as unknown:
+                    async with connect(run.address, "minted", "second", Events()):
+                        pass
+            assert unknown.value.code == -32603
+            assert not zed.closed.is_set()
+
+
+async def test_an_answer_that_arrives_late_is_still_applied(tmp_path: Path):
+    """A request does not wait for a slow database, but what the database then says counts."""
+    async with served(tmp_path, [[{"text": "hi"}]]) as run:
+        run.server.check_s = 0.05
+        await run.store.add_client_token(token_hash("minted"), run.address)
+        async with connect(run.address, "minted", "zed", Events()) as zed:
+            await zed.request("session.start", {})
+            await run.server.sweep()
+            answer = anyio.Event()
+            asked = run.store.client_token_ok
+
+            async def slow(token_sha256: str) -> bool:
+                await answer.wait()
+                return await asked(token_sha256)
+
+            run.store.client_token_ok = slow  # type: ignore[method-assign]
+            revoke(run.store, "minted")
+            await zed.request("auto_escalate.set", {"edits": True})  # no answer yet: allowed
+            answer.set()
+            await wait_closed(zed)
+            assert zed.close_code == 4001
+
+
+# ------------------------------------------------------------------ tokens and session rows
+
+
+async def test_a_minted_token_is_checked_against_the_session_that_runs_now(tmp_path: Path):
+    """A token is minted for one session row. A connection that stays open while the session
+    is stopped and started again holds a token of the row before, so it is closed once the
+    new session runs; the client mints a token for the new session."""
+    store = RowPerStart()
+    async with served(tmp_path, [[{"text": "one"}], [{"text": "two"}]], store=store) as run:
+        await store.add_client_token(token_hash(run.token), run.address)
+        async with client(run, Events()) as printed:
+            await printed.request("session.start", {})
+            await store.add_client_token(token_hash("minted"), run.address)
+            async with connect(run.address, "minted", "zed", Events()) as zed:
+                await zed.request("session.stop")
+                await run.server.sweep()
+                assert not zed.closed.is_set()  # it may start the next session
+                await zed.request("session.start", {})
+                await wait_closed(zed)
+                assert zed.close_code == 4001
+            assert run.session.snapshot().auto_escalate.edits is False
+            with pytest.raises(RequestFailed) as refused:
+                async with connect(run.address, "minted", "zed", Events()):
+                    pass
+            assert refused.value.code == -32001
+            await printed.request("auto_escalate.set", {"edits": True})  # untouched
+
+
+@pytest.mark.parametrize("which", ["printed", "minted"])
+async def test_a_token_revoked_shortly_before_its_session_ends_stays_revoked(
+    tmp_path: Path, which: str
+):
+    """Revoking a token and the end of its session may fall between two scheduled checks. The
+    token must then not be usable in the next session of the same process."""
+    store = RowPerStart()
+    async with served(tmp_path, [[{"text": "one"}], [{"text": "two"}]], store=store) as run:
+        await store.add_client_token(token_hash(run.token), run.address)
+        await store.add_client_token(token_hash("minted"), run.address)
+        await store.add_client_token(token_hash("other"), run.address)
+        token = run.token if which == "printed" else "minted"
+        async with connect(run.address, "other", "other", Events()) as other:
+            await other.request("session.start", {})
+            async with connect(run.address, token, "held", Events()) as held:
+                await run.server.sweep()
+                revoke(store, token)
+                await run.session.stop()  # no check in between
+                with pytest.raises(RequestFailed) as refused:
+                    await held.request("session.start", {})
+                assert refused.value.code == -32001
+                assert run.session.state == "stopped"
+                await wait_closed(held)
+                assert held.close_code == 4001
+            with pytest.raises(RequestFailed) as again:
+                async with connect(run.address, token, "again", Events()):
+                    pass
+            assert again.value.code == -32001
+            await other.request("session.start", {})  # a token that was valid at the end may
+            assert store.client_tokens == [] or which == "minted"
+            with pytest.raises(RequestFailed):
+                async with connect(run.address, token, "again", Events()):
+                    pass
+
+
+async def test_the_printed_token_survives_a_session_that_never_recorded_it(tmp_path: Path):
+    """A start that fails leaves a session row without a row for the printed token. That is
+    not a revocation: the token keeps working and is recorded for the next session."""
+    store = RowPerStart()
+    async with served(tmp_path, [[{"text": "one"}], [{"text": "two"}]], store=store) as run:
+        async with client(run, Events()) as printed:
+            await printed.request("session.start", {})
+            await run.session.stop()
+            await printed.request("session.start", {})
+            await run.server.sweep()
+            assert not printed.closed.is_set()
+            assert store.client_tokens == [(token_hash(run.token), run.address)]
+
+
+# ------------------------------------------------------------------ which requests are checked
+
+
+def test_every_request_that_is_not_listed_as_read_only_exists():
+    from calu.protocol.messages import REQUESTS
+    from calu.protocol.server import READ_ONLY_METHODS
+
+    assert READ_ONLY_METHODS <= set(REQUESTS)
+    assert set(REQUESTS) - READ_ONLY_METHODS == {
+        "session.start",
+        "session.stop",
+        "chat.send",
+        "comment.add",
+        "escalation.decide",
+        "auto_escalate.set",
+        "honesty.clear",
+        "interrupt",
+        "shutdown",
+    }, "a new request is checked against the token unless it is listed as read-only: decide"
+
+
+async def test_a_revoked_token_is_refused_every_request_that_changes_the_session(tmp_path: Path):
+    from calu.protocol.messages import REQUESTS
+    from calu.protocol.server import READ_ONLY_METHODS
+
+    async with served(tmp_path, [[{"text": "hi"}]]) as run:
+        async with client(run, Events()) as owner:
+            await owner.request("session.start", {})
+            for method in sorted(set(REQUESTS) - READ_ONLY_METHODS):
+                token = f"minted for {method}"
+                await run.store.add_client_token(token_hash(token), run.address)
+                async with connect(run.address, token, "zed", Events()) as zed:
+                    await run.server.sweep()
+                    revoke(run.store, token)
+                    with pytest.raises(RequestFailed) as refused:
+                        await zed.request(method, {})
+                    assert refused.value.code == -32001, method
+            assert run.session.state == "idle"
+            assert not run.server.shutdown.is_set()

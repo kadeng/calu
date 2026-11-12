@@ -172,3 +172,82 @@ async def test_a_new_session_in_the_same_process_keeps_its_clients_and_a_revocab
             with anyio.fail_after(10):
                 await client.closed.wait()
             assert client.close_code == 4001
+
+
+async def test_a_minted_token_does_not_outlive_its_session_row(db_url: str, tmp_path: Path) -> None:
+    """A minted token belongs to one session row. Its connection may start the next session of
+    the process, and is then closed, because the database holds no valid row for it there."""
+    async with running(db_url, tmp_path, [[{"text": "one"}], [{"text": "two"}]]) as run:
+        _, minted = await herd.mint_token(run.db, run.store.session_id or "", "zed")
+        async with attach(run.server.address, minted, "zed", Events()) as zed:
+            await zed.request("session.stop")
+            await run.server.sweep()
+            assert not zed.closed.is_set()
+            await zed.request("session.start", {})
+            with anyio.fail_after(10):
+                await zed.closed.wait()
+            assert zed.close_code == 4001
+        # The printed token was valid when the first session ended, so it follows.
+        async with attach(run.server.address, run.token, "attach", Events()) as printed:
+            await printed.request("auto_escalate.set", {"edits": True})
+            assert not (await printed_row(run)).revoked
+
+
+@pytest.mark.parametrize("which", ["printed", "minted"])
+async def test_a_token_revoked_shortly_before_its_session_ends_stays_revoked(
+    db_url: str, tmp_path: Path, which: str
+) -> None:
+    """The session revokes all its tokens when it ends (D108). An operator's revocation just
+    before that must still hold in the next session of the same process."""
+    async with running(db_url, tmp_path, [[{"text": "one"}], [{"text": "two"}]]) as run:
+        token_id, minted = await herd.mint_token(run.db, run.store.session_id or "", "zed")
+        _, other_token = await herd.mint_token(run.db, run.store.session_id or "", "other")
+        token = run.token if which == "printed" else minted
+        async with attach(run.server.address, other_token, "other", Events()) as other:
+            async with attach(run.server.address, token, "held", Events()) as held:
+                await run.server.sweep()
+                revoked_id = (await printed_row(run)).id if which == "printed" else token_id
+                await herd.revoke_token(run.db, revoked_id)
+                await run.session.stop()  # no scheduled check in between
+                with pytest.raises(RequestFailed) as refused:
+                    await held.request("session.start", {})
+                assert refused.value.code == -32001
+                assert run.session.state == "stopped"
+            with pytest.raises(RequestFailed) as again:
+                async with attach(run.server.address, token, "again", Events()):
+                    pass
+            assert again.value.code == -32001
+            await other.request("session.start", {})
+            await run.server.sweep()
+            with pytest.raises(RequestFailed):
+                async with attach(run.server.address, token, "again", Events()):
+                    pass
+            # Only a token that was valid when the session ended has a row in the new one.
+            rows = await herd.list_tokens(run.db, run.store.session_id)
+            assert len(rows) == (0 if which == "printed" else 1)
+
+
+async def test_the_printed_token_revoked_before_its_first_check_is_refused(
+    db_url: str, tmp_path: Path
+) -> None:
+    """The server has not asked about the printed token yet when an operator revokes it. The
+    token has a row that is not valid, which is a revocation and not a missing row."""
+    async with running(db_url, tmp_path, [[{"text": "hi"}]]) as run:
+        await herd.revoke_token(run.db, (await printed_row(run)).id)
+        with pytest.raises(RequestFailed) as refused:
+            async with attach(run.server.address, run.token, "early", Events()):
+                pass
+        assert refused.value.code == -32001
+        assert len(await herd.list_tokens(run.db, run.store.session_id)) == 1
+
+
+async def test_recording_the_printed_token_twice_is_not_a_revocation(
+    db_url: str, tmp_path: Path
+) -> None:
+    """`calu run` and the server may both record the printed token for the first session row.
+    The second insert is refused by the database, and the token stays valid."""
+    async with running(db_url, tmp_path, [[{"text": "hi"}]]) as run:
+        assert await run.server._record_printed(run.server.token_hash) is True
+        async with attach(run.server.address, run.token, "attach", Events()) as client:
+            await client.request("auto_escalate.set", {"edits": True})
+        assert not (await printed_row(run)).revoked

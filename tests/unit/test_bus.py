@@ -1,6 +1,9 @@
 """The event bus: sequence numbers, fan-out to several clients, replay and overflow."""
 
+from typing import Any
+
 import anyio
+import anyio.lowlevel
 import pytest
 
 from calu import bus as bus_module
@@ -152,3 +155,21 @@ async def test_a_sequence_number_beyond_the_stream_is_not_called_complete():
     events, complete = bus.replay(500)
     assert events == []
     assert not complete, "the client has seen nothing of this session and must resubscribe"
+
+
+async def test_publish_waits_for_its_watchers_and_survives_their_errors():
+    """The protocol server acts on a state the session reports before the session goes on."""
+    bus = Bus()
+    seen: list[int] = []
+
+    async def failing(event: Any) -> None:
+        raise LookupError("a watcher's own problem")
+
+    async def recording(event: Any) -> None:
+        await anyio.lowlevel.checkpoint()
+        seen.append(event.seq)
+
+    bus.watch(failing)
+    bus.watch(recording)
+    await bus.publish(Log(level="info", message="one"))
+    assert seen == [1]
