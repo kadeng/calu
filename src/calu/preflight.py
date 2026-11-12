@@ -367,12 +367,12 @@ def setting_source_warnings(
 ) -> list[str]:
     """Name the user's own Claude Code setup that a calu session leaves out (PLAN.md D144, Q21).
 
-    `claude.setting_sources` defaults to `["project"]` (D116), so Claude Code in a calu session
-    does not read `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `~/.claude/skills/` or the
-    project's `.claude/settings.local.json`. That is deliberate -- a personal permission rule
-    would widen what Claude Code approves by itself -- but it was silent: a user's hooks and
-    skills simply did not run. This says which of them exist, once per start, and how to
-    include them. It reads files only; a file that cannot be read or parsed is skipped.
+    `claude.setting_sources` loads every source by default, as a plain `claude` does (D178).
+    Someone who narrows it (to keep personal permission rules out, say) leaves out
+    `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, `~/.claude/skills/` or the project's
+    `.claude/settings.local.json` -- and their hooks and skills then simply do not run. This
+    says which of them exist, once per start, and how to include them again. It reads files
+    only; a file that cannot be read or parsed is skipped.
 
     Args:
         config: The session configuration.

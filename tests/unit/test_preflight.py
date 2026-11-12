@@ -264,7 +264,8 @@ def test_the_users_own_claude_setup_that_a_session_leaves_out_is_named(tmp_path:
     (project / ".claude").mkdir(parents=True)
     (project / ".claude" / "settings.local.json").write_text("{}", encoding="utf-8")
 
-    (said,) = preflight.setting_source_warnings(Config(), home, project)
+    narrowed = Config.model_validate({"claude": {"setting_sources": ["project"]}})
+    (said,) = preflight.setting_source_warnings(narrowed, home, project)
     assert "~/.claude/settings.json (hooks, enabledPlugins)" in said, "theme does not matter"
     assert "~/.claude/CLAUDE.md" in said and "~/.claude/skills/" in said
     assert ".claude/settings.local.json" in said
@@ -277,7 +278,9 @@ def test_the_users_own_claude_setup_that_a_session_leaves_out_is_named(tmp_path:
     # Nothing of the user's: nothing to say. A broken settings file is skipped, not fatal.
     (tmp_path / "empty" / ".claude").mkdir(parents=True)
     (tmp_path / "empty" / ".claude" / "settings.json").write_text("{broken", encoding="utf-8")
-    assert preflight.setting_source_warnings(Config(), tmp_path / "empty", None) == []
+    assert preflight.setting_source_warnings(narrowed, tmp_path / "empty", None) == []
+    # D178: by default every source loads, so nothing is left out to name.
+    assert preflight.setting_source_warnings(Config(), home, project) == []
 
 
 def test_a_password_free_credential_without_a_sandbox_is_named(tmp_path: Path) -> None:

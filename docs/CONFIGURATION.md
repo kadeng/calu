@@ -84,7 +84,7 @@ This file is generated from `calu.config` by `calu.configdoc`; a test keeps the 
 | `claude.model` | text (or empty) | `"opus"` | Claude Code model alias ("fable", "opus", "sonnet", "haiku": always the latest of that family) or a full model id; None uses Claude Code's default. |
 | `claude.effort` | one of `low`, `medium`, `high`, `xhigh`, `max` (or empty) | (empty) | Reasoning effort of the Claude session ("low" to "max"); None uses Claude Code's default. `calu run --effort` overrides it for one session. |
 | `claude.cli_path` | text (or empty) | (empty) | Path to the `claude` executable; None looks it up on PATH. |
-| `claude.setting_sources` | list of text | `["project"]` | Which of Claude Code's own settings files it may read ("user", "project", "local"). calu's `--settings` document overrides them for the sandbox either way. |
+| `claude.setting_sources` | list of text | `["user", "project", "local"]` | Which of Claude Code's own settings files it reads ("user", "project", "local"). All of them by default, as a plain `claude` does: calu wraps Claude Code and leaves how it loads its configuration, skills, MCP servers, plugins and auth alone (D178, the owner's answer to Q21). A narrower list is possible; the start-up warning then names what it leaves out. calu's `--settings` document overrides them for the sandbox either way. |
 | `claude.sandbox` | SandboxConfig | see below | Isolation of Bash commands (PLAN.md D15, D4). |
 | `claude.sandbox.enabled` | bool | `true` | Isolate Bash commands with Claude Code's own sandbox. Off removes that isolation and leaves only the checkers and the deny lists. |
 | `claude.sandbox.fail_if_unavailable` | bool | `true` | Refuse to start when no sandbox can be built, instead of running commands unsandboxed. |

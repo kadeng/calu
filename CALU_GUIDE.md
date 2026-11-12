@@ -248,19 +248,15 @@ and keeps everything that makes it work:
   configures works in a calu session;
 - its sandbox for Bash commands, which calu switches on and tightens rather than replaces.
 
-**Which settings files are read** is worth knowing exactly, because the default is narrower
-than an interactive `claude`: `claude.setting_sources` is `["project"]`, so calu reads the
-project's `.claude/settings.json` and **not** your personal `~/.claude/settings.json` or
-`.claude/settings.local.json`. Two reasons. A herd runs the same project on several machines and
-should behave the same on all of them; and a permission rule in a personal settings file would
-widen what Claude Code approves by itself, which is the decision a checker's PASS defers to —
-so a file calu cannot see cannot weaken the pair. When something of yours is left out this way
--- hooks or plugins in `~/.claude/settings.json`, `~/.claude/CLAUDE.md`, skills in
-`~/.claude/skills/`, or `.claude/settings.local.json` -- the session says which at its start.
-If you want your own settings in the session, say so:
+**Which settings files are read:** the same as a plain `claude`. Claude Code loads your
+`~/.claude/settings.json`, the project's `.claude/settings.json` and `.claude/settings.local.json`,
+your `CLAUDE.md` files, skills, MCP servers and plugins exactly as it would without calu. If you
+want a session to ignore your personal settings -- so that the same project behaves the same on
+every machine, or so that a permission rule in a personal file cannot widen what Claude Code
+approves by itself -- narrow it, and the session then names what it leaves out at its start:
 
 ```bash
-calu config set claude.setting_sources '["user", "project", "local"]'
+calu config set claude.setting_sources '["project"]'
 ```
 
 calu changes none of those rules and does not even set the permission mode: Claude Code's own

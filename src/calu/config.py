@@ -355,8 +355,11 @@ class ClaudeConfig(ConfigModel):
     default. `calu run --effort` overrides it for one session."""
     cli_path: str | None = None
     """Path to the `claude` executable; None looks it up on PATH."""
-    setting_sources: list[str] = Field(default_factory=lambda: ["project"])
-    """Which of Claude Code's own settings files it may read ("user", "project", "local").
+    setting_sources: list[str] = Field(default_factory=lambda: ["user", "project", "local"])
+    """Which of Claude Code's own settings files it reads ("user", "project", "local"). All of
+    them by default, as a plain `claude` does: calu wraps Claude Code and leaves how it loads
+    its configuration, skills, MCP servers, plugins and auth alone (D178, the owner's answer
+    to Q21). A narrower list is possible; the start-up warning then names what it leaves out.
     calu's `--settings` document overrides them for the sandbox either way."""
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     """Isolation of Bash commands (PLAN.md D15, D4)."""
