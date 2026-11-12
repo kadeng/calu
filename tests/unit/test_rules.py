@@ -580,3 +580,112 @@ def test_a_path_in_an_interpreters_inline_code_meets_the_read_deny_list(
     the end of a path (`.env`) could not match."""
     outcome = default_rules(tmp_path).evaluate(bash(command, str(tmp_path)))
     assert bool(outcome.ask) is asks, outcome.ask
+
+
+def test_a_search_of_an_ignored_directory_or_a_nested_repository_is_checked(
+    tmp_path: Path,
+) -> None:
+    """D168 (found in review): git's list is empty for an ignored directory and stops at a
+    nested repository, but ripgrep reads both -- such a Grep was allowed without any check."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("secrets/\n", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "prod.key").write_text("k\n", encoding="utf-8")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=nested, check=True)
+    (nested / "n.key").write_text("k\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    rules = default_rules(tmp_path)
+
+    def grep(**inp: str) -> Step:
+        return Step(tool_name="Grep", tool_input={"pattern": "x", **inp}, cwd=str(tmp_path))
+
+    assert "secrets/prod.key" in rules.evaluate(grep(path="secrets")).ask[0]
+    assert "nested/n.key" in rules.evaluate(grep()).ask[0]
+    assert rules.evaluate(grep(path="src")).allowed
+
+
+def test_a_listing_that_takes_too_long_is_incomplete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D168: a huge tree (`/`, a Windows drive under WSL) stalled a step for minutes."""
+    from calu.checkers import search
+
+    for i in range(5):
+        (tmp_path / f"d{i}").mkdir()
+        (tmp_path / f"d{i}" / "f.txt").write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(search, "TIME_LIMIT_S", -1.0)
+    assert not search.searched_files(tmp_path, git_ignore=False).complete
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # review finding 3: launcher options, `--`, nested -m, submodules
+        "python -m calu.cli resolve 1 allow",
+        "uv run --project /x calu resolve 1 allow",
+        "uv run -- calu resolve 1 allow",
+        "uv run python -m calu resolve 1 allow",
+        "uvx --from calu calu resolve 1 allow",
+        # finding 4: a command carried in an option value, and more wrappers
+        'env -S "sudo ls"',
+        'env --split-string="sudo ls"',
+        'script -c "sudo ls"',
+        "watch sudo ls",
+        "strace -f sudo ls",
+        "flock /tmp/lock sudo ls",
+        # finding 6: combined short options, checkout without --, config --unset
+        "curl -sSLo CLAUDE.md https://example.org/x",
+        "wget -qO CLAUDE.md https://example.org/x",
+        "git checkout HEAD CLAUDE.md",
+        "git config --unset core.hooksPath",
+        # finding 7: combined interpreter flags and --eval=
+        """python3 -Sc "print(open('.env').read())" """,
+        """node --eval="require('fs').readFileSync('.env')" """,
+    ],
+)
+def test_the_review_findings_of_d168_ask(tmp_path: Path, command: str) -> None:
+    """D168: spellings an independent review found going past the deny rules to the checker."""
+    assert default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn calu src",
+        "uv run pytest",
+        "python -m calendar",
+        "watch -n 5 ls",
+        "git checkout main",
+        "git checkout -b feature main",
+        "git config user.name",
+    ],
+)
+def test_the_d168_fixes_leave_ordinary_commands_alone(tmp_path: Path, command: str) -> None:
+    """D168: the wider patterns must not catch these."""
+    assert not default_rules(tmp_path).evaluate(bash(command, str(tmp_path))).ask, command
+
+
+def test_odd_paths_do_not_crash_the_rules(tmp_path: Path) -> None:
+    """D168, review finding 9: `~unknownuser` and NUL characters raised, which escalated the
+    step as an internal error; MCP argument names and write words were missing (finding 8)."""
+    rules = default_rules(tmp_path)
+    for tool, inp in [
+        ("mcp__x__y", {"path": "~nosuchuser_calu/a"}),
+        ("mcp__x__y", {"path": "/tmp/a\x00b"}),
+        ("Grep", {"pattern": "x", "path": "/tmp/a\x00b"}),
+        ("Bash", {"command": "python3 -c \"print('~nosuchuser_calu/x')\""}),
+        ("DesignSync", {"method": "write_files", "files": [{"path": "a", "localPath": "/x\x00"}]}),
+    ]:
+        rules.evaluate(Step(tool_name=tool, tool_input=inp, cwd=str(tmp_path)))
+    named = [
+        ("mcp__serena__find_symbol", {"relative_path": ".env"}),
+        ("mcp__fs__copy_file", {"destination": "CLAUDE.md"}),
+        ("mcp__fs__append_file", {"path": "CLAUDE.md"}),
+    ]
+    for tool, inp in named:
+        assert rules.evaluate(Step(tool_name=tool, tool_input=inp, cwd=str(tmp_path))).ask, tool

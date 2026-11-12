@@ -148,7 +148,20 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
     "chrt": (frozenset(), 1),
     "taskset": (frozenset(), 1),
     "unbuffer": (frozenset(), 0),
+    "watch": (frozenset({"-n", "--interval", "-d", "--differences", "-q", "--equexit"}), 0),
+    "strace": (frozenset({"-o", "-e", "-p", "-s", "-u", "-E", "-O", "-P", "-I", "-b"}), 0),
+    "ltrace": (frozenset({"-o", "-e", "-p", "-s", "-u", "-n"}), 0),
+    "flock": (frozenset({"-w", "--timeout", "-E", "--conflict-exit-code"}), 1),
+    "script": (frozenset({"-c", "--command", "-t", "--timing", "-T", "-I", "-O", "-B"}), 0),
+    "sg": (frozenset(), 1),
+    "chroot": (frozenset({"--userspec", "--groups"}), 1),
+    "systemd-run": (frozenset({"-p", "--property", "-u", "--unit", "-E", "--setenv"}), 0),
 }
+
+COMMAND_OPTIONS = frozenset(
+    {("env", "-S"), ("env", "--split-string"), ("script", "-c"), ("script", "--command")}
+)
+"""(wrapper, option) pairs whose value is a command line to run, not an option value (D168)."""
 """Commands that run the command after them, with how to skip their own arguments (D145)."""
 
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -204,14 +217,25 @@ def command_variants(command: str) -> list[str]:
         if words and words[0] in WRAPPERS:
             valued, positional = WRAPPERS[words[0]]
             rest = words[1:]
+            inner: list[str] = []
             while rest and (rest[0].startswith("-") or (words[0] == "env" and "=" in rest[0])):
                 option = rest.pop(0)
                 if option == "--":
                     break
+                # The value of these options is itself a command line (D168):
+                # `env -S "sudo ls"`, `script -c "sudo ls"`.
+                name, _, attached = option.partition("=")
+                if (words[0], name) in COMMAND_OPTIONS:
+                    value = attached or (rest.pop(0) if rest else "")
+                    try:
+                        inner = shlex.split(value)
+                    except ValueError:
+                        inner = value.split()
+                    continue
                 if option in valued and rest:
                     rest.pop(0)
             rest = rest[positional:]
-            words = rest
+            words = inner + rest if inner else rest
             add(words)
         if words == before:
             break
@@ -373,7 +397,12 @@ class _Walker:
                 output_next = False
                 self.add_path(arg, "write", f"output file of {name}")
                 continue
-            if value in outputs:
+            if value in outputs or (
+                # Combined short options ending in the output letter: `curl -sSLo FILE`,
+                # `wget -qO FILE` (D168).
+                re.fullmatch(r"-[A-Za-z]+", value) is not None
+                and any(o == "-" + value[-1] for o in outputs)
+            ):
                 output_next = True
                 continue
             if name == "dd" and "=" in value and not value.startswith("-"):
@@ -463,7 +492,18 @@ class _Walker:
         plain = [a for a in rest if not a.value.startswith("-")]
         if sub == "config":
             reading = {"--get", "--get-all", "--get-regexp", "--list", "-l", "--show-origin"}
-            if reading & set(options) or len(plain) < 2:
+            # These write with a single argument or none (D168).
+            writing = {
+                "--unset",
+                "--unset-all",
+                "--add",
+                "--replace-all",
+                "--rename-section",
+                "--remove-section",
+                "--edit",
+                "-e",
+            }
+            if reading & set(options) or (len(plain) < 2 and not writing & set(options)):
                 return
             if "--global" in options:
                 target = "~/.gitconfig"
@@ -472,8 +512,19 @@ class _Walker:
             else:
                 target = ".git/config"
             self.add_path(_Word(target, False), "write", "configuration written by git config")
-        elif sub in ("checkout", "restore") and ("--" in values or sub == "restore"):
-            after = rest[[a.value for a in rest].index("--") + 1 :] if "--" in values else plain
+        elif sub in ("checkout", "restore") and (
+            "--" in values
+            or sub == "restore"
+            # `git checkout REV PATH...` without `--` overwrites PATH as well (D168); a checkout
+            # that makes a branch names a branch and a start point, not files.
+            or (len(plain) >= 2 and not {"-b", "-B", "--orphan"} & set(options))
+        ):
+            if "--" in values:
+                after = rest[[a.value for a in rest].index("--") + 1 :]
+            elif sub == "checkout":
+                after = plain[1:]
+            else:
+                after = plain
             for arg in after:
                 if not arg.value.startswith("-"):
                     self.add_path(arg, "write", f"file overwritten by git {sub}")
@@ -585,18 +636,23 @@ GLOB_LIMIT = 1000
 
 
 def _expand_home(text: str, home: Path) -> str:
-    """Replace a leading `~`, `$HOME` or `${HOME}` with the home directory.
+    """Replace a leading `~`, `$HOME` or `${HOME}` with the home directory, and `~user`.
 
     Args:
         text: A path as written.
         home: The home directory.
 
     Returns:
-        The text with the prefix replaced, or unchanged.
+        The text with the prefix replaced (`~user/...` by that user's home, as the shell does;
+        an unknown user stays as written), or unchanged.
     """
     for prefix in ("${HOME}", "$HOME", "~"):
         if text == prefix or text.startswith(prefix + "/"):
             return str(home) + text[len(prefix) :]
+    if text.startswith("~"):
+        # `~root/notes` is /root/notes to the shell, not a project file named "~root" (D168).
+        expanded = os.path.expanduser(text)
+        return expanded
     return text
 
 

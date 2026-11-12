@@ -41,6 +41,7 @@ import itertools
 import logging
 import os
 import platform
+import re
 import shutil
 import socket
 import time
@@ -151,6 +152,10 @@ from calu.store import StepRow as StoredStep
 from calu.tokens import token_hash
 
 log = logging.getLogger(__name__)
+
+SWITCHES_BRANCH = re.compile(r"(^|[\s;&|(])git(\s+-C\s+\S+)*\s+(checkout|switch|worktree)\b")
+"""A command that changes the branch it then runs on (D168): with `honesty.scope = branch`
+every mark applies to it, since the branch is read before the command runs."""
 
 WRITE_SET_PROMPT = """## What the command wrote
 
@@ -2290,7 +2295,7 @@ class Session:
                 rules=rules,
             )
         # Asking git for the branch costs a process; with the register off there is no reason to.
-        marks = await self._marks_in_force() if self.config.honesty.mode != "off" else []
+        marks = await self._marks_in_force(step) if self.config.honesty.mode != "off" else []
         if marks:
             # After the deny lists and before the checkers: a rule the user wrote is a
             # stronger statement than honesty debt, so a step that matches one escalates with
@@ -3235,17 +3240,30 @@ class Session:
             await self._emit_safely(Log(level="info", message="honesty: " + ", ".join(parts)))
         await self._emit_honesty()
 
-    async def _marks_in_force(self) -> list[HonestyMark]:
-        """Return the open marks that apply to the next step (D142, `honesty.scope`).
+    async def _marks_in_force(self, step: Step | None = None) -> list[HonestyMark]:
+        """Return the open marks that apply to a step (D142, `honesty.scope`).
+
+        Args:
+            step: The step about to run; a command that switches branch itself counts as
+                running on any branch (D168).
 
         Returns:
             All of `self.honesty_marks` with scope "project"; with scope "branch" only those
-            made on the current branch (or with no recorded branch). Asks git for the branch
-            only when the scope needs it and there are marks; the answer is cached.
+            made on the current branch (or with no recorded branch) -- unless the branch is
+            unknown or a detached `HEAD`, or the step's command switches branch
+            (`git checkout`, `git switch`, `git worktree`), in which case all of them, because
+            the branch the code would run on cannot be known before it runs. Asks git for the
+            branch only when the scope needs it and there are marks; the answer is cached.
         """
         if self.config.honesty.scope != "branch" or not self.honesty_marks:
             return list(self.honesty_marks)
-        return in_force(self.honesty_marks, "branch", await self._git_branch())
+        command = str(step.tool_input.get("command", "")) if step is not None else ""
+        if SWITCHES_BRANCH.search(command):
+            return list(self.honesty_marks)
+        branch = await self._git_branch()
+        if branch in (None, "HEAD"):
+            return list(self.honesty_marks)
+        return in_force(self.honesty_marks, "branch", branch)
 
     async def _git_branch(self) -> str | None:
         """Return the branch of the workspace's git HEAD, cached like `_git_head`.

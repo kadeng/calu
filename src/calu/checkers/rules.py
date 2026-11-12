@@ -102,6 +102,12 @@ PATH_KEYS = frozenset(
         "uri",
         "root",
         "cwd",
+        "relative_path",
+        "pathname",
+        "abs_path",
+        "absolute_path",
+        "folder",
+        "location",
     }
 )
 """Argument names whose string values are read as paths in tools without a specific rule."""
@@ -128,7 +134,23 @@ CONTENT_KEYS = frozenset(
 )
 """Argument names whose values are content, not a place: never read as paths (D166)."""
 
-WRITE_WORDS = ("write", "edit", "create", "delete", "remove", "move", "rename", "put", "save")
+WRITE_WORDS = (
+    "write",
+    "edit",
+    "create",
+    "delete",
+    "remove",
+    "move",
+    "rename",
+    "put",
+    "save",
+    "copy",
+    "append",
+    "update",
+    "patch",
+    "replace",
+    "insert",
+)
 """Words in a tool's name that make the write deny list apply to the paths it names (D166)."""
 
 OTHER_RULED_TOOLS = frozenset({"DesignSync", "ExitWorktree"})
@@ -319,9 +341,8 @@ class Rules:
                 # A path written into an interpreter's inline code is read like an argument
                 # (D167); without this `node -e "...readFileSync('.env')"` never met the read
                 # deny list. From the raw command: the splitter's form has lost the quotes.
-                path = Path(literal).expanduser()
-                path = (path if path.is_absolute() else cwd / path).resolve()
-                if self.read_denied(path):
+                path = _absolute(literal, cwd)
+                if path is not None and self.read_denied(path):
                     all_allowed = False
                     outcome.ask.append(
                         f"Inline code in `{command[:60]}` names `{self.display(path)}`, which "
@@ -351,8 +372,12 @@ class Rules:
             kind = "read" if tool in READ_PATH_TOOLS else "write"
             for raw in _tool_paths(step):
                 parts += 1
-                path = Path(raw).expanduser()
-                path = (path if path.is_absolute() else cwd / path).resolve()
+                resolved = _absolute(raw, cwd)
+                if resolved is None:
+                    all_allowed = False
+                    outcome.ask.append(f"`{raw[:80]}` ({tool} tool) is not a usable path.")
+                    continue
+                path = resolved
                 if not self._check_path(path, kind, f"{tool} tool", outcome):
                     all_allowed = False
                 if (
@@ -377,6 +402,12 @@ class Rules:
         # Also the forms without leading assignments, wrappers (`env`, `nohup`, `timeout 5`)
         # and a path before the program name: deny rules are anchored at the start (D145).
         for variant in command_variants(command):
+            if runs_calu(variant):
+                outcome.ask.append(
+                    f"The command `{command}` runs calu itself, which always asks (built-in, "
+                    "D160): calu decides Claude's escalations."
+                )
+                return True
             rule = _first_match([*BUILT_IN_COMMAND_DENY, *self.lists("command-deny")[0]], variant)
             if rule is None:
                 continue
@@ -476,10 +507,8 @@ class Rules:
         lowered = step.tool_name.lower()
         writes = any(word in lowered for word in WRITE_WORDS)
         for text in _named_paths(step.tool_input):
-            path = Path(text.removeprefix("file://")).expanduser()
-            try:
-                path = (path if path.is_absolute() else cwd / path).resolve()
-            except OSError, RuntimeError:
+            path = _absolute(text.removeprefix("file://"), cwd)
+            if path is None:
                 continue
             kinds = ("read", "write") if writes else ("read",)
             for kind in kinds:
@@ -535,8 +564,10 @@ class Rules:
                 if isinstance(entry, dict) and isinstance(entry.get("localPath"), str)
             ]
         for text in raw:
-            path = Path(text).expanduser()
-            path = (path if path.is_absolute() else cwd / path).resolve()
+            path = _absolute(text, cwd)
+            if path is None:
+                outcome.ask.append(f"DesignSync names `{text[:80]}`, which is not a usable path.")
+                continue
             via = f"uploaded by DesignSync {method}"
             self._check_path(path, "read", via, outcome)
             if path.is_dir():
@@ -742,16 +773,97 @@ def inline_code_paths(command: str) -> list[str]:
         return []
     found: list[str] = []
     seen_interpreter = False
-    for index, word in enumerate(words[:-1]):
+    for index, word in enumerate(words):
         name = os.path.basename(word)
+        attached = word.startswith(("--eval=", "--print="))
+        separate = index + 1 < len(words) and (
+            word in _CODE_OPTIONS or re.fullmatch(r"-[A-Za-z]*[ce]", word) is not None
+        )
         if name in INTERPRETERS or re.fullmatch(r"python[0-9.]*", name):
             seen_interpreter = True
         elif word in ("&&", "||", "|", ";"):
             seen_interpreter = False
-        elif seen_interpreter and word in _CODE_OPTIONS:
-            code = words[index + 1]
+        elif seen_interpreter and (attached or separate):
+            code = word.partition("=")[2] if attached else words[index + 1]
             for match in _LITERAL.finditer(code):
                 literal = match.group(2)
                 if "\n" not in literal and ("/" in literal or literal.startswith((".", "~"))):
                     found.append(literal)
     return found
+
+
+LAUNCHERS = frozenset({"uv", "uvx", "pipx", "poetry", "pdm", "hatch", "rye", "pixi", "conda"})
+"""Programs that start another program named later on their command line (D168)."""
+
+
+def runs_calu(command: str) -> bool:
+    """Tell whether a simple command starts calu, however it is launched (D160, D168).
+
+    The pattern of D160 missed launcher options (`uv run --project /x calu`, `uv run -- calu`,
+    `uvx --from calu calu`), a launcher around an interpreter (`uv run python -m calu`) and a
+    submodule (`python -m calu.cli`). This reads the words instead: calu runs if the program
+    is `calu`; or if it is a Python interpreter whose `-m` names `calu` or `calu.<module>`; or
+    if it is a launcher and a later word is `calu` or such a `-m`. A word that only mentions
+    calu in another program's arguments (`grep -rn calu src`) does not count.
+
+    Args:
+        command: One simple command, as `shell.command_variants` gives it.
+
+    Returns:
+        True if it starts calu.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    if not words:
+        return False
+    program = os.path.basename(words[0])
+
+    def module_calu(rest: list[str]) -> bool:
+        """Tell whether `rest` holds `-m calu` or `-m calu.<module>`.
+
+        Args:
+            rest: Words after the program.
+
+        Returns:
+            True if it does.
+        """
+        return any(
+            word == "-m"
+            and index + 1 < len(rest)
+            and re.fullmatch(r"calu(\.\w+)*", rest[index + 1])
+            for index, word in enumerate(rest)
+        ) or any(re.fullmatch(r"-mcalu(\.\w+)*", word) for word in rest)
+
+    if program == "calu":
+        return True
+    if re.fullmatch(r"python[0-9.]*", program):
+        return module_calu(words[1:])
+    if program in LAUNCHERS:
+        rest = words[1:]
+        return any(os.path.basename(word) == "calu" for word in rest) or module_calu(rest)
+    return False
+
+
+def _absolute(text: str, cwd: Path) -> Path | None:
+    """Turn a path as a tool input names it into an absolute path, or None if it cannot be one.
+
+    `~user/...` is expanded like the shell does; an unknown user, a NUL character or a path the
+    OS refuses gives None instead of an exception, which would escalate the step as an
+    internal error (D168).
+
+    Args:
+        text: The path as written.
+        cwd: The directory a relative path is relative to.
+
+    Returns:
+        The resolved path, or None.
+    """
+    if "\0" in text:
+        return None
+    try:
+        path = Path(os.path.expanduser(text))
+        return (path if path.is_absolute() else cwd / path).resolve()
+    except OSError, RuntimeError, ValueError:
+        return None

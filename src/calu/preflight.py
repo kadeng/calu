@@ -394,8 +394,11 @@ def setting_source_warnings(
         if (home / ".claude" / "CLAUDE.md").is_file():
             missing.append("~/.claude/CLAUDE.md")
         skills = home / ".claude" / "skills"
-        if skills.is_dir() and any(skills.iterdir()):
-            missing.append("~/.claude/skills/")
+        try:
+            if skills.is_dir() and any(skills.iterdir()):
+                missing.append("~/.claude/skills/")
+        except OSError:
+            pass  # unreadable: nothing can be said about it, and a start must not fail on it
     local = workspace / ".claude" / "settings.local.json" if workspace is not None else None
     if "local" not in sources and local is not None and local.is_file():
         missing.append(".claude/settings.local.json")

@@ -1787,3 +1787,47 @@ async def test_a_slow_rule_check_does_not_stop_the_event_loop(
         tg.cancel_scope.cancel()
     assert elapsed >= 0.4
     assert ticks >= 5, f"the loop kept running while the rules worked ({ticks} ticks)"
+
+
+@pytest.mark.parametrize(
+    ("branch", "command"),
+    [
+        ("main", "git checkout feature/x && python src/parser.py"),
+        ("HEAD", "python src/parser.py"),
+    ],
+)
+async def test_a_branch_switch_in_the_command_does_not_dodge_a_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, branch: str, command: str
+):
+    """D168 (review): with scope "branch" the branch is read before the command runs, so
+    `git checkout A && python marked.py` ran a mark of A while on B, and a detached HEAD
+    dropped every branch's marks."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "parser.py").write_text("def fields():\n    return []\n", encoding="utf-8")
+    settings = default_settings(
+        tmp_path,
+        Config(honesty=HonestyConfig(mode="enforce", scope="branch")),
+    )
+    session, rec, store = make_session(
+        tmp_path,
+        [[{"tool": "Bash", "input": {"command": command}, "result": "ok"}]],
+        settings=settings,
+    )
+    await store.apply_honesty_marks(
+        [CodeMark(path="src/parser.py", symbol="fields", reason="the docstring lies")],
+        [],
+        None,
+        "feature/x",
+    )
+
+    async def current() -> str:
+        return branch
+
+    monkeypatch.setattr(session, "_git_branch", current)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (check,) = [c for c in rec.of(CheckResult) if c.tool_name == "Bash"]
+    assert check.decision is Decision.DENY, check.reason

@@ -20,11 +20,16 @@ import fnmatch
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 LIMIT = 200_000
 """Most files listed for one search; a larger tree is reported as incomplete."""
+
+TIME_LIMIT_S = 3.0
+"""Longest a listing may take; a slower tree (a Windows drive under WSL, `/`) is reported as
+incomplete, which sends the step to the checker instead of stalling it (D168)."""
 
 
 @dataclass
@@ -33,7 +38,7 @@ class SearchedFiles:
 
     files: list[Path] = field(default_factory=list)
     complete: bool = True
-    """False when the listing stopped at `LIMIT` or the glob cannot be interpreted."""
+    """False when the listing stopped at `LIMIT` or `TIME_LIMIT_S`."""
 
 
 def searched_files(
@@ -63,18 +68,9 @@ def searched_files(
     if not directory.is_dir():
         return SearchedFiles()
     found = SearchedFiles()
-    relative = _git_files(directory) if git_ignore else None
-    if relative is None:
-        relative = []
-        for root, dirs, names in os.walk(directory):
-            dirs[:] = [d for d in dirs if d != ".git"]
-            base = Path(root).relative_to(directory)
-            relative += [str(base / name) if str(base) != "." else name for name in names]
-            if len(relative) > LIMIT:
-                found.complete = False
-                break
-    elif len(relative) > LIMIT:
-        found.complete = False
+    deadline = time.monotonic() + TIME_LIMIT_S
+    relative, complete = _listing(directory, git_ignore, deadline)
+    found.complete = complete and len(relative) <= LIMIT
     patterns = _expand_braces(glob) if glob and not glob.startswith("!") else []
     for rel in relative[:LIMIT]:
         if patterns and not any(_glob_matches(p, rel) for p in patterns):
@@ -83,6 +79,83 @@ def searched_files(
             continue
         found.files.append(directory / rel)
     return found
+
+
+def _listing(directory: Path, git_ignore: bool, deadline: float) -> tuple[list[str], bool]:
+    """List the files below `directory` that a search reads, as relative paths (D146, D168).
+
+    With `git_ignore`, git's own list is used -- but a search given an ignored directory
+    explicitly still reads it (measured with rg: `rg x secrets` reads `secrets/prod.key`), so an
+    ignored directory, or one git cannot list, is walked. An entry of git's list that is itself
+    a directory -- an untracked nested repository (`nested/`) or a submodule's gitlink -- is
+    listed in its own right, because rg descends into it.
+
+    Args:
+        directory: The directory.
+        git_ignore: Whether the search leaves out what git ignores.
+        deadline: `time.monotonic()` value after which the listing stops, incomplete.
+
+    Returns:
+        (paths relative to `directory`, whether the listing is complete).
+    """
+    listed = _git_files(directory) if git_ignore and not _ignored(directory) else None
+    if listed is None:
+        return _walk(directory, deadline)
+    relative: list[str] = []
+    for entry in listed:
+        if time.monotonic() > deadline or len(relative) > LIMIT:
+            return relative, False
+        path = directory / entry.rstrip("/")
+        if entry.endswith("/") or (path.is_dir() and not path.is_symlink()):
+            inner, complete = _listing(path, git_ignore, deadline)
+            relative += [f"{entry.rstrip('/')}/{name}" for name in inner]
+            if not complete:
+                return relative, False
+        else:
+            relative.append(entry)
+    return relative, True
+
+
+def _walk(directory: Path, deadline: float) -> tuple[list[str], bool]:
+    """List every file below `directory`, hidden ones included, without following links.
+
+    Args:
+        directory: The directory.
+        deadline: `time.monotonic()` value after which the walk stops, incomplete.
+
+    Returns:
+        (paths relative to `directory`, whether the walk finished).
+    """
+    relative: list[str] = []
+    for root, dirs, names in os.walk(directory):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        base = Path(root).relative_to(directory)
+        relative += [str(base / name) if str(base) != "." else name for name in names]
+        if len(relative) > LIMIT or time.monotonic() > deadline:
+            return relative, False
+    return relative, True
+
+
+def _ignored(directory: Path) -> bool:
+    """Tell whether git ignores `directory` itself.
+
+    Args:
+        directory: The directory.
+
+    Returns:
+        True if `git check-ignore` says so; False otherwise, also outside a work tree.
+    """
+    try:
+        done = subprocess.run(
+            ["git", "check-ignore", "-q", directory.name],
+            cwd=directory.parent,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return False
+    return done.returncode == 0
 
 
 def _git_files(directory: Path) -> list[str] | None:

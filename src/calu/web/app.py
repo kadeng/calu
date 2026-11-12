@@ -297,7 +297,7 @@ class TokenGate:
             return
         query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
         offered = (query.get("token") or [""])[0]
-        if offered and secrets.compare_digest(offered, self.token):
+        if offered and _same(offered, self.token):
             rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
             location = scope.get("path", "/") + (f"?{rest}" if rest else "")
             cookie = f"{TOKEN_COOKIE}={self.token}; HttpOnly; SameSite=Strict; Path=/"
@@ -340,9 +340,25 @@ class TokenGate:
                 continue
             for part in value.decode("latin-1").split(";"):
                 key, _, given = part.strip().partition("=")
-                if key == TOKEN_COOKIE and secrets.compare_digest(given, self.token):
+                if key == TOKEN_COOKIE and _same(given, self.token):
                     return True
         return False
+
+
+def _same(given: str, token: str) -> bool:
+    """Compare a token in constant time; any text, ASCII or not, gives an answer (D168).
+
+    `secrets.compare_digest` raises TypeError on non-ASCII `str`, which turned a stray `?token=`
+    into a 500 instead of a 401.
+
+    Args:
+        given: What the request carried.
+        token: The real token.
+
+    Returns:
+        True if they are equal.
+    """
+    return secrets.compare_digest(given.encode("utf-8", "replace"), token.encode("utf-8"))
 
 
 class LocalOnly:

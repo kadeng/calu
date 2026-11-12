@@ -1006,3 +1006,16 @@ async def test_without_the_token_nothing_is_served_and_nothing_decided(db_url: s
         assert {row[0] for row in await cur.fetchall()} == {"open"}
     finally:
         await conn.close()
+
+
+async def test_a_non_ascii_token_is_refused_not_a_server_error(db_url: str) -> None:
+    """D168: `secrets.compare_digest` raised on non-ASCII text, which gave 500, not 401."""
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        app = create_app(Db(conn), git_url_template="", token="s3cret")
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            assert (await client.get("/?token=%C3%A4bc")).status_code == 401
+    finally:
+        await conn.close()
