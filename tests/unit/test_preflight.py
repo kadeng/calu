@@ -285,7 +285,9 @@ def test_a_password_free_credential_without_a_sandbox_is_named(tmp_path: Path) -
     any program Claude runs; a one-line script could resolve its own escalations."""
     from calu.credentials import CredentialStore, KdfParams
 
-    store = CredentialStore(tmp_path / "credentials.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1))
+    store = CredentialStore(
+        tmp_path / "credentials.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
+    )
     store.save("operator", "postgresql://op@localhost/calu", None)
     off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
     (said,) = preflight.self_approval_warnings(off, store)
