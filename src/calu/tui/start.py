@@ -7,7 +7,13 @@ installation without the extra `tui` and ask `available()`.
 import importlib.util
 import os
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from calu.tui.app import TuiOptions
 
 NOT_INSTALLED = "full-screen client not installed (pip install 'calu[tui]'); using the line client"
 """What `calu attach` says on stderr when Textual is missing."""
@@ -90,6 +96,37 @@ def exit_lines(ended: TuiExit) -> list[str]:
     return lines
 
 
+def options_from(config: Path, history: Path, environ: Mapping[str, str]) -> TuiOptions:
+    """Build the client's options from the settings file and the environment.
+
+    Args:
+        config: The settings file (`tui.toml`); it does not have to exist.
+        history: The file the sent texts are kept in.
+        environ: The environment; `CALU_TUI_THEME` overrides the theme of the file.
+
+    Returns:
+        The options: theme, bell, toasts, thinking, panel width and keys from the file (its
+        problems are kept for the client to show), and both paths, so that the client stores
+        later choices and the sent texts.
+    """
+    from calu.tui import settings
+    from calu.tui.app import TuiOptions
+    from calu.tui.theme import DARK
+
+    stored = settings.load(config)
+    return TuiOptions(
+        show_thinking=stored.thinking,
+        theme=environ.get("CALU_TUI_THEME") or stored.theme or DARK,
+        bell=stored.bell,
+        toasts=stored.toasts,
+        panel_width=stored.panel_width,
+        keys=stored.keys,
+        settings_path=config,
+        history_path=history,
+        problems=stored.problems,
+    )
+
+
 def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = True) -> TuiExit:
     """Run the full-screen client until the user detaches or the session closes the connection.
 
@@ -111,24 +148,12 @@ def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = 
         calu.protocol.client.RequestFailed: If the session refuses the token.
     """
     from calu.tui import settings
-    from calu.tui.app import CaluApp, TuiOptions
+    from calu.tui.app import CaluApp
     from calu.tui.connection import protocol_connector
-    from calu.tui.theme import DARK
 
-    path = settings.config_path()
-    stored = settings.load(path)
-    options = TuiOptions(
-        after_seq=after_seq,
-        show_thinking=show_thinking and stored.thinking,
-        theme=os.environ.get("CALU_TUI_THEME") or stored.theme or DARK,
-        bell=stored.bell,
-        toasts=stored.toasts,
-        panel_width=stored.panel_width,
-        keys=stored.keys,
-        settings_path=path,
-        history_path=settings.history_path(),
-        problems=stored.problems,
-    )
+    options = options_from(settings.config_path(), settings.history_path(), os.environ)
+    options.after_seq = after_seq
+    options.show_thinking = options.show_thinking and show_thinking
     app = CaluApp(protocol_connector(address, token), options)
     app.run()
     if app.link.error is not None:

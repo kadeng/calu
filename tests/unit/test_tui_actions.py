@@ -20,7 +20,7 @@ from calu.tui.capabilities import Capabilities
 from calu.tui.commands import COMMANDS, by_slash, completions, slash_names
 from calu.tui.connection import Link
 from calu.tui.fake import FakeSession, fake_connector
-from calu.tui.model import Change, SessionModel, StepBlock
+from calu.tui.model import Change, Diff, SessionModel, StepBlock
 
 pytestmark = pytest.mark.anyio
 
@@ -288,3 +288,83 @@ def test_the_command_table_is_consistent_and_says_why_something_is_unavailable()
     assert all(command.unavailable(none) == command.later for command in later)
     withdraw = next(command for command in COMMANDS if command.id == "withdraw")
     assert "cannot be withdrawn" in str(withdraw.unavailable(Capabilities(frozenset({"usage"}))))
+
+
+async def test_a_comment_on_diff_lines_carries_both_texts_and_the_side() -> None:
+    session = FakeSession()
+    diff = Diff("src/gate.py", "a\nb\n", "a\nB\n")
+    async with attached(session) as (actions, _, _):
+        outcome = await actions.comment_diff(diff, "before", 2, 2, "  why this line?  ")
+        assert outcome.ok and outcome.message == (
+            "comment on src/gate.py:2 (old content) sent to Claude"
+        )
+        assert session.sent("comment.add") == [
+            {
+                "kind": "diff",
+                "path": "src/gate.py",
+                "side": "before",
+                "start_line": 2,
+                "end_line": 2,
+                "after_text": "a\nB\n",
+                "before_text": "a\nb\n",
+                "text": "why this line?",
+            }
+        ]
+        ranged = await actions.comment_diff(diff, "after", 1, 2, "both")
+        assert ranged.message == "comment on src/gate.py:1-2 sent to Claude"
+        empty = await actions.comment_diff(diff, "after", 1, 1, "  ")
+        assert not empty.ok and len(session.sent("comment.add")) == 2
+
+
+async def test_a_restart_stops_first_and_then_starts_with_what_was_chosen() -> None:
+    session = FakeSession()
+    scenarios.preload(session, scenarios.simple_turn())
+    async with attached(session) as (actions, model, _):
+        outcome = await actions.restart("5f0c2a9e-claude", "sonnet", "max")
+        assert outcome.ok and outcome.message == "the session starts with sonnet / max"
+        order = [name for name, _ in session.requests if name.startswith("session.s")]
+        assert order == ["session.stop", "session.start"]
+        assert session.sent("session.start") == [
+            {"resume_id": "5f0c2a9e-claude", "model": "sonnet", "effort": "max"}
+        ]
+        with anyio.fail_after(5):
+            while model.model_name != "sonnet":
+                await anyio.sleep(0.01)
+        assert model.effort == "max", "the snapshot after the start carries model and effort"
+
+
+async def test_a_restart_reports_which_of_its_two_steps_failed() -> None:
+    session = FakeSession()
+    async with attached(session) as (actions, model, _):
+        session.fail["session.stop"] = "busy"
+        refused = await actions.restart(None)
+        assert not refused.ok and refused.message == "not stopped: busy"
+        assert session.sent("session.start") == []
+        del session.fail["session.stop"]
+        session.fail["session.start"] = "claude was not found"
+        failed = await actions.restart(None, effort="low")
+        assert (
+            failed.message == "the session is stopped, and the start failed: claude was not found"
+        )
+        with anyio.fail_after(5):
+            while model.state != "stopped":
+                await anyio.sleep(0.01)
+        del session.fail["session.start"]
+        again = await actions.restart(None, effort="low")
+        assert again.ok and len(session.sent("session.stop")) == 2, "a stopped one is not stopped"
+
+
+async def test_a_reload_shows_the_stored_history_of_the_conversation_that_runs_now() -> None:
+    session = FakeSession()
+    scenarios.preload(session, scenarios.simple_turn())
+    changes: list[Change] = []
+    async with attached(session, changes.append) as (_, model, link):
+        before = len(model.blocks)
+        assert before > 3 and model.stored_blocks == 0
+        session.results["session.history"] = scenarios.stored_history()
+        link.reload()
+        with anyio.fail_after(5):
+            while model.stored_blocks == 0:
+                await anyio.sleep(0.01)
+        assert len(model.blocks) == 10 and any(change.rebuilt for change in changes)
+        assert model.state == "idle", "the snapshot follows the reload"

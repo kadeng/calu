@@ -38,7 +38,7 @@ phases.
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
 | `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
 | `src/calu/attach.py` | `calu attach --plain`: the line-oriented terminal client of a running session (also used when input or output is a pipe) |
-| `src/calu/tui/` | `calu attach` on a terminal: the full-screen client (Textual, the optional `tui` extra). `model.py` is the state as a reducer over the protocol's events (no Textual import); `connection.py` keeps the connection and reconnects; `actions.py` sends the user's requests; `fake.py` and `scenarios.py` are a scripted session for tests, screenshots and the demo; `app.py`, `widgets/`, `screens/` and `tui.tcss` render the model |
+| `src/calu/tui/` | `calu attach` on a terminal: the full-screen client (Textual, the optional `tui` extra). `model.py` is the state as a reducer over the protocol's events (no Textual import); `connection.py` keeps the connection and reconnects; `actions.py` sends the user's requests; `fake.py` and `scenarios.py` are a scripted session for tests, screenshots and the demo; `settings.py` reads `tui.toml` and keeps the sent texts; `difftools.py`, `completion.py` and `export.py` are the Textual-free parts of the diff screen, of `@` completion and of `/export`; `app.py`, `widgets/`, `screens/` and `tui.tcss` render the model |
 | `src/calu/protocol/schema.py` | `calu protocol`: JSON Schema of the protocol, for clients in other languages |
 | `src/calu/bus.py` | Event bus: sequence numbers, fan-out to the clients, replay buffer |
 | `src/calu/tokens.py` | Client tokens (issued per session, stored hashed) |

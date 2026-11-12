@@ -201,11 +201,12 @@ class DiffScreen(Screen[None]):
         elif self.commenting:
             keys = Text(" enter sends the comment to Claude · esc cancels", palette.muted)
         else:
-            keys = Text(
+            wide = (
                 " ↑↓ move · ] [ next/previous change · v select lines · enter comment · "
-                "s split/unified · f next file · c copy · esc back",
-                palette.muted,
+                "s split/unified · f next file · c copy · esc back"
             )
+            narrow = " ↑↓ move · ] [ change · v select · enter comment · s split · c copy · esc"
+            keys = Text(wide if self.size.width >= len(wide) else narrow, palette.muted)
         self.query_one("#diff-keys", Static).update(keys)
         self.call_after_refresh(self._keep_visible)
 

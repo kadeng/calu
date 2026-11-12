@@ -218,6 +218,8 @@ class CaluApp(App[None]):
         self.next_model: str | None = None
         """The model the next start asks for (`/model` while the session is stopped)."""
         self._was_working = False
+        self.terminal_focused = True
+        """False while the terminal reports that its window has lost the focus."""
         self.target = MAIN
         """The agent a chat message goes to: `MAIN` or a running background subagent."""
         self.delivery = "queued"
@@ -409,6 +411,8 @@ class CaluApp(App[None]):
             transcript.apply(change.blocks_added, change.blocks_updated)
         if any(isinstance(self.model.blocks[index], TurnEndBlock) for index in change.blocks_added):
             self._usage_asked = False
+            if not self.terminal_focused and not change.rebuilt and self.options.bell:
+                self.bell()  # a turn ended while the user looks at another window
         if (
             not self._usage_asked
             and self.link.connection is not None
@@ -920,6 +924,14 @@ class CaluApp(App[None]):
                     partial(self.run_command, "clear_mark", key),
                 )
         self.render_all()
+
+    def on_app_blur(self) -> None:
+        """Note that the terminal window lost the focus (the bell then also marks a turn's end)."""
+        self.terminal_focused = False
+
+    def on_app_focus(self) -> None:
+        """Note that the terminal window has the focus again."""
+        self.terminal_focused = True
 
     def on_descendant_focus(self) -> None:
         """Show the keys of the widget that got the focus, and the panel's hints with it."""
@@ -2169,6 +2181,7 @@ class CaluApp(App[None]):
             else:
                 screen.set_body([Text(outcome.message, self.palette.red)])
 
+        screen.reload = lambda: self._spawn(load())
         self._spawn(load())
 
     def _cmd_usage(self, rest: str) -> None:

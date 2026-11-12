@@ -49,16 +49,20 @@ The client (`src/calu/tui/`) is tested in the unit layer, without a terminal, a 
 | `test_tui_render.py` | `calu.tui.render`: every line the client draws, compared as plain text | Rich only |
 | `test_tui_actions.py` | `calu.tui.actions` and the reconnect loop of `calu.tui.connection`: the exact request of each intention, refusals, falling behind, a revoked token; the command table against the line client's `HELP` | the scripted session `calu.tui.fake` |
 | `test_tui_app.py` | the Textual app under `App.run_test()` with `Pilot` pressing keys: sending in each mode, `a a`/`d d`/note, questions, the detail view, agent switching, side questions, the scrolling rules (the scroll offset and every visible line stay while output arrives), 80x24 and 120x36, a session of 2,000 steps | the scripted session |
+| `test_tui_more.py` | the same app for what came second: the start card of a stopped session, the confirmed stop-and-resume with another model or effort, resuming a stored conversation, the stored history above the replayed events, the diff screen (side by side, unified, jumps between changes, a comment on selected lines), the side panel as a list (queue, held drafts, marks), held drafts sent when the session turns idle, search, copy, export, `@` path completion, large pastes, the settings file, other keys, `NO_COLOR` | the scripted session |
+| `test_tui_tools.py` | what needs neither Textual nor a session: `calu.tui.settings` (`tui.toml`, the history of sent texts), `calu.tui.difftools` (the rows of a diff, a selection as a line range), `calu.tui.completion`, `calu.tui.export`, and the stored history in the model | nothing |
+| `test_tui_screens.py` | the whole screen as text for six scripted sessions at 120x36 and 80x24, compared with the files in `tests/unit/tui_screens/`; the same text without colours | the scripted session |
 | `test_tui_process.py` | the app over `protocol_connector` against a real `SessionServer`, session and fake runner: a turn, an escalation, a side question, the detail view, a model change; and which client `calu attach` starts | a real WebSocket |
 | `test_protocol_side_usage.py` | the requests `side.ask`, `usage.get`, `model.set` and the event `usage.update` through the fake runner | a real WebSocket |
 
 `calu.tui.scenarios` holds the scripted sessions (a turn, an escalation, subagents with a
-question, a set of questions, 2,000 steps); the tests, the screenshots and the demo use the
-same ones.
+question, a set of questions, a stopped session, 2,000 steps, a stored history); the tests, the
+screenshots and the demo use the same ones.
 
 ```bash
 uv run python -m calu.tui showcase                 # the client on a scripted session, to look at
-uv run python scripts/tui_screenshots.py /tmp/shots   # 13 states at 120x36 and 80x24, SVG and PNG
+uv run python scripts/tui_screenshots.py /tmp/shots   # 20 states at 120x36 and 80x24, SVG and PNG
+CALU_UPDATE_TUI_SCREENS=1 uv run pytest tests/unit/test_tui_screens.py   # after a wanted layout change
 ```
 
 `scripts/tui_screenshots.py` runs the client headless with a clock it controls and writes each
@@ -319,6 +323,20 @@ escalation resolved from the database alone.
    bar says why the connection ended; `ctrl+d` leaves); two clients on one escalation (the
    other one reports "decided elsewhere"); `calu attach --plain` and `calu attach | cat` give
    the line client.
+23. The second part of the full-screen client, in a real terminal: attach to a session that has
+   run a while and was restarted with `calu run --resume` (the stored history stands above a
+   line that says so, then the live events); `/stop`, then Enter on the start card; `/effort
+   max` on a running session (the confirmation lists what the stop ends; `n` keeps the session,
+   `y` resumes the conversation with the new effort); `/sessions` and a second conversation;
+   `ctrl+up`, the cursor on an edit, `D` (side by side from 120 columns, `s` switches), `v`,
+   `j`, Enter, a comment — Claude must receive it with the selected lines; `ctrl+f` and a
+   word (the matches are marked, Enter goes to the older one, Esc ends); `alt+h` while Claude
+   works (the draft is listed under HELD and goes out when the turn ends), `f2`, `d` on a
+   draft; paste 50 lines (one marker; the message arrives in full); `@` and Tab on a project
+   path; `/export`; `/theme calu-light`, detach, attach again (the theme is kept in
+   `~/.config/calu/tui.toml`, the sent texts come back with the up arrow); `NO_COLOR=1 calu
+   attach`; switch to another window while a turn runs (the bell rings at its end if the
+   terminal reports focus changes).
 
 ## Measuring the checkers
 

@@ -3,6 +3,7 @@
 All through a real WebSocket and the scripted fake runner (`tests/unit/test_protocol_server`).
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import anyio
@@ -163,3 +164,24 @@ async def test_the_model_of_a_running_session_can_be_changed(tmp_path: Path):
             await protocol.request("model.set", {})
             assert runner.model is None and runner.model_changes == 2
             assert (await protocol.request("state.get"))["model"] is None
+
+
+async def test_an_escalation_says_when_it_began_to_wait_also_in_the_snapshot(tmp_path: Path):
+    (tmp_path / "a.txt").write_text("old\n", encoding="utf-8")
+    edit = {"file_path": "a.txt", "old_string": "old", "new_string": "new # calu:escalate"}
+    turns = [[{"tool": "Edit", "input": edit, "result": "ok"}]]
+    async with served(tmp_path, turns) as run:
+        events = Events()
+        async with client(run, events) as protocol:
+            before = datetime.now(UTC)
+            await protocol.request("session.start", {})
+            await protocol.request("chat.send", {"text": "say hi"})
+            request = (await events.wait_for("escalation.request"))[0]
+            opened = datetime.fromisoformat(request["opened_at"])
+            assert before <= opened <= datetime.now(UTC)
+            listed = (await protocol.request("state.get"))["escalations"]
+            assert [entry["opened_at"] for entry in listed] == [request["opened_at"]]
+            await protocol.request(
+                "escalation.decide", {"escalation_id": request["escalation_id"], "decision": "deny"}
+            )
+            await events.wait_for("turn.result")
