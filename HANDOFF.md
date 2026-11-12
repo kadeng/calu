@@ -396,6 +396,14 @@ throwaway database and prints what it wrote. The sandbox is off by default (this
    critical misses calu's rules stop anyway from those where the gate rests on the model alone
    (`cat .env` is on the read-deny list; `kubectl apply` is on no list) -- which is what Q16
    asks the owner to decide.
+32. **The new Claude Code tools in a real session** (D156-D158, 2026-11-12, CLI 2.1.319, haiku,
+   rule-based fake checkers): `Monitor(command="X=1 sudo -n ls /root")`, loaded through
+   ToolSearch, escalated on the deny rule. A `Workflow` whose single `agent()` ran the same
+   command: the subagent's step escalated and was denied, its result went to the result
+   checker (`checker_runs` row `subagent-result`), and the one-shot run waited for the
+   background workflow ("1 background task(s) still running") and stopped only after Claude's
+   own follow-up turn. Before D158 the run stopped the session at the first idle, and the
+   workflow's escalation arrived after the stop.
 31. **The deny-list fixes of 2026-11-12 in a real session** (D145, D149, D151; CLI 2.1.319,
    haiku, rule-based fake checkers, throwaway folder with an un-ignored `.env`):
    `X=1 sudo -n ls /root` escalated with "matches the deny rule ... (as `sudo -n ls /root`)",
