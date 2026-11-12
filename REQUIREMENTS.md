@@ -56,6 +56,12 @@ broken down or extended. Derived requirements and design decisions belong in
 21. calu is written in Python, first as a package installable with uv plus a binary.
 22. The model layer follows Pydantic AI's patterns and supports AWS Bedrock and the Anthropic
     subscription out of the box.
+23. calu has proper plugins for VSCode (which may be modelled on stay-in-the-loop's extension)
+    and for the JetBrains IDEs (PyCharm, RustRover). Both offer a full coding-agent interface
+    and the settings calu adds on top, and let the user connect or attach to sessions. Both
+    must also work in the most modern remote development mode the IDE supports (PyCharm has
+    recently added remote functionality for this). They are implemented only after the
+    higher-priority items (the terminal client, the web IDE, standalone use) work well.
 
 ## Soft goals and priorities
 
@@ -68,3 +74,5 @@ broken down or extended. Derived requirements and design decisions belong in
    with bubblewrap (own PID and mount namespace, selected folders hidden or read-only) and
    separate users. A separate user may not be feasible in the intended usage scenarios.
 5. The relationship between calu and stay-in-the-loop is decided later.
+6. If possible, the web interface bundles a remote git browser that can work through an SSH
+   connection or tunnel.
