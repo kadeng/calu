@@ -126,7 +126,7 @@ def test_thinking_is_shown_dimmed_and_collapses_to_one_line() -> None:
     ]
     assert all("italic" in str(span.style) for span in shown[1].spans if span.end > 5)
     collapsed = render.thinking_lines(block, view(thinking_open=False))
-    assert plain(collapsed) == ["  ┊ thinking · 2 lines · t shows"]
+    assert plain(collapsed) == ["  ┊ thinking · 2 lines · alt+t shows"]
     reopened = render.thinking_lines(block, view(thinking_open=False, toggled=frozenset({3})))
     assert len(reopened) == 3
     block.streaming = True

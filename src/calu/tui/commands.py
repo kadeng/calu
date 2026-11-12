@@ -174,7 +174,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("follow", "Jump to the end and follow new output", "end · ctrl+end", group="View"),
     Command(
         "focus_transcript",
-        "Move into the transcript (j k move, enter expands, e next waiting step)",
+        "Move into the transcript (j k move, enter expands, e next waiting step, t, c)",
         "ctrl+↑",
         group="View",
     ),
@@ -215,7 +215,6 @@ COMMANDS: tuple[Command, ...] = (
 
 ALIASES = {
     "/exit": "/quit",
-    "/why": "/why",
     "/detail": "/why",
     "/side": "/btw",
     "/agents": "/agent",

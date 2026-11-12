@@ -608,7 +608,7 @@ async def test_thinking_is_shown_and_alt_t_collapses_it() -> None:
         )
         assert "  ┊ thinking" in run.transcript and "  ┊ Step two." in run.transcript
         await run.press("alt+t")
-        assert "  ┊ thinking · 2 lines · t shows" in run.transcript
+        assert "  ┊ thinking · 2 lines · alt+t shows" in run.transcript
         assert "  ┊ Step two." not in run.transcript
         await run.press("alt+t")
         assert "  ┊ Step two." in run.transcript

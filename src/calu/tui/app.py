@@ -9,10 +9,11 @@ to this view only -- the selected agent tab, the send mode of the composer, whic
 the card shows, whether the side questions are open -- and turns keys into calls of
 `calu.tui.actions.Actions`.
 
-The screen, top to bottom: status bar, agent tabs, transcript (with the side panel beside it on
-a wide terminal), the decision card while something waits for the user, the composer, a line of
-keys. Nothing that asks for a decision takes the keyboard away: the card sits between
-transcript and composer, the transcript stays scrollable and the composer usable.
+The screen, top to bottom: status bar, agent tabs, the transcript with the decision card under
+it while something waits for the user (and the side panel beside both on a wide terminal), the
+composer over the full width, a line of keys. Nothing that asks for a decision takes the
+keyboard away: the card sits between transcript and composer, the transcript stays scrollable
+and the composer usable.
 
 Keys while the composer is empty and a decision is open: `a a` allows, `d d` denies (the second
 press confirms, any other key types), `n` writes a note first, `w` shows what the checker saw;
@@ -196,8 +197,8 @@ class CaluApp(App[None]):
         """Build the screen.
 
         Yields:
-            Status bar, agent tabs, the body (transcript, card and composer beside the side
-            panel) and the line of keys.
+            Status bar, agent tabs, the body (transcript and decision card beside the side
+            panel), the composer with its header, and the line of keys.
         """
         yield Line("", id="status")
         yield AgentTabs(id="tabs")
@@ -207,13 +208,13 @@ class CaluApp(App[None]):
                 yield Transcript(self.model, self.palette, id="transcript")
                 yield NewBelow("", id="new-below")
                 yield Lines(id="card")
-                yield Line("", id="composer-head")
-                with Horizontal(id="composer-row"):
-                    yield Static(">", id="prompt")
-                    yield Composer(id="composer")
             with VerticalScroll(id="side"):
                 yield Lines(id="panel-lines")
                 yield Lines(id="side-lines")
+        yield Line("", id="composer-head")
+        with Horizontal(id="composer-row"):
+            yield Static(">", id="prompt")
+            yield Composer(id="composer")
         yield Line("", id="footer")
 
     def on_mount(self) -> None:
@@ -543,10 +544,7 @@ class CaluApp(App[None]):
             header = decision.questions[decision.current].header
             return f"your own answer to: {header} · enter keeps it · esc cancels"
         if self.mode == "side":
-            return (
-                "side question · answered beside the work, not part of the conversation · "
-                "esc closes"
-            )
+            return "side question · not part of the conversation · esc closes"
         if self.target != MAIN:
             return f"to {self.model.label(self.target)} · relayed by the main agent"
         note = ""
@@ -580,7 +578,7 @@ class CaluApp(App[None]):
             line.append(self.mode_text(), f"bold {palette.accent}" if special else palette.muted)
             if self.mode == "chat" and len(self._send_modes()) > 1:
                 line.append("  · tab changes", palette.faint)
-        line.truncate(max(10, self.query_one("#main").size.width - 2), overflow="ellipsis")
+        line.truncate(max(10, self.size.width - 2), overflow="ellipsis")
         self.query_one("#composer-head", Line).show(line)
 
     def _render_footer(self) -> None:
@@ -596,6 +594,8 @@ class CaluApp(App[None]):
                 (9, "j k", "move"),
                 (9, "enter", "expand"),
                 (8, "e", "next waiting"),
+                (7, "t", "thinking"),
+                (7, "c", "copy"),
                 (9, "esc", "back to input"),
             ]
         elif self.armed:
@@ -714,12 +714,19 @@ class CaluApp(App[None]):
         """Send a printable key pressed outside the composer into the composer.
 
         Typing therefore never goes nowhere: a letter pressed while the transcript has the
-        focus (and that is no key of the transcript) moves the focus back and is typed.
+        focus (and that is no key of the transcript) moves the focus back and is typed. In the
+        transcript `t` toggles thinking, `c` copies the block under the cursor and `w` opens
+        the detail of the open decision.
 
         Args:
             event: The key.
         """
         if len(self.screen_stack) > 1 or self.focused is self.composer:
+            return
+        in_transcript = {"t": "thinking", "c": "copy", "w": "detail"}
+        if self.focused is self.transcript and event.key in in_transcript:
+            event.stop()
+            self.run_command(in_transcript[event.key])
             return
         if event.is_printable and event.character:
             event.stop()

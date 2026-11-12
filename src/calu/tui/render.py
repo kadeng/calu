@@ -688,7 +688,7 @@ def thinking_lines(block: ThinkingBlock, view: View) -> list[Text]:
     head.append("thinking…" if block.streaming else "thinking", f"italic {palette.faint}")
     if not shown:
         count = f"{len(rows)} line{'s' if len(rows) != 1 else ''}"
-        head.append(f" · {count} · t shows", palette.faint)
+        head.append(f" · {count} · alt+t shows", palette.faint)
         return [head]
     lines = [head]
     for row in rows:
@@ -904,13 +904,11 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
     state.append(word, state_style(model.state, palette))
     if model.working() and model.state_since is not None and view.now is not None:
         state.append(f" {clock_text(view.now - model.state_since)}", palette.muted)
+    name = Text("calu", f"bold {palette.fg}")
+    if model.project:
+        name.append(f"  {model.project}", palette.muted)
     cells: list[tuple[int, Text]] = [
-        (
-            0,
-            Text.assemble(
-                ("calu", f"bold {palette.fg}"), "  ", (model.project or "", palette.muted)
-            ),
-        ),
+        (0, name),
         (0, state),
     ]
     open_count = len(model.decisions)
