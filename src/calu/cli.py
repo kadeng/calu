@@ -87,6 +87,7 @@ from calu.config import (
     DEFAULT_ALLOWED_DOMAINS,
     DEFAULT_NETWORK_POLICY,
     EMPTY_CHAT_SUMMARY,
+    PROVIDER_KEYS,
     Config,
     load_secrets,
     merge_settings,
@@ -1356,6 +1357,18 @@ def _run_again_through_sudo(args: argparse.Namespace) -> None:
             "--sudo would run this installation of calu as root, and it can be changed "
             "without root: " + "; ".join(problems[:3]) + ". Install calu for root, for "
             f"example: {asuser.INSTALL_HINT}"
+        )
+    carried = sorted(
+        name for name in os.environ if name in PROVIDER_KEYS or name.startswith("ANTHROPIC_")
+    )
+    if carried:
+        # sudo starts calu with a fresh environment: what the checkers need has to be in
+        # root's own file, or they fail at the first check with the provider's error.
+        print(
+            f"note: sudo does not pass your environment ({', '.join(carried)}). The checkers "
+            "read their keys from /etc/calu/.env; Claude Code uses your own login.",
+            file=sys.stderr,
+            flush=True,
         )
     command = asuser.sudo_command(_ARGUMENTS, getpass.getuser(), executable)
     try:
