@@ -1,14 +1,127 @@
 # Handoff
 
-State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
-the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
-with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D206, open questions §11, phases §12).
+State on 2026-11-13: after the honesty redesign and the full-screen terminal client were merged
+and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
+(D204) and `calu setup` with three database variants (D205). Read this, then `AGENTS.md`,
+`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D206, open questions §11, phases §12).
 
 ## Pick up here
 
-**`main` is green and pushed** (1851 tests with `uv run pytest -q -m 'not live'`, 16 browser
-tests, ruff, pyright). Everything below is ordered: do it top to bottom.
+**`main` is green and pushed** at `8173a86` plus the commit that wrote this section (1851
+tests with `uv run pytest -q -m 'not live'`, 16 browser tests, ruff, pyright). CI ran green
+on the pushes before `8173a86`; check `gh run list --limit 3` for the last ones.
+
+### What to do next, in this order
+
+1. **calu runs privileged, Claude Code as an unprivileged user (requirement 26, D206): not
+   built, the next work package.** Read requirement 26 and D206 whole before designing; they
+   hold everything the owner said on 2026-11-13. In short:
+   - `calu run` is started as root, or by a user with password-protected sudo; then calu runs
+     itself again through `sudo` and passes the original user **name**.
+   - As root the user for Claude Code must be given explicitly (root itself only when named).
+     A **number is always a bare uid**: calu gives Claude Code a state directory as its home
+     (for example `/var/lib/calu/claude/<uid>`), because such a uid may have neither a name
+     nor a home (root in a container, the host user known only as uid 1000; files in a
+     mounted project directory then come out owned by the host user). A **name** means that
+     user's own home directory is used.
+   - **calu never adds users** (hard restriction). The owner rejected a dedicated system user
+     `calu` with a sudoers rule: do not propose it again.
+   - calu's installation, credentials and database files live in system directories or below
+     `/root` (`/usr/local/lib/calu` and `/usr/local/bin/calu` through `uv tool install` with
+     `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR`, `/etc/calu`, `/var/lib/calu/db`), never in the
+     unprivileged user's home. calu needs no home of that user; what that user may configure
+     is in the database.
+   - calu keeps its credentials and reconnects with them (this replaces "credentials are
+     dropped before Claude Code starts" of requirement 16).
+   - Conditions I told the owner the build must meet, recorded in D206: (a) elevate only from
+     an installation the unprivileged user cannot write; (b) run git and everything else calu
+     starts inside the workspace as the unprivileged user (git executes what a repository
+     configures); (c) take the user from `SUDO_UID`, check the passed name against it, and
+     build Claude Code's environment (home, PATH, login) for that user explicitly;
+     (d) refuse `calu run` as root without a named user.
+   - Measured already (`spikes/RESULTS.md`, "Claude Code as a bare uid"): Claude Code runs as
+     a uid without name and home, but then stores nothing and cannot resume; with a writable
+     `HOME` it works fully.
+   - **First step: a spike** that starts Claude Code under another uid through the Agent SDK
+     (`ClaudeAgentOptions` has a `user` option: verify what it does) with the PreToolUse and
+     PostToolUse hooks, `can_use_tool` and the side question working across the two users.
+     This machine has `docker` but **no passwordless sudo** (`sudo -n true` fails), so run
+     the spike in a container as root (mount the `claude` binary, `readlink -f
+     ~/.local/bin/claude`, into a glibc image such as `postgres:18`, pass `ANTHROPIC_API_KEY`
+     and `ANTHROPIC_BASE_URL`, `--network host`); that is how the bare-uid measurement was
+     made.
+   - Until it is built: `calu run` works as before (one user); with the RDS variant only the
+     sandbox's read deny list keeps Claude's commands from `~/.aws`. Do not make `calu run`
+     usable as root before Claude Code really runs under another user.
+2. **`calu acp` from PyCharm does not work properly yet** (the owner, 2026-11-13, said so
+   after my fix and then moved on to packaging; nothing more is known). What was found and
+   changed on 2026-11-12, all outside the repository: PyCharm runs on Windows and could not
+   start a Linux path, so `C:\Users\KaiLo\.jetbrains\acp.json` now runs `wsl.exe -d Ubuntu
+   -- /home/klondenberg/projects/calu/.run_acp.sh` (backup `acp.json.bak`), and that script
+   calls `"$HOME/.local/bin/uv"` by absolute path (backup `.run_acp.sh.bak`; it holds an
+   address and a token of one running session, which go stale when that `calu run` ends).
+   Started that way by hand, `initialize` and `session/new` were answered. Not tested: a
+   prompt, and anything from inside PyCharm. Next: ask the owner what he sees, read
+   `/mnt/c/Users/KaiLo/AppData/Local/JetBrains/PyCharm2026.3/log/idea.log` (grep `acp`), and
+   drive `session/prompt` by hand. `~/projects/calu` is a second checkout of the repository,
+   behind `main`; the owner's running session there warned that its narrator is on Bedrock
+   without AWS credentials.
+3. **RDS with IAM authentication has never run against a real instance** (D205; no AWS
+   account on this machine). `docs/TESTING.md` item 26 says what to check. Also not run:
+   rootless Docker, and an existing server beyond `tests/db/test_setup_variants.py`.
+4. **The full-screen client: what item 4 of the list below left untried**, and the owner
+   has not used it yet.
+5. **Publishing**: the install is `uv tool install git+https://github.com/kadeng/calu` until
+   the owner sets PyPI up (`release.yml` says how). The single-file binary was not rebuilt
+   since the extras were folded in (`scripts/build-binary.sh`).
+6. Smaller open work: the timing-sensitive browser tests (item 7 below); a checker's model
+   and limits in two stores; `cli.py` (now about 3,500 lines) should become a package; a
+   fork cannot be forked again before one of its inherited turns; a session a client starts
+   through the protocol prints no `[session]` line; a login role per person or machine, so
+   that a second machine does not need `calu setup --renew-session` (D205, last part).
+7. **Later, by the owner's order of priorities**: own plugins for VSCode and the JetBrains
+   IDEs and a git browser in the web interface (D200, D201), only after the terminal client,
+   the web interface and standalone use work well; a schema per database user and
+   user-specific settings are tentative (soft goal 7, D205 part 6); development channels are
+   not built (item 11 below).
+
+### How the owner works with a session (learned on 2026-11-12 and 13)
+
+- He sends short messages while work runs, often several in a row that refine one idea. Take
+  each as a decision, record it in `REQUIREMENTS.md` (his words only) and `PLAN.md`, and go on;
+  do not stop to confirm. When he says no to a proposal ("don't mess with adding users"), drop
+  it for good.
+- A second Claude Code session may be working in the same checkout: on 2026-11-12 a paused
+  one had been restarted by accident and committed and pushed in parallel. If commits appear
+  that this session did not make, look for another `ccd-cli` process (`ps`) and ask him.
+- For a larger change he accepts, and the results justified, an independent review before the
+  commit: reviewers per aspect, each finding checked by a second agent. Both reviews of
+  2026-11-13 found real defects that the tests had not (20 confirmed in the database setup).
+  It needs his opt-in for multi-agent work ("ultracode" or his own words).
+
+### Things about this machine that cost time
+
+- `../.env` (sitl's, with `FIREWORKS_API_KEY` and `MISTRAL_API_KEY`) has Windows line
+  endings: never `source` it. Use `export FIREWORKS_API_KEY="$(grep '^FIREWORKS_API_KEY'
+  ../.env | cut -d= -f2- | tr -d '\r"')"`. Do not print the key (it ended up in one tool
+  output once).
+- The environment of a Claude Code session here carries `ANTHROPIC_API_KEY` and
+  `ANTHROPIC_BASE_URL`; a `claude` that calu starts uses them.
+- tmux: never `tmux kill-server` (it would end the owner's sessions); use a private server,
+  `tmux -L calutrial ...`. A new tmux server does not get exported variables reliably: put
+  what a pane needs into a small script.
+- The owner's own local database is the container `calu-db-postgres-1` on port 5433, and the
+  test server is `calu-dev-caludb-1` on 55432. A real run of the Docker variant must use
+  another compose project and port (`calu.db.local.PROJECT = "calu-db-spike"`, port 55477,
+  in a driver script), and its data directory cannot be deleted afterwards without root,
+  because the files belong to the container's user: tell the owner the path.
+- `uv run pytest -q -m 'not live'` takes about six minutes and includes the 16 browser tests.
+  Do not edit documents while it runs: some tests read them.
+- Removing files with `rm -rf` on a path built from shell variables is refused by the
+  session's safety check; do not work around it.
+- `/mnt/c/Users/KaiLo/...` is the Windows side (PyCharm's log and configuration).
+
+### What was done, item by item (the list the work followed)
 
 1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
    model** (the branch `feature/honesty-certification` is history now): trusted commits and
@@ -146,7 +259,8 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    run` works as before, and the RDS variant's protection of the AWS profile rests on the
    sandbox's deny list.
 
-Decisions of the owner on 2026-11-12 that are implemented and recorded: D178-D198 and Q22 in
+Decisions of the owner on 2026-11-13: D204 and D205 are implemented; D206 (requirement 26) is
+recorded and not built. Decisions of 2026-11-12 that are implemented and recorded: D178-D203 and Q22 in
 `PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
 is part of a checker's context (D193); rule lists stay empty by default and are the exception
 (D198); a blank model is Claude Haiku on the Anthropic API, or on Bedrock in an EU region in
