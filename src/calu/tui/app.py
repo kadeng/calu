@@ -92,6 +92,7 @@ from calu.tui.theme import CALU_DARK, CALU_LIGHT, DARK, Palette, palette_for
 from calu.tui.widgets.chrome import (
     AgentTabs,
     Buttons,
+    KeyLine,
     Line,
     Lines,
     NewBelow,
@@ -393,7 +394,7 @@ class CaluApp(App[None]):
         with Horizontal(id="composer-row"):
             yield Static(">", id="prompt")
             yield Composer(id="composer")
-        yield Line("", id="footer")
+        yield KeyLine("", id="footer")
 
     def on_mount(self) -> None:
         """Register the themes, start the connection and the clock, draw the empty screen."""
@@ -1002,13 +1003,18 @@ class CaluApp(App[None]):
             return
         self.slash_index = max(0, min(self.slash_index, len(entries) - 1))
         rows = 6 if self.size.height < TALL else 8
+        # The window of `render.slash_lines`: line i shows entry first + i. A click on a
+        # line completes that command, as Tab does for the selected one.
+        chosen = self.slash_index
+        first = max(0, min(chosen - rows + 1, len(entries) - rows)) if chosen >= rows else 0
         box.show(
             render.slash_lines(
                 [(entry.slash, entry.title) for entry in entries],
                 self.slash_index,
                 self.view(self.size.width - 2),
                 rows,
-            )
+            ),
+            {line: ("slash", str(first + line)) for line in range(min(rows, len(entries) - first))},
         )
 
     def _render_head(self) -> None:
@@ -1155,7 +1161,7 @@ class CaluApp(App[None]):
             line.append(key, f"bold {palette.fg}")
             line.append(f" {what}", palette.muted)
         line.truncate(self.size.width, overflow="ellipsis")
-        self.query_one("#footer", Line).show(line)
+        self.query_one("#footer", KeyLine).show(line)
 
     def _render_below(self) -> None:
         """Show or hide the marker for new content below the visible part of the transcript."""
@@ -1227,6 +1233,11 @@ class CaluApp(App[None]):
         elif message.kind in {"card", "option", "answers", "decline"}:
             self._card_clicked(message.kind, message.key)
             return
+        elif message.kind == "slash":
+            entries = self._slash_entries()
+            if message.key.isdigit() and int(message.key) < len(entries):
+                self.slash_index = int(message.key)
+                self._complete_slash(entries)
         self.composer.focus()
 
     def _card_clicked(self, kind: str, key: str) -> None:

@@ -24,7 +24,7 @@ from calu.tui.model import ALL, MAIN
 from calu.tui.screens.confirm import ConfirmScreen
 from calu.tui.screens.detail import DetailScreen
 from calu.tui.screens.text import TextScreen
-from calu.tui.widgets.chrome import AgentTabs, Buttons, Line, Lines
+from calu.tui.widgets.chrome import AgentTabs, Buttons, KeyLine, Line, Lines
 
 pytestmark = pytest.mark.anyio
 
@@ -95,7 +95,7 @@ class Running:
     def line(self, widget_id: str) -> str:
         """Return the text a one-line or multi-line widget shows."""
         widget = self.app.query_one(f"#{widget_id}")
-        assert isinstance(widget, Line | Lines | AgentTabs)
+        assert isinstance(widget, Line | Lines | AgentTabs | KeyLine)
         return widget.text
 
     @property
@@ -874,3 +874,72 @@ async def test_the_decision_card_is_answered_with_the_mouse() -> None:
         await click("click again to allow")
         sent = run.session.sent("escalation.decide")
         assert len(sent) == 1 and sent[0]["decision"] == "allow"
+
+
+def test_a_hint_names_the_key_a_click_on_it_presses() -> None:
+    from calu.tui.widgets.chrome import key_at, key_of
+
+    names = {
+        "a,a": "a",
+        "esc": "escape",
+        "^p": "ctrl+p",
+        "alt+d": "alt+d",
+        "f4": "f4",
+        "j/k": "j",
+        "pgup": "pageup",
+        "y": "y",
+        "n,": "n",
+        "/": "slash",
+        "]": "right_square_bracket",
+    }
+    for written, key in names.items():
+        assert key_of(written) == key, written
+    for no_key in ("1-9", "Checkers", "copied", "type", ""):
+        assert key_of(no_key) is None, no_key
+    line = " a,a allow   d,d deny · esc back   3 more"
+    assert key_at(line, line.index("allow")) == "a"
+    assert key_at(line, line.index("d,d")) == "d"
+    assert key_at(line, line.index("back")) == "escape"
+    assert key_at(line, line.index("3 more")) == "3"
+    assert key_at(line, 0) is None and key_at(line, line.index("allow") + 6) is None
+
+
+async def test_the_screens_and_the_command_list_answer_to_the_mouse() -> None:
+    """A click on a key hint presses the key; a click on a listed command completes it.
+
+    With a scripted session; nothing is started.
+    """
+    async with running("escalation") as run:
+
+        async def click(widget: str, label: str, row: int = 0) -> None:
+            """Click the place where a widget shows a label."""
+            run.clock.advance(0.6)
+            shown = run.app.screen.query_one(widget)
+            text = getattr(shown, "text", "").splitlines()[row]
+            await run.pilot.click(shown, offset=(text.index(label), row))
+            await run.pilot.pause()
+
+        # The detail screen opens from the card's button and closes by a click on its hint.
+        await click("#card-actions", "Show everything")
+        await click("#card-actions", "click again")
+        assert isinstance(run.app.screen, DetailScreen)
+        await click("#detail-keys", "esc")
+        assert not isinstance(run.app.screen, DetailScreen)
+
+        # A confirmation is answered by a click on its key.
+        answers: list[bool | None] = []
+        run.app.push_screen(
+            ConfirmScreen("Really?", ["it does a thing"], run.app.palette), answers.append
+        )
+        await run.pilot.pause()
+        await click("#confirm-keys", "y ")
+        assert answers == [True]
+
+        # The list of commands: a click completes the command on that line.
+        await run.type("/he")
+        await run.pilot.pause()
+        listed = run.app.query_one("#slash", Lines).text.splitlines()
+        row = next(index for index, line in enumerate(listed) if "/help" in line)
+        await run.pilot.click("#slash", offset=(6, row))
+        await run.pilot.pause()
+        assert run.composer.strip() == "/help"

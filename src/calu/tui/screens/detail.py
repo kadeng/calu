@@ -21,6 +21,7 @@ from textual.widgets import Static
 
 from calu.tui import render
 from calu.tui.model import Decision, Diff, SessionModel
+from calu.tui.widgets.chrome import KeyLine
 
 
 def _heading(title: str, view: render.View) -> list[Text]:
@@ -213,7 +214,7 @@ class DetailScreen(Screen[None]):
         """
         with VerticalScroll(id="detail-scroll"):
             yield Static("", id="detail-body")
-        yield Static("", id="detail-keys")
+        yield KeyLine("", id="detail-keys")
 
     def on_mount(self) -> None:
         """Draw what is known and focus the body, so that the scroll keys work."""

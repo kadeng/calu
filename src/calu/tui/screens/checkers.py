@@ -35,6 +35,7 @@ from calu.tui.adminaccess import AdminAccess, AdminFailed, PasswordNeeded
 from calu.tui.render import markdown_lines
 from calu.tui.screens.password import PasswordScreen
 from calu.tui.theme import Palette
+from calu.tui.widgets.chrome import KeyLine, Lines, Picked
 
 NARROW = 100
 """Below this width the list of checkers is narrower."""
@@ -106,14 +107,14 @@ class CheckersScreen(Screen[None]):
         """
         yield Static(Text(" Checkers and their instructions", "bold"), id="checkers-title")
         with Horizontal(id="checkers-body"):
-            yield Static("", id="checkers-list")
+            yield Lines(id="checkers-list")
             with VerticalScroll(id="checkers-scroll"):
                 yield Static("", id="checkers-text")
             yield TextArea(
                 "", id="checkers-editor", soft_wrap=True, show_line_numbers=True, language=None
             )
         yield Static("", id="checkers-message")
-        yield Static("", id="checkers-keys")
+        yield KeyLine("", id="checkers-keys")
 
     def on_mount(self) -> None:
         """Ask the session for the checkers and draw what is known so far."""
@@ -159,6 +160,17 @@ class CheckersScreen(Screen[None]):
             return "e edits the instructions · a running session uses a change at its next step"
         name = (self.current or {}).get("name") or "<name>"
         return f"read-only here: {problem} · edit with: calu checker edit {name}"
+
+    def on_picked(self, message: Picked) -> None:
+        """Select the checker whose line was clicked; not while its instructions are edited.
+
+        Args:
+            message: The click on a line of the list.
+        """
+        message.stop()
+        if message.kind == "checker" and not self.editing and message.key.isdigit():
+            self.index = max(0, min(len(self.checkers) - 1, int(message.key)))
+            self._draw()
 
     def _list_lines(self) -> list[Text]:
         """Render the list of checkers.
@@ -212,7 +224,10 @@ class CheckersScreen(Screen[None]):
         """Draw the list, the selected checker, the message and the keys."""
         palette = self.palette
         self.set_class(self.editing, "editing")
-        self.query_one("#checkers-list", Static).update(Group(*self._list_lines()))
+        self.query_one("#checkers-list", Lines).show(
+            self._list_lines(),
+            {index: ("checker", str(index)) for index in range(len(self.checkers))},
+        )
         checker = self.current
         body: RenderableType = ""
         if checker is not None:

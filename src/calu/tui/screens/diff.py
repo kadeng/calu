@@ -23,6 +23,7 @@ from textual.widgets import Input, Static
 from calu.tui import render
 from calu.tui.difftools import Row, diff_rows, hunk_starts, selection_range, unified_text
 from calu.tui.model import Diff
+from calu.tui.widgets.chrome import KeyLine
 
 SPLIT_WIDTH = 120
 """From this width on the diff opens side by side."""
@@ -116,7 +117,7 @@ class DiffScreen(Screen[None]):
         with VerticalScroll(id="diff-scroll"):
             yield Static("", id="diff-body")
         yield Input(placeholder="comment for Claude on the selected lines", id="diff-comment")
-        yield Static("", id="diff-keys")
+        yield KeyLine("", id="diff-keys")
 
     def on_mount(self) -> None:
         """Choose the layout by the width, draw, and put the cursor on the first change."""

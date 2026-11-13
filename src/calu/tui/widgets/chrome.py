@@ -5,6 +5,9 @@ that react to the mouse remember which column or line stands for what, and post 
 message with it; they hold no session data.
 """
 
+import re
+from typing import Any
+
 from rich.console import Group
 from rich.text import Text
 from textual import events
@@ -19,7 +22,8 @@ class Picked(Message):
     Attributes:
         kind: "agent", "decision", "follow", or of a button of the decision card: "card" (a
             letter of the card), "option" (an option of a question), "answers" (send the
-            answers) or "decline".
+            answers) or "decline"; "slash" (a line of the command list) or "checker" (a line
+            of the checkers screen's list), with the line's index as the key.
         key: The agent key, the escalation id, the card's letter or the option's index; ""
             for "follow", "answers" and "decline".
     """
@@ -87,6 +91,130 @@ class AgentTabs(Static):
             if start <= event.x < end:
                 self.post_message(Picked("agent", key))
                 return
+
+
+KEY_NAMES = {
+    "esc": "escape",
+    "enter": "enter",
+    "tab": "tab",
+    "space": "space",
+    "pgup": "pageup",
+    "pgdn": "pagedown",
+    "home": "home",
+    "end": "end",
+    "/": "slash",
+    "?": "question_mark",
+    "]": "right_square_bracket",
+    "[": "left_square_bracket",
+    "↑": "up",
+    "↓": "down",
+    "←": "left",
+    "→": "right",
+    "↑↓": "down",
+}
+"""How a line of key hints writes a key -> the name Textual knows it by."""
+
+SEPARATOR = re.compile(r"\s·\s")
+"""What separates two hints besides two or more spaces."""
+
+HINT = re.compile(r"\S+(?: \S+)*")
+"""One hint of a line whose ` · ` separators were replaced by spaces: words one space apart."""
+
+
+def key_of(token: str) -> str | None:
+    """Translate the way a hint writes a key into the key's name.
+
+        "a,a" -> "a"      "esc" -> "escape"    "^p" -> "ctrl+p"    "alt+d" -> "alt+d"
+        "f4" -> "f4"      "j/k" -> "j"         "pgup" -> "pageup"  "y" -> "y"
+
+    Args:
+        token: The first word of a hint.
+
+    Returns:
+        The key's name, or None if the word is no key (a title, a number range, a state).
+    """
+    token = token.strip().rstrip(",:")
+    first, _, second = token.partition(",")
+    if second and first == second:
+        token = first
+    token = token.split("/")[0] if len(token) > 1 and "+" not in token else token
+    if token in KEY_NAMES:
+        return KEY_NAMES[token]
+    if token.startswith("^") and len(token) == 2:
+        return f"ctrl+{token[1].lower()}"
+    if re.fullmatch(r"(ctrl|alt|shift)\+[a-z0-9]+(\+[a-z0-9]+)?", token) or re.fullmatch(
+        r"f\d{1,2}", token
+    ):
+        return token
+    if len(token) == 1 and token.isascii() and token.isalnum():
+        return token
+    return None
+
+
+def key_at(text: str, column: int) -> str | None:
+    """Find the key of the hint under a column of a line of key hints.
+
+    Args:
+        text: The line as shown, e.g. " a,a allow   d,d deny · esc back".
+        column: The clicked column, from 0.
+
+    Returns:
+        The name of the key the hint at that column starts with, or None if the column is
+        between hints or the hint names no key.
+    """
+    for found in HINT.finditer(SEPARATOR.sub("   ", text)):
+        if found.start() <= column < found.end():
+            words = found.group().split()
+            return key_of(words[0]) if words else None
+    return None
+
+
+class KeyLine(Static):
+    """A line of key hints: a click on a hint presses the key it names.
+
+    The line is drawn like any other text; what a click does is read from the text shown
+    (`key_at`), so a screen only has to show its hints here to make them work with the mouse.
+    """
+
+    def __init__(self, content: Text | str = "", id: str | None = None) -> None:
+        """Create the line.
+
+        Args:
+            content: The hints to start with.
+            id: The widget id.
+        """
+        super().__init__(content, id=id)
+        self.text = content.plain if isinstance(content, Text) else str(content)
+        """The plain text of the line as last shown."""
+
+    def update(self, content: Any = "", *, layout: bool = True) -> None:
+        """Replace the hints.
+
+        Args:
+            content: The new line.
+            layout: Passed on to `Static.update`.
+        """
+        self.text = content.plain if isinstance(content, Text) else str(content)
+        super().update(content, layout=layout)
+
+    def show(self, line: Text) -> None:
+        """Replace the hints (the name `Line` uses).
+
+        Args:
+            line: The new line.
+        """
+        self.update(line)
+
+    def on_click(self, event: events.Click) -> None:
+        """Press the key of the hint under the pointer.
+
+        Args:
+            event: The click.
+        """
+        key = key_at(self.text, event.x)
+        if key is not None:
+            event.stop()
+            self.app.simulate_key(key)
 
 
 class Buttons(Static):

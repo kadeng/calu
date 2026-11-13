@@ -12,6 +12,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from calu.tui.theme import Palette
+from calu.tui.widgets.chrome import KeyLine
 
 
 class PasswordScreen(ModalScreen[str | None]):
@@ -43,7 +44,7 @@ class PasswordScreen(ModalScreen[str | None]):
             if self.problem:
                 yield Static(Text(self.problem, palette.red))
             yield Input(password=True, id="password-input")
-            yield Static(Text("enter confirms · esc cancels", palette.faint))
+            yield KeyLine(Text("enter confirms · esc cancels", palette.faint))
 
     def on_mount(self) -> None:
         """Put the cursor into the input."""

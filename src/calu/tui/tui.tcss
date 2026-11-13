@@ -273,6 +273,10 @@ ConfirmScreen {
     height: auto;
 }
 
+#confirm-keys {
+    height: auto;
+}
+
 #detail-scroll, #text-scroll {
     height: 1fr;
     padding: 1 2;

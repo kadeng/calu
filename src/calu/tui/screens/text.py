@@ -15,6 +15,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from calu.tui.render import fit_hints
+from calu.tui.widgets.chrome import KeyLine
 
 
 class TextScreen(Screen[None]):
@@ -106,7 +107,7 @@ class TextScreen(Screen[None]):
         with VerticalScroll(id="text-scroll"):
             body = Group(*self.body) if isinstance(self.body, list) else self.body
             yield Static(body, id="text-body")
-        yield Static(self._keys_line(), id="text-keys")
+        yield KeyLine(self._keys_line(), id="text-keys")
 
     def on_mount(self) -> None:
         """Focus the body, so that the scroll keys work."""

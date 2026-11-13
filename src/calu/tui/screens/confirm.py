@@ -16,6 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from calu.tui.theme import Palette
+from calu.tui.widgets.chrome import KeyLine
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -75,6 +76,7 @@ class ConfirmScreen(ModalScreen[bool]):
         """
         with Vertical(id="confirm-box"):
             yield Static(self._body(), id="confirm-body")
+            yield KeyLine(self._keys(), id="confirm-keys")
 
     def _body(self) -> Group:
         """Render the question, the consequences and the keys.
@@ -103,16 +105,7 @@ class ConfirmScreen(ModalScreen[bool]):
             lines.append(Text(""))
             lines.append(Text(self.footnote, palette.muted))
         lines.append(Text(""))
-        if self.notice:
-            lines.append(
-                Text.assemble(
-                    ("enter", f"bold {palette.fg}"),
-                    (" or ", palette.muted),
-                    ("esc", f"bold {palette.fg}"),
-                    (" closes", palette.muted),
-                )
-            )
-        elif self.typed:
+        if self.typed and not self.notice:
             lines.append(
                 Text.assemble(
                     (f"type {self.typed} and press enter: ", palette.muted),
@@ -120,21 +113,34 @@ class ConfirmScreen(ModalScreen[bool]):
                     ("▍", palette.accent),
                 )
             )
-            lines.append(Text("esc cancels", palette.faint))
-        else:
-            lines.append(
-                Text.assemble(
-                    ("y", f"bold {palette.fg}"),
-                    (f" {self.yes}   ", palette.muted),
-                    ("n", f"bold {palette.fg}"),
-                    (", ", palette.muted),
-                    ("enter", f"bold {palette.fg}"),
-                    (" or ", palette.muted),
-                    ("esc", f"bold {palette.fg}"),
-                    (f" {self.no}", palette.muted),
-                )
-            )
         return Group(*lines)
+
+    def _keys(self) -> Text:
+        """Render the line of keys; a click on one presses it (`KeyLine`).
+
+        Returns:
+            The keys that answer the question.
+        """
+        palette = self.palette
+        if self.notice:
+            return Text.assemble(
+                ("enter", f"bold {palette.fg}"),
+                (" or ", palette.muted),
+                ("esc", f"bold {palette.fg}"),
+                (" closes", palette.muted),
+            )
+        if self.typed:
+            return Text("esc cancels", palette.faint)
+        return Text.assemble(
+            ("y", f"bold {palette.fg}"),
+            (f" {self.yes}   ", palette.muted),
+            ("n", f"bold {palette.fg}"),
+            (", ", palette.muted),
+            ("enter", f"bold {palette.fg}"),
+            (" or ", palette.muted),
+            ("esc", f"bold {palette.fg}"),
+            (f" {self.no}", palette.muted),
+        )
 
     def on_key(self, event: events.Key) -> None:
         """Take the answer.

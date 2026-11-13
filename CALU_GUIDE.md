@@ -730,6 +730,12 @@ narrow terminal) and the input, which is always usable. The footer shows the key
 in the present state; `f1` lists all of them, `ctrl+p` opens the command palette, and `/` in the
 input lists the slash commands with their descriptions.
 
+The client also works with the mouse. An open step has buttons under its card (Allow, Deny,
+Deny with a note, Show everything); as with the keys, the first click on Allow or Deny only
+arms it and the second carries it out. Every key shown in a line of hints -- the footer, and
+the bottom line of each screen -- can be clicked instead of pressed, agent tabs and the side
+panel's entries select by click, and a click on a listed slash command completes it.
+
 **Reading.** Each tool call is one line: the checker's verdict, the tool, the checker's
 summary, the time it took. Enter on a step expands it to the command, the checks, the result
 and the diff. Your own messages are blocks with their own background and the label `you`;
