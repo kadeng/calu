@@ -57,6 +57,7 @@ import getpass
 import json
 import math
 import os
+import pwd
 import secrets
 import shlex
 import shutil
@@ -168,6 +169,35 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
     return bytearray(first.encode())
 
 
+def _root_store_hint(store: CredentialStore) -> str:
+    """Say how a calu that was started through sudo gets the invoking user's credentials.
+
+    A root calu keeps its credentials in `/etc/calu` (PLAN.md D212), so what the user set up
+    in the own home directory is not seen after `--sudo`.
+
+    Args:
+        store: The credential store that lacks the credential.
+
+    Returns:
+        "" unless calu runs as root through sudo for a named user; else a sentence with the
+        two commands that copy that user's credential store, and the alternative.
+    """
+    user = os.environ.get("SUDO_USER")
+    if os.geteuid() != 0 or not user:
+        return ""
+    try:
+        home = pwd.getpwnam(user).pw_dir
+    except KeyError:
+        return ""
+    return (
+        f". calu as root keeps its credentials in {store.path.parent}, not in your home "
+        f"directory. To use the ones you have: `sudo install -d -m 700 {store.path.parent}` "
+        f"and `sudo install -m 600 {home}/.config/calu/credentials.json {store.path}` (the "
+        "entries stay encrypted with their passwords; copy `.env` with the checker keys the "
+        "same way). Or set up as root: `sudo calu setup`"
+    )
+
+
 def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray:
     """Return the secret of credential `name`, asking for its password if it has one.
 
@@ -188,7 +218,10 @@ def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray
         CredentialError: If the password is wrong or the store is corrupt.
     """
     if name not in store:
-        raise CliError(f"no credential {name!r}; run `calu setup` or `calu credential set {name}`")
+        raise CliError(
+            f"no credential {name!r} in {store.path}; run `calu setup` or `calu credential "
+            f"set {name}`{_root_store_hint(store)}"
+        )
     if not store.needs_password(name):
         return store.load(name)
     password = read_password(prompt)
