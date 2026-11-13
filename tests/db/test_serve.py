@@ -1,6 +1,7 @@
 """`calu serve` against the test database: requests, sessions as tasks, refusals (D208)."""
 
 import os
+import signal
 import socket
 import sys
 from collections.abc import AsyncGenerator
@@ -279,3 +280,65 @@ async def test_calu_start_without_a_server_says_what_to_do(db_url: str, tmp_path
     assert "no `calu serve` answered" in done.stderr.decode()
     async with owner_db(db_url) as db:
         assert await db.all("SELECT state FROM session_requests") == [("withdrawn",)]
+
+
+async def test_an_idle_session_without_a_client_ends_after_the_idle_time(
+    db_url: str, tmp_path: Path, capsys
+):
+    session_url = await prepare(db_url, tmp_path)
+    async with owner_db(db_url) as db, serving(session_url, idle_timeout_s=0.4) as server:
+        done = await ask(db, request(tmp_path))
+        assert done.state == "started"
+        session_id = done.session_id or ""
+        rows = {row.id: row for row in await herd.sessions(db, active_only=True)}
+        _, token = await herd.mint_token(db, session_id, "test")
+        # An attached client keeps the session, however long it is idle.
+        async with connect_client(rows[session_id].address, token, "test", _ignore):
+            await anyio.sleep(1.0)
+            assert list(server.sessions) == [done.id]
+        with anyio.fail_after(20):
+            while server.sessions:
+                await anyio.sleep(0.05)
+    assert "with no client attached: ending it" in capsys.readouterr().out
+
+
+async def test_calu_serve_as_a_process_answers_and_stops_on_sigterm(db_url: str, tmp_path: Path):
+    """The command itself: the password on stdin, a refused request, SIGTERM.
+
+    Starts `calu serve` with a credential store in `tmp_path`; no Claude Code is started,
+    because the one request names a directory that does not exist. On a failure it prints
+    what the child wrote to stdout and stderr (the server's own lines, no secrets).
+    """
+    session_url = await prepare(db_url, tmp_path)
+    config = tmp_path / "config"
+    CredentialStore(config / "calu" / "credentials.json").save(
+        "session", session_url, bytearray(b"a long enough password")
+    )
+    environment = dict(os.environ) | {"PYTHONUNBUFFERED": "1", "XDG_CONFIG_HOME": str(config)}
+    errors = tmp_path / "serve-stderr.log"
+    with errors.open("wb") as log:
+        process = await anyio.open_process(
+            [sys.executable, "-m", "calu", "serve"], env=environment, stderr=log.fileno()
+        )
+    seen: list[str] = []
+    try:
+        assert process.stdin is not None
+        await process.stdin.send(b"a long enough password\n")
+        with anyio.fail_after(60):
+            await _read_until(process, "[serve] answering session requests", seen, errors)
+            async with owner_db(db_url) as db:
+                wanted = SessionRequest(
+                    hostname=socket.gethostname(),
+                    os_user=os_user(),
+                    directory=str(tmp_path / "nowhere"),
+                )
+                done = await session_requests.wait_for(db, await session_requests.file(db, wanted))
+            assert done.state == "failed" and "is not a directory" in done.message
+            process.send_signal(signal.SIGTERM)
+            await process.wait()
+        assert process.returncode == 0, errors.read_text(encoding="utf-8", errors="replace")
+    finally:
+        if process.returncode is None:
+            process.kill()
+            with anyio.move_on_after(10):
+                await process.wait()

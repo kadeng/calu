@@ -1125,6 +1125,9 @@ all work with it, and each has its own address and its own tokens.
 - **What the server prints.** One line when a session is asked for, started and ended, each
   with the directory's name and the request's number in front; the conversation is shown by
   the clients. `calu serve --max-sessions N` limits how many run at once (default 10).
+- **Forgotten sessions.** `calu serve --idle-timeout 120` ends a session that has been idle
+  for two hours with no client attached; its conversation stays and `calu start --resume`
+  continues it. Without the option a session waits until you shut it down.
 
 ## calu as root, Claude Code as another user
 

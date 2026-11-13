@@ -60,6 +60,8 @@ class ServeOptions:
     """Interface the sessions' protocol servers bind; the default accepts only local clients."""
     run_as: RunAs | None = None
     """The user Claude Code runs as in every session (D206); None is calu's own user."""
+    idle_timeout_s: float | None = None
+    """End a session that has been idle this long with no client attached; None never does."""
 
 
 def os_user() -> str:
@@ -249,6 +251,7 @@ class Server:
             interactive=False,
             host=self.options.host,
             stay=True,
+            stay_idle_s=self.options.idle_timeout_s,
             quiet=True,
             run_as=self.options.run_as,
         )

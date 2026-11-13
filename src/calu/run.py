@@ -212,6 +212,9 @@ class RunOptions:
     """A session of `calu serve` (D208): it does not end when Claude has nothing left to do,
     because it waits for its user. It ends when a client sends `shutdown`, when the caller
     cancels it, or when its protocol server cannot start. Needs `serve`, and no `interactive`."""
+    stay_idle_s: float | None = None
+    """With `stay`: end the session after it has been idle this long with no client attached.
+    None (the default) lets it wait for ever."""
     quiet: bool = False
     """Print the lines about the session's life (project, ids, address, errors) but not the
     conversation: `calu serve` shares one terminal among its sessions, and the clients show
@@ -1100,7 +1103,7 @@ async def _run(
                         )
                 if options.stay:
                     if server is not None:
-                        await server.shutdown.wait()
+                        await _until_shut_down(server, bus, session, options.stay_idle_s)
                 elif not options.interactive or (ended == "eof" and sent):
                     # `idle` reads the session each time: a message that is still queued behind a
                     # turn, or was sent a moment ago, keeps the run going until its turn is over.
@@ -1312,6 +1315,39 @@ async def _until_done(idle: IdleSignal, server: SessionServer, bus: Bus) -> None
 
         tg.start_soon(wait_idle)
         tg.start_soon(wait_shutdown)
+
+
+async def _until_shut_down(
+    server: SessionServer, bus: Bus, session: Session, idle_s: float | None
+) -> None:
+    """Wait until a session that stays (`RunOptions.stay`) is to end.
+
+        a client sent `shutdown`, or the protocol server could not start  ──► return
+        idle_s given, and for that long: no client attached and the
+        session idle, stopped or failed                                   ──► say so, return
+
+    Args:
+        server: The protocol server, for its `shutdown` event.
+        bus: The bus, for the number of attached clients.
+        session: The session, for its state.
+        idle_s: The idle time after which the session ends, or None for no limit.
+    """
+    if idle_s is None:
+        await server.shutdown.wait()
+        return
+    quiet_since: float | None = None
+    while not server.shutdown.is_set():
+        busy = bus.clients > 0 or session.state not in ("idle", "stopped", "failed")
+        now = time.monotonic()
+        quiet_since = None if busy else (quiet_since if quiet_since is not None else now)
+        if quiet_since is not None and now - quiet_since >= idle_s:
+            say(
+                f"[session] idle for {idle_s:.0f} s with no client attached: ending it "
+                "(`calu start --resume` continues the conversation)"
+            )
+            return
+        with anyio.move_on_after(min(5.0, max(0.05, idle_s / 4))):
+            await server.shutdown.wait()
 
 
 def _note(session: Session, payload: object) -> None:

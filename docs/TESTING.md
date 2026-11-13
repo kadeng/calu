@@ -446,7 +446,9 @@ escalation resolved from the database alone.
    none as running. With the server stopped, `calu start` must say after about ten seconds
    that no `calu serve` answered. Run on 2026-11-13 with `spikes/smoke_serve.py` (two
    sessions at once and a fork, real Claude Code, fake checkers); not run by hand: the two
-   commands with a typed password, and Ctrl-C with sessions in the middle of a turn.
+   commands on a real terminal, and Ctrl-C with sessions in the middle of a turn. A test runs
+   `calu serve` as a process with the password on its standard input, a refused request and
+   SIGTERM (`tests/db/test_serve.py`).
 29. calu as root (D211). In a container as root with a project directory mounted from a
    host user: `calu run` without `--user` must refuse and say how to name the user; `calu
    run --user 1000 -p "run: id > who.txt"` must write `uid=1000 gid=1000` into a file owned

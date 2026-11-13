@@ -27,10 +27,13 @@ requirement 27):
   real Claude Code with `spikes/smoke_serve.py`: two sessions at once and a fork.
   **Not tried by hand**: `calu serve` with a typed password next to `calu start` in a second
   terminal (`docs/TESTING.md` item 27), and Ctrl-C while sessions are in the middle of a turn.
+  Added later that day: `calu serve --idle-timeout MINUTES`, and a test that runs `calu
+  serve` as a process (password on stdin, a refused request, SIGTERM).
   **Not built** (D208 part 8): "new session" and "fork" in the web interface and in the
-  full-screen client (the request table is what they would write), ending an idle served
-  session after a time, and a check against a second `calu run` of the same conversation
-  outside the server.
+  full-screen client. Both would write the row `calu start` writes
+  (`calu.session_requests.file`) and then attach to the session it names; the web
+  interface holds the `admin` login, the full-screen client asks for it
+  (`tui/adminaccess.py`). This is the next piece of work on `calu serve`.
 - **Conversations started with `claude` itself (D209)**: `src/calu/claude/transcripts.py`.
   `calu list-sessions` lists them as "outside calu"; a resume or fork of one gives the
   checkers one turn that reports what the transcript says the user wrote, as a report and
@@ -324,7 +327,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1897 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1899 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 32 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

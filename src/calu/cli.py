@@ -1252,21 +1252,30 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     runs in this process without a further password.
 
     Args:
-        args: Parsed arguments (`max_sessions`).
+        args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`).
         store: The credential store.
 
     Raises:
-        CliError: If there is no usable `session` credential, `--max-sessions` is below 1, or
-            the database refused the session login.
+        CliError: If there is no usable `session` credential, `--max-sessions` is below 1,
+            `--idle-timeout` is not above 0, the user cannot be switched (`_run_as`), or the
+            database refused the session login.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors at the start.
     """
     if args.max_sessions < 1:
         raise CliError("--max-sessions takes a number of 1 or more")
+    if args.idle_timeout is not None and not (
+        math.isfinite(args.idle_timeout) and args.idle_timeout > 0
+    ):
+        raise CliError("--idle-timeout takes a number of minutes above 0")
     run_as = _run_as(args)
     url = _session_login(store)
     try:
-        options = ServeOptions(max_sessions=args.max_sessions, run_as=run_as)
+        options = ServeOptions(
+            max_sessions=args.max_sessions,
+            run_as=run_as,
+            idle_timeout_s=args.idle_timeout * 60 if args.idle_timeout is not None else None,
+        )
         code = asyncio.run(serve_sessions(url, options, user=run_as.user if run_as else None))
     finally:
         wipe(url)
@@ -3585,6 +3594,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         metavar="N",
         help="how many sessions run at once; a request beyond that is refused (default: 10)",
+    )
+    p.add_argument(
+        "--idle-timeout",
+        type=float,
+        metavar="MINUTES",
+        help="end a session that has been idle this long with no client attached (default: "
+        "never); `calu start --resume` continues its conversation",
     )
     p.add_argument(
         "--user",
