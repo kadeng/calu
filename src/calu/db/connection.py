@@ -36,6 +36,8 @@ import psycopg
 from psycopg import pq
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+from calu.db.target import RdsIamAuth, Target, TargetError
+
 log = logging.getLogger(__name__)
 
 MIGRATION_LOCK = 0x6361_6C75  # "calu"
@@ -216,60 +218,94 @@ async def connect(url: str | bytes | bytearray) -> psycopg.AsyncConnection:
 
 
 class ConnectionSource:
-    """Keeps a connection string inside the calu process, so a lost connection can be reopened.
+    """Keeps a database login inside the calu process, so a lost connection can be reopened.
 
     This object is the one place where a session keeps what it needs to log in again
-    (REQUIREMENTS 16; this replaces PLAN.md D19): the string lives in this process's memory only.
+    (REQUIREMENTS 16; this replaces PLAN.md D19): the login lives in this process's memory only.
     It is never written to the environment, to a command line or to a file, so the Claude Code
     process that calu starts does not inherit it, and `repr` does not show it.
     """
 
-    def __init__(self, url: str | bytes | bytearray) -> None:
-        """Copy the connection string.
+    def __init__(self, target: Target | str | bytes | bytearray) -> None:
+        """Keep the login.
 
         Args:
-            url: A libpq connection string or URL. A `bytearray` is copied, so the caller may
-                wipe its own buffer afterwards.
+            target: The login (`calu.db.target.Target`), or the secret of a credential store
+                entry in either of its forms. A `bytearray` is copied, so the caller may wipe
+                its own buffer afterwards.
+
+        Raises:
+            TargetError: If a secret is given that cannot be read.
         """
-        self._conninfo = url if isinstance(url, str) else bytes(url).decode()
+        self._target = target if isinstance(target, Target) else Target.parse(target)
+
+    @property
+    def target(self) -> Target:
+        """The login this source opens connections with.
+
+        Returns:
+            The target. It holds the password of a password login.
+        """
+        return self._target
 
     async def open(self) -> psycopg.AsyncConnection:
         """Open a new connection (see `connect`), and say when a failure cannot heal.
 
+        The connection string is built once per attempt (`Target.conninfo_now`): a login with
+        IAM authentication gets a fresh token each time.
+
         Side effects: after a failed attempt, one more login attempt that only reads the
-        server's answer (`refusal`).
+        server's answer (`refusal`), with the same connection string.
 
         Returns:
             The open connection in autocommit mode; the caller closes it.
 
         Raises:
             LoginRefused: If the server answered and refused the login for a reason that
-                waiting does not change (`refuses_for_good`).
-            psycopg.OperationalError: If the server cannot be reached, or refuses for a reason
-                that may pass. `LoginRefused` is a subclass, so a caller that does not care
-                about the difference catches this one.
+                waiting does not change (`refuses_for_good`). Never for a refused IAM token.
+            psycopg.OperationalError: If the server cannot be reached, refuses for a reason
+                that may pass (a refused IAM token among them), or no IAM token could be
+                obtained (the server was not asked then). `LoginRefused` is a subclass, so a
+                caller that does not care about the difference catches this one.
         """
+        conninfo = await self._target.conninfo_now()
         try:
-            return await connect(self._conninfo)
+            return await connect(conninfo)
         except psycopg.OperationalError as exc:
-            code = await self.refusal()
+            code = await self.refusal(conninfo)
             if refuses_for_good(code):
                 assert code is not None
+                if isinstance(self._target.auth, RdsIamAuth) and code.startswith("28"):
+                    # A refused token is not final: the AWS sign-in of the profile may have
+                    # expired, and the next attempt signs a new token. Giving up after three
+                    # attempts would end a session that a renewed sign-in keeps alive.
+                    raise psycopg.OperationalError(
+                        f"{' '.join(str(exc).split())} (the server refused the IAM token of "
+                        f"the AWS profile {self._target.auth.profile!r}: its sign-in may have "
+                        "expired, or the policy does not allow rds-db:connect for "
+                        f"{self._target.user})"
+                    ) from exc
                 raise LoginRefused(" ".join(str(exc).split()), code) from exc
             raise
 
-    async def refusal(self) -> str | None:
-        """Ask the server how it answers a login with this connection string.
+    async def refusal(self, conninfo: str | None = None) -> str | None:
+        """Ask the server how it answers a login of this source.
 
         Side effects: one login attempt, in a worker thread, bounded by `REFUSAL_PROBE_S`.
 
+        Args:
+            conninfo: The connection string of the attempt that failed; None builds a new one
+                (for IAM authentication that asks for another token).
+
         Returns:
-            The SQLSTATE of the server's refusal, or None if the login worked or the server
-            did not answer.
+            The SQLSTATE of the server's refusal, or None if the login worked, the server
+            did not answer, or no connection string could be built.
         """
         try:
-            params = {**LIVENESS, **conninfo_to_dict(self._conninfo)}
-        except psycopg.ProgrammingError:
+            if conninfo is None:
+                conninfo = await self._target.conninfo_now()
+            params = {**LIVENESS, **conninfo_to_dict(conninfo)}
+        except psycopg.ProgrammingError, psycopg.OperationalError:
             return None
         return await anyio.to_thread.run_sync(
             _login_answer, make_conninfo("", **params), REFUSAL_PROBE_S, abandon_on_cancel=True
@@ -282,6 +318,47 @@ class ConnectionSource:
             A fixed text.
         """
         return "ConnectionSource(<hidden>)"
+
+
+async def open_stored(
+    secret: Target | str | bytes | bytearray, start_local: bool = True
+) -> psycopg.AsyncConnection:
+    """Open a connection with a login as the credential store holds it.
+
+    For calu's commands (`calu setup`, the admin and herd commands, `calu web`): the secret
+    may be in either stored form, the local Docker database is started if it does not
+    answer, and a login with IAM authentication gets a token.
+
+    Side effects: for the variant `docker` with a port that does not answer, starts the
+    container in a worker thread (`calu.db.local.ensure_running`), which takes seconds.
+
+    Args:
+        secret: The login, or the secret of a credential store entry.
+        start_local: False leaves a stopped local database stopped.
+
+    Returns:
+        The open connection in autocommit mode; the caller closes it.
+
+    Raises:
+        psycopg.OperationalError: If the server cannot be reached or refuses the login
+            (`ConnectionSource.open`), if the local database cannot be started (the message
+            holds what docker said), or if the secret holds no database login this version
+            can read. One exception type, because the callers report a database that cannot
+            be opened and do not care which of these it was.
+    """
+    try:
+        source = ConnectionSource(secret)
+    except TargetError as exc:
+        raise psycopg.OperationalError(str(exc)) from exc
+    block = source.target.docker
+    if start_local and block is not None:
+        from calu.db import local
+
+        try:
+            await anyio.to_thread.run_sync(local.ensure_running, block)
+        except local.DockerError as exc:
+            raise psycopg.OperationalError(f"the local database is not running: {exc}") from exc
+    return await source.open()
 
 
 def alive(conn: psycopg.AsyncConnection) -> bool:

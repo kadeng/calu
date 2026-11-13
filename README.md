@@ -180,7 +180,8 @@ inside VSCode for a single user.
 - Linux on the machine where Claude Code runs (clients may run anywhere)
 - Python 3.14 and [uv](https://docs.astral.sh/uv/)
 - Claude Code, set up for your project (claude.ai login, AWS Bedrock, ...)
-- PostgreSQL; for a simple local setup, Docker with Docker Compose (`calu db up`)
+- PostgreSQL: a local one in Docker that calu creates and starts itself (needs Docker with
+  Docker Compose), a server you already have, or an AWS RDS instance (`calu setup` asks)
 - An API key for the checker models (for example Mistral, Fireworks or AWS Bedrock)
 - `bubblewrap` and `socat` for the sandbox
 
@@ -192,9 +193,15 @@ command below):
 ```bash
 uv tool install git+https://github.com/kadeng/calu   # one package: every command included
 calu doctor               # what is in place, and what is still missing
-calu db up                # local PostgreSQL in Docker; asks for a new admin password
-calu setup                # default checkers and rules; asks for a new session password
+calu setup                # asks which database to use, sets it up, and asks for two new
+                          # passwords: admin (settings and rules) and session (calu run)
 ```
+
+`calu setup` offers three databases: a local PostgreSQL in Docker (calu creates it, keeps its
+files in `~/.local/state/calu/db` unless you name another directory, and starts it whenever a
+command needs it), a PostgreSQL server that exists already (host, port, user, password,
+database), or an AWS RDS instance with IAM authentication. The
+[guide](CALU_GUIDE.md#the-database) has the details.
 
 The checkers need credentials of their own -- AWS for Bedrock, or a key in
 `~/.config/calu/.env`, which Claude Code never sees. Every checker, the narrator and the

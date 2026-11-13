@@ -75,7 +75,7 @@ phases.
 | `src/calu/markdown.py` | Code fences that the quoted text cannot close (commands, diffs, file excerpts) |
 | `src/calu/files.py` | Files that tool calls refer to (links for clients) |
 | `src/calu/testing.py` | Rule-based fake checkers for tests without model calls |
-| `src/calu/db/` | Connections (`Db`: one connection, several tasks), migrations (`migrations/NNNN_*.sql`), notifications (`notify.py`), local Docker database (`local.py`, `local-compose.yml`) |
+| `src/calu/db/` | Connections (`Db`: one connection, several tasks), migrations (`migrations/NNNN_*.sql`), notifications (`notify.py`), what is stored about the database and its logins (`target.py`: the three variants of `calu setup`), login tokens for RDS with IAM authentication (`rds.py`), local Docker database with its on-demand start (`local.py`, `local-compose.yml`) |
 | `src/calu/defaults/` | Built-in checker instructions and rule lists (loaded into the database) and the built-in evaluation cases |
 | `tests/unit/` | Tests without database, `claude` or API keys |
 | `tests/db/` | Tests against the test database (marker `db`) |

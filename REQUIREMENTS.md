@@ -63,6 +63,38 @@ broken down or extended. Derived requirements and design decisions belong in
     recently added remote functionality for this). They are implemented only after the
     higher-priority items (the terminal client, the web IDE, standalone use) work well.
 
+24. calu is installed with `uv tool install`, from the GitHub URL first and from PyPI when it
+    all works; `uv tool install calu` pulls in everything, without optional sub-packages.
+25. PostgreSQL can be set up in three variants, and the calu tool sets each one up: (1) Docker
+    locally, where calu creates the database service and launches it on demand when `calu run`
+    is called, with its data directory in a location that can be overridden during setup;
+    (2) a preexisting PostgreSQL server, for which setup just asks host, port, user, password
+    and database; (3) a preexisting server with AWS authentication for RDS.
+26. calu itself runs privileged and Claude Code runs as an unprivileged user (stated
+    2026-11-13; this replaces "the credentials are dropped before Claude Code is started" of
+    requirement 16: calu keeps its credentials, which RDS IAM tokens need anyway, and
+    reconnects with them). `calu run` is invoked either as root or by a user who has sudo.
+    - Invoked by a user with sudo rights (sudo is password protected): calu runs itself again
+      through sudo with elevated privileges and passes the original user on the command line;
+      that user is who Claude Code runs as.
+    - Invoked as root: the user to run Claude Code as must be given explicitly (it may be
+      root, but only when passed explicitly). A numeric uid makes more sense than a name:
+      inside a Docker container calu is root and the user outside may be known only by its
+      uid (typically 1000), which need not have a name or a home directory there. Running
+      Claude Code under that uid also makes files in a project directory that is mapped from
+      the host come out owned by the unprivileged host user instead of root.
+    - Given a uid, calu provides the directory Claude Code keeps its own state in (its login
+      and its conversations) and makes it that process's home; given a user name, that user is
+      assumed to have a home directory, and Claude Code uses it. When calu runs itself again
+      through sudo it therefore passes the user name, not only the uid.
+    - Hard restriction: calu never adds users, sudo-capable or otherwise.
+    - calu's own installation (Python runtime, libraries, source), its privileged
+      configuration and its privileged data (the database files) live in system directories
+      or below `/root`, never in the unprivileged user's home directory: for example
+      `/etc/calu`, `/var/lib/calu/db`, `/usr/local/bin/calu`, `/usr/local/lib/calu`, in a way
+      that is compatible with `uv tool install`. calu needs no home directory of the
+      unprivileged user; everything that user may configure is in the database.
+
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
@@ -76,3 +108,7 @@ broken down or extended. Derived requirements and design decisions belong in
 5. The relationship between calu and stay-in-the-loop is decided later.
 6. If possible, the web interface bundles a remote git browser that can work through an SSH
    connection or tunnel.
+7. Tentative ("we might want"): every database user may have a namespace of its own in the
+   database, so that there can be database users who cannot see or modify each other's tables,
+   and also database users who can see and modify everything. Similarly there might be global
+   and user-specific configuration settings in the database later.

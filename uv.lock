@@ -153,6 +153,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },
+    { name = "boto3" },
     { name = "claude-agent-sdk" },
     { name = "cryptography" },
     { name = "jinja2" },
@@ -185,6 +186,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=25.1.0" },
+    { name = "boto3", specifier = ">=1.40" },
     { name = "claude-agent-sdk", specifier = ">=0.2.164" },
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "jinja2", specifier = ">=3.1.6" },

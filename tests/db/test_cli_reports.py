@@ -360,7 +360,7 @@ async def test_doctor_checks_the_database_it_is_pointed_at(prepared, capsys) -> 
         assert await run(["doctor", "--db"]) == 1
         failed = capsys.readouterr()
         assert "cannot connect" in failed.out
-        assert "calu db up" in failed.out
+        assert "calu setup" in failed.out
     finally:
         cli_module.load_credential = original  # type: ignore[assignment]
 

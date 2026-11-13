@@ -113,8 +113,8 @@ Lost connections are covered without restarting the server: `tests/db/test_conne
 `test_a_session_survives_the_loss_of_both_database_connections` end the session's server
 processes with `pg_terminate_backend`, which is what a restart does to them, and check that the
 session reconnects, is bound to its row again and loses no step. The same files cover the
-login that stops working for good: a test replaces the session credential (as every `calu setup`
-does) or removes the database, and checks that the reconnecting ends after a few attempts with
+login that stops working for good: a test replaces the session credential (as `calu setup
+--renew-session` does) or removes the database, and checks that the reconnecting ends after a few attempts with
 an error that names the cause, and that `calu run` then exits with 1. Session isolation
 (`tests/db/test_schema.py`) includes the attack of a second holder of the `calu_session` login
 who names another session's id, and checks with two real `calu_session` logins that the
@@ -418,6 +418,20 @@ escalation resolved from the database alone.
    answer when the review ended, and further lines must be accepted meanwhile. In a
    repository without a trusted commit, `/honesty-review` must end with `certified as trusted
    after the review` when every file was judged honest and the working tree has no changes.
+26. The database setup (D205), on a machine without calu credentials (or with
+   `XDG_CONFIG_HOME` pointing at an empty directory). **Docker:** `calu setup`, answer 1, a
+   data directory of your choice: the directory must be private (0700) with the cluster below
+   `pg/`; `calu db down`, then `calu run -p hi` must print `started the local database` after
+   the session password and run; `calu setup` again must say `session login kept`. Run on
+   2026-11-13 under a compose project of its own (setup 3.7 s, on-demand start 3.8 s); not
+   run: rootless Docker. **Existing server:** `calu setup --database server` with a user that
+   may not create roles must stop before any password is asked for storing, list what is
+   missing with the SQL, and store nothing; with a prepared user (the SQL of the guide) it
+   must end with `stored credential 'session'`. **RDS with IAM:** never run against a real
+   instance. With one: prepare the roles and the IAM policy as the guide says, `calu setup
+   --database rds-iam ...`, then `calu run`; let the session run longer than 15 minutes, end
+   its connections on the server (`pg_terminate_backend`) and check that it reconnects with a
+   new token; repeat with `--session-auth password`.
 
 ## Measuring the checkers
 

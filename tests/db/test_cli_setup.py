@@ -15,6 +15,7 @@ import pytest
 from calu import cli, herd
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
+from calu.db.target import Target
 from calu.store.config import ConfigStore
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
@@ -32,7 +33,7 @@ async def test_calu_setup_fills_an_empty_database_and_stores_the_session_credent
     # command runs in a thread with a loop of its own -- as it does in reality.
     code = await anyio.to_thread.run_sync(
         lambda: cli.main(
-            ["setup", "--checker-model", "claude:haiku"],
+            ["setup", "--renew-session", "--checker-model", "claude:haiku"],
             store_factory=lambda: cast(CredentialStore, store),
         )
     )
@@ -45,7 +46,15 @@ async def test_calu_setup_fills_an_empty_database_and_stores_the_session_credent
     assert store.needs_password("session") is True
     secret = bytes(store.load("session", "session-pw"))
     # The session gets its **own** login, not the admin one it was set up with (D48).
-    assert b"user=calu_session" in secret and b"calu_owner" not in secret
+    assert b'"user": "calu_session"' in secret and b"calu_owner" not in secret
+    # ... and only where the database is travels with it, not the owner's other parameters.
+    login = Target.parse(secret)
+    assert login.variant == "server" and sorted(login.conninfo) == [
+        "dbname",
+        "host",
+        "port",
+        "user",
+    ]
 
     conn = await connect(db_url)
     try:

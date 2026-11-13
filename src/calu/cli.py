@@ -1,13 +1,16 @@
 """Command line entry point `calu` (PLAN.md §8).
 
-    calu db up [--port N]          start the local PostgreSQL (Docker); first start creates
-                                   the `admin` credential
+    calu db up                     start the local PostgreSQL (Docker) by hand; commands that
+                                   need it start it themselves
     calu db down                   stop the local PostgreSQL (data is kept)
     calu db migrate                apply schema migrations (asks for the admin password)
     calu db reset                  drop and recreate everything in the database; asks for the
                                    admin password and a typed confirmation
-    calu setup [--checker-model M] migrate, load default checkers and rules, create the
-                                   `session` credential (asks for both passwords)
+    calu setup [--database docker|server|rds-iam] [--checker-model M]
+                                   on the first run choose and set up the database (a local
+                                   one in Docker, an existing server, RDS with IAM); then
+                                   migrate, load the default checkers, create the `session`
+                                   credential (asks for the passwords)
     calu credential list|set NAME|remove NAME
                                    manage the encrypted credential store
     calu run [DIR]                 start a checked Claude Code session in DIR (asks for the
@@ -70,7 +73,6 @@ from typing import Any
 
 import anyio
 import psycopg
-from psycopg.conninfo import conninfo_to_dict
 
 from calu import __version__, admin, doctor, herd
 from calu.acp import serve_acp
@@ -88,8 +90,16 @@ from calu.config import (
 )
 from calu.configdoc import setting_rows
 from calu.credentials import CredentialError, CredentialStore, wipe
-from calu.db import Db, connect, migrate
+from calu.db import Db, migrate
 from calu.db import local as local_db
+from calu.db import rds as rds_auth
+from calu.db.connection import open_stored
+from calu.db.target import (
+    PasswordAuth,
+    RdsIamAuth,
+    Target,
+    from_fields,
+)
 from calu.defaults.instructions import honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
@@ -100,7 +110,14 @@ from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
-from calu.setup import enable_operator_login, seed_defaults, setup
+from calu.setup import (
+    SetupRefused,
+    enable_operator_login,
+    preflight,
+    seed_defaults,
+    session_can_log_in,
+    setup_database,
+)
 from calu.store import trust
 from calu.store.projects import register_directory
 from calu.tui import start as tui_start
@@ -165,7 +182,7 @@ def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray
         CredentialError: If the password is wrong or the store is corrupt.
     """
     if name not in store:
-        raise CliError(f"no credential {name!r}; run `calu db up` or `calu credential set {name}`")
+        raise CliError(f"no credential {name!r}; run `calu setup` or `calu credential set {name}`")
     if not store.needs_password(name):
         return store.load(name)
     password = read_password(prompt)
@@ -175,43 +192,127 @@ def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray
         wipe(password)
 
 
-def cmd_db_up(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Start the local database; on the first start create the `admin` credential.
+def ask(prompt: str, default: str | None, flag: str) -> str:
+    """Ask one setup question that is no secret.
 
     Args:
-        args: Parsed arguments (`port`).
+        prompt: The question without the default, e.g. "Port on 127.0.0.1".
+        default: What an empty answer means; None if an answer is required.
+        flag: The command-line option that gives the answer, for the error message.
+
+    Returns:
+        The answer. Without a terminal nothing is asked: the default is returned.
+
+    Raises:
+        CliError: If an answer is required and none was given, or there is no terminal to ask
+            on and no default (the message names the option to pass).
+    """
+    if not sys.stdin.isatty():
+        if default is None:
+            raise CliError(f"{flag} is needed (there is no terminal to ask on)")
+        return default
+    shown = f"{prompt} ({default}): " if default else f"{prompt}: "
+    answer = input(shown).strip() or (default or "")
+    if not answer:
+        raise CliError(f"{prompt.lower()} must not be empty")
+    return answer
+
+
+def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
+    """Create the local database: store the `admin` credential, then start the container.
+
+    The credential is saved before the container starts, so that a start that fails can be
+    repeated with `calu db up`: the generated owner password is not lost.
+
+    Args:
+        store: The credential store; it must hold no `admin` entry.
+        port: The port on 127.0.0.1.
+        data: An absolute directory prepared with `local_db.prepare_data_dir`, or
+            `local_db.VOLUME_DATA`.
+
+    Returns:
+        The owner login.
+
+    Raises:
+        CliError: If the passwords are empty or do not match.
+        local_db.DockerError: If docker fails.
+    """
+    print("Choose the admin password (it protects the database owner login).")
+    password = read_password("New admin password: ", confirm=True)
+    owner = local_db.owner_target(local_db.new_owner_password(), port, data)
+    try:
+        store.save("admin", owner.dump(), password)
+    finally:
+        wipe(password)
+    assert isinstance(owner.auth, PasswordAuth)
+    local_db.up(port, owner.auth.password, data)
+    where = "the Docker volume calu-db_data" if data == local_db.VOLUME_DATA else data
+    print(f"local database initialized in {where}, running on 127.0.0.1:{port}")
+    return owner
+
+
+def load_target(store: CredentialStore, name: str, prompt: str) -> Target:
+    """Read a stored database login, asking for the entry's password if it has one.
+
+    Args:
+        store: The credential store.
+        name: The credential name.
+        prompt: The password prompt.
+
+    Returns:
+        The login. It holds the password of a password login; it is not wiped, because the
+        command that asked for it uses it until it ends.
+
+    Raises:
+        CliError: If the credential does not exist.
+        CredentialError: If the password is wrong or the store is corrupt.
+        TargetError: If the entry holds no database login this version can read.
+    """
+    secret = load_credential(store, name, prompt)
+    try:
+        return Target.parse(secret)
+    finally:
+        wipe(secret)
+
+
+def cmd_db_up(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Start the local database; without an `admin` credential create the database first.
+
+    With an `admin` credential the port and the data location come from it, so the command
+    asks for the admin password. `calu run` and the other commands start a stopped local
+    database themselves; this command is for starting it by hand.
+
+    Args:
+        args: Parsed arguments (`port`, `data_dir`).
         store: The credential store.
 
     Raises:
-        CliError: If a first start finds an `admin` credential for another database.
+        CliError: If the stored database is not the local one, or an option contradicts what
+            is stored.
         CredentialError: On a wrong password.
         local_db.DockerError: If docker fails.
     """
-    if local_db.volume_exists():
-        local_db.up(args.port)
-        print(f"local database running on 127.0.0.1:{args.port}")
+    if "admin" not in store:
+        data = str(local_db.prepare_data_dir(Path(args.data_dir or local_db.default_data_dir())))
+        _first_start_local(store, args.port or local_db.DEFAULT_PORT, data)
+        print("next: calu setup")
         return
-    owner_password: str | None = None
-    if "admin" in store:
-        # The volume is gone but the credential exists (e.g. a failed first start): reuse it.
-        secret = load_credential(store, "admin", "Admin password: ")
-        try:
-            owner_password = str(conninfo_to_dict(secret.decode()).get("password") or "")
-        finally:
-            wipe(secret)
-        if not owner_password:
-            raise CliError("the admin credential has no password; remove it first")
-    else:
-        print("First start: choose the admin password (it protects the database owner login).")
-        password = read_password("New admin password: ", confirm=True)
-        owner_password = local_db.new_owner_password()
-        try:
-            store.save("admin", local_db.owner_url(owner_password, args.port), password)
-        finally:
-            wipe(password)
-    local_db.up(args.port, owner_password)
-    print(f"local database initialized and running on 127.0.0.1:{args.port}")
-    print("next: calu setup")
+    owner = load_target(store, "admin", "Admin password: ")
+    block = owner.docker
+    if block is None:
+        raise CliError(
+            f"the stored database is {owner.place}, not a local one that calu starts; "
+            "`calu credential remove admin` first if a local database is wanted instead"
+        )
+    if args.port not in (None, block.port):
+        raise CliError(f"the local database was set up on port {block.port}, not {args.port}")
+    if args.data_dir and str(Path(args.data_dir).expanduser()) != block.data:
+        raise CliError(f"the local database was set up in {block.data}")
+    first = not local_db.initialized(block.data)
+    password = owner.auth.password if isinstance(owner.auth, PasswordAuth) and first else None
+    local_db.up(block.port, password, block.data)
+    state = "initialized and running" if first else "running"
+    print(f"local database {state} on 127.0.0.1:{block.port}")
 
 
 def cmd_db_down(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -225,7 +326,7 @@ def cmd_db_down(args: argparse.Namespace, store: CredentialStore) -> None:
         local_db.DockerError: If docker fails.
     """
     local_db.down()
-    print("local database stopped (data kept)")
+    print("local database stopped (data kept); the next calu command that needs it starts it")
 
 
 async def _migrate(url: bytearray) -> int:
@@ -240,7 +341,7 @@ async def _migrate(url: bytearray) -> int:
     Raises:
         psycopg.Error: On database errors.
     """
-    conn = await connect(url)
+    conn = await open_stored(url)
     try:
         return len(await migrate(conn))
     finally:
@@ -300,7 +401,7 @@ async def _reset_summary(url: bytearray) -> list[str]:
     Raises:
         psycopg.Error: On database errors.
     """
-    conn = await connect(url)
+    conn = await open_stored(url)
     try:
         db = Db(conn)
         lines: list[str] = []
@@ -341,7 +442,7 @@ async def _reset(url: bytearray) -> str:
         psycopg.Error: On database errors. The drop and the re-creation of the schema are one
             transaction; a failure there leaves the database as it was.
     """
-    conn = await connect(url)
+    conn = await open_stored(url)
     try:
         async with conn.transaction():
             await conn.execute("DROP SCHEMA public CASCADE")
@@ -476,8 +577,231 @@ async def _has_checker_types(db: Db) -> bool:
     return bool(counted and counted[0])
 
 
+VARIANTS = ("docker", "server", "rds-iam")
+"""The values of `calu setup --database`, in the order the question lists them."""
+
+
+def _ask_variant(chosen: str | None) -> str:
+    """Decide which kind of database `calu setup` sets up.
+
+    Args:
+        chosen: The value of `--database`, or None.
+
+    Returns:
+        One of `VARIANTS`; without a terminal and without the option, "docker".
+
+    Raises:
+        CliError: If the answer is none of the three.
+    """
+    if chosen:
+        return chosen
+    print(
+        "Which database should calu use?\n"
+        "  1  a local PostgreSQL in Docker, created and started by calu\n"
+        "  2  a PostgreSQL server that exists already (host, port, user, password, database)\n"
+        "  3  an AWS RDS instance with IAM authentication"
+    )
+    answer = ask("Database", "1", "--database")
+    by_number = {"1": "docker", "2": "server", "3": "rds-iam"}
+    variant = by_number.get(answer, answer)
+    if variant not in VARIANTS:
+        raise CliError(f"{answer!r} is none of 1, 2, 3 (or docker, server, rds-iam)")
+    return variant
+
+
+def _port(text: str) -> int:
+    """Read a port number from an answer.
+
+    Args:
+        text: The answer.
+
+    Returns:
+        The port.
+
+    Raises:
+        CliError: If it is no number between 1 and 65535.
+    """
+    if not text.isdigit() or not 1 <= int(text) <= 65535:
+        raise CliError(f"{text!r} is no port number")
+    return int(text)
+
+
+def _keep_ca_file(store: CredentialStore, source: str) -> str:
+    """Copy a certificate authority file next to the credential store.
+
+    The connection then does not depend on a file in a download directory, and the copy is
+    in a directory only this user can read.
+
+    Args:
+        store: The credential store, for its directory.
+        source: The file the user named.
+
+    Returns:
+        The absolute path of the copy (`db-ca.pem` in the store's directory, mode 0600).
+
+    Raises:
+        CliError: If the file cannot be read or holds no certificate.
+    """
+    try:
+        content = Path(source).expanduser().read_bytes()
+    except OSError as exc:
+        raise CliError(f"cannot read the CA file {source}: {exc}") from exc
+    if b"-----BEGIN CERTIFICATE-----" not in content:
+        raise CliError(f"{source} holds no PEM certificate")
+    target = store.path.parent / "db-ca.pem"
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target.write_bytes(content)
+    target.chmod(0o600)
+    return str(target)
+
+
+async def _check_owner_login(owner: Target) -> None:
+    """Connect with a new owner login and check that calu can be set up there.
+
+    Args:
+        owner: The login `calu setup` was given.
+
+    Raises:
+        CliError: If the connection fails (the message holds the server's answer) or the
+            preflight finds a problem (the message lists them with the SQL that fixes each).
+    """
+    try:
+        conn = await open_stored(owner)
+    except psycopg.OperationalError as exc:
+        raise CliError(f"cannot connect to {owner.place} as {owner.user}: {exc}") from exc
+    try:
+        problems = await preflight(conn)
+    finally:
+        await conn.close()
+    if problems:
+        lines = "\n".join(f"- {line}" for line in problems)
+        raise CliError(f"calu cannot be set up in {owner.place} as it is:\n{lines}")
+
+
+def _setup_server(args: argparse.Namespace, store: CredentialStore) -> Target:
+    """Ask for a PostgreSQL server that exists already and check the login.
+
+    Nothing is stored here: the caller saves the login after it has been checked.
+
+    Args:
+        args: Parsed arguments (`host`, `port`, `dbname`, `user`, `sslmode`, `sslrootcert`).
+        store: The credential store, for the directory a CA file is copied into.
+
+    Returns:
+        The owner login, checked with a connection and the preflight.
+
+    Raises:
+        CliError: If an answer is missing or invalid, the connection fails, or the preflight
+            finds a problem.
+    """
+    print(
+        "The user below becomes the owner login of calu's database: it creates the tables and "
+        "the two roles calu's sessions and operators log in as. It needs a database of its "
+        "own and the right to create roles; it does not need to be a superuser."
+    )
+    host = args.host or ask("Host", None, "--host")
+    port = args.port or _port(ask("Port", "5432", "--port"))
+    dbname = args.dbname or ask("Database", "calu", "--dbname")
+    user = args.user or ask("User", None, "--user")
+    password = read_password("Password of that user (not echoed): ")
+    try:
+        ca = _keep_ca_file(store, args.sslrootcert) if args.sslrootcert else None
+        owner = from_fields(
+            host, port, dbname, user, PasswordAuth(password=password.decode()), args.sslmode, ca
+        )
+    finally:
+        wipe(password)
+    if owner.conninfo.get("sslmode") == "disable":
+        print("warning: sslmode disable sends the password and all data unencrypted.")
+    asyncio.run(_check_owner_login(owner))
+    return owner
+
+
+def _setup_rds(args: argparse.Namespace, store: CredentialStore) -> Target:
+    """Ask for an AWS RDS instance with IAM authentication and check the login.
+
+    No database password is asked: the login authenticates with a token that AWS signs for
+    the named profile at every connection.
+
+    Args:
+        args: Parsed arguments (`host`, `port`, `dbname`, `user`, `region`, `aws_profile`,
+            `sslrootcert`).
+        store: The credential store, for the directory the CA file is copied into.
+
+    Returns:
+        The owner login, checked with a connection and the preflight.
+
+    Raises:
+        CliError: If an answer is missing or invalid, no token can be made, the connection
+            fails, or the preflight finds a problem.
+    """
+    print(
+        "The user below becomes the owner login of calu's database. An administrator prepares "
+        "it once: CREATE ROLE <user> LOGIN CREATEROLE; GRANT rds_iam TO <user> WITH ADMIN "
+        "OPTION; CREATE DATABASE calu OWNER <user>; and an IAM policy that allows "
+        "rds-db:connect for that database user (and for calu_session, if sessions use IAM "
+        "as well)."
+    )
+    host = args.host or ask("Endpoint host", None, "--host")
+    port = args.port or _port(ask("Port", "5432", "--port"))
+    dbname = args.dbname or ask("Database", "calu", "--dbname")
+    user = args.user or ask("User (a database role with rds_iam)", None, "--user")
+    region = args.region or ask("AWS region", rds_auth.region_of(host), "--region")
+    profile = args.aws_profile or ask("AWS profile that may connect", None, "--aws-profile")
+    source = args.sslrootcert or ask(
+        "CA bundle file (global-bundle.pem from AWS)", None, "--sslrootcert"
+    )
+    ca = _keep_ca_file(store, source)
+    owner = from_fields(
+        host, port, dbname, user, RdsIamAuth(region=region, profile=profile), "verify-full", ca
+    )
+    asyncio.run(_check_owner_login(owner))
+    return owner
+
+
+def _new_database(args: argparse.Namespace, store: CredentialStore) -> Target:
+    """Set up the database of the chosen variant and store its owner login as `admin`.
+
+    Args:
+        args: Parsed arguments of `calu setup`.
+        store: The credential store; it holds no `admin` entry.
+
+    Returns:
+        The owner login.
+
+    Raises:
+        CliError: On an invalid answer, a failed connection or a failed preflight; nothing is
+            stored then, except for the local database, whose credential is stored before
+            its container starts.
+        local_db.DockerError: If docker fails.
+    """
+    variant = _ask_variant(args.database)
+    if variant == "docker":
+        chosen = args.data_dir or ask(
+            "Data directory", str(local_db.default_data_dir()), "--data-dir"
+        )
+        port = args.port or _port(ask("Port on 127.0.0.1", str(local_db.DEFAULT_PORT), "--port"))
+        data = str(local_db.prepare_data_dir(Path(chosen)))
+        return _first_start_local(store, port, data)
+    owner = _setup_server(args, store) if variant == "server" else _setup_rds(args, store)
+    print("Choose the admin password (it protects the stored owner login on this machine).")
+    password = read_password("New admin password: ", confirm=True)
+    try:
+        store.save("admin", owner.dump(), password)
+    finally:
+        wipe(password)
+    return owner
+
+
 def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Run the first-time setup and store the `session` credential.
+    """Set calu's database up: choose it on the first run, then migrate, seed and log in.
+
+    Without an `admin` credential the command asks which database to use (`--database`:
+    a local one in Docker, a server that exists, or an RDS instance with IAM authentication),
+    checks the login and stores it as `admin`. Then, and on every later run: it applies the
+    migrations, adds the default checkers, and makes sure this machine has the `session`
+    credential that `calu run` uses. A session login that exists is kept, so a second run
+    does not cut off running sessions or other machines; `--renew-session` replaces it.
 
     Without `--checker-model` no model is stored: every checker, the narrator and the
     summarizer then use the default model (`calu.config.default_model`: Haiku on the Anthropic
@@ -487,60 +811,115 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
     (`calu.model_choice`).
 
     Args:
-        args: Parsed arguments (`checker_model`).
+        args: Parsed arguments (`checker_model`, `database` and the options of its variants,
+            `renew_session`, `session_auth`).
         store: The credential store.
 
     Raises:
-        CliError: If there is no `admin` credential, a password is empty or mismatched, or
-            `--checker-model auto` finds no provider's credentials.
+        CliError: If an answer or password is missing or invalid, the database cannot be
+            reached or set up as it is, `--database` is given although a database is stored,
+            the role `calu_session` has a login this machine does not hold (the message
+            names `--renew-session`), or `--checker-model auto` finds no provider's
+            credentials.
         CredentialError: On a wrong password.
+        local_db.DockerError: If docker fails.
         psycopg.Error: On database errors.
     """
     explicit = args.checker_model is not None
     model, effort, how = _chosen_model(args.checker_model, None) if explicit else ("", None, "")
-    url = load_credential(store, "admin", "Admin password: ")
-    try:
-        admin_url = url.decode()
+    if "admin" in store:
+        if args.database:
+            raise CliError(
+                "a database is set up already (the `admin` credential); `calu credential "
+                "remove admin` first to set up another one"
+            )
+        owner = load_target(store, "admin", "Admin password: ")
+        block = owner.docker
+        if (
+            block is not None
+            and isinstance(owner.auth, PasswordAuth)
+            and local_db.mount_of(block.data) is not None
+            and not local_db.initialized(block.data)
+        ):
+            # An earlier setup stored the owner login and then failed to start the container
+            # (docker missing, the port taken): finish that first start now.
+            local_db.up(block.port, owner.auth.password, block.data)
+            print(f"local database initialized in {block.data}")
+        new_database = False
+    else:
+        owner = _new_database(args, store)
+        new_database = True
+    # A database that was just chosen never shares a session login stored for another one.
+    renew = args.renew_session or new_database or "session" not in store
+    session_iam = None
+    if isinstance(owner.auth, RdsIamAuth) and args.session_auth != "password":
+        session_iam = RdsIamAuth(
+            region=owner.auth.region, profile=args.session_aws_profile or owner.auth.profile
+        )
 
-        async def run() -> tuple[str, str]:
-            """Connect and run the setup steps.
+    async def run() -> tuple[str, Target | None]:
+        """Connect and run the setup steps.
 
-            Returns:
-                The report and the session connection string.
-            """
-            conn = await connect(admin_url)
-            try:
-                db = Db(conn)
-                # Models are stored only when asked for; otherwise every role uses the default
-                # model (D194), and a second `calu setup` leaves chosen models alone (D129).
-                fresh = not await _has_checker_types(db)
-                report, session_url = await setup(conn, admin_url, model)
-                if explicit:
-                    await admin.set_all_models(db, model, effort)
-                    report += "\nmodels of every checker, the narrator and the summarizer: "
-                    report += f"{model}" + (f", effort {effort}" if effort else "") + f" ({how})"
-                elif fresh:
-                    report += (
-                        "\nmodels: the default for every role -- "
-                        f"{ANTHROPIC_HAIKU} (needs ANTHROPIC_API_KEY in {user_env_file()}), or "
-                        f"{BEDROCK_EU_HAIKU} once `calu config set claude.use_bedrock true` is"
-                        " set. `calu config models M` chooses another one."
-                    )
-                return report, session_url
-            finally:
-                await conn.close()
+        Returns:
+            The report and the new session login, or None if the login was kept.
 
-        print("Choose the session password (needed to start sessions with `calu run`).")
-        session_password = read_password("New session password: ", confirm=True)
+        Raises:
+            CliError: If `calu_session` has a login this machine does not hold, or the
+                database cannot be set up as it is.
+        """
+        conn = await open_stored(owner)
         try:
-            report, session_url = asyncio.run(run())
-            store.save("session", session_url, session_password)
+            db = Db(conn)
+            if renew and not args.renew_session and await session_can_log_in(conn):
+                raise CliError(
+                    "the role calu_session has a login already, and this machine does not "
+                    "hold it (another machine, or an earlier setup). `calu setup "
+                    "--renew-session` gives it a new one, which stops the sessions and the "
+                    "machines that use the old one."
+                )
+            # Models are stored only when asked for; otherwise every role uses the default
+            # model (D194), and a second `calu setup` leaves chosen models alone (D129).
+            fresh = not await _has_checker_types(db)
+            try:
+                report, session = await setup_database(conn, owner, model, renew, session_iam)
+            except SetupRefused as exc:
+                raise CliError(f"calu cannot be set up in {owner.place} as it is:\n{exc}") from exc
+            if explicit:
+                await admin.set_all_models(db, model, effort)
+                report += "\nmodels of every checker, the narrator and the summarizer: "
+                report += f"{model}" + (f", effort {effort}" if effort else "") + f" ({how})"
+            elif fresh:
+                report += (
+                    "\nmodels: the default for every role -- "
+                    f"{ANTHROPIC_HAIKU} (needs ANTHROPIC_API_KEY in {user_env_file()}), or "
+                    f"{BEDROCK_EU_HAIKU} once `calu config set claude.use_bedrock true` is"
+                    " set. `calu config models M` chooses another one."
+                )
+            return report, session
         finally:
-            wipe(session_password)
+            await conn.close()
+
+    if not renew:
+        report, _ = asyncio.run(run())
+        print(report)
+        print(
+            "session login kept (`calu setup --renew-session` replaces it and stops the "
+            "sessions that use it)"
+        )
+        return
+    # Asked before the database is touched: a mistyped password must not leave the role with
+    # a new login that nothing holds.
+    print("Choose the session password (needed to start sessions with `calu run`).")
+    session_password = read_password("New session password: ", confirm=True)
+    try:
+        report, session = asyncio.run(run())
+        assert session is not None
+        store.save("session", session.dump(), session_password)
     finally:
-        wipe(url)
+        wipe(session_password)
     print(report)
     print("stored credential 'session'")
+    print("next: `calu project add . --name NAME` in a project directory, then `calu run`")
 
 
 def _new_operator(store: CredentialStore) -> None:
@@ -566,9 +945,10 @@ def _new_operator(store: CredentialStore) -> None:
         Returns:
             Its connection string.
         """
-        conn = await connect(url.decode())
+        owner = Target.parse(url)
+        conn = await open_stored(owner)
         try:
-            return await enable_operator_login(conn, url.decode())
+            return await enable_operator_login(conn, owner)
         finally:
             await conn.close()
 
@@ -576,9 +956,16 @@ def _new_operator(store: CredentialStore) -> None:
         operator_url = asyncio.run(work())
     finally:
         wipe(url)
+    ca_note = ""
+    if "sslrootcert=" in operator_url:
+        ca_note = (
+            "It names a CA file of this machine (sslrootcert): copy that file to the other "
+            "machine as well and change the path in the string to where it is there. "
+        )
     print(
-        "connection string for the operator role (this is the only copy):\n\n"
+        "login of the operator role (this is the only copy):\n\n"
         f"    {operator_url}\n\n"
+        f"{ca_note}"
         "Store it on the machine that will use it with `calu credential set operator`. It reads "
         "the fleet and resolves escalations (`calu sessions`, `calu escalations`, `calu "
         "escalation`, `calu resolve`, `calu evals`) and can change nothing else. Running "
@@ -746,6 +1133,11 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
     harden_process()
     url = load_credential(store, "session", "Session password: ")
     try:
+        # After the password, because where the local database is comes out of the decrypted
+        # entry; before the session connects. The docker command gets no secret.
+        block = Target.parse(url).docker
+        if block is not None and local_db.ensure_running(block):
+            print(f"started the local database on 127.0.0.1:{block.port}", flush=True)
         code = asyncio.run(run_session(url, options))
     finally:
         wipe(url)
@@ -766,7 +1158,7 @@ async def _with_admin(url: str, work: Callable[[Db], Awaitable[str]]) -> str:
     Raises:
         psycopg.Error: On database errors.
     """
-    conn = await connect(url)
+    conn = await open_stored(url)
     try:
         return await work(Db(conn))
     finally:
@@ -1074,7 +1466,7 @@ async def _with_admin_value[T](url: str, work: Callable[[Db], Awaitable[T]]) -> 
     Raises:
         psycopg.Error: On database errors.
     """
-    conn = await connect(url)
+    conn = await open_stored(url)
     try:
         return await work(Db(conn))
     finally:
@@ -1255,7 +1647,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
 
         # A connection the database closed (a restart, a failover, an idle timeout) is opened
         # again, so the server outlives the database's restarts.
-        db = ReopeningDb(await connect(url.decode()), lambda: connect(url.decode()))
+        db = ReopeningDb(await open_stored(url.decode()), lambda: open_stored(url.decode()))
         try:
             values = await admin.settings(db)
             template = str((values.get("web") or {}).get("git_url_template") or "")
@@ -2737,7 +3129,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="db_command", required=True
     )
     p = db.add_parser("up", help="start the local PostgreSQL in Docker")
-    p.add_argument("--port", type=int, default=local_db.DEFAULT_PORT, help="host port")
+    p.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=f"host port of a new local database (default: {local_db.DEFAULT_PORT}); an "
+        "existing one keeps the port it was set up with",
+    )
+    p.add_argument(
+        "--data-dir",
+        metavar="DIR",
+        help="directory for the files of a new local database (default: ~/.local/state/calu/db)",
+    )
     p.set_defaults(handler=cmd_db_up)
     db.add_parser("down", help="stop the local PostgreSQL").set_defaults(handler=cmd_db_down)
     db.add_parser("migrate", help="apply schema migrations").set_defaults(handler=cmd_db_migrate)
@@ -2747,7 +3150,53 @@ def build_parser() -> argparse.ArgumentParser:
         "it again, empty; asks for the admin password and a typed confirmation",
     ).set_defaults(handler=cmd_db_reset)
 
-    p = sub.add_parser("setup", help="first-time setup of the database")
+    p = sub.add_parser(
+        "setup",
+        help="set the database up: choose it on the first run (a local one in Docker, an "
+        "existing server, or RDS with IAM authentication), then migrate and create the "
+        "session login",
+    )
+    p.add_argument(
+        "--database",
+        choices=VARIANTS,
+        help="which database to set up, instead of the question: docker (created and started "
+        "by calu), server (an existing PostgreSQL) or rds-iam (AWS RDS, IAM authentication)",
+    )
+    p.add_argument("--data-dir", metavar="DIR", help="docker: directory for the database's files")
+    p.add_argument("--port", type=int, help="docker: port on 127.0.0.1; else the server's port")
+    p.add_argument("--host", help="server, rds-iam: host name of the server")
+    p.add_argument("--dbname", help="server, rds-iam: the database (default: calu)")
+    p.add_argument("--user", help="server, rds-iam: the role that owns calu's database")
+    p.add_argument(
+        "--sslmode",
+        choices=("disable", "allow", "prefer", "require", "verify-ca", "verify-full"),
+        help="server: libpq sslmode; left out, a remote host gets `require`",
+    )
+    p.add_argument(
+        "--sslrootcert",
+        metavar="FILE",
+        help="server, rds-iam: the CA file the server's certificate is verified with; it is "
+        "copied next to the credential store",
+    )
+    p.add_argument("--region", help="rds-iam: AWS region, if the host name does not show it")
+    p.add_argument("--aws-profile", help="rds-iam: the AWS profile that may connect as --user")
+    p.add_argument(
+        "--session-auth",
+        choices=("iam", "password"),
+        default="iam",
+        help="rds-iam: how sessions log in as calu_session: with IAM tokens (the default; "
+        "calu keeps no database password then) or with a generated password",
+    )
+    p.add_argument(
+        "--session-aws-profile",
+        help="rds-iam: the AWS profile of the session login, if it differs from --aws-profile",
+    )
+    p.add_argument(
+        "--renew-session",
+        action="store_true",
+        help="give calu_session a new login although one exists; sessions and machines that "
+        "use the old one stop working",
+    )
     p.add_argument(
         "--checker-model",
         default=None,

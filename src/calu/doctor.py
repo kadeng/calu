@@ -25,7 +25,8 @@ from calu import __version__, preflight
 from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.credentials import CredentialStore
-from calu.db import applied_versions, connect, migrations
+from calu.db import applied_versions, migrations
+from calu.db.connection import open_stored as connect
 
 VERSION_TIMEOUT_S = 10.0
 """How long `claude --version` may take before it is reported as not answering."""
@@ -357,7 +358,7 @@ async def database_findings(url: str) -> list[Finding]:
                 "database",
                 False,
                 f"cannot connect ({type(exc).__name__}: {exc})",
-                "`calu db up` starts a local one; for a server, check the `admin` credential.",
+                "`calu setup` sets a database up; for a server, check the `admin` credential.",
                 essential=True,
             )
         ]

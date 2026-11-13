@@ -19,7 +19,9 @@ services:
     ports:
       - "127.0.0.1:${CALU_DB_PORT:-5433}:5432"
     volumes:
-      - data:/var/lib/postgresql
+      # A host directory (an absolute path in CALU_DB_DATA, chosen at `calu setup`) or, when
+      # the variable is unset, the named volume `calu-db_data` of earlier installations.
+      - ${CALU_DB_DATA:-data}:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U calu_owner -d calu"]
       interval: 2s

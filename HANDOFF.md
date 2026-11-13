@@ -3,11 +3,11 @@
 State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
 the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
 with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D204, open questions §11, phases §12).
+`PLAN.md` (decisions D1-D206, open questions §11, phases §12).
 
 ## Pick up here
 
-**`main` is green and pushed** (1817 tests with `uv run pytest -q -m 'not live'`, 16 browser
+**`main` is green and pushed** (1851 tests with `uv run pytest -q -m 'not live'`, 16 browser
 tests, ruff, pyright). Everything below is ordered: do it top to bottom.
 
 1. **Done: the honesty redesign (D196) is merged into `main` and was run against a real
@@ -132,6 +132,19 @@ tests, ruff, pyright). Everything below is ordered: do it top to bottom.
    without a message, the server connects as an ordinary MCP server and what it pushes is
    dropped. The owner: leave it, and replicate it later as a channels-enabled plugin or MCP
    server.
+12. **Done: one package, and `calu setup` with three database variants** (the owner on
+   2026-11-13; D204, D205): `uv tool install git+https://github.com/kadeng/calu` installs
+   everything; `calu setup` asks for a local database in Docker (data directory chosen at
+   setup, started on demand by `calu run`), an existing server, or RDS with IAM
+   authentication. Run for real: the Docker variant. **Never run: RDS with IAM** (no AWS
+   account here; `docs/TESTING.md` item 26 says what to check), rootless Docker, and an
+   existing server whose user is no superuser beyond what `tests/db/test_setup_variants.py`
+   covers.
+13. **Next, decided and not built: calu runs privileged, Claude Code as an unprivileged
+   user** (the owner on 2026-11-13; requirement 26, D206, with the four conditions the build
+   has to meet). Start with the spike named at the end of D206. Until it is built, `calu
+   run` works as before, and the RDS variant's protection of the AWS profile rests on the
+   sandbox's deny list.
 
 Decisions of the owner on 2026-11-12 that are implemented and recorded: D178-D198 and Q22 in
 `PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
@@ -184,7 +197,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1817 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1851 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 31 migrations, 22 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

@@ -31,7 +31,8 @@ import psycopg
 
 from calu import admin
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
-from calu.db.connection import Db, connect
+from calu.db.connection import Db
+from calu.db.connection import open_stored as connect
 
 CREDENTIAL = "admin"
 """The credential both changes need: only the database owner may write these tables."""

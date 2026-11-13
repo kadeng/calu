@@ -112,7 +112,7 @@ async def test_a_database_that_does_not_answer_is_one_finding() -> None:
     found = await doctor.database_findings("postgresql://127.0.0.1:1/nothing")
     assert len(found) == 1
     assert found[0].name == "database" and found[0].ok is False and found[0].essential
-    assert "calu db up" in found[0].advice
+    assert "calu setup" in found[0].advice
 
 
 def test_the_web_packages_are_reported_but_never_essential() -> None:

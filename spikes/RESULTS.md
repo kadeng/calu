@@ -572,6 +572,51 @@ which no role separation prevents, because a compromised session process *is* th
 **Re-run when** the schema gains a table a session writes, which would need a policy of its own
 (the spike's SQL is the place to add it).
 
+## The local database in a host directory, and proof from the server (D205, 2026-11-13)
+
+**Questions:** does postgres:18 initialise in a bind-mounted host directory when the directory
+calu creates is private to the user? Can calu's connections insist that the server proves it
+knows the password?
+
+**Setup:** Docker Desktop on WSL2 (29.7.2). A directory with mode 0700 and a subdirectory `pg`
+with mode 0755; `docker run postgres:18` with `pg` mounted at `/var/lib/postgresql` and the
+same initdb arguments as `local-compose.yml`. Then psycopg (libpq 18.0.6) with and without
+`require_auth`.
+
+**Results:**
+
+- initdb succeeded; the image created `pg/18/docker`, owned by the container's postgres user
+  (uid 999) with mode 0700. The host user cannot read the cluster's files and cannot delete
+  them without Docker or root; the 0700 parent keeps other users out.
+- `require_auth=scram-sha-256` connected; `require_auth=md5` was refused by libpq with
+  "authentication method requirement \"md5\" failed". The parameter is honoured.
+- Through calu (`calu setup --database docker` under a compose project of its own): setup in
+  3.7 s, `calu db down`, on-demand start in 3.8 s, a second setup kept the session login.
+
+**Not measured:** rootless Docker, and Docker on Linux without Docker Desktop.
+
+## Claude Code as a bare uid: no name, no home directory (D206, 2026-11-13, CLI 2.1.319)
+
+**Question:** calu is to run as root and Claude Code as an unprivileged uid, also inside a
+container where that uid (typically 1000) has neither a passwd entry nor a home directory.
+Does Claude Code work then?
+
+**Setup:** the `claude` binary of this machine mounted into a `postgres:18` container (any
+glibc image), `--user 1000:1000`, the API key passed in the environment. One prompt with
+`--session-id`, then `--resume` of that id in the same container.
+
+**Results:**
+
+- No passwd entry, `HOME` unset (the container reports `/`): Claude Code started and answered.
+  The resume failed with "No conversation found with session ID": nothing could be stored.
+  A claude.ai login could not be stored either; only authentication from the environment
+  works this way.
+- No passwd entry, `HOME=/tmp/home` (a directory that uid created): the first prompt and the
+  resume both worked; the state is in `$HOME/.claude`.
+
+**Conclusion:** the missing name is no problem; a writable `HOME` is needed for everything
+that outlives one prompt. calu gives Claude Code a state directory owned by that uid.
+
 ## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
 
 **Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable

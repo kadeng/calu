@@ -87,7 +87,7 @@ async def test_setup_chooses_the_model_on_a_fresh_database_only(
     store.save("admin", db_url, None)
 
     monkeypatch.setattr("sys.stdin", io.StringIO("pw\npw\n"))
-    assert await _run(store, ["setup"]) == 0
+    assert await _run(store, ["setup", "--renew-session"]) == 0
     said = capsys.readouterr().out
     assert "models: the default for every role -- anthropic:claude-haiku-5-5" in said
 

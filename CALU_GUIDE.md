@@ -21,6 +21,7 @@ configuration, the web interface, the checkers and the ACP adapter.
 - [Editors that speak ACP](#editors-that-speak-acp)
 - [Checker instructions, rules and evaluations](#checker-instructions-rules-and-evaluations)
 - [Resuming and forking a conversation](#resuming-and-forking-a-conversation)
+- [The database](#the-database)
 - [Installation and configuration reference](#installation-and-configuration-reference)
 
 ## What the checkers give you, in detail
@@ -830,8 +831,11 @@ every `calu` command Claude runs (`calu …`, `uv run calu …`, `uvx calu …`,
 and every command that names the file ask you first, sandbox or not. The sandbox, not the rule,
 is the boundary for what a command can read: a session started without it says so at its start
 when a credential has no password.
-The local database of `calu db up` asks every connection for a password, including those from
-inside its container (an older one is converted at the next `calu db up`).
+The local database asks every connection for a password, including those from inside its
+container (an older one is converted at its next start). For a local database set up with
+this version, calu's own connections also require the server to prove that it knows the
+password (SCRAM), so another program that listens on the port is refused; a database that an
+earlier `calu db up` created keeps its stored logins, which do not ask for that proof.
 
 The operator login reads every table, resolves escalations and mints or revokes client tokens,
 and can change nothing else — not a rule, not a checker's instructions, not a setting. `calu
@@ -1067,6 +1071,85 @@ files are deliberately left as they are: Claude Code's file checkpointing only p
 its own edit tools changed, so rewinding them would leave a tree that looks consistent and is
 not.
 
+## The database
+
+`calu setup` asks which database calu uses, the first time it runs on a machine, and stores the
+answer inside its encrypted credential store (`~/.config/calu/credentials.json`): where the
+database is, how to log in, and for the local one its port and directory. Nothing about the
+database is in a plain file. Each variant can also be chosen with options, for a script:
+
+```bash
+calu setup                                             # asks
+calu setup --database docker --data-dir /srv/calu/db --port 5433
+calu setup --database server --host db.example.org --dbname calu --user calu_admin
+calu setup --database rds-iam --host calu.abc.eu-central-1.rds.amazonaws.com --user calu_admin --aws-profile calu --sslrootcert global-bundle.pem
+```
+
+Passwords are never options: they are asked without echo on a terminal, or read as lines from
+standard input, in this order: the database password (existing server only), the new admin
+password twice, the new session password twice.
+
+**1. A local PostgreSQL in Docker.** calu creates the database, generates its owner password and
+keeps the files in the directory you name (default `~/.local/state/calu/db`). The directory
+itself is private to you; the cluster's files inside belong to the container's own user. You
+never have to start it: `calu run` and every other command that needs the database start the
+container when it does not answer (`calu run` after you typed the session password, because
+where the database is comes out of the encrypted entry). `calu db down` stops it and
+`calu db up` starts it by hand. A session that is running while the database is stopped waits
+for it and does not start it. A database that an earlier `calu db up` created in the Docker
+volume `calu-db_data` keeps working unchanged; to move it into a directory, dump it and
+restore it into a new setup.
+
+**2. A PostgreSQL server that exists already.** calu asks for host, port, database, user and
+password. That user becomes the owner login of calu's database: it creates the tables and the
+two roles sessions and operators log in as, `calu_session` and `calu_operator`. `calu run`
+never uses it. Before anything is stored or changed, setup connects and checks what it needs,
+and says what is missing together with the SQL that an administrator runs:
+
+- a database of its own (calu does not create one, and refuses one that holds other tables);
+- the right to create tables in it (own the database);
+- the right to create roles (`CREATEROLE`), which is also what lets it give the two roles
+  their logins; from PostgreSQL 16 on, if the two roles exist already (another calu database
+  on the server), they must be granted to the user with the admin option. No superuser is
+  needed.
+
+```sql
+CREATE ROLE calu_admin LOGIN CREATEROLE PASSWORD '...';
+CREATE DATABASE calu OWNER calu_admin;
+```
+
+For a server on another host the connection is encrypted (`sslmode=require`);
+`--sslmode verify-full --sslrootcert FILE` also verifies the server's certificate, and
+`--sslmode disable` switches encryption off and says so. The two roles belong to the whole
+server, not to one database: a second calu database on the same server shares them, and setup
+refuses to replace a session login that exists unless you pass `--renew-session`. A connection
+pooler in transaction mode is not supported: a session needs its own long-lived connections.
+
+**3. AWS RDS with IAM authentication.** No database password exists: at every connection calu
+asks AWS's signing code for a token (valid for 15 minutes for new logins) with the AWS profile
+you name, and sends it over a verified TLS connection (`verify-full` with the CA bundle from
+AWS, which setup copies next to its credential store). By default the session login uses
+tokens too (`--session-auth password` gives it a generated password instead), so a running
+session keeps the ability to get new tokens for reconnects. An administrator prepares the
+instance once:
+
+```sql
+CREATE ROLE calu_admin LOGIN CREATEROLE;
+GRANT rds_iam TO calu_admin WITH ADMIN OPTION;   -- it passes rds_iam on to calu_session
+CREATE DATABASE calu OWNER calu_admin;
+```
+
+and an IAM policy that allows `rds-db:connect` for the database users `calu_admin` and
+`calu_session`. What this variant means for protection: who may log in is decided by the AWS
+policy and by who can use that AWS profile on the machine, not by a password that only calu
+holds. As long as calu and Claude Code run as the same operating-system user, the commands
+Claude runs are kept from `~/.aws` by the sandbox's read deny list and nothing stronger. This
+variant has not been run against a real RDS instance yet.
+
+Running `calu setup` again applies new migrations and keeps both logins. A second machine that
+should start sessions against the same database needs the session login: today that means
+`calu setup --renew-session` there, which replaces the login for every machine.
+
 ## Installation and configuration reference
 
 calu is one package; installing it installs every command, the web interface and the
@@ -1091,8 +1174,8 @@ first; they lose their rows.
 An existing installation gets new schema versions with `calu db migrate` (`calu setup` applies
 them too). **Stop the running sessions first**: migration 0025 changes how a session proves its
 identity to the database, and a session that runs across it loses access to its rows and stops.
-`calu setup` also renews the session login on every run, so a session that is still running
-ends at its next reconnect to the database.
+`calu setup` keeps the session login when it is run again; `calu setup --renew-session`
+replaces it, and a session that is still running then ends at its next reconnect.
 
 Every setting with its type, its default and what it does:
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
