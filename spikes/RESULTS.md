@@ -658,6 +658,13 @@ itself in front of `claude` (uid, gid and supplementary groups together) and bui
 process's environment from an empty one, so that nothing of the root process's environment
 (database and AWS variables, `SUDO_*`) reaches Claude Code.
 
+**The launcher that was built from this (D207), measured the same way** (mode `launcher`,
+2026-11-13): with `cli_path` naming calu's console script `calu-claude` and the record in
+`CALU_LAUNCH`, a command ran as `uid=1000 gid=1000 groups=1000`, the hooks, `can_use_tool`,
+the side question and the resume worked, and neither the variable from the root process's
+environment nor the one from `options.env` reached the command: the environment holds only
+what the record keeps.
+
 **Not measured:** Claude Code's own sandbox (bubblewrap, socat) under the other uid, a
 claude.ai login kept in the state directory, a named user with its own home directory, git
 run by calu as the other user, and the re-execution through sudo.

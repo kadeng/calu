@@ -10,6 +10,8 @@ Two ways to change the user are measured:
 - `sdk-user`: `ClaudeAgentOptions(user=...)`, which the SDK hands to the process start.
 - `wrapper`: `cli_path` names a script that changes uid, gid and groups with `setpriv` and
   then executes the real `claude`.
+- `launcher`: `cli_path` names calu's own launcher `calu-claude` (D207), which was built
+  after the first two were measured.
 
 Run as root in a container, never on a workstation (`spikes/spike_other_uid.sh` does that).
 Arguments: the mode, and a workspace directory owned by the target uid. Needs
@@ -32,6 +34,8 @@ from claude_agent_sdk import (
     PermissionResultAllow,
     ResultMessage,
 )
+
+from calu.claude.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 
 UID = 1000
 GID = 1000
@@ -93,7 +97,7 @@ async def main(mode: str, workspace: Path) -> None:
     """Run one turn with a side question, then a resume, and print what happened.
 
     Args:
-        mode: `sdk-user`, `sdk-user-str` or `wrapper`.
+        mode: `sdk-user`, `sdk-user-str`, `wrapper` or `launcher`.
         workspace: The project directory, owned by the target uid.
     """
     started = time.monotonic()
@@ -160,6 +164,9 @@ async def main(mode: str, workspace: Path) -> None:
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "CALU_SPIKE_GIVEN": "from-options",
     }
+    if mode == "launcher":
+        run_as = RunAs(uid=UID, gid=GID, home=str(STATE))
+        environment[LAUNCH_ENV] = run_as.spec(claude_path(None)).dump()
     hooks: Any = {
         "PreToolUse": [HookMatcher(hooks=[pre])],
         "PostToolUse": [HookMatcher(hooks=[post])],
@@ -178,6 +185,7 @@ async def main(mode: str, workspace: Path) -> None:
             "sdk-user": {"user": UID},
             "sdk-user-str": {"user": str(UID)},
             "wrapper": {"cli_path": str(WRAPPER)},
+            "launcher": {"cli_path": str(launcher_path())},
         }[mode]
         return ClaudeAgentOptions(
             model="haiku",

@@ -3,7 +3,7 @@
 # environment are mounted read-only at their own paths, so the environment's interpreter works.
 #
 # Usage: spikes/spike_other_uid.sh MODE WORKSPACE
-#   MODE       sdk-user, sdk-user-str or wrapper
+#   MODE       sdk-user, sdk-user-str, wrapper or launcher
 #   WORKSPACE  an empty directory owned by uid 1000; the container mounts it as /work
 # Needs docker, the image postgres:18 (any glibc image with setpriv), ANTHROPIC_API_KEY and
 # optionally ANTHROPIC_BASE_URL in the environment.

@@ -56,6 +56,7 @@ from claude_agent_sdk.types import (
 from calu.checkers.model import Step
 from calu.checkers.policy import SHELL_TOOLS, Route, unknown_tools
 from calu.checkers.result_checker import SubagentResult
+from calu.claude.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 from calu.claude.runner import (
     NOT_FROM_USER,
     EventSink,
@@ -205,6 +206,7 @@ class SdkRunner:
         config: ClaudeConfig,
         hidden_env: set[str] | None = None,
         tool_routes: dict[str, Route] | None = None,
+        run_as: RunAs | None = None,
     ) -> None:
         """Prepare a runner; nothing is started until `run`.
 
@@ -215,7 +217,11 @@ class SdkRunner:
                 must not see.
             tool_routes: The configured routes per tool, so that a tool named there is not
                 reported as unknown (D154).
+            run_as: The user Claude Code runs as, started through calu's launcher with an
+                environment built for that user (D207); None starts it as the user calu
+                runs as, with calu's environment.
         """
+        self.run_as = run_as
         self.tool_routes = dict(tool_routes or {})
         self._tools_reported = False
         self.hidden_env = set(hidden_env or ())
@@ -873,7 +879,7 @@ class SdkRunner:
             cwd=str(self.workspace),
             model=self.config.model,
             effort=self.config.effort,
-            cli_path=self.config.cli_path,
+            cli_path=self._cli_path(),
             # None: Claude Code takes the mode from its own settings (D5); calu does not take
             # that choice away from the user. The effective mode is reported (`_mode_events`).
             permission_mode=self.config.permission_mode,
@@ -1064,14 +1070,36 @@ class SdkRunner:
         authentication settings (claude.ai login, Bedrock, Vertex, Foundry, API key) are left as
         they are configured on this machine.
 
+        With `run_as`, the launch record for calu's launcher is added (`CALU_LAUNCH`); the
+        launcher drops every variable that Claude Code does not need, and the record itself.
+
         Returns:
             Variable name -> value ("" means unset for Claude Code).
+
+        Raises:
+            LaunchError: With `run_as`, if no Claude Code executable is found.
         """
         env = dict.fromkeys(sorted(self.hidden_env), "")
         env[INSIDE_SESSION_ENV] = "1"
         if self.config.use_bedrock:
             env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        if self.run_as is not None:
+            env[LAUNCH_ENV] = self.run_as.spec(claude_path(self.config.cli_path)).dump()
         return env
+
+    def _cli_path(self) -> str | None:
+        """Return the executable the Agent SDK starts.
+
+        Returns:
+            calu's launcher when Claude Code runs as another user (`run_as`); otherwise
+            `claude.cli_path`, where None lets the SDK find Claude Code.
+
+        Raises:
+            LaunchError: With `run_as`, if this installation has no launcher.
+        """
+        if self.run_as is not None:
+            return str(launcher_path())
+        return self.config.cli_path
 
     def _agent_id(self, sdk_agent_id: str | None) -> str | None:
         """Map an SDK agent id (hook/permission context) to the protocol agent id.

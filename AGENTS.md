@@ -62,7 +62,7 @@ phases.
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
 | `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the reviewer agent of the honesty review (`honesty_review.py`: batches, bounded concurrency, a failure verifies nothing), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
-| `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner |
+| `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner, and `launch.py`: the console script `calu-claude` that starts Claude Code as another user with an environment built for it (D207) |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
 | `src/calu/web/` | `calu web`: the herd overview (Starlette), the settings form generated from `Config` (`settings.py`), the live relay to a session's own WebSocket, links into a git browser (`git.py`) |
 | `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |

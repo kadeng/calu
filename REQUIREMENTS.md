@@ -94,6 +94,13 @@ broken down or extended. Derived requirements and design decisions belong in
       `/etc/calu`, `/var/lib/calu/db`, `/usr/local/bin/calu`, `/usr/local/lib/calu`, in a way
       that is compatible with `uv tool install`. calu needs no home directory of the
       unprivileged user; everything that user may configure is in the database.
+    - What starts Claude Code under the other uid and gid is built into calu: no script is
+      written to disk for it, which could be hijacked (stated 2026-11-13).
+27. `calu serve` (stated 2026-11-13): another run mode that works like `calu run` but can
+    spawn and track multiple calu/Claude sessions in various project directories on the same
+    system. With it, forking a session or creating a new one needs no new authentication each
+    time. It might also allow picking up or resuming sessions that were launched directly as
+    `claude`.
 
 ## Soft goals and priorities
 
