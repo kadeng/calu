@@ -1114,6 +1114,10 @@ def _check_conversation_choice(args: argparse.Namespace) -> None:
             ) from None
 
 
+_ARGUMENTS: list[str] = []
+"""calu's arguments as they were given, for the command `--sudo` runs again."""
+
+
 def _run_as(args: argparse.Namespace) -> RunAs | None:
     """Decide which user Claude Code runs as, from `--user` and who calu runs as (D206).
 
@@ -1121,17 +1125,22 @@ def _run_as(args: argparse.Namespace) -> RunAs | None:
         calu is root, --user root   ──► None: one user, as without the option
         calu is root, --user X      ──► X; its directories are prepared (`calu.asuser.prepare`)
         calu is not root, --user X  ──► refused, unless X is the user calu runs as (None)
+        calu is not root, --sudo    ──► calu runs again as root through sudo, with --user
+                                        <the invoking user> (`_run_again_through_sudo`)
 
     Args:
-        args: Parsed arguments (`user`).
+        args: Parsed arguments (`user`, `sudo`, `from_sudo`).
 
     Returns:
         The user to switch to, or None to run everything as calu's own user.
 
     Raises:
-        CliError: In the refused cases, and if the user or its directories cannot be used.
+        CliError: In the refused cases, if the user or its directories cannot be used, and
+            if `--sudo` cannot run calu again.
     """
     root = os.geteuid() == 0
+    if args.sudo and not root:
+        _run_again_through_sudo(args)
     if args.user is None:
         if root:
             raise CliError(
@@ -1144,6 +1153,12 @@ def _run_as(args: argparse.Namespace) -> RunAs | None:
         run_as = asuser.resolve(args.user)
         if run_as.uid == os.geteuid():
             return None
+        if args.from_sudo and str(run_as.uid) != os.environ.get("SUDO_UID"):
+            # `--sudo` passes the invoking user's own name; anything else is not that path.
+            raise CliError(
+                f"--user {args.user} is not the user who ran sudo (uid "
+                f"{os.environ.get('SUDO_UID', 'unknown')})"
+            )
         if not root:
             raise CliError(
                 "--user needs calu to run as root: only root can start Claude Code as another user"
@@ -1152,6 +1167,41 @@ def _run_as(args: argparse.Namespace) -> RunAs | None:
     except asuser.UserError as exc:
         raise CliError(str(exc)) from exc
     return run_as
+
+
+def _run_again_through_sudo(args: argparse.Namespace) -> None:
+    """Replace this process by `sudo calu ... --user <the invoking user>` (requirement 26).
+
+    calu then runs as root and Claude Code as the user who typed the command. sudo asks for
+    its password on the terminal. Refused when the invoking user could change the calu that
+    would run as root: elevation would hand that user root.
+
+    Side effect: on success the process image is replaced; this function does not return.
+
+    Args:
+        args: Parsed arguments (`user`).
+
+    Raises:
+        CliError: If `--user` is given as well, the installation is not root's alone, or
+            sudo cannot be executed.
+    """
+    if args.user is not None:
+        raise CliError("--sudo runs Claude Code as you; it takes no --user")
+    executable = Path(sys.executable).parent / "calu"
+    problems = asuser.writable_by_others(
+        [executable, Path(sys.executable), Path(asuser.__file__).parent]
+    )
+    if problems:
+        raise CliError(
+            "--sudo would run this installation of calu as root, and it can be changed "
+            "without root: " + "; ".join(problems[:3]) + ". Install calu for root, for "
+            f"example: {asuser.INSTALL_HINT}"
+        )
+    command = asuser.sudo_command(_ARGUMENTS, getpass.getuser(), executable)
+    try:
+        os.execvp(command[0], command)
+    except OSError as exc:
+        raise CliError(f"cannot run sudo: {exc}") from exc
 
 
 def _session_login(store: CredentialStore) -> bytearray:
@@ -3515,6 +3565,13 @@ def build_parser() -> argparse.ArgumentParser:
         "project has. A number is a uid without a name or home directory on this machine "
         "(calu gives Claude Code a state directory); root itself only when named",
     )
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="started as an ordinary user who has sudo: run calu again as root through sudo, "
+        "with Claude Code as you. Needs an installation only root can change",
+    )
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_run)
 
@@ -3536,6 +3593,13 @@ def build_parser() -> argparse.ArgumentParser:
         "project has. A number is a uid without a name or home directory on this machine "
         "(calu gives Claude Code a state directory); root itself only when named",
     )
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="started as an ordinary user who has sudo: run calu again as root through sudo, "
+        "with Claude Code as you. Needs an installation only root can change",
+    )
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_serve)
 
     p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")
@@ -3854,7 +3918,9 @@ def main(
         argv: Arguments without the program name; None uses `sys.argv[1:]`.
         store_factory: Creates the credential store (tests pass a store in a temporary dir).
 
-    Side effects: loads calu's own env file (`~/.config/calu/.env`) into the process
+    Side effects: as root, points calu at `/etc/calu` and `/var/lib/calu`
+    (`calu.asuser.use_system_directories`); remembers the arguments for `--sudo`; loads calu's
+    own env file (`~/.config/calu/.env`) into the process
     environment before any command runs, without overwriting what is already set. Every command
     then sees the same checker keys a session sees: only `calu run` used to read the file, so
     `calu doctor` reported "none of the known providers has a key" with a key in it, and
@@ -3864,6 +3930,11 @@ def main(
     Returns:
         The exit code: 0 on success, 1 on a reported error.
     """
+    global _ARGUMENTS
+    _ARGUMENTS = list(sys.argv[1:] if argv is None else argv)
+    # Before anything reads a path: as root, calu's credentials and state are in the system
+    # directories, never in a home directory (requirement 26).
+    asuser.use_system_directories(os.environ, os.geteuid())
     args = build_parser().parse_args(argv)
     try:
         load_secrets()

@@ -454,6 +454,15 @@ escalation resolved from the database alone.
    1000 with mode 0700. Run on 2026-11-13 with `spikes/smoke_privileged.sh` (real Claude
    Code, fake checkers, snapshots on, the sandbox off); not run: a named user with its own
    home, the sandbox on, `calu serve --user`.
+30. `--sudo` (D212), on a machine where you have sudo. With calu installed in your own home:
+   `calu run --sudo` must refuse and print the install command for root. After that
+   install and `sudo calu setup`: `calu run --sudo -p "run: id > who.txt"` must ask the sudo
+   password, then the session password, and `who.txt` must name you and belong to you;
+   `sudo ls /etc/calu` must show the credential store, and your home must hold nothing new
+   of calu's. **Never run**: this machine's sudo asks a password a session cannot type. Run
+   in a container as root on 2026-11-13: the install command (calu and `calu-claude` land in
+   `/usr/local/lib/calu/calu/bin`, linked from `/usr/local/bin`), the installation check
+   on it (passes), and the refusal of `calu run` without `--user`.
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of

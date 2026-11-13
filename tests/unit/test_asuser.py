@@ -106,3 +106,59 @@ def test_as_root_the_user_must_be_named(monkeypatch):
     # Root itself, when named: one user, as without the option.
     assert _run_as(options("--user", "0")) is None
     assert build_parser().parse_args(["serve", "--user", "1000:1000"]).user == "1000:1000"
+
+
+def test_root_started_through_sudo_always_uses_the_system_directories():
+    through_sudo = {"SUDO_UID": "1000", "XDG_CONFIG_HOME": "/home/ada/.config"}
+    asuser.use_system_directories(through_sudo, 0)
+    assert (
+        through_sudo["XDG_CONFIG_HOME"] == "/etc" and through_sudo["XDG_STATE_HOME"] == "/var/lib"
+    )
+    chosen = {"XDG_CONFIG_HOME": "/srv/calu-config"}
+    asuser.use_system_directories(chosen, 0)
+    assert chosen == {"XDG_CONFIG_HOME": "/srv/calu-config", "XDG_STATE_HOME": "/var/lib"}
+    ordinary = {"HOME": "/home/ada"}
+    asuser.use_system_directories(ordinary, 1000)
+    assert ordinary == {"HOME": "/home/ada"}
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="as root the temporary files belong to root")
+def test_an_installation_somebody_else_can_change_is_reported(tmp_path: Path):
+    mine = tmp_path / "calu"
+    mine.write_text("#!/bin/sh\n")
+    problems = asuser.writable_by_others([mine, tmp_path / "missing"])
+    assert any(f"{mine} belongs to uid {os.getuid()}" in problem for problem in problems)
+    assert any("missing" in problem for problem in problems)
+    # What the system installs for root passes.
+    assert asuser.writable_by_others([Path("/usr/bin/env")]) == []
+
+
+def test_the_sudo_command_names_the_invoking_user():
+    command = asuser.sudo_command(["run", "--sudo", "-p", "hi"], "ada", Path("/usr/local/bin/calu"))
+    assert command == [
+        "sudo",
+        "--",
+        "/usr/local/bin/calu",
+        "run",
+        "-p",
+        "hi",
+        "--user",
+        "ada",
+        "--from-sudo",
+    ]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="--sudo is for a calu that is not root")
+def test_sudo_is_refused_for_an_installation_the_user_can_change():
+    """The checkout the tests run from belongs to the user, so elevation must be refused."""
+    with pytest.raises(CliError, match="can be changed without root"):
+        _run_as(options("--sudo"))
+    with pytest.raises(CliError, match="takes no --user"):
+        _run_as(options("--sudo", "--user", "ada"))
+
+
+def test_the_user_passed_through_sudo_must_be_the_one_who_ran_it(monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_UID", "4242")
+    with pytest.raises(CliError, match="not the user who ran sudo"):
+        _run_as(options("--user", "1000", "--from-sudo"))

@@ -4,7 +4,7 @@ State on 2026-11-13: after the honesty redesign and the full-screen terminal cli
 and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
 (D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
 `calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
-Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D209, open
+Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D212, open
 questions §11, phases §12).
 
 ## Pick up here
@@ -39,66 +39,29 @@ requirement 27):
 
 ### What to do next, in this order
 
-1. **calu runs privileged, Claude Code as an unprivileged user (requirement 26, D206): the
-   launcher is built (D207), the rest is the next work package.** Read requirement 26, D206
-   and D207 whole before designing; they hold everything the owner said on 2026-11-13. In
-   short:
-   - `calu run` is started as root, or by a user with password-protected sudo; then calu runs
-     itself again through `sudo` and passes the original user **name**.
-   - As root the user for Claude Code must be given explicitly (root itself only when named).
-     A **number is always a bare uid**: calu gives Claude Code a state directory as its home
-     (for example `/var/lib/calu/claude/<uid>`), because such a uid may have neither a name
-     nor a home (root in a container, the host user known only as uid 1000; files in a
-     mounted project directory then come out owned by the host user). A **name** means that
-     user's own home directory is used.
-   - **calu never adds users** (hard restriction). The owner rejected a dedicated system user
-     `calu` with a sudoers rule: do not propose it again.
-   - calu's installation, credentials and database files live in system directories or below
-     `/root` (`/usr/local/lib/calu` and `/usr/local/bin/calu` through `uv tool install` with
-     `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR`, `/etc/calu`, `/var/lib/calu/db`), never in the
-     unprivileged user's home. calu needs no home of that user; what that user may configure
-     is in the database.
-   - calu keeps its credentials and reconnects with them (this replaces "credentials are
-     dropped before Claude Code starts" of requirement 16).
-   - Conditions I told the owner the build must meet, recorded in D206: (a) elevate only from
-     an installation the unprivileged user cannot write; (b) run git and everything else calu
-     starts inside the workspace as the unprivileged user (git executes what a repository
-     configures); (c) take the user from `SUDO_UID`, check the passed name against it, and
-     build Claude Code's environment (home, PATH, login) for that user explicitly;
-     (d) refuse `calu run` as root without a named user.
-   - Measured already (`spikes/RESULTS.md`, "Claude Code as a bare uid"): Claude Code runs as
-     a uid without name and home, but then stores nothing and cannot resume; with a writable
-     `HOME` it works fully.
-   - **The first spike is done** (`spikes/spike_other_uid.sh`, `spikes/RESULTS.md`, "calu as
-     root, Claude Code as another uid"): with calu as root and Claude Code as uid 1000 the
-     PreToolUse and PostToolUse hooks, `can_use_tool`, the side question and a resume all
-     work; a command of Claude Code could not read a root-only file, the root process's
-     environment, or signal it. Two things the build must do: **not use the SDK's `user`
-     option** (it changes the uid only; gid and groups stay root's, and a uid as a string
-     fails without passwd entry) but put its own user change in front of `claude` through
-     `cli_path` (uid, gid, supplementary groups); and **build Claude Code's environment from
-     an empty one**, because the SDK passes its own process's whole environment on.
-   - How the spike runs, for the next ones: this machine has `docker` but **no passwordless
-     sudo** (`sudo -n true` fails), so as root in a container (`postgres:18`, the checkout
-     and the uv Python directory mounted read-only at their own paths, `ANTHROPIC_API_KEY`
-     and `ANTHROPIC_BASE_URL` passed, `--network host`). That image has no git, bubblewrap or
-     socat.
-   - **Still to measure before or while building:** Claude Code's sandbox under the other
-     uid; a named user with its own home; git run by calu as the other user; the
-     re-execution through sudo (needs the owner's terminal, sudo asks a password).
-   - **Done:** the user change in front of `claude` and the clean environment (D207). The
-     owner on 2026-11-13: it must be built into calu, no script written to disk that could
-     be hijacked; it is a console script of the installation.
-   - **Still to build**, in this order: git and the write-set snapshots as the other user
-     (condition b; until then no option may set `run_as`, because calu as root would run git
-     in a repository the other user controls); `calu run --user` and `calu serve --user`,
-     refused as root without it (condition d), with the state directory for a bare uid;
-     reading Claude Code's transcripts from that user's home (`calu.claude.transcripts`
-     reads the home of calu's own user); the re-execution through sudo with the installation
-     check (conditions a and c); the system directories.
-   - Until it is built: `calu run` works as before (one user); with the RDS variant only the
-     sandbox's read deny list keeps Claude's commands from `~/.aws`. Do not make `calu run`
-     usable as root before Claude Code really runs under another user.
+1. **calu runs privileged, Claude Code as an unprivileged user (requirement 26; D206, D207,
+   D211, D212): built, and run as root in a container; the path through a real sudo was
+   never run.**
+   - What exists: the launcher `calu-claude` (`src/calu/launch.py`); `src/calu/asuser.py`
+     (`resolve` for `--user`, `prepare`, `enter`, `child`, the installation check, the sudo
+     command, the system directories); `--user`, `--sudo` on `calu run` and `calu serve`.
+     As root, `--user` is required. calu's own file access in the project uses the user's
+     file-system identity (per thread), and every program it starts there the user's ids.
+   - Rules the owner set, do not reopen: calu never adds users; no dedicated system user; a
+     number is always a bare uid with a home from calu (`/var/lib/calu/claude/<uid>`), a name
+     uses that user's home; the launcher is part of calu, no script written at run time;
+     calu's own files in system directories or below `/root`, never in the user's home.
+   - Run: `spikes/smoke_privileged.sh` (root in the development image, real Claude Code, uid
+     1000, snapshots on), `spikes/spike_fs_identity.py`, the root install with `uv tool
+     install` and the installation check in a container.
+   - **The owner has to try** (`docs/TESTING.md` item 30): `calu run --sudo` on a machine
+     with sudo. This machine's sudo asks a password, so a session cannot.
+   - **Open:** the RDS variant together with `--user` (a token renewal reads the AWS profile
+     as root after the switch: give that one thread root's file identity back, which the
+     spike shows is possible); Claude Code's sandbox under the other uid (not switched on in
+     the run); a named user with a real home (not run); the `operator` credential of the
+     user next to a `session` credential in `/etc/calu` (D212, last sentence); `calu doctor`
+     says nothing about any of this yet; the single-file binary has no launcher.
 2. **`calu acp` from PyCharm does not work properly yet** (the owner, 2026-11-13, said so
    after my fix and then moved on to packaging; nothing more is known). What was found and
    changed on 2026-11-12, all outside the repository: PyCharm runs on Windows and could not
@@ -299,18 +262,18 @@ requirement 27):
    account here; `docs/TESTING.md` item 26 says what to check), rootless Docker, and an
    existing server whose user is no superuser beyond what `tests/db/test_setup_variants.py`
    covers.
-13. **Partly built (the launcher, D207): calu runs privileged, Claude Code as an
-   unprivileged user** (the owner on 2026-11-13; requirement 26, D206, with the four conditions the build
-   has to meet). Start with the spike named at the end of D206. Until it is built, `calu
-   run` works as before, and the RDS variant's protection of the AWS profile rests on the
-   sandbox's deny list.
+13. **Built (D207, D211, D212), the sudo path not run: calu runs privileged, Claude Code as
+   an unprivileged user** (the owner on 2026-11-13; requirement 26). See item 1 of "What to
+   do next" for what exists, what was run and what is open. Without `--user` and `--sudo`,
+   `calu run` works as before, and the RDS variant's protection of the AWS profile then
+   rests on the sandbox's deny list.
 
 14. **Done: `calu serve`, `calu start`, and conversations started with `claude` itself**
    (the owner on 2026-11-13, requirement 27; D208, D209). See "Built on 2026-11-13" above
    for what was run and what was not.
 
-Decisions of the owner on 2026-11-13: D204, D205, D207, D208 and D209 are implemented; D206
-(requirement 26) is recorded, and of it only the launcher is built. Decisions of 2026-11-12 that are implemented and recorded: D178-D203 and Q22 in
+Decisions of the owner on 2026-11-13: D204-D212 are implemented (D206 through D207, D211
+and D212); D210 is the skill `honest-code` with the owner's rulings on what honesty covers. Decisions of 2026-11-12 that are implemented and recorded: D178-D203 and Q22 in
 `PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
 is part of a checker's context (D193); rule lists stay empty by default and are the exception
 (D198); a blank model is Claude Haiku on the Anthropic API, or on Bedrock in an EU region in
@@ -361,7 +324,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1881 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1897 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 32 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

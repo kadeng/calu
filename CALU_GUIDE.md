@@ -1152,8 +1152,21 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   cannot change calu's installation. calu's own work in the project -- git for its snapshots,
   the files a checker reads -- is done with that user's rights too, so a link in the project
   that points at a file only root may read is refused for calu as it is for Claude.
-- **Not yet:** starting calu as an ordinary user who has sudo, and the RDS variant of the
-  database together with `--user`.
+- **As an ordinary user who has sudo:** `calu run --sudo` (or `calu serve --sudo`) runs calu
+  again as root through sudo, which asks for its password, with Claude Code as you. This
+  needs a calu that only root can change, because otherwise the elevation would hand root to
+  whoever can edit calu's files; calu checks that and refuses if not. Install it for root:
+
+  ```bash
+  sudo env UV_TOOL_DIR=/usr/local/lib/calu UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python uv tool install git+https://github.com/kadeng/calu
+  ```
+
+- **Where a root calu keeps its own files:** the credentials and the checker keys in
+  `/etc/calu`, its state (and a local database's files, by default) in `/var/lib/calu`. Never
+  in a home directory; started through sudo it ignores `XDG_CONFIG_HOME` and
+  `XDG_STATE_HOME`. Run `calu setup` as root (`sudo calu setup`) to create them there; the
+  `operator` credential that `calu attach` and `calu start` use stays with your own user.
+- **Not yet:** the RDS variant of the database together with `--user`.
 
 ## The database
 

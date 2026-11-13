@@ -20,9 +20,10 @@ uid without a home directory) lives below `STATE_ROOT`, in directories owned by 
 import ctypes
 import os
 import pwd
+import stat
 import sys
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -222,3 +223,86 @@ def child(env: Mapping[str, str] | None = None) -> dict[str, Any]:
         "extra_groups": list(_active.groups),
         "env": environment(spec, os.environ if env is None else env),
     }
+
+
+SYSTEM_CONFIG = "/etc"
+"""`XDG_CONFIG_HOME` of a calu that runs as root: its credentials are in `/etc/calu`."""
+
+SYSTEM_STATE = "/var/lib"
+"""`XDG_STATE_HOME` of a calu that runs as root: its state is in `/var/lib/calu`."""
+
+INSTALL_HINT = (
+    "sudo env UV_TOOL_DIR=/usr/local/lib/calu UV_TOOL_BIN_DIR=/usr/local/bin "
+    "UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python "
+    "uv tool install git+https://github.com/kadeng/calu"
+)
+"""How to install calu where only root can change it."""
+
+
+def use_system_directories(environ: MutableMapping[str, str], euid: int) -> None:
+    """Point a calu that runs as root at the system directories (requirement 26).
+
+        root, started through sudo        ──► always /etc/calu and /var/lib/calu: the
+                                              variables sudo let through may be the user's
+        root otherwise, variable not set  ──► the same
+        root otherwise, variable set      ──► kept: root chose it (a container, a test)
+        not root                          ──► nothing changes
+
+    Side effect: sets `XDG_CONFIG_HOME` and `XDG_STATE_HOME` in `environ`.
+
+    Args:
+        environ: The process environment.
+        euid: The effective uid of the process.
+    """
+    if euid != 0:
+        return
+    forced = "SUDO_UID" in environ
+    for name, value in (("XDG_CONFIG_HOME", SYSTEM_CONFIG), ("XDG_STATE_HOME", SYSTEM_STATE)):
+        if forced or not environ.get(name):
+            environ[name] = value
+
+
+def writable_by_others(paths: Sequence[Path]) -> list[str]:
+    """Find what somebody other than root could change among files and all their parents.
+
+    Args:
+        paths: Files or directories of calu's installation.
+
+    Returns:
+        One sentence per path, or parent directory of one, that is not owned by root or is
+        writable by its group or by everybody; empty if only root can change any of them.
+        A path that does not exist is reported too.
+    """
+    problems: list[str] = []
+    seen: set[Path] = set()
+    for path in paths:
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            problems.append(f"{path}: {exc}")
+            continue
+        for place in (resolved, *resolved.parents):
+            if place in seen:
+                continue
+            seen.add(place)
+            status = place.stat()
+            if status.st_uid != 0:
+                problems.append(f"{place} belongs to uid {status.st_uid}, not to root")
+            elif status.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                problems.append(f"{place} is writable by its group or by everybody")
+    return problems
+
+
+def sudo_command(arguments: Sequence[str], user: str, executable: Path) -> list[str]:
+    """Build the command that runs calu again as root for the invoking user.
+
+    Args:
+        arguments: calu's own arguments as they were given, without the program name.
+        user: The login name of the invoking user.
+        executable: The `calu` console script of this installation.
+
+    Returns:
+        `sudo -- <executable> <arguments without --sudo> --user <user> --from-sudo`.
+    """
+    kept = [argument for argument in arguments if argument != "--sudo"]
+    return ["sudo", "--", str(executable), *kept, "--user", user, "--from-sudo"]
