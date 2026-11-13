@@ -47,6 +47,7 @@ import ipaddress
 import logging
 import re
 import secrets
+import socket
 from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from pathlib import Path
@@ -240,6 +241,7 @@ def create_app(
             "/sessions/{session_id:uuid}/token", _page(mint, state), methods=["POST"], name="mint"
         ),
         Route("/sessions/{session_id:uuid}/live", _page(live_page, state), name="live"),
+        Route("/sessions/{session_id:uuid}/file", _page(session_file, state), name="file"),
         Route(
             "/sessions/{session_id:uuid}/request",
             _page(request_session, state),
@@ -1122,6 +1124,73 @@ async def mint(request: Request, state: _State) -> Response:
     page = await _session_view(request, state, minted)
     page.headers["cache-control"] = "no-store"
     return page
+
+
+IMAGE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+"""File name endings `session_file` serves, with their media types. No SVG: it is a document
+that can carry scripts."""
+
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+"""Largest image `session_file` serves."""
+
+
+def _image_in(directory: str, given: str) -> tuple[bytes, str] | None:
+    """Read an image file of a project directory, if the path names one inside it.
+
+    Args:
+        directory: The session's project directory.
+        given: The path as a tool call named it, absolute or relative to the directory.
+
+    Returns:
+        The file's content and media type; None if the path, with symbolic links resolved,
+        is outside the directory, is no regular file with an image ending (`IMAGE_TYPES`),
+        is larger than `MAX_IMAGE_BYTES`, or cannot be read.
+    """
+    try:
+        base = Path(directory).resolve(strict=True)
+        target = (base / given).resolve(strict=True)
+        kind = IMAGE_TYPES.get(target.suffix.lower())
+        if kind is None or not target.is_relative_to(base) or not target.is_file():
+            return None
+        if target.stat().st_size > MAX_IMAGE_BYTES:
+            return None
+        return target.read_bytes(), kind
+    except OSError, ValueError:
+        return None
+
+
+async def session_file(request: Request, state: _State) -> Response:
+    """Serve an image file of a session's project directory, for the live view's thumbnails.
+
+    The live view asks for the file a `Read` tool call named, so that a person sees what
+    Claude looked at. Only image files inside the session's directory are served, and only
+    for a session of this machine; the file is read as it is now, which may be newer than
+    what Claude read.
+
+    Args:
+        request: The request; its path holds the session id, its query `path`.
+        state: The shared state.
+
+    Returns:
+        The image; a 404 page if there is no such session, it runs on another machine, or
+        the path names nothing `_image_in` serves.
+    """
+    session_id = str(request.path_params["session_id"])
+    row = await herd.session(state.db, session_id)
+    given = request.query_params.get("path", "")
+    if row is None or not given or row.hostname != socket.gethostname():
+        return _not_found(request, given or session_id)
+    found = await anyio.to_thread.run_sync(_image_in, row.directory, given)
+    if found is None:
+        return _not_found(request, given)
+    content, kind = found
+    return Response(content, media_type=kind, headers={"cache-control": "private, max-age=60"})
 
 
 async def request_session(request: Request, state: _State) -> Response:

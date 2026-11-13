@@ -207,3 +207,20 @@ document.addEventListener("click", async (event) => {
     button.textContent = "Select and copy";
   }
 });
+
+// A link to a collapsed section (`<details id="...">`, e.g. "fork before this turn" on a
+// session's page) opens that section: a browser only scrolls to it, and a closed section
+// shows nothing of what the link promised.
+(() => {
+  const reveal = () => {
+    let target = null;
+    try { target = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch (e) { /* a malformed fragment names nothing */ }
+    if (target && target.tagName === "DETAILS") {
+      target.open = true;
+      target.scrollIntoView({ block: "center" });
+    }
+  };
+  window.addEventListener("hashchange", reveal);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", reveal);
+  else reveal();
+})();

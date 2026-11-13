@@ -67,7 +67,7 @@ session shows the real thinking as it streams.</p>
       <form class="inline" method="post" action="{{ url_for('request_session', session_id=session.id) }}">
         <input type="hidden" name="kind" value="resume">
         <input type="hidden" name="fork_before_turn" value="{{ turn.index }}">
-        <button>Fork before this turn with calu serve</button>
+        <button>Fork before this turn now (needs a running calu serve)</button>
       </form>
       <p class="muted">Run it on {{ session.hostname }}, in {{ session.directory }}.</p>
       <p class="muted">The files are left as they are: a fork rewinds the conversation, not the

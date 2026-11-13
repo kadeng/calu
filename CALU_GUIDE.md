@@ -899,6 +899,12 @@ it nowhere, and each wrong password makes the next answer wait longer. On a data
 `calu setup` has not given that role a password yet, `calu web` prints an address with a
 login token instead (`...?token=...`), to be opened once per browser.
 
+The live view of a session shows Claude's text formatted (headings, lists, code, tables,
+links), leaves a gap after each turn, and shows an image file that Claude reads as a small
+picture under the tool call; a click opens it. The picture is read from the project
+directory by the web interface, so it appears only for a session on the same machine and
+for a file inside that directory.
+
 The web interface can change what steers the checkers, so it holds a database login in
 memory for as long as it runs. Started as yourself, that process is within reach of
 whatever Claude Code runs unsandboxed as you; `calu web --sudo` runs it as root, with the

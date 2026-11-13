@@ -50,13 +50,45 @@
     return field ? input[field].slice(0, 500) : JSON.stringify(input).slice(0, 300);
   }
 
+  // Claude's text is Markdown: it is rendered as such (markdown.js builds nodes, never HTML
+  // from text). The source is kept with the row, because a streamed message grows.
+  const sources = new WeakMap();
+  function markdown(row, source) {
+    sources.set(row, source);
+    row.classList.add("md");
+    row.replaceChildren(window.caluMarkdown.render(source));
+  }
+
   // Deltas of one message are appended to the same line, so streaming text reads as text.
   const open = new Map();
   function chunk(id, kind, text) {
     const key = `${kind}:${id || "none"}`;
     let row = open.get(key);
     if (!row) { row = line(kind, ""); open.set(key, row); }
-    row.textContent += text;
+    markdown(row, (sources.get(row) || "") + text);
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  // An image file Claude reads is shown small under the tool call, so that one sees what
+  // Claude looked at; a click opens it in full. The server serves only image files inside
+  // the session's project directory; anything else leaves no thumbnail.
+  const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+  function thumbnail(path) {
+    if (typeof path !== "string" || !IMAGE.test(path)) return;
+    const base = location.pathname.replace(/\/live\/?$/, "");
+    const address = `${base}/file?path=${encodeURIComponent(path)}`;
+    const link = document.createElement("a");
+    link.className = "line thumb";
+    link.href = address;
+    link.target = "_blank";
+    link.rel = "noopener";
+    const image = document.createElement("img");
+    image.loading = "lazy";
+    image.alt = path;
+    image.src = address;
+    image.addEventListener("error", () => link.remove());
+    link.appendChild(image);
+    stream.appendChild(link);
     stream.scrollTop = stream.scrollHeight;
   }
 
@@ -231,12 +263,15 @@
       case "session.state": onState(params.state); break;
       case "assistant.delta": chunk(params.message_id, "assistant", params.text); break;
       case "assistant.text":
-        if (!open.has(`assistant:${params.message_id || "none"}`)) line("assistant", params.text);
+        if (!open.has(`assistant:${params.message_id || "none"}`)) {
+          markdown(line("assistant", ""), params.text);
+        }
         break;
       case "assistant.thinking": line("thinking", params.text); break;
       case "user.input": line("user", params.text); break;
       case "tool.use":
         line("tool", toolText(params.input), "", { className: "tag", text: params.name });
+        if (params.name === "Read") thumbnail((params.input || {}).file_path);
         break;
       case "check.result":
         line("check", `${params.route} checker: ${params.step_summary || ""}`,

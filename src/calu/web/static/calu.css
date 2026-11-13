@@ -452,6 +452,27 @@ details.explain p { max-width: 80ch; }
 #stream .check { color: var(--fg-soft); }
 #stream .line > .tag, #stream .line > .decision { margin-right: .2rem; vertical-align: .05rem; }
 #stream .result, #stream .log, #stream .diff, #stream .turn { color: var(--muted); }
+/* The end of a turn closes a paragraph: the next turn starts after a gap. */
+#stream .turn { margin-bottom: 1.2rem; }
+/* Claude's text, rendered from Markdown (markdown.js). */
+#stream .md { white-space: normal; font-family: var(--sans); line-height: 1.5; }
+#stream .md > :first-child { margin-top: 0; }
+#stream .md > :last-child { margin-bottom: 0; }
+#stream .md p, #stream .md ul, #stream .md ol, #stream .md pre, #stream .md table,
+#stream .md blockquote { margin: .5rem 0; }
+#stream .md h3, #stream .md h4, #stream .md h5, #stream .md h6 { margin: .8rem 0 .3rem; font-size: 1rem; }
+#stream .md h3 { font-size: 1.1rem; }
+#stream .md ul, #stream .md ol { padding-left: 1.4rem; }
+#stream .md code { font-family: var(--mono); font-size: .9em; background: var(--surface); padding: 0 .2rem; border-radius: 3px; }
+#stream .md pre { background: var(--surface); padding: .5rem .7rem; border-radius: 4px; overflow-x: auto; white-space: pre; }
+#stream .md pre code { background: none; padding: 0; }
+#stream .md blockquote { border-left: 3px solid var(--line); padding-left: .7rem; color: var(--fg-soft); }
+#stream .md table { border-collapse: collapse; }
+#stream .md th, #stream .md td { border: 1px solid var(--line); padding: .15rem .5rem; text-align: left; }
+#stream .md hr { border: 0; border-top: 1px solid var(--line); }
+/* An image Claude read: small, a click opens it. */
+#stream .thumb { display: block; }
+#stream .thumb img { max-width: 14rem; max-height: 9rem; border: 1px solid var(--line); border-radius: 4px; }
 
 .escalation {
   border-color: color-mix(in srgb, var(--warn) 45%, transparent);

@@ -1216,3 +1216,45 @@ async def test_a_non_ascii_token_is_refused_not_a_server_error(db_url: str) -> N
             assert (await client.get("/?token=%C3%A4bc")).status_code == 401
     finally:
         await conn.close()
+
+
+async def test_only_images_inside_the_sessions_directory_are_served(db_url: str, tmp_path) -> None:
+    """The thumbnails of the live view; writes a few small files into `tmp_path`."""
+    import dataclasses
+    import socket
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (project / "notes.txt").write_text("plain")
+    (tmp_path / "secret.png").write_bytes(b"outside")
+    (project / "link.png").symlink_to(tmp_path / "secret.png")
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        here = dataclasses.replace(IDENTITY, hostname=socket.gethostname(), directory=str(project))
+        mine = await DatabaseSessionStore(db).start(here)
+        elsewhere = await DatabaseSessionStore(db).start(
+            dataclasses.replace(here, hostname="another-machine")
+        )
+        async with await client_for(db) as client:
+            served = await client.get(f"/sessions/{mine}/file", params={"path": "shot.png"})
+            assert served.status_code == 200 and served.headers["content-type"] == "image/png"
+            absolute = await client.get(
+                f"/sessions/{mine}/file", params={"path": str(project / "shot.png")}
+            )
+            assert absolute.status_code == 200
+            for refused in (
+                "notes.txt",
+                "link.png",
+                "../secret.png",
+                str(tmp_path / "secret.png"),
+                "",
+            ):
+                answer = await client.get(f"/sessions/{mine}/file", params={"path": refused})
+                assert answer.status_code == 404, refused
+            other = await client.get(f"/sessions/{elsewhere}/file", params={"path": "shot.png"})
+            assert other.status_code == 404, "a session of another machine has its files there"
+    finally:
+        await conn.close()
