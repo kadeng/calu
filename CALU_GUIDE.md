@@ -1151,6 +1151,9 @@ all work with it, and each has its own address and its own tokens.
   session; the one you left keeps running. Both ask the `calu serve` of the session's
   machine. The client uses this machine's `admin` credential for it and asks for its
   password; without that credential it names the `calu start` command instead.
+- **A fork says what it is.** The history and live pages of a forked session name the
+  conversation it was forked from, with a link, and what it took over; the page of that
+  conversation lists its forks.
 - **Forgotten sessions.** `calu serve --idle-timeout 120` ends a session that has been idle
   for two hours with no client attached; its conversation stays and `calu start --resume`
   continues it. Without the option a session waits until you shut it down.

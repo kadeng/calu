@@ -13,6 +13,20 @@
   {% if session.claude_session_id %}· claude <span class="mono">{{ session.claude_session_id }}</span>{% endif %}
 </p>
 
+{% if origin %}
+<p class="notice">
+  This session is a <strong>fork</strong> of
+  {% if origin.session_id %}<a href="{{ url_for('session', session_id=origin.session_id) }}">another conversation</a>{% else %}another conversation{% endif %}
+  (<span class="mono">{{ origin.claude_session_id }}</span>): it took over {{ origin.kept() }}
+  and continues from there under its own id. The turns it took over are listed below as they were recorded there; the files in the directory were not rewound. The conversation it was forked from is unchanged.
+</p>
+{% endif %}
+{% if forked_into %}
+<p class="muted">Forks of this conversation:
+  {% for fork_id, before in forked_into %}<a href="{{ url_for('session', session_id=fork_id) }}">{{ 'before turn ' ~ before if before else 'of the whole conversation' }}</a>{{ ', ' if not loop.last }}{% endfor %}
+</p>
+{% endif %}
+
 {% if escalations %}
 <h2>Waiting for a decision</h2>
 {% for e in escalations %}
@@ -55,21 +69,19 @@ session shows the real thinking as it streams.</p>
   {% for turn in turns %}
   <div class="card">
     <p class="muted">Turn {{ turn.index }} · {{ turn.started_at.strftime('%H:%M:%S') }}
-      {% if forks.get(turn.index) %}
-        · <a href="#fork-{{ turn.index }}">fork before this turn</a>
-      {% endif %}
     </p>
     {% if forks.get(turn.index) %}
+    {% set kept = 'turn 1' if turn.index == 2 else 'turns 1 to ' ~ (turn.index - 1) %}
+    <form class="inline" method="post" action="{{ url_for('request_session', session_id=session.id) }}">
+      <input type="hidden" name="kind" value="resume">
+      <input type="hidden" name="fork_before_turn" value="{{ turn.index }}">
+      <button title="Starts a new session with calu serve and opens it. This conversation stays as it is.">Fork here: new session that keeps {{ kept }} and drops turn {{ turn.index }} and everything after it</button>
+    </form>
     <details id="fork-{{ turn.index }}">
-      <summary class="muted">Fork before turn {{ turn.index }}: keep everything up to the previous
-        turn and drop this one. The fork gets its own session id; this conversation stays as it is.</summary>
+      <summary class="muted">The same from a terminal, and what a fork does to the files</summary>
       <pre>{{ forks[turn.index].command() }}</pre>
-      <form class="inline" method="post" action="{{ url_for('request_session', session_id=session.id) }}">
-        <input type="hidden" name="kind" value="resume">
-        <input type="hidden" name="fork_before_turn" value="{{ turn.index }}">
-        <button>Fork before this turn now (needs a running calu serve)</button>
-      </form>
-      <p class="muted">Run it on {{ session.hostname }}, in {{ session.directory }}.</p>
+      <p class="muted">Run it on {{ session.hostname }}, in {{ session.directory }}. The fork gets
+        its own session id; this conversation stays as it is.</p>
       <p class="muted">The files are left as they are: a fork rewinds the conversation, not the
         working tree, so whatever the dropped turn wrote is still on disk. Check the tree before
         you let the fork continue.</p>

@@ -21,7 +21,6 @@
                                                                                     ▏
                                                                                     ▏
                                                                                     ▏
-                                                                                    ▏
 ▌ you · waiting (after the running tool calls)  also bump the version               ▏
 ▌ you · waiting (next turn)  then write the changelog entry                         ▏
  ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
@@ -31,6 +30,7 @@
  │   `git push --force` (force push).                                             │ ▏
  │   a,a allow · d,d deny · w,w detail · n,n note                                 │ ▏
  ╰────────────────────────────────────────────────────────────────────────────────╯ ▏
+   Allow    Deny    Deny with a note    Show everything                             ▏
  to main · next turn · tab changes
  >
  a,a allow   d,d deny   w,w detail   n,n note   alt+←/→ agent   f3 side question   ^p palette   f1 help

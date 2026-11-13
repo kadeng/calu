@@ -207,6 +207,15 @@ class SessionStore(Protocol):
         """
         ...
 
+    async def set_fork_origin(self, claude_session_id: str, before_turn: int | None) -> None:
+        """Record that this session is a fork, and of which conversation.
+
+        Args:
+            claude_session_id: The Claude session id of the conversation that was copied.
+            before_turn: The first turn the fork dropped, or None if it kept all of them.
+        """
+        ...
+
     async def set_address(self, address: str) -> None:
         """Record where this session process listens for clients (PLAN.md D29).
 
@@ -792,6 +801,21 @@ class DatabaseSessionStore:
         await self._db.execute(
             "UPDATE sessions SET claude_session_id = %s, model = coalesce(%s, model) WHERE id = %s",
             (claude_session_id, model, self._require_session()),
+        )
+
+    async def set_fork_origin(self, claude_session_id: str, before_turn: int | None) -> None:
+        """Record what this session is a fork of (see `SessionStore.set_fork_origin`).
+
+        Args:
+            claude_session_id: The Claude session id of the conversation that was copied.
+            before_turn: The first turn the fork dropped, or None.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        await self._db.execute(
+            "UPDATE sessions SET forked_from = %s, forked_before_turn = %s WHERE id = %s",
+            (claude_session_id, before_turn, self._require_session()),
         )
 
     async def note_setting_change(

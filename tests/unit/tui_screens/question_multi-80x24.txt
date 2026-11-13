@@ -10,7 +10,6 @@
 
 
 
-
  ╭────────────────────────────────────────────────────────────────────────────╮
  │ QUESTION 1 of 1  ·  main  ·  AskUserQuestion                  waiting 0:00 │
  │    Runner   Checks   Fixtures    0 of 3 answered                           │
@@ -19,6 +18,7 @@
  │    2 ( ) unittest  standard library only                                   │
  │   1-9 choose · o,o own answer · enter next open question · ←/→ question    │
  ╰────────────────────────────────────────────────────────────────────────────╯
+   1 pytest    2 unittest    own answer    send    decline
  to main · next turn · tab changes
  >
  1-9 choose   o,o own answer   enter send   ^p palette   f1 help

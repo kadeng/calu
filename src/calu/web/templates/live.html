@@ -11,6 +11,15 @@
   · <span id="note">attaching…</span>
 </p>
 
+{% if origin %}
+<p class="notice">
+  This session is a <strong>fork</strong> of
+  {% if origin.session_id %}<a href="{{ url_for('session', session_id=origin.session_id) }}">another conversation</a>{% else %}another conversation{% endif %}
+  (<span class="mono">{{ origin.claude_session_id }}</span>): it took over {{ origin.kept() }}
+  and continues from there under its own id. The conversation it was forked from is unchanged.
+</p>
+{% endif %}
+
 <div class="card" id="controls">
   <div class="row">
     <button id="start">Start</button>

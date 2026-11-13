@@ -120,6 +120,15 @@ class MemorySessionStore:
         """
         self.states.append(state)
 
+    async def set_fork_origin(self, claude_session_id: str, before_turn: int | None) -> None:
+        """Remember what this session is a fork of (see `SessionStore.set_fork_origin`).
+
+        Args:
+            claude_session_id: The Claude session id of the conversation that was copied.
+            before_turn: The first turn the fork dropped, or None.
+        """
+        self.fork_origin = (claude_session_id, before_turn)
+
     async def set_claude_session(self, claude_session_id: str, model: str | None = None) -> None:
         """Record Claude Code's session id and model.
 

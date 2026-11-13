@@ -639,7 +639,10 @@ async def test_the_fork_points_of_a_session_are_offered_per_turn(db_url: str) ->
 
         async with await client_for(db) as client:
             page = (await client.get(f"/sessions/{session_id}")).text
-            assert "fork before this turn" in page
+            # One button per fork point, labelled with what the fork keeps and drops (D219).
+            assert "new session that keeps turn 1 and drops turn 2" in page
+            assert "new session that keeps turns 1 to 2 and drops turn 3" in page
+            assert 'name="fork_before_turn" value="2"' in page
             assert "calu run --resume claude-xyz --fork-before-turn 2" in page
     finally:
         await conn.close()

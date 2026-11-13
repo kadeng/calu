@@ -2301,6 +2301,13 @@ class Session:
         # timed out, for example) must still be resumable by its Claude session id (D27). An
         # id calu chose is known now; Claude Code reports it with the first turn only.
         await self._record_claude_session(runner.session_id or chosen)
+        if fork is not None and resume_id is not None:
+            # So that the fork's page can say where its first turns come from, and the
+            # conversation it left can be found from it.
+            await self.recorder.attempt(
+                "recording what the session is a fork of",
+                self.store.set_fork_origin(resume_id, fork.before_turn),
+            )
         # Only now, with Claude Code running: a fork whose start failed must not leave a
         # conversation behind that is listed and cannot be resumed.
         for turn in inherited:

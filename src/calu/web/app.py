@@ -1082,6 +1082,10 @@ async def _session_view(
             "levels": DETAIL_LEVELS,
             "turns": await herd.turns(state.db, session_id, MAX_TURNS),
             "forks": {point.turn: point for point in await herd.fork_points(state.db, session_id)},
+            "origin": await herd.fork_origin(state.db, session_id),
+            "forked_into": await herd.forks_of(state.db, row.claude_session_id)
+            if row.claude_session_id
+            else [],
             "by_turn": by_turn,
             "agents": await herd.agents(state.db, session_id),
             "setting_changes": await herd.setting_changes(state.db, session_id),
@@ -1318,6 +1322,7 @@ async def live_page(request: Request, state: _State) -> Response:
         "live.html",
         {
             "session": row,
+            "origin": await herd.fork_origin(state.db, session_id),
             "socket": request.url_for("live_ws", session_id=session_id),
             "efforts": EFFORTS,
             "models": MODELS,

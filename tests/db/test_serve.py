@@ -387,12 +387,22 @@ async def test_the_web_interface_asks_the_server_for_a_session(
                 "SELECT kind, claude_session_id, prompt, label FROM session_requests"
                 " ORDER BY id DESC LIMIT 1"
             )
-            assert filed == (
-                "fork",
-                rows[first.session_id or ""].claude_session_id,
-                "go on",
-                "calu web",
-            )
+            conversation = rows[first.session_id or ""].claude_session_id
+            assert filed == ("fork", conversation, "go on", "calu web")
+
+            # The fork says where it comes from, on its live view and its history page, and
+            # the conversation it left names it.
+            forked = fork.headers["location"].split("/sessions/")[1].removesuffix("/live")
+            origin = await herd.fork_origin(db, forked)
+            assert origin is not None and origin.claude_session_id == conversation
+            assert origin.before_turn is None and origin.session_id == first.session_id
+            live = await web.get(f"/sessions/{forked}/live")
+            assert "This session is a <strong>fork</strong>" in live.text
+            assert "the whole conversation" in live.text
+            assert "<strong>fork</strong>" in (await web.get(f"/sessions/{forked}")).text
+            left = await web.get(f"/sessions/{first.session_id}")
+            assert "Forks of this conversation" in left.text and forked in left.text
+            assert await herd.fork_origin(db, started) is None, "a new session is no fork"
 
             bad = await web.post(f"/sessions/{first.session_id}/request", data={"kind": "x"})
             assert bad.status_code == 400

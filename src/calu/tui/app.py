@@ -89,7 +89,15 @@ from calu.tui.screens.diff import DiffScreen
 from calu.tui.screens.password import PasswordScreen
 from calu.tui.screens.text import TextScreen
 from calu.tui.theme import CALU_DARK, CALU_LIGHT, DARK, Palette, palette_for
-from calu.tui.widgets.chrome import AgentTabs, Line, Lines, NewBelow, PanelList, Picked
+from calu.tui.widgets.chrome import (
+    AgentTabs,
+    Buttons,
+    Line,
+    Lines,
+    NewBelow,
+    PanelList,
+    Picked,
+)
 from calu.tui.widgets.composer import Composer
 from calu.tui.widgets.transcript import Transcript
 
@@ -376,6 +384,7 @@ class CaluApp(App[None]):
                 yield NewBelow("", id="new-below")
                 yield Lines(id="pending")
                 yield Lines(id="card")
+                yield Buttons(id="card-actions")
             with VerticalScroll(id="side"):
                 yield PanelList(id="panel-lines")
                 yield Lines(id="side-lines")
@@ -779,6 +788,7 @@ class CaluApp(App[None]):
             self._card_at = self.clock() - (CARD_SETTLE_S if own else 0.0)
         self._own_switch = False
         if decision is None:
+            self._render_card_buttons(None, "")
             if self.armed:
                 self.disarm()
             width = max(30, self.query_one("#main").size.width - 6)
@@ -793,6 +803,7 @@ class CaluApp(App[None]):
         waiting = list(self.model.decisions)
         position = (waiting.index(decision.escalation_id) + 1, len(waiting))
         armed = self.armed if self.armed_for == decision.escalation_id else ""
+        self._render_card_buttons(decision, armed)
         card.show(
             render.card_lines(
                 decision,
@@ -1213,7 +1224,73 @@ class CaluApp(App[None]):
             self.select_tab(message.key)
         elif message.kind == "follow":
             self.transcript.follow()
+        elif message.kind in {"card", "option", "answers", "decline"}:
+            self._card_clicked(message.kind, message.key)
+            return
         self.composer.focus()
+
+    def _card_clicked(self, kind: str, key: str) -> None:
+        """Carry out a click on a button of the decision card: what its key does.
+
+            "card"     a letter of the card (a, d, n, w, o): as the key, so the first click
+                       on Allow or Deny is remembered and the second carries it out
+            "option"   an option of the question shown, by its index
+            "answers"  Enter on a question: send the answers, or go to the next question
+            "decline"  alt+d on a question
+
+        Args:
+            kind: What the button stands for.
+            key: The letter, or the option's index.
+        """
+        decision = self.current_decision()
+        if decision is None:
+            return
+        if kind == "card":
+            self.decision_key(key)
+        elif kind == "option" and decision.is_question:
+            self.pick_option(decision, int(key))
+        elif kind == "answers" and decision.is_question:
+            self._enter_on_question(decision)
+        elif kind == "decline":
+            self.action_decide("deny")
+        self.render_all()
+
+    def _render_card_buttons(self, decision: Decision | None, armed: str) -> None:
+        """Draw the row of buttons under the decision card, or hide it.
+
+        Args:
+            decision: The item the card shows, or None.
+            armed: What the first press or click chose for that item ("allow", "deny", ...),
+                or "".
+        """
+        row = self.query_one("#card-actions", Buttons)
+        row.set_class(decision is not None, "-shown")
+        if decision is None:
+            row.show([], "")
+            return
+        again = ARM_LETTER.get(armed, "")
+        if decision.is_question:
+            question = decision.questions[decision.current]
+            buttons = [
+                (f"{number} {render.cut(option.label, 18)}", "option", str(number - 1))
+                for number, option in enumerate(question.options[:9], start=1)
+            ]
+            buttons += [
+                ("own answer" + (": click again" if again == "o" else ""), "card", "o"),
+                ("send", "answers", ""),
+                ("decline", "decline", ""),
+            ]
+        else:
+            buttons = [
+                (f"click again to {name}" if again == letter else label, "card", letter)
+                for letter, name, label in (
+                    ("a", "allow", "Allow"),
+                    ("d", "deny", "Deny"),
+                    ("n", "write a note", "Deny with a note"),
+                    ("w", "see all of it", "Show everything"),
+                )
+            ]
+        row.show(buttons, f"{self.palette.fg} on {self.palette.surface}", again)
 
     def on_panel_list_moved(self) -> None:
         """Show the keys of the entry the panel's cursor went to."""

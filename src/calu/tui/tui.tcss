@@ -94,6 +94,17 @@ Screen {
     display: block;
 }
 
+/* The buttons under the card, for the mouse: each does what its key does. */
+#card-actions {
+    display: none;
+    height: 1;
+    margin: 0 2;
+}
+
+#card-actions.-shown {
+    display: block;
+}
+
 #card.-question {
     max-height: 50%;
 }

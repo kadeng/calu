@@ -17,8 +17,11 @@ class Picked(Message):
     """The user clicked something that stands for an agent, a decision or an action.
 
     Attributes:
-        kind: "agent", "decision" or "follow".
-        key: The agent key or the escalation id; "" for "follow".
+        kind: "agent", "decision", "follow", or of a button of the decision card: "card" (a
+            letter of the card), "option" (an option of a question), "answers" (send the
+            answers) or "decline".
+        key: The agent key, the escalation id, the card's letter or the option's index; ""
+            for "follow", "answers" and "decline".
     """
 
     def __init__(self, kind: str, key: str = "") -> None:
@@ -83,6 +86,57 @@ class AgentTabs(Static):
         for start, end, key in self._spans:
             if start <= event.x < end:
                 self.post_message(Picked("agent", key))
+                return
+
+
+class Buttons(Static):
+    """A row of buttons for the mouse: each stands for what a key does.
+
+    A click posts `Picked(kind, key)` of the button under the pointer. The row is one line;
+    buttons that do not fit the width are cut off by the terminal, so labels are short.
+    """
+
+    def __init__(self, id: str | None = None) -> None:
+        """Create the empty row.
+
+        Args:
+            id: The widget id.
+        """
+        super().__init__("", id=id)
+        self._spans: list[tuple[int, int, str, str]] = []
+        self.text = ""
+        """The plain text of the row as last shown."""
+
+    def show(self, buttons: list[tuple[str, str, str]], style: str, strong: str = "") -> None:
+        """Replace the buttons.
+
+        Args:
+            buttons: `(label, kind, key)` per button, left to right.
+            style: The Rich style of a button.
+            strong: The key of the button drawn bold (the one a second click carries out);
+                "" for none.
+        """
+        line = Text()
+        spans: list[tuple[int, int, str, str]] = []
+        for label, kind, key in buttons:
+            if line.plain:
+                line.append("  ")
+            start = len(line.plain)
+            line.append(f" {label} ", f"{style} bold" if key == strong else style)
+            spans.append((start, len(line.plain), kind, key))
+        self._spans = spans
+        self.text = line.plain
+        self.update(line)
+
+    def on_click(self, event: events.Click) -> None:
+        """Post what the button under the pointer stands for.
+
+        Args:
+            event: The click.
+        """
+        for start, end, kind, key in self._spans:
+            if start <= event.x < end:
+                self.post_message(Picked(kind, key))
                 return
 
 

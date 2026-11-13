@@ -854,3 +854,6 @@ main.st-shell { max-width: 84rem; padding-top: 0; padding-bottom: 0; }
 .st-fact { max-width: 34rem; text-align: right; font-size: .9rem; color: var(--fg-soft); font-variant-numeric: tabular-nums; }
 .st-fact.is-warn { color: var(--bad); font-weight: 600; }
 .st-miss { margin: 0; max-height: 9rem; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
+
+/* A fact about the page one must not miss, e.g. that a session is a fork. */
+.notice { border-left: 3px solid var(--accent); padding: .4rem .8rem; background: var(--surface); }

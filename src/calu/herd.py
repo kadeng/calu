@@ -451,6 +451,73 @@ async def conversations(
     return [ConversationRow(*row) for row in rows]
 
 
+@dataclass(frozen=True)
+class ForkOrigin:
+    """Where a forked session comes from."""
+
+    claude_session_id: str
+    """The Claude session id of the conversation that was copied."""
+    before_turn: int | None
+    """The first turn the fork dropped; None if it kept the whole conversation."""
+    session_id: str | None
+    """The newest session row of that conversation, for a link; None if there is none."""
+
+    def kept(self) -> str:
+        """Say in words what the fork took over.
+
+        Returns:
+            "turns 1 to N" for a fork before a turn, else "the whole conversation".
+        """
+        if self.before_turn is None:
+            return "the whole conversation"
+        last = self.before_turn - 1
+        return "turn 1" if last == 1 else f"turns 1 to {last}"
+
+
+async def fork_origin(db: Db, session_id: str) -> ForkOrigin | None:
+    """Read what a session is a fork of.
+
+    Args:
+        db: A connection with read access to `sessions`.
+        session_id: The session's row id.
+
+    Returns:
+        The origin, or None if the session is no fork (or ran before migration 0034).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    row = await db.one(
+        "SELECT s.forked_from, s.forked_before_turn,"
+        "       (SELECT o.id::text FROM sessions o WHERE o.claude_session_id = s.forked_from"
+        "         ORDER BY o.started_at DESC LIMIT 1)"
+        "  FROM sessions s WHERE s.id = %s::uuid AND s.forked_from IS NOT NULL",
+        (session_id,),
+    )
+    return None if row is None else ForkOrigin(row[0], row[1], row[2])
+
+
+async def forks_of(db: Db, claude_session_id: str) -> list[tuple[str, int | None]]:
+    """List the sessions that are forks of a conversation, oldest first.
+
+    Args:
+        db: A connection with read access to `sessions`.
+        claude_session_id: The conversation's Claude session id.
+
+    Returns:
+        The row id of each fork and the first turn it dropped (None: it kept all).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT id::text, forked_before_turn FROM sessions WHERE forked_from = %s"
+        " ORDER BY started_at",
+        (claude_session_id,),
+    )
+    return [(row[0], row[1]) for row in rows]
+
+
 async def known_conversations(db: Db, directory: str, hostname: str, os_user: str) -> set[str]:
     """Return the Claude session ids calu has recorded for one directory, host and user.
 

@@ -1,10 +1,9 @@
  calu  myproject   ● ESCALATED 0:00   1 needs you   opus / high
   main 1!                                                   2 queued · f2 panel
-  I will rename check_step to judge_step and update the callers.
 
   PASS      Read   read gate.py                                           0.5s
-  PASS      Edit   renamed check_step to judge_step in gate.py           +2 -2 ▂
-    note    the docstring of judge_step still names the old function
+  PASS      Edit   renamed check_step to judge_step in gate.py           +2 -2
+    note    the docstring of judge_step still names the old function           ▁
   PASS      Bash   ran the unit tests: 412 passed                         8.7s
   DENY      Bash   read a credentials file
     reason  the task does not need this file
@@ -19,6 +18,7 @@
  │   rule `git push --force` (force push).                                    │
  │   a,a allow · d,d deny · w,w detail · n,n note                             │
  ╰────────────────────────────────────────────────────────────────────────────╯
+   Allow    Deny    Deny with a note    Show everything
  to main · next turn · tab changes
  >
  a,a allow   d,d deny   w,w detail   n,n note   ^p palette   f1 help

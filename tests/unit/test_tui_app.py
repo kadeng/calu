@@ -24,7 +24,7 @@ from calu.tui.model import ALL, MAIN
 from calu.tui.screens.confirm import ConfirmScreen
 from calu.tui.screens.detail import DetailScreen
 from calu.tui.screens.text import TextScreen
-from calu.tui.widgets.chrome import AgentTabs, Line, Lines
+from calu.tui.widgets.chrome import AgentTabs, Buttons, Line, Lines
 
 pytestmark = pytest.mark.anyio
 
@@ -847,3 +847,30 @@ async def test_a_long_session_costs_the_same_per_step_as_a_short_one() -> None:
 def test_the_stylesheet_ships_with_the_package() -> None:
     sheet = resources.files("calu.tui").joinpath("tui.tcss")
     assert sheet.is_file() and "#transcript" in sheet.read_text(encoding="utf-8")
+
+
+async def test_the_decision_card_is_answered_with_the_mouse() -> None:
+    """The buttons under the card do what the keys do, also the second click that confirms.
+
+    With a scripted session; nothing is started.
+    """
+    async with running("escalation") as run:
+        await run.pilot.pause()
+        row = run.app.query_one("#card-actions", Buttons)
+        assert (
+            "Allow" in row.text and "Deny with a note" in row.text and "Show everything" in row.text
+        )
+
+        async def click(label: str) -> None:
+            """Click a button of the row by its label, a moment after the card settled."""
+            run.clock.advance(0.6)
+            column = run.app.query_one("#card-actions", Buttons).text.index(label) + 1
+            await run.pilot.click("#card-actions", offset=(column, 0))
+            await run.pilot.pause()
+
+        await click("Allow")
+        assert run.session.sent("escalation.decide") == [], "the first click only arms"
+        assert "click again to allow" in run.app.query_one("#card-actions", Buttons).text
+        await click("click again to allow")
+        sent = run.session.sent("escalation.decide")
+        assert len(sent) == 1 and sent[0]["decision"] == "allow"
