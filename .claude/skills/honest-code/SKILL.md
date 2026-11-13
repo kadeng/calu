@@ -22,6 +22,16 @@ executable. A unit is honest when all three hold:
 A unit is **dishonest** when it does something else than its name and documentation say, does
 more, or does less.
 
+**What counts as documentation.** The name and the doc comment, or documentation kept next to
+the code: what a reader sees when looking at the unit. A README or a guide is outside this
+rule; it may or may not be read by somebody who looks at a function.
+
+**What counts as trusted.** That depends on the project. Typically: popular libraries with
+good documentation, and components, libraries and applications that come with the operating
+system's distribution or from a renowned vendor. A popular library can be expected to be
+honest, because its users would soon report and correct a difference between its name or
+documentation and what it does.
+
 ## How much to write
 
 Write the contract compactly, at the unit's own level of abstraction. State what a competent
