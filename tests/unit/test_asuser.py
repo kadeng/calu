@@ -162,3 +162,18 @@ def test_the_user_passed_through_sudo_must_be_the_one_who_ran_it(monkeypatch):
     monkeypatch.setenv("SUDO_UID", "4242")
     with pytest.raises(CliError, match="not the user who ran sudo"):
         _run_as(options("--user", "1000", "--from-sudo"))
+
+
+def test_without_an_admin_entry_settings_use_the_typed_admin_password(tmp_path, monkeypatch):
+    """Only an `operator` entry is stored: the login is `calu_admin` at that database."""
+    from calu import cli
+    from calu.credentials import CredentialStore
+    from calu.db.target import PasswordAuth, Target
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("operator", "host=db.example port=5432 dbname=calu user=calu_operator", None)
+    monkeypatch.setattr(cli, "read_password", lambda prompt, confirm=False: bytearray(b"typed"))
+    login = Target.parse(cli._admin_secret(store))
+    assert login.conninfo["user"] == "calu_admin" and login.conninfo["host"] == "db.example"
+    assert login.auth == PasswordAuth(password="typed")
+    assert "admin" not in store, "nothing was stored"

@@ -152,7 +152,7 @@ def test_cmd_attach_starts_the_chosen_client_and_prints_what_is_left(
 
     started: list[tuple[str, str, int]] = []
 
-    def run_tui(address: str, token: str, after_seq: int = 0) -> TuiExit:
+    def run_tui(address: str, token: str, after_seq: int = 0, database=None) -> TuiExit:
         """Stand in for the full-screen client."""
         started.append((address, token, after_seq))
         return TuiExit(0, "escalated", "abc", 2)

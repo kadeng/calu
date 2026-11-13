@@ -357,6 +357,54 @@ async def _enable_login(conn: psycopg.AsyncConnection, admin: Target, role: str)
     return login
 
 
+ADMIN_ROLE = "calu_admin"
+"""The role a person changes settings as, with a password that is typed and never stored
+(migration 0033)."""
+
+
+def admin_login(place: Target, password: str) -> Target:
+    """Describe the login of `calu_admin` at the database another login names.
+
+    Args:
+        place: Any login of the same database (the owner's, the operator's): where the
+            database is and how its server is verified are taken from it, nothing else.
+        password: The admin password.
+
+    Returns:
+        The login of `calu_admin`.
+
+    Raises:
+        TargetError: If `place` finds its server through a libpq service file.
+    """
+    return place.for_role(ADMIN_ROLE, PasswordAuth(password=password))
+
+
+async def enable_admin_login(conn: psycopg.AsyncConnection, password: str) -> None:
+    """Let `calu_admin` log in with `password`; an earlier password stops working.
+
+    The server gets the SCRAM verifier, computed here, and never the password itself, so the
+    password is in no statement the server could log.
+
+    Args:
+        conn: An open connection of the database owner, schema migrated (version 33).
+        password: The admin password a person will type; not empty.
+
+    Raises:
+        ValueError: If the password is empty.
+        psycopg.Error: On database errors.
+    """
+    if not password:
+        raise ValueError("the admin password must not be empty")
+    verifier = conn.pgconn.encrypt_password(
+        password.encode(), ADMIN_ROLE.encode(), b"scram-sha-256"
+    ).decode()
+    await conn.execute(
+        sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+            sql.Identifier(ADMIN_ROLE), sql.Literal(verifier)
+        )
+    )
+
+
 async def enable_operator_login(conn: psycopg.AsyncConnection, admin: Target | str) -> str:
     """Give `calu_operator` a new random password and return its connection string (D48).
 

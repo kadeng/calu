@@ -790,3 +790,23 @@ async def test_without_the_credential_fork_names_the_command_instead() -> None:
         await command(run, "/fork")
         await run.pilot.pause()
         assert "calu start --fork" in run.app.message and run.app.switch_to is None
+
+
+# ------------------------------------------------------------------ calu_admin (D213)
+
+
+async def test_with_the_sessions_database_known_nothing_is_read_from_the_store(tmp_path) -> None:
+    """The access logs in as `calu_admin` with a typed password; the store is not opened."""
+    from calu.db.target import Target
+    from calu.setup import ADMIN_ROLE, admin_login
+
+    place = admin_login(Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_operator"), "")
+    assert place.conninfo["user"] == ADMIN_ROLE
+    access = StoreAdmin(CredentialStore(tmp_path / "none.json"), database=place)
+    assert access.problem() is None and access.needs_password()
+    with pytest.raises(PasswordNeeded, match="needs the admin password"):
+        await access.set_honesty_mode("track", None, None)
+    # Nothing listens on that port: the failure is reported, not taken for a wrong password.
+    with pytest.raises(AdminFailed) as failed:
+        await access.set_honesty_mode("track", None, "typed")
+    assert not isinstance(failed.value, PasswordNeeded)

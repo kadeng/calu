@@ -53,6 +53,7 @@ is read as one line from stdin (for scripts and tests).
 
 import argparse
 import asyncio
+import contextlib
 import getpass
 import json
 import math
@@ -119,6 +120,8 @@ from calu.serve import serve as serve_sessions
 from calu.session_requests import SessionRequest
 from calu.setup import (
     SetupRefused,
+    admin_login,
+    enable_admin_login,
     enable_operator_login,
     preflight,
     seed_defaults,
@@ -167,6 +170,53 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
     if confirm and ask("Repeat: ") != first:
         raise CliError("passwords do not match")
     return bytearray(first.encode())
+
+
+_typed: dict[str, str] = {}
+"""`admin`: the admin password as it was typed in this command, kept until the command ends
+so that `calu setup` can give the role `calu_admin` the same one (PLAN.md D213)."""
+
+_admin_place: list[Target] = []
+"""The database the last herd command of this process connected to, without any secret: the
+login of `calu_admin` there with an empty password. The full-screen client is given it, so
+that it can change settings in the database of the session it is attached to."""
+
+
+def _remember_admin_password(password: bytes | bytearray) -> None:
+    """Keep the admin password that was just typed, for `calu setup` (see `_typed`).
+
+    Args:
+        password: The password; it is copied, the caller still wipes its buffer.
+    """
+    _typed["admin"] = bytes(password).decode()
+
+
+def _admin_secret(store: CredentialStore) -> bytearray:
+    """Return a login that may change settings, asking for what it needs (PLAN.md D213).
+
+        `admin` stored here       ──► that entry (the owner login), with its password
+        only `operator` stored    ──► the login of `calu_admin` at the operator's database,
+                                      with the admin password typed now; nothing is stored
+
+    Args:
+        store: The credential store.
+
+    Returns:
+        The login as the credential store would hold it; the caller wipes it.
+
+    Raises:
+        CliError: If neither credential is stored.
+        CredentialError: On a wrong password of a stored entry.
+        TargetError: If the operator entry holds no database login this version can read.
+    """
+    if "admin" in store or "operator" not in store:
+        return load_credential(store, "admin", "Admin password: ")
+    place = load_target(store, "operator", "Operator password: ")
+    password = read_password("Admin password: ")
+    try:
+        return bytearray(admin_login(place, password.decode()).dump())
+    finally:
+        wipe(password)
 
 
 def _root_store_hint(store: CredentialStore) -> str:
@@ -226,7 +276,10 @@ def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray
         return store.load(name)
     password = read_password(prompt)
     try:
-        return store.load(name, password)
+        secret = store.load(name, password)
+        if name == "admin":
+            _remember_admin_password(password)
+        return secret
     finally:
         wipe(password)
 
@@ -281,6 +334,7 @@ def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
     owner = local_db.owner_target(local_db.new_owner_password(), port, data)
     try:
         store.save("admin", owner.dump(), password)
+        _remember_admin_password(password)
     finally:
         wipe(password)
     assert isinstance(owner.auth, PasswordAuth)
@@ -827,6 +881,7 @@ def _new_database(args: argparse.Namespace, store: CredentialStore) -> Target:
     password = read_password("New admin password: ", confirm=True)
     try:
         store.save("admin", owner.dump(), password)
+        _remember_admin_password(password)
     finally:
         wipe(password)
     return owner
@@ -923,6 +978,16 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
                 report, session = await setup_database(conn, owner, model, renew, session_iam)
             except SetupRefused as exc:
                 raise CliError(f"calu cannot be set up in {owner.place} as it is:\n{exc}") from exc
+            if _typed.get("admin"):
+                # The password a person knows also opens the role that changes settings,
+                # from any client and without a stored login (D213).
+                await enable_admin_login(conn, _typed["admin"])
+                report += "\nlogin of calu_admin: set to the admin password"
+            else:
+                report += (
+                    "\nlogin of calu_admin: not set, because the `admin` credential has no "
+                    "password; clients on other accounts cannot change settings"
+                )
             if explicit:
                 await admin.set_all_models(db, model, effort)
                 report += "\nmodels of every checker, the narrator and the summarizer: "
@@ -1512,7 +1577,7 @@ def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]])
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
-    url = load_credential(store, "admin", "Admin password: ")
+    url = _admin_secret(store)
     try:
         print(asyncio.run(_with_admin(url.decode(), work)))
     finally:
@@ -1742,6 +1807,8 @@ def _herd_value[T](
                 )
             url = load_credential(store, name, f"{name.capitalize()} password: ")
             try:
+                with contextlib.suppress(ValueError):  # also TargetError: no usable place
+                    _admin_place[:] = [admin_login(Target.parse(url), "")]
                 return asyncio.run(_with_admin_value(url.decode(), work))
             finally:
                 wipe(url)
@@ -1840,7 +1907,12 @@ def _attach(
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
             while True:
-                ended = tui_start.run_tui(endpoint.address, endpoint.token, after_seq)
+                ended = tui_start.run_tui(
+                    endpoint.address,
+                    endpoint.token,
+                    after_seq,
+                    database=_admin_place[0] if _admin_place else None,
+                )
                 if ended.switch_to is None:
                     break
                 # `/new` or `/fork` in the client: the session it started is attached next,
@@ -1966,7 +2038,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         check_host(args.host)
     except NotLocal as exc:
         raise CliError(str(exc)) from exc
-    url = load_credential(store, "admin", "Admin password: ")
+    url = _admin_secret(store)
 
     async def serve() -> None:
         """Open the connection, build the app and serve until interrupted."""
@@ -2244,7 +2316,7 @@ def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
         _admin_command(store, show)
         return
 
-    url = load_credential(store, "admin", "Admin password: ")
+    url = _admin_secret(store)
     try:
         admin_url = url.decode()
 
@@ -2982,7 +3054,7 @@ def _edit_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         admin.AdminError: If the edited instructions are refused (e.g. empty).
         psycopg.Error: On database errors.
     """
-    url = load_credential(store, "admin", "Admin password: ")
+    url = _admin_secret(store)
     try:
         admin_url = url.decode()
 
@@ -3045,7 +3117,7 @@ def _edit_rule_list(args: argparse.Namespace, store: CredentialStore) -> None:
     if not args.target:
         raise CliError(f"rules edit needs a list name ({', '.join(admin.RULE_LISTS)})")
     scope = args.project or "global"
-    url = load_credential(store, "admin", "Admin password: ")
+    url = _admin_secret(store)
     try:
         admin_url = url.decode()
 
@@ -3328,7 +3400,7 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.action in ("trust", "trusted", "untrust", "prune"):
         _honesty_trust(args, store)
         return
-    url = load_credential(store, "admin", "Admin password: ")
+    url = _admin_secret(store)
     try:
         admin_url = url.decode()
 

@@ -96,6 +96,15 @@ broken down or extended. Derived requirements and design decisions belong in
       unprivileged user; everything that user may configure is in the database.
     - What starts Claude Code under the other uid and gid is built into calu: no script is
       written to disk for it, which could be hijacked (stated 2026-11-13).
+    - What is privileged (clarified 2026-11-13): the database files and the database's
+      configuration, and calu's configuration and executables on the file system. Changing
+      settings is not reserved to root: the full-screen client must still allow it, asking
+      for the admin password, which it does not store. PostgreSQL's permission system is to
+      be used for this; the database choice is fixed to PostgreSQL also for that reason.
+    - A client attached to a session that was started through sudo may itself run through
+      sudo (suggested 2026-11-13): it then has privileged abilities with ease of use, and
+      Claude cannot reach it. It should then also list sessions and switch between them
+      without a new authentication, as `calu serve` starts sessions without one.
 27. `calu serve` (stated 2026-11-13): another run mode that works like `calu run` but can
     spawn and track multiple calu/Claude sessions in various project directories on the same
     system. With it, forking a session or creating a new one needs no new authentication each

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from calu.db.target import Target
+
 if TYPE_CHECKING:
     from calu.tui.app import TuiOptions
 
@@ -169,7 +171,13 @@ def options_from(config: Path, history: Path, environ: Mapping[str, str]) -> Tui
     )
 
 
-def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = True) -> TuiExit:
+def run_tui(
+    address: str,
+    token: str,
+    after_seq: int = 0,
+    show_thinking: bool = True,
+    database: Target | None = None,
+) -> TuiExit:
     """Run the full-screen client until the user detaches or the session closes the connection.
 
     Blocks, and takes over the terminal while it runs. The session keeps running when the
@@ -181,6 +189,9 @@ def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = 
         token: The client token.
         after_seq: The first subscription continues after this sequence number.
         show_thinking: Whether thinking is shown in full at the start.
+        database: The login of `calu_admin` at the session's database, without a password
+            (`calu.setup.admin_login`): settings are then changed there with the admin
+            password the user types. None uses this machine's `admin` credential.
 
     Returns:
         What the client knew when it ended.
@@ -196,7 +207,9 @@ def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = 
     options = options_from(settings.config_path(), settings.history_path(), os.environ)
     options.after_seq = after_seq
     options.show_thinking = options.show_thinking and show_thinking
-    app = CaluApp(protocol_connector(address, token), options)
+    from calu.tui.adminaccess import StoreAdmin
+
+    app = CaluApp(protocol_connector(address, token), options, admin=StoreAdmin(database=database))
     app.run()
     if app.link.error is not None:
         raise app.link.error

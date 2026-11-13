@@ -33,6 +33,7 @@ from calu import admin, session_requests
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
+from calu.db.target import PasswordAuth, Target
 from calu.session_requests import SessionRequest
 
 CREDENTIAL = "admin"
@@ -184,13 +185,21 @@ def weakens(before: str, after: str) -> bool:
 class StoreAdmin:
     """`AdminAccess` over the local credential store and `calu.admin`."""
 
-    def __init__(self, store: CredentialStore | None = None) -> None:
+    def __init__(
+        self, store: CredentialStore | None = None, database: Target | None = None
+    ) -> None:
         """Create the access.
 
         Args:
             store: The credential store; the default store of this user if None.
+            database: The login of the role `calu_admin` at the database of the attached
+                session, without its password (`calu.setup.admin_login`). With it, every
+                change logs in there as `calu_admin` with the admin password the user types;
+                nothing is read from the store and nothing is stored (PLAN.md D213). None
+                uses the store's `admin` credential.
         """
         self.store = store or CredentialStore()
+        self.database = database
 
     def problem(self) -> str | None:
         """Say why nothing can be changed from this machine.
@@ -199,6 +208,8 @@ class StoreAdmin:
             None if the `admin` credential is stored, `NO_CREDENTIAL` if not, or the store's
             own message if its file cannot be read.
         """
+        if self.database is not None:
+            return None
         try:
             return None if CREDENTIAL in self.store else NO_CREDENTIAL
         except CredentialError as error:
@@ -211,10 +222,56 @@ class StoreAdmin:
             True if it is; False without a password, without the credential or when the
             store cannot be read.
         """
+        if self.database is not None:
+            return True
         try:
             return CREDENTIAL in self.store and self.store.needs_password(CREDENTIAL)
         except CredentialError:
             return False
+
+    @staticmethod
+    async def _as_admin[T](
+        database: Target, password: str | None, work: Callable[[Db], Awaitable[T]]
+    ) -> T:
+        """Log in as `calu_admin` with the typed password, run `work` and close.
+
+        Args:
+            database: The login of `calu_admin` without its password.
+            password: The admin password the user typed, or None.
+            work: `async (Db) -> T`.
+
+        Returns:
+            What `work` returned.
+
+        Raises:
+            PasswordNeeded: If no password was given, or the database refuses it.
+            AdminFailed: If the database cannot be reached or refuses the change.
+        """
+        if not password:
+            raise PasswordNeeded("changing this needs the admin password")
+        login = database.model_copy(update={"auth": PasswordAuth(password=password)})
+        try:
+            try:
+                with anyio.fail_after(CONNECT_TIMEOUT_S):
+                    conn = await connect(login, False)
+            except TimeoutError as error:
+                raise AdminFailed(
+                    f"the database did not answer within {CONNECT_TIMEOUT_S:.0f} seconds"
+                ) from error
+            except psycopg.OperationalError as error:
+                if "password authentication failed" in str(error):
+                    raise PasswordNeeded("wrong admin password") from error
+                first = str(error).strip().splitlines()[0] if str(error).strip() else ""
+                raise AdminFailed(f"the database cannot be reached: {first}") from error
+            try:
+                return await work(Db(conn))
+            finally:
+                await conn.close()
+        except admin.AdminError as error:
+            raise AdminFailed(str(error)) from error
+        except psycopg.Error as error:
+            first = str(error).strip().splitlines()[0] if str(error).strip() else "no detail"
+            raise AdminFailed(f"the database refused: {first}") from error
 
     async def _with_db[T](self, password: str | None, work: Callable[[Db], Awaitable[T]]) -> T:
         """Open the owner's connection, run `work` with it and close it.
@@ -233,6 +290,8 @@ class StoreAdmin:
             AdminFailed: If there is no credential, the database cannot be reached or it
                 refuses the change.
         """
+        if self.database is not None:
+            return await self._as_admin(self.database, password, work)
         missing = self.problem()
         if missing is not None:
             raise AdminFailed(missing)

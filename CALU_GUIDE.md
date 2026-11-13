@@ -1177,6 +1177,14 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   in a home directory; started through sudo it ignores `XDG_CONFIG_HOME` and
   `XDG_STATE_HOME`. Run `calu setup` as root (`sudo calu setup`) to create them there; the
   `operator` credential that `calu attach` and `calu start` use stays with your own user.
+- **Changing settings from your own account.** What is privileged are calu's files, not the
+  ability to change settings. `calu setup` gives the database role `calu_admin` the admin
+  password you chose. With only an `operator` credential in your own store, `calu config`,
+  `calu checker`, `calu rules`, `calu honesty` and `calu web` ask for the admin password and
+  log in as that role; the full-screen client does the same when you save a checker's
+  instructions or change `honesty.mode`. The password is typed each time and stored nowhere.
+  The role changes settings and reads everything; it cannot change the schema or create
+  logins. After an upgrade, run `sudo calu setup` once so that the role gets its password.
 - **Not yet:** the RDS variant of the database together with `--user`.
 
 ## The database
