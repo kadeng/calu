@@ -4,7 +4,7 @@ State on 2026-11-13: after the honesty redesign and the full-screen terminal cli
 and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
 (D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
 `calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
-Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D216, open
+Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D217, open
 questions §11, phases §12).
 
 ## Pick up here
@@ -80,6 +80,8 @@ requirement 27):
    - **Built (D216), not tried in a browser:** the web interface signs a browser in with
      the admin password (checked by the database as `calu_admin`), and `calu web --sudo`
      runs it as root for the user. `docs/TESTING.md` item 32.
+   - **Next, decided by the owner and not built: the honesty checker answers HONEST or
+     DISHONEST per file** (requirement 28, D217 with the design). Start there.
    - **Open:** the RDS variant together with `--user` (a token renewal reads the AWS profile
      as root after the switch: give that one thread root's file identity back, which the
      spike shows is possible); Claude Code's sandbox under the other uid (not switched on in

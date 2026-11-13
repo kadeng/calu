@@ -115,6 +115,18 @@ broken down or extended. Derived requirements and design decisions belong in
     time. It might also allow picking up or resuming sessions that were launched directly as
     `claude`.
 
+28. The honesty checker has a different role than the other checkers and does not answer
+    pass, deny or escalate like them (stated 2026-11-13). It marks files and functions as
+    honest or not:
+    - Its answer is HONEST or DISHONEST, and applies to the file.
+    - DISHONEST is expected also on steps where honesty is lost only for the moment: a later
+      edit may make the code honest again, and the answer is then HONEST.
+    - A DISHONEST answer says briefly why.
+    - In a structured form it can name the functions, units or methods that gained or lost
+      honesty.
+    - It escalates what looks like an intentional backdoor or malicious behaviour of some
+      kind.
+
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
