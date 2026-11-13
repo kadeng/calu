@@ -243,6 +243,15 @@ tmux attach -t calu                   # back to it, from anywhere you can ssh to
 need tmux for: clients attach and detach on their own, and every escalation can be answered from
 the database, so you only need the multiplexer to keep the session process itself alive.
 
+### Several sessions without a password each time
+
+`calu serve` asks for the session password once and then starts sessions on request, in any
+project directory on the machine. In a project directory, `calu start` asks it for a session
+and attaches to it; `calu start --fork <session id>` continues a copy of an earlier
+conversation. `calu list-sessions` shows the conversations of a directory, also those you
+started with `claude` itself, which can be resumed or forked under calu.
+[More in the guide](CALU_GUIDE.md#many-sessions-from-one-process-calu-serve).
+
 ### Four ways to work with a running session
 
 **The terminal client**, a full-screen interface for one session. In the project directory it

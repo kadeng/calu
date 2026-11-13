@@ -74,9 +74,10 @@ from typing import Any
 import anyio
 import psycopg
 
-from calu import __version__, admin, doctor, herd
+from calu import __version__, admin, doctor, herd, session_requests
 from calu.acp import serve_acp
 from calu.attach import attach
+from calu.claude.transcripts import transcripts, user_inputs
 from calu.config import (
     ANTHROPIC_HAIKU,
     BEDROCK_EU_HAIKU,
@@ -110,6 +111,10 @@ from calu.protocol.client import RequestFailed
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
+from calu.serve import ServeOptions
+from calu.serve import os_user as serve_os_user
+from calu.serve import serve as serve_sessions
+from calu.session_requests import SessionRequest
 from calu.setup import (
     SetupRefused,
     enable_operator_login,
@@ -1048,24 +1053,17 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     print(f"stored credential {args.name!r}")
 
 
-def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Start a checked Claude Code session in the foreground.
-
-    Asks for the session password, decrypts the `session` credential, and hands it to
-    `calu.run.run_session`, which wipes it before Claude Code starts.
+def _workspace_and_prompt(args: argparse.Namespace) -> tuple[Path, str | None]:
+    """Read the project directory and the first message of `calu run` and `calu start`.
 
     Args:
-        args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `fork`,
-            `fork_before_turn`, `model`, `effort`, `batch`, `thinking`).
-        store: The credential store.
+        args: Parsed arguments (`directory`, `prompt`, `prompt_file`).
+
+    Returns:
+        The resolved directory and the first message, or None for none.
 
     Raises:
-        CliError: If there is no `session` credential, the directory does not exist, the
-            options contradict each other (`--fork` with `--resume` or with
-            `--fork-before-turn`), `--resume` or `--fork` name no UUID, `--fork-before-turn`
-            is below 2, or the session could not be started.
-        CredentialError: On a wrong password.
-        psycopg.Error: On database errors.
+        CliError: If the directory does not exist or the prompt file cannot be read.
     """
     workspace = Path(args.directory).resolve()
     if not workspace.is_dir():
@@ -1076,24 +1074,20 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
             prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
         except OSError as exc:
             raise CliError(f"cannot read {args.prompt_file}: {exc}") from exc
-    options = RunOptions(
-        workspace=workspace,
-        project=args.project,
-        prompt=prompt,
-        resume_id=args.resume,
-        fork_id=args.fork,
-        fork_before_turn=args.fork_before_turn,
-        socket_path=_socket_path(args.socket),
-        model=args.model,
-        effort=args.effort,
-        interactive=not args.batch,
-        show_thinking=args.thinking,
-        background_timeout_s=args.background_timeout,
-    )
-    if args.background_timeout is not None and (
-        not args.batch or not math.isfinite(args.background_timeout) or args.background_timeout <= 0
-    ):
-        raise CliError("--background-timeout needs --batch and a number of seconds above 0")
+    return workspace, prompt
+
+
+def _check_conversation_choice(args: argparse.Namespace) -> None:
+    """Check `--resume`, `--fork` and `--fork-before-turn` of `calu run` and `calu start`.
+
+    Args:
+        args: Parsed arguments (`resume`, `fork`, `fork_before_turn`).
+
+    Raises:
+        CliError: If `--fork` comes with `--resume` or with `--fork-before-turn`, if
+            `--fork-before-turn` comes without `--resume` or is below 2, or if `--resume` or
+            `--fork` name no UUID.
+    """
     if args.fork and args.resume:
         raise CliError(
             "--fork and --resume exclude each other: --resume ID continues that conversation, "
@@ -1117,8 +1111,26 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
                 f"{option} takes a Claude session id (a UUID); `calu list-sessions` shows "
                 "those of this directory"
             ) from None
-    if options.interactive and not options.prompt and sys.stdin.isatty():
-        print("Type a message for Claude; /quit ends the session.")
+
+
+def _session_login(store: CredentialStore) -> bytearray:
+    """Ask for the session password and return the decrypted `session` credential.
+
+    Side effects: clears the process's "dumpable" flag before the password is read, so that
+    neither the password nor the credential is ever in a process another process of this
+    user can read; starts the local database when that variant is configured and its port
+    does not answer (the docker command gets no secret).
+
+    Args:
+        store: The credential store.
+
+    Returns:
+        The credential; the caller wipes it.
+
+    Raises:
+        CliError: If there is no `session` credential, or it is stored without a password.
+        CredentialError: On a wrong password.
+    """
     if "session" in store and not store.needs_password("session"):
         # REQUIREMENTS 17 on the read path as well (D115 guards the write path): an entry
         # without a password is unauthenticated, so whatever can write the credential file
@@ -1128,16 +1140,168 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
             "password protected by design (REQUIREMENTS 17); store it again with "
             "`calu credential set session`"
         )
-    # Before the password is read and the credential decrypted, so that neither is ever in a
-    # process that another process of this user can read.
     harden_process()
     url = load_credential(store, "session", "Session password: ")
     try:
         # After the password, because where the local database is comes out of the decrypted
-        # entry; before the session connects. The docker command gets no secret.
+        # entry; before anything connects.
         block = Target.parse(url).docker
         if block is not None and local_db.ensure_running(block):
             print(f"started the local database on 127.0.0.1:{block.port}", flush=True)
+    except BaseException:
+        wipe(url)
+        raise
+    return url
+
+
+def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Answer session requests in the foreground until interrupted (PLAN.md D208).
+
+    Asks for the session password once; every session that `calu start` asks for afterwards
+    runs in this process without a further password.
+
+    Args:
+        args: Parsed arguments (`max_sessions`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no usable `session` credential, `--max-sessions` is below 1, or
+            the database refused the session login.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors at the start.
+    """
+    if args.max_sessions < 1:
+        raise CliError("--max-sessions takes a number of 1 or more")
+    url = _session_login(store)
+    try:
+        code = asyncio.run(serve_sessions(url, ServeOptions(max_sessions=args.max_sessions)))
+    finally:
+        wipe(url)
+    if code:
+        raise CliError("the server ended with an error (see the messages above)")
+
+
+def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Ask the running `calu serve` for a session and attach to it (PLAN.md D208).
+
+    Side effects: writes a `session_requests` row and, unless `--no-attach`, a client token
+    that is revoked when the client ends; prints the session's ids.
+
+    Args:
+        args: Parsed arguments (`directory`, `project`, `prompt`, `prompt_file`, `resume`,
+            `fork`, `fork_before_turn`, `model`, `effort`, `no_attach`, `plain`, `thinking`).
+        store: The credential store; the `operator` credential is enough.
+
+    Raises:
+        CliError: If the options contradict each other, no server answered, the server
+            refused or failed to start the session, or the client ended with an error.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    workspace, prompt = _workspace_and_prompt(args)
+    _check_conversation_choice(args)
+    if args.fork_before_turn is not None and not args.resume:
+        raise CliError("--fork-before-turn needs --resume <session id>")
+    user, host = serve_os_user(), socket.gethostname()
+    wanted = SessionRequest(
+        hostname=host,
+        os_user=user,
+        directory=str(workspace),
+        kind="resume" if args.resume else "fork" if args.fork else "new",
+        claude_session_id=args.resume or args.fork,
+        fork_before_turn=args.fork_before_turn,
+        prompt=prompt,
+        model=args.model,
+        effort=args.effort,
+        project=args.project,
+        label=f"calu start ({user})",
+    )
+
+    async def work(db: Db) -> tuple[Endpoint, str]:
+        """File the request, wait for the session and mint a token for it.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The endpoint (without a token for `--no-attach`) and the Claude session id.
+
+        Raises:
+            CliError: If no server answered or the session was not started.
+        """
+        try:
+            done = await session_requests.wait_for(db, await session_requests.file(db, wanted))
+        except session_requests.NoServer:
+            raise CliError(
+                f"no `calu serve` answered for {user} on {host}: start it in a terminal with "
+                "`calu serve`, or run this one session with `calu run`"
+            ) from None
+        except TimeoutError as exc:
+            raise CliError(str(exc)) from None
+        if done.state != "started" or done.session_id is None:
+            raise CliError(f"the server did not start the session: {done.message}")
+        row = await db.one(
+            "SELECT coalesce(address, ''), coalesce(claude_session_id, '') "
+            "FROM sessions WHERE id = %s::uuid",
+            (done.session_id,),
+        )
+        address, claude_id = row if row is not None else ("", "")
+        if args.no_attach:
+            return Endpoint(address, "", None, done.session_id), claude_id
+        token_id, token = await herd.mint_token(db, done.session_id, "calu start")
+        return Endpoint(address, token, token_id, done.session_id), claude_id
+
+    endpoint, claude_id = _herd_value(store, work)
+    print(f"[session] {claude_id}", flush=True)
+    if args.no_attach:
+        print(f"[clients] attach with: calu attach --session {endpoint.session_id}", flush=True)
+        return
+    _attach(endpoint, store, args.plain, 0, args.thinking)
+
+
+def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Start a checked Claude Code session in the foreground.
+
+    Asks for the session password, decrypts the `session` credential, and hands it to
+    `calu.run.run_session`, which wipes it before Claude Code starts.
+
+    Args:
+        args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `fork`,
+            `fork_before_turn`, `model`, `effort`, `batch`, `thinking`).
+        store: The credential store.
+
+    Raises:
+        CliError: If there is no `session` credential, the directory does not exist, the
+            options contradict each other (`--fork` with `--resume` or with
+            `--fork-before-turn`), `--resume` or `--fork` name no UUID, `--fork-before-turn`
+            is below 2, or the session could not be started.
+        CredentialError: On a wrong password.
+        psycopg.Error: On database errors.
+    """
+    workspace, prompt = _workspace_and_prompt(args)
+    options = RunOptions(
+        workspace=workspace,
+        project=args.project,
+        prompt=prompt,
+        resume_id=args.resume,
+        fork_id=args.fork,
+        fork_before_turn=args.fork_before_turn,
+        socket_path=_socket_path(args.socket),
+        model=args.model,
+        effort=args.effort,
+        interactive=not args.batch,
+        show_thinking=args.thinking,
+        background_timeout_s=args.background_timeout,
+    )
+    if args.background_timeout is not None and (
+        not args.batch or not math.isfinite(args.background_timeout) or args.background_timeout <= 0
+    ):
+        raise CliError("--background-timeout needs --batch and a number of seconds above 0")
+    _check_conversation_choice(args)
+    if options.interactive and not options.prompt and sys.stdin.isatty():
+        print("Type a message for Claude; /quit ends the session.")
+    url = _session_login(store)
+    try:
         code = asyncio.run(run_session(url, options))
     finally:
         wipe(url)
@@ -1517,16 +1681,33 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
             of this directory is running.
     """
     endpoint = _endpoint_of(args, store, "calu attach")
+    _attach(endpoint, store, args.plain, args.after_seq, args.thinking)
+
+
+def _attach(
+    endpoint: Endpoint, store: CredentialStore, plain: bool, after_seq: int, thinking: bool
+) -> None:
+    """Run the terminal client on an endpoint until it ends, then revoke a minted token.
+
+    Args:
+        endpoint: Where to connect, and the token.
+        store: The credential store, for revoking a token that was minted for this client.
+        plain: The line client also on a terminal.
+        after_seq: Continue after this event sequence number.
+        thinking: The line client also prints Claude's thinking.
+
+    Raises:
+        CliError: If the address cannot be reached, the token is refused, or the client ended
+            with an error.
+    """
     try:
-        if tui_start.wants_full_screen(args.plain):
+        if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
-            ended = tui_start.run_tui(endpoint.address, endpoint.token, args.after_seq)
+            ended = tui_start.run_tui(endpoint.address, endpoint.token, after_seq)
             print("\n".join(tui_start.exit_lines(ended)))
             code = ended.code
         else:
-            code = asyncio.run(
-                attach(endpoint.address, endpoint.token, args.after_seq, args.thinking)
-            )
+            code = asyncio.run(attach(endpoint.address, endpoint.token, after_seq, thinking))
     except (OSError, RequestFailed) as exc:
         raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
     finally:
@@ -1764,21 +1945,46 @@ def cmd_list_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
             One line per conversation and how to resume or fork one, or a sentence that
             says there is none.
         """
-        rows = await herd.conversations(
-            db, here, socket.gethostname(), getpass.getuser(), args.count
+        host, user = socket.gethostname(), getpass.getuser()
+        rows = await herd.conversations(db, here, host, user, args.count)
+        known = await herd.known_conversations(db, here, host, user)
+        # Conversations that were started with `claude` itself, from its own transcripts
+        # (D209); read in a worker thread, because it reads files.
+        found = await anyio.to_thread.run_sync(transcripts, Path(here))
+
+        def last_input(session_id: str) -> str:
+            """Return the last message the user typed in a transcript.
+
+            Args:
+                session_id: The Claude session id.
+
+            Returns:
+                The message, or "" if the transcript holds none.
+            """
+            inputs = user_inputs(session_id, Path(here))
+            return inputs[-1] if inputs else ""
+
+        rows = await anyio.to_thread.run_sync(
+            herd.with_transcripts, rows, known, found, last_input, args.count
         )
         if not rows:
             return (
-                f"no stored Claude session of {here} on this host for this user\n"
-                "(a session is listed once its first turn has ended; `calu sessions --all` "
-                "lists the sessions of every directory, host and user)"
+                f"no Claude session of {here} on this host for this user\n"
+                "(a session of calu is listed once its first turn has ended; `calu sessions "
+                "--all` lists the sessions of every directory, host and user)"
             )
         lines = [row.line(width) for row in rows]
         lines.append("")
         lines.append("continue one:  calu run --resume <session id>")
         lines.append("copy one:      calu run --fork <session id>   (the original stays as it is)")
+        lines.append("with a running `calu serve`: calu start --resume | --fork <session id>")
         if any(row.running for row in rows):
             lines.append("running:       a process still has that conversation; use calu attach")
+        if any(row.outside for row in rows):
+            lines.append(
+                "outside calu:  started with `claude` itself, so none of its steps was "
+                "checked; if a `claude` still has it open, fork it"
+            )
         return "\n".join(lines)
 
     _herd_command(store, work)
@@ -3260,6 +3466,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_run)
+
+    p = sub.add_parser(
+        "serve",
+        help="one process, authenticated once, that starts sessions when `calu start` asks",
+    )
+    p.add_argument(
+        "--max-sessions",
+        type=int,
+        default=10,
+        metavar="N",
+        help="how many sessions run at once; a request beyond that is refused (default: 10)",
+    )
+    p.set_defaults(handler=cmd_serve)
+
+    p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")
+    p.add_argument("directory", nargs="?", default=".", help="project directory (default: .)")
+    p.add_argument("--project", help="name of the project row whose settings and rules apply")
+    p.add_argument("-p", "--prompt", help="first message for Claude")
+    p.add_argument("--prompt-file", help="read the first message from this file")
+    p.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        help="Claude session id to resume (`calu list-sessions` shows those of this directory)",
+    )
+    p.add_argument(
+        "--fork",
+        metavar="SESSION_ID",
+        help="start a copy of that conversation under a new session id and continue the copy;"
+        " the original stays as it is. Not together with --resume",
+    )
+    p.add_argument(
+        "--fork-before-turn",
+        type=int,
+        metavar="N",
+        help="with --resume: branch the conversation off before turn N instead of continuing it",
+    )
+    p.add_argument("--model", help="Claude model alias or id (overrides the configuration)")
+    p.add_argument(
+        "--effort",
+        choices=["low", "medium", "high", "xhigh", "max", "default"],
+        help="reasoning effort (overrides the configuration)",
+    )
+    p.add_argument(
+        "--no-attach",
+        action="store_true",
+        help="only start the session and print its ids; attach later with `calu attach`",
+    )
+    p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
+    p.add_argument(
+        "--plain",
+        action="store_true",
+        help="the line client instead of the full-screen one (a pipe always gets the line client)",
+    )
+    p.set_defaults(handler=cmd_start)
 
     p = sub.add_parser("attach", help="terminal client for a running session")
     p.add_argument(

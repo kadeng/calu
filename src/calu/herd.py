@@ -14,18 +14,20 @@ remote interface) attach without the terminal that started the session, and revo
 that access again.
 """
 
+import dataclasses
 import json
 import logging
 import os
 import socket
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import psycopg
 
 from calu import machine
+from calu.claude.transcripts import Transcript
 from calu.context.turns import TurnRecord
 from calu.db import Db
 from calu.store.session import turn_record
@@ -351,6 +353,9 @@ class ConversationRow:
     running: bool
     """Whether a session of this conversation has not ended and still says it is running
     (silent for no longer than `STALE_AFTER_S`): attach to it instead of resuming it."""
+    outside: bool = False
+    """Whether the conversation was started with `claude` itself and calu has no record of
+    it (D209): it is read from Claude Code's transcript, and none of its steps was checked."""
 
     def line(self, width: int = 100) -> str:
         """Return the conversation as one terminal line.
@@ -360,12 +365,13 @@ class ConversationRow:
 
         Returns:
             The age, the Claude session id, "running" if a process still has the
-            conversation, and the last user input on one line. Whitespace runs of the input
+            conversation, "outside calu" if calu has no record of it, and the last user
+            input on one line. Whitespace runs of the input
             are one space, and a character that is not printable (control characters, escape
             sequences) is shown as U+FFFD. The length is counted in characters, so a line
             with wide characters can be wider than `width` columns.
         """
-        mark = "  running" if self.running else ""
+        mark = "  running" if self.running else "  outside calu" if self.outside else ""
         head = f"{age_text(self.age_s):>7}  {self.claude_session_id}{mark}  "
         # The input is text somebody typed or pasted: no character of it may steer the
         # terminal it is printed to.
@@ -443,6 +449,78 @@ async def conversations(
         (directory, hostname, os_user, STALE_AFTER_S, max(1, limit)),
     )
     return [ConversationRow(*row) for row in rows]
+
+
+async def known_conversations(db: Db, directory: str, hostname: str, os_user: str) -> set[str]:
+    """Return the Claude session ids calu has recorded for one directory, host and user.
+
+    Unlike `conversations` this includes a conversation whose first turn has not ended.
+
+    Args:
+        db: A connection with read access to `sessions` and `hosts`.
+        directory: The project directory as `calu run` recorded it.
+        hostname: The host name `calu run` recorded.
+        os_user: The OS user `calu run` recorded.
+
+    Returns:
+        The ids.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    rows = await db.all(
+        "SELECT DISTINCT s.claude_session_id FROM sessions s JOIN hosts h ON h.id = s.host_id"
+        " WHERE s.directory = %s AND h.hostname = %s AND s.os_user = %s"
+        "   AND s.claude_session_id IS NOT NULL",
+        (directory, hostname, os_user),
+    )
+    return {row[0] for row in rows}
+
+
+def with_transcripts(
+    rows: list[ConversationRow],
+    known: set[str],
+    found: list[Transcript],
+    last_input: Callable[[str], str],
+    limit: int,
+    now: datetime | None = None,
+) -> list[ConversationRow]:
+    """Add the conversations that only Claude Code knows to a listing (D209).
+
+    Args:
+        rows: The conversations calu has stored turns of, the freshest first.
+        known: Every Claude session id calu has recorded for the directory; a transcript
+            with one of them is calu's own conversation and is not added.
+        found: The transcripts Claude Code keeps for the directory.
+        last_input: Returns the last message the user typed in a transcript, by Claude
+            session id ("" if none). Called only for the transcripts that are listed.
+        limit: How many conversations to return at most.
+        now: The current time; None reads the clock.
+
+    Returns:
+        At most `limit` conversations of both kinds, the freshest first. One that only
+        Claude Code knows has `outside` set and no turn count.
+    """
+    current = now or datetime.now(UTC)
+    outside = [
+        ConversationRow(
+            claude_session_id=transcript.session_id,
+            age_s=max(0.0, (current - transcript.last_activity).total_seconds()),
+            last_input=transcript.first_input,
+            turns=0,
+            running=False,
+            outside=True,
+        )
+        for transcript in found
+        if transcript.session_id not in known
+    ]
+    merged = sorted([*rows, *outside], key=lambda row: row.age_s)[: max(1, limit)]
+    return [
+        dataclasses.replace(row, last_input=last_input(row.claude_session_id) or row.last_input)
+        if row.outside
+        else row
+        for row in merged
+    ]
 
 
 async def escalations(db: Db, session_id: str | None = None) -> list[EscalationRow]:

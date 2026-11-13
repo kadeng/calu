@@ -36,6 +36,7 @@ token; several at once. The terminal output of this command shows the same event
 session can also be watched where it was started.
 """
 
+import contextvars
 import ctypes
 import dataclasses
 import functools
@@ -59,8 +60,10 @@ from pydantic_ai.models import Model
 
 from calu import herd, preflight
 from calu.bus import Bus
+from calu.claude.launch import RunAs
 from calu.claude.runner import ClaudeRunner, Fork
 from calu.claude.sdk_runner import SdkRunner
+from calu.claude.transcripts import user_inputs
 from calu.clock import ClockWatch
 from calu.config import AutoEscalate, ClaudeConfig, load_secrets
 from calu.credentials import wipe
@@ -138,6 +141,36 @@ the environment variables that Claude Code must not see."""
 Serving = Callable[[str, str], Awaitable[None]]
 """Called with the WebSocket address and the client token once the protocol server listens."""
 
+Ready = Callable[[str | None, str], Awaitable[None]]
+"""Called with the id of the `sessions` row (None if the row could not be written) and the
+address, once the protocol server listens and the address is recorded: a client that looks
+the session up in the database finds it from then on."""
+
+LABEL: contextvars.ContextVar[str] = contextvars.ContextVar("calu_run_label", default="")
+"""What `say` puts in front of each line. `calu run` leaves it empty; `calu serve` sets it per
+session, because the lines of several sessions share one terminal."""
+
+ERRORS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "calu_run_errors", default=None
+)
+"""Where `say` also collects the error lines of one session, or None. `calu serve` reads the
+reason of a failed start from it."""
+
+
+def say(text: str, error: bool = False) -> None:
+    """Print one line about the session that runs in this task.
+
+    Side effects: writes to stdout, or to stderr for an error; appends an error to `ERRORS`
+    when a list is set there.
+
+    Args:
+        text: The line, without the label.
+        error: Whether the line reports a failure.
+    """
+    if error and (collected := ERRORS.get()) is not None:
+        collected.append(text)
+    print(f"{LABEL.get()}{text}", file=sys.stderr if error else sys.stdout, flush=True)
+
 
 @dataclass(frozen=True)
 class RunOptions:
@@ -175,6 +208,17 @@ class RunOptions:
     background_timeout_s: float | None = None
     """Unattended runs only: end the run after the session has been idle this long while Claude
     Code's background tasks still run (D170). None (the default) waits as long as they run."""
+    stay: bool = False
+    """A session of `calu serve` (D208): it does not end when Claude has nothing left to do,
+    because it waits for its user. It ends when a client sends `shutdown`, when the caller
+    cancels it, or when its protocol server cannot start. Needs `serve`, and no `interactive`."""
+    quiet: bool = False
+    """Print the lines about the session's life (project, ids, address, errors) but not the
+    conversation: `calu serve` shares one terminal among its sessions, and the clients show
+    the conversation."""
+    run_as: RunAs | None = None
+    """The user Claude Code runs as, when that is not the user calu runs as (D206); None
+    starts it as calu's own user."""
 
 
 def honesty_lines(info: HonestyInfo) -> list[str]:
@@ -352,13 +396,15 @@ def one_line(text: str, limit: int = 300) -> str:
 class Console:
     """Prints session events to stdout. The stand-in client until phase 4."""
 
-    def __init__(self, show_thinking: bool = False) -> None:
+    def __init__(self, show_thinking: bool = False, quiet: bool = False) -> None:
         """Create a console printer.
 
         Args:
             show_thinking: Also print Claude's thinking.
+            quiet: Print only `log` events of the level "error" (`RunOptions.quiet`).
         """
         self.show_thinking = show_thinking
+        self.quiet = quiet
 
     async def __call__(self, event: Event) -> None:
         """Print one event.
@@ -368,9 +414,11 @@ class Console:
         """
         if isinstance(event, AssistantThinking) and not self.show_thinking:
             return
+        if self.quiet and not (isinstance(event, Log) and event.level == "error"):
+            return
         line = format_event(event)
         if line is not None:
-            print(line, flush=True)
+            say(line)
 
 
 @dataclass(frozen=True)
@@ -539,7 +587,7 @@ class IdleSignal:
         """
         if not self._reported:
             self._reported = True
-            print(line, file=sys.stderr if error else sys.stdout, flush=True)
+            say(line, error)
 
     async def wait(self) -> None:
         """Wait until `finished()` holds.
@@ -671,12 +719,54 @@ async def run_session(
         # The caller's buffer is not needed any more. The copy in `source` stays in this
         # process's memory; nothing of it reaches Claude Code, which starts below.
         wipe(url)
+    return await run_from(source, hidden, options, runner_factory, checker_models, on_serving)
+
+
+async def run_from(
+    source: ConnectionSource,
+    hidden: set[str],
+    options: RunOptions,
+    runner_factory: RunnerFactory | None = None,
+    checker_models: dict[str, str | Model] | None = None,
+    on_serving: Serving | None = None,
+    on_ready: Ready | None = None,
+) -> int:
+    """Run one session on connections of its own, opened from `source`, until it ends.
+
+    This is the part of `run_session` that `calu serve` repeats for every session it starts:
+    the login is read once, each session gets its own two connections.
+
+    Side effects: opens and closes two database connections; everything `_run` does.
+
+    Args:
+        source: Where connections come from; it is not closed or changed.
+        hidden: Names of environment variables Claude Code must not see.
+        options: What to run.
+        runner_factory: Creates the runner; None uses `SdkRunner`.
+        checker_models: Replacements for the configured checker models, or None.
+        on_serving: Awaited with the address and the token once the server listens, or None.
+        on_ready: Awaited with the session row's id and the address once a client can find the
+            session in the database, or None.
+
+    Returns:
+        0 if the session ended normally, 1 if it failed or could not start.
+
+    Raises:
+        psycopg.Error: If the database cannot be reached at the start or rejects the login.
+    """
     db = Db(await source.open(), source=source)
     try:
         notifier = Notifier(await source.open(), source=source)
         try:
             return await _run(
-                db, notifier, hidden, options, runner_factory, checker_models, on_serving
+                db,
+                notifier,
+                hidden,
+                options,
+                runner_factory,
+                checker_models,
+                on_serving,
+                on_ready,
             )
         finally:
             with anyio.CancelScope(shield=True):
@@ -708,22 +798,21 @@ async def _project(db: Db, options: RunOptions) -> RunOptions | None:
         psycopg.Error: On database errors.
     """
     if options.project is not None:
-        print(f"[project] {options.project}", flush=True)
+        say(f"[project] {options.project}")
         return options
     try:
         found = await project_for_directory(db, options.workspace, socket.gethostname())
     except AmbiguousProject as exc:
-        print(f"calu: {exc}", file=sys.stderr)
+        say(f"calu: {exc}", error=True)
         return None
     if found is None:
-        print(
+        say(
             "[project] none: no project is registered for this directory, so only the global "
             "settings and rules apply (register one with `calu project add .`, or pass "
-            "--project)",
-            flush=True,
+            "--project)"
         )
         return options
-    print(f"[project] {found} (registered for this directory)", flush=True)
+    say(f"[project] {found} (registered for this directory)")
     return dataclasses.replace(options, project=found)
 
 
@@ -735,6 +824,7 @@ async def _run(
     runner_factory: RunnerFactory | None = None,
     checker_models: dict[str, str | Model] | None = None,
     on_serving: Serving | None = None,
+    on_ready: Ready | None = None,
 ) -> int:
     """Load the settings, start the session and drive it until it ends.
 
@@ -746,6 +836,8 @@ async def _run(
         runner_factory: Creates the runner; None uses `SdkRunner`.
         checker_models: Replacements for the configured checker models, or None.
         on_serving: Awaited with the address and the token once the server listens, or None.
+        on_ready: Awaited with the session row's id and the address once a client can find the
+            session in the database, or None.
 
     Returns:
         0 if the session ended normally, 1 if it failed or could not start.
@@ -763,9 +855,9 @@ async def _run(
     except UnknownProject as exc:
         # Not a fallback to the global settings: the session would run without the project's
         # rules and nobody would be told.
-        print(f"calu: {exc}; nothing was started", file=sys.stderr)
+        say(f"calu: {exc}; nothing was started", error=True)
         return 1
-    console = Console(options.show_thinking)
+    console = Console(options.show_thinking, options.quiet)
     idle = IdleSignal(lambda: activity(session), options.background_timeout_s)
     bus = Bus()
     store = DatabaseSessionStore(db)
@@ -775,7 +867,10 @@ async def _run(
         settings,
         store,
         lambda: (
-            runner_factory or functools.partial(SdkRunner, tool_routes=session.config.tool_routes)
+            runner_factory
+            or functools.partial(
+                SdkRunner, tool_routes=session.config.tool_routes, run_as=options.run_as
+            )
         )(options.workspace, session.config.claude, hidden | set(session.config.hidden_env)),
         emit,
         project=options.project,
@@ -783,6 +878,9 @@ async def _run(
         startup_warnings=preflight.warnings(
             settings.config, checkers=settings.checkers, workspace=options.workspace
         ),
+        # A conversation that was started with `claude` itself: the checkers are told what
+        # its transcript says the user asked for (D209).
+        transcript_inputs=functools.partial(user_inputs, directory=options.workspace),
     )
 
     async def on_settings(new: ProjectSettings) -> None:
@@ -919,7 +1017,7 @@ async def _run(
                 " not written yet are not recorded. Start a new one with `calu run`"
                 " (`--resume` continues the conversation)."
             )
-            print(f"calu: {message}", file=sys.stderr, flush=True)
+            say(f"calu: {message}", error=True)
             report("error", message)
             work.cancel()
 
@@ -962,13 +1060,13 @@ async def _run(
                 )
                 # On a line of its own and first, for a person and for a script: this is the
                 # id `calu run --resume` and `calu run --fork` take.
-                print(f"[session] {claude_session_id}", flush=True)
+                say(f"[session] {claude_session_id}")
                 if options.serve:
                     # After the start, so that the session row and its id exist when the first
                     # client asks; the events of the start are in the bus and are replayed.
                     token = new_token()
                     server = SessionServer(session, bus, token_hash(token), tg)
-                    tg.start_soon(_listen, server, options, token, store, on_serving)
+                    tg.start_soon(_listen, server, options, token, store, on_serving, on_ready)
                 sent = bool(options.prompt)
                 if options.prompt:
                     await session.send_chat(ChatSendParams(text=options.prompt))
@@ -990,12 +1088,14 @@ async def _run(
                         # A closed stdin only means that no further message comes (a password
                         # piped in, a service unit, nohup). Stopping here ended the session
                         # seconds into its first turn, with exit code 0.
-                        print(
+                        say(
                             "calu: stdin closed; waiting for Claude to finish (as with --batch)",
-                            file=sys.stderr,
-                            flush=True,
+                            error=True,
                         )
-                if not options.interactive or (ended == "eof" and sent):
+                if options.stay:
+                    if server is not None:
+                        await server.shutdown.wait()
+                elif not options.interactive or (ended == "eof" and sent):
                     # `idle` reads the session each time: a message that is still queued behind a
                     # turn, or was sent a moment ago, keeps the run going until its turn is over.
                     if server is not None:
@@ -1003,7 +1103,7 @@ async def _run(
                     else:
                         await idle.wait()
         except SessionError as exc:
-            print(f"calu: {exc}", file=sys.stderr)
+            say(f"calu: {exc}", error=True)
             failed = True
         finally:
             # The last writes are worth a short wait, but a shutdown must not wait for a
@@ -1114,8 +1214,12 @@ async def _listen(
     token: str,
     store: DatabaseSessionStore,
     on_serving: Serving | None = None,
+    on_ready: Ready | None = None,
 ) -> None:
     """Serve the protocol and print the address and the token once; never raises.
+
+    A session that stays until a client shuts it down (`RunOptions.stay`) would wait for ever
+    without a protocol server, so a server that cannot start ends such a session.
 
     The token's hash is recorded with the session (`client_tokens`), so an operator can see
     which sessions accept clients and revoke one; the token itself is only printed here.
@@ -1126,25 +1230,34 @@ async def _listen(
         token: The client token to print.
         store: The session store, for the address and the token's hash.
         on_serving: Awaited with the address and the token as well, or None.
+        on_ready: Awaited with the session row's id and the address after both are recorded,
+            or None.
     """
+
+    def failed() -> None:
+        """End a session that only a client could end, since no client can reach it."""
+        if options.stay:
+            server.shutdown.set()
+
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(server.listen, options.host, options.port, options.socket_path)
             with anyio.move_on_after(START_TIMEOUT_S):
                 await server.ready.wait()
             if not server.ready.is_set():
-                print("calu: the protocol server did not start", flush=True)
+                say("calu: the protocol server did not start", error=True)
+                failed()
                 return
-            print(f"[clients] {server.address}", flush=True)
+            say(f"[clients] {server.address}")
             # The short form first, because it is the one a user here will use (D105); the
             # explicit one is for a client on another machine and needs no database. Written
             # `--token=` and not `--token `, so that a token from before D102, which may start
             # with a dash, is not read as an option.
-            print("[clients] attach from this directory with: calu attach", flush=True)
-            print(
-                f"[clients] from another machine: calu attach {server.address} --token={token}",
-                flush=True,
-            )
+            say("[clients] attach from this directory with: calu attach")
+            if not options.quiet:
+                # Not in a server's shared output: a token there would be readable long after
+                # its session, and a client of a served session mints its own (D105).
+                say(f"[clients] from another machine: calu attach {server.address} --token={token}")
             if store.session_id is not None:
                 try:
                     await store.set_address(server.address)
@@ -1153,8 +1266,11 @@ async def _listen(
                     log.exception("recording the address and the client token failed")
             if on_serving is not None:
                 await on_serving(server.address, token)
+            if on_ready is not None:
+                await on_ready(store.session_id, server.address)
     except OSError as exc:
-        print(f"calu: the protocol server could not start: {exc}", flush=True)
+        say(f"calu: the protocol server could not start: {exc}", error=True)
+        failed()
 
 
 async def _until_done(idle: IdleSignal, server: SessionServer, bus: Bus) -> None:

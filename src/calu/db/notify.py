@@ -51,6 +51,9 @@ ESCALATION_RESOLVED = "escalation_resolved"
 TRUST_CHANGED = "trust_changed"
 """Channel of changes to the trusted commits and trusted file contents (migration 0029)."""
 
+SESSION_REQUESTED = "session_requested"
+"""Channel of new requests for a session, which `calu serve` answers (migration 0032)."""
+
 
 async def listen(conn: psycopg.AsyncConnection, channels: Iterable[str]) -> None:
     """Subscribe a connection to notification channels.

@@ -202,6 +202,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_session_rls.py` | Would row-level security keyed on a per-connection session id separate two sessions? (Q3) | the schema gains a table a session writes |
 | `scripts/build-binary.sh` | Does a frozen one-file calu still find its package data, and what does it cost? (Q15) | a dependency is added or pydantic-ai is updated (the release workflow runs it on every tag) |
 | `smoke_session.py` | A whole calu session against the real `claude` | before a release, and after changes to the runner |
+| `smoke_serve.py` | `calu serve` with the real `claude`: two sessions at once in two directories, and a fork started through the server (D208) | after changes to `calu.serve` or to how a session is started |
 
 ```bash
 docker compose up -d caludb --wait
@@ -433,6 +434,22 @@ escalation resolved from the database alone.
    --database rds-iam ...`, then `calu run`; let the session run longer than 15 minutes, end
    its connections on the server (`pg_terminate_backend`) and check that it reconnects with a
    new token; repeat with `--session-auth password`.
+27. `calu serve` (D208). In one terminal `calu serve`: it asks the session password once and
+   prints that it answers requests. In two project directories `calu start -p hi`: each must
+   attach to a session of its own without a session password, and the server prints one
+   "requested", "started" and (after `/shutdown` in the client) "ended" line per session,
+   with the directory's name in front. `calu start --fork <id>` of one of them must know the
+   original conversation. `/quit` in a client must leave the session running (`calu attach`
+   finds it again). Ctrl-C in the server must stop every session; `calu sessions` then lists
+   none as running. With the server stopped, `calu start` must say after about ten seconds
+   that no `calu serve` answered. Run on 2026-11-13 with `spikes/smoke_serve.py` (two
+   sessions at once and a fork, real Claude Code, fake checkers); not run by hand: the two
+   commands with a typed password, and Ctrl-C with sessions in the middle of a turn.
+28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
+   send a message, quit. `calu list-sessions` must list it with "outside calu" and that
+   message; `calu run --resume <id>` must continue it and warn at the start that none of
+   its steps was checked. Run on 2026-11-13: the listing and the reading of a real
+   transcript; not run: the resume under calu with real checkers.
 
 ## Measuring the checkers
 

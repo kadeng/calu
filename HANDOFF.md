@@ -2,20 +2,47 @@
 
 State on 2026-11-13: after the honesty redesign and the full-screen terminal client were merged
 and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
-(D204) and `calu setup` with three database variants (D205). Read this, then `AGENTS.md`,
-`REQUIREMENTS.md` and `PLAN.md` (decisions D1-D206, open questions §11, phases §12).
+(D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
+`calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
+Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D209, open
+questions §11, phases §12).
 
 ## Pick up here
 
-**`main` is green and pushed** at `8173a86` plus the commit that wrote this section (1851
-tests with `uv run pytest -q -m 'not live'`, 16 browser tests, ruff, pyright). CI ran green
-on the pushes before `8173a86`; check `gh run list --limit 3` for the last ones.
+**`main` is green and pushed** (`uv run pytest -q -m 'not live'`, ruff, pyright); check
+`gh run list --limit 3` for CI on the last pushes.
+
+**Built on 2026-11-13 after the handoff of that morning** (the owner: "continue", then
+requirement 27):
+
+- **`calu-claude`, the launcher (D207)**: `src/calu/claude/launch.py`, a console script of
+  the installation. `SdkRunner(run_as=RunAs(...))` names it as `cli_path` and passes the
+  record in `CALU_LAUNCH`; `RunOptions.run_as` and `ServeOptions.run_as` carry it. Measured
+  as root in a container (`spikes/spike_other_uid.sh launcher`). **Nothing sets `run_as`
+  yet**: no command line option exists, on purpose (see item 1 below).
+- **`calu serve` and `calu start` (D208)**: `src/calu/serve.py`, `src/calu/session_requests.py`,
+  migration 0032. A request is a database row written with the operator login; the server
+  claims it and runs the session as a task through `calu.run.run_from`. `calu.run` got
+  `say` (labelled lines), `RunOptions.stay` and `quiet`, and `on_ready`. Run against the
+  real Claude Code with `spikes/smoke_serve.py`: two sessions at once and a fork.
+  **Not tried by hand**: `calu serve` with a typed password next to `calu start` in a second
+  terminal (`docs/TESTING.md` item 27), and Ctrl-C while sessions are in the middle of a turn.
+  **Not built** (D208 part 8): "new session" and "fork" in the web interface and in the
+  full-screen client (the request table is what they would write), ending an idle served
+  session after a time, and a check against a second `calu run` of the same conversation
+  outside the server.
+- **Conversations started with `claude` itself (D209)**: `src/calu/claude/transcripts.py`.
+  `calu list-sessions` lists them as "outside calu"; a resume or fork of one gives the
+  checkers one turn that reports what the transcript says the user wrote, as a report and
+  not as user input (a transcript is an unverified file). Checked against a real transcript;
+  **not run**: such a resume under calu with real checkers.
 
 ### What to do next, in this order
 
-1. **calu runs privileged, Claude Code as an unprivileged user (requirement 26, D206): not
-   built, the next work package.** Read requirement 26 and D206 whole before designing; they
-   hold everything the owner said on 2026-11-13. In short:
+1. **calu runs privileged, Claude Code as an unprivileged user (requirement 26, D206): the
+   launcher is built (D207), the rest is the next work package.** Read requirement 26, D206
+   and D207 whole before designing; they hold everything the owner said on 2026-11-13. In
+   short:
    - `calu run` is started as root, or by a user with password-protected sudo; then calu runs
      itself again through `sudo` and passes the original user **name**.
    - As root the user for Claude Code must be given explicitly (root itself only when named).
@@ -59,11 +86,16 @@ on the pushes before `8173a86`; check `gh run list --limit 3` for the last ones.
    - **Still to measure before or while building:** Claude Code's sandbox under the other
      uid; a named user with its own home; git run by calu as the other user; the
      re-execution through sudo (needs the owner's terminal, sudo asks a password).
-   - **Then build**, in this order: the user change in front of `claude` and the clean
-     environment (a module of its own, testable without root); `calu run --user`, refused as
-     root without it (condition d); git and the write-set snapshots as the other user
-     (condition b); the re-execution through sudo with the installation check (conditions a
-     and c); the system directories.
+   - **Done:** the user change in front of `claude` and the clean environment (D207). The
+     owner on 2026-11-13: it must be built into calu, no script written to disk that could
+     be hijacked; it is a console script of the installation.
+   - **Still to build**, in this order: git and the write-set snapshots as the other user
+     (condition b; until then no option may set `run_as`, because calu as root would run git
+     in a repository the other user controls); `calu run --user` and `calu serve --user`,
+     refused as root without it (condition d), with the state directory for a bare uid;
+     reading Claude Code's transcripts from that user's home (`calu.claude.transcripts`
+     reads the home of calu's own user); the re-execution through sudo with the installation
+     check (conditions a and c); the system directories.
    - Until it is built: `calu run` works as before (one user); with the RDS variant only the
      sandbox's read deny list keeps Claude's commands from `~/.aws`. Do not make `calu run`
      usable as root before Claude Code really runs under another user.
@@ -267,14 +299,18 @@ on the pushes before `8173a86`; check `gh run list --limit 3` for the last ones.
    account here; `docs/TESTING.md` item 26 says what to check), rootless Docker, and an
    existing server whose user is no superuser beyond what `tests/db/test_setup_variants.py`
    covers.
-13. **Next, decided and not built: calu runs privileged, Claude Code as an unprivileged
-   user** (the owner on 2026-11-13; requirement 26, D206, with the four conditions the build
+13. **Partly built (the launcher, D207): calu runs privileged, Claude Code as an
+   unprivileged user** (the owner on 2026-11-13; requirement 26, D206, with the four conditions the build
    has to meet). Start with the spike named at the end of D206. Until it is built, `calu
    run` works as before, and the RDS variant's protection of the AWS profile rests on the
    sandbox's deny list.
 
-Decisions of the owner on 2026-11-13: D204 and D205 are implemented; D206 (requirement 26) is
-recorded and not built. Decisions of 2026-11-12 that are implemented and recorded: D178-D203 and Q22 in
+14. **Done: `calu serve`, `calu start`, and conversations started with `claude` itself**
+   (the owner on 2026-11-13, requirement 27; D208, D209). See "Built on 2026-11-13" above
+   for what was run and what was not.
+
+Decisions of the owner on 2026-11-13: D204, D205, D207, D208 and D209 are implemented; D206
+(requirement 26) is recorded, and of it only the launcher is built. Decisions of 2026-11-12 that are implemented and recorded: D178-D203 and Q22 in
 `PLAN.md`. Standing instructions of that day, beyond the ones below: no file of the workspace
 is part of a checker's context (D193); rule lists stay empty by default and are the exception
 (D198); a blank model is Claude Haiku on the Anthropic API, or on Bedrock in an EU region in
@@ -325,9 +361,9 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1851 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1881 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
-default instructions), ~36k of tests, 31 migrations, 22 CLI commands, 22 protocol requests,
+default instructions), ~36k of tests, 32 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

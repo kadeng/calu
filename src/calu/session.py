@@ -159,6 +159,7 @@ from calu.claude.runner import (
     Verdict,
 )
 from calu.claude.sdk_runner import AGENT_TOOLS
+from calu.claude.transcripts import unwitnessed_turn
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
@@ -399,6 +400,7 @@ class Session:
         checker_models: dict[str, str | Model] | None = None,
         startup_warnings: Sequence[str] = (),
         snapshot_root: Path | None = None,
+        transcript_inputs: Callable[[str], list[str]] | None = None,
     ) -> None:
         """Set up the checkers, the context builder and the rules from `settings`.
 
@@ -420,7 +422,13 @@ class Session:
                 at every `start`, before the runner starts.
             snapshot_root: Where the optional write-set snapshots live (PLAN.md D31); None
                 uses `calu.changes.default_root()`.
+            transcript_inputs: Reads what the user typed in a conversation from Claude Code's
+                own transcript, by Claude session id (it may block: it is run in a worker
+                thread). Used when a conversation is resumed or forked that the store knows
+                nothing about, because it was started without calu (PLAN.md D209); None
+                starts such a session without that context.
         """
+        self.transcript_inputs = transcript_inputs
         self.workspace = workspace
         self.settings = settings
         self.config = settings.config
@@ -3407,21 +3415,33 @@ class Session:
         covering the turns before the fork point only, so that the turns the fork runs are
         read back when it is resumed.
 
+        A conversation the store knows nothing about was started without calu: it gets one
+        turn that reports what Claude Code's transcript says the user wrote (`_unwitnessed`).
+
         Args:
             resume_id: Claude session id to resume, or None for a new session.
             fork: Where the resumed conversation is branched off, or None.
 
         Returns:
-            The turns a fork inherits and has to store under its own row; empty for a new
-            session and for a plain resume.
+            The turns the caller has to store under this session's row: what a fork
+            inherits, and the turn that describes a conversation started without calu.
+            Empty for a new session and for a plain resume of a conversation the store knows.
         """
         turns: list[TurnRecord] = []
         summary = ""
+        unknown_to_store = False
         if resume_id is not None:
             try:
                 turns, summary = await self.store.load_previous(resume_id)
             except Exception:
                 log.exception("restoring the context of %s failed", resume_id)
+            else:
+                if not turns and not summary:
+                    unwitnessed = await self._unwitnessed(resume_id)
+                    if unwitnessed is not None:
+                        # Stored with this session also on a plain resume: the store holds
+                        # nothing of this conversation yet.
+                        turns, unknown_to_store = [unwitnessed], True
         before = fork.before_turn if fork is not None else None
         if before is not None:
             # `turns` are the turns the summary does not cover. If the lowest of them is
@@ -3445,7 +3465,41 @@ class Session:
             turns = [turn for turn in turns if turn.index < before]
         self.context.restore(turns, next_index=before)
         self.context.summary = summary or EMPTY_CHAT_SUMMARY
-        return turns if fork is not None else []
+        return turns if fork is not None or unknown_to_store else []
+
+    async def _unwitnessed(self, resume_id: str) -> TurnRecord | None:
+        """Describe a conversation the store does not know from Claude Code's transcript.
+
+        Side effect: reports as a `log` event that the conversation ran without calu.
+
+        Args:
+            resume_id: The Claude session id that is resumed or forked.
+
+        Returns:
+            One turn that tells the checkers what the transcript says the user asked for
+            (`calu.claude.transcripts.unwitnessed_turn`); None without a transcript reader,
+            without a readable transcript or without a typed message in it.
+        """
+        if self.transcript_inputs is None:
+            return None
+        try:
+            inputs = await anyio.to_thread.run_sync(self.transcript_inputs, resume_id)
+        except Exception:
+            log.exception("reading Claude Code's transcript of %s failed", resume_id)
+            return None
+        turn = unwitnessed_turn(inputs)
+        if turn is not None:
+            await self._emit_safely(
+                Log(
+                    level="warning",
+                    message=(
+                        f"the conversation {resume_id} was started in Claude Code without "
+                        "calu: none of its steps was checked. The checkers are told what its "
+                        f"transcript says the user wrote ({len(inputs)} message(s))."
+                    ),
+                )
+            )
+        return turn
 
     # ------------------------------------------------------------------ store helpers
 

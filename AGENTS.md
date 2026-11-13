@@ -37,6 +37,8 @@ phases.
 | `src/calu/credentials.py` | Encrypted credential store (Argon2id, AES-GCM) |
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
 | `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
+| `src/calu/serve.py` | `calu serve`: one process that holds the session login and runs many sessions as tasks; it claims requests from the database and runs each as `calu.run` does (D208) |
+| `src/calu/session_requests.py` | The rows `calu start` writes and `calu serve` answers: filing, claiming, finishing, waiting, withdrawing |
 | `src/calu/attach.py` | `calu attach --plain`: the line-oriented terminal client of a running session (also used when input or output is a pipe) |
 | `src/calu/tui/` | `calu attach` on a terminal: the full-screen client (Textual). `model.py` is the state as a reducer over the protocol's events (no Textual import); `connection.py` keeps the connection and reconnects; `actions.py` sends the user's requests; `fake.py` and `scenarios.py` are a scripted session for tests, screenshots and the demo; `settings.py` reads `tui.toml` and keeps the sent texts; `difftools.py`, `completion.py` and `export.py` are the Textual-free parts of the diff screen, of `@` completion and of `/export`; `adminaccess.py` stores what the client changes in the database with the local `admin` credential (a checker's instructions, `honesty.mode`), never through the session; `gittool.py` chooses the terminal git program `f4` starts and names the install command; `app.py`, `widgets/`, `screens/` and `tui.tcss` render the model |
 | `src/calu/protocol/schema.py` | `calu protocol`: JSON Schema of the protocol, for clients in other languages |
@@ -50,7 +52,7 @@ phases.
 | `src/calu/steps.py` | Stateless helpers about one tool call: its paths relative to the project directory, the file an edit targets, the summary of its result |
 | `src/calu/run_state.py` | What the session knows about one run (`RunState`) and about one tool call (`PerCall`); a start replaces it, so each run begins from the defaults |
 | `src/calu/store/` | The database as the session sees it: configuration in (`config.py`), history and escalations out (`session.py`), in-memory twin for tests (`memory.py`), trusted commits and trusted file contents (`trust.py`) |
-| `src/calu/herd.py` | `calu sessions`, `calu escalations`, `calu resolve`, `calu token` (database only) |
+| `src/calu/herd.py` | `calu sessions`, `calu list-sessions`, `calu escalations`, `calu resolve`, `calu token` (database only) |
 | `src/calu/admin.py` | `calu project`, `calu config`, `calu checker`, `calu rules`: changing what steers the checkers |
 | `src/calu/evals/` | `calu evals`: evaluation cases, checker runs and their metrics |
 | `src/calu/preflight.py` | Start-up warnings: sandbox tools, checker API keys, write-set settings |
@@ -62,7 +64,7 @@ phases.
 | `src/calu/config.py` | Session configuration models, built from database values; sandbox settings; checker API keys |
 | `src/calu/checkers/` | Rules engine and shell parser, the files a directory search reads (`search.py`), tool routing, step rendering, checker, result checker and changeset checker agents (`changeset.py`), the reviewer agent of the honesty review (`honesty_review.py`: batches, bounded concurrency, a failure verifies nothing), the checkers' read-only code tools (`tools.py`) |
 | `src/calu/context/` | Turn records, narrator, context builder with chat summary folding |
-| `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner, and `launch.py`: the console script `calu-claude` that starts Claude Code as another user with an environment built for it (D207) |
+| `src/calu/claude/` | Claude Code runner interface, Agent SDK runner (hook, auto mode), scripted fake runner, `launch.py`: the console script `calu-claude` that starts Claude Code as another user with an environment built for it (D207), and `transcripts.py`: the conversations Claude Code keeps itself, for listing and resuming one that was started without calu (D209) |
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
 | `src/calu/web/` | `calu web`: the herd overview (Starlette), the settings form generated from `Config` (`settings.py`), the live relay to a session's own WebSocket, links into a git browser (`git.py`) |
 | `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |

@@ -21,6 +21,7 @@ configuration, the web interface, the checkers and the ACP adapter.
 - [Editors that speak ACP](#editors-that-speak-acp)
 - [Checker instructions, rules and evaluations](#checker-instructions-rules-and-evaluations)
 - [Resuming and forking a conversation](#resuming-and-forking-a-conversation)
+- [Many sessions from one process: calu serve](#many-sessions-from-one-process-calu-serve)
 - [The database](#the-database)
 - [Installation and configuration reference](#installation-and-configuration-reference)
 
@@ -1046,6 +1047,15 @@ conversation it copied until it has one of its own. The command reads the databa
 `operator` or `admin` credential, like `calu sessions`, which lists the sessions of every
 directory, host and user.
 
+The list also holds the conversations of this directory that you started with `claude`
+itself, marked "outside calu": Claude Code keeps a transcript of each, and calu reads the
+list from there. Such a conversation can be resumed or forked like any other. calu saw none
+of it, so none of its steps was checked, and the checkers know nothing about it except what
+its transcript says you wrote; that is given to them as a report about an earlier
+conversation, not as your words in this session, because calu cannot verify a file it did not
+write. If a `claude` still has the conversation open, fork it instead of resuming it: two
+processes would otherwise write one transcript.
+
 ```bash
 calu run --resume <session id>     # continue that conversation, under the same id
 calu run --fork <session id>       # continue a copy of it, under a new id
@@ -1070,6 +1080,50 @@ take a session id as printed, not a session title. The
 files are deliberately left as they are: Claude Code's file checkpointing only puts back what
 its own edit tools changed, so rewinding them would leave a tree that looks consistent and is
 not.
+
+## Many sessions from one process: calu serve
+
+`calu run` asks for the session password and runs one session. `calu serve` asks for it once
+and then runs as many sessions as you ask for, in any project directory on the machine, until
+you stop it:
+
+```bash
+calu serve                      # in a terminal of its own, or under tmux or a service unit
+```
+
+In another terminal, in a project directory:
+
+```bash
+calu start                              # a new session here, and attach to it
+calu start -p "run the tests"           # with a first message
+calu start --fork <session id>          # continue a copy of a conversation
+calu start --resume <session id>        # continue a conversation
+calu start ~/src/other --no-attach      # another directory; attach later
+```
+
+`calu start` takes the options of `calu run` that describe the session (`--project`,
+`--prompt-file`, `--fork-before-turn`, `--model`, `--effort`). It asks the server for the
+session, waits until it runs, prints its Claude session id and attaches the terminal client;
+`--plain` and a pipe get the line client. Each session of the server is a session like any
+other: `calu attach` in its directory, `calu sessions`, the web interface and an ACP editor
+all work with it, and each has its own address and its own tokens.
+
+- **No password per session.** The server holds the session login; `calu start` uses the
+  `operator` credential, as `calu attach` does. Stored without a password (`calu credential
+  set operator --no-password`), it asks nothing.
+- **How the request travels.** `calu start` writes a row into the database; the server, which
+  listens for such rows, starts the session and writes the outcome back. The server offers no
+  socket of its own for this. Who may start a session is therefore decided by who has a
+  database login that may write that table, and Claude Code has none: a running session
+  cannot ask for another one.
+- **Which server answers.** The one that runs on the same machine as the same OS user. When
+  none answers within ten seconds, `calu start` withdraws its request and says so.
+- **A served session waits for you.** It does not end when Claude has nothing left to do.
+  `/shutdown` in a client ends that one session; detaching (`/quit`, ctrl+d) leaves it
+  running. Ctrl-C or SIGTERM stops the server and every session it runs, each in order.
+- **What the server prints.** One line when a session is asked for, started and ended, each
+  with the directory's name and the request's number in front; the conversation is shown by
+  the clients. `calu serve --max-sessions N` limits how many run at once (default 10).
 
 ## The database
 
