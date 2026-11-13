@@ -23,6 +23,7 @@ import pwd
 import stat
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -164,6 +165,28 @@ def fs_identity(uid: int, gid: int, groups: tuple[int, ...]) -> None:
         raise UserError(f"the file-system identity could not be set to {uid}:{gid}")
 
 
+THREADS_END_S = 5.0
+"""How long `enter` waits for threads that are just ending, such as the worker threads of an
+event loop that was closed a moment ago: they are told to stop and are not waited for."""
+
+
+def _other_threads(wait_s: float) -> list[str]:
+    """Wait for the threads beside the calling one to end, and name those that did not.
+
+    Args:
+        wait_s: How long to wait in all.
+
+    Returns:
+        The names of the threads that still run; empty if the calling thread is alone.
+    """
+    deadline = time.monotonic() + wait_s
+    current = threading.current_thread()
+    for thread in threading.enumerate():
+        if thread is not current:
+            thread.join(max(0.0, deadline - time.monotonic()))
+    return [thread.name for thread in threading.enumerate() if thread is not current]
+
+
 def enter(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
     """Make this process work as the user wherever it touches files or starts programs.
 
@@ -179,11 +202,16 @@ def enter(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
         state_root: The root of calu's state.
 
     Raises:
-        UserError: If other threads already run, or the identity cannot be set.
+        UserError: If other threads still run after `THREADS_END_S` seconds, or the identity
+            cannot be set.
     """
     global _active
-    if threading.active_count() != 1:
-        raise UserError("the user must be switched before the process starts other threads")
+    others = _other_threads(THREADS_END_S)
+    if others:
+        raise UserError(
+            "the user cannot be switched while other threads of this process run, because "
+            f"they would keep root's file access: {', '.join(others)}"
+        )
     fs_identity(run_as.uid, run_as.gid, (run_as.gid, *run_as.groups))
     os.environ["XDG_STATE_HOME"] = str(state_home(run_as, state_root))
     os.environ["CLAUDE_CONFIG_DIR"] = str(Path(run_as.home) / ".claude")

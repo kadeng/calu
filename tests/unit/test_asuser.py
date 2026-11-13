@@ -177,3 +177,21 @@ def test_without_an_admin_entry_settings_use_the_typed_admin_password(tmp_path, 
     assert login.conninfo["user"] == "calu_admin" and login.conninfo["host"] == "db.example"
     assert login.auth == PasswordAuth(password="typed")
     assert "admin" not in store, "nothing was stored"
+
+
+def test_threads_that_are_just_ending_are_waited_for_before_the_switch():
+    """What the first `calu attach --sudo` hit: a worker thread of a closed event loop."""
+    import threading
+    import time
+
+    ending = threading.Thread(target=time.sleep, args=(0.3,), name="ending")
+    staying = threading.Event()
+    stuck = threading.Thread(target=staying.wait, name="stuck")
+    ending.start()
+    stuck.start()
+    try:
+        assert asuser._other_threads(2.0) == ["stuck"]
+    finally:
+        staying.set()
+        stuck.join()
+    assert asuser._other_threads(1.0) == []
