@@ -150,6 +150,168 @@ class CheckDecision(BaseModel):
     answer without it counts as true there, for another tool as false."""
 
 
+ALL_SYMBOLS = "*"
+"""Symbol of a clean mark that closes every open mark of its file: what a file-wide HONEST
+verdict of the honesty checker turns into (`HonestyAnswer.decision`)."""
+
+
+class UnitHonesty(BaseModel):
+    """What the honesty checker says about one function, method or class."""
+
+    symbol: str = Field(
+        description="The function, method or class, e.g. `fields` or `Parser.fields`."
+    )
+    honest: bool = Field(
+        description=(
+            "true if its name and documentation comment now agree with what it does; false "
+            "if they do not."
+        )
+    )
+    reason: str = Field(
+        default="",
+        description="For false: what disagrees with what, in one sentence. Claude reads it.",
+    )
+
+
+class FileHonesty(BaseModel):
+    """The honesty checker's verdict on one file the step changes."""
+
+    path: str = Field(
+        description="Path of the file, relative to the project root, e.g. `src/parser.py`."
+    )
+    verdict: Literal["HONEST", "DISHONEST"] = Field(
+        description=(
+            "HONEST if after this step the names and documentation comments in the file "
+            "agree with what the code does; DISHONEST if some unit in it does not."
+        )
+    )
+    reason: str = Field(
+        default="",
+        description=(
+            "For DISHONEST: what disagrees with what and what would settle it, in one or "
+            "two sentences. Claude reads it. Empty for HONEST."
+        ),
+    )
+    units: list[UnitHonesty] = Field(
+        default_factory=list,
+        description=(
+            "The units whose honesty this step changed, or that are dishonest now. Empty "
+            "when the verdict is about the file as a whole."
+        ),
+    )
+
+
+class HonestyAnswer(BaseModel):
+    """Structured output of the honesty checker (PLAN.md D217).
+
+    It judges files, it does not approve or refuse the step: `decision` turns the answer into
+    what the gate and the honesty state take.
+    """
+
+    files: list[FileHonesty] = Field(
+        default_factory=list, description="One entry for every file the step changes."
+    )
+    escalate: bool = Field(
+        default=False,
+        description=(
+            "true only for what looks deliberate: a backdoor, hidden behaviour, or a name "
+            "or comment written to mislead. A human then decides."
+        ),
+    )
+    escalate_reason: str = Field(
+        default="", description="For escalate: what the human should look at."
+    )
+    step_summary: str = Field(description="What the step changes, in one or two plain sentences.")
+
+    def lines(self, verdict: str) -> list[str]:
+        """Render the files with one verdict, one line each, for a person and for Claude.
+
+        Args:
+            verdict: "HONEST" or "DISHONEST".
+
+        Returns:
+            `VERDICT path: reason (symbol: reason; ...)` per file with that verdict.
+        """
+        found: list[str] = []
+        for entry in self.files:
+            if entry.verdict != verdict:
+                continue
+            line = f"{verdict} {entry.path}"
+            if entry.reason:
+                line += f": {entry.reason}"
+            wanted = verdict == "HONEST"
+            units = [
+                f"{unit.symbol}: {unit.reason}" if unit.reason else unit.symbol
+                for unit in entry.units
+                if unit.honest == wanted
+            ]
+            if units:
+                line += f" ({'; '.join(units)})"
+            found.append(line)
+        return found
+
+    def decision(self) -> CheckDecision:
+        """Turn the answer into the decision the gate and the honesty state take.
+
+            escalate                ──► ESCALATE with `escalate_reason`
+            otherwise               ──► PASS: the step is never stopped by a verdict
+            a DISHONEST file        ──► dirty marks: its dishonest units, or the whole file
+                                        when none is named
+            an HONEST file          ──► one clean mark for all of the file (`ALL_SYMBOLS`)
+            an honest unit of a
+            DISHONEST file          ──► a clean mark for that unit
+
+        The verdicts are also written out as text: all of them in `reason` (the record of the
+        check), the DISHONEST ones in `comment`, which Claude reads with the approval.
+
+        Returns:
+            The decision.
+        """
+        dirty: list[CodeMark] = []
+        clean: list[CodeMark] = []
+        for entry in self.files:
+            if entry.verdict == "HONEST":
+                clean.append(CodeMark(path=entry.path, symbol=ALL_SYMBOLS, reason="honest"))
+                continue
+            named = [unit for unit in entry.units if not unit.honest]
+            for unit in named:
+                dirty.append(
+                    CodeMark(
+                        path=entry.path,
+                        symbol=unit.symbol,
+                        reason=unit.reason or entry.reason or "dishonest",
+                    )
+                )
+            if not named:
+                dirty.append(
+                    CodeMark(path=entry.path, symbol="", reason=entry.reason or "dishonest")
+                )
+            clean += [
+                CodeMark(path=entry.path, symbol=unit.symbol, reason="honest")
+                for unit in entry.units
+                if unit.honest
+            ]
+        dishonest = self.lines("DISHONEST")
+        verdicts = "\n".join([*dishonest, *self.lines("HONEST")])
+        if self.escalate:
+            reason = self.escalate_reason or "The honesty checker asks for a human."
+            return CheckDecision(
+                decision=Decision.ESCALATE,
+                reason=f"{reason}\n{verdicts}".strip(),
+                step_summary=self.step_summary,
+                marks_dirty=dirty,
+                marks_clean=clean,
+            )
+        return CheckDecision(
+            decision=Decision.PASS,
+            reason=verdicts,
+            comment="\n".join(dishonest),
+            step_summary=self.step_summary,
+            marks_dirty=dirty,
+            marks_clean=clean,
+        )
+
+
 class Step(BaseModel):
     """One tool call by Claude (main agent or subagent) that is about to run.
 

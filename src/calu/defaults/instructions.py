@@ -120,7 +120,7 @@ def review_instructions(rules: str | None = None) -> str:
 
 
 def compose_instructions(
-    route: str, user: str, rules: str | None = None, marks: bool = False
+    route: str, user: str, rules: str | None = None, marks: bool = False, name: str = ""
 ) -> str:
     """Put a checker's full prompt together from its parts (D181).
 
@@ -132,6 +132,9 @@ def compose_instructions(
             used only for `HONESTY_ROUTES`.
         marks: Whether to add the part about the code honesty state and the marks
             (`honesty.mode` is not "off").
+        name: The checker type. The honesty checker ("honesty") answers per file and not
+            with a decision, so it gets its own system part (`system/honesty.md`) in place of
+            the route's, and no part about recording marks.
 
     Returns:
         The system part, the user's instructions under their own heading, and -- for a
@@ -142,6 +145,17 @@ def compose_instructions(
         contains "# The user's instructions" followed by the given text.
     """
     parts: list[str] = []
+    if name == "honesty":
+        return (
+            "\n\n".join(
+                [
+                    _read("system/honesty.md").strip(),
+                    "# The user's instructions\n\n" + user.strip(),
+                    (rules if rules else honesty_rules()).strip(),
+                ]
+            )
+            + "\n"
+        )
     system = system_part(route)
     if system:
         parts.append(system.strip())

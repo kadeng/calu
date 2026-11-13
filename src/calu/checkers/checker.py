@@ -34,13 +34,14 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai import Agent, CachePoint, ModelRetry, UsageLimits
 from pydantic_ai.capabilities import Caching, Toolset
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
-from calu.checkers.model import CheckDecision, CheckerEffort, Decision, Step
+from calu.checkers.model import CheckDecision, CheckerEffort, Decision, HonestyAnswer, Step
 from calu.checkers.render import render_step_cut
 from calu.checkers.rules import Rules
 from calu.checkers.tools import CodeTools, StepTimes
@@ -223,33 +224,60 @@ class Checker:
     effort: CheckerEffort | None = None
     """How much the model may think (`calu.config.CheckerEffort`); None leaves the provider's
     default. It reaches the provider as Pydantic AI's `thinking` model setting."""
-    _agent: Agent[None, CheckDecision] | None = field(default=None, init=False, repr=False)
+    _agent: Agent[None, Any] | None = field(default=None, init=False, repr=False)
     _built_for: str | None = field(default=None, init=False, repr=False)
     cache_key: str = field(default_factory=lambda: f"calu-{secrets.token_hex(6)}")
     """Routing hint for providers with automatic prompt caching (one per checker and core run)."""
 
     @property
-    def agent(self) -> Agent[None, CheckDecision]:
+    def judges_honesty(self) -> bool:
+        """Whether this is the honesty checker, which answers per file (PLAN.md D217).
+
+        Returns:
+            True for the checker type `HONESTY_CHECKER`: its model answers with an
+            `HonestyAnswer` (HONEST or DISHONEST per file), which `run` turns into the
+            decision every other checker gives directly.
+        """
+        return self.name == HONESTY_CHECKER
+
+    @property
+    def agent(self) -> Agent[None, Any]:
         """The Pydantic AI agent, rebuilt if `instructions` changed.
 
         Returns:
-            The agent with the current instructions and the `_require_reason` validator.
+            The agent with the current instructions and the validator of its answer:
+            `_require_reason` for a `CheckDecision`, `_require_verdict_reason` for the
+            honesty checker's `HonestyAnswer`.
         """
         instructions = self.instructions
         if self._agent is None or instructions != self._built_for:
             tools = CodeTools(workspace=self.workspace, rules=self.rules, times=self.times)
-            agent: Agent[None, CheckDecision] = Agent(
-                output_type=CheckDecision,
-                instructions=instructions,
-                name=f"{self.name}-checker",
-                capabilities=[
-                    Caching(messages=False),
-                    # The only tools: calu's own read-only ones, which confine every read to
-                    # the project directory themselves (`CodeTools.confine`).
-                    Toolset(tools.toolset()),
-                ],
-            )
-            agent.output_validator(_require_reason)
+            capabilities: list[Any] = [
+                Caching(messages=False),
+                # The only tools: calu's own read-only ones, which confine every read to
+                # the project directory themselves (`CodeTools.confine`).
+                Toolset(tools.toolset()),
+            ]
+            name = f"{self.name}-checker"
+            agent: Agent[None, Any]
+            if self.judges_honesty:
+                judging: Agent[None, HonestyAnswer] = Agent(
+                    output_type=HonestyAnswer,
+                    instructions=instructions,
+                    name=name,
+                    capabilities=capabilities,
+                )
+                judging.output_validator(_require_verdict_reason)
+                agent = judging
+            else:
+                deciding: Agent[None, CheckDecision] = Agent(
+                    output_type=CheckDecision,
+                    instructions=instructions,
+                    name=name,
+                    capabilities=capabilities,
+                )
+                deciding.output_validator(_require_reason)
+                agent = deciding
             self._agent, self._built_for = agent, instructions
         return self._agent
 
@@ -401,13 +429,44 @@ class Checker:
                 duration_ms=elapsed_ms(started),
             )
         unseen = unseen or (-1 if extra_cut or EXTRA_CUT.search(extra) else 0)
+        answered = result.output
+        if isinstance(answered, HonestyAnswer):
+            answered = answered.decision()
         return CheckOutcome(
-            decision=escalate_if_cut(result.output, unseen, self.name),
+            decision=escalate_if_cut(answered, unseen, self.name),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             cache_read_tokens=usage.cache_read_tokens,
             duration_ms=elapsed_ms(started),
         )
+
+
+HONESTY_CHECKER = "honesty"
+"""Name of the checker type that judges honesty per file instead of approving a step."""
+
+
+def _require_verdict_reason(output: HonestyAnswer) -> HonestyAnswer:
+    """Ask the honesty checker again when a DISHONEST verdict or an escalation says nothing.
+
+    Args:
+        output: The model's answer.
+
+    Returns:
+        The answer unchanged.
+
+    Raises:
+        ModelRetry: If a DISHONEST file has neither a reason nor a dishonest unit with one,
+            or `escalate` is set without `escalate_reason`.
+    """
+    for entry in output.files:
+        said = entry.reason.strip() or any(
+            unit.reason.strip() for unit in entry.units if not unit.honest
+        )
+        if entry.verdict == "DISHONEST" and not said:
+            raise ModelRetry(f"Say briefly why {entry.path} is DISHONEST.")
+    if output.escalate and not output.escalate_reason.strip():
+        raise ModelRetry("Say in escalate_reason what the human should look at.")
+    return output
 
 
 def _require_reason(output: CheckDecision) -> CheckDecision:

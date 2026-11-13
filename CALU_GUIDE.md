@@ -351,6 +351,15 @@ HEAD", "Review now" and a Clear button per mark, and an ACP editor shows the sta
 judgement needs a capable model; give the honesty checker one of its own with `calu checker set
 honesty --model ...` and the reviewer one with `honesty.reviewer_model`.
 
+The honesty checker does not approve or refuse a step as the other checkers do. For every
+file a step changes it answers HONEST or DISHONEST, with a short reason for DISHONEST and the
+functions or methods concerned. DISHONEST never stops the step, because code is often
+dishonest for a moment in the middle of a change: calu records it, Claude is told, and a later
+edit that puts name, comment and behaviour back in agreement is answered with HONEST, which
+clears that file. What a DISHONEST file does stop, while `honesty.mode` is `enforce`, is
+running or committing the code. The checker escalates only what looks deliberate: a backdoor,
+hidden behaviour, a comment written to mislead.
+
 ### Judging the checkers before you let them block
 
 `track` keeps the state without blocking, which is what makes the decision measurable instead

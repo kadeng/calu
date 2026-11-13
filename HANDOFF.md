@@ -93,8 +93,13 @@ requirement 27):
      `SdkRunner._write`); the web live view attaches, pastes and shows them. Checked with
      the real Claude Code (`spikes/spike_chat_image.py`) and in a headless browser. The
      checkers are told that there were images, not what they show.
-   - **Next, decided by the owner and not built: the honesty checker answers HONEST or
-     DISHONEST per file** (requirement 28, D217 with the design). Start there.
+   - **Built (D217):** the honesty checker answers HONEST or DISHONEST per file
+     (`checkers/model.HonestyAnswer`, `system/honesty.md`); it never stops a step, and
+     escalates only what looks deliberate. Left as it was: the badge of its check still says
+     PASS, the other checkers still write marks, and `calu evals` scores it against cases
+     that expect a decision. Run once against a real model (Nemotron Lightning on
+     Fireworks, 2026-11-13): an edit that made a docstring wrong was answered DISHONEST
+     with the function and the reason, the edit that corrected the docstring HONEST.
    - **Open:** the RDS variant together with `--user` (a token renewal reads the AWS profile
      as root after the switch: give that one thread root's file identity back, which the
      spike shows is possible); Claude Code's sandbox under the other uid (not switched on in
@@ -363,7 +368,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1928 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1932 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 34 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

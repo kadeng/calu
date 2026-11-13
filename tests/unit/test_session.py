@@ -1362,7 +1362,7 @@ async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
     """
     settings = default_settings(tmp_path)
     extra = CheckerDefinition(
-        name="honesty",
+        name="security",
         route="command",
         instructions="# Honesty checker\n\nJudge whether the code tells the truth.",
         model="test:model",
@@ -1371,7 +1371,7 @@ async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
         max_tokens=8_000,
         version=1,
     )
-    settings = replace(settings, checkers={**settings.checkers, "honesty": extra})
+    settings = replace(settings, checkers={**settings.checkers, "security": extra})
     session, rec, store = make_session(
         tmp_path,
         [[{"tool": "Bash", "input": {"command": "deploy the parser"}, "result": "ok"}]],
@@ -1379,10 +1379,10 @@ async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
         checker_models={
             **fake_models(),
             # The command checker passes this step; the second checker denies it.
-            "honesty": fixed_checker("DENY", "src/parser.py:fields is dirty: fix the docstring"),
+            "security": fixed_checker("DENY", "src/parser.py:fields is dirty: fix the docstring"),
         },
     )
-    assert [c.name for c in session.checkers[Route.COMMAND]] == ["command", "honesty"]
+    assert [c.name for c in session.checkers[Route.COMMAND]] == ["command", "security"]
 
     async with anyio.create_task_group() as tg:
         await session.start(tg)
@@ -1393,12 +1393,12 @@ async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):
     # The step was denied, although the route's own checker had no objection.
     (check,) = [e for e in rec.of(CheckResult) if e.tool_name == "Bash"]
     assert check.decision is Decision.DENY
-    assert "honesty: src/parser.py:fields is dirty" in check.reason, (
+    assert "security: src/parser.py:fields is dirty" in check.reason, (
         "a denial must name the checker it came from"
     )
     # Both checkers are recorded, so `calu checker stats` can price and judge each of them.
     runs = [run for step in store.steps.values() for run in step.checker_runs]
-    assert sorted(run.checker_name for run in runs) == ["command", "honesty"]
+    assert sorted(run.checker_name for run in runs) == ["command", "security"]
     assert {run.decision for run in runs} == {"pass", "deny"}  # rows keep them lower case
 
 

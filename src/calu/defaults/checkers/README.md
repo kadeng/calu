@@ -7,6 +7,7 @@ A checker's prompt is put together from parts (PLAN.md D181):
 | `system/<route>.md` | the role, the tools, how to answer | calu (fixed) |
 | `<checker>.md` | what to pass, deny and escalate | you: `calu checker edit <name>` |
 | `honesty-rules.md` | API contracts and what dishonesty is | rarely: `calu honesty edit` |
+| `system/honesty.md` | the honesty checker's own form of answer: HONEST or DISHONEST per file, and when to escalate | calu (fixed) |
 | `system/marks.md` | the code honesty state in the step's notes, and how to record marks (honesty mode on) | calu (fixed) |
 
 `calu setup` loads each `<checker>.md` into the `checker_types` table, where a session reads it

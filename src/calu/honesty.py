@@ -56,6 +56,7 @@ import anyio.to_thread
 from calu import asuser
 from calu.checkers import CodeMark
 from calu.checkers.changeset import GIT_OPTIONS, HEAD_ID
+from calu.checkers.model import ALL_SYMBOLS
 from calu.checkers.symbols import definition_names
 from calu.store.trust import TrustSource, stronger, sufficient, weakest
 
@@ -1861,6 +1862,7 @@ class HonestyState:
         in both stays open. A clean mark closes an open mark only if no review is required,
         the step edits that file, and path and symbol match (`normal_symbol`, `match_symbol`;
         in a Python file that parses, the symbol is first read as the definition it names).
+        A clean mark with the symbol `ALL_SYMBOLS` closes every open mark of its file.
         A dirty mark must name an existing file of the workspace (`checked_marks`); for a
         Python file that parses, its symbol is replaced by the definition's dotted name, and a
         symbol that names no definition becomes a mark on the whole file. A dirty mark whose
@@ -1893,6 +1895,11 @@ class HonestyState:
                 changes.ignored.append(f"{entry.label()}: the step does not edit that file")
                 continue
             standing = {mark.symbol: mark for mark in self.open_marks if mark.path == entry.path}
+            if entry.symbol == ALL_SYMBOLS:
+                # The honesty checker's HONEST for the file: every open mark of it closes.
+                for mark in standing.values():
+                    changes.closed.append(self._close(mark, by or "a checker"))
+                continue
             wanted = normal_symbol(entry.symbol)
             names = self._definitions(entry.path) if wanted else None
             named = match_symbol(wanted, names) if names is not None else None

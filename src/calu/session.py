@@ -642,6 +642,7 @@ class Session:
             self._instructions(name),
             self.config.honesty.rules,
             marks=self.config.honesty.mode != "off",
+            name=name,
         )
 
     def _result_checker(self) -> ResultChecker:

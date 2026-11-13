@@ -164,6 +164,7 @@ async def run_evals(
             definition.instructions,
             settings.config.honesty.rules,
             marks=settings.config.honesty.mode != "off" or row_name == "honesty",
+            name=row_name,
         )
         configured = {
             "command": settings.config.command_checker,
