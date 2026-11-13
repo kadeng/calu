@@ -243,8 +243,8 @@ async def withdraw(db: Db, request_id: int) -> bool:
 async def wait_for(
     db: Db,
     request_id: int,
-    claim_wait_s: float = CLAIM_WAIT_S,
-    start_wait_s: float = START_WAIT_S,
+    claim_wait_s: float | None = None,
+    start_wait_s: float | None = None,
 ) -> SessionRequest:
     """Wait until a request is finished, and withdraw it when no server takes it.
 
@@ -255,8 +255,10 @@ async def wait_for(
     Args:
         db: A connection of the operator or the owner.
         request_id: The row's id.
-        claim_wait_s: How long to wait for a server to claim the request.
-        start_wait_s: How long to wait, after the claim, for the outcome.
+        claim_wait_s: How long to wait for a server to claim the request; None uses
+            `CLAIM_WAIT_S`.
+        start_wait_s: How long to wait, after the claim, for the outcome; None uses
+            `START_WAIT_S`.
 
     Returns:
         The request in the state "started" or "failed".
@@ -267,6 +269,8 @@ async def wait_for(
         LookupError: If the row does not exist (any more).
         psycopg.Error: On database errors.
     """
+    claim_wait_s = CLAIM_WAIT_S if claim_wait_s is None else claim_wait_s
+    start_wait_s = START_WAIT_S if start_wait_s is None else start_wait_s
     filed = time.monotonic()
     claimed: float | None = None
     while True:

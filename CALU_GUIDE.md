@@ -1125,6 +1125,14 @@ all work with it, and each has its own address and its own tokens.
 - **What the server prints.** One line when a session is asked for, started and ended, each
   with the directory's name and the request's number in front; the conversation is shown by
   the clients. `calu serve --max-sessions N` limits how many run at once (default 10).
+- **From the web interface and the full-screen client.** A session's page in the web
+  interface has "New session in this directory", "Fork this conversation" and, for a session
+  that has ended, "Continue this conversation", and each fork point has its own button; the
+  page then opens the new session's live view. In the full-screen client, `/new [first
+  message]` and `/fork [first message]` do the same and switch the client to the new
+  session; the one you left keeps running. Both ask the `calu serve` of the session's
+  machine. The client uses this machine's `admin` credential for it and asks for its
+  password; without that credential it names the `calu start` command instead.
 - **Forgotten sessions.** `calu serve --idle-timeout 120` ends a session that has been idle
   for two hours with no client attached; its conversation stays and `calu start --resume`
   continues it. Without the option a session waits until you shut it down.

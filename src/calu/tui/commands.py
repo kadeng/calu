@@ -215,6 +215,21 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         "start", "Start the session, or resume a stored one", "enter", "/start [resume id | new]"
     ),
+    Command(
+        "new",
+        "New session in this directory, from calu serve",
+        "",
+        "/new [first message]",
+        about="Needs a running `calu serve` and this machine's admin credential. The client "
+        "switches to the new session; this one keeps running.",
+    ),
+    Command(
+        "fork",
+        "Fork this conversation into a new session, from calu serve",
+        "",
+        "/fork [first message]",
+        about="A copy of the conversation under a new session id; this one stays as it is.",
+    ),
     Command("stop", "Stop the Claude session (calu keeps running)", "", "/stop"),
     Command("shutdown", "Shut down calu (asks for the word shutdown)", "", "/shutdown"),
     # ---- view

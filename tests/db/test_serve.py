@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import anyio
+import httpx
 import psycopg
 import pytest
 
@@ -20,6 +21,7 @@ from calu.protocol.client import connect as connect_client
 from calu.serve import ServeOptions, Server, os_user
 from calu.session_requests import NoServer, SessionRequest
 from calu.testing import fake_models
+from calu.web.app import create_app
 from tests.db.test_attach_discovery import _read_until
 from tests.db.test_run import SCRIPT, prepare
 
@@ -342,3 +344,64 @@ async def test_calu_serve_as_a_process_answers_and_stops_on_sigterm(db_url: str,
             process.kill()
             with anyio.move_on_after(10):
                 await process.wait()
+
+
+async def test_the_web_interface_asks_the_server_for_a_session(
+    db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The buttons of the session page: they write the row `calu start` writes.
+
+    Runs the web application in this process against the test database, with a server that
+    uses fake runners; prints nothing.
+    """
+    session_url = await prepare(db_url, tmp_path)
+    async with owner_db(db_url) as db:
+        web = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(db, git_url_template="")),
+            base_url="http://127.0.0.1",
+        )
+        host, user = socket.gethostname(), os_user()
+        async with web, serving(session_url, host, user) as server:
+            # A session's row names the real host and user, so the server answers for those.
+            first = await ask(
+                db, SessionRequest(hostname=host, os_user=user, directory=str(tmp_path))
+            )
+            page = await web.get(f"/sessions/{first.session_id}")
+            assert "New session in this directory" in page.text
+            assert "Fork this conversation" in page.text
+
+            new = await web.post(f"/sessions/{first.session_id}/request", data={"kind": "new"})
+            assert new.status_code == 303, new.text
+            started = new.headers["location"].split("/sessions/")[1].removesuffix("/live")
+            assert started != first.session_id
+            rows = {row.id: row for row in await herd.sessions(db, active_only=True)}
+            assert rows[started].directory == str(tmp_path)
+            assert len(server.sessions) == 2
+
+            fork = await web.post(
+                f"/sessions/{first.session_id}/request",
+                data={"kind": "fork", "prompt": "go on"},
+            )
+            assert fork.status_code == 303, fork.text
+            (filed,) = await db.all(
+                "SELECT kind, claude_session_id, prompt, label FROM session_requests"
+                " ORDER BY id DESC LIMIT 1"
+            )
+            assert filed == (
+                "fork",
+                rows[first.session_id or ""].claude_session_id,
+                "go on",
+                "calu web",
+            )
+
+            bad = await web.post(f"/sessions/{first.session_id}/request", data={"kind": "x"})
+            assert bad.status_code == 400
+        # The server is gone: the page says so instead of waiting for ever.
+        monkeypatch.setattr(session_requests, "CLAIM_WAIT_S", 0.3)
+        web = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(db, git_url_template="")),
+            base_url="http://127.0.0.1",
+        )
+        async with web:
+            nobody = await web.post(f"/sessions/{first.session_id}/request", data={"kind": "new"})
+        assert nobody.status_code == 503 and "calu serve" in nobody.text

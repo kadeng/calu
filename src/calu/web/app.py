@@ -65,7 +65,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from calu import __version__, admin, herd
+from calu import __version__, admin, herd, session_requests
 from calu.db import Db
 from calu.protocol.client import RequestFailed, connect
 from calu.web import git
@@ -234,6 +234,12 @@ def create_app(
             "/sessions/{session_id:uuid}/token", _page(mint, state), methods=["POST"], name="mint"
         ),
         Route("/sessions/{session_id:uuid}/live", _page(live_page, state), name="live"),
+        Route(
+            "/sessions/{session_id:uuid}/request",
+            _page(request_session, state),
+            methods=["POST"],
+            name="request_session",
+        ),
         Route(
             "/sessions/{session_id:uuid}/summary",
             _page(summary_page, state),
@@ -1002,6 +1008,73 @@ async def mint(request: Request, state: _State) -> Response:
     page = await _session_view(request, state, minted)
     page.headers["cache-control"] = "no-store"
     return page
+
+
+async def request_session(request: Request, state: _State) -> Response:
+    """Ask the `calu serve` of a session's machine for another session (PLAN.md D208).
+
+    The new session is in the same directory, for the same host and OS user, as the session
+    of the page: a new conversation, a continuation of this one, or a fork of it (whole, or
+    before a turn). The request is the row `calu start` writes; this handler waits for the
+    server's answer as that command does.
+
+    Side effects: writes a `session_requests` row; a server that claims it starts a session.
+
+    Args:
+        request: The request; its path holds the session id, its form `kind` ("new",
+            "resume" or "fork"), optionally `fork_before_turn` (with "resume") and `prompt`.
+        state: The shared state.
+
+    Returns:
+        A redirect to the new session's live view; a 404 page if no session has that id; a
+        400 page if the form is not usable or this conversation has no Claude session id; a
+        503 page if no server answered or the server did not start the session, with the
+        reason.
+    """
+    session_id = str(request.path_params["session_id"])
+    row = await herd.session(state.db, session_id)
+    if row is None:
+        return _not_found(request, session_id)
+    form = await request.form()
+    kind = str(form.get("kind") or "")
+    if kind not in ("new", "resume", "fork"):
+        return _bad(request, f"unknown kind of session: {kind}")
+    turn_text = str(form.get("fork_before_turn") or "")
+    if turn_text and (kind != "resume" or not turn_text.isdigit() or int(turn_text) < 2):
+        return _bad(request, "a fork before a turn takes kind=resume and a turn of 2 or more")
+    if kind != "new" and not row.claude_session_id:
+        return _bad(
+            request,
+            "this session has no Claude session id yet, so there is no "
+            "conversation to continue or fork",
+        )
+    wanted = session_requests.SessionRequest(
+        hostname=row.hostname,
+        os_user=row.os_user,
+        directory=row.directory,
+        kind=kind,  # type: ignore[arg-type]  # checked above
+        claude_session_id=row.claude_session_id if kind != "new" else None,
+        fork_before_turn=int(turn_text) if turn_text else None,
+        prompt=str(form.get("prompt") or "").strip() or None,
+        label="calu web",
+    )
+    try:
+        done = await session_requests.wait_for(
+            state.db, await session_requests.file(state.db, wanted)
+        )
+    except session_requests.NoServer:
+        return _error(
+            request,
+            503,
+            "No server answered",
+            f"No `calu serve` answered for {row.os_user} on {row.hostname}. Start it there "
+            "in a terminal with `calu serve`, then try again.",
+        )
+    except TimeoutError as exc:
+        return _error(request, 503, "The server did not answer in time", str(exc))
+    if done.state != "started" or done.session_id is None:
+        return _error(request, 503, "The session was not started", done.message)
+    return RedirectResponse(request.url_for("live", session_id=done.session_id), status_code=303)
 
 
 async def summary_page(request: Request, state: _State) -> Response:

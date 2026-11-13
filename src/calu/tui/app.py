@@ -28,17 +28,19 @@ nothing if it is no longer open. For `CARD_SETTLE_S` after the card began to sho
 item, the keys that decide are ignored.
 """
 
+import getpass
 import os
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import time
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import anyio
 from rich.markdown import Markdown
@@ -51,6 +53,7 @@ from textual.geometry import Size
 from textual.widgets import Static
 
 from calu.acp.modes import LADDER
+from calu.session_requests import SessionRequest
 from calu.tui import completion, gittool, render, settings
 from calu.tui.actions import Actions, Outcome
 from calu.tui.adminaccess import (
@@ -261,6 +264,8 @@ class CaluApp(App[None]):
         """
         super().__init__()
         self.admin: AdminAccess = admin if admin is not None else StoreAdmin()
+        self.switch_to: str | None = None
+        """The id of the session `/new` or `/fork` started: the client ended to attach to it."""
         self.environ: Mapping[str, str] = os.environ
         """The environment `f4` reads `CALU_GIT_TOOL` from."""
         self.which: gittool.Which = shutil.which
@@ -2654,6 +2659,104 @@ class CaluApp(App[None]):
         resume = None if rest == "new" else (rest or self.model.claude_session_id)
         other = resume != self.model.claude_session_id
         self._spawn(self._restart(resume, self.next_model, self.next_effort, reload=other))
+
+    def _cmd_new(self, rest: str) -> None:
+        """Ask `calu serve` for a new session in this directory and switch to it (`/new`).
+
+        Args:
+            rest: The first message for Claude, or "".
+        """
+        self._request_session("new", rest)
+
+    def _cmd_fork(self, rest: str) -> None:
+        """Ask `calu serve` for a fork of this conversation and switch to it (`/fork`).
+
+        Args:
+            rest: The first message for Claude, or "".
+        """
+        if not self.model.claude_session_id:
+            self.flash("nothing to fork yet: the session has no Claude session id", error=True)
+            return
+        self._request_session("fork", rest)
+
+    def _request_session(self, kind: Literal["new", "fork"], prompt: str) -> None:
+        """File a session request with this machine's admin credential, then switch (D208).
+
+            no credential            ──► say which command does the same
+            password needed          ──► ask for it (again after a wrong one)
+            the server started it    ──► remember the session in `switch_to` and end the
+                                         client; `calu attach` attaches to it next
+            no server, or a refusal  ──► say why; nothing else changes
+
+        The request names this machine and this user: a client attached from another
+        machine gets no answer and is told so.
+
+        Args:
+            kind: "new" for a new conversation, "fork" for a copy of this one.
+            prompt: The first message for Claude, or "".
+        """
+        command = "calu start" + (
+            f" --fork {self.model.claude_session_id}" if kind == "fork" else ""
+        )
+        problem = self.admin.problem()
+        if problem is not None:
+            self.flash(f"not started here; use: {command} · {problem}", error=True)
+            return
+        wanted = SessionRequest(
+            hostname=socket.gethostname(),
+            os_user=getpass.getuser(),
+            directory=self.model.workspace,
+            kind=kind,
+            claude_session_id=self.model.claude_session_id if kind == "fork" else None,
+            prompt=prompt.strip() or None,
+            label="calu attach",
+        )
+
+        def ask(problem: str = "") -> None:
+            """Ask for the password if one is needed, then file the request.
+
+            Args:
+                problem: What was wrong with the password given before, or "".
+            """
+
+            async def file(password: str | None) -> None:
+                """File the request and switch, or say why not.
+
+                Args:
+                    password: The credential's password, or None if it has none.
+                """
+                self.flash("asked calu serve for the session …")
+                try:
+                    session_id = await self.admin.request_session(wanted, password)
+                except PasswordNeeded as error:
+                    ask(str(error))
+                    return
+                except AdminFailed as error:
+                    self.flash(f"no session started: {error}", error=True)
+                    return
+                self.switch_to = session_id
+                self.exit()
+
+            def answered(password: str | None) -> None:
+                """Go on with the password; without one nothing is asked for.
+
+                Args:
+                    password: What the user typed, or None.
+                """
+                if password is None:
+                    self.flash("no session started: no password given", error=True)
+                else:
+                    self._spawn(file(password))
+
+            if self.admin.needs_password():
+                self.push_screen(
+                    PasswordScreen("It asks calu serve for a session.", self.palette, problem),
+                    answered,
+                )
+            else:
+                self._spawn(file(None))
+
+        ask()
 
     def _cmd_shutdown(self, rest: str) -> None:
         """Shut down calu after a typed confirmation (`/shutdown`, or `/shutdown confirm`).

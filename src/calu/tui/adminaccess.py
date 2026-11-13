@@ -29,10 +29,11 @@ from typing import Protocol
 import anyio
 import psycopg
 
-from calu import admin
+from calu import admin, session_requests
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
+from calu.session_requests import SessionRequest
 
 CREDENTIAL = "admin"
 """The credential both changes need: only the database owner may write these tables."""
@@ -95,6 +96,27 @@ class AdminAccess(Protocol):
         """
         ...
 
+    async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
+        """Ask the `calu serve` of this machine for a session and wait until it runs (D208).
+
+        Side effect: writes a `session_requests` row; a server that claims it starts a
+        session.
+
+        Args:
+            wanted: The session to start.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The id of the started session's row.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            NoServerAnswered: If no server claimed the request in time.
+            AdminFailed: If the server did not start the session (the message is its
+                reason), or the database cannot be reached.
+        """
+        ...
+
     async def save_instructions(
         self, name: str, text: str, password: str | None, base_version: int | None = None
     ) -> SavedChecker:
@@ -137,6 +159,10 @@ class AdminAccess(Protocol):
                 refuses.
         """
         ...
+
+
+class NoServerAnswered(AdminFailed):
+    """No `calu serve` claimed a session request; it was withdrawn."""
 
 
 def weakens(before: str, after: str) -> bool:
@@ -238,6 +264,54 @@ class StoreAdmin:
         except psycopg.Error as error:
             first = str(error).strip().splitlines()[0] if str(error).strip() else "no detail"
             raise AdminFailed(f"the database refused: {first}") from error
+
+    async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
+        """Ask the `calu serve` of this machine for a session and wait until it runs (D208).
+
+        Side effect: writes a `session_requests` row; a server that claims it starts a
+        session.
+
+        Args:
+            wanted: The session to start.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The id of the started session's row.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            NoServerAnswered: If no server claimed the request in time.
+            AdminFailed: If the server did not start the session (the message is its
+                reason), or the database cannot be reached.
+        """
+
+        async def work(db: Db) -> str:
+            """File the request and wait for its outcome.
+
+            Args:
+                db: The owner's connection.
+
+            Returns:
+                The session's row id.
+
+            Raises:
+                NoServerAnswered: If no server claimed the request in time.
+                AdminFailed: If the session was not started.
+            """
+            try:
+                done = await session_requests.wait_for(db, await session_requests.file(db, wanted))
+            except session_requests.NoServer:
+                raise NoServerAnswered(
+                    f"no `calu serve` answered for {wanted.os_user} on {wanted.hostname}; "
+                    "start it in a terminal with `calu serve`"
+                ) from None
+            except TimeoutError as error:
+                raise AdminFailed(str(error)) from error
+            if done.state != "started" or done.session_id is None:
+                raise AdminFailed(f"the server did not start the session: {done.message}")
+            return done.session_id
+
+        return await self._with_db(password, work)
 
     async def save_instructions(
         self, name: str, text: str, password: str | None, base_version: int | None = None

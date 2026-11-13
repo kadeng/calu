@@ -64,6 +64,11 @@ session shows the real thinking as it streams.</p>
       <summary class="muted">Fork before turn {{ turn.index }}: keep everything up to the previous
         turn and drop this one. The fork gets its own session id; this conversation stays as it is.</summary>
       <pre>{{ forks[turn.index].command() }}</pre>
+      <form class="inline" method="post" action="{{ url_for('request_session', session_id=session.id) }}">
+        <input type="hidden" name="kind" value="resume">
+        <input type="hidden" name="fork_before_turn" value="{{ turn.index }}">
+        <button>Fork before this turn with calu serve</button>
+      </form>
       <p class="muted">Run it on {{ session.hostname }}, in {{ session.directory }}.</p>
       <p class="muted">The files are left as they are: a fork rewinds the conversation, not the
         working tree, so whatever the dropped turn wrote is still on disk. Check the tree before
@@ -153,6 +158,21 @@ session shows the real thinking as it streams.</p>
   </tbody>
 </table>
 {% endif %}
+
+<h2>Start a session from here</h2>
+<div class="card">
+  <form class="inline" method="post" action="{{ url_for('request_session', session_id=session.id) }}">
+    <input type="text" name="prompt" placeholder="first message for Claude (optional)">
+    <button name="kind" value="new">New session in this directory</button>
+    {% if session.claude_session_id %}
+    <button name="kind" value="fork">Fork this conversation</button>
+    {% if session.ended_at %}<button name="kind" value="resume">Continue this conversation</button>{% endif %}
+    {% endif %}
+  </form>
+  <p class="muted">Needs a running <code>calu serve</code> of {{ session.os_user }} on {{ session.hostname }}:
+    it starts the session, without a password, and this page opens its live view. A fork is a copy
+    under a new session id; this conversation stays as it is.</p>
+</div>
 
 <h2>Connect to this session</h2>
 <div class="card">

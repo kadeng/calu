@@ -40,6 +40,9 @@ class TuiExit:
     """How many steps or questions waited for a decision."""
     message: str = ""
     """Why the connection ended, if the session closed it."""
+    switch_to: str | None = None
+    """The id of a session the user started from the client (`/new`, `/fork`): the caller
+    attaches to that one next."""
 
 
 SUPPORTED = ((8, 2), (9, 0))
@@ -204,4 +207,5 @@ def run_tui(address: str, token: str, after_seq: int = 0, show_thinking: bool = 
         claude_session_id=model.claude_session_id,
         open_decisions=len(model.decisions),
         message=app.link.closed_reason,
+        switch_to=app.switch_to,
     )

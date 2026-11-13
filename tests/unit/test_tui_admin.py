@@ -750,3 +750,43 @@ async def test_help_and_palette_name_the_new_commands() -> None:
             "CALU_GIT_TOOL",
         ):
             assert expected in text
+
+
+# ------------------------------------------------------------------ /new and /fork (D208)
+
+
+async def test_fork_asks_calu_serve_and_ends_the_client_to_switch() -> None:
+    """With a scripted session and a stand-in for the database; nothing is started."""
+    session = FakeSession()
+    access = FakeAdmin(session, password="secret")
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/fork carry on")
+        assert isinstance(run.app.screen, PasswordScreen)
+        await run.press(*"secret", "enter")
+        await run.pilot.pause()
+        (wanted,) = access.requests
+        assert (wanted.kind, wanted.prompt, wanted.label) == ("fork", "carry on", "calu attach")
+        assert wanted.claude_session_id == run.app.model.claude_session_id
+        assert wanted.directory == run.app.model.workspace
+        assert run.app.switch_to == "started-1"
+
+
+async def test_new_needs_no_conversation_and_says_why_nothing_started() -> None:
+    session = FakeSession()
+    access = FakeAdmin(session)
+    access.fail = "no `calu serve` answered for ada on box"
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/new")
+        await run.pilot.pause()
+        assert access.requests == [] and run.app.switch_to is None
+        assert "no session started: no `calu serve` answered" in run.app.message
+
+
+async def test_without_the_credential_fork_names_the_command_instead() -> None:
+    session = FakeSession()
+    async with running(
+        "simple_turn", session=session, admin=FakeAdmin(session, credential=False)
+    ) as run:
+        await command(run, "/fork")
+        await run.pilot.pause()
+        assert "calu start --fork" in run.app.message and run.app.switch_to is None

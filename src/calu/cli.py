@@ -1806,7 +1806,17 @@ def _attach(
     try:
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
-            ended = tui_start.run_tui(endpoint.address, endpoint.token, after_seq)
+            while True:
+                ended = tui_start.run_tui(endpoint.address, endpoint.token, after_seq)
+                if ended.switch_to is None:
+                    break
+                # `/new` or `/fork` in the client: the session it started is attached next,
+                # with a token of its own; the one of the session that was left is revoked.
+                print(f"[session] switching to {ended.switch_to}", flush=True)
+                following = _find_endpoint(store, ended.switch_to, "calu attach")
+                if endpoint.token_id is not None:
+                    _revoke(store, endpoint.token_id)
+                endpoint, after_seq = following, 0
             print("\n".join(tui_start.exit_lines(ended)))
             code = ended.code
         else:

@@ -27,6 +27,7 @@ import anyio
 
 from calu.protocol.client import OnEvent, RequestFailed
 from calu.protocol.messages import CLOSE_FELL_BEHIND, REQUESTS
+from calu.session_requests import SessionRequest
 from calu.tui.adminaccess import (
     NO_CREDENTIAL,
     AdminFailed,
@@ -174,6 +175,8 @@ class FakeAdmin:
         self.saved: list[tuple[str, str]] = []
         """Every `(checker, instructions)` stored, oldest first."""
         self.modes: list[tuple[str, str | None]] = []
+        self.requests: list[SessionRequest] = []
+        """The sessions that were asked for (`request_session`)."""
         """Every `(mode, project)` stored, oldest first."""
         self.fail = ""
         """If set, every change is refused with this sentence."""
@@ -250,6 +253,24 @@ class FakeAdmin:
             found["version"] = version = now + 1
         self.saved.append((name, text))
         return SavedChecker(name, version)
+
+    async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
+        """Record the request and answer with a made-up session id.
+
+        Args:
+            wanted: The session to start.
+            password: The password the client passed.
+
+        Returns:
+            `started-<n>`, n counting the requests of this access.
+
+        Raises:
+            PasswordNeeded: If the password is not the one of this access.
+            AdminFailed: Without a credential or with `fail` set.
+        """
+        self._check(password)
+        self.requests.append(wanted)
+        return f"started-{len(self.requests)}"
 
     async def set_honesty_mode(
         self, mode: str, project: str | None, password: str | None

@@ -29,11 +29,13 @@ requirement 27):
   terminal (`docs/TESTING.md` item 27), and Ctrl-C while sessions are in the middle of a turn.
   Added later that day: `calu serve --idle-timeout MINUTES`, and a test that runs `calu
   serve` as a process (password on stdin, a refused request, SIGTERM).
-  **Not built** (D208 part 8): "new session" and "fork" in the web interface and in the
-  full-screen client. Both would write the row `calu start` writes
-  (`calu.session_requests.file`) and then attach to the session it names; the web
-  interface holds the `admin` login, the full-screen client asks for it
-  (`tui/adminaccess.py`). This is the next piece of work on `calu serve`.
+  Also built: "new session", "fork" and "continue" on the web interface's session page
+  (`web/app.py: request_session`), and `/new` and `/fork` in the full-screen client
+  (`tui/app.py: _request_session`, `TuiExit.switch_to`, the loop in `cli._attach`). The web
+  buttons were run against a server with fake runners; the client's commands only with the
+  scripted session. **Not tried**: either of them by a person against a real `calu serve`.
+  **Not built**: the same in the line client and through ACP; a "new session" on the fleet
+  page for a directory no session ran in yet.
 - **Conversations started with `claude` itself (D209)**: `src/calu/claude/transcripts.py`.
   `calu list-sessions` lists them as "outside calu"; a resume or fork of one gives the
   checkers one turn that reports what the transcript says the user wrote, as a report and
@@ -327,7 +329,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1899 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1903 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 32 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
