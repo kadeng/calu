@@ -905,6 +905,11 @@ it nowhere, and each wrong password makes the next answer wait longer. On a data
 `calu setup` has not given that role a password yet, `calu web` prints an address with a
 login token instead (`...?token=...`), to be opened once per browser.
 
+A message in the live view can carry up to four images (PNG, JPEG, GIF or WebP, 5 MB each):
+choose them with the file field or paste one into the text. Claude sees them. The checkers
+do not: they are told that the message had images, not what the images show, so an
+instruction that exists only inside an image is unknown to them.
+
 The live view of a session shows Claude's text formatted (headings, lists, code, tables,
 links), leaves a gap after each turn, and shows an image file that Claude reads as a small
 picture under the tool call; a click opens it. The picture is read from the project

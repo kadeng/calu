@@ -2478,6 +2478,11 @@ class Session:
         runner = self._require_running()
         priority: Literal["next", "later"] = "next" if params.delivery == "inject" else "later"
         text = params.text
+        if params.images and params.to != "main":
+            raise SessionError(
+                "an image can be sent to the main agent only: a message to a subagent is "
+                "relayed as text"
+            )
         if params.to != "main":
             agent = self._find_agent(params.to)
             text = RELAY_TEMPLATE.format(
@@ -2486,7 +2491,7 @@ class Session:
                 text=params.text,
             )
             priority = "next"
-        await runner.send(text, priority)
+        await runner.send(text, priority, params.images)
         queued = QueuedMessage(
             id=f"q{next(self._queue_ids)}", text=params.text, delivery=params.delivery, to=params.to
         )
@@ -3153,7 +3158,15 @@ class Session:
                 case UserInput() if event.source != "user":
                     self._record_cross_session(event.text, event.source)
                 case UserInput():
-                    self.context.user_input(event.text, event.uuid)
+                    # The checkers judge by the user's words. An image is part of what the
+                    # user said and they do not see it, so they are told that there was one.
+                    seen = event.text
+                    if event.images:
+                        seen += (
+                            f"\n[{len(event.images)} image(s) attached to this message; "
+                            "calu does not show images to the checkers]"
+                        )
+                    self.context.user_input(seen, event.uuid)
                     await self._take_from_queue(event.text)
                 case AssistantText() if event.agent_id is None and event.uuid:
                     # Where a fork that keeps this turn resumes from (D36); the narrator case below

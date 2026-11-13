@@ -69,6 +69,7 @@ from calu.bus import Bus, Subscription
 from calu.protocol.messages import (
     CLOSE_FELL_BEHIND,
     CLOSE_TOKEN_REVOKED,
+    MAX_FRAME_BYTES,
     REQUESTS,
     AutoEscalate,
     AutoEscalateSetParams,
@@ -354,7 +355,7 @@ class SessionServer:
         if socket_path is not None:
             await self._listen_unix(socket_path)
             return
-        async with await serve(self._handle, host, port) as server:
+        async with await serve(self._handle, host, port, max_size=MAX_FRAME_BYTES) as server:
             bound = server.sockets[0].getsockname()
             self.address = f"ws://{bound[0]}:{bound[1]}"
             self.ready.set()
@@ -818,7 +819,7 @@ class SessionServer:
         """
         await anyio.to_thread.run_sync(_prepare_socket, socket_path)
         try:
-            async with await unix_serve(self._handle, str(socket_path)):
+            async with await unix_serve(self._handle, str(socket_path), max_size=MAX_FRAME_BYTES):
                 await anyio.to_thread.run_sync(socket_path.chmod, 0o600)
                 self.address = f"unix:{socket_path}"
                 self.ready.set()
@@ -850,7 +851,12 @@ class SessionServer:
             # `cleanup_socket=False`: the event loop would look at the socket file to remove
             # it later, with the file access of this thread, which may be the user's; the
             # file is removed below with root's.
-            async with await unix_serve(self._handle_local, sock=listener, cleanup_socket=False):
+            async with await unix_serve(
+                self._handle_local,
+                sock=listener,
+                cleanup_socket=False,
+                max_size=MAX_FRAME_BYTES,
+            ):
                 log.info("root clients are accepted on %s", path)
                 await self.shutdown.wait()
         finally:

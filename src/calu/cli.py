@@ -113,6 +113,7 @@ from calu.launch import RunAs
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
 from calu.protocol.client import RequestFailed
+from calu.protocol.messages import MAX_FRAME_BYTES
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
@@ -2210,7 +2211,13 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                     flush=True,
                 )
             config = uvicorn.Config(
-                app, host=args.host, port=args.port, log_level="warning", access_log=False
+                app,
+                host=args.host,
+                port=args.port,
+                log_level="warning",
+                access_log=False,
+                # A chat message may carry images (D220).
+                ws_max_size=MAX_FRAME_BYTES,
             )
             await uvicorn.Server(config).serve()
         finally:

@@ -1473,3 +1473,51 @@ async def test_a_slow_rule_check_does_not_stop_the_event_loop(
         tg.cancel_scope.cancel()
     assert elapsed >= 0.4
     assert ticks >= 5, f"the loop kept running while the rules worked ({ticks} ticks)"
+
+
+async def test_an_image_reaches_claude_with_the_message_and_the_checkers_are_told(tmp_path: Path):
+    """A chat message with an image (D220), with the scripted runner; nothing is started."""
+    import base64
+
+    from calu.protocol.messages import ChatImage, UserInput
+
+    image = ChatImage(media_type="image/png", data=base64.b64encode(b"not really a png").decode())
+    session, rec, _store = make_session(tmp_path, [[{"text": "I see it."}]])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        with pytest.raises(SessionError, match="main agent only"):
+            await session.send_chat(ChatSendParams(text="look", to="a1", images=[image]))
+        await session.send_chat(ChatSendParams(text="what is on this?", images=[image]))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (shown,) = [event for event in rec.events if isinstance(event, UserInput)]
+    assert shown.images == [image], "clients get the image with the user's message"
+    recent = session.checker_context().recent
+    assert "what is on this?" in recent
+    assert "1 image(s) attached to this message" in recent
+    assert image.data not in recent
+
+
+def test_an_image_must_be_a_small_raster_image():
+    import base64
+
+    from pydantic import ValidationError
+
+    from calu.protocol.messages import MAX_IMAGE_BYTES, MAX_IMAGES, ChatImage
+
+    good = base64.b64encode(b"x").decode()
+    ChatImage(media_type="image/webp", data=good)
+    for bad in (
+        {"media_type": "image/svg+xml", "data": good},
+        {"media_type": "image/png", "data": "not base64!"},
+        {
+            "media_type": "image/png",
+            "data": base64.b64encode(b"x" * (MAX_IMAGE_BYTES + 9)).decode(),
+        },
+    ):
+        with pytest.raises(ValidationError):
+            ChatImage.model_validate(bad)
+    with pytest.raises(ValidationError):
+        ChatSendParams(
+            text="x", images=[ChatImage(media_type="image/png", data=good)] * (MAX_IMAGES + 1)
+        )

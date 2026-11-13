@@ -205,6 +205,7 @@ them by hand; they use throwaway directories and databases.
 | `smoke_privileged.sh` | calu as root with `--user 1000` and the real `claude` in the development image: who a command, git's filter and calu's files end up as (D211) | after changes to `calu.asuser`, `calu.launch` or to where calu starts a program |
 | `spike_root_socket.py` | After the switch to the user's file identity: is the session's socket root's alone, closed to the process's own access, and is a root peer reported as uid 0? (D215) | after changes to `calu.localsocket` or `asuser.as_root` |
 | `spike_fs_identity.py` | Is the file-system identity of a root process per thread, and inherited by new threads? (yes; D211 rests on it) | a kernel or C library that behaves differently is suspected |
+| `spike_chat_image.py` | Does Claude Code take an image in a chat message, and how is the message replayed? (D220) | the CLI or the SDK changes |
 | `smoke_serve.py` | `calu serve` with the real `claude`: two sessions at once in two directories, and a fork started through the server (D208) | after changes to `calu.serve` or to how a session is started |
 
 ```bash

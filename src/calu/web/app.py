@@ -360,6 +360,9 @@ def _inline_script_hashes() -> list[str]:
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
+    # `data:` for the images a user attached to a chat message: the live view shows them from
+    # the event, and only raster formats are accepted there (`ChatImage`).
+    "img-src 'self' data:; "
     f"script-src 'self' {' '.join(_inline_script_hashes())}; "
     "connect-src 'self' ws://{host} wss://{host}; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"

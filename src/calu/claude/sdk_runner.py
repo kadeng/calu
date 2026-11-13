@@ -83,6 +83,7 @@ from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
     AssistantThinking,
+    ChatImage,
     ContextUsage,
     Event,
     Log,
@@ -246,6 +247,8 @@ class SdkRunner:
         self.agents: dict[str, AgentInfo] = {}  # by Agent tool call id
         self._task_to_tool_use: dict[str, str] = {}  # SDK task/agent id -> tool call id
         self._human_texts: list[str] = []  # sent for a human, not yet replayed (stripped)
+        self._human_images: dict[str, list[ChatImage]] = {}
+        """The images sent with a human text, by that text, until its replay arrives."""
         self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
         self._sink: EventSink | None = None  # set by `run`; hooks report through it
@@ -408,7 +411,7 @@ class SdkRunner:
         """Return once the SDK client is connected and `send` may be called."""
         await self._ready.wait()
 
-    async def send(self, text: str, priority: Priority) -> None:
+    async def send(self, text: str, priority: Priority, images: Sequence[ChatImage] = ()) -> None:
         """Write a message **of the human user** to Claude's input.
 
         Precondition: `wait_ready` has returned and `run` is still active.
@@ -421,22 +424,43 @@ class SdkRunner:
         Args:
             text: The message text.
             priority: "next" (read after the running tool calls) or "later" (after the turn).
+            images: Images the user attached. They are sent to Claude as image blocks after
+                the text and kept until the text's replay, whose `UserInput` carries them.
         """
         self._human_texts.append(text.strip())
         del self._human_texts[:-MAX_PENDING_HUMAN_TEXTS]
-        await self._write(text, priority)
+        if images:
+            self._human_images[text.strip()] = list(images)
+        await self._write(text, priority, images)
 
-    async def _write(self, text: str, priority: Priority) -> None:
+    async def _write(self, text: str, priority: Priority, images: Sequence[ChatImage] = ()) -> None:
         """Write a user-role message to Claude's input without marking it as the user's.
 
         Args:
             text: The message text.
             priority: "next" (read after the running tool calls) or "later" (after the turn).
+            images: Images to send with the text, as image blocks.
         """
         assert self._client is not None, "runner is not running"
+        content: str | list[dict[str, Any]] = text
+        if images:
+            content = [
+                {"type": "text", "text": text},
+                *(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image.media_type,
+                            "data": image.data,
+                        },
+                    }
+                    for image in images
+                ),
+            ]
         message = {
             "type": "user",
-            "message": {"role": "user", "content": text},
+            "message": {"role": "user", "content": content},
             "parent_tool_use_id": None,
             "priority": priority,
         }
@@ -1238,9 +1262,16 @@ class SdkRunner:
                             and agent is None
                             and not self._skill_text(block.text, events)
                         ):
+                            source = self._user_source(block.text, origin)
                             events.append(
                                 UserInput(
-                                    text=block.text, source=self._user_source(block.text, origin)
+                                    text=block.text,
+                                    source=source,
+                                    # What the user attached to this text (`send`); only the
+                                    # user's own message can have any.
+                                    images=self._human_images.pop(block.text.strip(), [])
+                                    if source == "user"
+                                    else [],
                                 )
                             )
             case TaskStartedMessage():

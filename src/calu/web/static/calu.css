@@ -857,3 +857,9 @@ main.st-shell { max-width: 84rem; padding-top: 0; padding-bottom: 0; }
 
 /* A fact about the page one must not miss, e.g. that a session is a fork. */
 .notice { border-left: 3px solid var(--accent); padding: .4rem .8rem; background: var(--surface); }
+
+/* Images waiting to be sent with the next message; a click removes one. */
+#attached .attached { padding: .1rem .3rem; margin-right: .3rem; }
+#attached .thumb-small { max-height: 2.2rem; max-width: 4rem; vertical-align: middle; }
+#stream .thumb img { cursor: zoom-in; }
+#stream .thumb img.large { max-width: 100%; max-height: none; cursor: zoom-out; }

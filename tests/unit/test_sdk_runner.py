@@ -368,3 +368,40 @@ async def test_a_finished_edit_is_reported_to_the_gate_before_the_agent_goes_on(
     assert answer == {}
     (step,) = finished
     assert (step.tool_name, step.tool_use_id, step.cwd) == ("Write", "toolu_1", "/w")
+
+
+@pytest.mark.anyio
+async def test_an_attached_image_is_sent_as_an_image_block_and_reported_with_the_replay(
+    tmp_path: Path,
+):
+    """What Claude Code is handed for a message with an image, and what the clients get."""
+    import base64
+
+    from claude_agent_sdk import TextBlock, UserMessage
+
+    from calu.protocol.messages import ChatImage
+
+    sent: list[dict[str, Any]] = []
+
+    class Client:
+        async def query(self, messages) -> None:
+            async for message in messages:
+                sent.append(message)
+
+    image = ChatImage(media_type="image/png", data=base64.b64encode(b"png").decode())
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._client = Client()  # type: ignore[assignment]
+    await runner.send("what is this?", "later", [image])
+    await runner.send("and no image", "later")
+    assert sent[0]["message"]["content"] == [
+        {"type": "text", "text": "what is this?"},
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": image.data},
+        },
+    ]
+    assert sent[1]["message"]["content"] == "and no image", "plain text stays a string"
+    # The replay of the message carries the text; the image is the one that was sent with it.
+    replay = UserMessage(content=[TextBlock(text="what is this?")])
+    (shown,) = [e for e in runner._translate(replay) if isinstance(e, UserInput)]
+    assert shown.source == "user" and shown.images == [image]

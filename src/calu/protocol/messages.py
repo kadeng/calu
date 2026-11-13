@@ -19,10 +19,11 @@ protocol: they live in the database and are changed with calu's own commands, wh
 credentials than a session (PLAN.md D6, §5).
 """
 
+import base64
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from calu.checkers.model import Decision
 from calu.checkers.policy import Route
@@ -94,6 +95,50 @@ class EmptyParams(BaseModel):
     """Parameters of requests without arguments (`session.stop`, `interrupt`, `shutdown`)."""
 
 
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+"""Largest image of a chat message, decoded (the limit of the model's API for one image)."""
+
+MAX_IMAGES = 4
+"""How many images one chat message may carry."""
+
+MAX_FRAME_BYTES = 32 * 1024 * 1024
+"""Largest protocol message a session or a client accepts: room for `MAX_IMAGES` images of
+`MAX_IMAGE_BYTES` in base64 with the rest of the message."""
+
+
+class ChatImage(BaseModel):
+    """An image a user attached to a chat message (PLAN.md D220).
+
+    `data` is the image file, base64. Only the listed raster formats: an SVG is a document
+    that can carry scripts.
+    """
+
+    media_type: Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+    data: str = Field(min_length=1)
+
+    @field_validator("data")
+    @classmethod
+    def _decodable_and_small(cls, value: str) -> str:
+        """Refuse what is no base64 or decodes to more than `MAX_IMAGE_BYTES`.
+
+        Args:
+            value: The base64 text.
+
+        Returns:
+            The text unchanged.
+
+        Raises:
+            ValueError: If the text is no valid base64, or the image is too large.
+        """
+        if len(value) * 3 // 4 > MAX_IMAGE_BYTES + 3:
+            raise ValueError(f"an image may have at most {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+        try:
+            base64.b64decode(value, validate=True)
+        except ValueError as exc:
+            raise ValueError("the image data is no valid base64") from exc
+        return value
+
+
 class ChatSendParams(BaseModel):
     """A user chat message.
 
@@ -105,6 +150,9 @@ class ChatSendParams(BaseModel):
     text: str = Field(min_length=1)
     delivery: Literal["queued", "inject"] = "queued"
     to: str = "main"
+    images: list[ChatImage] = Field(default_factory=list, max_length=MAX_IMAGES)
+    """Images attached to the message, for the main agent only. Claude sees them; the
+    checkers are told how many there were, not what they show."""
 
 
 class CommentAddParams(BaseModel):
@@ -771,6 +819,8 @@ class UserInput(Event):
     method: ClassVar[str] = "user.input"
     text: str
     source: Literal["user", "cross_session", "system"] = "user"
+    images: list[ChatImage] = Field(default_factory=list)
+    """The images the user attached to this message, for clients that can show them."""
     uuid: str = ""
     """The transcript entry's uuid, when Claude Code replays it (`replay-user-messages`). calu
     records it with the turn so that a later session can be forked before this prompt (D36)."""

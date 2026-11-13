@@ -225,3 +225,36 @@ async def test_claudes_text_is_shown_as_markdown_and_a_read_image_as_a_thumbnail
             "getComputedStyle(document.querySelector('#stream .turn')).marginBottom"
         )
         assert float(gap.removesuffix("px")) > 10
+
+
+async def test_an_image_is_attached_to_a_message_and_shown_with_it(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """Runs a scripted session and a browser; writes one small image into `tmp_path`.
+
+    The image chosen in the page must travel with the message and come back in the stream,
+    where the page shows it (the content policy has to allow that).
+    """
+    picture = tmp_path / "shot.png"
+    picture.write_bytes(PNG)
+    async with running(db_url, tmp_path, [[{"text": "I see one pixel."}]]) as (base, sid, _s):
+        await page.goto(f"{base}/sessions/{sid}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await page.set_input_files("#images", str(picture))
+        await page.wait_for_selector("#attached .attached img")
+        await page.fill("#text", "what is on this?")
+        await page.get_by_role("button", name="Send (queued)").click()
+        await page.wait_for_function(
+            "document.getElementById('stream').textContent.includes('I see one pixel.')"
+        )
+        # Sent: the waiting image is gone from the form and shown under the user's message.
+        assert await page.locator("#attached .attached").count() == 0
+        await page.wait_for_function(
+            "[...document.querySelectorAll('#stream .thumb img')]"
+            ".some((image) => image.complete && image.naturalWidth === 1)"
+        )
+        stream = await page.inner_text("#stream")
+        assert "what is on this?" in stream
+        # A click enlarges it in place.
+        await page.click("#stream .thumb img")
+        assert await page.locator("#stream .thumb img.large").count() == 1

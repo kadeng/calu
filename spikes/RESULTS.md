@@ -702,6 +702,20 @@ problem. The first attempt with a whole session failed: asyncio looked at the so
 to clean it up later, with the user's access (`PermissionError`); `cleanup_socket=False`
 and a removal through `as_root` fixed it.
 
+## An image in a chat message (D220, 2026-11-13, CLI 2.1.319)
+
+**Question:** does Claude Code take a user message of the stream whose content is a text
+block followed by an image block, and what does the replay of that message look like?
+
+**Setup:** `spikes/spike_chat_image.py`: one such message with a red square of 32 pixels and
+the question which colour fills it, with `replay-user-messages`.
+
+**Result:** the answer was "Red". The replayed user message had one `TextBlock` and no image
+block.
+
+**Conclusion:** the format works; the runner recognises the user's message by its text, as
+before, and adds the images it kept for that text to the `user.input` event.
+
 ## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
 
 **Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable

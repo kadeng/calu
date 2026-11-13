@@ -268,7 +268,23 @@
         }
         break;
       case "assistant.thinking": line("thinking", params.text); break;
-      case "user.input": line("user", params.text); break;
+      case "user.input": {
+        line("user", params.text);
+        // What the user attached, small; a click shows it large.
+        // (A browser does not open a `data:` address in a new tab, so the click enlarges it
+        // in place instead.)
+        for (const image of params.images || []) {
+          const holder = document.createElement("div");
+          holder.className = "line thumb";
+          const shown = picture(image, "");
+          shown.title = "click to enlarge";
+          shown.onclick = () => shown.classList.toggle("large");
+          holder.appendChild(shown);
+          stream.appendChild(holder);
+        }
+        stream.scrollTop = stream.scrollHeight;
+        break;
+      }
       case "tool.use":
         line("tool", toolText(params.input), "", { className: "tag", text: params.name });
         if (params.name === "Read") thumbnail((params.input || {}).file_path);
@@ -368,11 +384,62 @@
   }
   attach();
 
+  // Images for the next message: chosen with the file input or pasted into the text. They
+  // are sent with the message as base64 and reach Claude with it; the limits are the ones
+  // the session enforces (protocol/messages.py).
+  const MAX_IMAGES = 4;
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  let attached = [];
+  function picture(image, className) {
+    const shown = document.createElement("img");
+    shown.className = className;
+    shown.alt = "attached image";
+    shown.src = `data:${image.media_type};base64,${image.data}`;
+    return shown;
+  }
+  function renderAttached() {
+    const box = el("attached");
+    box.replaceChildren();
+    attached.forEach((image, index) => {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.title = "remove this image";
+      remove.className = "attached";
+      remove.appendChild(picture(image, "thumb-small"));
+      remove.append(" ×");
+      remove.onclick = () => { attached.splice(index, 1); renderAttached(); };
+      box.appendChild(remove);
+    });
+  }
+  function attach_files(files) {
+    for (const file of files) {
+      if (!IMAGE_TYPES.includes(file.type)) { say(`not attached: ${file.name || "that"} is no PNG, JPEG, GIF or WebP image`); continue; }
+      if (file.size > MAX_IMAGE_BYTES) { say(`not attached: ${file.name || "the image"} is larger than 5 MB`); continue; }
+      if (attached.length >= MAX_IMAGES) { say(`a message takes at most ${MAX_IMAGES} images`); break; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (attached.length >= MAX_IMAGES) return;
+        attached.push({ media_type: file.type, data: String(reader.result).split(",")[1] });
+        renderAttached();
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+  el("images").onchange = (event) => { attach_files(event.target.files); event.target.value = ""; };
+  el("text").addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData || {}).files || []].filter((file) => file.type.startsWith("image/"));
+    if (files.length) { event.preventDefault(); attach_files(files); }
+  });
+
   const message = (delivery) => {
     const text = el("text").value.trim();
-    if (!text) return;
-    send("chat.send", { text, delivery, to: el("to").value });
+    if (!text) { if (attached.length) say("write a line with the image: a message needs text"); return; }
+    if (attached.length && el("to").value !== "main") { say("an image can be sent to the main agent only"); return; }
+    send("chat.send", { text, delivery, to: el("to").value, images: attached });
     el("text").value = "";
+    attached = [];
+    renderAttached();
   };
   el("send").onclick = () => message("queued");
   el("steer").onclick = () => message("inject");

@@ -4,7 +4,7 @@ State on 2026-11-13: after the honesty redesign and the full-screen terminal cli
 and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
 (D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
 `calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
-Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D219, open
+Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D220, open
 questions §11, phases §12).
 
 ## Pick up here
@@ -89,8 +89,10 @@ requirement 27):
    - **Built:** the full-screen client works with the mouse throughout (D219 part 3:
      `Buttons` under the card, `KeyLine` for every line of key hints, the command list, the
      checkers list).
-   - **Asked for by the owner, not built:** images attached to chat messages, shown in the
-     web interface (D219 part 4).
+   - **Built (D220):** a chat message can carry images (`ChatImage` in the protocol,
+     `SdkRunner._write`); the web live view attaches, pastes and shows them. Checked with
+     the real Claude Code (`spikes/spike_chat_image.py`) and in a headless browser. The
+     checkers are told that there were images, not what they show.
    - **Next, decided by the owner and not built: the honesty checker answers HONEST or
      DISHONEST per file** (requirement 28, D217 with the design). Start there.
    - **Open:** the RDS variant together with `--user` (a token renewal reads the AWS profile
@@ -361,7 +363,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1924 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1928 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 34 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

@@ -32,7 +32,7 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
 from calu import asuser, localsocket
-from calu.protocol.messages import CLOSE_FELL_BEHIND
+from calu.protocol.messages import CLOSE_FELL_BEHIND, MAX_FRAME_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -267,13 +267,15 @@ async def _open(address: str) -> AsyncGenerator[ClientConnection]:
             # A session's root-owned socket (D215): checked to be root's alone before
             # anything is sent, and opened with root's file access.
             opened = await anyio.to_thread.run_sync(asuser.as_root, localsocket.connected, path)
-            connecting = unix_connect(None, "ws://localhost/", sock=opened)
+            connecting = unix_connect(
+                None, "ws://localhost/", sock=opened, max_size=MAX_FRAME_BYTES
+            )
         else:
-            connecting = unix_connect(str(path), "ws://localhost/")
+            connecting = unix_connect(str(path), "ws://localhost/", max_size=MAX_FRAME_BYTES)
         async with connecting as connection:
             yield connection
         return
-    async with ws_connect(address) as connection:
+    async with ws_connect(address, max_size=MAX_FRAME_BYTES) as connection:
         yield connection
 
 

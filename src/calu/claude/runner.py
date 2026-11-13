@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 
 from calu.checkers.model import Step
 from calu.checkers.result_checker import SubagentResult
-from calu.protocol.messages import AgentInfo, ContextUsage, Event
+from calu.protocol.messages import AgentInfo, ChatImage, ContextUsage, Event
 
 EventSink = Callable[[Event], Awaitable[None]]
 """Receives events in the order Claude produced them. Must not block for long.
@@ -248,7 +248,7 @@ class ClaudeRunner(Protocol):
         """Return once the session accepts `send` calls."""
         ...
 
-    async def send(self, text: str, priority: Priority) -> None:
+    async def send(self, text: str, priority: Priority, images: Sequence[ChatImage] = ()) -> None:
         """Send a message of the human user to the main agent.
 
         Only text that a human client sent belongs here (a prompt, a queued or injected chat
@@ -259,6 +259,8 @@ class ClaudeRunner(Protocol):
         Args:
             text: The message text.
             priority: "next" delivers it after the running tool calls, "later" after the turn.
+            images: Images the user attached; they reach Claude with the text, and the
+                runner reports them with the `UserInput` of that text.
         """
         ...
 

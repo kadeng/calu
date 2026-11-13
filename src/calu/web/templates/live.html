@@ -46,7 +46,11 @@
     <select id="to" title="who reads it"><option value="main">the main agent</option></select>
     <span class="muted" id="queue"></span>
   </div>
-  <textarea id="text" rows="3" placeholder="a message for Claude"></textarea>
+  <textarea id="text" rows="3" placeholder="a message for Claude (an image can be pasted)"></textarea>
+  <p class="row">
+    <input type="file" id="images" accept="image/png,image/jpeg,image/gif,image/webp" multiple>
+    <span id="attached"></span>
+  </p>
   <p class="row">
     <button class="primary" id="send">Send (queued)</button>
     <button id="steer">Steer (read after the running tool calls)</button>

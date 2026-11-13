@@ -65,6 +65,7 @@ from calu.protocol.messages import (
     AssistantDelta,
     AssistantText,
     AssistantThinking,
+    ChatImage,
     ContextUsage,
     Event,
     RateLimit,
@@ -122,6 +123,8 @@ class FakeRunner:
         self._ready = anyio.Event()
         self._send, self._receive = anyio.create_memory_object_stream[str](100)
         self._next_queue: list[str] = []
+        self._images: dict[str, list[ChatImage]] = {}
+        """The images sent with a text, until that text is reported."""
         self._cancel: anyio.CancelScope | None = None
         self._interrupted = False
         self.agents: dict[str, AgentInfo] = {}
@@ -194,7 +197,13 @@ class FakeRunner:
             self._cancel = scope
             self._ready.set()
             async for text in self._receive:
-                await sink(UserInput(text=text, source=user_message_source(text)))
+                await sink(
+                    UserInput(
+                        text=text,
+                        source=user_message_source(text),
+                        images=self._images.pop(text, []),
+                    )
+                )
                 await self._turn(text, gate, sink)
                 while self._follow_up:
                     # Like Claude Code (D158): the turn has ended and the session is idle; when
@@ -207,7 +216,7 @@ class FakeRunner:
         """Return once `run` has started."""
         await self._ready.wait()
 
-    async def send(self, text: str, priority: Priority) -> None:
+    async def send(self, text: str, priority: Priority, images: Sequence[ChatImage] = ()) -> None:
         """Queue a user message.
 
         A "next" message during a turn is reported after the current action of the main agent;
@@ -216,7 +225,10 @@ class FakeRunner:
         Args:
             text: The message text.
             priority: "next" or "later".
+            images: Images the user attached; reported with the message's `UserInput`.
         """
+        if images:
+            self._images[text] = list(images)
         if priority == "next" and self._in_turn:
             self._next_queue.append(text)
         else:
@@ -326,7 +338,8 @@ class FakeRunner:
                 return
             await self._action(action, agent, gate, sink)
             while self._next_queue and agent is None:
-                await sink(UserInput(text=self._next_queue.pop(0)))
+                queued = self._next_queue.pop(0)
+                await sink(UserInput(text=queued, images=self._images.pop(queued, [])))
 
     async def _action(
         self, action: dict[str, Any], agent: str | None, gate: ToolGate, sink: EventSink
