@@ -476,6 +476,13 @@ escalation resolved from the database alone.
    a line `[clients] root clients, without a token: unix:/run/calu/sessions/<id>.sock`, and
    `sudo ls -l /run/calu/sessions` must show that socket as `srw------- root root`; `calu
    token list` must show no new token for the `--sudo` client (D215). **Never run.**
+32. The web interface's login (D216), after `sudo calu setup`: `calu web` must print the
+   address without a token; the browser must show a page asking for the admin password, say
+   "That is not the admin password" after a wrong one (and answer the next attempt later),
+   and show the fleet after the right one; saving a setting must then work. `calu web
+   --sudo` must do the same with the process running as root (`ps -o user= -C calu`). On a
+   database without a password for `calu_admin`, the address must carry `?token=`. Run on
+   2026-11-13 only as a test of the gate against the database; **not in a browser**.
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of

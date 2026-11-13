@@ -18,6 +18,7 @@ from psycopg import sql
 
 from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
 from calu.db import migrate
+from calu.db.connection import open_stored
 from calu.db.target import PasswordAuth, RdsIamAuth, Target
 from calu.defaults.instructions import legacy_instructions
 
@@ -377,6 +378,53 @@ def admin_login(place: Target, password: str) -> Target:
         TargetError: If `place` finds its server through a libpq service file.
     """
     return place.for_role(ADMIN_ROLE, PasswordAuth(password=password))
+
+
+async def admin_can_log_in(conn: psycopg.AsyncConnection) -> bool:
+    """Tell whether the role `calu_admin` exists and may log in.
+
+    Args:
+        conn: An open connection of the owner or of `calu_admin` itself.
+
+    Returns:
+        True if `calu setup` has given the role a password; False before that, and for a
+        database without the role (schema older than version 33).
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    cur = await conn.execute("SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ADMIN_ROLE,))
+    row = await cur.fetchone()
+    return bool(row and row[0])
+
+
+async def is_admin_password(place: Target, password: str) -> bool:
+    """Ask the database whether `password` is the admin password, by logging in with it.
+
+    Side effect: one connection as `calu_admin`, opened and closed.
+
+    Args:
+        place: Any login of the database (`admin_login` takes the place from it).
+        password: The password to check.
+
+    Returns:
+        True if the server accepted the login; False if it refused the password.
+
+    Raises:
+        psycopg.OperationalError: If the database cannot be reached or refuses the login
+            for another reason than the password.
+        TargetError: If `place` cannot be taken over (`Target.for_role`).
+    """
+    if not password:
+        return False
+    try:
+        conn = await open_stored(admin_login(place, password), False)
+    except psycopg.OperationalError as exc:
+        if "password authentication failed" in str(exc):
+            return False
+        raise
+    await conn.close()
+    return True
 
 
 async def enable_admin_login(conn: psycopg.AsyncConnection, password: str) -> None:

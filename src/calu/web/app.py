@@ -202,7 +202,11 @@ def check_host(host: str) -> None:
 
 
 def create_app(
-    db: Db, git_url_template: str = "", token: str | None = None, host_name: str = ""
+    db: Db,
+    git_url_template: str = "",
+    token: str | None = None,
+    host_name: str = "",
+    check_password: PasswordCheck | None = None,
 ) -> Starlette:
     """Build the web application on an open database connection.
 
@@ -218,6 +222,8 @@ def create_app(
             neither GitHub, GitLab nor Bitbucket ("" guesses from the project's remote).
         token: The login token (`TokenGate`, D161). `calu web` always passes one; None leaves
             the gate out, for in-process tests.
+        check_password: Says whether a typed password is the admin password: with it and a
+            token, a browser without a login is asked for the password (D216).
         host_name: The only host name a request may carry (`LocalOnly`). `calu web` always
             passes `WEB_HOST_NAME`; "" accepts every loopback name, for in-process tests.
 
@@ -279,7 +285,7 @@ def create_app(
         Middleware(LocalOnly, host_name=host_name),
     ]
     if token is not None:
-        middleware.append(Middleware(TokenGate, token=token))
+        middleware.append(Middleware(TokenGate, token=token, check_password=check_password))
     return Starlette(
         routes=routes,
         middleware=middleware,
@@ -430,6 +436,16 @@ def _header(scope: Any, name: bytes) -> str:
     return ""
 
 
+PasswordCheck = Callable[[str], Awaitable[bool]]
+"""Says whether a typed password is the admin password (`TokenGate`)."""
+
+LOGIN_PATH = "/_login"
+"""Where the password page posts to."""
+
+LOGIN_DELAY_MAX_S = 8.0
+"""Longest wait after a wrong password."""
+
+
 class TokenGate:
     """Let through only what a logged-in browser of the operator sends (PLAN.md D161).
 
@@ -463,15 +479,23 @@ class TokenGate:
     restart prints a new token and forgets every login.
     """
 
-    def __init__(self, app: Any, token: str) -> None:
+    def __init__(self, app: Any, token: str, check_password: PasswordCheck | None = None) -> None:
         """Wrap the application.
 
         Args:
             app: The ASGI application.
             token: The secret a browser logs in with, as `?token=`.
+            check_password: Says whether a typed password is the admin password; with it, a
+                browser without a login gets a page that asks for the password (PLAN.md
+                D216). None leaves the token as the only login.
         """
         self.app = app
         self.token = token
+        self.check_password = check_password
+        self._failed = 0
+        """Wrong passwords in a row; each one makes the next answer wait longer."""
+        self._checking = anyio.Lock()
+        """One password is checked at a time, so that guesses cannot run side by side."""
         self.browsers: dict[str, str] = {}
         """Session id -> key, one entry per login, oldest first (at most `MAX_BROWSERS`)."""
 
@@ -500,6 +524,13 @@ class TokenGate:
             return
         method = scope.get("method", "GET")
         if method == "GET" and await self._login(scope, send):
+            return
+        if self.check_password is not None and scope.get("path") == LOGIN_PATH:
+            if method == "POST":
+                await self._password_login(scope, receive, send)
+                return
+        if key is None and self.check_password is not None and method == "GET":
+            await self._ask_password(send, self._onward(scope), "")
             return
         if key is None:
             await _plain(
@@ -547,13 +578,97 @@ class TokenGate:
         offered = (query.get("token") or [""])[0]
         if not offered or not _same(offered, self.token):
             return False
+        await self._logged_in(send, self._onward(scope))
+        return True
+
+    @staticmethod
+    def _onward(scope: Any) -> str:
+        """Return the address of a request without its login token, as a path on this host.
+
+        Args:
+            scope: The ASGI scope.
+
+        Returns:
+            The path and query; one leading slash only, because "//host/" would be read as
+            an address on another host.
+        """
+        query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+        rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
+        return "/" + str(scope.get("path", "/")).lstrip("/") + (f"?{rest}" if rest else "")
+
+    async def _ask_password(self, send: Any, onward: str, problem: str) -> None:
+        """Answer with the page that asks for the admin password.
+
+        Args:
+            send: The ASGI send channel.
+            onward: Where to go after the login.
+            problem: What was wrong with the last attempt, or "".
+        """
+        page = TEMPLATES.get_template("password.html").render(
+            action=LOGIN_PATH, onward=onward, problem=problem
+        )
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"text/html; charset=utf-8"),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": page.encode("utf-8")})
+
+    async def _password_login(self, scope: Any, receive: Any, send: Any) -> None:
+        """Check a typed admin password and log the browser in, or ask again.
+
+        One password is checked at a time, and after a wrong one the answer waits
+        `min(LOGIN_DELAY_MAX_S, 2 ** wrong_in_a_row / 2)` seconds, so guessing is slow.
+
+        Args:
+            scope: The ASGI scope of the POST to `LOGIN_PATH`.
+            receive: The ASGI receive channel.
+            send: The ASGI send channel.
+        """
+        assert self.check_password is not None
+        body = await _form_body(scope, receive)
+        fields = parse_qs((body or b"").decode("utf-8", "replace"), keep_blank_values=True)
+        password = (fields.get("password") or [""])[0]
+        onward = "/" + (fields.get("onward") or ["/"])[0].lstrip("/")
+        if onward.startswith(LOGIN_PATH):
+            onward = "/"
+        problem = "Type the admin password."
+        async with self._checking:
+            if password:
+                try:
+                    right = await self.check_password(password)
+                except Exception as exc:
+                    log.warning("checking a login password failed: %s", exc)
+                    right, problem = False, "The database could not be asked. Try again."
+                else:
+                    problem = "That is not the admin password."
+                if right:
+                    self._failed = 0
+                    await self._logged_in(send, onward)
+                    return
+                self._failed += 1
+                await anyio.sleep(min(LOGIN_DELAY_MAX_S, 2**self._failed / 2))
+        await self._ask_password(send, onward, problem)
+
+    async def _logged_in(self, send: Any, onward: str) -> None:
+        """Remember a new login and answer with the page that stores its key.
+
+        Side effects: a new session id and key; the oldest login beyond `MAX_BROWSERS` is
+        forgotten.
+
+        Args:
+            send: The ASGI send channel.
+            onward: Where the page goes next.
+        """
         session_id, key = secrets.token_urlsafe(24), secrets.token_urlsafe(24)
         self.browsers[session_id] = key
         while len(self.browsers) > MAX_BROWSERS:
             del self.browsers[next(iter(self.browsers))]
-        rest = urlencode([(k, v) for k, vs in query.items() if k != "token" for v in vs])
-        # One leading slash only: "//host/" would be read as an address on another host.
-        onward = "/" + str(scope.get("path", "/")).lstrip("/") + (f"?{rest}" if rest else "")
         page = TEMPLATES.get_template("login.html").render(key=key, onward=onward)
         cookie = f"{SESSION_COOKIE}={session_id}; HttpOnly; SameSite=Strict; Path=/"
         await send(
@@ -568,7 +683,6 @@ class TokenGate:
             }
         )
         await send({"type": "http.response.body", "body": page.encode("utf-8")})
-        return True
 
     def _key_of(self, scope: Any) -> str | None:
         """Find the login the request's cookie names.

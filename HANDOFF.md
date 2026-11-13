@@ -4,7 +4,7 @@ State on 2026-11-13: after the honesty redesign and the full-screen terminal cli
 and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
 (D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
 `calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
-Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D215, open
+Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D216, open
 questions §11, phases §12).
 
 ## Pick up here
@@ -77,10 +77,9 @@ requirement 27):
      (root, 0600); a root client that finds it root's alone connects without a token
      (`src/calu/localsocket.py`, `asuser.as_root`). Run in a container; a root client
      attaching over it to a real session was not run.
-   - **Asked by the owner, answered, not built:** the web interface in the privileged
-     setup. It has a login already (D161: a token in the printed address, then a cookie and
-     a key). Proposed: `calu web --sudo`, and a login with the admin password instead of
-     the printed token.
+   - **Built (D216), not tried in a browser:** the web interface signs a browser in with
+     the admin password (checked by the database as `calu_admin`), and `calu web --sudo`
+     runs it as root for the user. `docs/TESTING.md` item 32.
    - **Open:** the RDS variant together with `--user` (a token renewal reads the AWS profile
      as root after the switch: give that one thread root's file identity back, which the
      spike shows is possible); Claude Code's sandbox under the other uid (not switched on in
@@ -349,7 +348,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1916 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1918 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 33 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

@@ -889,14 +889,26 @@ that token is refused), and with 4002 when the client fell more than 1000 events
 A browser shows every session of every host at once:
 
 ```bash
-calu web          # prints http://calu.localhost:8800/?token=...: open it once per browser
+calu web          # prints http://calu.localhost:8800/ : sign in with the admin password
+calu web --sudo   # the same as root, for you: Claude Code cannot reach the process
 ```
+
+A browser that is not signed in gets a page that asks for the admin password. The database
+checks it (it is the password of the role `calu_admin`, which `calu setup` sets); calu keeps
+it nowhere, and each wrong password makes the next answer wait longer. On a database where
+`calu setup` has not given that role a password yet, `calu web` prints an address with a
+login token instead (`...?token=...`), to be opened once per browser.
+
+The web interface can change what steers the checkers, so it holds a database login in
+memory for as long as it runs. Started as yourself, that process is within reach of
+whatever Claude Code runs unsandboxed as you; `calu web --sudo` runs it as root, with the
+login read from `/etc/calu`.
 
 The interface answers only under the host name `calu.localhost`, although it listens on
 127.0.0.1: a browser keeps a login per host name, and a name of its own keeps that login apart
 from whatever else runs on the machine's loopback ports. Chrome, Edge and Firefox resolve
 `*.localhost` by themselves; for a browser or tool that does not, add `127.0.0.1 calu.localhost`
-to the hosts file. Opening the printed address logs that browser in until `calu web` stops.
+to the hosts file. A login lasts until `calu web` stops.
 Pages that change something (answering an escalation, saving settings) need JavaScript. While
 the database is unreachable the pages say so and reload by themselves; `calu web` reconnects.
 

@@ -54,6 +54,7 @@ is read as one line from stdin (for scripts and tests).
 import argparse
 import asyncio
 import contextlib
+import functools
 import getpass
 import json
 import math
@@ -119,10 +120,12 @@ from calu.serve import os_user as serve_os_user
 from calu.serve import serve as serve_sessions
 from calu.session_requests import SessionRequest
 from calu.setup import (
+    ADMIN_ROLE,
     SetupRefused,
     admin_login,
     enable_admin_login,
     enable_operator_login,
+    is_admin_password,
     preflight,
     seed_defaults,
     session_can_log_in,
@@ -2142,7 +2145,12 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         check_host(args.host)
     except NotLocal as exc:
         raise CliError(str(exc)) from exc
+    run_as = _client_user(args)
     url = _admin_secret(store)
+    if run_as is not None:
+        # As root for a user (`calu web --sudo`): the login was read from root's store and
+        # stays in this process's memory; from here on the process touches files as the user.
+        _become_client_of(run_as)
 
     async def serve() -> None:
         """Open the connection, build the app and serve until interrupted."""
@@ -2157,15 +2165,37 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
             # The login token (D161): any local process could otherwise decide escalations,
             # Claude's own `curl` included. New on every start, never stored.
             token = secrets.token_urlsafe(24)
-            app = create_app(db, git_url_template=template, token=token, host_name=WEB_HOST_NAME)
+            # Where `calu setup` gave `calu_admin` its password, a browser logs in with the
+            # admin password, which the database checks (D216); the token is then not shown.
+            place = Target.parse(url)
+            by_password = bool(
+                await db.scalar(
+                    "SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ADMIN_ROLE,)
+                )
+            )
+            app = create_app(
+                db,
+                git_url_template=template,
+                token=token,
+                host_name=WEB_HOST_NAME,
+                check_password=functools.partial(is_admin_password, place) if by_password else None,
+            )
             # Flushed: this is the one line a user needs, and the process then serves for
             # hours. Without it the address sits in a buffer whenever stdout is a pipe -- a
             # log file, a systemd unit, `tmux pipe-pane` -- and the user sees nothing (D125).
-            print(
-                f"calu web on http://{WEB_HOST_NAME}:{args.port}/?token={token}"
-                " (open it once per browser; the token is your login, keep it to yourself)",
-                flush=True,
-            )
+            if by_password:
+                print(
+                    f"calu web on http://{WEB_HOST_NAME}:{args.port}/ (sign in with the "
+                    "admin password)",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"calu web on http://{WEB_HOST_NAME}:{args.port}/?token={token}"
+                    " (open it once per browser; the token is your login, keep it to "
+                    "yourself). `calu setup` makes the admin password the login instead.",
+                    flush=True,
+                )
             config = uvicorn.Config(
                 app, host=args.host, port=args.port, log_level="warning", access_log=False
             )
@@ -3928,6 +3958,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("web", help="the herd overview in a browser (127.0.0.1 only)")
     p.add_argument("--host", default="127.0.0.1", help="address to bind (loopback only)")
     p.add_argument("--port", type=int, default=8800)
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="run the web interface as root through sudo, for you: it reads calu's "
+        "credentials in /etc/calu, and nothing Claude Code runs can reach it",
+    )
+    p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_web)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")
