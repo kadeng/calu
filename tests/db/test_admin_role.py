@@ -3,7 +3,6 @@
 Runs against the test database; creates the roles and a schema there and prints nothing.
 """
 
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import psycopg
@@ -19,21 +18,6 @@ from calu.setup import ADMIN_ROLE, admin_login, enable_admin_login, setup
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
 PASSWORD = "what a person types"
-
-
-@pytest.fixture(autouse=True)
-async def no_login_left_behind(db_url: str) -> AsyncGenerator[None]:
-    """Take the login of `calu_admin` away again after each test.
-
-    Roles belong to the whole test server, not to one test database: a login left behind
-    would make `calu web` in a later test offer the password login instead of its token.
-    """
-    yield
-    owner = await connect(db_url)
-    try:
-        await owner.execute("ALTER ROLE calu_admin NOLOGIN")
-    finally:
-        await owner.close()
 
 
 async def prepared(db_url: str) -> Target:

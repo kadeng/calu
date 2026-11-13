@@ -67,6 +67,13 @@ async def db_url() -> AsyncIterator[str]:
     except psycopg.OperationalError as exc:
         pytest.skip(f"test database not reachable: {exc}")
     try:
+        # Roles belong to the whole test server, not to one test database. A test that ran
+        # `calu setup` leaves `calu_admin` with a login, and `calu web` then offers the
+        # password login instead of its token (D216): each test starts without that login.
+        await admin.execute(
+            "DO $$ BEGIN IF EXISTS (SELECT FROM pg_roles WHERE rolname = 'calu_admin') THEN "
+            "ALTER ROLE calu_admin NOLOGIN; END IF; END $$"
+        )
         await admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
         params = conninfo_to_dict(base)
         params["dbname"] = name
