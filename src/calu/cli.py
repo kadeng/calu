@@ -182,6 +182,65 @@ login of `calu_admin` there with an empty password. The full-screen client is gi
 that it can change settings in the database of the session it is attached to."""
 
 
+_held: list[Target] = []
+"""The database login a client that runs as root keeps in memory (`calu attach --sudo`): read
+once from root's store, then used for every later step (minting and revoking tokens,
+switching sessions, changing settings), because after the switch to the user's file identity
+the store cannot be read again, and so that nothing is asked twice (PLAN.md D214)."""
+
+_hold: list[bool] = []
+"""Non-empty while the next credential a herd command loads is to be kept in `_held`."""
+
+
+def _client_user(args: argparse.Namespace) -> RunAs | None:
+    """Decide whether a client (`calu attach`, `calu start`) runs as root for a user (D214).
+
+        not root, --sudo      ──► calu runs again as root through sudo, with --user <you>
+        root, --user X        ──► X: the client keeps its login in memory and does its file
+                                  access and starts its programs as X
+        root, no --user       ──► None: an ordinary client of root
+        not root, no --sudo   ──► None: an ordinary client
+
+    Side effect: with a user, the next credential a herd command loads is kept in memory.
+
+    Args:
+        args: Parsed arguments (`user`, `sudo`, `from_sudo`).
+
+    Returns:
+        The user the client works for, or None.
+
+    Raises:
+        CliError: As `_run_as`.
+    """
+    if not getattr(args, "sudo", False) and getattr(args, "user", None) is None:
+        return None
+    run_as = _run_as(args)
+    if run_as is not None:
+        _hold[:] = [True]
+    return run_as
+
+
+def _become_client_of(run_as: RunAs) -> None:
+    """Switch a client that runs as root to the file identity of its user, once.
+
+    Side effects: `calu.asuser.enter`; points `XDG_CONFIG_HOME` at the user's own
+    configuration, where the client's `tui.toml` is.
+
+    Args:
+        run_as: The user.
+
+    Raises:
+        CliError: If the switch is not possible.
+    """
+    if asuser.active() is not None:
+        return
+    try:
+        asuser.enter(run_as)
+    except asuser.UserError as exc:
+        raise CliError(str(exc)) from exc
+    os.environ["XDG_CONFIG_HOME"] = str(Path(run_as.home) / ".config")
+
+
 def _remember_admin_password(password: bytes | bytearray) -> None:
     """Keep the admin password that was just typed, for `calu setup` (see `_typed`).
 
@@ -1402,7 +1461,10 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
     _check_conversation_choice(args)
     if args.fork_before_turn is not None and not args.resume:
         raise CliError("--fork-before-turn needs --resume <session id>")
+    run_as = _client_user(args)
     user, host = serve_os_user(), socket.gethostname()
+    if run_as is not None:
+        user = run_as.user or str(run_as.uid)
     wanted = SessionRequest(
         hostname=host,
         os_user=user,
@@ -1456,7 +1518,7 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.no_attach:
         print(f"[clients] attach with: calu attach --session {endpoint.session_id}", flush=True)
         return
-    _attach(endpoint, store, args.plain, 0, args.thinking)
+    _attach(endpoint, store, args.plain, 0, args.thinking, run_as)
 
 
 def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1794,7 +1856,9 @@ def _herd_value[T](
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
-    for name in OPERATOR_FIRST:
+    if _held:
+        return asyncio.run(_with_admin_value(_held[0], work))
+    for name in ("admin", "operator") if _hold else OPERATOR_FIRST:
         if name in store:
             if not may_ask and store.needs_password(name):
                 raise CliError(
@@ -1809,6 +1873,8 @@ def _herd_value[T](
             try:
                 with contextlib.suppress(ValueError):  # also TargetError: no usable place
                     _admin_place[:] = [admin_login(Target.parse(url), "")]
+                    if _hold:
+                        _held[:] = [Target.parse(url)]
                 return asyncio.run(_with_admin_value(url.decode(), work))
             finally:
                 wipe(url)
@@ -1820,7 +1886,7 @@ def _herd_value[T](
     )
 
 
-async def _with_admin_value[T](url: str, work: Callable[[Db], Awaitable[T]]) -> T:
+async def _with_admin_value[T](url: str | Target, work: Callable[[Db], Awaitable[T]]) -> T:
     """Connect, run `work`, close the connection and return its value.
 
     Args:
@@ -1883,12 +1949,18 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
         CliError: If the address cannot be reached, the token is refused, or no single session
             of this directory is running.
     """
+    run_as = _client_user(args)
     endpoint = _endpoint_of(args, store, "calu attach")
-    _attach(endpoint, store, args.plain, args.after_seq, args.thinking)
+    _attach(endpoint, store, args.plain, args.after_seq, args.thinking, run_as)
 
 
 def _attach(
-    endpoint: Endpoint, store: CredentialStore, plain: bool, after_seq: int, thinking: bool
+    endpoint: Endpoint,
+    store: CredentialStore,
+    plain: bool,
+    after_seq: int,
+    thinking: bool,
+    run_as: RunAs | None = None,
 ) -> None:
     """Run the terminal client on an endpoint until it ends, then revoke a minted token.
 
@@ -1898,11 +1970,17 @@ def _attach(
         plain: The line client also on a terminal.
         after_seq: Continue after this event sequence number.
         thinking: The line client also prints Claude's thinking.
+        run_as: The user a client that runs as root works for (`_client_user`): the client
+            then does its file access and starts its programs as that user, and uses the
+            login it holds in memory for settings and for switching sessions.
 
     Raises:
-        CliError: If the address cannot be reached, the token is refused, or the client ended
-            with an error.
+        CliError: If the address cannot be reached, the token is refused, the user cannot be
+            switched to, or the client ended with an error.
     """
+    if run_as is not None:
+        _become_client_of(run_as)
+    database = _held[0] if _held else (_admin_place[0] if _admin_place else None)
     try:
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
@@ -1911,7 +1989,7 @@ def _attach(
                     endpoint.address,
                     endpoint.token,
                     after_seq,
-                    database=_admin_place[0] if _admin_place else None,
+                    database=database,
                 )
                 if ended.switch_to is None:
                     break
@@ -3772,6 +3850,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="the line client instead of the full-screen one (a pipe always gets the line client)",
     )
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="run this client as root through sudo, for you: it reads calu's credentials in "
+        "/etc/calu, asks one password, and nothing Claude Code runs can reach it",
+    )
+    p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_start)
 
     p = sub.add_parser("attach", help="terminal client for a running session")
@@ -3792,6 +3878,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="the line client instead of the full-screen one (a pipe always gets the line client)",
     )
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="run this client as root through sudo, for you: it reads calu's credentials in "
+        "/etc/calu, asks one password, and nothing Claude Code runs can reach it",
+    )
+    p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_attach)
 
     p = sub.add_parser("acp", help="serve a running session to an ACP editor (stdin/stdout)")

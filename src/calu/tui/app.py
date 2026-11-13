@@ -52,6 +52,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Size
 from textual.widgets import Static
 
+from calu import herd
 from calu.acp.modes import LADDER
 from calu.session_requests import SessionRequest
 from calu.tui import completion, gittool, render, settings
@@ -2659,6 +2660,113 @@ class CaluApp(App[None]):
         resume = None if rest == "new" else (rest or self.model.claude_session_id)
         other = resume != self.model.claude_session_id
         self._spawn(self._restart(resume, self.next_model, self.next_effort, reload=other))
+
+    def _with_sessions(self, then: Callable[[list[herd.SessionRow]], None]) -> None:
+        """Read the running sessions from the database, asking for a password if needed.
+
+        Args:
+            then: Called with the sessions; not called when they cannot be read (the reason
+                is shown).
+        """
+        problem = self.admin.problem()
+        if problem is not None:
+            self.flash(f"not read here; use: calu sessions · {problem}", error=True)
+            return
+
+        def ask(problem: str = "") -> None:
+            """Ask for the password if one is needed, then read.
+
+            Args:
+                problem: What was wrong with the password given before, or "".
+            """
+
+            async def read(password: str | None) -> None:
+                """Read the sessions and hand them on, or say why not.
+
+                Args:
+                    password: The credential's password, or None if none is needed.
+                """
+                try:
+                    rows = await self.admin.sessions(password)
+                except PasswordNeeded as error:
+                    ask(str(error))
+                    return
+                except AdminFailed as error:
+                    self.flash(f"the sessions could not be read: {error}", error=True)
+                    return
+                then(rows)
+
+            def answered(password: str | None) -> None:
+                """Go on with the password; without one nothing is read.
+
+                Args:
+                    password: What the user typed, or None.
+                """
+                if password is not None:
+                    self._spawn(read(password))
+
+            if self.admin.needs_password():
+                self.push_screen(
+                    PasswordScreen("It reads the list of sessions.", self.palette, problem),
+                    answered,
+                )
+            else:
+                self._spawn(read(None))
+
+        ask()
+
+    def _cmd_running(self, rest: str) -> None:
+        """Show the sessions that run (`/running`).
+
+        Args:
+            rest: Ignored.
+        """
+
+        def show(rows: list[herd.SessionRow]) -> None:
+            """Open the page.
+
+            Args:
+                rows: The running sessions.
+            """
+            body = [Text(row.line()) for row in rows] or [
+                Text("no session is running", self.palette.muted)
+            ]
+            body.append(Text(""))
+            body.append(Text("/switch <beginning of an id> attaches to one", self.palette.muted))
+            self._page("Sessions", body)
+
+        self._with_sessions(show)
+
+    def _cmd_switch(self, rest: str) -> None:
+        """Attach this client to another running session (`/switch <id>`).
+
+        The client ends with the session's id in `switch_to`; `calu attach` attaches to it.
+
+        Args:
+            rest: The beginning of the session's id.
+        """
+        wanted = rest.strip()
+        if not wanted:
+            self.flash("usage: /switch <beginning of a session id> · /running lists them")
+            return
+
+        def switch(rows: list[herd.SessionRow]) -> None:
+            """Pick the one session the id names and end the client.
+
+            Args:
+                rows: The running sessions.
+            """
+            found = [row for row in rows if row.id.startswith(wanted)]
+            if len(found) != 1:
+                self.flash(
+                    f"{len(found)} running sessions start with {wanted}; /running lists them",
+                    error=True,
+                )
+                return
+            self.switch_to = found[0].id
+            self.exit()
+
+        self._with_sessions(switch)
 
     def _cmd_new(self, rest: str) -> None:
         """Ask `calu serve` for a new session in this directory and switch to it (`/new`).

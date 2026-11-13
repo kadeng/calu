@@ -29,7 +29,7 @@ from typing import Protocol
 import anyio
 import psycopg
 
-from calu import admin, session_requests
+from calu import admin, herd, session_requests
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
@@ -94,6 +94,21 @@ class AdminAccess(Protocol):
         Returns:
             True for a credential stored with a password; False without one or without the
             credential.
+        """
+        ...
+
+    async def sessions(self, password: str | None) -> list[herd.SessionRow]:
+        """List the sessions that run, of every directory and host, newest first.
+
+        Args:
+            password: The credential's password, or None if none is needed.
+
+        Returns:
+            The sessions that have not ended.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the database cannot be reached.
         """
         ...
 
@@ -162,6 +177,19 @@ class AdminAccess(Protocol):
         ...
 
 
+def _has_secret(database: Target) -> bool:
+    """Tell whether a login can connect as it is, without a typed password.
+
+    Args:
+        database: The login.
+
+    Returns:
+        True for a password login with a password, and for a login that authenticates
+        another way (a token); False for a password login whose password is empty.
+    """
+    return not isinstance(database.auth, PasswordAuth) or bool(database.auth.password)
+
+
 class NoServerAnswered(AdminFailed):
     """No `calu serve` claimed a session request; it was withdrawn."""
 
@@ -223,7 +251,7 @@ class StoreAdmin:
             store cannot be read.
         """
         if self.database is not None:
-            return True
+            return not _has_secret(self.database)
         try:
             return CREDENTIAL in self.store and self.store.needs_password(CREDENTIAL)
         except CredentialError:
@@ -236,7 +264,8 @@ class StoreAdmin:
         """Log in as `calu_admin` with the typed password, run `work` and close.
 
         Args:
-            database: The login of `calu_admin` without its password.
+            database: The login of `calu_admin` without its password, or a complete login
+                that a client running as root holds in memory (then `password` is not used).
             password: The admin password the user typed, or None.
             work: `async (Db) -> T`.
 
@@ -244,12 +273,16 @@ class StoreAdmin:
             What `work` returned.
 
         Raises:
-            PasswordNeeded: If no password was given, or the database refuses it.
+            PasswordNeeded: If a password is needed and none was given, or the database
+                refuses it.
             AdminFailed: If the database cannot be reached or refuses the change.
         """
-        if not password:
+        if _has_secret(database):
+            login = database
+        elif not password:
             raise PasswordNeeded("changing this needs the admin password")
-        login = database.model_copy(update={"auth": PasswordAuth(password=password)})
+        else:
+            login = database.model_copy(update={"auth": PasswordAuth(password=password)})
         try:
             try:
                 with anyio.fail_after(CONNECT_TIMEOUT_S):
@@ -323,6 +356,21 @@ class StoreAdmin:
         except psycopg.Error as error:
             first = str(error).strip().splitlines()[0] if str(error).strip() else "no detail"
             raise AdminFailed(f"the database refused: {first}") from error
+
+    async def sessions(self, password: str | None) -> list[herd.SessionRow]:
+        """List the sessions that run, of every directory and host, newest first.
+
+        Args:
+            password: The credential's password, or None if none is needed.
+
+        Returns:
+            The sessions that have not ended.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the database cannot be reached.
+        """
+        return await self._with_db(password, herd.sessions)
 
     async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
         """Ask the `calu serve` of this machine for a session and wait until it runs (D208).

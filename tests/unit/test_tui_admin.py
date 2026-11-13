@@ -14,7 +14,7 @@ import pytest
 
 pytest.importorskip("textual")
 
-from calu import admin
+from calu import admin, herd
 from calu.credentials import CredentialStore, KdfParams
 from calu.tui import adminaccess, gittool
 from calu.tui.actions import Actions
@@ -810,3 +810,58 @@ async def test_with_the_sessions_database_known_nothing_is_read_from_the_store(t
     with pytest.raises(AdminFailed) as failed:
         await access.set_honesty_mode("track", None, "typed")
     assert not isinstance(failed.value, PasswordNeeded)
+
+
+# ------------------------------------------------------------------ /running and /switch (D214)
+
+
+def running_row(session_id: str, directory: str) -> herd.SessionRow:
+    """Build a row of a running session for the scripted database access.
+
+    Args:
+        session_id: The session's id.
+        directory: Its project directory.
+
+    Returns:
+        The row.
+    """
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    return herd.SessionRow(
+        id=session_id,
+        hostname="box",
+        os_user="ada",
+        directory=directory,
+        state="idle",
+        state_since=now,
+        started_at=now,
+        ended_at=None,
+        claude_session_id=None,
+        open_escalations=0,
+    )
+
+
+async def test_switch_ends_the_client_for_the_one_session_the_id_names() -> None:
+    """With a scripted session and a stand-in for the database; nothing is attached."""
+    session = FakeSession()
+    access = FakeAdmin(session)
+    access.running = [running_row("aaaa1111", "/w/one"), running_row("bbbb2222", "/w/two")]
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/running")
+        assert isinstance(run.app.screen, TextScreen)
+        await run.press("escape")
+        await command(run, "/switch zz")
+        await run.pilot.pause()
+        assert run.app.switch_to is None and "0 running sessions start with zz" in run.app.message
+        await command(run, "/switch bbbb")
+        await run.pilot.pause()
+        assert run.app.switch_to == "bbbb2222"
+
+
+def test_a_login_held_in_memory_needs_no_typed_password(tmp_path) -> None:
+    from calu.db.target import Target
+
+    held = Target.parse("host=127.0.0.1 port=1 dbname=calu user=calu_owner password=pw")
+    access = StoreAdmin(CredentialStore(tmp_path / "none.json"), database=held)
+    assert access.problem() is None and not access.needs_password()

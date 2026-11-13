@@ -216,6 +216,20 @@ COMMANDS: tuple[Command, ...] = (
         "start", "Start the session, or resume a stored one", "enter", "/start [resume id | new]"
     ),
     Command(
+        "running",
+        "The sessions that run, of every directory",
+        "",
+        "/running",
+        about="Reads the database; `/switch <id>` attaches this client to one of them.",
+    ),
+    Command(
+        "switch",
+        "Attach this client to another running session",
+        "",
+        "/switch <the beginning of a session id>",
+        about="The session you leave keeps running.",
+    ),
+    Command(
         "new",
         "New session in this directory, from calu serve",
         "",

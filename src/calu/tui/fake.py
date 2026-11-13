@@ -25,6 +25,7 @@ from typing import Any
 
 import anyio
 
+from calu import herd
 from calu.protocol.client import OnEvent, RequestFailed
 from calu.protocol.messages import CLOSE_FELL_BEHIND, REQUESTS
 from calu.session_requests import SessionRequest
@@ -176,6 +177,8 @@ class FakeAdmin:
         """Every `(checker, instructions)` stored, oldest first."""
         self.modes: list[tuple[str, str | None]] = []
         self.requests: list[SessionRequest] = []
+        self.running: list[herd.SessionRow] = []
+        """What `sessions` answers."""
         """The sessions that were asked for (`request_session`)."""
         """Every `(mode, project)` stored, oldest first."""
         self.fail = ""
@@ -253,6 +256,22 @@ class FakeAdmin:
             found["version"] = version = now + 1
         self.saved.append((name, text))
         return SavedChecker(name, version)
+
+    async def sessions(self, password: str | None) -> list[herd.SessionRow]:
+        """Return the scripted list of running sessions.
+
+        Args:
+            password: The password the client passed.
+
+        Returns:
+            `self.running`.
+
+        Raises:
+            PasswordNeeded: If the password is not the one of this access.
+            AdminFailed: Without a credential or with `fail` set.
+        """
+        self._check(password)
+        return list(self.running)
 
     async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
         """Record the request and answer with a made-up session id.

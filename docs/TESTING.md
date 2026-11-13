@@ -465,6 +465,13 @@ escalation resolved from the database alone.
    in a container as root on 2026-11-13: the install command (calu and `calu-claude` land in
    `/usr/local/lib/calu/calu/bin`, linked from `/usr/local/bin`), the installation check
    on it (passes), and the refusal of `calu run` without `--user`.
+31. The client as root (D214), with a session started by `calu run --sudo`: `calu attach
+   --sudo` must ask the sudo password (unless sudo remembers it) and the admin password
+   once; editing and saving a checker's instructions (`/checkers`, `e`, ctrl+s) must then
+   ask nothing; `/running` must list the sessions, `/switch <id>` must attach to another
+   one without a password, and `f4` and the editor must run as you (a file they create
+   belongs to you). As yourself, without `--sudo`: saving must ask for the admin password
+   and accept it after `sudo calu setup` has run once (D213). **Never run.**
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of
