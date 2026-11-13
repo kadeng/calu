@@ -15,7 +15,7 @@ questions §11, phases §12).
 **Built on 2026-11-13 after the handoff of that morning** (the owner: "continue", then
 requirement 27):
 
-- **`calu-claude`, the launcher (D207)**: `src/calu/claude/launch.py`, a console script of
+- **`calu-claude`, the launcher (D207)**: `src/calu/launch.py`, a console script of
   the installation. `SdkRunner(run_as=RunAs(...))` names it as `cli_path` and passes the
   record in `CALU_LAUNCH`; `RunOptions.run_as` and `ServeOptions.run_as` carry it. Measured
   as root in a container (`spikes/spike_other_uid.sh launcher`). **Nothing sets `run_as`

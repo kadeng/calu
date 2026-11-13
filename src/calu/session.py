@@ -125,7 +125,7 @@ from anyio.abc import TaskGroup
 from pydantic_ai import UsageLimits
 from pydantic_ai.models import Model
 
-from calu import __version__, machine
+from calu import __version__, asuser, machine
 from calu.changes import default_root
 from calu.checkers import (
     CheckContext,
@@ -380,6 +380,19 @@ CERTIFIER = "calu session"
 
 class SessionError(Exception):
     """A request cannot be served in the current state (reported to the client)."""
+
+
+def _os_user() -> str:
+    """Name the OS user a session works for, for its `sessions` row.
+
+    Returns:
+        The user calu switched to (`calu.asuser.enter`): its login name, or its uid as text
+        when it has none. Otherwise the user this process runs as.
+    """
+    run_as = asuser.active()
+    if run_as is not None:
+        return run_as.user or str(run_as.uid)
+    return getpass.getuser()
 
 
 class Session:
@@ -3512,7 +3525,7 @@ class Session:
         """
         return SessionIdentity(
             hostname=socket.gethostname(),
-            os_user=getpass.getuser(),
+            os_user=_os_user(),
             directory=str(self.workspace),
             pid=os.getpid(),
             os=f"{platform.system()} {platform.release()}".strip(),
@@ -3713,6 +3726,7 @@ class Session:
                     ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
                     cwd=self.workspace,
                     check=False,
+                    **asuser.child(),
                 )
             if done.returncode == 0:
                 value = done.stdout.decode().strip() or None

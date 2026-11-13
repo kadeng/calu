@@ -43,6 +43,8 @@ from pathlib import Path
 import anyio
 import anyio.to_thread
 
+from calu import asuser
+
 log = logging.getLogger(__name__)
 
 GIT_TIMEOUT_S = 120.0
@@ -377,15 +379,17 @@ class SnapshotStore:
                     cwd=self.workspace,
                     check=False,
                     input=stdin.encode() if stdin else None,
-                    env={
-                        **os.environ,
-                        "GIT_CONFIG_GLOBAL": "/dev/null",
-                        "GIT_CONFIG_SYSTEM": "/dev/null",
-                        # File names come from the project, which the agent writes: a file
-                        # called `:!other.py` must name itself and not "everything but
-                        # other.py" (pathspec magic also applies after `--`).
-                        "GIT_LITERAL_PATHSPECS": "1",
-                    },
+                    **asuser.child(
+                        {
+                            **os.environ,
+                            "GIT_CONFIG_GLOBAL": "/dev/null",
+                            "GIT_CONFIG_SYSTEM": "/dev/null",
+                            # File names come from the project, which the agent writes: a
+                            # file called `:!other.py` must name itself and not "everything
+                            # but other.py" (pathspec magic also applies after `--`).
+                            "GIT_LITERAL_PATHSPECS": "1",
+                        }
+                    ),
                 )
         except (OSError, TimeoutError) as exc:
             raise SnapshotError(f"git {arguments[0]} failed: {exc}") from exc

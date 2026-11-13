@@ -1,4 +1,4 @@
-"""The launcher that starts Claude Code as another user (`calu.claude.launch`, D207)."""
+"""The launcher that starts Claude Code as another user (`calu.launch`, D207)."""
 
 import json
 import os
@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from calu.claude.launch import (
+from calu.claude.sdk_runner import SdkRunner
+from calu.config import ClaudeConfig
+from calu.launch import (
     LAUNCH_ENV,
     REFUSED,
     SCRIPT,
@@ -20,8 +22,6 @@ from calu.claude.launch import (
     launcher_path,
     main,
 )
-from calu.claude.sdk_runner import SdkRunner
-from calu.config import ClaudeConfig
 
 
 def own(claude: str = "/usr/bin/env", **changes) -> LaunchSpec:

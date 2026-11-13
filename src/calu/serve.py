@@ -29,11 +29,11 @@ import anyio
 import psycopg
 from pydantic_ai.models import Model
 
-from calu import session_requests
-from calu.claude.launch import RunAs
+from calu import asuser, session_requests
 from calu.config import load_secrets
 from calu.credentials import wipe
 from calu.db import SESSION_REQUESTED, ConnectionSource, Db, Dirty, LoginRefused, Notifier
+from calu.launch import RunAs
 from calu.run import ERRORS, LABEL, RunnerFactory, RunOptions, harden_process, run_from, say
 from calu.session_requests import SessionRequest
 
@@ -344,10 +344,13 @@ async def serve(
     options: ServeOptions | None = None,
     runner_factory: RunnerFactory | None = None,
     checker_models: dict[str, str | Model] | None = None,
+    user: str | None = None,
 ) -> int:
     """Answer session requests until SIGINT or SIGTERM, then stop every session.
 
-    Side effects: clears the process's "dumpable" flag (`calu.run.harden_process`), loads
+    Side effects: with `options.run_as`, switches the process's file access and the programs
+    it starts to that user for good (`calu.asuser.enter`). Clears the process's "dumpable"
+    flag (`calu.run.harden_process`), loads
     the checker keys, installs handlers for SIGINT and SIGTERM for the time it runs, and
     everything `Server.run` does. A `bytearray` passed as `url` is wiped; a copy of the
     connection string stays in this process's memory, so that sessions can be started and
@@ -358,6 +361,8 @@ async def serve(
         options: Limits and addresses; None uses the defaults.
         runner_factory: Creates each session's runner; None uses the Agent SDK runner.
         checker_models: Replacements for the configured checker models, or None.
+        user: The OS user whose requests are answered; None is the user of this process, or
+            with `options.run_as` the name or the number of that user.
 
     Returns:
         0 after a stop by signal; 1 if the database refused the session login for good.
@@ -367,10 +372,15 @@ async def serve(
     """
     hidden = load_secrets()
     harden_process()
+    if options is not None and options.run_as is not None:
+        asuser.enter(options.run_as)
     source = ConnectionSource(url)
     if isinstance(url, bytearray):
         wipe(url)
-    server = Server(source, hidden, options, runner_factory, checker_models)
+    run_as = options.run_as if options is not None else None
+    if user is None and run_as is not None:
+        user = run_as.user or str(run_as.uid)
+    server = Server(source, hidden, options, runner_factory, checker_models, user=user)
     code = 0
     async with anyio.create_task_group() as tg:
 

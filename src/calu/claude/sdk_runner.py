@@ -56,7 +56,6 @@ from claude_agent_sdk.types import (
 from calu.checkers.model import Step
 from calu.checkers.policy import SHELL_TOOLS, Route, unknown_tools
 from calu.checkers.result_checker import SubagentResult
-from calu.claude.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 from calu.claude.runner import (
     NOT_FROM_USER,
     EventSink,
@@ -75,6 +74,7 @@ from calu.context.foreign import (
     user_message_source,
 )
 from calu.files import skill_file
+from calu.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 from calu.paths import INSIDE_SESSION_ENV
 from calu.preflight import settings_file_sandbox_blockers
 from calu.protocol.messages import (

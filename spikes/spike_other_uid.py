@@ -35,7 +35,7 @@ from claude_agent_sdk import (
     ResultMessage,
 )
 
-from calu.claude.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
+from calu.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 
 UID = 1000
 GID = 1000

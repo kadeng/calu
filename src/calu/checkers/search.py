@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from calu import asuser
+
 LIMIT = 200_000
 """Most files listed for one search; a larger tree is reported as incomplete."""
 
@@ -176,6 +178,7 @@ def _ignored(directory: Path, deadline: float) -> bool:
             capture_output=True,
             timeout=_remaining(deadline),
             check=False,
+            **asuser.child(),
         )
     except OSError, subprocess.TimeoutExpired:
         return False
@@ -211,6 +214,7 @@ def _git_files(directory: Path, deadline: float | None = None) -> list[str] | No
             capture_output=True,
             timeout=_remaining(deadline) if deadline is not None else 5,
             check=False,
+            **asuser.child(),
         )
     except OSError, subprocess.TimeoutExpired:
         return None

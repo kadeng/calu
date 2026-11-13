@@ -65,6 +65,8 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, U
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
+from calu import asuser
+
 log = logging.getLogger(__name__)
 
 PREFIX = "claude:"
@@ -259,7 +261,11 @@ def claude_cli_model(
             try:
                 with anyio.fail_after(timeout_s):
                     done = await anyio.run_process(
-                        command, cwd=empty, check=False, input=content.encode("utf-8")
+                        command,
+                        cwd=empty,
+                        check=False,
+                        input=content.encode("utf-8"),
+                        **asuser.child(),
                     )
             except FileNotFoundError as exc:
                 raise ClaudeCliError(

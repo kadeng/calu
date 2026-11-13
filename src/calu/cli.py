@@ -74,7 +74,7 @@ from typing import Any
 import anyio
 import psycopg
 
-from calu import __version__, admin, doctor, herd, session_requests
+from calu import __version__, admin, asuser, doctor, herd, session_requests
 from calu.acp import serve_acp
 from calu.attach import attach
 from calu.claude.transcripts import transcripts, user_inputs
@@ -105,6 +105,7 @@ from calu.defaults.instructions import honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
 from calu.honesty import GitError, content_ids, resolve_commit
+from calu.launch import RunAs
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
 from calu.protocol.client import RequestFailed
@@ -1113,6 +1114,46 @@ def _check_conversation_choice(args: argparse.Namespace) -> None:
             ) from None
 
 
+def _run_as(args: argparse.Namespace) -> RunAs | None:
+    """Decide which user Claude Code runs as, from `--user` and who calu runs as (D206).
+
+        calu is root, no --user     ──► refused: Claude Code never runs as root by accident
+        calu is root, --user root   ──► None: one user, as without the option
+        calu is root, --user X      ──► X; its directories are prepared (`calu.asuser.prepare`)
+        calu is not root, --user X  ──► refused, unless X is the user calu runs as (None)
+
+    Args:
+        args: Parsed arguments (`user`).
+
+    Returns:
+        The user to switch to, or None to run everything as calu's own user.
+
+    Raises:
+        CliError: In the refused cases, and if the user or its directories cannot be used.
+    """
+    root = os.geteuid() == 0
+    if args.user is None:
+        if root:
+            raise CliError(
+                "calu runs as root, so say which user Claude Code runs as: --user NAME, or "
+                "--user UID[:GID] for a user without a name or home directory on this "
+                "machine (as in a container); root itself only as --user root"
+            )
+        return None
+    try:
+        run_as = asuser.resolve(args.user)
+        if run_as.uid == os.geteuid():
+            return None
+        if not root:
+            raise CliError(
+                "--user needs calu to run as root: only root can start Claude Code as another user"
+            )
+        asuser.prepare(run_as)
+    except asuser.UserError as exc:
+        raise CliError(str(exc)) from exc
+    return run_as
+
+
 def _session_login(store: CredentialStore) -> bytearray:
     """Ask for the session password and return the decrypted `session` credential.
 
@@ -1172,9 +1213,11 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     """
     if args.max_sessions < 1:
         raise CliError("--max-sessions takes a number of 1 or more")
+    run_as = _run_as(args)
     url = _session_login(store)
     try:
-        code = asyncio.run(serve_sessions(url, ServeOptions(max_sessions=args.max_sessions)))
+        options = ServeOptions(max_sessions=args.max_sessions, run_as=run_as)
+        code = asyncio.run(serve_sessions(url, options, user=run_as.user if run_as else None))
     finally:
         wipe(url)
     if code:
@@ -1292,6 +1335,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         interactive=not args.batch,
         show_thinking=args.thinking,
         background_timeout_s=args.background_timeout,
+        run_as=_run_as(args),
     )
     if args.background_timeout is not None and (
         not args.batch or not math.isfinite(args.background_timeout) or args.background_timeout <= 0
@@ -3464,6 +3508,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --batch: end the run after Claude has been idle this long while background "
         "tasks (a dev server, a Monitor, a workflow) still run; default: wait for them",
     )
+    p.add_argument(
+        "--user",
+        metavar="NAME|UID[:GID]",
+        help="as root: the user Claude Code runs as, and whose rights calu's own work in the "
+        "project has. A number is a uid without a name or home directory on this machine "
+        "(calu gives Claude Code a state directory); root itself only when named",
+    )
     p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
     p.set_defaults(handler=cmd_run)
 
@@ -3477,6 +3528,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         metavar="N",
         help="how many sessions run at once; a request beyond that is refused (default: 10)",
+    )
+    p.add_argument(
+        "--user",
+        metavar="NAME|UID[:GID]",
+        help="as root: the user Claude Code runs as, and whose rights calu's own work in the "
+        "project has. A number is a uid without a name or home directory on this machine "
+        "(calu gives Claude Code a state directory); root itself only when named",
     )
     p.set_defaults(handler=cmd_serve)
 

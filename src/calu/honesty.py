@@ -53,6 +53,7 @@ from typing import Any, Concatenate
 
 import anyio.to_thread
 
+from calu import asuser
 from calu.checkers import CodeMark
 from calu.checkers.changeset import GIT_OPTIONS, HEAD_ID
 from calu.checkers.symbols import definition_names
@@ -600,9 +601,9 @@ def run_git(cwd: Path, arguments: Sequence[str], *, accept: tuple[int, ...] = (0
         done = subprocess.run(
             ["git", *GIT_OPTIONS, *arguments],
             cwd=cwd,
-            env=environment,
             capture_output=True,
             timeout=GIT_TIMEOUT_S,
+            **asuser.child(environment),
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:

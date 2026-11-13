@@ -80,6 +80,7 @@ from pathlib import Path
 import anyio
 import anyio.to_thread
 
+from calu import asuser
 from calu.checkers.shell import command_variants, parse_command
 
 log = logging.getLogger(__name__)
@@ -958,8 +959,8 @@ async def _git_raw(
                 ["git", *GIT_OPTIONS, *arguments],
                 cwd=cwd,
                 check=False,
-                env=environment,
                 input=stdin or None,
+                **asuser.child(environment),
             )
     except (OSError, TimeoutError) as exc:
         log.warning("git %s failed: %s", " ".join(arguments), exc)

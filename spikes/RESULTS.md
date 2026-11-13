@@ -669,6 +669,26 @@ what the record keeps.
 claude.ai login kept in the state directory, a named user with its own home directory, git
 run by calu as the other user, and the re-execution through sudo.
 
+## A root process with the file access of another user, per thread (D211, 2026-11-13)
+
+**Question:** calu as root reads and writes in a project directory the unprivileged user
+controls. Can it do that with the user's rights while it stays root as a process?
+
+**Setup:** `spikes/spike_fs_identity.py` as root in a `postgres:18` container: `setfsuid`,
+`setfsgid` and the raw `setgroups` system call in the main thread, then a read of a file
+with mode 0600 of root, directly and through a symbolic link, a file creation, a thread
+started afterwards, and a thread that sets its identity back to root.
+
+**Results:** after the switch the main thread got `PermissionError` on both reads, the file
+it created belonged to 1000:1000, and `os.getresuid()` was still `(0, 0, 0)`. The thread
+started afterwards had the same identity and the same refusal. The thread that went back to
+root could read the file, and the main thread still could not afterwards.
+
+**Conclusion:** one call in the main thread before any other thread exists covers every file
+access of the process, and a single thread can be given root's file access back where it is
+needed. `spikes/smoke_privileged.sh` is the same with a whole session and the real Claude
+Code: command, git filter and all written files were uid 1000.
+
 ## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
 
 **Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable

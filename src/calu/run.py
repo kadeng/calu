@@ -58,9 +58,8 @@ import psycopg
 from pydantic import ValidationError
 from pydantic_ai.models import Model
 
-from calu import herd, preflight
+from calu import asuser, herd, preflight
 from calu.bus import Bus
-from calu.claude.launch import RunAs
 from calu.claude.runner import ClaudeRunner, Fork
 from calu.claude.sdk_runner import SdkRunner
 from calu.claude.transcripts import user_inputs
@@ -77,6 +76,7 @@ from calu.db import (
     LoginRefused,
     Notifier,
 )
+from calu.launch import RunAs
 from calu.protocol.messages import (
     AssistantText,
     AssistantThinking,
@@ -686,8 +686,10 @@ async def run_session(
 ) -> int:
     """Run one session until it ends, and report what happened.
 
-    Side effects: clears the process's "dumpable" flag (`harden_process`; `calu run` has done
-    that already before it read the password, this call covers a caller that embeds the
+    Side effects: with `options.run_as`, switches the process's file access and the programs
+    it starts to that user for good (`calu.asuser.enter`; the caller has run
+    `calu.asuser.prepare`). Clears the process's "dumpable" flag (`harden_process`; `calu run`
+    has done that already before it read the password, this call covers a caller that embeds the
     function, and the flag then stays cleared for the rest of that process), opens two database
     connections, creates a `sessions` row, starts a Claude Code process, prints events to stdout
     and, with `options.interactive`, reads messages from stdin. A `bytearray` passed as `url` is
@@ -714,6 +716,10 @@ async def run_session(
     """
     hidden = load_secrets()
     harden_process()
+    if options.run_as is not None:
+        # After the checker keys were read as root; from here on, calu's own file access
+        # and the programs it starts in the project are the unprivileged user's (D206).
+        asuser.enter(options.run_as)
     source = ConnectionSource(url)
     if isinstance(url, bytearray):
         # The caller's buffer is not needed any more. The copy in `source` stays in this

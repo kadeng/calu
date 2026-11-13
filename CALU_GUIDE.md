@@ -22,6 +22,7 @@ configuration, the web interface, the checkers and the ACP adapter.
 - [Checker instructions, rules and evaluations](#checker-instructions-rules-and-evaluations)
 - [Resuming and forking a conversation](#resuming-and-forking-a-conversation)
 - [Many sessions from one process: calu serve](#many-sessions-from-one-process-calu-serve)
+- [calu as root, Claude Code as another user](#calu-as-root-claude-code-as-another-user)
 - [The database](#the-database)
 - [Installation and configuration reference](#installation-and-configuration-reference)
 
@@ -1124,6 +1125,35 @@ all work with it, and each has its own address and its own tokens.
 - **What the server prints.** One line when a session is asked for, started and ended, each
   with the directory's name and the request's number in front; the conversation is shown by
   the clients. `calu serve --max-sessions N` limits how many run at once (default 10).
+
+## calu as root, Claude Code as another user
+
+Started as one user, calu and Claude Code share that user: the sandbox and calu's own
+precautions keep Claude's commands away from calu's credentials. Started as root, calu puts
+the operating system between the two:
+
+```bash
+calu run --user ada                 # as root: Claude Code runs as the user ada
+calu run --user 1000                # as root in a container: uid 1000, which has no name there
+calu serve --user 1000:1000         # the same for a server and all its sessions
+```
+
+- **`--user` is required as root.** Claude Code never runs as root by accident; root itself
+  only when you name it (`--user root`).
+- **A name** is a user of this machine: Claude Code uses that user's home directory, with its
+  login and its conversations.
+- **A number** is a uid that needs neither a name nor a home directory, which is the usual
+  case in a container where calu is root and the project directory is mounted from a host
+  user. calu gives Claude Code the directory `/var/lib/calu/claude/<uid>` as its home (mount a
+  volume there if the login and the conversations should outlive the container), and files
+  written in the project belong to that uid, not to root. `UID:GID` names the group as well.
+- **What the separation covers.** Claude Code and every command it runs are that user: they
+  cannot read calu's credentials or checker keys, cannot signal or trace the calu process and
+  cannot change calu's installation. calu's own work in the project -- git for its snapshots,
+  the files a checker reads -- is done with that user's rights too, so a link in the project
+  that points at a file only root may read is refused for calu as it is for Claude.
+- **Not yet:** starting calu as an ordinary user who has sudo, and the RDS variant of the
+  database together with `--user`.
 
 ## The database
 

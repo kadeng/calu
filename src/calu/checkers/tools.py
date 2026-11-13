@@ -60,6 +60,7 @@ import anyio
 import anyio.to_thread
 from pydantic_ai.toolsets import FunctionToolset
 
+from calu import asuser
 from calu.checkers.rules import Rules
 
 log = logging.getLogger(__name__)
@@ -301,7 +302,10 @@ class CodeTools:
                 # for hours and holds the interpreter lock meanwhile. `run_process` kills the
                 # child when the deadline (or the checker's own) cancels this call.
                 done = await anyio.run_process(
-                    [sys.executable, "-I", "-S", "-c", GREP_CHILD], input=payload, check=False
+                    [sys.executable, "-I", "-S", "-c", GREP_CHILD],
+                    input=payload,
+                    check=False,
+                    **asuser.child(),
                 )
             answer = json.loads(done.stdout.decode("utf-8"))
         except TimeoutError:

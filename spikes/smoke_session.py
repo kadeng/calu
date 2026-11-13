@@ -43,7 +43,7 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from calu import herd
+from calu import asuser, herd
 from calu.config import SETTINGS_KEY, load_secrets
 from calu.db import Db, connect
 from calu.model_choice import detect_model
@@ -169,6 +169,11 @@ async def main(args: argparse.Namespace) -> int:
         finally:
             await owner.close()
         codes: list[int] = []
+        run_as = None
+        if args.user:
+            # calu as root, Claude Code and calu's work in the project as that user (D206).
+            run_as = asuser.resolve(args.user)
+            asuser.prepare(run_as)
 
         async def run() -> None:
             """Run the session and keep its exit code."""
@@ -183,6 +188,7 @@ async def main(args: argparse.Namespace) -> int:
                         interactive=args.stay,
                         show_thinking=args.stay,
                         socket_path=Path(args.socket) if args.socket else None,
+                        run_as=run_as,
                     ),
                     checker_models=None if args.checker_model else fake_models(),
                 )
@@ -232,6 +238,11 @@ parser.add_argument(
     help="measure and review what a command writes (PLAN.md D31): snapshot and review on",
 )
 parser.add_argument("--model", default="haiku")
+parser.add_argument(
+    "--user",
+    help="as root: the user Claude Code runs as, a name or UID[:GID] (D206); see "
+    "`spikes/smoke_privileged.sh`",
+)
 parser.add_argument(
     "--checker-model",
     metavar="MODEL|auto",

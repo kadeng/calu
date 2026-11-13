@@ -32,6 +32,21 @@ system's distribution or from a renowned vendor. A popular library can be expect
 honest, because its users would soon report and correct a difference between its name or
 documentation and what it does.
 
+**Tests are units too.** A test's name and doc comment say what it checks. Beyond that, an
+honest test describes every effect it has other than checking: files, databases, services or
+processes it touches, and what it prints, both when it passes and when it fails. Plain error
+information needs little description. What must be named is printed data that the test read
+from somewhere: a database, a file, an environment variable, a subprocess or global state. A
+reader needs that to judge whether running the test is safe and keeps confidential data
+confidential.
+
+**Configuration is code.** When a configuration can widen what a unit does -- name classes
+or functions that are called, files that are read or written, services that are contacted --
+the unit's contract says so ("... according to the configuration" does), and the configuration
+then counts like an imported unit: the honesty rule applies to it, wherever it is stored.
+Where a configuration format allows no doc comments, it is honest when what it references is:
+a reader follows the references.
+
 ## How much to write
 
 Write the contract compactly, at the unit's own level of abstraction. State what a competent

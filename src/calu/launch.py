@@ -25,7 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
-import claude_agent_sdk
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 LAUNCH_ENV = "CALU_LAUNCH"
@@ -166,8 +165,9 @@ def environment(spec: LaunchSpec, given: Mapping[str, str]) -> dict[str, str]:
         given: The environment the launcher was started with.
 
     Returns:
-        The environment for the Claude Code process. `USER` and `LOGNAME` of `given` never
-        survive: they would name the user calu runs as.
+        The environment for the Claude Code process. `USER`, `LOGNAME` and
+        `CLAUDE_CONFIG_DIR` of `given` never survive: they would name the user calu runs as,
+        or that user's directory.
     """
     result = {
         name: value
@@ -175,6 +175,9 @@ def environment(spec: LaunchSpec, given: Mapping[str, str]) -> dict[str, str]:
         if name != LAUNCH_ENV and any(fnmatch.fnmatchcase(name, pattern) for pattern in spec.keep)
     }
     result["HOME"] = spec.home
+    # Claude Code's configuration directory is `<home>/.claude` for this user; a value from
+    # calu's environment would name the directory of the user calu runs as.
+    result.pop("CLAUDE_CONFIG_DIR", None)
     for name in ("USER", "LOGNAME"):
         result.pop(name, None)
         if spec.user is not None:
@@ -249,6 +252,9 @@ def claude_path(configured: str | None) -> str:
     """
     if configured:
         return configured
+    # Imported here: the launcher itself never needs the SDK and should start fast.
+    import claude_agent_sdk
+
     bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
     if bundled.is_file():
         return str(bundled)

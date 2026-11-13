@@ -202,6 +202,8 @@ them by hand; they use throwaway directories and databases.
 | `spike_session_rls.py` | Would row-level security keyed on a per-connection session id separate two sessions? (Q3) | the schema gains a table a session writes |
 | `scripts/build-binary.sh` | Does a frozen one-file calu still find its package data, and what does it cost? (Q15) | a dependency is added or pydantic-ai is updated (the release workflow runs it on every tag) |
 | `smoke_session.py` | A whole calu session against the real `claude` | before a release, and after changes to the runner |
+| `smoke_privileged.sh` | calu as root with `--user 1000` and the real `claude` in the development image: who a command, git's filter and calu's files end up as (D211) | after changes to `calu.asuser`, `calu.launch` or to where calu starts a program |
+| `spike_fs_identity.py` | Is the file-system identity of a root process per thread, and inherited by new threads? (yes; D211 rests on it) | a kernel or C library that behaves differently is suspected |
 | `smoke_serve.py` | `calu serve` with the real `claude`: two sessions at once in two directories, and a fork started through the server (D208) | after changes to `calu.serve` or to how a session is started |
 
 ```bash
@@ -445,6 +447,13 @@ escalation resolved from the database alone.
    that no `calu serve` answered. Run on 2026-11-13 with `spikes/smoke_serve.py` (two
    sessions at once and a fork, real Claude Code, fake checkers); not run by hand: the two
    commands with a typed password, and Ctrl-C with sessions in the middle of a turn.
+29. calu as root (D211). In a container as root with a project directory mounted from a
+   host user: `calu run` without `--user` must refuse and say how to name the user; `calu
+   run --user 1000 -p "run: id > who.txt"` must write `uid=1000 gid=1000` into a file owned
+   by 1000, and `/var/lib/calu/claude/1000` and `/var/lib/calu/state/1000` must belong to
+   1000 with mode 0700. Run on 2026-11-13 with `spikes/smoke_privileged.sh` (real Claude
+   Code, fake checkers, snapshots on, the sandbox off); not run: a named user with its own
+   home, the sandbox on, `calu serve --user`.
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of
