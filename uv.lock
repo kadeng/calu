@@ -155,24 +155,18 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "claude-agent-sdk" },
     { name = "cryptography" },
+    { name = "jinja2" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "bedrock", "mistral", "openai"] },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "starlette" },
+    { name = "textual" },
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-tui = [
-    { name = "textual" },
-]
-web = [
-    { name = "jinja2" },
-    { name = "starlette" },
     { name = "uvicorn" },
+    { name = "websockets" },
 ]
 
 [package.dev-dependencies]
@@ -185,7 +179,6 @@ dev = [
     { name = "pyright" },
     { name = "pytest" },
     { name = "ruff" },
-    { name = "textual" },
     { name = "types-pyyaml" },
 ]
 
@@ -194,20 +187,19 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=25.1.0" },
     { name = "claude-agent-sdk", specifier = ">=0.2.164" },
     { name = "cryptography", specifier = ">=50.0.2" },
-    { name = "jinja2", marker = "extra == 'web'", specifier = ">=3.1.6" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.8" },
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "bedrock", "mistral", "openai"], specifier = ">=2.66.0" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "starlette", marker = "extra == 'web'", specifier = ">=1.10.0" },
-    { name = "textual", marker = "extra == 'tui'", specifier = ">=8.2,<9" },
+    { name = "starlette", specifier = ">=1.10.0" },
+    { name = "textual", specifier = ">=8.2,<9" },
     { name = "tree-sitter", specifier = ">=0.26.0" },
     { name = "tree-sitter-bash", specifier = ">=0.25.1" },
-    { name = "uvicorn", marker = "extra == 'web'", specifier = ">=0.54.0" },
+    { name = "uvicorn", specifier = ">=0.54.0" },
     { name = "websockets", specifier = ">=17.4" },
 ]
-provides-extras = ["web", "tui"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -219,7 +211,6 @@ dev = [
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "ruff", specifier = ">=0.17.4" },
-    { name = "textual", specifier = ">=8.2,<9" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20261103" },
 ]
 

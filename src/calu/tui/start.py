@@ -1,7 +1,7 @@
 """Starting the full-screen client: whether it can run here, and running it.
 
 This module imports nothing from Textual at import time, so `calu.cli` can import it in an
-installation without the extra `tui` and ask `available()`.
+installation whose Textual is missing or of another version and ask `available()`.
 """
 
 import importlib.metadata
@@ -16,7 +16,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from calu.tui.app import TuiOptions
 
-NOT_INSTALLED = "full-screen client not installed (pip install 'calu[tui]'); using the line client"
+NOT_INSTALLED = (
+    "the full-screen client's package textual is missing (install calu again: "
+    "uv tool install --reinstall calu); using the line client"
+)
 """What `calu attach` says on stderr when Textual is missing."""
 
 
@@ -41,7 +44,7 @@ class TuiExit:
 
 SUPPORTED = ((8, 2), (9, 0))
 """The Textual versions the client is written for: from the first, below the second (the
-range of the extra `tui` in `pyproject.toml`)."""
+range of `textual` in `pyproject.toml`)."""
 
 
 def problem() -> str | None:
@@ -50,7 +53,7 @@ def problem() -> str | None:
     Returns:
         None if a supported Textual is installed; `NOT_INSTALLED` without Textual; a line
         that names the installed and the supported versions for a Textual outside
-        `SUPPORTED` (one installed beside calu, not through the extra `tui`).
+        `SUPPORTED` (one installed beside calu, not as calu's dependency).
     """
     if importlib.util.find_spec("textual") is None:
         return NOT_INSTALLED
@@ -66,7 +69,8 @@ def problem() -> str | None:
     if not low <= tuple(numbers) < high:
         return (
             f"the full-screen client needs textual >= {low[0]}.{low[1]} and < {high[0]} "
-            f"(found {found}; pip install 'calu[tui]'); using the line client"
+            f"(found {found}; install calu again: uv tool install --reinstall calu); "
+            "using the line client"
         )
     return None
 
@@ -75,7 +79,7 @@ def available() -> bool:
     """Tell whether the full-screen client can run in this installation.
 
     Returns:
-        True if a supported Textual is installed (the extra `tui`).
+        True if a supported Textual is installed.
     """
     return problem() is None
 

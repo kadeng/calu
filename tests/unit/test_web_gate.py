@@ -15,8 +15,8 @@ import httpx
 import pytest
 
 # The web interface is an optional extra, so a checkout synced without it skips these tests.
-pytest.importorskip("starlette", reason="the web interface needs the `web` extra")
-pytest.importorskip("jinja2", reason="the web interface needs the `web` extra")
+pytest.importorskip("starlette", reason="the web interface's packages are missing: uv sync")
+pytest.importorskip("jinja2", reason="the web interface's packages are missing: uv sync")
 
 from calu.web.app import (
     CONTENT_SECURITY_POLICY,

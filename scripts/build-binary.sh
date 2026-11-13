@@ -33,7 +33,7 @@ from calu.cli import main
 sys.exit(main())
 PY
 
-uv run --with pyinstaller --extra web pyinstaller --onefile --name calu \
+uv run --with pyinstaller pyinstaller --onefile --name calu \
     --distpath "$out" --workpath "$work/build" --specpath "$work" --noconfirm \
     --collect-data calu --collect-submodules calu \
     --copy-metadata genai_prices --copy-metadata pydantic-ai-slim --copy-metadata pydantic \

@@ -47,7 +47,7 @@ jobs:
         with:
           enable-cache: true
       # The web interface is an optional extra, and the database tests exercise it.
-      - run: uv sync --all-extras --locked
+      - run: uv sync --locked
       - run: uv run ruff format --check .
       - run: uv run ruff check .
       - run: uv run pyright
@@ -76,7 +76,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-extras --locked
+      - run: uv sync --locked
       # A runner has root, so Playwright's own installer does what scripts/get-browser.sh does
       # without it.
       - run: uv run playwright install --with-deps chromium
@@ -99,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           uv venv /tmp/installed
-          uv pip install --python /tmp/installed/bin/python "$(echo dist/*.whl)[web]"
+          uv pip install --python /tmp/installed/bin/python "$(echo dist/*.whl)"
           /tmp/installed/bin/calu --version
           /tmp/installed/bin/calu protocol --out /tmp/protocol.json
           /tmp/installed/bin/python -c "

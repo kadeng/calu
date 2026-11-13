@@ -186,10 +186,11 @@ inside VSCode for a single user.
 
 ## Getting started
 
-Not published yet; from a clone, `uv run calu ...` runs every command below.
+calu is not on PyPI yet; install it from GitHub (from a clone, `uv run calu ...` runs every
+command below):
 
 ```bash
-uv tool install calu      # not published yet
+uv tool install git+https://github.com/kadeng/calu   # one package: every command included
 calu doctor               # what is in place, and what is still missing
 calu db up                # local PostgreSQL in Docker; asks for a new admin password
 calu setup                # default checkers and rules; asks for a new session password
@@ -241,7 +242,7 @@ the database, so you only need the multiplexer to keep the session process itsel
 takes no arguments — it finds the session running there:
 
 ```bash
-calu attach            # full screen on a terminal (needs the extra: uv sync --extra tui)
+calu attach            # full screen on a terminal
 calu attach --plain    # the line-by-line client; also what a pipe gets
 ```
 

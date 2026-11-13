@@ -6,7 +6,7 @@ import pytest
 
 from calu.db import connect
 
-pytest.importorskip("starlette", reason="the web interface needs the `web` extra")
+pytest.importorskip("starlette", reason="the web interface's packages are missing: uv sync")
 
 from calu.web.database import ReopeningDb
 

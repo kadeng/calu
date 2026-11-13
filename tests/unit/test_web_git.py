@@ -2,7 +2,7 @@
 
 import pytest
 
-pytest.importorskip("starlette", reason="the web interface needs the `web` extra")
+pytest.importorskip("starlette", reason="the web interface's packages are missing: uv sync")
 
 from calu.web.git import commit_url, project_url
 

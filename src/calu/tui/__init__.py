@@ -1,7 +1,7 @@
 """The full-screen terminal client of a running session (`calu attach` on a terminal).
 
-A client of the protocol like the web live view and the ACP adapter. It needs Textual, which
-is the optional extra `tui` (`pip install 'calu[tui]'`): `calu.tui.start` imports
+A client of the protocol like the web live view and the ACP adapter. It needs Textual, an
+ordinary dependency of calu. `calu.tui.start` imports
 nothing from Textual, so `calu.cli` can ask `start.available()` without it; `start.run_tui`
 imports the app when it is called.
 

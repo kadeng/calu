@@ -3,7 +3,7 @@
 State on 2026-11-12, evening: after the review of the whole code base and its fixes (D183-D191),
 the one-page settings (D182), the split of `session.py`, the full-screen terminal client, and
 with the honesty redesign built on a branch. Read this, then `AGENTS.md`, `REQUIREMENTS.md` and
-`PLAN.md` (decisions D1-D203, open questions §11, phases §12).
+`PLAN.md` (decisions D1-D204, open questions §11, phases §12).
 
 ## Pick up here
 

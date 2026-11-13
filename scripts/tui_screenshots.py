@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: uv sync --all-extras
+      - run: uv sync
       - run: uv run pytest -q
 """
 

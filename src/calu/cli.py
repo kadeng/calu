@@ -1111,7 +1111,7 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
     client with the token it printed at its start. Without one it finds the session running in
     this directory and mints its own token, which it revokes when it ends (PLAN.md D105).
 
-    On a terminal this is the full-screen client (`calu.tui`, the extra `tui`); with `--plain`,
+    On a terminal this is the full-screen client (`calu.tui`); with `--plain`,
     through a pipe, or without Textual installed it is the line client (`calu.attach`). The
     choice is made by `calu.tui.start.wants_full_screen`.
 
@@ -1238,10 +1238,10 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     try:
         from calu.web.app import WEB_HOST_NAME, NotLocal, check_host, create_app
         from calu.web.database import ReopeningDb
-    except ImportError as exc:  # the `web` extra is not installed
+    except ImportError as exc:  # a damaged installation: these are ordinary dependencies
         raise CliError(
-            "the web interface needs its extra dependencies: `uv tool install 'calu[web]'` "
-            f"(or `uv sync --extra web` in a clone). {exc}"
+            "a package of the web interface is missing; install calu again: "
+            f"`uv tool install --reinstall calu` (or `uv sync` in a clone). {exc}"
         ) from exc
     try:
         check_host(args.host)

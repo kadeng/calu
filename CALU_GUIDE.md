@@ -717,9 +717,8 @@ is written, the thinking, the tool results as they arrive. That is what attachin
 
 ## Attached to a session
 
-`calu attach` on a terminal starts the **full-screen client** (the optional extra `tui`:
-`uv sync --extra tui`, or `--all-extras`). `calu attach --plain`, a pipe, `TERM=dumb` or a
-missing Textual give the **line client** described at the end of this section. Detaching
+`calu attach` on a terminal starts the **full-screen client**. `calu attach --plain`, a pipe
+or `TERM=dumb` give the **line client** described at the end of this section. Detaching
 (`ctrl+d`) leaves the session running.
 
 **The screen.** A status line (state, model and effort, what waits for you, cost, context),
@@ -1070,9 +1069,17 @@ not.
 
 ## Installation and configuration reference
 
-`uv tool install` installs the wheel, and `calu doctor` reports what is still missing; a
-single-file binary can be built with `scripts/build-binary.sh` (70 MiB, no Python needed to run
-it) but is not published yet.
+calu is one package; installing it installs every command, the web interface and the
+full-screen client included:
+
+```bash
+uv tool install git+https://github.com/kadeng/calu      # until calu is on PyPI
+uv tool upgrade calu                                    # later: the newest commit
+```
+
+uv downloads a Python 3.14 if the machine has none and puts the `calu` command into
+`~/.local/bin`. `calu doctor` reports what is still missing. A single-file binary can be built
+with `scripts/build-binary.sh` (no Python needed to run it) but is not published yet.
 
 `calu db reset` starts over: it drops every table and creates the database again as a fresh
 `calu setup` leaves it, so sessions, steps, escalations, projects, rules, checker instructions

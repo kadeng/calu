@@ -139,7 +139,7 @@ def test_calu_attach_uses_the_line_client_unless_a_terminal_is_there(
     monkeypatch.setattr(start, "problem", lambda: start.NOT_INSTALLED)
     assert capsys.readouterr().err == ""
     assert not wants_full_screen(plain=False)
-    assert "pip install 'calu[tui]'" in capsys.readouterr().err
+    assert "uv tool install --reinstall calu" in capsys.readouterr().err
 
 
 def test_cmd_attach_starts_the_chosen_client_and_prints_what_is_left(

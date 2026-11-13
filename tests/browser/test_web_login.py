@@ -22,8 +22,8 @@ from tests.db.test_web import populate
 from tests.db.test_web_live import gone_quiet, running
 
 # The web interface is an optional extra, so a checkout synced without it skips these
-# tests instead of failing to collect them (`uv sync --all-extras`, docs/TESTING.md).
-WEB_EXTRA = "the web interface needs the `web` extra: uv sync --all-extras"
+# tests instead of failing to collect them (`uv sync`, docs/TESTING.md).
+WEB_EXTRA = "the web interface's packages are missing: uv sync"
 pytest.importorskip("starlette", reason=WEB_EXTRA)
 pytest.importorskip("jinja2", reason=WEB_EXTRA)
 

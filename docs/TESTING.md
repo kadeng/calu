@@ -34,9 +34,9 @@ a public address. The first three need neither Docker nor a database; coverage d
 code that runs in a child process -- `calu/acp/serve.py` and the input loop of
 `calu/attach.py` are exercised end to end while reporting as uncovered.
 
-Sync with `uv sync --all-extras`: the web interface and the full-screen terminal client are
-optional extras (`web`, `tui`), and the tests that need them skip without them with a message
-saying so, rather than failing to collect.
+Sync with `uv sync`: the web interface and the full-screen terminal client are part of the one
+package (no optional extras since 2026-11-13). The tests that need their packages still skip
+with a message when one cannot be imported, rather than failing to collect.
 
 ### The full-screen terminal client (`calu attach`)
 

@@ -313,11 +313,11 @@ def directory_findings() -> list[Finding]:
 
 
 def extra_findings() -> list[Finding]:
-    """Check the optional dependencies of the commands that need them.
+    """Check that the packages of the web interface can be imported.
 
-    The web interface is the `web` extra, so an installation made without it has every other
-    command but fails on `calu web`. That is worth saying here rather than only when the command
-    is run.
+    They are ordinary dependencies of calu (no optional extra since 2026-11-13), so a missing
+    one means a damaged installation. Every other command works without them, which is worth
+    saying here rather than only when `calu web` is run.
 
     Returns:
         One finding for the web interface; never essential, because a session does not need it.
@@ -328,12 +328,12 @@ def extra_findings() -> list[Finding]:
             Finding(
                 "web interface",
                 False,
-                f"the `web` extra is not installed ({', '.join(missing)} missing)",
-                "`uv tool install 'calu[web]'` (or `uv sync --all-extras` in a clone); "
-                "every other command works without it.",
+                f"its packages are not installed ({', '.join(missing)} missing)",
+                "install calu again: `uv tool install --reinstall calu` (or `uv sync` in a "
+                "clone); every other command works without it.",
             )
         ]
-    return [Finding("web interface", True, "the `web` extra is installed", "")]
+    return [Finding("web interface", True, "its packages are installed", "")]
 
 
 async def database_findings(url: str) -> list[Finding]:

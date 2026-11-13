@@ -14,7 +14,7 @@ import pytest
 
 import calu.protocol.server as protocol_server
 
-pytest.importorskip("starlette", reason="the web interface needs the `web` extra")
+pytest.importorskip("starlette", reason="the web interface's packages are missing: uv sync")
 
 from calu.web.app import LIVE_METHODS  # imported after the guard above
 
