@@ -50,6 +50,7 @@ printed token still attaches unless it was seen revoked, and a minted token cann
 import json
 import logging
 import secrets
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,7 @@ from pydantic import BaseModel, ValidationError
 from websockets.asyncio.server import ServerConnection, serve, unix_serve
 from websockets.exceptions import ConnectionClosed
 
+from calu import asuser, localsocket
 from calu.bus import Bus, Subscription
 from calu.protocol.messages import (
     CLOSE_FELL_BEHIND,
@@ -828,13 +830,52 @@ class SessionServer:
             with anyio.CancelScope(shield=True):
                 await anyio.to_thread.run_sync(_remove_socket, socket_path)
 
-    async def _handle(self, connection: ServerConnection) -> None:
-        """Serve one WebSocket connection until it closes. Never raises.
+    async def listen_local(self, listener: socket.socket, path: Path) -> None:
+        """Accept root clients on the session's root-owned socket (PLAN.md D215).
+
+        Runs next to `listen`, until `shutdown` is set or the caller is cancelled. A
+        connection whose peer the kernel reports as root needs no client token; any other
+        peer is treated like a TCP client and has to show one.
+
+        Side effect: removes the socket file when it stops.
+
+        Args:
+            listener: The listening socket (`calu.localsocket.bind`).
+            path: Its path, for the removal.
+
+        Raises:
+            OSError: If the socket cannot be served.
+        """
+        try:
+            # `cleanup_socket=False`: the event loop would look at the socket file to remove
+            # it later, with the file access of this thread, which may be the user's; the
+            # file is removed below with root's.
+            async with await unix_serve(self._handle_local, sock=listener, cleanup_socket=False):
+                log.info("root clients are accepted on %s", path)
+                await self.shutdown.wait()
+        finally:
+            with anyio.CancelScope(shield=True):
+                await anyio.to_thread.run_sync(asuser.as_root, _remove_socket, path)
+
+    async def _handle_local(self, connection: ServerConnection) -> None:
+        """Serve one connection of the root-owned socket until it closes. Never raises.
 
         Args:
             connection: The accepted connection.
         """
-        client = Client(self, connection)
+        peer = connection.transport.get_extra_info("socket")
+        trusted = peer is not None and localsocket.peer_uid(peer) == 0
+        await self._handle(connection, trusted)
+
+    async def _handle(self, connection: ServerConnection, trusted: bool = False) -> None:
+        """Serve one WebSocket connection until it closes. Never raises.
+
+        Args:
+            connection: The accepted connection.
+            trusted: Whether the connection came over the root-owned socket from root, so
+                that it needs no client token.
+        """
+        client = Client(self, connection, trusted)
         self._clients.add(client)
         try:
             await client.serve()
@@ -850,13 +891,19 @@ class SessionServer:
 class Client:
     """One connected client: its authentication, its requests and its event stream."""
 
-    def __init__(self, server: SessionServer, connection: ServerConnection) -> None:
+    def __init__(
+        self, server: SessionServer, connection: ServerConnection, trusted: bool = False
+    ) -> None:
         """Wrap an accepted connection.
 
         Args:
             server: The server this client belongs to.
             connection: The WebSocket connection.
+            trusted: Whether the peer is root on the session's root-owned socket: such a
+                client is authenticated by `initialize` whatever token it sends, and has no
+                token that could be revoked (PLAN.md D215).
         """
+        self.trusted = trusted
         self.server = server
         self.connection = connection
         self.name = ""
@@ -1200,6 +1247,13 @@ class Client:
                 outage is not reported as a wrong token, and the printed token still works
                 then, unless it was seen revoked before the outage.
         """
+        if self.trusted:
+            self.authenticated = True
+            self.name = params.client
+            log.info("root client %r connected on the local socket", self.name)
+            return self.server.session.initialize_result().model_copy(
+                update={"last_seq": self.server.bus.last_seq}
+            )
         try:
             sha = await self.server.authenticate(params.token)
         except TokenCheckUnavailable as error:
@@ -1226,6 +1280,8 @@ class Client:
         Returns:
             False if the token was revoked since `initialize`; True otherwise.
         """
+        if self.trusted:
+            return True
         if self.token_sha256 is None:
             return False
         if await self.server.still_valid(self.token_sha256):

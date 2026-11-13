@@ -105,6 +105,10 @@ broken down or extended. Derived requirements and design decisions belong in
       sudo (suggested 2026-11-13): it then has privileged abilities with ease of use, and
       Claude cannot reach it. It should then also list sessions and switch between them
       without a new authentication, as `calu serve` starts sessions without one.
+    - A session also listens on a root-owned Unix socket, in addition to TCP (stated
+      2026-11-13). For connections over that socket the token authentication is skipped. It
+      must be verified that the socket is actually owned by root and limited to mode 0600
+      or similar.
 27. `calu serve` (stated 2026-11-13): another run mode that works like `calu run` but can
     spawn and track multiple calu/Claude sessions in various project directories on the same
     system. With it, forking a session or creating a new one needs no new authentication each

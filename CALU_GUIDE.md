@@ -1183,6 +1183,11 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   `/fork`, and switching between sessions with `/running` and `/switch <beginning of an id>`
   all use the login it holds in memory. Nothing Claude Code starts can read or steer a
   client that runs as root. Its editor and git program still run as you.
+- **Root clients need no token.** A session that runs as root also listens on a Unix socket
+  that only root can reach, `/run/calu/sessions/<session id>.sock` (mode 0600, in a directory
+  with mode 0700). `calu attach --sudo` uses it: it checks that the socket and its directory
+  are root's alone, and the session checks with the kernel that the peer is root. The TCP
+  port with its tokens stays for every other client.
 - **Changing settings from your own account.** What is privileged are calu's files, not the
   ability to change settings. `calu setup` gives the database role `calu_admin` the admin
   password you chose. With only an `operator` credential in your own store, `calu config`,

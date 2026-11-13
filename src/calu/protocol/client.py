@@ -23,6 +23,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -30,6 +31,7 @@ from websockets.asyncio.client import ClientConnection, unix_connect
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
+from calu import asuser, localsocket
 from calu.protocol.messages import CLOSE_FELL_BEHIND
 
 log = logging.getLogger(__name__)
@@ -260,7 +262,15 @@ async def _open(address: str) -> AsyncGenerator[ClientConnection]:
         OSError: If the address cannot be reached.
     """
     if address.startswith(UNIX_PREFIX):
-        async with unix_connect(address[len(UNIX_PREFIX) :], "ws://localhost/") as connection:
+        path = Path(address[len(UNIX_PREFIX) :])
+        if localsocket.ROOT in path.parents:
+            # A session's root-owned socket (D215): checked to be root's alone before
+            # anything is sent, and opened with root's file access.
+            opened = await anyio.to_thread.run_sync(asuser.as_root, localsocket.connected, path)
+            connecting = unix_connect(None, "ws://localhost/", sock=opened)
+        else:
+            connecting = unix_connect(str(path), "ws://localhost/")
+        async with connecting as connection:
             yield connection
         return
     async with ws_connect(address) as connection:

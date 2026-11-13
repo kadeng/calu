@@ -38,6 +38,7 @@ phases.
 | `src/calu/setup.py` | `calu setup`: migrations, default checkers and rules, session login |
 | `src/calu/run.py` | `calu run`: credentials, connections, session, protocol server, terminal output |
 | `src/calu/launch.py` | The console script `calu-claude`, which starts Claude Code as another user with an environment built for it (D207); a module of its own outside `calu.claude`, so that the launcher imports little |
+| `src/calu/localsocket.py` | The root-owned Unix socket of a root session: binding it, checking that it is root's alone, connecting, and asking the kernel for the peer's uid (D215) |
 | `src/calu/asuser.py` | calu as root: its own file access and the programs it starts in the project run as the unprivileged user (`resolve` reads `--user`, `prepare` creates that user's directories, `enter` switches, `child` gives the arguments for a program start) (D206) |
 | `src/calu/serve.py` | `calu serve`: one process that holds the session login and runs many sessions as tasks; it claims requests from the database and runs each as `calu.run` does (D208) |
 | `src/calu/session_requests.py` | The rows `calu start` writes and `calu serve` answers: filing, claiming, finishing, waiting, withdrawing |

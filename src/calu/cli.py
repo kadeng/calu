@@ -76,7 +76,7 @@ from typing import Any
 import anyio
 import psycopg
 
-from calu import __version__, admin, asuser, doctor, herd, session_requests
+from calu import __version__, admin, asuser, doctor, herd, localsocket, session_requests
 from calu.acp import serve_acp
 from calu.attach import attach
 from calu.claude.transcripts import transcripts, user_inputs
@@ -1510,6 +1510,9 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         address, claude_id = row if row is not None else ("", "")
         if args.no_attach:
             return Endpoint(address, "", None, done.session_id), claude_id
+        local = _local_endpoint(done.session_id)
+        if local is not None:
+            return local, claude_id
         token_id, token = await herd.mint_token(db, done.session_id, "calu start")
         return Endpoint(address, token, token_id, done.session_id), claude_id
 
@@ -1746,6 +1749,26 @@ def _inside(path: Path, directory: str) -> bool:
         return False
 
 
+def _local_endpoint(session_id: str) -> Endpoint | None:
+    """Return a session's root-owned socket as the endpoint, for a client that is root (D215).
+
+    Args:
+        session_id: The id of the session's row.
+
+    Returns:
+        The endpoint, without a token, if this process is root and the session's socket
+        exists and is root's alone (`calu.localsocket.problems`); else None, and the caller
+        uses the session's address with a token. The socket is checked again when the
+        client connects.
+    """
+    if os.geteuid() != 0:
+        return None
+    path = localsocket.path_of(session_id)
+    if asuser.as_root(localsocket.problems, path):
+        return None
+    return Endpoint(f"unix:{path}", "", None, session_id)
+
+
 def _find_endpoint(
     store: CredentialStore, hint: str | None, label: str, may_ask: bool = True
 ) -> Endpoint:
@@ -1786,6 +1809,9 @@ def _find_endpoint(
             The endpoint.
         """
         row = _pick_session(await herd.sessions(db, active_only=True), hint)
+        local = _local_endpoint(row.id)
+        if local is not None:
+            return local
         token_id, token = await herd.mint_token(db, row.id, label)
         return Endpoint(row.address, token, token_id, row.id)
 

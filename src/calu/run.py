@@ -58,7 +58,7 @@ import psycopg
 from pydantic import ValidationError
 from pydantic_ai.models import Model
 
-from calu import asuser, herd, preflight
+from calu import asuser, herd, localsocket, preflight
 from calu.bus import Bus
 from calu.claude.runner import ClaudeRunner, Fork
 from calu.claude.sdk_runner import SdkRunner
@@ -1203,6 +1203,20 @@ async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | N
     return Fork(resume_at=point.resume_at, drops_turn=point.drops_turn, before_turn=turn)
 
 
+async def _serve_root_clients(server: SessionServer, listener: socket.socket, path: Path) -> None:
+    """Serve the root-owned socket; a failure costs that socket, not the session.
+
+    Args:
+        server: The protocol server.
+        listener: The listening socket.
+        path: Its path.
+    """
+    try:
+        await server.listen_local(listener, path)
+    except OSError as exc:
+        say(f"calu: the socket for root clients stopped ({exc}); they use the token", True)
+
+
 def default_socket_path() -> Path:
     """Return where a session puts its Unix socket when `--socket` is given without a path.
 
@@ -1273,6 +1287,20 @@ async def _listen(
                     await store.add_client_token(token_hash(token), server.address)
                 except Exception:
                     log.exception("recording the address and the client token failed")
+            if os.geteuid() == 0 and store.session_id is not None:
+                # A root session also accepts root clients on a socket only root can reach,
+                # without a token (D215). Created with root's file access, which this
+                # process may have given up for its own work.
+                path = localsocket.path_of(str(store.session_id))
+                try:
+                    listener = await anyio.to_thread.run_sync(
+                        asuser.as_root, localsocket.bind, path
+                    )
+                except (OSError, asuser.UserError) as exc:
+                    say(f"calu: no socket for root clients ({exc}); they use the token", True)
+                else:
+                    tg.start_soon(_serve_root_clients, server, listener, path)
+                    say(f"[clients] root clients, without a token: unix:{path}")
             if on_serving is not None:
                 await on_serving(server.address, token)
             if on_ready is not None:

@@ -689,6 +689,19 @@ access of the process, and a single thread can be given root's file access back 
 needed. `spikes/smoke_privileged.sh` is the same with a whole session and the real Claude
 Code: command, git filter and all written files were uid 1000.
 
+## The session's root-owned socket after the switch to the user (D215, 2026-11-13)
+
+**Setup:** `spikes/spike_root_socket.py` as root in a `postgres:18` container: the process
+switches its file identity to uid 1000 (`asuser.enter`), then binds
+`/run/calu/sessions/<id>.sock` through `asuser.as_root`.
+
+**Results:** the socket is `0:0 0600`, its directory `0:0 0700`. With the process's own file
+access the socket cannot even be examined (`NotTrusted`). A connection opened through
+`asuser.as_root` is accepted, and the kernel reports its peer as uid 0. The check finds no
+problem. The first attempt with a whole session failed: asyncio looked at the socket file
+to clean it up later, with the user's access (`PermissionError`); `cleanup_socket=False`
+and a removal through `as_root` fixed it.
+
 ## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
 
 **Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable

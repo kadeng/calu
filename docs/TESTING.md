@@ -203,6 +203,7 @@ them by hand; they use throwaway directories and databases.
 | `scripts/build-binary.sh` | Does a frozen one-file calu still find its package data, and what does it cost? (Q15) | a dependency is added or pydantic-ai is updated (the release workflow runs it on every tag) |
 | `smoke_session.py` | A whole calu session against the real `claude` | before a release, and after changes to the runner |
 | `smoke_privileged.sh` | calu as root with `--user 1000` and the real `claude` in the development image: who a command, git's filter and calu's files end up as (D211) | after changes to `calu.asuser`, `calu.launch` or to where calu starts a program |
+| `spike_root_socket.py` | After the switch to the user's file identity: is the session's socket root's alone, closed to the process's own access, and is a root peer reported as uid 0? (D215) | after changes to `calu.localsocket` or `asuser.as_root` |
 | `spike_fs_identity.py` | Is the file-system identity of a root process per thread, and inherited by new threads? (yes; D211 rests on it) | a kernel or C library that behaves differently is suspected |
 | `smoke_serve.py` | `calu serve` with the real `claude`: two sessions at once in two directories, and a fork started through the server (D208) | after changes to `calu.serve` or to how a session is started |
 
@@ -471,7 +472,10 @@ escalation resolved from the database alone.
    ask nothing; `/running` must list the sessions, `/switch <id>` must attach to another
    one without a password, and `f4` and the editor must run as you (a file they create
    belongs to you). As yourself, without `--sudo`: saving must ask for the admin password
-   and accept it after `sudo calu setup` has run once (D213). **Never run.**
+   and accept it after `sudo calu setup` has run once (D213). `calu run --sudo` must print
+   a line `[clients] root clients, without a token: unix:/run/calu/sessions/<id>.sock`, and
+   `sudo ls -l /run/calu/sessions` must show that socket as `srw------- root root`; `calu
+   token list` must show no new token for the `--sudo` client (D215). **Never run.**
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of

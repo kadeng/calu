@@ -23,7 +23,7 @@ import pwd
 import stat
 import sys
 import threading
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -188,6 +188,45 @@ def enter(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
     os.environ["XDG_STATE_HOME"] = str(state_home(run_as, state_root))
     os.environ["CLAUDE_CONFIG_DIR"] = str(Path(run_as.home) / ".claude")
     _active = run_as
+
+
+def as_root[T](work: Callable[..., T], *arguments: Any) -> T:
+    """Run a function with root's file access, also after `enter`.
+
+    Before `enter` the function is simply called. After it, the function runs in a thread of
+    its own whose file-system identity is set back to root; the calling thread and every
+    other thread keep the user's (measured: `spikes/spike_fs_identity.py`). Blocks until the
+    function returns. Use it only for calu's own files, never for a path the user controls.
+
+    Args:
+        work: The function.
+        *arguments: Its arguments.
+
+    Returns:
+        What the function returned.
+
+    Raises:
+        UserError: If the thread cannot get root's identity.
+    """
+    if _active is None:
+        return work(*arguments)
+    outcome: list[T] = []
+    failure: list[BaseException] = []
+
+    def body() -> None:
+        """Take root's file identity, call the function and keep its outcome."""
+        try:
+            fs_identity(0, 0, (0,))
+            outcome.append(work(*arguments))
+        except BaseException as exc:
+            failure.append(exc)
+
+    thread = threading.Thread(target=body, name="calu-as-root")
+    thread.start()
+    thread.join()
+    if failure:
+        raise failure[0]
+    return outcome[0]
 
 
 def active() -> RunAs | None:
