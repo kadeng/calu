@@ -42,14 +42,28 @@ on the pushes before `8173a86`; check `gh run list --limit 3` for the last ones.
    - Measured already (`spikes/RESULTS.md`, "Claude Code as a bare uid"): Claude Code runs as
      a uid without name and home, but then stores nothing and cannot resume; with a writable
      `HOME` it works fully.
-   - **First step: a spike** that starts Claude Code under another uid through the Agent SDK
-     (`ClaudeAgentOptions` has a `user` option: verify what it does) with the PreToolUse and
-     PostToolUse hooks, `can_use_tool` and the side question working across the two users.
-     This machine has `docker` but **no passwordless sudo** (`sudo -n true` fails), so run
-     the spike in a container as root (mount the `claude` binary, `readlink -f
-     ~/.local/bin/claude`, into a glibc image such as `postgres:18`, pass `ANTHROPIC_API_KEY`
-     and `ANTHROPIC_BASE_URL`, `--network host`); that is how the bare-uid measurement was
-     made.
+   - **The first spike is done** (`spikes/spike_other_uid.sh`, `spikes/RESULTS.md`, "calu as
+     root, Claude Code as another uid"): with calu as root and Claude Code as uid 1000 the
+     PreToolUse and PostToolUse hooks, `can_use_tool`, the side question and a resume all
+     work; a command of Claude Code could not read a root-only file, the root process's
+     environment, or signal it. Two things the build must do: **not use the SDK's `user`
+     option** (it changes the uid only; gid and groups stay root's, and a uid as a string
+     fails without passwd entry) but put its own user change in front of `claude` through
+     `cli_path` (uid, gid, supplementary groups); and **build Claude Code's environment from
+     an empty one**, because the SDK passes its own process's whole environment on.
+   - How the spike runs, for the next ones: this machine has `docker` but **no passwordless
+     sudo** (`sudo -n true` fails), so as root in a container (`postgres:18`, the checkout
+     and the uv Python directory mounted read-only at their own paths, `ANTHROPIC_API_KEY`
+     and `ANTHROPIC_BASE_URL` passed, `--network host`). That image has no git, bubblewrap or
+     socat.
+   - **Still to measure before or while building:** Claude Code's sandbox under the other
+     uid; a named user with its own home; git run by calu as the other user; the
+     re-execution through sudo (needs the owner's terminal, sudo asks a password).
+   - **Then build**, in this order: the user change in front of `claude` and the clean
+     environment (a module of its own, testable without root); `calu run --user`, refused as
+     root without it (condition d); git and the write-set snapshots as the other user
+     (condition b); the re-execution through sudo with the installation check (conditions a
+     and c); the system directories.
    - Until it is built: `calu run` works as before (one user); with the RDS variant only the
      sandbox's read deny list keeps Claude's commands from `~/.aws`. Do not make `calu run`
      usable as root before Claude Code really runs under another user.

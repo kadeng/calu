@@ -617,6 +617,51 @@ glibc image), `--user 1000:1000`, the API key passed in the environment. One pro
 **Conclusion:** the missing name is no problem; a writable `HOME` is needed for everything
 that outlives one prompt. calu gives Claude Code a state directory owned by that uid.
 
+## calu as root, Claude Code as another uid, through the Agent SDK (D206, 2026-11-13, CLI 2.1.319)
+
+**Question:** the process that holds the hooks and the permission callback runs as root and
+Claude Code runs under an unprivileged uid without passwd entry. Do the PreToolUse and
+PostToolUse hooks, `can_use_tool`, the side question and a resume still work, and which
+identity does a command of Claude Code get?
+
+**Setup:** `spikes/spike_other_uid.sh MODE WORKSPACE` runs `spikes/spike_other_uid.py` as root
+in a `postgres:18` container (the checkout and its virtual environment mounted read-only, the
+workspace owned by uid 1000, `HOME` of Claude Code set to `/var/lib/calu/claude/1000`, owned
+by that uid, mode 0700). One turn runs a script through the Bash tool that prints its
+identity, tries to read a file only root may read, tries to read the root process's
+environment and to signal it, and sleeps; a side question is asked meanwhile; then the
+conversation is resumed in a second client.
+
+**Results:**
+
+| | `ClaudeAgentOptions(user=1000)` | `cli_path` = a script that runs `setpriv --reuid 1000 --regid 1000 --clear-groups claude "$@"` |
+|---|---|---|
+| identity of a command | `uid=1000 gid=0(root) groups=0(root)` | `uid=1000 gid=1000 groups=1000` |
+| files it creates | `1000:0` | `1000:1000` |
+| PreToolUse, PostToolUse, `can_use_tool` | called, in the root process | called, in the root process |
+| side question during a running command | answered | answered |
+| conversation stored in the state directory, resume | works | works |
+| file with mode 0600 of root | permission denied | permission denied |
+| `/proc/<pid of the root process>/environ` | permission denied | permission denied |
+| signal to the root process | not permitted | not permitted |
+
+- `user="1000"` (a string, which is what the SDK's type says) fails for a uid without passwd
+  entry: `getpwnam(): name not found: '1000'`. An `int` works, against the declared type.
+- The SDK's `user` changes the uid only: the group and the supplementary groups stay root's.
+  A command of Claude Code could then read and write everything that root's group may.
+- The SDK starts Claude Code with the whole environment of its own process plus
+  `options.env`: a variable set only in the root process was visible to the command.
+
+**Conclusion:** the model of D206 works with the Agent SDK as it is; the callbacks need
+nothing from the other user. calu must not use the SDK's `user` option. It changes the user
+itself in front of `claude` (uid, gid and supplementary groups together) and builds that
+process's environment from an empty one, so that nothing of the root process's environment
+(database and AWS variables, `SUDO_*`) reaches Claude Code.
+
+**Not measured:** Claude Code's own sandbox (bubblewrap, socat) under the other uid, a
+claude.ai login kept in the state directory, a named user with its own home directory, git
+run by calu as the other user, and the re-execution through sudo.
+
 ## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
 
 **Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable

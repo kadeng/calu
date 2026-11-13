@@ -196,6 +196,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_auto_mode_ask.py` | Does auto mode ask rather than only allow or deny? (D38) | the CLI changes |
 | `spike_dev_channel.py` | Does `--dangerously-load-development-channels` have an effect in the headless mode calu uses? (no: ignored) | the CLI changes |
 | `spike_session_id.py` | Does Claude Code take the session id calu chooses, for a new session and for a fork of a whole conversation? (D203) | the CLI or the SDK changes |
+| `spike_other_uid.sh` (runs `spike_other_uid.py` as root in a container) | Do the hooks, the permission callback, the side question and a resume work when calu is root and Claude Code another uid, and which uid, gid and groups does a command get? (D206) | the CLI or the SDK changes |
 | `spike_calu_fork.py` | Does `calu run --fork-before-turn` branch a conversation calu recorded? | the fork code changes |
 | `spike_rewind_files.py` | What does `rewind_files` put back -- tool edits only, or a command's writes too? (D46) | the SDK or the CLI changes what checkpointing tracks |
 | `spike_session_rls.py` | Would row-level security keyed on a per-connection session id separate two sessions? (Q3) | the schema gains a table a session writes |
