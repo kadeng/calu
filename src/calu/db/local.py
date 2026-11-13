@@ -236,6 +236,39 @@ def owner_target(password: str, port: int = DEFAULT_PORT, data: str = VOLUME_DAT
     )
 
 
+def container_data() -> str | None:
+    """Say where the existing container of the local database keeps the cluster's files.
+
+    Returns:
+        The host directory that is mounted, or `volume:<name>` for a named volume; None if
+        no container of the compose project exists, running or stopped, or docker cannot be
+        asked (the start that follows reports that).
+    """
+    try:
+        found = _run(
+            ["docker", "ps", "-a", "-q", "--filter", f"label=com.docker.compose.project={PROJECT}"]
+        )
+        ids = found.stdout.split()
+        if found.returncode != 0 or not ids:
+            return None
+        shown = _run(
+            [
+                "docker",
+                "inspect",
+                ids[0],
+                "--format",
+                '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}'
+                "{{.Type}} {{.Name}} {{.Source}}{{end}}{{end}}",
+            ]
+        )
+    except DockerError:
+        return None
+    parts = shown.stdout.split()
+    if shown.returncode != 0 or len(parts) < 2:
+        return None
+    return f"volume:{parts[1]}" if parts[0] == "volume" else parts[-1]
+
+
 def up(
     port: int = DEFAULT_PORT, owner_password: str | None = None, data: str = VOLUME_DATA
 ) -> None:
@@ -255,12 +288,27 @@ def up(
     Raises:
         ValueError: If nothing is initialized at `data` and no owner password is given: a
             start without one never creates a new, empty database.
-        DockerError: If docker is missing or `docker compose up` fails.
+        DockerError: If docker is missing, `docker compose up` fails, or a container of the
+            local database exists whose files are somewhere else than `data` (nothing is
+            started or changed then).
     """
     if owner_password is None and not initialized(data):
         raise ValueError("the first start needs the owner password")
     env = {"CALU_DB_PORT": str(port), "CALU_DB_OWNER_PASSWORD": owner_password or ""}
     mount = mount_of(data)
+    wanted = str(mount) if mount is not None else VOLUME_DATA
+    existing = container_data()
+    if existing is not None and existing != wanted:
+        # `docker compose up` would replace that container: a database that sessions may be
+        # using would stop, and another one would answer on its port.
+        raise DockerError(
+            f"a local calu database already exists on this machine, with its files in "
+            f"{existing}; starting one with its files in {wanted} would replace its "
+            "container. One machine has one local calu database. To keep using the existing "
+            "one, use the credentials that were set up for it (as another user: copy that "
+            "user's credential store); to replace it, stop it first with `calu db down` as "
+            "the user who set it up"
+        )
     if mount is not None:
         env["CALU_DB_DATA"] = str(mount)
     command = ["docker", "compose", "-f", str(compose_file()), "-p", PROJECT, "up", "-d", "--wait"]

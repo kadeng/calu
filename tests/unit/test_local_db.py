@@ -66,6 +66,36 @@ def calls(log: Path) -> list[dict]:
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
 
 
+def composed(log: Path) -> list[dict]:
+    """Read the recorded `docker compose` calls, without the questions about containers.
+
+    Args:
+        log: The log file.
+
+    Returns:
+        One entry per `docker compose` call.
+    """
+    return [call for call in calls(log) if "compose" in call["args"]]
+
+
+def test_a_start_never_replaces_a_database_that_keeps_its_files_elsewhere(
+    docker: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What happened on 2026-11-13: a setup as root replaced the user's running database.
+
+    Uses a stub `docker` that records its calls in `tmp_path`; nothing is started.
+    """
+    data = str(local.prepare_data_dir(tmp_path / "db"))
+    monkeypatch.setattr(local, "container_data", lambda: "volume:calu-db_data")
+    with pytest.raises(local.DockerError, match="already exists on this machine"):
+        local.up(5544, "owner-pw", data)
+    assert composed(docker) == []
+    # The same location is the same database: a restart, or a repeated first start.
+    monkeypatch.setattr(local, "container_data", lambda: f"{data}/pg")
+    local.up(5544, "owner-pw", data)
+    assert len([call for call in composed(docker) if "up" in call["args"]]) == 2
+
+
 def test_the_first_start_needs_a_password_and_passes_it_to_the_container(docker: Path) -> None:
     """Without a volume the password makes the owner, so it must not be silently skipped."""
     # The stub answers "no such volume" (exit 1) for the inspect, so this is a first start.
@@ -194,7 +224,7 @@ def test_the_container_mounts_the_chosen_directory(docker: Path, tmp_path: Path)
     with pytest.raises(ValueError, match="owner password"):
         local.up(5544, None, data)  # nothing initialized there: never create a database unasked
     local.up(5544, "owner-pw", data)
-    first, second = calls(docker)[:2]
+    first, second = composed(docker)[:2]
     assert first["env"] == {
         "CALU_DB_PORT": "5544",
         "CALU_DB_OWNER_PASSWORD": "owner-pw",
@@ -229,7 +259,7 @@ def test_a_stopped_local_database_is_started_when_it_is_needed(
     docker.unlink()
     (Path(data) / "pg" / "18").mkdir()
     assert local.ensure_running(block) is True
-    started = calls(docker)[0]
+    started = composed(docker)[0]
     assert started["args"][-3:] == ["up", "-d", "--wait"]
     assert started["env"]["CALU_DB_DATA"] == f"{data}/pg"
     assert started["env"]["CALU_DB_OWNER_PASSWORD"] == "", "no secret goes to docker"
