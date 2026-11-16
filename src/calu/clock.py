@@ -9,10 +9,16 @@ So calu compares its own two clocks:
 
     drift = (CLOCK_REALTIME now - before) - (CLOCK_BOOTTIME now - before)
 
-`CLOCK_BOOTTIME` cannot be set and keeps counting while the host sleeps, so a drift means the
-wall clock was moved, not that time passed differently. Boottime rather than `CLOCK_MONOTONIC`
-is used on purpose: monotonic stops during suspend, so a laptop or a WSL host that was asleep
-would look like a forward jump of hours.
+`CLOCK_BOOTTIME` cannot be set, so a drift means the wall clock was moved relative to it.
+Boottime rather than `CLOCK_MONOTONIC` is used on purpose: monotonic stops while the machine
+itself is suspended, boottime keeps counting then.
+
+A virtual machine that its host pauses is different: neither clock counts while it is paused,
+and the host sets the wall clock right afterwards. Measured on WSL2 (2026-11-16): after 57 h
+of uptime with the Windows host asleep several times, `CLOCK_BOOTTIME` and `CLOCK_MONOTONIC`
+were equal, and every sleep showed up as a forward jump of its length (hours), sometimes
+followed by a small backward correction of the time synchronisation. A forward jump is
+therefore reported as what it most often is, a pause of the machine.
 
 - A backward jump of more than `max_backward_s` (default 1 s, far above the slew of a
   time-server sync) is reported as tampering: the session escalates its next tool call, so
@@ -73,12 +79,20 @@ class ClockJump:
         """Describe the jump for a human and for the reason of an escalation.
 
         Returns:
-            One sentence naming the direction and the size.
+            The direction and the size; for a forward jump also its usual cause.
         """
         way = "backwards" if self.backward else "forwards"
-        return (
+        moved = (
             f"the wall clock moved {way} by {self.seconds:.1f} s relative to the boot clock, "
             f"which cannot be set"
+        )
+        if self.backward:
+            return moved
+        # Hours forwards is what a paused virtual machine looks like when it goes on.
+        return (
+            f"{moved}. The usual cause is that the machine was asleep or paused for that "
+            "long (a laptop's sleep under WSL2, a suspended virtual machine); a first time "
+            "synchronisation after a boot does the same"
         )
 
 
