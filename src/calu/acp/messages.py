@@ -20,6 +20,7 @@ What calu deliberately does **not** use (§6.1, points 3 and 4):
 Both are therefore reported as unsupported or ignored, never forwarded.
 """
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -217,8 +218,10 @@ def initialize_result(name: str, version: str) -> dict[str, Any]:
     """Build the result of `initialize`.
 
     `loadSession` is advertised, because calu can replay a conversation from the database
-    (`session.history`). The prompt capabilities stay at their defaults, so the client sends
-    only the baseline `text` and `resource_link` blocks, plus `resource` for embedded context.
+    (`session.history`). A prompt may carry text, embedded context and images (calu's chat
+    takes images, D220), no audio. `session/list` is offered and names the one session this
+    adapter serves: an editor that lists an agent's sessions (JetBrains asks every minute)
+    otherwise takes the agent for one that cannot be used in the project.
 
     Args:
         name: Name of this agent, as the client shows it.
@@ -231,11 +234,11 @@ def initialize_result(name: str, version: str) -> dict[str, Any]:
         "protocolVersion": PROTOCOL_VERSION,
         "agentCapabilities": {
             "loadSession": True,
-            "promptCapabilities": {"image": False, "audio": False, "embeddedContext": True},
+            "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True},
             "mcpCapabilities": {"http": False, "sse": False},
             # `session/close` is handled; the schema (v1) says a client may only call it when
             # the agent offers it here (D152).
-            "sessionCapabilities": {"close": {}},
+            "sessionCapabilities": {"close": {}, "list": {}},
         },
         "agentInfo": {"name": name, "version": version},
         "authMethods": [],
@@ -246,9 +249,9 @@ def prompt_text(blocks: list[dict[str, Any]]) -> str:
     """Turn the content blocks of `session/prompt` into the text calu sends to Claude.
 
     Understood: "text" (its text), "resource" (the embedded text, with its uri as a heading) and
-    "resource_link" (the uri). An "image" or "audio" block is named but not passed on, because
-    the adapter does not advertise those capabilities; an unknown type is named by its type, so
-    that Claude is told something arrived rather than silently losing it.
+    "resource_link" (the uri). An "image" block is not text: `prompt_images` takes it. An
+    "audio" block or an unknown type is named by its type, so that Claude is told something
+    arrived rather than silently losing it.
 
     Args:
         blocks: The `prompt` array as the client sent it.
@@ -268,9 +271,53 @@ def prompt_text(blocks: list[dict[str, Any]]) -> str:
             parts.append(f"{uri}:\n\n{text}" if text else uri)
         elif kind == "resource_link":
             parts.append(str(block.get("uri", "")))
+        elif kind == "image":
+            continue
         else:
             parts.append(f"[a {kind or 'nameless'} content block, which calu does not accept]")
     return "\n\n".join(part for part in parts if part)
+
+
+WSL_SHARE = re.compile(r"^//(?:wsl\.localhost|wsl\$)/[^/]+(/.*)?$", re.IGNORECASE)
+"""How Windows names a directory inside a WSL distribution: `//wsl.localhost/<name>/<path>`
+(or the older `//wsl$/...`), after backslashes were turned into slashes."""
+
+
+def local_path(cwd: str) -> str:
+    """Turn the directory an editor names into the path it has where the adapter runs.
+
+    An editor on Windows whose project is inside WSL starts the adapter in WSL and may name
+    the project as Windows sees it, `//wsl.localhost/Ubuntu/home/ada/project` (with slashes
+    or with backslashes); inside WSL that directory is `/home/ada/project`.
+
+    Args:
+        cwd: The directory as the editor sent it.
+
+    Returns:
+        The path inside the distribution for a WSL share name; any other value unchanged.
+    """
+    found = WSL_SHARE.match(cwd.replace("\\", "/"))
+    return (found.group(1) or "/") if found else cwd
+
+
+def prompt_images(blocks: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Take the images out of the content blocks of `session/prompt`, as calu's chat sends them.
+
+    Args:
+        blocks: The `prompt` array as the client sent it.
+
+    Returns:
+        `{"media_type": ..., "data": ...}` per "image" block that carries base64 data, in
+        order; an image block without data (a bare uri) is left out. Whether calu accepts
+        the type and the size is decided by the session (`chat.send`).
+    """
+    images: list[dict[str, str]] = []
+    for block in blocks:
+        if str(block.get("type", "")) == "image" and block.get("data"):
+            images.append(
+                {"media_type": str(block.get("mimeType", "")), "data": str(block["data"])}
+            )
+    return images
 
 
 def text_block(text: str) -> dict[str, Any]:

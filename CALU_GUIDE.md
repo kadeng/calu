@@ -988,6 +988,18 @@ directory and it attaches to the session running there:
 { "command": "calu", "args": ["acp"] }
 ```
 
+An editor on Windows whose project is inside WSL starts the adapter inside WSL, in the
+project directory, with calu's own path:
+
+```json
+{ "command": "wsl.exe", "args": ["-d", "Ubuntu", "--cd", "/home/you/project", "/usr/local/bin/calu", "acp"] }
+```
+
+The adapter offers one session, the one that runs in that directory: an editor that lists
+an agent's sessions sees that one. A prompt may carry images, which Claude sees and the
+checkers do not (see the web interface above). A step that waits for a decision appears as
+the editor's permission question, with the command or the file it is about.
+
 The adapter has no terminal, so it cannot ask for a password: store the operator credential
 with `calu credential set operator --no-password` (above) and the editor needs no
 configuration beyond that line. With a password on it, the adapter says so and stops rather

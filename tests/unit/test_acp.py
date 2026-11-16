@@ -169,8 +169,8 @@ async def test_initialize_reports_the_protocol_version_and_what_calu_can_do() ->
         assert result["protocolVersion"] == 1
         assert result["agentCapabilities"]["loadSession"] is True
         # D152: a method the adapter handles has to be offered, or a client never calls it.
-        assert result["agentCapabilities"]["sessionCapabilities"] == {"close": {}}
-        assert result["agentCapabilities"]["promptCapabilities"]["image"] is False
+        assert result["agentCapabilities"]["sessionCapabilities"] == {"close": {}, "list": {}}
+        assert result["agentCapabilities"]["promptCapabilities"]["image"] is True
         assert result["authMethods"] == []
         assert result["agentInfo"]["name"] == "calu"
 
@@ -427,6 +427,10 @@ async def test_an_escalation_asks_the_editor_and_passes_the_answer_on() -> None:
         question = await h.editor.expect("session/request_permission")
         params = question["params"]
         assert params["toolCall"]["toolCallId"] == "t1"
+        # The question names what it is about: an editor may draw this request alone.
+        assert params["toolCall"]["title"] == "sudo ls"
+        assert params["toolCall"]["kind"] == "execute"
+        assert params["toolCall"]["rawInput"] == {"command": "sudo ls"}
         assert [option["kind"] for option in params["options"]] == [
             "allow_once",
             "allow_always",
@@ -1429,3 +1433,78 @@ async def test_the_adapter_connects_again_after_falling_behind(
 
         bridged = await run_bridge(run.address, run.token, tmp_path, body)
     assert bridged.code == 0
+
+
+async def test_session_list_names_the_one_session_the_adapter_serves() -> None:
+    """Found with a real ACP client: JetBrains lists an agent's sessions every minute."""
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        listed = (await h.editor.call("session/list", {"cwd": str(h.adapter.workspace)}))["result"]
+        (entry,) = listed["sessions"]
+        assert entry["sessionId"] == session and entry["cwd"] == str(h.adapter.workspace)
+        assert entry["title"].endswith("(idle)") and entry["updatedAt"].endswith("Z")
+        # Without a directory the session is listed too; for another project, nothing is.
+        assert len((await h.editor.call("session/list", {}))["result"]["sessions"]) == 1
+        elsewhere = await h.editor.call("session/list", {"cwd": "/somewhere/else"})
+        assert elsewhere["result"] == {"sessions": []}
+
+    await run_adapter(calu, body)
+
+
+async def test_an_image_of_a_prompt_is_sent_with_the_chat_message() -> None:
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        image = {"type": "image", "mimeType": "image/png", "data": "aGVsbG8="}
+
+        async def prompt(blocks: list[dict[str, Any]]) -> None:
+            await h.editor.call("session/prompt", {"sessionId": session, "prompt": blocks})
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(prompt, [{"type": "text", "text": "what is this?"}, image])
+            with anyio.fail_after(5):
+                while not h.calu.sent("chat.send"):
+                    await anyio.sleep(0.01)
+            (sent,) = h.calu.sent("chat.send")
+            assert sent["text"] == "what is this?"
+            assert sent["images"] == [{"media_type": "image/png", "data": "aGVsbG8="}]
+            await h.adapter.on_event("turn.result", {"subtype": "success"})
+        # An image alone still needs a line of text for calu's chat.
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(prompt, [image])
+            with anyio.fail_after(5):
+                while len(h.calu.sent("chat.send")) < 2:
+                    await anyio.sleep(0.01)
+            assert h.calu.sent("chat.send")[1]["text"] == "See the attached image."
+            await h.adapter.on_event("turn.result", {"subtype": "success"})
+
+    await run_adapter(calu, body)
+
+
+def test_a_windows_name_of_a_wsl_directory_is_the_path_inside_wsl() -> None:
+    """JetBrains on Windows names a project in WSL as `//wsl.localhost/Ubuntu/...`."""
+    from calu.acp.messages import local_path
+
+    assert local_path("//wsl.localhost/Ubuntu/home/ada/project") == "/home/ada/project"
+    assert local_path(r"\\wsl.localhost\Ubuntu\home\ada\project") == "/home/ada/project"
+    assert local_path(r"\\wsl$\Ubuntu-24.04\srv") == "/srv"
+    assert local_path("//wsl.localhost/Ubuntu") == "/"
+    for unchanged in ("/home/ada/project", "C:\\Users\\ada", "//server/share/x", ""):
+        assert local_path(unchanged) == unchanged
+
+
+async def test_a_session_is_found_under_its_windows_name_too() -> None:
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        share = f"//wsl.localhost/Ubuntu{WORKSPACE}"
+        new = await h.editor.call("session/new", {"cwd": share, "mcpServers": []})
+        assert new["result"]["sessionId"] == "s1"
+        listed = await h.editor.call("session/list", {"cwd": share.replace("/", "\\")})
+        assert len(listed["result"]["sessions"]) == 1
+
+    await run_adapter(calu, body)

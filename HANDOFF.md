@@ -4,7 +4,7 @@ State on 2026-11-13: after the honesty redesign and the full-screen terminal cli
 and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
 (D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
 `calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
-Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D220, open
+Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D221, open
 questions §11, phases §12).
 
 ## Pick up here
@@ -106,19 +106,16 @@ requirement 27):
      the run); a named user with a real home (not run); the `operator` credential of the
      user next to a `session` credential in `/etc/calu` (D212, last sentence); `calu doctor`
      says nothing about any of this yet; the single-file binary has no launcher.
-2. **`calu acp` from PyCharm does not work properly yet** (the owner, 2026-11-13, said so
-   after my fix and then moved on to packaging; nothing more is known). What was found and
-   changed on 2026-11-12, all outside the repository: PyCharm runs on Windows and could not
-   start a Linux path, so `C:\Users\KaiLo\.jetbrains\acp.json` now runs `wsl.exe -d Ubuntu
-   -- /home/klondenberg/projects/calu/.run_acp.sh` (backup `acp.json.bak`), and that script
-   calls `"$HOME/.local/bin/uv"` by absolute path (backup `.run_acp.sh.bak`; it holds an
-   address and a token of one running session, which go stale when that `calu run` ends).
-   Started that way by hand, `initialize` and `session/new` were answered. Not tested: a
-   prompt, and anything from inside PyCharm. Next: ask the owner what he sees, read
-   `/mnt/c/Users/KaiLo/AppData/Local/JetBrains/PyCharm2026.3/log/idea.log` (grep `acp`), and
-   drive `session/prompt` by hand. `~/projects/calu` is a second checkout of the repository,
-   behind `main`; the owner's running session there warned that its narrator is on Bedrock
-   without AWS credentials.
+2. **`calu acp`: driven by a real ACP client and fixed where it failed (D221); not yet
+   tried again in PyCharm.** `spikes/acp_host.py` (the official `agent-client-protocol`
+   client) holds a whole conversation with the adapter against a real session. Fixed: the
+   permission request has a title, `session/list` exists (PyCharm asked for it every
+   minute), a prompt's images are sent, and a Windows name of a WSL directory is understood.
+   The owner's start script `/home/klondenberg/projects/calu/.run_acp.sh` still names the
+   address and token of a session that ended on 2026-11-13: it has to run `calu acp`
+   without them (that needs an `operator` credential without a password in his store), or
+   be given a current address and token. PyCharm's log:
+   `/mnt/c/Users/KaiLo/AppData/Local/JetBrains/PyCharm2026.3/log/idea.log` (grep `calu`).
 3. **RDS with IAM authentication has never run against a real instance** (D205; no AWS
    account on this machine). `docs/TESTING.md` item 26 says what to check. Also not run:
    rootless Docker, and an existing server beyond `tests/db/test_setup_variants.py`.
@@ -368,7 +365,7 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**1932 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**1935 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
 default instructions), ~36k of tests, 34 migrations, 24 CLI commands, 22 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and

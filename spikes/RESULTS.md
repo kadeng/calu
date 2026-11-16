@@ -716,6 +716,29 @@ block.
 **Conclusion:** the format works; the runner recognises the user's message by its text, as
 before, and adds the images it kept for that text to the `user.input` event.
 
+## `calu acp` under a real ACP client (D221, 2026-11-16)
+
+**Setup:** `spikes/acp_host.py` with the client side of `agent-client-protocol` 1.0.0, against
+`calu acp` attached to a real session (`spikes/smoke_session.py DIR --stay`: Claude Code on
+Haiku, fake checkers).
+
+**Results:**
+
+| step | outcome |
+|---|---|
+| initialize, session/new | accepted by the client's schema; modes offered |
+| a prompt with a command | tool call, two progress updates, the answer; `end_turn` |
+| a command that escalates | a permission request with four options; allowed from the client; the turn went on |
+| session/cancel during a long command | the command was interrupted; the prompt answered `cancelled` |
+| session/set_mode | answered, and a mode update followed |
+| session/list | **method not found** before the fix; one session after it |
+| a prompt with an image | ignored before the fix; after it Claude answered "Red" for a red square |
+| session/load, then a prompt | the conversation was replayed, and the prompt answered |
+
+The permission request had no title before the fix (the client printed `None`). Claude Code
+refused two attempts to make it sleep for a minute, so the cancelled command is a long
+computation.
+
 ## A single-file binary: does the package data survive freezing? (Q15, 2026-11-10)
 
 **Question.** REQUIREMENTS 21 and soft goal 2 ask for a single executable beside the installable

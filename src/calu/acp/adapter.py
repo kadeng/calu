@@ -35,6 +35,7 @@ goes to the adapter's own log, not to the editor.
 import logging
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -286,6 +287,8 @@ class Adapter:
             case "session/close":
                 await self._cancel(params)
                 return {}
+            case "session/list":
+                return await self._list_sessions(params)
             case _:
                 raise RpcError(acp.METHOD_NOT_FOUND, f"calu does not implement {method}")
 
@@ -390,6 +393,42 @@ class Adapter:
         await self._replay(history)
         return self._mode_fields()
 
+    async def _list_sessions(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `session/list` with the one session this adapter serves.
+
+        An adapter is attached to one running calu session, and `session/load` takes only
+        that one, so nothing else is listed: an entry the editor could not open would be a
+        false offer. Asked for another directory than the session's (and not one inside it),
+        the list is empty.
+
+        Args:
+            params: The `session/list` params: an optional `cwd` and `cursor`.
+
+        Returns:
+            `{"sessions": [...]}` with at most one entry: the session's id, its project
+            directory, a title (the directory's name and the session's state) and the time
+            of the answer as the last update.
+        """
+        cwd = params.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            try:
+                self._check_cwd(cwd)
+            except RpcError:
+                return {"sessions": []}
+        snapshot = await self.calu.request("state.get")
+        session_id = self.session_id or str(snapshot.get("calu_session_id") or "calu")
+        state = str(snapshot.get("state", self.state))
+        return {
+            "sessions": [
+                {
+                    "sessionId": session_id,
+                    "cwd": str(self.workspace),
+                    "title": f"{self.workspace.name} ({state})",
+                    "updatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                }
+            ]
+        }
+
     async def _prompt(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `session/prompt`: send the message to Claude and wait for the turn to end.
 
@@ -414,6 +453,10 @@ class Adapter:
         request = acp.PromptParams.model_validate(params)
         self._require_session(request.session_id)
         text = acp.prompt_text(request.prompt)
+        images = acp.prompt_images(request.prompt)
+        if not text.strip() and images:
+            # calu's chat needs a line of text; an image alone gets a neutral one.
+            text = "See the attached image."
         if not text.strip():
             raise RpcError(acp.INVALID_PARAMS, "the prompt holds no text")
         if self.state in ("stopped", "failed"):
@@ -423,7 +466,10 @@ class Adapter:
         self._turns.append(turn)
         try:
             self._echo.append(text)
-            await self.calu.request("chat.send", {"text": text, "delivery": "queued"})
+            message: dict[str, Any] = {"text": text, "delivery": "queued"}
+            if images:
+                message["images"] = images
+            await self.calu.request("chat.send", message)
             await turn.done.wait()
         finally:
             self._turns.remove(turn)
@@ -454,13 +500,17 @@ class Adapter:
         the project is refused, because the editor would then act on files the session does not
         cover.
 
+        An editor on Windows that names a directory inside WSL the way Windows sees it
+        (`//wsl.localhost/<distribution>/...`) means the path inside the distribution
+        (`acp.local_path`).
+
         Args:
             cwd: The absolute path the editor sent.
 
         Raises:
             RpcError: If it is neither the session's project directory nor below it.
         """
-        here = Path(cwd).resolve()
+        here = Path(acp.local_path(cwd)).resolve()
         workspace = self.workspace.resolve()
         if here != workspace and not here.is_relative_to(workspace):
             raise RpcError(
@@ -1002,11 +1052,24 @@ class Adapter:
         """
         if self._peer is None:
             raise ConnectionError("the adapter is not attached to a peer")
+        # The dialog shows what it is about: an editor that draws only this request (and
+        # not the tool call it announced before) had a question without a subject.
+        known = self._calls.get(call_id) or {}
+        name = str(known.get("name") or "")
+        tool_call: dict[str, Any] = {
+            "toolCallId": call_id,
+            "title": _title(name, known.get("input") or {}) if name else "A step of Claude",
+            "kind": acp.TOOL_KINDS.get(name, "other"),
+            "status": "pending",
+            "content": content,
+        }
+        if known.get("input"):
+            tool_call["rawInput"] = known["input"]
         return await self._peer.request(
             "session/request_permission",
             {
                 "sessionId": self.session_id,
-                "toolCall": {"toolCallId": call_id, "content": content},
+                "toolCall": tool_call,
                 "options": acp.permission_options(),
             },
         )
