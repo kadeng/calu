@@ -9,9 +9,11 @@ The program, by priority:
 
 1. the environment variable `CALU_GIT_TOOL` (a command line, e.g. `lazygit` or `tig status`);
 2. `git_tool` in `tui.toml`;
-3. gitui, the default, if it is installed (on the search path or in `~/.local/bin`);
-4. `git diff` through a pager (`FALLBACK`), if git is installed, after the client offered to
-   install gitui.
+3. gitui, the default, if it is installed (on the search path or in `~/.local/bin`).
+
+There is nothing after that: without a program `f4` opens nothing and offers to install
+gitui. calu does not stand in with git commands of its own choosing (the owner, 2026-11-16:
+a git program that shows whatever is there, and no decision by calu about what to show).
 
 gitui (https://github.com/gitui-org/gitui) is the default, the owner's choice: the diff of the
 working copy, staging, log and branches in a fast terminal program. Another program (lazygit,
@@ -24,7 +26,6 @@ only shown.
 import platform
 import shlex
 import shutil
-import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +71,9 @@ class Missing:
     """Why no program can be started."""
 
     reason: str
+    offer_install: bool = False
+    """True when nothing is configured and the default program is not installed: the client
+    then offers to install it. False for a configuration that cannot be used as it is."""
 
 
 @dataclass(frozen=True)
@@ -96,16 +100,6 @@ _PLANS: tuple[tuple[str, str, bool, str], ...] = (
 is used when neither brew nor the release command applies. Debian, Ubuntu and Fedora carry no
 gitui package, so they are not listed. `cargo install` writes into the user's own directory
 and comes last."""
-
-FALLBACK = ("git", "-c", "core.pager=less -R -+F -+X", "diff")
-"""The command line without a git program: the unstaged changes, in `less`.
-
-`-+F` and `-+X` switch off two options git sets for `less` by default (`LESS=FRX`): with them
-`less` ends at once when the text fits on one screen, and the diff is gone when the client
-draws itself again (seen in a real terminal). Without changes git prints nothing and starts
-no pager; `unstaged_changes` says so beforehand. (`git diff --exit-code` would report it, but
-git never starts a pager with that option.)
-"""
 
 
 def configured(environ: Mapping[str, str], setting: str = "") -> tuple[str, str]:
@@ -138,7 +132,7 @@ def choose(
     Returns:
         The program by the priority of the module docstring. `Missing` if a configured
         command line cannot be read or its program is not installed (the reason names the
-        setting), or if not even git is installed.
+        setting), or if nothing is configured and gitui is not installed (`offer_install`).
     """
     line, source = configured(environ, setting)
     if line:
@@ -158,9 +152,7 @@ def choose(
         if which(str(local)) is not None:
             # Installed by `install_plan`'s release command, with ~/.local/bin not on the PATH.
             return GitTool((str(local),), "installed")
-    if which("git") is not None:
-        return GitTool(FALLBACK, "fallback")
-    return Missing("git is not installed on this machine")
+    return Missing("no terminal git program is installed", offer_install=True)
 
 
 def install_plan(which: Which = shutil.which) -> InstallPlan:
@@ -242,71 +234,6 @@ def release_command(which: Which = shutil.which) -> str | None:
         f'curl -fsSL "{archive}" | tar -xz --no-same-owner -C "{target}" ./gitui'
     )
     return "sh -c " + shlex.quote(script)
-
-
-LOG = (
-    "git",
-    "-c",
-    "core.pager=less -R -+F -+X",
-    "log",
-    "--graph",
-    "--decorate",
-    "--date=relative",
-    "--stat",
-)
-"""The command line for the history without a git program: every commit with its files, as a
-graph, in `less` (the pager options are those of `FALLBACK`). In a repository without a
-commit git prints an error and starts no pager; `has_commits` says so beforehand."""
-
-
-def has_commits(directory: str) -> bool | None:
-    """Ask git whether the repository has a commit to show (`git rev-parse HEAD`).
-
-    Args:
-        directory: The directory to ask in.
-
-    Returns:
-        True if HEAD names a commit, False if the repository has none yet, None if git
-        could not say (no repository, git missing, no answer within 10 seconds).
-    """
-    try:
-        done = subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
-            cwd=directory,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
-        )
-    except OSError, subprocess.TimeoutExpired:
-        return None
-    return {0: True, 1: False}.get(done.returncode)
-
-
-def unstaged_changes(directory: str) -> bool | None:
-    """Ask git whether `FALLBACK` would show anything (`git diff --quiet`).
-
-    Args:
-        directory: The directory to ask in.
-
-    Returns:
-        True if the working copy has unstaged changes, False if it has none, None if git
-        could not say (no repository, git missing, no answer within 10 seconds).
-    """
-    try:
-        done = subprocess.run(
-            ["git", "diff", "--quiet"],
-            cwd=directory,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
-        )
-    except OSError, subprocess.TimeoutExpired:
-        return None
-    return {0: False, 1: True}.get(done.returncode)
 
 
 def usable_directory(workspace: str) -> str | None:

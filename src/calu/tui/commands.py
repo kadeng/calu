@@ -286,12 +286,10 @@ COMMANDS: tuple[Command, ...] = (
         "git",
         "Open a terminal git program",
         "f4",
-        "/git [log | diff]",
+        "/git",
         group="View",
         about="In the project directory: gitui by default. CALU_GIT_TOOL or git_tool in "
-        "tui.toml name another program. Without gitui, f4 offers to install it and meanwhile "
-        "opens git diff when there are unstaged changes and git log otherwise; /git log and "
-        "/git diff choose.",
+        "tui.toml name another program. Without one, f4 offers to install gitui.",
     ),
     Command(
         "search",

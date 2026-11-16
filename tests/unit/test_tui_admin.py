@@ -61,28 +61,10 @@ def test_the_git_program_is_chosen_by_environment_then_setting_then_what_is_inst
     assert gittool.choose({}, "lazygit", which) == gittool.GitTool(("lazygit",), "tui.toml")
     assert gittool.choose({}, "", which) == gittool.GitTool(("gitui",), "installed")
     # gitui is the default (the owner's decision): another program counts only when it is
-    # configured, so without gitui the client falls back to git diff and offers to install it.
-    fallback = gittool.choose({}, "", installed("lazygit", "tig", "git"))
-    assert isinstance(fallback, gittool.GitTool) and fallback.source == "fallback"
-    assert fallback.argv == gittool.FALLBACK and fallback.name == "git"
-    # In a real terminal a short diff was gone at once: git's default options for less end
-    # it when the text fits on one screen. The fallback switches those two off.
-    assert fallback.argv[:2] == ("git", "-c") and "diff" in fallback.argv
-    assert "-+F" in fallback.argv[2] and "-+X" in fallback.argv[2]
-
-
-def test_git_says_whether_the_fallback_would_show_anything(tmp_path: Path) -> None:
-    import subprocess
-
-    assert gittool.unstaged_changes(str(tmp_path)) is None, "no repository: git cannot say"
-    assert gittool.has_commits(str(tmp_path)) is None
-    assert gittool.unstaged_changes(str(tmp_path / "missing")) is None
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "a.txt"], check=True)
-    assert gittool.unstaged_changes(str(tmp_path)) is False
-    (tmp_path / "a.txt").write_text("two\n", encoding="utf-8")
-    assert gittool.unstaged_changes(str(tmp_path)) is True
+    # configured. Without gitui nothing is started in its place, not even git itself: the
+    # client offers to install gitui.
+    nothing = gittool.choose({}, "", installed("lazygit", "tig", "git"))
+    assert isinstance(nothing, gittool.Missing) and nothing.offer_install
 
 
 def test_a_configured_program_that_is_missing_is_named_and_nothing_else_is_tried() -> None:
@@ -90,8 +72,11 @@ def test_a_configured_program_that_is_missing_is_named_and_nothing_else_is_tried
     assert missing == gittool.Missing("CALU_GIT_TOOL names lazygit, which is not installed")
     broken = gittool.choose({}, "gitui 'x", installed("gitui"))
     assert isinstance(broken, gittool.Missing) and "tui.toml is no command line" in broken.reason
+    # A configuration that cannot be used is an error to fix, not a reason to offer gitui.
+    assert isinstance(missing, gittool.Missing) and not missing.offer_install
+    assert not broken.offer_install
     assert gittool.choose({}, "", installed()) == gittool.Missing(
-        "git is not installed on this machine"
+        "no terminal git program is installed", offer_install=True
     )
 
 
@@ -683,30 +668,17 @@ async def test_without_a_git_program_the_install_command_is_shown_and_never_run_
         await run.press("y")
         assert run.app.screen is notice and programs.runs == [], "y runs nothing here"
         await run.press("enter")
-        assert [argv[0] for argv, _ in programs.runs] == ["git"], "git diff through the pager"
-        assert "that was git diff" in run.line("composer-head")
+        assert not isinstance(run.app.screen, ConfirmScreen)
+        assert programs.runs == [], "nothing is started in gitui's place"
+        # Every f4 offers it again: there is nothing else it could open.
         await run.press("f4")
-        assert not isinstance(run.app.screen, ConfirmScreen), "the notice is shown once"
-        assert len(programs.runs) == 2
-        # A clean working copy: f4 shows the history instead of an empty diff.
-        run.app.unstaged_changes = lambda directory: False
-        run.app.has_commits = lambda directory: True
+        assert isinstance(run.app.screen, ConfirmScreen) and programs.runs == []
+        await run.press("escape")
+        # With gitui there, f4 starts it as it is and asks git nothing first.
+        run.app.which = installed("gitui", "git")
         await run.press("f4")
-        assert len(programs.runs) == 3 and "log" in programs.runs[2][0]
-        assert "that was git log" in run.line("composer-head")
-        # Asked for the diff by name, there is nothing to show, and git would start no pager.
-        await command(run, "/git diff")
-        assert len(programs.runs) == 3
-        assert "no unstaged changes" in run.line("composer-head")
-        # The history by name, also with changes; and a repository without a commit.
-        run.app.unstaged_changes = lambda directory: True
-        await command(run, "/git log")
-        assert len(programs.runs) == 4 and "log" in programs.runs[3][0]
-        run.app.unstaged_changes = lambda directory: False
-        run.app.has_commits = lambda directory: False
-        await run.press("f4")
-        assert len(programs.runs) == 4
-        assert "no commit yet" in run.line("composer-head")
+        assert [argv for argv, _ in programs.runs] == [("gitui",)]
+        assert "back from gitui" in run.line("composer-head")
 
 
 async def test_an_install_without_sudo_runs_only_after_a_yes(tmp_path: Path) -> None:
@@ -718,7 +690,7 @@ async def test_an_install_without_sudo_runs_only_after_a_yes(tmp_path: Path) -> 
         question = run.app.screen
         assert isinstance(question, ConfirmScreen) and not question.notice
         await run.press("n")
-        assert [argv[0] for argv, _ in programs.runs] == ["git"], "no: git diff, no install"
+        assert programs.runs == [], "no: no install, and nothing in gitui's place"
 
     async with running("simple_turn", session=FakeSession(workspace=str(tmp_path))) as run:
         programs = Programs()

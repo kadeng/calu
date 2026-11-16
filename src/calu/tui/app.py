@@ -283,12 +283,9 @@ class CaluApp(App[None]):
         self.run_program: Callable[[Sequence[str], str], int] = self._run_program
         """Hands the terminal to a program in a directory and returns its exit code; tests
         replace it."""
-        self.unstaged_changes: Callable[[str], bool | None] = gittool.unstaged_changes
-        self.has_commits: Callable[[str], bool | None] = gittool.has_commits
         """Says whether `git diff` would show anything in a directory; tests replace it."""
         self.describe_commit: Callable[[str, str], str] = describe_commit
         """Names a commit of a repository for the question of `/trust`; tests replace it."""
-        self._install_shown = False
         self._honesty_page: TextScreen | None = None
         self.options = options or TuiOptions()
         self.clock = clock
@@ -3772,64 +3769,24 @@ class CaluApp(App[None]):
             self.flash(f"{what} could not be started", error=True)
         return code
 
-    def _plain_git(self, wanted: str) -> None:
-        """Show the history or the unstaged changes with git itself, through the pager.
-
-            wanted "log", or "" in a clean working copy   git log (graph, files per commit)
-            wanted "diff", or "" with unstaged changes    git diff
-            nothing to show (no commit, no change)        a message; git would start no pager
-
-        Args:
-            wanted: "log", "diff" or "" (see above).
-        """
-        directory = self.model.workspace
-        more = "gitui shows staging, log and branches on one screen"
-        changed = self.unstaged_changes(directory)
-        if wanted == "diff" or (wanted == "" and changed is not False):
-            if changed is False:
-                self.flash(f"git diff: no unstaged changes · /git log shows the history · {more}")
-                return
-            code = self._launch(gittool.FALLBACK, "git")
-            if code is not None and code != 127:
-                self.flash(
-                    f"back from git · that was git diff; /git log shows the history · {more}"
-                )
-            return
-        if self.has_commits(directory) is False:
-            self.flash("git log: this repository has no commit yet, and no unstaged changes")
-            return
-        code = self._launch(gittool.LOG, "git")
-        if code is not None and code != 127:
-            self.flash(
-                f"back from git · that was git log; /git diff shows unstaged changes · {more}"
-            )
-
     def _cmd_git(self, rest: str) -> None:
-        """Open a terminal git program in the session's project directory (`f4`, `/git`).
+        """Open the terminal git program in the session's project directory (`f4`, `/git`).
 
-        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or gitui, the default.
-        Without gitui, the client offers to install it (once per run) and opens `git diff`
-        through the pager if the answer is no. That command is
-        run only after a yes and only if it needs no administrator rights; otherwise it is
-        shown for the user to run. The client has no git viewer of its own.
+        The program is `CALU_GIT_TOOL`, `git_tool` of `tui.toml`, or gitui, the default. It
+        is started as it is, whatever state the repository is in: what to show is the
+        program's business. Without a program the client offers to install gitui, every
+        time; the install command is run only after a yes and only if it needs no
+        administrator rights, otherwise it is shown for the user to run. The client has no
+        git viewer of its own and puts no git command in its place.
 
         Args:
-            rest: Without a git program: "log" for the history, "diff" for the unstaged
-                changes, "" for the changes if there are any and the history otherwise.
-                A git program shows both itself and ignores it.
+            rest: Ignored.
         """
         problem = gittool.usable_directory(self.model.workspace)
         if problem is not None:
             self.flash(problem, error=True)
             return
-        wanted = rest.strip().lower()
-        if wanted not in {"", "log", "diff"}:
-            self.flash("usage: /git [log | diff]")
-            return
         tool = gittool.choose(self.environ, self.options.git_tool, self.which)
-        if isinstance(tool, gittool.Missing):
-            self.flash(f"f4: {tool.reason}", error=True)
-            return
 
         def run(chosen: gittool.GitTool) -> None:
             """Start the program and say that the client is back.
@@ -3837,27 +3794,27 @@ class CaluApp(App[None]):
             Args:
                 chosen: The program.
             """
-            if chosen.source == "fallback":
-                self._plain_git(wanted)
-                return
             code = self._launch(chosen.argv, chosen.name)
             if code is not None and code != 127:
                 self.flash(f"back from {chosen.name}")
 
-        if tool.source != "fallback" or self._install_shown:
+        if isinstance(tool, gittool.GitTool):
             run(tool)
             return
-        self._install_shown = True
+        if not tool.offer_install:
+            self.flash(f"f4: {tool.reason}", error=True)
+            return
         plan = gittool.install_plan(self.which)
         lines = [
-            "f4 opens one in the project directory; gitui is the default: the diff of "
-            "the working copy, staging, log and branches on one screen. Install it with:"
+            "f4 opens a terminal git program in the project directory; gitui is the "
+            "default: the working copy, staging, log and branches on one screen. Install "
+            "it with:"
         ]
         footnote = "another program: CALU_GIT_TOOL or git_tool in tui.toml (f1 says more)"
         if not plan.runnable:
             footnote = (
-                "calu runs no command with sudo: run it in a terminal of your own; until "
-                f"then f4 opens git diff · {footnote}"
+                "calu runs no command with sudo: run it in a terminal of your own, then "
+                f"press f4 again · {footnote}"
             )
         if plan.note:
             footnote = f"{plan.note}\n{footnote}"
@@ -3868,16 +3825,23 @@ class CaluApp(App[None]):
             Args:
                 yes: The answer; always False for a command that is only shown.
             """
-            if yes and plan.runnable:
-                code = self._launch(shlex.split(plan.command), plan.manager)
-                if code is None:
-                    return
-                if code != 0:
-                    self.flash(f"{plan.command} ended with exit code {code}", error=True)
-                    return
+            if not (yes and plan.runnable):
+                return
+            code = self._launch(shlex.split(plan.command), plan.manager)
+            if code is None:
+                return
+            if code != 0:
+                self.flash(f"{plan.command} ended with exit code {code}", error=True)
+                return
             again = gittool.choose(self.environ, self.options.git_tool, self.which)
             if isinstance(again, gittool.GitTool):
                 run(again)
+            else:
+                self.flash(
+                    f"the install ended without an error, but gitui is neither on the "
+                    f"search path nor in {gittool.local_bin()}",
+                    error=True,
+                )
 
         self.push_screen(
             ConfirmScreen(
@@ -3888,7 +3852,7 @@ class CaluApp(App[None]):
                 command=plan.command,
                 footnote=footnote,
                 yes="runs it now in this terminal",
-                no="opens git diff",
+                no="closes",
             ),
             answered,
         )
