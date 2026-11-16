@@ -52,7 +52,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.geometry import Size
 from textual.widgets import Static
 
-from calu import herd
+from calu import asuser, herd
 from calu.acp.modes import LADDER
 from calu.session_requests import SessionRequest
 from calu.tui import completion, gittool, render, settings
@@ -284,6 +284,7 @@ class CaluApp(App[None]):
         """Hands the terminal to a program in a directory and returns its exit code; tests
         replace it."""
         self.unstaged_changes: Callable[[str], bool | None] = gittool.unstaged_changes
+        self.has_commits: Callable[[str], bool | None] = gittool.has_commits
         """Says whether `git diff` would show anything in a directory; tests replace it."""
         self.describe_commit: Callable[[str, str], str] = describe_commit
         """Names a commit of a repository for the question of `/trust`; tests replace it."""
@@ -3730,7 +3731,14 @@ class CaluApp(App[None]):
             except ValueError:  # not the main thread: there is no handler to replace
                 previous = None
             try:
-                return subprocess.call(list(argv), cwd=cwd)
+                # A client that runs as root for a user starts its programs as that user,
+                # with that user's home and `~/.local/bin` (where gitui is installed) on the
+                # search path; any other client starts them as itself.
+                started = asuser.child()
+                if "env" in started:
+                    found = started["env"].get("PATH", "/usr/local/bin:/usr/bin:/bin")
+                    started["env"]["PATH"] = f"{gittool.local_bin()}{os.pathsep}{found}"
+                return subprocess.call(list(argv), cwd=cwd, **started)
             except OSError:
                 return 127
             finally:
@@ -3764,6 +3772,38 @@ class CaluApp(App[None]):
             self.flash(f"{what} could not be started", error=True)
         return code
 
+    def _plain_git(self, wanted: str) -> None:
+        """Show the history or the unstaged changes with git itself, through the pager.
+
+            wanted "log", or "" in a clean working copy   git log (graph, files per commit)
+            wanted "diff", or "" with unstaged changes    git diff
+            nothing to show (no commit, no change)        a message; git would start no pager
+
+        Args:
+            wanted: "log", "diff" or "" (see above).
+        """
+        directory = self.model.workspace
+        more = "gitui shows staging, log and branches on one screen"
+        changed = self.unstaged_changes(directory)
+        if wanted == "diff" or (wanted == "" and changed is not False):
+            if changed is False:
+                self.flash(f"git diff: no unstaged changes · /git log shows the history · {more}")
+                return
+            code = self._launch(gittool.FALLBACK, "git")
+            if code is not None and code != 127:
+                self.flash(
+                    f"back from git · that was git diff; /git log shows the history · {more}"
+                )
+            return
+        if self.has_commits(directory) is False:
+            self.flash("git log: this repository has no commit yet, and no unstaged changes")
+            return
+        code = self._launch(gittool.LOG, "git")
+        if code is not None and code != 127:
+            self.flash(
+                f"back from git · that was git log; /git diff shows unstaged changes · {more}"
+            )
+
     def _cmd_git(self, rest: str) -> None:
         """Open a terminal git program in the session's project directory (`f4`, `/git`).
 
@@ -3774,11 +3814,17 @@ class CaluApp(App[None]):
         shown for the user to run. The client has no git viewer of its own.
 
         Args:
-            rest: Ignored.
+            rest: Without a git program: "log" for the history, "diff" for the unstaged
+                changes, "" for the changes if there are any and the history otherwise.
+                A git program shows both itself and ignores it.
         """
         problem = gittool.usable_directory(self.model.workspace)
         if problem is not None:
             self.flash(problem, error=True)
+            return
+        wanted = rest.strip().lower()
+        if wanted not in {"", "log", "diff"}:
+            self.flash("usage: /git [log | diff]")
             return
         tool = gittool.choose(self.environ, self.options.git_tool, self.which)
         if isinstance(tool, gittool.Missing):
@@ -3791,22 +3837,12 @@ class CaluApp(App[None]):
             Args:
                 chosen: The program.
             """
-            fallback = chosen.source == "fallback"
-            if fallback and self.unstaged_changes(self.model.workspace) is False:
-                # git would print nothing and start no pager: say so instead of a flicker.
-                self.flash(
-                    "git diff: no unstaged changes in the project directory"
-                    " · gitui shows staging, log and branches too"
-                )
+            if chosen.source == "fallback":
+                self._plain_git(wanted)
                 return
             code = self._launch(chosen.argv, chosen.name)
             if code is not None and code != 127:
-                hint = (
-                    " · that was git diff; gitui shows staging, log and branches too"
-                    if fallback
-                    else ""
-                )
-                self.flash(f"back from {chosen.name}{hint}")
+                self.flash(f"back from {chosen.name}")
 
         if tool.source != "fallback" or self._install_shown:
             run(tool)

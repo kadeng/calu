@@ -786,7 +786,9 @@ stands, beside the running work, and becomes no part of it.
 - `f4` or `/git`: hands the terminal to gitui in the project directory and comes back when
   you leave it. `CALU_GIT_TOOL` (a command line) or `git_tool` in `~/.config/calu/tui.toml`
   name another program. Without gitui the client offers to install it; it runs no command
-  with `sudo`, it shows it.
+  with `sudo`, it shows it. Until gitui is there, `f4` opens git itself in a pager: the
+  unstaged changes if there are any, the history otherwise; `/git log` and `/git diff`
+  choose one.
 - `/sessions`, `/history`, `/search`, `/export`: stored sessions, the stored steps of this
   one, search in the transcript, the transcript as Markdown.
 - Usage: the side panel shows cost, context fill and a usage limit once Claude Code reports

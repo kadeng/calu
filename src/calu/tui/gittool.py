@@ -29,6 +29,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from calu import asuser
+
 ENV = "CALU_GIT_TOOL"
 """The environment variable that names the program as a command line."""
 
@@ -152,7 +154,7 @@ def choose(
     for name in KNOWN:
         if which(name) is not None:
             return GitTool((name,), "installed")
-        local = LOCAL_BIN / name
+        local = local_bin() / name
         if which(str(local)) is not None:
             # Installed by `install_plan`'s release command, with ~/.local/bin not on the PATH.
             return GitTool((str(local),), "installed")
@@ -182,7 +184,7 @@ def install_plan(which: Which = shutil.which) -> InstallPlan:
             release,
             "release",
             True,
-            f"This downloads gitui's release binary from GitHub into {LOCAL_BIN}; your "
+            f"This downloads gitui's release binary from GitHub into {local_bin()}; your "
             "package manager may have it as well.",
         )
     for manager, command, runnable, note in _PLANS:
@@ -195,8 +197,20 @@ def install_plan(which: Which = shutil.which) -> InstallPlan:
     )
 
 
-LOCAL_BIN = Path.home() / ".local" / "bin"
-"""Where the release command puts gitui: a directory of the user, so no `sudo` is needed."""
+def local_bin() -> Path:
+    """Return where the release command puts gitui: `~/.local/bin` of the user.
+
+    A directory of the user, so no `sudo` is needed. For a client that runs as root for a
+    user (`calu attach --sudo`) it is that user's home, not root's: the client starts its
+    programs as that user (`calu.asuser`), who could neither write nor run a file in root's.
+
+    Returns:
+        The directory; it need not exist.
+    """
+    user = asuser.active()
+    home = Path(user.home) if user is not None else Path.home()
+    return home / ".local" / "bin"
+
 
 RELEASE_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
 """`platform.machine()` -> the architecture name in gitui's release file names."""
@@ -206,7 +220,7 @@ def release_command(which: Which = shutil.which) -> str | None:
     """Build the command that installs gitui's newest release binary for this user.
 
     The command downloads the Linux archive of gitui's newest release for this machine's
-    architecture from GitHub and unpacks the one file `gitui` into `LOCAL_BIN`. It changes
+    architecture from GitHub and unpacks the one file `gitui` into `local_bin()`. It changes
     nothing outside that directory and needs no rights of the administrator.
 
     Args:
@@ -222,10 +236,52 @@ def release_command(which: Which = shutil.which) -> str | None:
     if which("curl") is None or which("tar") is None or which("sh") is None:
         return None
     archive = f"{RELEASES}/latest/download/gitui-linux-{arch}.tar.gz"
+    target = local_bin()
     script = (
-        f'set -e; mkdir -p "{LOCAL_BIN}"; curl -fsSL "{archive}" | tar -xz -C "{LOCAL_BIN}" ./gitui'
+        f'set -e; mkdir -p "{target}"; '
+        f'curl -fsSL "{archive}" | tar -xz --no-same-owner -C "{target}" ./gitui'
     )
     return "sh -c " + shlex.quote(script)
+
+
+LOG = (
+    "git",
+    "-c",
+    "core.pager=less -R -+F -+X",
+    "log",
+    "--graph",
+    "--decorate",
+    "--date=relative",
+    "--stat",
+)
+"""The command line for the history without a git program: every commit with its files, as a
+graph, in `less` (the pager options are those of `FALLBACK`). In a repository without a
+commit git prints an error and starts no pager; `has_commits` says so beforehand."""
+
+
+def has_commits(directory: str) -> bool | None:
+    """Ask git whether the repository has a commit to show (`git rev-parse HEAD`).
+
+    Args:
+        directory: The directory to ask in.
+
+    Returns:
+        True if HEAD names a commit, False if the repository has none yet, None if git
+        could not say (no repository, git missing, no answer within 10 seconds).
+    """
+    try:
+        done = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD"],
+            cwd=directory,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except OSError, subprocess.TimeoutExpired:
+        return None
+    return {0: True, 1: False}.get(done.returncode)
 
 
 def unstaged_changes(directory: str) -> bool | None:

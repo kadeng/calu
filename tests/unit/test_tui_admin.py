@@ -75,6 +75,7 @@ def test_git_says_whether_the_fallback_would_show_anything(tmp_path: Path) -> No
     import subprocess
 
     assert gittool.unstaged_changes(str(tmp_path)) is None, "no repository: git cannot say"
+    assert gittool.has_commits(str(tmp_path)) is None
     assert gittool.unstaged_changes(str(tmp_path / "missing")) is None
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / "a.txt").write_text("one\n", encoding="utf-8")
@@ -127,7 +128,7 @@ def test_the_install_offer_prefers_a_command_the_client_may_run(
     plan = gittool.install_plan(installed("apt", "curl", "tar", "sh"))
     assert plan.runnable and "sudo" not in plan.command
     assert "releases/latest/download/gitui-linux-x86_64.tar.gz" in plan.command
-    assert str(gittool.LOCAL_BIN) in plan.command and str(gittool.LOCAL_BIN) in plan.note
+    assert str(gittool.local_bin()) in plan.command and str(gittool.local_bin()) in plan.note
     # Another system, or an architecture gitui has no archive for: the package manager's way.
     monkeypatch.setattr(gittool.platform, "machine", lambda: "riscv64")
     assert gittool.install_plan(installed("pacman", "curl", "tar", "sh")).command == (
@@ -136,7 +137,7 @@ def test_the_install_offer_prefers_a_command_the_client_may_run(
     # Debian and Ubuntu carry no package: there the page of the release binaries is named.
     assert gittool.RELEASES in gittool.install_plan(installed("apt", "curl", "tar", "sh")).command
     # After that install the program is found although ~/.local/bin is not on the PATH.
-    local = str(gittool.LOCAL_BIN / "gitui")
+    local = str(gittool.local_bin() / "gitui")
     assert gittool.choose({}, "", installed(local, "git")) == gittool.GitTool((local,), "installed")
 
 
@@ -687,11 +688,25 @@ async def test_without_a_git_program_the_install_command_is_shown_and_never_run_
         await run.press("f4")
         assert not isinstance(run.app.screen, ConfirmScreen), "the notice is shown once"
         assert len(programs.runs) == 2
-        # Without changes git prints nothing and starts no pager: the client says so instead.
+        # A clean working copy: f4 shows the history instead of an empty diff.
         run.app.unstaged_changes = lambda directory: False
+        run.app.has_commits = lambda directory: True
         await run.press("f4")
-        assert len(programs.runs) == 2
+        assert len(programs.runs) == 3 and "log" in programs.runs[2][0]
+        assert "that was git log" in run.line("composer-head")
+        # Asked for the diff by name, there is nothing to show, and git would start no pager.
+        await command(run, "/git diff")
+        assert len(programs.runs) == 3
         assert "no unstaged changes" in run.line("composer-head")
+        # The history by name, also with changes; and a repository without a commit.
+        run.app.unstaged_changes = lambda directory: True
+        await command(run, "/git log")
+        assert len(programs.runs) == 4 and "log" in programs.runs[3][0]
+        run.app.unstaged_changes = lambda directory: False
+        run.app.has_commits = lambda directory: False
+        await run.press("f4")
+        assert len(programs.runs) == 4
+        assert "no commit yet" in run.line("composer-head")
 
 
 async def test_an_install_without_sudo_runs_only_after_a_yes(tmp_path: Path) -> None:
