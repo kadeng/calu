@@ -35,6 +35,10 @@ def test_migrations_are_found_in_order() -> None:
     assert "CREATE TABLE sessions" in found[0].sql
 
 
+DSN = "host=db.example.org dbname=calu user=u"
+"""A connection string `calu credential set` accepts for a login entry."""
+
+
 def run_cli(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, argv: list[str], stdin: str
 ) -> int:
@@ -45,8 +49,8 @@ def run_cli(
 def test_credential_set_list_remove(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert run_cli(monkeypatch, store, ["credential", "set", "admin"], "dsn\npw\npw\n") == 0
-    assert store.load("admin", "pw") == bytearray(b"dsn")
+    assert run_cli(monkeypatch, store, ["credential", "set", "admin"], f"{DSN}\npw\npw\n") == 0
+    assert store.load("admin", "pw") == bytearray(DSN.encode())
     assert run_cli(monkeypatch, store, ["credential", "list"], "") == 0
     assert "admin" in capsys.readouterr().out
     assert run_cli(monkeypatch, store, ["credential", "remove", "admin"], "") == 0
@@ -56,7 +60,7 @@ def test_credential_set_list_remove(
 def test_mismatched_confirmation_is_an_error(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert run_cli(monkeypatch, store, ["credential", "set", "admin"], "dsn\npw\nother\n") == 1
+    assert run_cli(monkeypatch, store, ["credential", "set", "admin"], f"{DSN}\npw\nother\n") == 1
     assert "do not match" in capsys.readouterr().err
     assert store.names() == []
 
@@ -318,7 +322,7 @@ def test_a_credential_without_a_password_is_read_without_a_prompt(
     was asked.
     """
     assert (
-        run_cli(monkeypatch, store, ["credential", "set", "operator", "--no-password"], "dsn\n")
+        run_cli(monkeypatch, store, ["credential", "set", "operator", "--no-password"], f"{DSN}\n")
         == 0
     )
     printed = capsys.readouterr().out
@@ -326,13 +330,13 @@ def test_a_credential_without_a_password_is_read_without_a_prompt(
     assert str(store.path) in printed, "the warning has to name the file that now holds it"
 
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
-    assert cli.load_credential(store, "operator", "Operator password: ") == bytearray(b"dsn")
+    assert cli.load_credential(store, "operator", "Operator password: ") == bytearray(DSN.encode())
 
     assert run_cli(monkeypatch, store, ["credential", "list"], "") == 0
     assert "operator  (file mode only)" in capsys.readouterr().out
 
     # Setting it again without the switch puts a password back on it.
-    assert run_cli(monkeypatch, store, ["credential", "set", "operator"], "dsn\npw\npw\n") == 0
+    assert run_cli(monkeypatch, store, ["credential", "set", "operator"], f"{DSN}\npw\npw\n") == 0
     assert run_cli(monkeypatch, store, ["credential", "list"], "") == 0
     assert "operator  (password)" in capsys.readouterr().out
 
@@ -354,7 +358,7 @@ def test_the_session_credential_cannot_be_stored_without_a_password(
 
     # The operator credential, which the switch is for, still works.
     assert (
-        run_cli(monkeypatch, store, ["credential", "set", "operator", "--no-password"], "dsn\n")
+        run_cli(monkeypatch, store, ["credential", "set", "operator", "--no-password"], f"{DSN}\n")
         == 0
     )
     assert store.needs_password("operator") is False
@@ -399,3 +403,71 @@ def test_the_web_text_of_a_rule_list_reads_back_to_the_same_rules() -> None:
     parsed = parse_rule_file("command-deny", text)
     assert [(r.pattern, r.comment) for r in parsed] == [(r.pattern, r.comment) for r in rows]
     assert rule_list_text([]) == ""
+
+
+class _AdminConn:
+    """A connection that records statements and says `calu_admin` is a member of rds_iam."""
+
+    def __init__(self, member: bool) -> None:
+        """Start with no statements.
+
+        Args:
+            member: What the membership query answers.
+        """
+        self.member = member
+        self.statements: list[str] = []
+        self.pgconn = self
+
+    def encrypt_password(self, password: bytes, user: bytes, algorithm: bytes) -> bytes:
+        """Stand in for libpq's verifier computation.
+
+        Args:
+            password: The password.
+            user: The role.
+            algorithm: The algorithm.
+
+        Returns:
+            A fake verifier.
+        """
+        return b"SCRAM-SHA-256$fake"
+
+    async def execute(self, query: Any, params: Any = None) -> _AdminConn:
+        """Record the statement.
+
+        Args:
+            query: The statement (bytes, str or `psycopg.sql.Composed`).
+            params: Its parameters (ignored).
+
+        Returns:
+            Itself, as the cursor.
+        """
+        self.statements.append(repr(query))
+        return self
+
+    async def fetchone(self) -> tuple | None:
+        """Answer the membership query.
+
+        Returns:
+            A row if `calu_admin` is a member of rds_iam, else None.
+        """
+        return (1,) if self.member else None
+
+
+@pytest.mark.parametrize("member", [True, False])
+def test_the_admin_password_works_on_rds_after_leaving_rds_iam(member: bool) -> None:
+    """On RDS a member of rds_iam is asked for a token and its password is ignored."""
+    import asyncio
+
+    from calu.setup import enable_admin_login
+
+    conn = _AdminConn(member)
+    asyncio.run(enable_admin_login(conn, "pw"))  # type: ignore[arg-type]
+    revokes = [i for i, s in enumerate(conn.statements) if "REVOKE rds_iam" in s]
+    alters = [i for i, s in enumerate(conn.statements) if "ALTER ROLE" in s]
+    assert len(alters) == 1 and "calu_admin" in conn.statements[alters[0]]
+    assert "'pw'" not in conn.statements[alters[0]], "only the verifier reaches the server"
+    if member:
+        assert len(revokes) == 1 and revokes[0] < alters[0]
+        assert "calu_admin" in conn.statements[revokes[0]]
+    else:
+        assert revokes == []

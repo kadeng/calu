@@ -911,7 +911,7 @@ calu web --sudo   # the same as root, for you: Claude Code cannot reach the proc
 
 A browser that is not signed in gets a page that asks for the admin password. The database
 checks it (it is the password of the role `calu_admin`, which `calu setup` sets); calu keeps
-it nowhere, and each wrong password makes the next answer wait longer. On a database where
+it nowhere, and each wrong password makes the next answer wait longer; the count starts again after a minute without a wrong one. On a database where
 `calu setup` has not given that role a password yet, `calu web` prints an address with a
 login token instead (`...?token=...`), to be opened once per browser.
 

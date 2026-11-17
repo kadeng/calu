@@ -110,3 +110,28 @@ async def test_a_root_peer_on_the_local_socket_needs_no_token(
             assert (await client.request("state.get"))["workspace"] == str(workspace)
         tg.cancel_scope.cancel()
     assert not path.exists(), "the socket is removed with the session"
+
+
+def test_an_existing_outer_directory_others_may_write_to_is_refused(short: Path):
+    """An existing `/run/calu` is checked too, not only one that `bind` creates."""
+    outer = short / "calu"
+    outer.mkdir(mode=0o700)
+    outer.chmod(0o777)
+    path = localsocket.path_of("s", outer / "s")
+    with pytest.raises(localsocket.NotTrusted, match="writable by its group or by others"):
+        localsocket.bind(path, owner=ME)
+    assert not path.exists(), "nothing is bound in a directory somebody else can change"
+    outer.chmod(0o755)
+    listener = localsocket.bind(path, owner=ME)
+    try:
+        assert localsocket.problems(path, ME) == []
+        outer.chmod(0o775)
+        assert any(str(outer) in problem for problem in localsocket.problems(path, ME))
+        with pytest.raises(localsocket.NotTrusted):
+            localsocket.connected(path, ME)
+    finally:
+        outer.chmod(0o700)
+        listener.close()
+    # Somebody else's outer directory: the real check asks for root.
+    with pytest.raises(localsocket.NotTrusted, match=f"{outer} belongs to uid {ME}"):
+        localsocket.bind(path)

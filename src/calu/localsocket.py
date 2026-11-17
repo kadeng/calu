@@ -52,7 +52,9 @@ def bind(path: Path, owner: int = 0) -> socket.socket:
 
     Side effects: creates the socket's directory and the one above it with mode 0700 if they
     are missing, removes a socket file left by an earlier process, creates the socket with
-    mode 0600.
+    mode 0600. Both directories are checked whether calu created them or found them: an
+    existing `/run/calu` that somebody else owns or may write to is refused before anything
+    is removed or bound in it.
 
     Args:
         path: `path_of(session_id)`.
@@ -63,12 +65,17 @@ def bind(path: Path, owner: int = 0) -> socket.socket:
 
     Raises:
         OSError: If a directory or the socket cannot be created.
-        NotTrusted: If the result is not root's alone (`problems`).
+        NotTrusted: If either directory or the result is not root's alone (`problems`).
     """
     for directory in (path.parent.parent, path.parent):
         if not directory.exists():
             directory.mkdir(mode=0o700)
             directory.chmod(0o700)
+    # Whoever may write to the outer directory can replace the inner one between this check
+    # and the bind, so both are checked before the old socket is removed.
+    wrong = _directory_problems(path.parent.parent, owner) + _directory_problems(path.parent, owner)
+    if wrong:
+        raise NotTrusted("; ".join(wrong))
     if path.is_socket():
         path.unlink()
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -90,13 +97,40 @@ def bind(path: Path, owner: int = 0) -> socket.socket:
     return listener
 
 
+def _directory_problems(directory: Path, owner: int) -> list[str]:
+    """Say why a directory of the sockets cannot be trusted. Needs root's file access.
+
+    Checked without following a symbolic link at the directory's own name: it is a
+    directory, belongs to `owner`, and its group and others cannot write to it.
+
+    Args:
+        directory: The directory.
+        owner: The uid that must own it (root; a test passes its own).
+
+    Returns:
+        One sentence per finding; empty if the directory can be trusted.
+    """
+    try:
+        status = directory.lstat()
+    except OSError as exc:
+        return [f"{directory}: {exc}"]
+    found: list[str] = []
+    if not stat.S_ISDIR(status.st_mode):
+        found.append(f"{directory} is no directory")
+    if status.st_uid != owner:
+        found.append(f"{directory} belongs to uid {status.st_uid}, not to uid {owner}")
+    if status.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        found.append(f"{directory} is writable by its group or by others")
+    return found
+
+
 def problems(path: Path, owner: int = 0) -> list[str]:
     """Say why a socket cannot be trusted to be root's alone. Needs root's file access.
 
     Checked without following a symbolic link at the socket's own name: the path is a
     socket, it and its directory belong to `owner`, and neither grants anything to a group
-    or to others. With the directory closed to everybody else, what is above it cannot be
-    used to reach or replace the socket.
+    or to others; the directory above (`/run/calu`) belongs to `owner` and its group and
+    others cannot write to it, so nobody else can replace the socket's directory.
 
     Args:
         path: The socket.
@@ -120,6 +154,7 @@ def problems(path: Path, owner: int = 0) -> list[str]:
             found.append(f"{place} belongs to uid {status.st_uid}, not to uid {owner}")
         if status.st_mode & PRIVATE:
             found.append(f"{place} is open to its group or to others")
+    found += _directory_problems(path.parent.parent, owner)
     return found
 
 

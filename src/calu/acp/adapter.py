@@ -45,6 +45,7 @@ from calu.acp import messages as acp
 from calu.acp import modes
 from calu.acp.peer import Peer, RpcError
 from calu.config import AutoEscalate
+from calu.protocol.client import RequestFailed
 from calu.protocol.messages import HonestyInfo
 
 log = logging.getLogger(__name__)
@@ -285,7 +286,7 @@ class Adapter:
                 await self._cancel(params)
                 return None
             case "session/close":
-                await self._cancel(params)
+                await self._close(params)
                 return {}
             case "session/list":
                 return await self._list_sessions(params)
@@ -369,6 +370,10 @@ class Adapter:
         comes from the database (`session.history`), because the event buffer of the bus only
         covers the running process.
 
+        The requested id must be the running session's calu session id (as `state.get`
+        reports it), also when no `session/new` came first: an editor may remember the id of an
+        earlier calu run, and adopting that id would label this session's updates with it.
+
         Args:
             params: The `session/load` params.
 
@@ -377,15 +382,18 @@ class Adapter:
 
         Raises:
             RpcError: If `cwd` is outside the session's project directory, or the session id
-                is not
-                the one this adapter serves.
+                is not the one this adapter serves (`UNKNOWN_SESSION`).
         """
         request = acp.LoadSessionParams.model_validate(params)
         self._check_cwd(request.cwd)
-        if self.session_id is not None and request.session_id != self.session_id:
-            raise RpcError(acp.UNKNOWN_SESSION, f"calu does not serve {request.session_id}")
-        self.session_id = request.session_id
         snapshot = await self.calu.request("state.get")
+        served = self.session_id or str(snapshot.get("calu_session_id") or "calu")
+        if request.session_id != served:
+            raise RpcError(
+                acp.UNKNOWN_SESSION,
+                f"calu does not serve {request.session_id}: this calu acp serves session {served}",
+            )
+        self.session_id = served
         self.state = str(snapshot.get("state", self.state))
         self._read_auto(snapshot)
         self._remember_open(snapshot)  # asked after the answer, see `_after_response`
@@ -407,7 +415,9 @@ class Adapter:
         Returns:
             `{"sessions": [...]}` with at most one entry: the session's id, its project
             directory, a title (the directory's name and the session's state) and the time
-            of the answer as the last update.
+            of the answer as the last update. Empty (and a warning in the log) when the
+            session does not answer `state.get`: some editors poll this list, and an error
+            answer would show up there as a failure of the agent.
         """
         cwd = params.get("cwd")
         if isinstance(cwd, str) and cwd:
@@ -415,7 +425,11 @@ class Adapter:
                 self._check_cwd(cwd)
             except RpcError:
                 return {"sessions": []}
-        snapshot = await self.calu.request("state.get")
+        try:
+            snapshot = await self.calu.request("state.get")
+        except (RequestFailed, ConnectionError) as error:
+            log.warning("session/list: the calu session did not answer state.get: %s", error)
+            return {"sessions": []}
         session_id = self.session_id or str(snapshot.get("calu_session_id") or "calu")
         state = str(snapshot.get("state", self.state))
         return {
@@ -476,9 +490,10 @@ class Adapter:
         return {"stopReason": turn.stop_reason}
 
     async def _cancel(self, params: dict[str, Any]) -> None:
-        """Handle `session/cancel` (and `session/close`): interrupt Claude's turn.
+        """Handle `session/cancel`: interrupt Claude's turn.
 
-        Every pending prompt answers `cancelled`, as the protocol requires.
+        Every pending prompt answers `cancelled`, as the protocol requires. A cancel for
+        another session is a notification and gets no answer, so it is only logged.
 
         Args:
             params: The params holding the session id.
@@ -488,6 +503,25 @@ class Adapter:
             log.warning("ignoring a cancel for the unknown session %s", request.session_id)
             return
         self.finish_turns("cancelled")
+        await self.calu.request("interrupt", {})
+
+    async def _close(self, params: dict[str, Any]) -> None:
+        """Handle `session/close`: interrupt Claude's turn and forget the session id.
+
+        Every pending prompt answers `cancelled`. The calu session itself keeps running (it
+        belongs to `calu run`); only this editor's attachment ends, so a later request needs
+        a `session/new` or `session/load` first.
+
+        Args:
+            params: The params holding the session id.
+
+        Raises:
+            RpcError: `UNKNOWN_SESSION` if no session is attached or the id is a different one.
+        """
+        request = acp.SessionIdParams.model_validate(params)
+        self._require_session(request.session_id)
+        self.finish_turns("cancelled")
+        self.session_id = None
         await self.calu.request("interrupt", {})
 
     def _check_cwd(self, cwd: str) -> None:

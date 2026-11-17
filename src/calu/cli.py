@@ -103,6 +103,7 @@ from calu.db.target import (
     PasswordAuth,
     RdsIamAuth,
     Target,
+    TargetError,
     from_fields,
 )
 from calu.defaults.instructions import honesty_rules
@@ -374,11 +375,34 @@ def ask(prompt: str, default: str | None, flag: str) -> str:
     return answer
 
 
+def _store_new_admin(store: CredentialStore, owner: Target, password: bytearray) -> None:
+    """Store the owner login of a database that was just chosen, as `admin`.
+
+    Side effects: saves the `admin` entry; removes a `session` entry, which belongs to the
+    database set up before (there was no `admin` entry, so this is another database or one
+    set up again). Removing it now, and not only when the setup succeeds, makes a setup
+    that stops later (docker fails, the role `calu_session` has a login, a wrong password)
+    renew the session login when it runs again, instead of keeping the old one.
+
+    Args:
+        store: The credential store; it holds no `admin` entry.
+        owner: The owner login.
+        password: The admin password, which encrypts the entry; the caller wipes it.
+    """
+    store.save("admin", owner.dump(), password)
+    _remember_admin_password(password)
+    if store.remove("session"):
+        print(
+            "removed the stored 'session' credential, which belongs to the database set up before"
+        )
+
+
 def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
     """Create the local database: store the `admin` credential, then start the container.
 
     The credential is saved before the container starts, so that a start that fails can be
-    repeated with `calu db up`: the generated owner password is not lost.
+    repeated with `calu db up`: the generated owner password is not lost. A stored `session`
+    entry is removed then (`_store_new_admin`).
 
     Args:
         store: The credential store; it must hold no `admin` entry.
@@ -397,8 +421,7 @@ def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
     password = read_password("New admin password: ", confirm=True)
     owner = local_db.owner_target(local_db.new_owner_password(), port, data)
     try:
-        store.save("admin", owner.dump(), password)
-        _remember_admin_password(password)
+        _store_new_admin(store, owner, password)
     finally:
         wipe(password)
     assert isinstance(owner.auth, PasswordAuth)
@@ -463,7 +486,12 @@ def cmd_db_up(args: argparse.Namespace, store: CredentialStore) -> None:
         )
     if args.port not in (None, block.port):
         raise CliError(f"the local database was set up on port {block.port}, not {args.port}")
-    if args.data_dir and str(Path(args.data_dir).expanduser()) != block.data:
+    chosen = (
+        os.path.normpath(os.path.abspath(Path(args.data_dir).expanduser()))
+        if args.data_dir
+        else None
+    )
+    if chosen is not None and chosen != os.path.normpath(block.data):
         raise CliError(f"the local database was set up in {block.data}")
     first = not local_db.initialized(block.data)
     password = owner.auth.password if isinstance(owner.auth, PasswordAuth) and first else None
@@ -916,6 +944,81 @@ def _setup_rds(args: argparse.Namespace, store: CredentialStore) -> Target:
     return owner
 
 
+_SETUP_OPTIONS = (
+    ("data_dir", "--data-dir", ("docker",)),
+    ("port", "--port", ("docker", "server", "rds-iam")),
+    ("host", "--host", ("server", "rds-iam")),
+    ("dbname", "--dbname", ("server", "rds-iam")),
+    ("user", "--user", ("server", "rds-iam")),
+    ("sslmode", "--sslmode", ("server",)),
+    ("sslrootcert", "--sslrootcert", ("server", "rds-iam")),
+    ("region", "--region", ("rds-iam",)),
+    ("aws_profile", "--aws-profile", ("rds-iam",)),
+)
+"""(attribute, option, variants it applies to) of the `calu setup` options that describe a new
+database. `--sslmode` is not for rds-iam: IAM authentication always uses `verify-full`."""
+
+
+def _check_setup_options(args: argparse.Namespace, variant: str | None) -> None:
+    """Refuse `calu setup` options that would be ignored, before anything is asked or stored.
+
+    Args:
+        args: Parsed arguments of `calu setup`.
+        variant: The variant of the new database; None if a database is stored already
+            (the `admin` entry), whose options are then all fixed.
+
+    Raises:
+        CliError: If an option of `_SETUP_OPTIONS` was given for a stored database or for a
+            variant it does not apply to, or a session option (`--session-auth`,
+            `--session-aws-profile`) for a variant other than rds-iam, or
+            `--session-aws-profile` together with `--session-auth password`.
+    """
+    for attribute, option, variants in _SETUP_OPTIONS:
+        if getattr(args, attribute) is None:
+            continue
+        if variant is None:
+            raise CliError(
+                f"{option} describes a new database, and one is set up already (the `admin` "
+                "credential); leave it out, or `calu credential remove admin` first to set up "
+                "another one"
+            )
+        if variant not in variants:
+            raise CliError(
+                f"{option} does not apply to the database {variant}; it is for "
+                f"{' and '.join(variants)}"
+            )
+    if variant not in (None, "rds-iam") and (args.session_auth or args.session_aws_profile):
+        raise CliError("--session-auth and --session-aws-profile are for the database rds-iam")
+    if args.session_auth == "password" and args.session_aws_profile:
+        raise CliError("--session-aws-profile is for --session-auth iam, not password")
+
+
+def _check_session_options(args: argparse.Namespace, owner: Target, renew: bool) -> None:
+    """Refuse session options that the stored database or the kept session login ignore.
+
+    Args:
+        args: Parsed arguments of `calu setup` (`session_auth`, `session_aws_profile`).
+        owner: The owner login of the database.
+        renew: Whether this setup gives `calu_session` a new login.
+
+    Raises:
+        CliError: If a session option is given for a database without IAM authentication,
+            or while the session login is kept (no `--renew-session`).
+    """
+    if not (args.session_auth or args.session_aws_profile):
+        return
+    if not isinstance(owner.auth, RdsIamAuth):
+        raise CliError(
+            "--session-auth and --session-aws-profile are for a database with IAM "
+            f"authentication; {owner.place} is not set up with it"
+        )
+    if not renew:
+        raise CliError(
+            "--session-auth and --session-aws-profile change the session login, which this "
+            "setup keeps; add --renew-session to replace it"
+        )
+
+
 def _new_database(args: argparse.Namespace, store: CredentialStore) -> Target:
     """Set up the database of the chosen variant and store its owner login as `admin`.
 
@@ -926,13 +1029,17 @@ def _new_database(args: argparse.Namespace, store: CredentialStore) -> Target:
     Returns:
         The owner login.
 
+    Side effects: stores `admin` and removes a stored `session` entry (`_store_new_admin`).
+
     Raises:
-        CliError: On an invalid answer, a failed connection or a failed preflight; nothing is
-            stored then, except for the local database, whose credential is stored before
-            its container starts.
+        CliError: On an option that does not apply to the chosen variant
+            (`_check_setup_options`), an invalid answer, a failed connection or a failed
+            preflight; nothing is stored then, except for the local database, whose
+            credential is stored before its container starts.
         local_db.DockerError: If docker fails.
     """
     variant = _ask_variant(args.database)
+    _check_setup_options(args, variant)
     if variant == "docker":
         chosen = args.data_dir or ask(
             "Data directory", str(local_db.default_data_dir()), "--data-dir"
@@ -944,14 +1051,32 @@ def _new_database(args: argparse.Namespace, store: CredentialStore) -> Target:
     print("Choose the admin password (it protects the stored owner login on this machine).")
     password = read_password("New admin password: ", confirm=True)
     try:
-        store.save("admin", owner.dump(), password)
-        _remember_admin_password(password)
+        _store_new_admin(store, owner, password)
     finally:
         wipe(password)
     return owner
 
 
 def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Run `_setup`, then forget the admin password that was typed for it (`_typed`).
+
+    Args:
+        args: Parsed arguments of `calu setup`.
+        store: The credential store.
+
+    Raises:
+        CliError: As `_setup`.
+        CredentialError: On a wrong password.
+        local_db.DockerError: If docker fails.
+        psycopg.Error: On database errors.
+    """
+    try:
+        _setup(args, store)
+    finally:
+        _typed.clear()
+
+
+def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     """Set calu's database up: choose it on the first run, then migrate, seed and log in.
 
     Without an `admin` credential the command asks which database to use (`--database`:
@@ -977,7 +1102,8 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
         CliError: If an answer or password is missing or invalid, the database cannot be
             reached or set up as it is, `--database` is given although a database is stored,
             the role `calu_session` has a login this machine does not hold (the message
-            names `--renew-session`), or `--checker-model auto` finds no provider's
+            names `--renew-session`), an option does not apply (`_check_setup_options`,
+            `_check_session_options`), or `--checker-model auto` finds no provider's
             credentials.
         CredentialError: On a wrong password.
         local_db.DockerError: If docker fails.
@@ -991,6 +1117,7 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
                 "a database is set up already (the `admin` credential); `calu credential "
                 "remove admin` first to set up another one"
             )
+        _check_setup_options(args, None)
         owner = load_target(store, "admin", "Admin password: ")
         block = owner.docker
         if (
@@ -1009,6 +1136,7 @@ def cmd_setup(args: argparse.Namespace, store: CredentialStore) -> None:
         new_database = True
     # A database that was just chosen never shares a session login stored for another one.
     renew = args.renew_session or new_database or "session" not in store
+    _check_session_options(args, owner, renew)
     session_iam = None
     if isinstance(owner.auth, RdsIamAuth) and args.session_auth != "password":
         session_iam = RdsIamAuth(
@@ -1159,8 +1287,9 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If `name` is missing or unknown, a password is empty or mismatched, or
-            `new` was asked for something other than the operator.
+        CliError: If `name` is missing or unknown, a password is empty or mismatched, `new`
+            was asked for something other than the operator, or `set` of a login entry
+            (`LOGIN_ENTRIES`) was given a secret that is no database login (`Target.parse`).
         CredentialError: On a wrong password.
         psycopg.Error: On database errors (for `new`).
     """
@@ -1195,6 +1324,14 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
             "'operator' credential, which reads the fleet and resolves escalations"
         )
     secret = read_password("Connection string (not echoed): ")
+    if args.name in LOGIN_ENTRIES:
+        # Checked before the entry's password is asked: a typo in the string would otherwise
+        # only show at the next command that uses the entry.
+        try:
+            Target.parse(secret)
+        except TargetError as exc:
+            wipe(secret)
+            raise CliError(f"credential {args.name!r} not stored: {exc}") from None
     password = None
     if not args.no_password:
         password = read_password(f"New password for {args.name!r}: ", confirm=True)
@@ -1216,6 +1353,10 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     print(f"stored credential {args.name!r}")
 
 
+LOGIN_ENTRIES = ("admin", "session", "operator")
+"""The credential entries that hold a database login (`calu.db.target.Target`)."""
+
+
 def _workspace_and_prompt(args: argparse.Namespace) -> tuple[Path, str | None]:
     """Read the project directory and the first message of `calu run` and `calu start`.
 
@@ -1226,17 +1367,24 @@ def _workspace_and_prompt(args: argparse.Namespace) -> tuple[Path, str | None]:
         The resolved directory and the first message, or None for none.
 
     Raises:
-        CliError: If the directory does not exist or the prompt file cannot be read.
+        CliError: If the directory does not exist, `--prompt` and `--prompt-file` are both
+            given, or the prompt file cannot be read or holds nothing but white space.
     """
     workspace = Path(args.directory).resolve()
     if not workspace.is_dir():
         raise CliError(f"{workspace} is not a directory")
+    if args.prompt is not None and args.prompt_file:
+        raise CliError("--prompt and --prompt-file exclude each other; give one of them")
     prompt = args.prompt
     if args.prompt_file:
         try:
             prompt = Path(args.prompt_file).read_text(encoding="utf-8").strip()
         except OSError as exc:
             raise CliError(f"cannot read {args.prompt_file}: {exc}") from exc
+        if not prompt:
+            # An empty first message would start a session that waits, which is not what a
+            # file of instructions was meant for (a wrong file, or one not written yet).
+            raise CliError(f"{args.prompt_file}: the file is empty")
     return workspace, prompt
 
 
@@ -1469,15 +1617,23 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store; the `operator` credential is enough.
 
     Raises:
-        CliError: If the options contradict each other, no server answered, the server
-            refused or failed to start the session, or the client ended with an error.
+        CliError: If the options contradict each other (also `--no-attach` with `--plain` or
+            `--thinking`), no server answered, the server refused or failed to start the
+            session, or the client ended with an error.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
+        KeyboardInterrupt: On Ctrl-C while waiting for the server; the request was withdrawn
+            first where no server had claimed it yet.
     """
     workspace, prompt = _workspace_and_prompt(args)
     _check_conversation_choice(args)
     if args.fork_before_turn is not None and not args.resume:
         raise CliError("--fork-before-turn needs --resume <session id>")
+    if args.no_attach and (args.plain or args.thinking):
+        raise CliError(
+            "--plain and --thinking choose how the client shows the session, and --no-attach "
+            "starts no client; give them to `calu attach` later"
+        )
     run_as = _client_user(args)
     user, host = serve_os_user(), socket.gethostname()
     if run_as is not None:
@@ -1507,9 +1663,27 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
 
         Raises:
             CliError: If no server answered or the session was not started.
+            asyncio.CancelledError: On Ctrl-C while waiting; the request was withdrawn
+                first where that was still possible.
         """
+        request_id = await session_requests.file(db, wanted)
         try:
-            done = await session_requests.wait_for(db, await session_requests.file(db, wanted))
+            done = await session_requests.wait_for(db, request_id)
+        except asyncio.CancelledError:
+            # Ctrl-C: `asyncio.run` cancels this task. Take the request back, so that a
+            # server does not start a session for a client that has gone.
+            withdrawn = False
+            with contextlib.suppress(Exception):
+                withdrawn = await session_requests.withdraw(db, request_id)
+            print(
+                "withdrew the session request"
+                if withdrawn
+                else "the session request could not be withdrawn (a server may have taken it "
+                "already; `calu sessions` shows the session if it starts)",
+                file=sys.stderr,
+                flush=True,
+            )
+            raise
         except session_requests.NoServer:
             raise CliError(
                 f"no `calu serve` answered for {user} on {host}: start it in a terminal with "
@@ -1534,7 +1708,10 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         return Endpoint(address, token, token_id, done.session_id), claude_id
 
     endpoint, claude_id = _herd_value(store, work)
-    print(f"[session] {claude_id}", flush=True)
+    if claude_id:
+        print(f"[session] {claude_id}", flush=True)
+    else:
+        print("[session] the Claude session id is not known yet", flush=True)
     if args.no_attach:
         print(f"[clients] attach with: calu attach --session {endpoint.session_id}", flush=True)
         return
@@ -1561,6 +1738,15 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         psycopg.Error: On database errors.
     """
     workspace, prompt = _workspace_and_prompt(args)
+    if args.background_timeout is not None and (
+        not args.batch or not math.isfinite(args.background_timeout) or args.background_timeout <= 0
+    ):
+        raise CliError("--background-timeout needs --batch and a number of seconds above 0")
+    _check_conversation_choice(args)
+    socket_path = _socket_path(args.socket)
+    # Last: `--sudo` replaces this process by sudo, which asks for a password, so every
+    # mistake that can be found without it is reported first.
+    run_as = _run_as(args)
     options = RunOptions(
         workspace=workspace,
         project=args.project,
@@ -1568,19 +1754,14 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         resume_id=args.resume,
         fork_id=args.fork,
         fork_before_turn=args.fork_before_turn,
-        socket_path=_socket_path(args.socket),
+        socket_path=socket_path,
         model=args.model,
         effort=args.effort,
         interactive=not args.batch,
         show_thinking=args.thinking,
         background_timeout_s=args.background_timeout,
-        run_as=_run_as(args),
+        run_as=run_as,
     )
-    if args.background_timeout is not None and (
-        not args.batch or not math.isfinite(args.background_timeout) or args.background_timeout <= 0
-    ):
-        raise CliError("--background-timeout needs --batch and a number of seconds above 0")
-    _check_conversation_choice(args)
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print("Type a message for Claude; /quit ends the session.")
     url = _session_login(store)
@@ -2142,8 +2323,8 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If the web dependencies are missing, the address is not local, or there is no
-            `admin` credential.
+        CliError: If the web dependencies are missing, the address is not local, the port is
+            not between 1 and 65535, or there is no `admin` credential.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -2159,6 +2340,9 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         check_host(args.host)
     except NotLocal as exc:
         raise CliError(str(exc)) from exc
+    if not 1 <= args.port <= 65535:
+        # Port 0 would bind a random port, and the address printed below would name port 0.
+        raise CliError(f"--port takes a number from 1 to 65535, not {args.port}")
     run_as = _client_user(args)
     url = _admin_secret(store)
     if run_as is not None:
@@ -3761,7 +3945,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--session-auth",
         choices=("iam", "password"),
-        default="iam",
+        default=None,
         help="rds-iam: how sessions log in as calu_session: with IAM tokens (the default; "
         "calu keeps no database password then) or with a generated password",
     )
@@ -4244,6 +4428,9 @@ def main(
     # Before anything reads a path: as root, calu's credentials and state are in the system
     # directories, never in a home directory (requirement 26).
     asuser.use_system_directories(os.environ, os.geteuid())
+    # A password typed in an earlier call of `main` in the same process (tests, an embedding
+    # program) must not reach this command's `calu setup`.
+    _typed.clear()
     args = build_parser().parse_args(argv)
     try:
         load_secrets()

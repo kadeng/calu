@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from importlib import resources
 
 import pytest
+from rich.text import Text
 
 pytest.importorskip("textual")
 
@@ -943,3 +944,127 @@ async def test_the_screens_and_the_command_list_answer_to_the_mouse() -> None:
         await run.pilot.click("#slash", offset=(6, row))
         await run.pilot.pause()
         assert run.composer.strip() == "/help"
+
+
+MANY_OPTIONS: list[dict] = [
+    {
+        "question": "Which of the twelve modules comes first?",
+        "header": "Module",
+        "multiSelect": False,
+        "options": [
+            {"label": f"module number {number}", "description": ""} for number in range(1, 13)
+        ],
+    },
+]
+"""A question with more options than there are digit keys."""
+
+
+async def click_button(run: Running, label: str) -> None:
+    """Click a button under the card by its label, on whichever line it was laid out."""
+    run.clock.advance(0.6)
+    lines = run.app.query_one("#card-actions", Buttons).text.splitlines()
+    row = next(index for index, line in enumerate(lines) if f" {label}" in line)
+    await run.pilot.click("#card-actions", offset=(lines[row].index(f" {label}") + 1, row))
+    await run.pilot.pause()
+
+
+async def test_the_card_buttons_wrap_and_every_option_has_one() -> None:
+    """On 80 columns the buttons of a 12-option question take several lines; all are there.
+
+    With a scripted session; nothing is started.
+    """
+    async with running(size=(80, 30)) as run:
+        await run.play(scenarios.question("e9", "t9", MANY_OPTIONS))
+        row = run.app.query_one("#card-actions", Buttons)
+        lines = row.text.splitlines()
+        assert len(lines) > 1 and row.size.height == len(lines)
+        assert all(len(line) <= row.size.width for line in lines)
+        for label in ("1 module number 1", "10 module numbe", "12 module numbe", "send"):
+            assert any(label in line for line in lines), label
+        assert "decline" in lines[-1]
+        await click_button(run, "12 module numbe")
+        decision = run.app.current_decision()
+        assert decision is not None and decision.picks[0] == {11}
+        await click_button(run, "send")
+        assert run.session.sent("escalation.decide") == [
+            {"escalation_id": "e9", "answer": "module number 12"}
+        ]
+
+
+async def test_a_buttons_row_lays_out_again_for_a_new_width() -> None:
+    async with running("escalation", size=(120, 36)) as run:
+        row = run.app.query_one("#card-actions", Buttons)
+        assert len(row.text.splitlines()) == 1
+        await run.pilot.resize_terminal(40, 36)
+        await run.pilot.pause()
+        lines = run.app.query_one("#card-actions", Buttons).text.splitlines()
+        assert len(lines) > 1 and all(len(line) <= row.size.width for line in lines)
+        assert "Show everything" in lines[-1]
+
+
+async def test_a_click_on_a_button_of_a_card_that_changed_does_nothing() -> None:
+    """A button carries its item and question; a click for another one only says so.
+
+    With a scripted session; nothing is started.
+    """
+    from calu.tui.app import card_button_key, parse_card_button_key
+    from calu.tui.widgets.chrome import Picked
+
+    assert parse_card_button_key(card_button_key("e:7", 2, "3")) == ("e:7", 2, "3")
+    assert parse_card_button_key("a") == ("", -1, "")
+    async with running("question_multi", size=(80, 24)) as run:
+        await run.press("1")
+        decision = run.app.current_decision()
+        assert decision is not None and decision.current == 1
+        run.clock.advance(0.6)
+        run.app.post_message(Picked("option", "e1:q0:1"))  # drawn for the first question
+        await run.pilot.pause()
+        assert decision.picks[0] == {0} and decision.picks[1] == set()
+        assert "the card changed; nothing was done" in run.app.message
+        run.app.post_message(Picked("decline", "e0:q1:"))  # drawn for another item
+        await run.pilot.pause()
+        assert run.session.sent("escalation.decide") == []
+        run.app.post_message(Picked("option", "e1:q1:2"))
+        await run.pilot.pause()
+        assert decision.picks[1] == {2}
+
+
+async def test_send_clicked_twice_sends_without_a_choice_just_before() -> None:
+    """Without a choice just before, the first click on "send" arms and the second sends.
+
+    With a scripted session; nothing is started.
+    """
+    async with running(size=(120, 36)) as run:
+        await run.play(scenarios.question("e9", "t9", MANY_OPTIONS))
+        await run.press("1")
+        await run.type("x")
+        await run.press("backspace")
+        await click_button(run, "send")
+        assert run.session.sent("escalation.decide") == [], "the first click only arms"
+        await click_button(run, "send")
+        assert run.session.sent("escalation.decide") == [
+            {"escalation_id": "e9", "answer": "module number 1"}
+        ]
+
+
+async def test_a_message_in_a_line_of_keys_presses_no_key() -> None:
+    """A message shown where a page's keys are is no hint, even if it starts with a letter.
+
+    With a scripted session; nothing is started.
+    """
+    async with running("simple_turn") as run:
+        await run.press("f1")
+        assert isinstance(run.app.screen, TextScreen)
+        pressed: list[str] = []
+        run.app.simulate_key = pressed.append  # type: ignore[method-assign]
+        keys = run.app.screen.query_one("#text-keys", KeyLine)
+        assert keys.hints
+        run.app.flash("a page could not be read")
+        await run.pilot.pause()
+        assert keys.text == " a page could not be read" and keys.hints == ""
+        await run.pilot.click(keys, offset=(1, 0))
+        await run.pilot.pause()
+        assert pressed == []
+        keys.update(Text(" q closes"))
+        await run.pilot.click(keys, offset=(1, 0))
+        assert pressed == ["q"]

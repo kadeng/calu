@@ -163,7 +163,9 @@ class ClockWatch:
             jump = self.check()
             if jump is None:
                 continue
-            log.warning("clock jump: %s", jump.describe())
+            # Debug only: `on_jump` (the session's `clock_jumped`) reports the jump to the
+            # user as a `log` event, and a warning here would print it a second time.
+            log.debug("clock jump: %s", jump.describe())
             try:
                 await self.on_jump(jump)
             except Exception:

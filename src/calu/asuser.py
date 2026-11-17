@@ -28,14 +28,36 @@ from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from calu.launch import DEFAULT_KEEP, RunAs, environment
+from calu.launch import RunAs, environment
 
 STATE_ROOT = Path("/var/lib/calu")
 """Below it: `claude/<uid>`, the home calu gives Claude Code for a uid without one, and
 `state/<uid>`, calu's own state for that user (the snapshots of the project)."""
 
-CHILD_KEEP = (*DEFAULT_KEEP, "GIT_*")
-"""Environment variables a program calu starts as the user keeps, as shell patterns."""
+CHILD_KEEP = (
+    "PATH",
+    "LANG",
+    "LC_*",
+    "TZ",
+    "TERM",
+    "COLORTERM",
+    "PWD",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "GIT_*",
+)
+"""Environment variables a program calu starts as the user keeps, as shell patterns: what git
+and calu's helper programs need to run (path, locale, terminal, proxies, certificates, git's
+own settings). Unlike Claude Code's `calu.launch.DEFAULT_KEEP` it keeps no `ANTHROPIC_*` or
+`CLAUDE_*` variable: git runs hooks, filters and an fsmonitor the project configures, which
+Claude can write, so no key of a model provider may reach these programs."""
 
 SYS_SETGROUPS = {"x86_64": 116, "aarch64": 159}
 """Number of the `setgroups` system call per machine type. The C library's `setgroups` changes
@@ -203,7 +225,8 @@ def enter(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
 
     Raises:
         UserError: If other threads still run after `THREADS_END_S` seconds, or the identity
-            cannot be set.
+            cannot be set. In the second case the calling thread has been given root's file
+            identity back as far as the kernel allows, and nothing else was changed.
     """
     global _active
     others = _other_threads(THREADS_END_S)
@@ -212,7 +235,16 @@ def enter(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
             "the user cannot be switched while other threads of this process run, because "
             f"they would keep root's file access: {', '.join(others)}"
         )
-    fs_identity(run_as.uid, run_as.gid, (run_as.gid, *run_as.groups))
+    try:
+        fs_identity(run_as.uid, run_as.gid, (run_as.gid, *run_as.groups))
+    except UserError:
+        # `fs_identity` may have changed the groups or the gid before its check failed: a
+        # thread with half the user's identity must not go on as if nothing had happened.
+        try:
+            fs_identity(0, 0, (0,))
+        except UserError:
+            pass  # the first error is the one to report; the caller ends the process
+        raise
     os.environ["XDG_STATE_HOME"] = str(state_home(run_as, state_root))
     os.environ["CLAUDE_CONFIG_DIR"] = str(Path(run_as.home) / ".claude")
     _active = run_as
@@ -266,7 +298,7 @@ def active() -> RunAs | None:
     return _active
 
 
-def child(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+def child(env: Mapping[str, str] | None = None, keep: Sequence[str] = CHILD_KEEP) -> dict[str, Any]:
     """Return the keyword arguments that start a program as the user calu works for.
 
     For `subprocess.run`, `subprocess.Popen` and `anyio.run_process`:
@@ -274,21 +306,30 @@ def child(env: Mapping[str, str] | None = None) -> dict[str, Any]:
 
     Args:
         env: The environment the caller wants the program to have; None means calu's own.
+        keep: The shell patterns of the variables the program keeps after `enter`. A caller
+            that starts Claude Code's CLI and needs its login variables passes a wider list;
+            the names in `calu.config.PROVIDER_KEYS` are dropped whatever it holds.
 
     Returns:
         Without `enter`: `{"env": env}` if `env` is given, else nothing, so the program
         starts as before. After `enter`: `user`, `group`, `extra_groups`, and an `env` built
         from an empty one: the variables of `env` (or of calu's environment) that match
-        `CHILD_KEEP`, with `HOME`, `USER` and `LOGNAME` of the user.
+        `keep` and are not in `PROVIDER_KEYS`, with `HOME`, `USER` and `LOGNAME` of the user.
     """
     if _active is None:
         return {} if env is None else {"env": dict(env)}
-    spec = _active.spec("").model_copy(update={"keep": CHILD_KEEP})
+    # Imported here: `calu.config` reaches this module through `calu.claude_model`.
+    from calu.config import PROVIDER_KEYS
+
+    spec = _active.spec("").model_copy(update={"keep": tuple(keep)})
+    built = environment(spec, os.environ if env is None else env)
+    for name in PROVIDER_KEYS:
+        built.pop(name, None)
     return {
         "user": _active.uid,
         "group": _active.gid,
         "extra_groups": list(_active.groups),
-        "env": environment(spec, os.environ if env is None else env),
+        "env": built,
     }
 
 
@@ -369,7 +410,18 @@ def sudo_command(arguments: Sequence[str], user: str, executable: Path) -> list[
         executable: The `calu` console script of this installation.
 
     Returns:
-        `sudo -- <executable> <arguments without --sudo> --user <user> --from-sudo`.
+        `sudo -- <executable> <subcommand> --user <user> --from-sudo <the other arguments>`.
+        The two options follow the subcommand (the first argument), so they come before a
+        literal `--` that ends the options. `--sudo` is dropped where it is an option, that
+        is before the first `--`; after it, every argument is kept as given.
+
+    Example:
+        `["start", "--sudo", "--", "DIR"]` becomes
+        `["sudo", "--", <executable>, "start", "--user", "ada", "--from-sudo", "--", "DIR"]`.
     """
-    kept = [argument for argument in arguments if argument != "--sudo"]
-    return ["sudo", "--", str(executable), *kept, "--user", user, "--from-sudo"]
+    if not arguments:
+        return ["sudo", "--", str(executable), "--user", user, "--from-sudo"]
+    subcommand, *rest = arguments
+    end = rest.index("--") if "--" in rest else len(rest)
+    kept = [argument for argument in rest[:end] if argument != "--sudo"] + rest[end:]
+    return ["sudo", "--", str(executable), subcommand, "--user", user, "--from-sudo", *kept]

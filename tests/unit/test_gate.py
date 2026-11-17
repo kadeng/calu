@@ -855,3 +855,49 @@ async def test_a_failure_while_recording_the_turn_result_still_ends_the_turn(
         assert rec.of(TurnResult)
         await session.stop()
         tg.cancel_scope.cancel()
+
+
+def test_the_honesty_checker_neither_vetoes_allow_nor_hides_the_answer_on_execution(
+    tmp_path: Path,
+) -> None:
+    """The honesty checker only ever answers PASS or ESCALATE and never fills
+    `executes_project_code`.
+
+    Counted as a vote on ALLOW it turned every ALLOW of the route's checker into PASS; read as
+    the first answer on execution it hid the command checker's answer.
+    """
+    from types import SimpleNamespace
+
+    from calu.checkers import CheckDecision, Checker, CheckOutcome, Decision, Route
+
+    def verdict(decision: Decision, **fields: Any) -> CheckDecision:
+        """A decision with a summary."""
+        return CheckDecision(decision=decision, reason="r", step_summary="s", **fields)
+
+    combine = gate_module.combine_decisions
+    allowed = combine([("command", verdict(Decision.ALLOW)), ("honesty", verdict(Decision.PASS))])
+    assert allowed.decision is Decision.ALLOW
+    escalated = combine(
+        [("command", verdict(Decision.ALLOW)), ("honesty", verdict(Decision.ESCALATE))]
+    )
+    assert escalated.decision is Decision.ESCALATE, "it can still escalate"
+    assert (
+        combine(
+            [
+                ("command", verdict(Decision.ALLOW)),
+                ("honesty", verdict(Decision.PASS)),
+                ("security", verdict(Decision.PASS)),
+            ]
+        ).decision
+        is Decision.PASS
+    ), "every other checker still has to say ALLOW"
+
+    honesty = Checker("honesty", "i", "test", tmp_path)
+    command = Checker("command", "i", "test", tmp_path)
+    fake = SimpleNamespace(_checkers=lambda: {Route.COMMAND: [honesty, command]})
+    runs = [
+        (honesty, CheckOutcome(decision=verdict(Decision.PASS))),
+        (command, CheckOutcome(decision=verdict(Decision.PASS, executes_project_code=False))),
+    ]
+    executes = gate_module.StepGate._executes  # pyright: ignore[reportPrivateUsage]
+    assert executes(fake, Route.COMMAND, runs, True) is False  # pyright: ignore[reportArgumentType]

@@ -261,6 +261,10 @@ class HonestyAnswer(BaseModel):
             an honest unit of a
             DISHONEST file          ──► a clean mark for that unit
 
+        A unit whose symbol the model wrote as `ALL_SYMBOLS` names no unit: as a dishonest
+        unit it becomes a mark on the whole file (symbol ""), as an honest unit it is left out.
+        Only a file-wide HONEST closes every mark of a file.
+
         The verdicts are also written out as text: all of them in `reason` (the record of the
         check), the DISHONEST ones in `comment`, which Claude reads with the approval.
 
@@ -278,7 +282,9 @@ class HonestyAnswer(BaseModel):
                 dirty.append(
                     CodeMark(
                         path=entry.path,
-                        symbol=unit.symbol,
+                        # Said explicitly rather than left to the state, which reads "*" as
+                        # every symbol of the file only on a clean mark.
+                        symbol="" if unit.symbol.strip() == ALL_SYMBOLS else unit.symbol,
                         reason=unit.reason or entry.reason or "dishonest",
                     )
                 )
@@ -289,7 +295,8 @@ class HonestyAnswer(BaseModel):
             clean += [
                 CodeMark(path=entry.path, symbol=unit.symbol, reason="honest")
                 for unit in entry.units
-                if unit.honest
+                # An honest "*" would close every mark of a file the checker calls DISHONEST.
+                if unit.honest and unit.symbol.strip() != ALL_SYMBOLS
             ]
         dishonest = self.lines("DISHONEST")
         verdicts = "\n".join([*dishonest, *self.lines("HONEST")])

@@ -116,6 +116,11 @@ MAX_PENDING_HUMAN_TEXTS = 256
 """How many texts sent for a human the runner remembers until Claude Code replays them. A text
 that is never replayed (the session was interrupted first) would otherwise stay for ever; the
 oldest is dropped beyond this number, and its late replay is then not counted as user input."""
+MAX_PENDING_HUMAN_IMAGE_TEXTS = 8
+"""How many pending human texts (`MAX_PENDING_HUMAN_TEXTS`) may keep their attached images until
+the replay. An image can be several megabytes, so beyond this number the images of the oldest
+pending text are dropped (the text itself stays pending); its `UserInput` then has no images.
+Claude Code has received the images already in any case (`send`)."""
 REVIEW_HOOK_TIMEOUT_S = 24 * 3600
 """Timeout of the two hooks that review a subagent's result: they may wait for a human, because
 an escalated result is decided inside the hook."""
@@ -246,9 +251,13 @@ class SdkRunner:
         self._skills = SkillContentFilter()  # skill text after Skill calls is no user input
         self.agents: dict[str, AgentInfo] = {}  # by Agent tool call id
         self._task_to_tool_use: dict[str, str] = {}  # SDK task/agent id -> tool call id
-        self._human_texts: list[str] = []  # sent for a human, not yet replayed (stripped)
-        self._human_images: dict[str, list[ChatImage]] = {}
-        """The images sent with a human text, by that text, until its replay arrives."""
+        self._human_texts: list[tuple[str, list[ChatImage]]] = []
+        """Texts sent for a human and not yet replayed, oldest first: (stripped text, images).
+
+        Each entry keeps the images sent with that text, so that two sends of the same text pair
+        with their replays in order. At most `MAX_PENDING_HUMAN_TEXTS` entries, of which at most
+        `MAX_PENDING_HUMAN_IMAGE_TEXTS` keep images (`send`).
+        """
         self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
         self._sink: EventSink | None = None  # set by `run`; hooks report through it
@@ -416,10 +425,12 @@ class SdkRunner:
 
         Precondition: `wait_ready` has returned and `run` is still active.
 
-        Side effect: the text is remembered, so that its replay on the stream is reported as
-        `UserInput` with source "user" (`_user_source`). Callers therefore pass only text a
-        human client sent (a prompt, a queued or injected chat message, a comment); calu's own
-        notes go through `_send_note`.
+        Side effect: the text and its images are remembered, so that its replay on the stream
+        is reported as `UserInput` with source "user" and these images (`_user_source`).
+        Callers therefore pass only text a human client sent (a prompt, a queued or injected
+        chat message, a comment); calu's own notes go through `_send_note`. The oldest pending
+        texts beyond `MAX_PENDING_HUMAN_TEXTS`, and the images of the oldest pending texts
+        beyond `MAX_PENDING_HUMAN_IMAGE_TEXTS`, are forgotten.
 
         Args:
             text: The message text.
@@ -427,10 +438,13 @@ class SdkRunner:
             images: Images the user attached. They are sent to Claude as image blocks after
                 the text and kept until the text's replay, whose `UserInput` carries them.
         """
-        self._human_texts.append(text.strip())
+        self._human_texts.append((text.strip(), list(images)))
         del self._human_texts[:-MAX_PENDING_HUMAN_TEXTS]
-        if images:
-            self._human_images[text.strip()] = list(images)
+        # Bound the memory held for replays that may never come: keep the images of the newest
+        # texts only, and drop them from older entries (newest first, so the newest are kept).
+        with_images = [i for i, (_, imgs) in enumerate(self._human_texts) if imgs]
+        for i in with_images[:-MAX_PENDING_HUMAN_IMAGE_TEXTS]:
+            self._human_texts[i] = (self._human_texts[i][0], [])
         await self._write(text, priority, images)
 
     async def _write(self, text: str, priority: Priority, images: Sequence[ChatImage] = ()) -> None:
@@ -990,7 +1004,7 @@ class SdkRunner:
 
     def _user_source(
         self, text: str, origin: Any = None
-    ) -> Literal["user", "cross_session", "system"]:
+    ) -> tuple[Literal["user", "cross_session", "system"], list[ChatImage]]:
         """Decide whether a user-role text on the stream is the human user's.
 
         The checkers accept only the user's messages as authorization, so the default is "not
@@ -1000,7 +1014,8 @@ class SdkRunner:
           of kind "human"; task notifications, channel and peer messages and every unknown
           kind are not human), and
         - the session sent exactly this text (ignoring surrounding white space) through `send`
-          and its replay has not been seen yet. Each sent text is matched once.
+          and its replay has not been seen yet. Each sent text is matched once; of several
+          pending sends of the same text, the oldest is matched first.
 
         Side effect: a matched text is removed from the pending texts.
 
@@ -1009,24 +1024,27 @@ class SdkRunner:
             origin: The message's `origin`, or None.
 
         Returns:
-            "user" for the user's text (or "cross_session" where it carries the marker of a
-            message from another Claude session, `user_message_source`), else `NOT_FROM_USER`.
+            (source, images). source is "user" for the user's text (or "cross_session" where it
+            carries the marker of a message from another Claude session, `user_message_source`),
+            else `NOT_FROM_USER`. images are those `send` kept for the matched text (empty when
+            none were sent or they were dropped); always empty when the text is not matched.
 
         Example:
-            After `send("Fix it.", "later")`, `_user_source("Fix it.")` is "user" and a second
-            `_user_source("Fix it.")` is "system".
+            After `send("Fix it.", "later")`, `_user_source("Fix it.")` is ("user", []) and a
+            second `_user_source("Fix it.")` is ("system", []).
 
         Measured with CLI 2.1.319 (`tests/unit/test_runner_live.py`): a prompt, a message
         queued for the next turn and a message injected into a running turn are each replayed
         once, with the text unchanged and no other origin, so all three are recognised.
         """
         if origin is not None and not (isinstance(origin, dict) and origin.get("kind") == "human"):
-            return NOT_FROM_USER
-        try:
-            self._human_texts.remove(text.strip())
-        except ValueError:
-            return NOT_FROM_USER
-        return user_message_source(text)
+            return NOT_FROM_USER, []
+        stripped = text.strip()
+        for i, (pending, images) in enumerate(self._human_texts):
+            if pending == stripped:
+                del self._human_texts[i]
+                return user_message_source(text), images
+        return NOT_FROM_USER, []
 
     def _mode_events(self, mode: Any, sdk_agent_id: Any = None) -> list[Event]:
         """Report the permission mode of an agent when it is first seen and when it changes.
@@ -1235,10 +1253,12 @@ class SdkRunner:
                 origin = getattr(msg, "origin", None)
                 if isinstance(msg.content, str):
                     if agent is None and not self._skill_text(msg.content, events):
+                        source, images = self._user_source(msg.content, origin)
                         events.append(
                             UserInput(
                                 text=msg.content,
-                                source=self._user_source(msg.content, origin),
+                                source=source,
+                                images=images if source == "user" else [],
                                 # Claude Code replays the prompt with its transcript uuid
                                 # (`replay-user-messages`), which is the fork point of the turn
                                 # that starts here (D36).
@@ -1262,16 +1282,14 @@ class SdkRunner:
                             and agent is None
                             and not self._skill_text(block.text, events)
                         ):
-                            source = self._user_source(block.text, origin)
+                            # The images are what the user attached to this text (`send`);
+                            # only the user's own message can have any.
+                            source, images = self._user_source(block.text, origin)
                             events.append(
                                 UserInput(
                                     text=block.text,
                                     source=source,
-                                    # What the user attached to this text (`send`); only the
-                                    # user's own message can have any.
-                                    images=self._human_images.pop(block.text.strip(), [])
-                                    if source == "user"
-                                    else [],
+                                    images=images if source == "user" else [],
                                 )
                             )
             case TaskStartedMessage():

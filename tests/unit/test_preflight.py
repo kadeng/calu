@@ -753,3 +753,61 @@ def test_the_users_settings_file_is_found_where_claude_code_reads_it(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(relocated))
     ((label, entries),) = preflight.settings_file_sandbox_findings(Config())
     assert label == "$CLAUDE_CONFIG_DIR/settings.json" and "enabled: false" in entries[0]
+
+
+# ---------------------------------------------------------------- calu as root for a user
+
+
+def test_under_another_user_the_users_claude_settings_are_read(tmp_path: Path, monkeypatch):
+    """Under `--user` calu is root: `Path.home()` names root's home, not the user's."""
+    import json
+
+    from calu import asuser
+    from calu.launch import RunAs
+
+    root_home = tmp_path / "root"
+    user_home = tmp_path / "ada"
+    for home, mode in ((root_home, "plan"), (user_home, "auto")):
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "settings.json").write_text(
+            json.dumps({"permissions": {"defaultMode": mode}}), encoding="utf-8"
+        )
+    (user_home / ".claude" / "CLAUDE.md").write_text("be brief\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: root_home))
+    narrowed = Config.model_validate({"claude": {"setting_sources": ["project"]}})
+
+    # Nobody switched to: calu's own home, as before.
+    assert preflight.claude_home() == root_home
+    assert preflight.expected_permission_mode(Config())[0] == "plan"
+    assert preflight.setting_source_warnings(narrowed) == []
+
+    monkeypatch.setattr(asuser, "_active", RunAs(uid=1000, gid=1000, home=str(user_home)))
+    assert preflight.claude_home() == user_home
+    assert preflight.expected_permission_mode(Config())[0] == "auto"
+    (said,) = preflight.setting_source_warnings(narrowed)
+    assert "~/.claude/CLAUDE.md" in said
+
+
+def test_under_another_user_calus_own_directories_are_written_for_claudes_home(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Claude Code resolves "~" against the user's home; root's directories are absolute."""
+    from calu import asuser
+    from calu.config import calu_private_paths
+    from calu.launch import RunAs
+
+    root_home = tmp_path / "root"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: root_home))
+    environ = {"XDG_CONFIG_HOME": "/etc", "XDG_STATE_HOME": "/var/lib"}
+    before = ["~/.config/calu", "~/.local/state/calu", "/etc/calu", "/var/lib/calu"]
+    assert calu_private_paths(environ) == before
+
+    monkeypatch.setattr(asuser, "_active", RunAs(uid=1000, gid=1000, home="/home/ada"))
+    assert calu_private_paths(environ) == [
+        "~/.config/calu",
+        "~/.local/state/calu",
+        f"{root_home}/.config/calu",
+        f"{root_home}/.local/state/calu",
+        "/etc/calu",
+        "/var/lib/calu",
+    ]

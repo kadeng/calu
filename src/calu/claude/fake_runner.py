@@ -121,10 +121,12 @@ class FakeRunner:
         self._turns = iter(script.turns)
         self._ids = itertools.count(1)
         self._ready = anyio.Event()
-        self._send, self._receive = anyio.create_memory_object_stream[str](100)
-        self._next_queue: list[str] = []
-        self._images: dict[str, list[ChatImage]] = {}
-        """The images sent with a text, until that text is reported."""
+        # Each queued message travels with its own images, so two sends of the same text keep
+        # their images apart and nothing stays behind once the message is reported.
+        self._send, self._receive = anyio.create_memory_object_stream[tuple[str, list[ChatImage]]](
+            100
+        )
+        self._next_queue: list[tuple[str, list[ChatImage]]] = []
         self._cancel: anyio.CancelScope | None = None
         self._interrupted = False
         self.agents: dict[str, AgentInfo] = {}
@@ -196,14 +198,8 @@ class FakeRunner:
         with anyio.CancelScope() as scope:
             self._cancel = scope
             self._ready.set()
-            async for text in self._receive:
-                await sink(
-                    UserInput(
-                        text=text,
-                        source=user_message_source(text),
-                        images=self._images.pop(text, []),
-                    )
-                )
+            async for text, images in self._receive:
+                await sink(UserInput(text=text, source=user_message_source(text), images=images))
                 await self._turn(text, gate, sink)
                 while self._follow_up:
                     # Like Claude Code (D158): the turn has ended and the session is idle; when
@@ -227,12 +223,10 @@ class FakeRunner:
             priority: "next" or "later".
             images: Images the user attached; reported with the message's `UserInput`.
         """
-        if images:
-            self._images[text] = list(images)
         if priority == "next" and self._in_turn:
-            self._next_queue.append(text)
+            self._next_queue.append((text, list(images)))
         else:
-            await self._send.send(text)
+            await self._send.send((text, list(images)))
 
     async def interrupt(self) -> None:
         """Skip the remaining actions of the current turn; its result becomes "interrupted"."""
@@ -338,8 +332,8 @@ class FakeRunner:
                 return
             await self._action(action, agent, gate, sink)
             while self._next_queue and agent is None:
-                queued = self._next_queue.pop(0)
-                await sink(UserInput(text=queued, images=self._images.pop(queued, [])))
+                queued, images = self._next_queue.pop(0)
+                await sink(UserInput(text=queued, images=images))
 
     async def _action(
         self, action: dict[str, Any], agent: str | None, gate: ToolGate, sink: EventSink

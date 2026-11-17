@@ -1184,7 +1184,10 @@ class CaluApp(App[None]):
         if self.is_running:
             self._render_head()
             if isinstance(self.screen, TextScreen) and message:
-                self.screen.say(message, error)
+                # `KeyLine.say`, not `update`: a message is no line of hints, and a click on
+                # a message that starts with a one-letter word must not press that key.
+                for keys in self.screen.query("#text-keys").results(KeyLine):
+                    keys.say(Text(" " + message, "bold red" if error else "bold"))
 
     def report(self, outcome: Outcome, done: str = "") -> None:
         """Show the result of a request.
@@ -1243,29 +1246,53 @@ class CaluApp(App[None]):
 
             "card"     a letter of the card (a, d, n, w, o): as the key, so the first click
                        on Allow or Deny is remembered and the second carries it out
-            "option"   an option of the question shown, by its index
-            "answers"  Enter on a question: send the answers, or go to the next question
+            "option"   an option of the question shown, by its index (as its digit key)
+            "answers"  Enter on a question: send the answers, or go to the next question;
+                       a click after a first one that only armed "send" sends
             "decline"  alt+d on a question
+
+        The button's key names the item and the question it was drawn for
+        (`card_button_key`). A click that arrives after the card moved on to another item
+        or another question does nothing and says so, so that it never decides an item the
+        user did not see under the pointer.
 
         Args:
             kind: What the button stands for.
-            key: The letter, or the option's index.
+            key: `<escalation id>:q<question index>:<letter or option index>`.
         """
         decision = self.current_decision()
         if decision is None:
             return
+        escalation_id, question, value = parse_card_button_key(key)
+        if escalation_id != decision.escalation_id or question != _question_index(decision):
+            self.flash("the card changed; nothing was done", error=True)
+            self.render_all()
+            return
         if kind == "card":
-            self.decision_key(key)
-        elif kind == "option" and decision.is_question:
-            self.pick_option(decision, int(key))
+            self.decision_key(value)
+        elif kind == "option" and decision.is_question and value.isdigit():
+            # As a digit key does: not while the card settles, and it counts as "the key
+            # before was a choice", so that one click on "send" sends.
+            if not self._settling(decision):
+                self.pick_option(decision, int(value))
+                self._card_key = decision.escalation_id
         elif kind == "answers" and decision.is_question:
-            self._enter_on_question(decision)
+            if self.armed == "send" and self.armed_for == decision.escalation_id:
+                # The second click on "send", as the second Enter (`_armed_key`).
+                self.disarm()
+                self._second_press("send", decision.escalation_id)
+            else:
+                self._enter_on_question(decision)
         elif kind == "decline":
             self.action_decide("deny")
         self.render_all()
 
     def _render_card_buttons(self, decision: Decision | None, armed: str) -> None:
-        """Draw the row of buttons under the decision card, or hide it.
+        """Draw the buttons under the decision card, or hide them.
+
+        A question gets one button per option, numbered from 1 (keys 1-9 choose the first
+        nine; options from 10 on are chosen with the mouse or the cursor). Every button's
+        key names the item and the question it belongs to (`card_button_key`).
 
         Args:
             decision: The item the card shows, or None.
@@ -1278,20 +1305,33 @@ class CaluApp(App[None]):
             row.show([], "")
             return
         again = ARM_LETTER.get(armed, "")
+        question = _question_index(decision)
+
+        def key(value: str) -> str:
+            """Build the key of a button of this card.
+
+            Args:
+                value: The letter or the option's index.
+
+            Returns:
+                The key with the item and the question.
+            """
+            return card_button_key(decision.escalation_id, question, value)
+
         if decision.is_question:
-            question = decision.questions[decision.current]
+            options = decision.questions[decision.current].options
             buttons = [
-                (f"{number} {render.cut(option.label, 18)}", "option", str(number - 1))
-                for number, option in enumerate(question.options[:9], start=1)
+                (f"{number} {render.cut(option.label, 18)}", "option", key(str(number - 1)))
+                for number, option in enumerate(options, start=1)
             ]
             buttons += [
-                ("own answer" + (": click again" if again == "o" else ""), "card", "o"),
-                ("send", "answers", ""),
-                ("decline", "decline", ""),
+                ("own answer" + (": click again" if again == "o" else ""), "card", key("o")),
+                ("send", "answers", key("")),
+                ("decline", "decline", key("")),
             ]
         else:
             buttons = [
-                (f"click again to {name}" if again == letter else label, "card", letter)
+                (f"click again to {name}" if again == letter else label, "card", key(letter))
                 for letter, name, label in (
                     ("a", "allow", "Allow"),
                     ("d", "deny", "Deny"),
@@ -1299,7 +1339,11 @@ class CaluApp(App[None]):
                     ("w", "see all of it", "Show everything"),
                 )
             ]
-        row.show(buttons, f"{self.palette.fg} on {self.palette.surface}", again)
+        row.show(
+            buttons,
+            f"{self.palette.fg} on {self.palette.surface}",
+            key(again) if again else "",
+        )
 
     def on_panel_list_moved(self) -> None:
         """Show the keys of the entry the panel's cursor went to."""
@@ -2804,6 +2848,9 @@ class CaluApp(App[None]):
     def _cmd_running(self, rest: str) -> None:
         """Show the sessions that run (`/running`).
 
+        A session `/switch` can attach to starts with `▸`; any other is followed by the
+        reason it cannot (`switch_refusal`).
+
         Args:
             rest: Ignored.
         """
@@ -2814,11 +2861,22 @@ class CaluApp(App[None]):
             Args:
                 rows: The running sessions.
             """
-            body = [Text(row.line()) for row in rows] or [
-                Text("no session is running", self.palette.muted)
-            ]
+            body: list[Text] = []
+            for row in rows:
+                refusal = switch_refusal(row, self.model.calu_session_id)
+                line = Text("  " + row.line() if refusal else "▸ " + row.line())
+                if refusal:
+                    line.append(f"  (no /switch: {refusal})", self.palette.muted)
+                body.append(line)
+            if not body:
+                body = [Text("no session is running", self.palette.muted)]
             body.append(Text(""))
-            body.append(Text("/switch <beginning of an id> attaches to one", self.palette.muted))
+            body.append(
+                Text(
+                    "/switch <beginning of an id> attaches to a session marked ▸",
+                    self.palette.muted,
+                )
+            )
             self._page("Sessions", body)
 
         self._with_sessions(show)
@@ -2827,6 +2885,13 @@ class CaluApp(App[None]):
         """Attach this client to another running session (`/switch <id>`).
 
         The client ends with the session's id in `switch_to`; `calu attach` attaches to it.
+        It ends only for a session `calu attach` accepts (`switch_refusal`): otherwise it
+        stays and says why.
+
+            no running session starts with the id        ──► "0 running sessions start with"
+            exactly one of them can be switched to       ──► switch to it
+            several can                                  ──► ask for more of the id
+            none can                                     ──► say why, per session
 
         Args:
             rest: The beginning of the session's id.
@@ -2837,19 +2902,30 @@ class CaluApp(App[None]):
             return
 
         def switch(rows: list[herd.SessionRow]) -> None:
-            """Pick the one session the id names and end the client.
+            """Pick the one session the id names and end the client, or say why not.
 
             Args:
                 rows: The running sessions.
             """
             found = [row for row in rows if row.id.startswith(wanted)]
-            if len(found) != 1:
+            if not found:
                 self.flash(
-                    f"{len(found)} running sessions start with {wanted}; /running lists them",
+                    f"0 running sessions start with {wanted}; /running lists them", error=True
+                )
+                return
+            refusals = {row.id: switch_refusal(row, self.model.calu_session_id) for row in found}
+            usable = [row for row in found if not refusals[row.id]]
+            if len(usable) > 1:
+                self.flash(
+                    f"{len(usable)} running sessions start with {wanted}; /running lists them",
                     error=True,
                 )
                 return
-            self.switch_to = found[0].id
+            if not usable:
+                reasons = "; ".join(f"{row.id}: {refusals[row.id]}" for row in found)
+                self.flash(f"cannot switch: {reasons}", error=True)
+                return
+            self.switch_to = usable[0].id
             self.exit()
 
         self._with_sessions(switch)
@@ -2882,8 +2958,9 @@ class CaluApp(App[None]):
                                          client; `calu attach` attaches to it next
             no server, or a refusal  ──► say why; nothing else changes
 
-        The request names this machine and this user: a client attached from another
-        machine gets no answer and is told so.
+        The request names this machine and this user (`client_os_user`): a client attached
+        from another machine gets no answer and is told so. It carries the project, model and
+        effort of the attached session, so that the new session runs as this one does.
 
         Args:
             kind: "new" for a new conversation, "fork" for a copy of this one.
@@ -2898,11 +2975,14 @@ class CaluApp(App[None]):
             return
         wanted = SessionRequest(
             hostname=socket.gethostname(),
-            os_user=getpass.getuser(),
+            os_user=client_os_user(),
             directory=self.model.workspace,
             kind=kind,
             claude_session_id=self.model.claude_session_id if kind == "fork" else None,
             prompt=prompt.strip() or None,
+            model=self.model.model_name or None,
+            effort=self.model.effort or None,
+            project=self.model.project or None,
             label="calu attach",
         )
 
@@ -4339,6 +4419,97 @@ class CaluApp(App[None]):
         self.action_detach()
 
 
+def card_button_key(escalation_id: str, question: int, value: str) -> str:
+    """Build the key of a button under the decision card.
+
+        card_button_key("e7", 0, "3") == "e7:q0:3"      card_button_key("e7", 1, "") == "e7:q1:"
+
+    Args:
+        escalation_id: The item the card shows.
+        question: The index of the question shown; 0 for a step.
+        value: The card's letter, the option's index, or "".
+
+    Returns:
+        The key; `parse_card_button_key` reads it back.
+    """
+    return f"{escalation_id}:q{question}:{value}"
+
+
+def parse_card_button_key(key: str) -> tuple[str, int, str]:
+    """Read the key of a button under the decision card (`card_button_key`).
+
+    The escalation id may itself contain colons: the key is split from the right.
+
+    Args:
+        key: The key.
+
+    Returns:
+        `(escalation id, question index, value)`; `("", -1, "")` for a key of another form,
+        which then matches no card.
+    """
+    parts = key.rsplit(":", 2)
+    if len(parts) != 3 or not parts[1].startswith("q") or not parts[1][1:].isdigit():
+        return "", -1, ""
+    return parts[0], int(parts[1][1:]), parts[2]
+
+
+def _question_index(decision: Decision) -> int:
+    """Name the question of an item the card shows.
+
+    Args:
+        decision: The open item.
+
+    Returns:
+        The index of its current question; 0 for a step.
+    """
+    return decision.current if decision.is_question else 0
+
+
+def switch_refusal(row: herd.SessionRow, current: str | None) -> str:
+    """Say why `/switch` cannot attach to a session, by the rules `calu attach` applies.
+
+    `calu attach --session <id>` (`cli._pick_session`) only connects to a session of this
+    host that is not stale and publishes an address; the client checks the same before it
+    ends, so that a switch never leaves the user at the shell with an error.
+
+    Args:
+        row: The session.
+        current: The calu session id of the attached session, or None if unknown.
+
+    Returns:
+        "" if the client can switch to it; else the reason, e.g. "it runs on host other".
+    """
+    if current is not None and row.id == current:
+        return "it is the session this client shows"
+    if row.hostname != socket.gethostname():
+        return f"it runs on host {row.hostname}"
+    if row.stale:
+        return f"it has been silent for {row.silent_for_s / 60:.0f} min"
+    if not row.address:
+        return "it serves no clients"
+    return ""
+
+
+def client_os_user() -> str:
+    """Name the OS user a session request of this client is for, as `calu start` does.
+
+    A client that runs as root for another user (`asuser.active`) asks for that user's
+    session, not for root's: the user's name, or the uid as text for a uid without a name.
+    Any other client names the user it runs as (`calu.serve.os_user`, repeated here so that
+    the client does not import the server).
+
+    Returns:
+        The user name or uid text; "unknown" if the system does not tell it.
+    """
+    run_as = asuser.active()
+    if run_as is not None:
+        return run_as.user or str(run_as.uid)
+    try:
+        return getpass.getuser() or "unknown"
+    except OSError, KeyError:
+        return "unknown"
+
+
 def describe_commit(workspace: str, rev: str) -> str:
     """Name a commit of the project for a question: short id and subject line.
 
@@ -4353,12 +4524,15 @@ def describe_commit(workspace: str, rev: str) -> str:
     if not workspace or not Path(workspace).is_dir():
         return ""
     try:
+        # As the user the client works for (`asuser.child`): git reads the repository's
+        # configuration, which that user controls, and must not do so with root's rights.
         done = subprocess.run(
             ["git", "-C", workspace, "log", "-1", "--format=%h %s", rev, "--"],
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
+            **asuser.child(),
         )
     except OSError, subprocess.SubprocessError:
         return ""

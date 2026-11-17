@@ -1310,12 +1310,12 @@ def test_verdicts_of_several_checkers_combine_most_restrictively():
     deny = combine_decisions(
         [
             verdict("command", Decision.PASS),
-            verdict("honesty", Decision.DENY, reason="src/parser.py:fields is dirty"),
+            verdict("style", Decision.DENY, reason="src/parser.py:fields is dirty"),
             verdict("security", Decision.ESCALATE, reason="reaches the network"),
         ]
     )
     assert deny.decision is Decision.DENY
-    assert deny.reason == "honesty: src/parser.py:fields is dirty", (
+    assert deny.reason == "style: src/parser.py:fields is dirty", (
         "only the reasons of the checkers that produced the decision belong in it"
     )
 
@@ -1327,13 +1327,13 @@ def test_verdicts_of_several_checkers_combine_most_restrictively():
     # ALLOW overrules Claude Code's own approval, so it needs every voice.
     assert (
         combine_decisions(
-            [verdict("command", Decision.ALLOW), verdict("honesty", Decision.PASS)]
+            [verdict("command", Decision.ALLOW), verdict("style", Decision.PASS)]
         ).decision
         is Decision.PASS
     )
     assert (
         combine_decisions(
-            [verdict("command", Decision.ALLOW), verdict("honesty", Decision.ALLOW)]
+            [verdict("command", Decision.ALLOW), verdict("style", Decision.ALLOW)]
         ).decision
         is Decision.ALLOW
     )
@@ -1342,16 +1342,20 @@ def test_verdicts_of_several_checkers_combine_most_restrictively():
     passed = combine_decisions(
         [
             verdict("command", Decision.PASS, comment="name the units"),
-            verdict("honesty", Decision.PASS, comment="the docstring is vague"),
+            verdict("style", Decision.PASS, comment="the docstring is vague"),
         ]
     )
     assert passed.decision is Decision.PASS
     assert "command: name the units" in passed.comment
-    assert "honesty: the docstring is vague" in passed.comment
+    assert "style: the docstring is vague" in passed.comment
     assert passed.step_summary == "summary by command"
 
     with pytest.raises(ValueError, match="no checker"):
         combine_decisions([])
+    # The honesty checker judges files and never allows (D217): it does not veto an ALLOW.
+    assert (
+        combine_decisions([verdict("command", Decision.ALLOW), verdict("honesty", Decision.PASS)])
+    ).decision is Decision.ALLOW
 
 
 async def test_a_second_checker_on_a_route_runs_and_is_recorded(tmp_path: Path):

@@ -261,7 +261,9 @@ class Server:
 
         Side effects: writes the request's outcome ("started" once a client can find the
         session, "failed" with the reason otherwise), prints the session's lines with a label
-        of its own, and removes the request from `sessions` at the end.
+        of its own, and removes the request from `sessions` at the end. A session whose start
+        cannot be reported (no session row, or "started" not written) is stopped at once: its
+        requester would never learn of it, and no client would ever attach to it.
 
         Args:
             db: The server's connection, for the request's outcome.
@@ -271,9 +273,14 @@ class Server:
         errors: list[str] = []
         ERRORS.set(errors)
         answered = False
+        session_scope = anyio.CancelScope()
 
         async def ready(session_id: str | None, address: str) -> None:
-            """Tell the requester that the session can be attached to.
+            """Tell the requester that the session can be attached to, or stop the session.
+
+            Side effects: writes "started" for the request; if there is no session row or
+            that write fails, prints the reason as an error (which collects it in `errors`)
+            and cancels the session, so that `_host` writes "failed" instead.
 
             Args:
                 session_id: The id of the session's row, or None if it could not be written.
@@ -281,23 +288,34 @@ class Server:
             """
             nonlocal answered
             if session_id is None:
-                errors.append("the session's row could not be written to the database")
-                return
-            answered = await self._finish(db, request.id, "started", session_id)
-            say(f"[serve] started: session {session_id} in {request.directory}")
+                reason = "the session's row could not be written to the database"
+            else:
+                answered = await self._finish(db, request.id, "started", session_id)
+                if answered:
+                    say(f"[serve] started: session {session_id} in {request.directory}")
+                    return
+                reason = f"the start of session {session_id} could not be recorded for the request"
+            # An error line is also collected in `errors`; its last entry is the reason
+            # `_host` writes with "failed".
+            say(f"[serve] {reason}", error=True)
+            say("[serve] stopping the session: nobody can learn that it runs")
+            session_scope.cancel()
 
         what = request.kind + (f" {request.claude_session_id}" if request.claude_session_id else "")
         say(f"[serve] requested by {request.label or 'a client'}: {what}")
         try:
             options = self._options(request)
-            await run_from(
-                self.source,
-                self.hidden,
-                options,
-                self.runner_factory,
-                self.checker_models,
-                on_ready=ready,
-            )
+            # `ready` cancels this scope only; a stop of the whole server still reaches the
+            # caller as a cancellation.
+            with session_scope:
+                await run_from(
+                    self.source,
+                    self.hidden,
+                    options,
+                    self.runner_factory,
+                    self.checker_models,
+                    on_ready=ready,
+                )
         except Refused as exc:
             say(f"[serve] refused: {exc}", error=True)
         except Exception as exc:

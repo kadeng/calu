@@ -79,6 +79,60 @@ def test_after_the_switch_a_program_gets_the_user_and_a_built_environment(monkey
     }
 
 
+def test_no_provider_key_reaches_a_program_started_as_the_user(monkeypatch):
+    """git runs hooks and filters Claude can write: the checker keys must not reach them."""
+    user = RunAs(uid=1000, gid=1000, home="/home/ada", user="ada")
+    monkeypatch.setattr(asuser, "_active", user)
+    given = {
+        "PATH": "/usr/bin",
+        "ANTHROPIC_API_KEY": "secret",
+        "ANTHROPIC_BASE_URL": "https://example.invalid",
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "MISTRAL_API_KEY": "secret",
+    }
+    assert asuser.child(given)["env"] == {
+        "PATH": "/usr/bin",
+        "HOME": "/home/ada",
+        "USER": "ada",
+        "LOGNAME": "ada",
+    }
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
+    monkeypatch.setenv("MISTRAL_API_KEY", "secret")
+    started = asuser.child()["env"]
+    assert "ANTHROPIC_API_KEY" not in started and "MISTRAL_API_KEY" not in started
+    # A caller that asks for wider patterns still never gets a key of `PROVIDER_KEYS`.
+    wider = asuser.child(given, keep=("*",))["env"]
+    assert "MISTRAL_API_KEY" not in wider and wider["ANTHROPIC_BASE_URL"]
+
+
+def test_a_failed_switch_gives_the_thread_root_identity_back(monkeypatch, tmp_path: Path):
+    calls: list[tuple[int, int, tuple[int, ...]]] = []
+
+    def refused(uid: int, gid: int, groups: tuple[int, ...]) -> None:
+        """Record the call and fail like a kernel that did not apply the user's identity.
+
+        Args:
+            uid: The file-system uid.
+            gid: The file-system gid.
+            groups: The supplementary groups.
+
+        Raises:
+            UserError: For every identity but root's.
+        """
+        calls.append((uid, gid, groups))
+        if uid != 0:
+            raise asuser.UserError("the file-system identity could not be set")
+
+    monkeypatch.setattr(asuser, "fs_identity", refused)
+    monkeypatch.setattr(asuser, "_other_threads", lambda wait_s: [])
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+    user = RunAs(uid=1000, gid=1000, home=str(tmp_path), groups=(44,))
+    with pytest.raises(asuser.UserError, match="could not be set"):
+        asuser.enter(user, tmp_path)
+    assert calls == [(1000, 1000, (1000, 44)), (0, 0, (0,))]
+    assert asuser.active() is None and "XDG_STATE_HOME" not in os.environ
+
+
 def options(*arguments: str) -> argparse.Namespace:
     """Parse a `calu run` command line.
 
@@ -128,7 +182,8 @@ def test_an_installation_somebody_else_can_change_is_reported(tmp_path: Path):
     mine.write_text("#!/bin/sh\n")
     problems = asuser.writable_by_others([mine, tmp_path / "missing"])
     assert any(f"{mine} belongs to uid {os.getuid()}" in problem for problem in problems)
-    assert any("missing" in problem for problem in problems)
+    missing = tmp_path / "missing"
+    assert any(problem.startswith(f"{missing}: ") for problem in problems)
     # What the system installs for root passes.
     assert asuser.writable_by_others([Path("/usr/bin/env")]) == []
 
@@ -140,12 +195,33 @@ def test_the_sudo_command_names_the_invoking_user():
         "--",
         "/usr/local/bin/calu",
         "run",
-        "-p",
-        "hi",
         "--user",
         "ada",
         "--from-sudo",
+        "-p",
+        "hi",
     ]
+
+
+def test_the_sudo_options_come_before_the_end_of_the_options():
+    """`calu start --sudo -- DIR` must still parse after the password: `--user` before `--`."""
+    executable = Path("/usr/local/bin/calu")
+    command = asuser.sudo_command(["start", "--sudo", "--", "DIR"], "ada", executable)
+    assert command == [
+        "sudo",
+        "--",
+        "/usr/local/bin/calu",
+        "start",
+        "--user",
+        "ada",
+        "--from-sudo",
+        "--",
+        "DIR",
+    ]
+    assert build_parser().parse_args(command[3:]).user == "ada"
+    # After `--` a "--sudo" is an argument, not the option: it is kept.
+    kept = asuser.sudo_command(["start", "--", "--sudo"], "ada", executable)
+    assert kept[-2:] == ["--", "--sudo"]
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="--sudo is for a calu that is not root")

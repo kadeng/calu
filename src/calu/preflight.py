@@ -15,6 +15,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from calu import asuser
 from calu.claude_model import is_cli_model
 from calu.config import (
     KEYLESS_PREFIXES,
@@ -27,6 +28,19 @@ from calu.config import (
     user_env_file,
 )
 from calu.credentials import CredentialError, CredentialStore
+
+
+def claude_home() -> Path:
+    """Return the home directory Claude Code of a session reads its user settings from.
+
+    Returns:
+        The home of the user `calu.asuser.enter` switched to (`RunAs.home`), or `Path.home()`
+        while calu works as the user it runs as. Under `--user` calu runs as root, so
+        `Path.home()` would name root's home, not the one Claude Code gets.
+    """
+    run_as = asuser.active()
+    return Path.home() if run_as is None else Path(run_as.home)
+
 
 SANDBOX_TOOLS = ("bwrap", "socat")
 """Programs that Claude Code's Linux sandbox needs (`spikes/RESULTS.md`, Q1a)."""
@@ -449,7 +463,7 @@ def setting_source_warnings(
 
     Args:
         config: The session configuration.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `claude_home()`.
         workspace: The project directory, for `.claude/settings.local.json`; None skips it.
 
     Returns:
@@ -457,7 +471,7 @@ def setting_source_warnings(
         nothing is left out.
     """
     sources = set(config.claude.setting_sources)
-    home = home if home is not None else Path.home()
+    home = home if home is not None else claude_home()
     missing: list[str] = []
     if "user" not in sources:
         settings = _json_object(home / ".claude" / "settings.json")
@@ -536,7 +550,7 @@ def settings_file_sandbox_findings(
     Args:
         config: The session configuration, or its `claude` part alone (which is all a runner
             has), with the project's network policy applied.
-        home: The home directory; None uses `Path.home()`, or `$CLAUDE_CONFIG_DIR` for the
+        home: The home directory; None uses `claude_home()`, or `$CLAUDE_CONFIG_DIR` for the
             user's file when that variable is set (Claude Code reads it from there then).
         workspace: The project directory; None skips the project and the local file.
 
@@ -628,7 +642,7 @@ def settings_file_sandbox_blockers(
     Args:
         config: The session configuration, or its `claude` part alone, with the project's
             network policy applied.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `claude_home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -656,7 +670,7 @@ def settings_file_sandbox_warnings(
 
     Args:
         config: The session configuration, with the project's network policy applied.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `claude_home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -697,7 +711,7 @@ def expected_permission_mode(
 
     Args:
         config: The session configuration.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `claude_home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -710,7 +724,7 @@ def expected_permission_mode(
     if config.claude.permission_mode is not None:
         return config.claude.permission_mode, "claude.permission_mode"
     sources = set(config.claude.setting_sources)
-    home = home if home is not None else Path.home()
+    home = home if home is not None else claude_home()
     files: list[tuple[str, Path]] = []
     if workspace is not None and "local" in sources:
         files.append((".claude/settings.local.json", workspace / ".claude" / "settings.local.json"))
@@ -737,7 +751,7 @@ def permission_mode_line(
 
     Args:
         config: The session configuration.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `claude_home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -770,7 +784,7 @@ def permission_mode_warnings(
 
     Args:
         config: The session configuration.
-        home: The home directory; None uses `Path.home()`.
+        home: The home directory; None uses `claude_home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
@@ -804,7 +818,7 @@ def user_settings_file(home: Path | None = None) -> tuple[str, Path]:
 
     Args:
         home: The home directory to look in; None follows Claude Code: `$CLAUDE_CONFIG_DIR` if
-            set, else `~/.claude`.
+            set, else `.claude` in `claude_home()`.
 
     Returns:
         (the file as a message names it, its path).
@@ -814,7 +828,7 @@ def user_settings_file(home: Path | None = None) -> tuple[str, Path]:
     relocated = os.environ.get("CLAUDE_CONFIG_DIR")
     if relocated:
         return "$CLAUDE_CONFIG_DIR/settings.json", Path(relocated) / "settings.json"
-    return "~/.claude/settings.json", Path.home() / ".claude" / "settings.json"
+    return "~/.claude/settings.json", claude_home() / ".claude" / "settings.json"
 
 
 def _unknown_sandbox_keys(found: dict[str, object]) -> list[str]:

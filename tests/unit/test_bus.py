@@ -173,3 +173,27 @@ async def test_publish_waits_for_its_watchers_and_survives_their_errors():
     bus.watch(recording)
     await bus.publish(Log(level="info", message="one"))
     assert seen == [1]
+
+
+async def test_the_replay_buffer_keeps_the_images_of_the_newest_events_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import base64
+
+    from calu.protocol.messages import ChatImage, UserInput
+
+    monkeypatch.setattr(bus_module, "REPLAY_IMAGE_EVENTS", 2)
+    bus = Bus()
+    client = bus.subscribe()
+    image = ChatImage(media_type="image/png", data=base64.b64encode(b"png").decode())
+    for i in range(4):
+        await bus.publish(UserInput(text=f"message {i}", images=[image]))
+        await bus.publish(log("no image"))
+    events, _ = bus.replay(0)
+    kept = [e.params for e in events if e.method == "user.input"]
+    assert [p["text"] for p in kept] == [f"message {i}" for i in range(4)], "no event is lost"
+    assert [len(p["images"]) for p in kept] == [0, 0, 1, 1]
+    # A connected client got every event with its images.
+    client.close()
+    live = [e for e in [m async for m in client.events()] if isinstance(e, UserInput)]
+    assert [len(e.images) for e in live] == [1, 1, 1, 1]

@@ -21,7 +21,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from calu import __version__, preflight
+from calu import __version__, asuser, preflight
 from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.credentials import CredentialStore
@@ -74,6 +74,7 @@ def claude_version() -> tuple[bool, str]:
             text=True,
             timeout=VERSION_TIMEOUT_S,
             check=False,
+            **asuser.child(),  # as the user calu works for; a no-op without --user
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, f"{path} did not answer ({type(exc).__name__})"
@@ -505,6 +506,8 @@ def sandbox_posture(workspace: Path) -> dict[str, Any] | None:
             timeout=VERSION_TIMEOUT_S,
             cwd=workspace,
             check=False,
+            # In the project, which the user controls: never with root's rights or keys.
+            **asuser.child(),
         )
     except OSError, subprocess.SubprocessError:
         return None

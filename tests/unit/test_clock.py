@@ -111,3 +111,30 @@ async def test_the_loop_reports_a_jump_and_survives_a_failing_report() -> None:
                 await anyio.sleep(0.01)
             tasks.cancel_scope.cancel()
     assert [round(jump.seconds) for jump in seen] == [11, 21]
+
+
+async def test_the_loop_leaves_the_report_of_a_jump_to_on_jump(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The session's `clock_jumped` reports a jump as a `log` event the console prints.
+
+    A warning of the watch itself printed every jump a second time; only a failing report is
+    logged as an error.
+    """
+    clocks = Clocks()
+    seen: list[ClockJump] = []
+
+    async def on_jump(jump: ClockJump) -> None:
+        seen.append(jump)
+
+    eye = ClockWatch(on_jump, interval_s=0.01, wall=lambda: clocks.wall, boot=lambda: clocks.boot)
+    with caplog.at_level("DEBUG", logger="calu.clock"), anyio.move_on_after(5):
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(eye.run)
+            clocks.advance(1, wall=-10)
+            while not seen:
+                await anyio.sleep(0.01)
+            tasks.cancel_scope.cancel()
+    assert len(seen) == 1
+    jumps = [r for r in caplog.records if "clock jump" in r.getMessage()]
+    assert jumps and all(r.levelname == "DEBUG" for r in jumps)

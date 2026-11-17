@@ -86,7 +86,30 @@ def test_the_new_form_round_trips_and_shows_no_secret() -> None:
             ' "rds-iam", "region": "r", "profile": "p"}}',
             "rds-iam only",
         ),
-        ("not a = connection = string", "no connection string"),
+        (
+            '{"calu_db": 2, "variant": "rds-iam", "conninfo": {"host": "h", "user": "u",'
+            ' "sslmode": "require"}, "auth": {"method": "rds-iam", "region": "r",'
+            ' "profile": "p"}}',
+            "needs sslmode verify-full",
+        ),
+        (
+            '{"calu_db": 2, "variant": "rds-iam", "conninfo": {"host": "h", "user": "u"},'
+            ' "auth": {"method": "rds-iam", "region": "r", "profile": "p"}}',
+            "needs sslmode verify-full",
+        ),
+        (
+            '{"calu_db": 2, "variant": "rds-iam", "conninfo": {"user": "u",'
+            ' "sslmode": "verify-full"}, "auth": {"method": "rds-iam", "region": "r",'
+            ' "profile": "p"}}',
+            "needs a host and a user",
+        ),
+        (
+            '{"calu_db": 2, "variant": "rds-iam", "conninfo": {"host": "h",'
+            ' "sslmode": "verify-full"}, "auth": {"method": "rds-iam", "region": "r",'
+            ' "profile": "p"}}',
+            "needs a host and a user",
+        ),
+        ("not a =connection = string", "no connection string"),
     ],
 )
 def test_a_record_this_version_cannot_use_is_refused_with_a_reason(
@@ -133,6 +156,7 @@ def test_the_questions_of_setup_become_a_record_with_a_sensible_tls_mode() -> No
         from_fields("x.rds.amazonaws.com", 5432, "c", "u", iam)
     rds_target = from_fields("x.rds.amazonaws.com", 5432, "c", "u", iam, None, "/ca.pem")
     assert rds_target.variant == "rds-iam" and rds_target.conninfo["sslmode"] == "verify-full"
+    assert Target.parse(rds_target.dump()) == rds_target, "a valid IAM record is read back"
     with pytest.raises(TargetError, match="verify-full"):
         from_fields("x.rds.amazonaws.com", 5432, "c", "u", iam, "require", "/ca.pem")
     with pytest.raises(TargetError, match="no connection string"):

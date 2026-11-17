@@ -1845,6 +1845,55 @@ class HonestyState:
         return {mark.path for mark in self.open_marks}
 
     @_locked
+    def record_step(
+        self,
+        answers: Sequence[tuple[str, Sequence[CodeMark], Sequence[CodeMark]]],
+        edited: Collection[str] = (),
+    ) -> MarkChanges:
+        """Apply the marks of all checkers that judged one step (section 3).
+
+        The clean marks of every answer are applied first, then the dirty marks of every
+        answer (both via `record`). So a clean mark closes only marks that were open before
+        the step: a file-wide HONEST of the honesty checker (`ALL_SYMBOLS`) does not close the
+        dirty mark another checker opens on the same file in the same step. Applied answer by
+        answer, the route's checker comes first and its fresh mark would be closed at once.
+
+        Side effects: as `record`, once per answer and kind of mark.
+
+        Args:
+            answers: One (checker name, dirty marks, clean marks) per checker of the step, in
+                the order the checkers ran.
+            edited: The workspace-relative paths the step edits; empty for a command.
+
+        Returns:
+            The changes of all answers together. Each `ignored` sentence starts with the name
+            of the checker whose mark it is ("honesty: ..."); `withdrawn` holds each content
+            once; `review_required` is as after the last mark.
+        """
+        total = MarkChanges()
+
+        def add(name: str, changes: MarkChanges) -> None:
+            """Add one `record` call's changes to `total`.
+
+            Args:
+                name: The checker whose marks they are.
+                changes: What the call changed.
+            """
+            total.opened += changes.opened
+            total.closed += changes.closed
+            total.ignored += [f"{name}: {message}" for message in changes.ignored]
+            total.withdrawn += [one for one in changes.withdrawn if one not in total.withdrawn]
+
+        for name, _dirty, clean in answers:
+            if clean:
+                add(name, self.record((), clean, name, edited))
+        for name, dirty, _clean in answers:
+            if dirty:
+                add(name, self.record(dirty, (), name, edited))
+        total.review_required = self.review_required
+        return total
+
+    @_locked
     def record(
         self,
         dirty: Sequence[CodeMark],

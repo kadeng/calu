@@ -94,10 +94,11 @@ Screen {
     display: block;
 }
 
-/* The buttons under the card, for the mouse: each does what its key does. */
+/* The buttons under the card, for the mouse: each does what its key does. They wrap onto
+   more lines on a narrow terminal (`Buttons`), so the height follows the content. */
 #card-actions {
     display: none;
-    height: 1;
+    height: auto;
     margin: 0 2;
 }
 

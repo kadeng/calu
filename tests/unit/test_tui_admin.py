@@ -802,22 +802,32 @@ async def test_with_the_sessions_database_known_nothing_is_read_from_the_store(t
 # ------------------------------------------------------------------ /running and /switch (D214)
 
 
-def running_row(session_id: str, directory: str) -> herd.SessionRow:
+def running_row(
+    session_id: str,
+    directory: str,
+    hostname: str | None = None,
+    address: str = "127.0.0.1:7000",
+    silent_for_s: float = 0.0,
+) -> herd.SessionRow:
     """Build a row of a running session for the scripted database access.
 
     Args:
         session_id: The session's id.
         directory: Its project directory.
+        hostname: Its host; None means this machine.
+        address: Where it serves clients; "" for none.
+        silent_for_s: Seconds since it last said it was running.
 
     Returns:
         The row.
     """
+    import socket
     from datetime import UTC, datetime
 
     now = datetime.now(UTC)
     return herd.SessionRow(
         id=session_id,
-        hostname="box",
+        hostname=socket.gethostname() if hostname is None else hostname,
         os_user="ada",
         directory=directory,
         state="idle",
@@ -826,6 +836,8 @@ def running_row(session_id: str, directory: str) -> herd.SessionRow:
         ended_at=None,
         claude_session_id=None,
         open_escalations=0,
+        address=address,
+        silent_for_s=silent_for_s,
     )
 
 
@@ -844,6 +856,106 @@ async def test_switch_ends_the_client_for_the_one_session_the_id_names() -> None
         await command(run, "/switch bbbb")
         await run.pilot.pause()
         assert run.app.switch_to == "bbbb2222"
+
+
+def test_only_a_session_calu_attach_accepts_can_be_switched_to() -> None:
+    from calu.tui.app import switch_refusal
+
+    assert switch_refusal(running_row("a1", "/w"), "calu-7d41") == ""
+    assert switch_refusal(running_row("a1", "/w"), "a1") == "it is the session this client shows"
+    assert switch_refusal(running_row("a1", "/w", hostname="elsewhere"), None) == (
+        "it runs on host elsewhere"
+    )
+    assert "silent for 60 min" in switch_refusal(running_row("a1", "/w", silent_for_s=3600), None)
+    assert switch_refusal(running_row("a1", "/w", address=""), None) == "it serves no clients"
+
+
+async def test_switch_refuses_what_calu_attach_would_not_attach_to_and_stays() -> None:
+    """A session of another host, a stale one, one without address and this one are refused.
+
+    With a scripted session and a stand-in for the database; nothing is attached.
+    """
+    session = FakeSession()
+    access = FakeAdmin(session)
+    access.running = [
+        running_row("far1", "/w/one", hostname="elsewhere"),
+        running_row("old1", "/w/two", silent_for_s=3600),
+        running_row("mute1", "/w/three", address=""),
+        running_row(str(session.calu_session_id), "/work/myproject"),
+        running_row("ok01", "/w/four"),
+        running_row("ok02", "/w/five"),
+    ]
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/running")
+        page = run.app.screen
+        assert isinstance(page, TextScreen)
+        lines = page.text.splitlines()
+        marked = [line for line in lines if line.startswith("▸ ")]
+        assert [line.split()[1] for line in marked] == ["ok01", "ok02"]
+        assert any("far1" in line and "runs on host elsewhere" in line for line in lines)
+        await run.press("escape")
+        for wanted, reason in (
+            ("far", "runs on host elsewhere"),
+            ("old", "silent for 60 min"),
+            ("mute", "serves no clients"),
+            ("calu", "is the session this client shows"),
+        ):
+            await command(run, f"/switch {wanted}")
+            await run.pilot.pause()
+            assert run.app.is_running and run.app.switch_to is None
+            assert reason in run.app.message, wanted
+        await command(run, "/switch ok")
+        await run.pilot.pause()
+        assert run.app.switch_to is None and "2 running sessions start with ok" in run.app.message
+        await command(run, "/switch ok01")
+        await run.pilot.pause()
+        assert run.app.switch_to == "ok01"
+
+
+async def test_a_session_request_carries_project_model_effort_and_the_user() -> None:
+    """With a scripted session and a stand-in for the database; nothing is started."""
+    session = FakeSession()
+    access = FakeAdmin(session)
+    async with running("simple_turn", session=session, admin=access) as run:
+        await command(run, "/new")
+        await run.pilot.pause()
+        (wanted,) = access.requests
+        assert (wanted.project, wanted.model, wanted.effort) == ("myproject", "opus", "high")
+        from calu.tui.app import client_os_user
+
+        assert wanted.os_user == client_os_user()
+
+
+def test_a_client_working_for_another_user_names_that_user(monkeypatch) -> None:
+    from calu.launch import RunAs
+    from calu.tui import app
+
+    monkeypatch.setattr(app.asuser, "active", lambda: RunAs(uid=1234, gid=1234, home="/h"))
+    assert app.client_os_user() == "1234"
+    monkeypatch.setattr(
+        app.asuser, "active", lambda: RunAs(uid=1234, gid=1234, home="/h", user="ada")
+    )
+    assert app.client_os_user() == "ada"
+
+
+def test_git_for_a_commit_runs_as_the_user_the_client_works_for(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from calu.tui import app
+
+    seen: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> Any:
+        """Record the call and answer like git."""
+        import subprocess
+
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "4f2a9c1 Rename the helper\n", "")
+
+    monkeypatch.setattr(app.asuser, "child", lambda: {"user": 1234, "env": {"PATH": "/bin"}})
+    monkeypatch.setattr(app.subprocess, "run", fake_run)
+    assert describe_commit(str(tmp_path), "HEAD") == "HEAD = 4f2a9c1 Rename the helper"
+    assert seen["user"] == 1234 and seen["env"] == {"PATH": "/bin"}
 
 
 def test_a_login_held_in_memory_needs_no_typed_password(tmp_path) -> None:

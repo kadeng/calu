@@ -48,6 +48,7 @@ import logging
 import re
 import secrets
 import socket
+import time
 from collections.abc import Awaitable, Callable, Collection
 from contextlib import suppress
 from pathlib import Path
@@ -294,6 +295,8 @@ def create_app(
         exception_handlers={
             psycopg.OperationalError: _database_down,
             TimeoutError: _database_down,
+            psycopg.errors.UndefinedTable: _schema_too_old,
+            psycopg.errors.UndefinedColumn: _schema_too_old,
         },
     )
 
@@ -337,22 +340,27 @@ MAX_BROWSERS = 64
 """Browser logins `TokenGate` remembers; the oldest is forgotten when one more logs in."""
 
 
-def _inline_script_hashes() -> list[str]:
-    """Hash the inline scripts of the page templates, for the Content-Security-Policy.
+def _inline_script_hashes(tag: str = "script") -> list[str]:
+    """Hash the inline scripts (or styles) of the page templates, for the Content-Security-Policy.
 
     A few templates carry a short inline `<script>` (the theme is applied before the
     stylesheet loads, some pages reload themselves). The policy allows exactly these by their
     SHA-256 hash, so a script that reaches a page any other way does not run. The hash is of
     the template source, which is what the browser receives as long as the script contains no
-    template expression (`tests/unit/test_web_methods.py` checks that).
+    template expression (`tests/unit/test_web_gate.py` checks that). The password page carries
+    an inline `<style>` the same way, because a browser without a login is served no file of
+    `/static` (`TokenGate`).
+
+    Args:
+        tag: "script" or "style": the element without attributes whose bodies are hashed.
 
     Returns:
-        One `'sha256-...'` source expression per distinct inline script, sorted.
+        One `'sha256-...'` source expression per distinct inline element, sorted.
     """
     found: set[str] = set()
     for template in sorted((HERE / "templates").glob("*.html")):
         source = template.read_text(encoding="utf-8")
-        for script in re.findall(r"<script>(.*?)</script>", source, flags=re.DOTALL):
+        for script in re.findall(rf"<{tag}>(.*?)</{tag}>", source, flags=re.DOTALL):
             digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
             found.add(f"'sha256-{digest}'")
     return sorted(found)
@@ -364,6 +372,8 @@ CONTENT_SECURITY_POLICY = (
     # the event, and only raster formats are accepted there (`ChatImage`).
     "img-src 'self' data:; "
     f"script-src 'self' {' '.join(_inline_script_hashes())}; "
+    # The password page's own `<style>`: a browser without a login gets no stylesheet.
+    f"style-src 'self' {' '.join(_inline_script_hashes('style'))}; "
     "connect-src 'self' ws://{host} wss://{host}; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
@@ -450,6 +460,9 @@ LOGIN_PATH = "/_login"
 LOGIN_DELAY_MAX_S = 8.0
 """Longest wait after a wrong password."""
 
+LOGIN_FAILURES_FORGET_S = 60.0
+"""Seconds without a wrong password after which `TokenGate` starts counting from zero again."""
+
 
 class TokenGate:
     """Let through only what a logged-in browser of the operator sends (PLAN.md D161).
@@ -498,7 +511,12 @@ class TokenGate:
         self.token = token
         self.check_password = check_password
         self._failed = 0
-        """Wrong passwords in a row; each one makes the next answer wait longer."""
+        """Wrong passwords in a row; each one makes its own answer wait longer."""
+        self._last_failure = 0.0
+        """`_clock()` time of the last wrong password; after `LOGIN_FAILURES_FORGET_S` without
+        one, `_failed` starts from zero again."""
+        self._clock: Callable[[], float] = time.monotonic
+        """Monotonic seconds; tests replace it."""
         self._checking = anyio.Lock()
         """One password is checked at a time, so that guesses cannot run side by side."""
         self.browsers: dict[str, str] = {}
@@ -628,7 +646,16 @@ class TokenGate:
         """Check a typed admin password and log the browser in, or ask again.
 
         One password is checked at a time, and after a wrong one the answer waits
-        `min(LOGIN_DELAY_MAX_S, 2 ** wrong_in_a_row / 2)` seconds, so guessing is slow.
+        `min(LOGIN_DELAY_MAX_S, 2 ** wrong_in_a_row / 2)` seconds, so guessing is slow. The
+        count of wrong passwords in a row starts from zero again after
+        `LOGIN_FAILURES_FORGET_S` seconds without one, or after a right one. The wait happens
+        after the check lock is released, so a process that keeps posting wrong passwords
+        delays its own answers but does not queue the operator's right password behind them.
+        A check that fails (the database could not be asked) is not counted as a wrong
+        password and is answered at once.
+
+        Side effects: on a right password, a new login (`_logged_in`); on a wrong one, the
+        failure count grows.
 
         Args:
             scope: The ASGI scope of the POST to `LOGIN_PATH`.
@@ -643,21 +670,30 @@ class TokenGate:
         if onward.startswith(LOGIN_PATH):
             onward = "/"
         problem = "Type the admin password."
-        async with self._checking:
-            if password:
+        delay = 0.0
+        if password:
+            async with self._checking:
                 try:
                     right = await self.check_password(password)
                 except Exception as exc:
+                    # Not a wrong guess: counting it would lock the operator out while the
+                    # database is away.
                     log.warning("checking a login password failed: %s", exc)
-                    right, problem = False, "The database could not be asked. Try again."
+                    problem = "The database could not be asked. Try again."
                 else:
+                    if right:
+                        self._failed = 0
+                        await self._logged_in(send, onward)
+                        return
                     problem = "That is not the admin password."
-                if right:
-                    self._failed = 0
-                    await self._logged_in(send, onward)
-                    return
-                self._failed += 1
-                await anyio.sleep(min(LOGIN_DELAY_MAX_S, 2**self._failed / 2))
+                    now = self._clock()
+                    if now - self._last_failure > LOGIN_FAILURES_FORGET_S:
+                        self._failed = 0
+                    self._failed += 1
+                    self._last_failure = now
+                    delay = min(LOGIN_DELAY_MAX_S, 2**self._failed / 2)
+        if delay:
+            await anyio.sleep(delay)
         await self._ask_password(send, onward, problem)
 
     async def _logged_in(self, send: Any, onward: str) -> None:
@@ -1105,6 +1141,10 @@ async def _session_view(
     )
 
 
+MAX_TOKEN_LABEL = 200
+"""Longest label `mint` stores with a token; a longer one is cut."""
+
+
 async def mint(request: Request, state: _State) -> Response:
     """Mint a client token for a session, so that a client can attach to it.
 
@@ -1114,7 +1154,8 @@ async def mint(request: Request, state: _State) -> Response:
     needs less than this POST does (`TokenGate`), and the token decides escalations.
 
     Args:
-        request: The request; its form may hold a `label`.
+        request: The request; its form may hold a `label`, of which the first
+            `MAX_TOKEN_LABEL` characters are kept.
         state: The shared state.
 
     Returns:
@@ -1123,7 +1164,7 @@ async def mint(request: Request, state: _State) -> Response:
     """
     session_id = str(request.path_params["session_id"])
     form = await request.form()
-    label = str(form.get("label") or "calu web")
+    label = str(form.get("label") or "calu web").strip()[:MAX_TOKEN_LABEL] or "calu web"
     try:
         minted = await herd.mint_token(state.db, session_id, label)
     except ValueError:
@@ -1203,10 +1244,11 @@ async def session_file(request: Request, state: _State) -> Response:
 async def request_session(request: Request, state: _State) -> Response:
     """Ask the `calu serve` of a session's machine for another session (PLAN.md D208).
 
-    The new session is in the same directory, for the same host and OS user, as the session
-    of the page: a new conversation, a continuation of this one, or a fork of it (whole, or
-    before a turn). The request is the row `calu start` writes; this handler waits for the
-    server's answer as that command does.
+    The new session is in the same directory, for the same host and OS user, and in the same
+    project as the session of the page: a new conversation, a continuation of this one, or a
+    fork of it (whole, or before a turn). Model and effort are left to the configuration,
+    because the session row does not record them. The request is the row `calu start` writes;
+    this handler waits for the server's answer as that command does.
 
     Side effects: writes a `session_requests` row; a server that claims it starts a session.
 
@@ -1238,6 +1280,7 @@ async def request_session(request: Request, state: _State) -> Response:
             "this session has no Claude session id yet, so there is no "
             "conversation to continue or fork",
         )
+    project = await herd.project_of(state.db, session_id)
     wanted = session_requests.SessionRequest(
         hostname=row.hostname,
         os_user=row.os_user,
@@ -1246,6 +1289,7 @@ async def request_session(request: Request, state: _State) -> Response:
         claude_session_id=row.claude_session_id if kind != "new" else None,
         fork_before_turn=int(turn_text) if turn_text else None,
         prompt=str(form.get("prompt") or "").strip() or None,
+        project=project[0] if project else None,
         label="calu web",
     )
     try:
@@ -2059,3 +2103,30 @@ async def _database_down(request: Request, exc: Exception) -> Response:
             {"ok": False, "error": "database unreachable", "message": message}, status_code=503
         )
     return _error(request, 503, "The database cannot be reached", message, retry=reading)
+
+
+async def _schema_too_old(request: Request, exc: Exception) -> Response:
+    """Answer a request whose statement named a table or column the database does not have.
+
+    Registered for `psycopg.errors.UndefinedTable` and `psycopg.errors.UndefinedColumn`: the
+    database was set up by an older calu, and its schema lacks what this version reads. The
+    operator is told how to bring it up to date instead of seeing a bare status 500.
+
+    Args:
+        request: The request.
+        exc: What the statement raised.
+
+    Returns:
+        Status 500: `{"ok": false, "error": "database schema too old", "message": ...}` for
+        the paths under `/api/`, the error page otherwise.
+    """
+    log.warning("the database schema is older than calu %s: %s", __version__, exc)
+    message = (
+        f"The database schema is older than this calu ({__version__}): {exc}. "
+        "Run `calu setup` (or `calu db migrate`) to bring it up to date, then reload this page."
+    )
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"ok": False, "error": "database schema too old", "message": message}, status_code=500
+        )
+    return _error(request, 500, "The database schema is too old", message)

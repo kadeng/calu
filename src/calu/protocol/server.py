@@ -160,6 +160,22 @@ FIRST_CHECK_S = 1.0
 printed token soon after `calu run` recorded it, and records it if that did not happen
 (`SessionServer.observe`)."""
 
+INITIALIZE_TIMEOUT_S = 10.0
+"""Seconds a connection may stay open without a successful `initialize`; then it is closed
+with `CLOSE_POLICY`. A peer without a token cannot hold connections open (`Client.serve`)."""
+
+MAX_PRE_AUTH_CHARS = 64 * 1024
+"""Largest message (in characters) a client may send before a successful `initialize`. The
+WebSocket layer accepts frames up to `MAX_FRAME_BYTES` (room for images), so a larger message has
+already been read when this is checked; the connection is closed with `CLOSE_TOO_BIG`, so the
+peer cannot send a second one on it (`Client._read`)."""
+
+CLOSE_POLICY = 1008
+"""WebSocket close code "policy violation" (RFC 6455): no `initialize` in time."""
+
+CLOSE_TOO_BIG = 1009
+"""WebSocket close code "message too big" (RFC 6455)."""
+
 MAX_SOCKET_PATH = 100
 """Bytes a Unix socket path may have. The kernel's limit is 108 including the terminating zero
 (`sun_path`), and a few bytes of margin keep the message friendlier than `AF_UNIX path too
@@ -916,6 +932,8 @@ class Client:
         self.authenticated = False
         self.token_sha256: str | None = None
         """SHA-256 of the token this client authenticated with; None before `initialize`."""
+        self._initialized = False
+        """True once an `initialize` succeeded; stays True after a revocation."""
         self._lock = anyio.Lock()
         self._subscription: Subscription | None = None
         self._last_sent = 0  # so a replayed event is not sent twice
@@ -964,6 +982,9 @@ class Client:
         session exactly as if the client had stayed; only the responses are dropped. Requests
         are cut short only when this method itself is cancelled, which is the end of the
         process.
+
+        A client that has not completed `initialize` within `INITIALIZE_TIMEOUT_S` seconds is
+        disconnected (`_initialize_deadline`).
         """
         queue_in, queue_out = anyio.create_memory_object_stream[str](REQUEST_BACKLOG)
         async with queue_out, anyio.create_task_group() as requests:
@@ -971,6 +992,7 @@ class Client:
             try:
                 async with anyio.create_task_group() as pushes, queue_in:
                     self._tasks = pushes
+                    pushes.start_soon(self._initialize_deadline)
                     try:
                         await self._read(requests, queue_in)
                     finally:
@@ -982,8 +1004,23 @@ class Client:
                 # is still served: leaving this block normally lets `requests` finish.
                 log.exception("reading from client %r failed", self.name or "unknown")
 
+    async def _initialize_deadline(self) -> None:
+        """Close the connection if the client has not completed `initialize` in time.
+
+        Side effect: after `INITIALIZE_TIMEOUT_S` seconds, a client that has never been
+        authenticated is disconnected with `CLOSE_POLICY`, which ends `_read`. Runs in the
+        task group of the pushes, so it is cancelled when the client disconnects first.
+        """
+        await anyio.sleep(INITIALIZE_TIMEOUT_S)
+        if not self._initialized:
+            log.warning("closing a connection that sent no valid initialize in time")
+            await self.connection.close(CLOSE_POLICY, "no valid initialize in time")
+
     async def _read(self, requests: TaskGroup, queue: MemoryObjectSendStream[str]) -> None:
         """Read the client's messages until it disconnects and hand each one on.
+
+        A message of more than `MAX_PRE_AUTH_CHARS` characters before a successful
+        `initialize` closes the connection with `CLOSE_TOO_BIG` and is not answered.
 
         Args:
             requests: The task group that control requests are started in. It is not cancelled
@@ -992,6 +1029,12 @@ class Client:
         """
         try:
             async for message in self.connection:
+                if not self.authenticated and len(message) > MAX_PRE_AUTH_CHARS:
+                    # The frame limit leaves room for images, which only an authenticated
+                    # client may send; closing stops a peer without a token from repeating it.
+                    log.warning("closing a connection that sent a large message before initialize")
+                    await self.connection.close(CLOSE_TOO_BIG, "message too big before initialize")
+                    break
                 text = message if isinstance(message, str) else message.decode()
                 if not text.strip():
                     continue
@@ -1180,7 +1223,9 @@ class Client:
                     params.escalation_id,
                     params.decision,
                     params.note,
-                    client=self.name,
+                    # A root client has no token of its own, so the decision is recorded under
+                    # the session's token (`SessionServer.recorded`); the name tells them apart.
+                    client=f"root:{self.name}" if self.trusted else self.name,
                     answer=params.answer,
                     token_sha256=self.server.recorded(self.token_sha256),
                 )
@@ -1254,7 +1299,7 @@ class Client:
                 then, unless it was seen revoked before the outage.
         """
         if self.trusted:
-            self.authenticated = True
+            self.authenticated = self._initialized = True
             self.name = params.client
             log.info("root client %r connected on the local socket", self.name)
             return self.server.session.initialize_result().model_copy(
@@ -1268,7 +1313,7 @@ class Client:
         if sha is None:
             log.warning("client %r sent an invalid token", params.client)
             raise RpcError(UNAUTHENTICATED, "invalid client token")
-        self.authenticated = True
+        self.authenticated = self._initialized = True
         self.token_sha256 = sha
         self.name = params.client
         log.info("client %r connected", self.name)

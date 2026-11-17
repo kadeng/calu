@@ -322,3 +322,43 @@ def test_doctor_names_sandbox_entries_a_session_would_not_start_with(tmp_path: P
     (finding,) = doctor.settings_file_findings(workspace, home)
     assert not finding.ok and "excludedCommands: docker" in finding.detail
     assert "does not start" in finding.advice
+
+
+def test_the_claude_cli_runs_as_the_user_calu_works_for(tmp_path: Path, monkeypatch) -> None:
+    """Under `--user` the CLI runs in the project as that user, without root's keys."""
+    import subprocess
+
+    from calu import asuser
+    from calu.launch import RunAs
+
+    seen: list[dict[str, object]] = []
+
+    def run(command: list[str], **options: object) -> subprocess.CompletedProcess[str]:
+        """Record the options and answer like the CLI.
+
+        Args:
+            command: The command line.
+            **options: The keyword arguments of `subprocess.run`.
+
+        Returns:
+            A finished process that printed a version and one JSON line.
+        """
+        seen.append(options)
+        return subprocess.CompletedProcess(command, 0, '2.1.319\n{"enabled": true}\n', "")
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(doctor.subprocess, "run", run)
+    monkeypatch.setenv("MISTRAL_API_KEY", "secret")
+    monkeypatch.setattr(asuser, "_active", RunAs(uid=1000, gid=1000, home="/home/ada"))
+    assert doctor.claude_version()[0] is True
+    assert doctor.sandbox_posture(tmp_path) == {"enabled": True}
+    for options in seen:
+        assert options["user"] == 1000 and options["group"] == 1000
+        env = options["env"]
+        assert isinstance(env, dict) and "MISTRAL_API_KEY" not in env
+        assert env["HOME"] == "/home/ada"
+    # Without a switch nothing changes: no user, no environment of its own.
+    monkeypatch.setattr(asuser, "_active", None)
+    seen.clear()
+    doctor.claude_version()
+    assert "user" not in seen[0] and "env" not in seen[0]

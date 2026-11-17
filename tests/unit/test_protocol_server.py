@@ -808,16 +808,19 @@ async def test_a_request_is_finished_when_its_client_disconnects(tmp_path: Path)
             while run.server._clients and all(c._tasks for c in run.server._clients):
                 await anyio.sleep(0.01)
         release.set()
-        with anyio.fail_after(10):
+        with anyio.move_on_after(10):
             while run.session.state != "idle" or not run.session.snapshot().auto_escalate.edits:
                 await anyio.sleep(0.01)
-        with anyio.fail_after(10):  # and the connection's handler has ended
+        assert run.session.state == "idle", "the start was completed"
+        assert run.session.snapshot().auto_escalate.edits, "the request sent after it was served"
+        with anyio.move_on_after(10):  # and the connection's handler has ended
             while run.server._clients:
                 await anyio.sleep(0.01)
+        assert not run.server._clients
         events = Events()
         async with client(run, events) as successor:
             await successor.request("chat.send", {"text": "hello"})
-            await events.wait_for("turn.result")
+            assert await events.wait_for("turn.result"), "the next client can use the session"
 
 
 async def test_a_session_stop_is_finished_when_its_client_disconnects(tmp_path: Path):
@@ -851,10 +854,11 @@ async def test_a_session_stop_is_finished_when_its_client_disconnects(tmp_path: 
             with anyio.fail_after(10):
                 await entered.wait()
         release.set()
-        with anyio.fail_after(10):
+        with anyio.move_on_after(10):
             while run.session.state != "stopped":
                 await anyio.sleep(0.01)
         run.session.stop = stop  # type: ignore[method-assign]
+        assert run.session.state == "stopped", "the stop was completed after the disconnect"
 
 
 # ------------------------------------------------------------------ a database without an answer
@@ -1066,3 +1070,100 @@ async def test_a_revoked_token_is_refused_every_request_that_changes_the_session
                     assert refused.value.code == -32001, method
             assert run.session.state == "idle"
             assert not run.server.shutdown.is_set()
+
+
+# ------------------------------------------------------------------ before initialize
+
+
+async def test_a_connection_without_initialize_is_closed_after_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from websockets.asyncio.client import connect as ws_connect
+    from websockets.exceptions import ConnectionClosed
+
+    from calu.protocol import server as server_module
+
+    monkeypatch.setattr(server_module, "INITIALIZE_TIMEOUT_S", 0.2)
+    async with served(tmp_path) as run:
+        async with ws_connect(run.address) as idle:
+            with anyio.fail_after(10), pytest.raises(ConnectionClosed):
+                await idle.recv()
+            assert idle.close_code == server_module.CLOSE_POLICY
+        # A client that initializes in time stays connected past the deadline.
+        events = Events()
+        async with client(run, events) as prompt:
+            await anyio.sleep(0.4)
+            assert not prompt.closed.is_set()
+            assert (await prompt.request("state.get", {}))["state"]
+
+
+async def test_a_large_message_before_initialize_closes_the_connection(tmp_path: Path):
+    import json
+
+    from websockets.asyncio.client import connect as ws_connect
+    from websockets.exceptions import ConnectionClosed
+
+    from calu.protocol import server as server_module
+
+    async with served(tmp_path) as run:
+        async with ws_connect(run.address, max_size=None) as peer:
+            big = json.dumps({"id": 1, "method": "initialize", "params": {"client": "x" * 70_000}})
+            assert len(big) > server_module.MAX_PRE_AUTH_CHARS
+            await peer.send(big)
+            with anyio.fail_after(10), pytest.raises(ConnectionClosed):
+                await peer.recv()
+            assert peer.close_code == server_module.CLOSE_TOO_BIG
+        # After initialize a large message is allowed (images make chat messages large).
+        events = Events()
+        async with client(run, events) as authenticated:
+            # Unknown params are ignored, so this is a large valid request.
+            state = await authenticated.request("state.get", {"padding": "y" * 70_000})
+            assert state["state"]
+            assert not authenticated.closed.is_set()
+
+
+async def test_a_root_client_decision_is_recorded_under_a_root_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from calu.protocol.server import Client
+
+    async with served(tmp_path) as run:
+        decided: list[dict[str, Any]] = []
+
+        async def decide_escalation(*args: Any, **kwargs: Any) -> None:
+            decided.append(kwargs)
+
+        monkeypatch.setattr(run.session, "decide_escalation", decide_escalation)
+        for trusted, expected in [(True, "root:ops"), (False, "ops")]:
+            peer = Client(run.server, connection=None, trusted=trusted)  # type: ignore[arg-type]
+            token = "" if trusted else run.token
+            await peer._dispatch("initialize", {"client": "ops", "token": token})
+            await peer._dispatch("escalation.decide", {"escalation_id": "e1"})
+            assert decided[-1]["client"] == expected
+        assert decided[0]["token_sha256"] is None, "a root client has no token of its own"
+
+
+async def test_the_fake_runner_pairs_each_send_with_its_own_images(tmp_path: Path):
+    """Two sends of the same text keep their images apart (`FakeRunner.send`)."""
+    import base64
+
+    from calu.protocol.messages import ChatImage, UserInput
+
+    runner = FakeRunner(FakeScript(turns=[[{"text": "a"}], [{"text": "b"}]]), tmp_path)
+    image = ChatImage(media_type="image/png", data=base64.b64encode(b"png").decode())
+    inputs: list[UserInput] = []
+
+    async def sink(event: Any) -> None:
+        if isinstance(event, UserInput):
+            inputs.append(event)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(runner.run, None, sink)  # type: ignore[arg-type]  # no tool calls
+        await runner.wait_ready()
+        await runner.send("look", "later", [image])
+        await runner.send("look", "later")
+        with anyio.fail_after(10):
+            while len(inputs) < 2:
+                await anyio.sleep(0.01)
+        await runner.stop()
+    assert [(e.text, e.images) for e in inputs] == [("look", [image]), ("look", [])]

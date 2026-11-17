@@ -192,14 +192,22 @@ class Target(_Model):
         Raises:
             TargetError: For a schema other than "public", a `docker` block on another
                 variant or none on `docker`, and IAM authentication on another variant than
-                `rds-iam`.
+                `rds-iam`, and IAM authentication without `host`, without `user` or with another
+                `sslmode` than `verify-full`.
         """
         if self.schema_name != "public":
             raise TargetError("only the schema `public` is supported in this version of calu")
         if (self.variant == "docker") != (self.docker is not None):
             raise TargetError("the stored database record mixes the Docker variant with another")
-        if isinstance(self.auth, RdsIamAuth) and self.variant != "rds-iam":
-            raise TargetError("IAM authentication belongs to the variant rds-iam only")
+        if isinstance(self.auth, RdsIamAuth):
+            if self.variant != "rds-iam":
+                raise TargetError("IAM authentication belongs to the variant rds-iam only")
+            # The token is sent like a password, so the server must prove who it is; and the
+            # token is signed for one host and one user, which libpq must not fill in itself.
+            if self.conninfo.get("sslmode") != "verify-full":
+                raise TargetError("IAM authentication needs sslmode verify-full")
+            if not self.conninfo.get("host") or not self.user:
+                raise TargetError("IAM authentication needs a host and a user")
 
     def dump(self) -> bytes:
         """Return the form 2 secret of this target.

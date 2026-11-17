@@ -12,7 +12,7 @@ from calu.acp import modes
 from calu.acp.adapter import Adapter
 from calu.acp.peer import Peer
 from calu.config import AutoEscalate
-from calu.protocol.client import connect
+from calu.protocol.client import RequestFailed, connect
 from tests.unit.test_protocol_server import served
 
 pytestmark = pytest.mark.anyio
@@ -1139,7 +1139,11 @@ async def test_an_escalation_resolved_before_session_new_is_not_asked() -> None:
 async def test_session_load_asks_the_open_escalations_after_the_replay() -> None:
     calu = FakeCalu(
         {
-            "state.get": {"state": "escalated", "escalations": [OPEN_ESCALATION]},
+            "state.get": {
+                "state": "escalated",
+                "calu_session_id": "s1",
+                "escalations": [OPEN_ESCALATION],
+            },
             "session.history": {"turns": [{"index": 1, "user_inputs": ["hello"]}], "steps": []},
         }
     )
@@ -1449,6 +1453,75 @@ async def test_session_list_names_the_one_session_the_adapter_serves() -> None:
         assert len((await h.editor.call("session/list", {}))["result"]["sessions"]) == 1
         elsewhere = await h.editor.call("session/list", {"cwd": "/somewhere/else"})
         assert elsewhere["result"] == {"sessions": []}
+
+    await run_adapter(calu, body)
+
+
+async def test_session_list_is_empty_when_the_session_does_not_answer() -> None:
+    """A failing `state.get` gives an empty list, not an error the editor shows every minute."""
+
+    class Failing(FakeCalu):
+        def __init__(self, error: Exception) -> None:
+            super().__init__({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+            self.error = error
+
+        async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+            if method == "state.get":
+                raise self.error
+            return await super().request(method, params)
+
+    for error in (ConnectionError("gone"), RequestFailed({"code": -32603, "message": "x"})):
+        calu = Failing(error)
+
+        async def body(h: Harness) -> None:
+            listed = await h.editor.call("session/list", {})
+            assert listed["result"] == {"sessions": []}
+
+        await run_adapter(calu, body)
+
+
+async def test_session_load_without_session_new_refuses_a_stale_id() -> None:
+    """An id an editor remembered from an earlier calu run is not adopted."""
+    calu = FakeCalu(
+        {"state.get": {"state": "idle", "calu_session_id": "s1"}, "session.history": {}}
+    )
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        stale = await h.editor.call(
+            "session/load", {"sessionId": "old", "cwd": str(WORKSPACE), "mcpServers": []}
+        )
+        assert stale["error"]["code"] == -32002
+        assert "serves session s1" in stale["error"]["message"]
+        assert h.adapter.session_id is None
+        assert not h.calu.sent("session.history")
+        loaded = await h.editor.call(
+            "session/load", {"sessionId": "s1", "cwd": str(WORKSPACE), "mcpServers": []}
+        )
+        assert "error" not in loaded
+        assert h.adapter.session_id == "s1"
+
+    await run_adapter(calu, body)
+
+
+async def test_session_close_ends_the_served_session_and_refuses_another() -> None:
+    calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        session = await handshake(h.editor, h.calu)
+        other = await h.editor.call("session/close", {"sessionId": "other"})
+        assert other["error"]["code"] == -32002
+        assert not h.calu.sent("interrupt") and h.adapter.session_id == session
+        closed = await h.editor.call("session/close", {"sessionId": session})
+        assert closed["result"] == {}
+        assert h.calu.sent("interrupt") and h.adapter.session_id is None
+        # After the close, the id is no longer served until session/new or session/load.
+        again = await h.editor.call("session/close", {"sessionId": session})
+        assert again["error"]["code"] == -32002
+        prompt = await h.editor.call(
+            "session/prompt", {"sessionId": session, "prompt": [{"type": "text", "text": "x"}]}
+        )
+        assert prompt["error"]["code"] == -32002
 
     await run_adapter(calu, body)
 

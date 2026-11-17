@@ -320,6 +320,30 @@ async def session_can_log_in(conn: psycopg.AsyncConnection) -> bool:
     return bool(row and row[0])
 
 
+async def _leave_rds_iam(conn: psycopg.AsyncConnection, role: str) -> None:
+    """Take `role` out of the RDS role `rds_iam` if it is a member, so a password works.
+
+    On RDS a member of `rds_iam` is asked for an IAM token and its password is not accepted.
+    On a server without `rds_iam` (no RDS instance) nothing happens.
+
+    Side effects: at most one `REVOKE rds_iam FROM <role>`.
+
+    Args:
+        conn: An open connection of the database owner.
+        role: The role that is about to get a password.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    cur = await conn.execute(
+        b"SELECT 1 FROM pg_roles r WHERE r.rolname = 'rds_iam'"
+        b" AND pg_has_role(%s, r.oid, 'MEMBER')",
+        (role,),
+    )
+    if await cur.fetchone():
+        await conn.execute(sql.SQL("REVOKE rds_iam FROM {}").format(sql.Identifier(role)))
+
+
 async def _enable_login(conn: psycopg.AsyncConnection, admin: Target, role: str) -> Target:
     """Give `role` a new random password and build its login record.
 
@@ -342,14 +366,7 @@ async def _enable_login(conn: psycopg.AsyncConnection, admin: Target, role: str)
     password = secrets.token_urlsafe(32)
     # Built first: an owner record that cannot be taken over must not cost the role its login.
     login = admin.for_role(role, PasswordAuth(password=password))
-    cur = await conn.execute(
-        b"SELECT 1 FROM pg_roles r WHERE r.rolname = 'rds_iam'"
-        b" AND pg_has_role(%s, r.oid, 'MEMBER')",
-        (role,),
-    )
-    if await cur.fetchone():
-        # On RDS a member of `rds_iam` is asked for a token and its password is not accepted.
-        await conn.execute(sql.SQL("REVOKE rds_iam FROM {}").format(sql.Identifier(role)))
+    await _leave_rds_iam(conn, role)
     await conn.execute(
         sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
             sql.Identifier(role), sql.Literal(password)
@@ -431,7 +448,8 @@ async def enable_admin_login(conn: psycopg.AsyncConnection, password: str) -> No
     """Let `calu_admin` log in with `password`; an earlier password stops working.
 
     The server gets the SCRAM verifier, computed here, and never the password itself, so the
-    password is in no statement the server could log.
+    password is in no statement the server could log. On RDS the role is first taken out of
+    `rds_iam`, which would otherwise make the server ignore the password.
 
     Args:
         conn: An open connection of the database owner, schema migrated (version 33).
@@ -446,6 +464,7 @@ async def enable_admin_login(conn: psycopg.AsyncConnection, password: str) -> No
     verifier = conn.pgconn.encrypt_password(
         password.encode(), ADMIN_ROLE.encode(), b"scram-sha-256"
     ).decode()
+    await _leave_rds_iam(conn, ADMIN_ROLE)
     await conn.execute(
         sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
             sql.Identifier(ADMIN_ROLE), sql.Literal(verifier)

@@ -275,3 +275,52 @@ def test_the_owner_record_of_the_local_database_requires_proof_from_the_server()
     session = owner.for_role("calu_session", local.PasswordAuth(password="s"))
     assert session.conninfo["require_auth"] == "scram-sha-256" and session.docker == owner.docker
     assert local.default_data_dir().parts[-2:] == ("calu", "db")
+
+
+def _fake_docker(monkeypatch: pytest.MonkeyPatch, inspect_stdout: str) -> None:
+    """Replace `local._run` with answers of `docker ps` and `docker inspect`.
+
+    Args:
+        monkeypatch: Used to replace `_run`.
+        inspect_stdout: What `docker inspect` prints.
+    """
+    import subprocess
+
+    def run(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+        out = "abc123\n" if args[1] == "ps" else inspect_stdout
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    monkeypatch.setattr(local, "_run", run)
+
+
+def test_container_data_reads_a_bind_source_with_a_space(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A data directory under `/home/a b` is one path, not two words."""
+    mounts = [
+        {"Type": "bind", "Source": "/etc/other", "Destination": "/etc/x"},
+        {"Type": "bind", "Source": "/home/a b/db/pg", "Destination": "/var/lib/postgresql"},
+    ]
+    _fake_docker(monkeypatch, json.dumps(mounts) + "\n")
+    assert local.container_data() == "/home/a b/db/pg"
+
+
+def test_container_data_reads_a_named_volume(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A named volume is reported as `volume:<name>`."""
+    mounts = [
+        {
+            "Type": "volume",
+            "Name": "calu-db_data",
+            "Source": "/var/lib/docker/volumes/calu-db_data/_data",
+            "Destination": "/var/lib/postgresql",
+        }
+    ]
+    _fake_docker(monkeypatch, json.dumps(mounts) + "\n")
+    assert local.container_data() == "volume:calu-db_data"
+
+
+@pytest.mark.parametrize("stdout", ["[]\n", "null\n", "not json\n"])
+def test_container_data_without_a_data_mount_is_none(
+    monkeypatch: pytest.MonkeyPatch, stdout: str
+) -> None:
+    """No mount of the data directory, or unreadable output, says nothing."""
+    _fake_docker(monkeypatch, stdout)
+    assert local.container_data() is None

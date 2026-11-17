@@ -1656,16 +1656,12 @@ class Session:
         """
         state = self.honesty
         state.watch_all(written)
-        total = MarkChanges()
         edited: set[str] = set()
         if pending.edit_path is not None:
             edited.add(state.watch(pending.edit_path))
-        for name, dirty, clean in pending.marks:
-            changes = state.record(dirty, clean, name, edited)
-            total.opened += changes.opened
-            total.closed += changes.closed
-            total.ignored += [f"{name}: {message}" for message in changes.ignored]
-            total.withdrawn += [one for one in changes.withdrawn if one not in total.withdrawn]
+        # All checkers' clean marks before any dirty mark (`record_step`): one checker's HONEST
+        # must not close the mark another checker opens in the same step.
+        total = state.record_step(pending.marks, edited)
         store: list[tuple[str, str]] = []
         if pending.edit_path is not None:
             state.record_edit(

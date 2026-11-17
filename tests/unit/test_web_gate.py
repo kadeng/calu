@@ -11,6 +11,7 @@ import hashlib
 import re
 from typing import Any
 
+import anyio
 import httpx
 import pytest
 
@@ -18,9 +19,12 @@ import pytest
 pytest.importorskip("starlette", reason="the web interface's packages are missing: uv sync")
 pytest.importorskip("jinja2", reason="the web interface's packages are missing: uv sync")
 
+import calu.web.app as web_app  # after the guard above
 from calu.web.app import (
     CONTENT_SECURITY_POLICY,
     HERE,
+    LOGIN_FAILURES_FORGET_S,
+    LOGIN_PATH,
     WEB_HOST_NAME,
     LocalOnly,
     SecurityHeaders,
@@ -303,3 +307,138 @@ def test_the_policy_allows_exactly_the_inline_scripts_of_the_templates() -> None
         source = template.read_text(encoding="utf-8")
         assert not re.search(r"\son[a-z]+\s*=", source), f"{template.name}: inline handler"
         assert not re.search(r"\sstyle\s*=", source), f"{template.name}: inline style"
+
+
+def test_the_policy_allows_exactly_the_inline_styles_of_the_templates() -> None:
+    """The password page styles itself inline: a browser without a login gets no stylesheet.
+
+    The policy names `style-src` with the hash of that very `<style>`, so the page is styled and
+    any other inline style is still refused.
+    """
+    styles = set()
+    for template in (HERE / "templates").glob("*.html"):
+        source = template.read_text(encoding="utf-8")
+        for attributes, style in re.findall(r"<style([^>]*)>(.*?)</style>", source, re.S):
+            assert not attributes.strip(), f"{template.name}: inline style with attributes"
+            assert "{{" not in style and "{%" not in style, template.name
+            styles.add(style)
+    assert styles, "password.html carries an inline style; drop this test when it does not"
+    policy = dict(
+        part.strip().split(" ", 1) for part in CONTENT_SECURITY_POLICY.split(";") if part.strip()
+    )
+    assert "unsafe-inline" not in policy["style-src"]
+    for style in styles:
+        digest = base64.b64encode(hashlib.sha256(style.encode()).digest()).decode()
+        assert f"'sha256-{digest}'" in policy["style-src"]
+
+
+class Passwords:
+    """A fake admin password check: "right" is the password; it can be made to fail."""
+
+    def __init__(self) -> None:
+        """Start with a working database and nothing checked."""
+        self.broken = False
+        """True makes the check raise, as an unreachable database does."""
+        self.checked: list[str] = []
+        """Every password that was checked, in order."""
+
+    async def __call__(self, password: str) -> bool:
+        """Check one password; raises OSError while `broken`."""
+        self.checked.append(password)
+        if self.broken:
+            raise OSError("database away")
+        return password == "right"
+
+
+def password_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[TokenGate, Passwords, list[float], httpx.AsyncClient]:
+    """A gate with a fake password check, a fake clock and a recorded (instant) sleep."""
+    passwords = Passwords()
+    gate = TokenGate(Recorder(), TOKEN, check_password=passwords)
+    gate._clock = lambda: 1000.0  # the test drives the clock
+    slept: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        """Record the wait instead of waiting."""
+        slept.append(seconds)
+
+    monkeypatch.setattr(web_app.anyio, "sleep", fake_sleep)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gate), base_url=f"http://{WEB_HOST_NAME}:8800"
+    )
+    return gate, passwords, slept, client
+
+
+async def test_each_wrong_password_waits_longer_and_a_quiet_minute_resets_the_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding: the count of wrong passwords never decayed, so one burst of guesses kept
+    the operator's own attempts waiting 8 s for as long as the process ran."""
+    gate, _passwords, slept, client = password_gate(monkeypatch)
+    async with client:
+        for _ in range(6):
+            answer = await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
+            assert answer.status_code == 401
+            assert "not the admin password" in answer.text
+        assert slept == [1.0, 2.0, 4.0, 8.0, 8.0, 8.0]
+        gate._clock = lambda: 1000.0 + LOGIN_FAILURES_FORGET_S + 1
+        await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
+        assert slept[-1] == pytest.approx(1.0), "after a quiet minute the count starts from zero"
+        right = await client.post(LOGIN_PATH, data={"password": "right", "onward": "/"})
+        assert right.status_code == 200 and "set-cookie" in right.headers
+        await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
+        assert slept[-1] == pytest.approx(1.0), "a right password resets the count"
+
+
+async def test_a_database_failure_is_not_counted_as_a_wrong_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding: a check that could not ask the database counted as a wrong guess."""
+    _gate, passwords, slept, client = password_gate(monkeypatch)
+    passwords.broken = True
+    async with client:
+        for _ in range(3):
+            answer = await client.post(LOGIN_PATH, data={"password": "right", "onward": "/"})
+            assert answer.status_code == 401
+            assert "could not be asked" in answer.text
+        assert slept == [], "answered at once, and nothing counted"
+        passwords.broken = False
+        await client.post(LOGIN_PATH, data={"password": "wrong", "onward": "/"})
+        assert slept == [1.0]
+
+
+async def test_the_wait_after_a_wrong_password_does_not_hold_up_the_right_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review finding: the delay was slept while holding the check lock, so the operator's
+    right password queued behind every wrong one another process had posted."""
+    passwords = Passwords()
+    gate = TokenGate(Recorder(), TOKEN, check_password=passwords)
+    waiting = anyio.Event()
+    release = anyio.Event()
+
+    async def slow_sleep(_seconds: float) -> None:
+        """Block the wrong guess's answer until the test releases it."""
+        waiting.set()
+        await release.wait()
+
+    monkeypatch.setattr(web_app.anyio, "sleep", slow_sleep)
+    client = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=gate), base_url=f"http://{WEB_HOST_NAME}:8800"
+    )
+    answers: dict[str, int] = {}
+
+    async def post(password: str) -> None:
+        """Post one password and keep the answer's status."""
+        answer = await client.post(LOGIN_PATH, data={"password": password, "onward": "/"})
+        answers[password] = answer.status_code
+
+    async with client, anyio.create_task_group() as group:
+        group.start_soon(post, "wrong")
+        await waiting.wait()  # the wrong guess now waits out its delay
+        with anyio.fail_after(5):
+            await post("right")
+        assert answers == {"right": 200}, "the right password got through during the wait"
+        release.set()
+    assert answers["wrong"] == 401

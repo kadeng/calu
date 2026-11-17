@@ -141,8 +141,12 @@ class TextScreen(Screen[None]):
         """
         if not self.is_attached:
             return
-        line = Text(" " + message, "bold red" if error else "bold") if message else None
-        self.query_one("#text-keys", Static).update(line or self._keys_line())
+        keys = self.query_one("#text-keys", KeyLine)
+        if message:
+            # As a message, not as hints: a click on it must press no key.
+            keys.say(Text(" " + message, "bold red" if error else "bold"))
+        else:
+            keys.update(self._keys_line())
 
     def _refilter(self) -> None:
         """Draw the title, the keys and the body for the current filter."""

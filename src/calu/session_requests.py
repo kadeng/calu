@@ -7,18 +7,23 @@
                                                     finish ──► started (session id) | failed
     wait_for: reads the row until it is finished
     withdraw: pending ──► withdrawn, when no server claimed it in time
+    expire:   claimed ──► failed, when the server that claimed it did not answer in time
 
-The states and who may change them are enforced by the database (migration 0032). This module
-only reads and writes the rows; it starts nothing.
+The states and who may change them are enforced by the database (migrations 0032, 0035). This
+module only reads and writes the rows; it starts nothing.
 """
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Literal
 
 import anyio
+import psycopg
 
 from calu.db import Db
+
+log = logging.getLogger(__name__)
 
 Kind = Literal["new", "resume", "fork"]
 State = Literal["pending", "claimed", "started", "failed", "withdrawn"]
@@ -176,6 +181,10 @@ async def claim(db: Db, hostname: str, os_user: str, pid: int) -> SessionRequest
 
     Each request is claimed at most once, also when several servers ask at the same moment.
 
+    The host and the user are the caller's word: every holder of the session login may claim
+    the requests of any host and user, prompt and directory included. That is intended (the
+    owner, 2026-11-17): the session login is trusted with it.
+
     Args:
         db: A connection with the session login.
         hostname: This machine's host name.
@@ -240,6 +249,27 @@ async def withdraw(db: Db, request_id: int) -> bool:
     return bool(await db.scalar("SELECT calu_withdraw_session_request(%s)", (request_id,)))
 
 
+async def expire(db: Db, request_id: int) -> bool:
+    """Mark a request failed whose server claimed it long ago and never answered.
+
+    Side effects: in the database, a request in the state "claimed" whose claim is older than
+    `START_WAIT_S` seconds (the limit is fixed in migration 0035) becomes "failed" with a
+    message for the requester. A server that answers later finds the request finished and
+    stops the session it started (`calu.serve`).
+
+    Args:
+        db: A connection of the operator or the owner.
+        request_id: The row's id.
+
+    Returns:
+        False if the request is not "claimed" or its claim is younger than the limit.
+
+    Raises:
+        psycopg.Error: On database errors, among them a schema older than migration 0035.
+    """
+    return bool(await db.scalar("SELECT calu_expire_session_request(%s)", (request_id,)))
+
+
 async def wait_for(
     db: Db,
     request_id: int,
@@ -249,8 +279,11 @@ async def wait_for(
     """Wait until a request is finished, and withdraw it when no server takes it.
 
         pending for claim_wait_s ──► withdraw ──► NoServer
-        claimed for start_wait_s ──► TimeoutError (the request stays with the server)
+        claimed for start_wait_s ──► expire ──► TimeoutError
         started | failed         ──► returned
+
+    `expire` marks the request failed only if its claim is older than the database's limit
+    (`START_WAIT_S`); with a shorter `start_wait_s` the request may stay "claimed".
 
     Args:
         db: A connection of the operator or the owner.
@@ -265,7 +298,8 @@ async def wait_for(
 
     Raises:
         NoServer: If no server claimed the request in time; it was withdrawn.
-        TimeoutError: If a server claimed the request and did not finish it in time.
+        TimeoutError: If a server claimed the request and did not finish it in time; the
+            request was marked failed where the database allowed it.
         LookupError: If the row does not exist (any more).
         psycopg.Error: On database errors.
     """
@@ -288,6 +322,12 @@ async def wait_for(
         else:
             claimed = claimed or now
             if now - claimed > start_wait_s:
+                # A server that died after its claim never answers; without this the row
+                # would stay "claimed" for good.
+                try:
+                    await expire(db, request_id)
+                except psycopg.Error as exc:
+                    log.warning("could not mark session request %d as failed: %s", request_id, exc)
                 raise TimeoutError(
                     f"the server claimed session request {request_id} and did not answer "
                     f"within {start_wait_s:.0f} s"

@@ -11,6 +11,7 @@ container's environment.
 has to run `calu db up` before `calu run`.
 """
 
+import json
 import os
 import secrets
 import socket
@@ -251,22 +252,27 @@ def container_data() -> str | None:
         ids = found.stdout.split()
         if found.returncode != 0 or not ids:
             return None
-        shown = _run(
-            [
-                "docker",
-                "inspect",
-                ids[0],
-                "--format",
-                '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}'
-                "{{.Type}} {{.Name}} {{.Source}}{{end}}{{end}}",
-            ]
-        )
+        # JSON, not a space-separated template: a bind source may contain spaces.
+        shown = _run(["docker", "inspect", ids[0], "--format", "{{json .Mounts}}"])
     except DockerError:
         return None
-    parts = shown.stdout.split()
-    if shown.returncode != 0 or len(parts) < 2:
+    if shown.returncode != 0:
         return None
-    return f"volume:{parts[1]}" if parts[0] == "volume" else parts[-1]
+    try:
+        mounts = json.loads(shown.stdout)
+    except ValueError:
+        return None
+    if not isinstance(mounts, list):
+        return None
+    for mount in mounts:
+        if not isinstance(mount, dict) or mount.get("Destination") != "/var/lib/postgresql":
+            continue
+        if mount.get("Type") == "volume":
+            name = mount.get("Name")
+            return f"volume:{name}" if isinstance(name, str) and name else None
+        source = mount.get("Source")
+        return source if isinstance(source, str) and source else None
+    return None
 
 
 def up(

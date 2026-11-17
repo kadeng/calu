@@ -10,6 +10,11 @@ has reached; the bus hands it the events after that number from the ring buffer 
 following ones as they happen. A client that was away longer than the buffer reaches is told so
 (`EventsSubscribeResult.complete` is False) and should take a fresh snapshot.
 
+An event can carry images (`UserInput.images`, up to `MAX_IMAGES` of `MAX_IMAGE_BYTES` each).
+The buffer keeps the images of the newest `REPLAY_IMAGE_EVENTS` such events only; an older one
+stays in the buffer with an empty `images` list, so the buffer cannot grow to gigabytes. A client
+connected at the time got the images live; the replayed text is unchanged.
+
 Token streams are not written to the database (PLAN.md D3), so the buffer is the only place
 where an event lives after it was sent; it is lost when the process ends. What a client needs
 after a restart (steps, turns, escalations) is in the database.
@@ -34,6 +39,9 @@ log = logging.getLogger(__name__)
 
 CAPACITY = 5_000
 """Events kept for replay; roughly the last few minutes of a busy session."""
+REPLAY_IMAGE_EVENTS = 20
+"""How many of the newest image-carrying events keep their images in the replay buffer; at
+about 27 MB per event at most (4 images of 5 MB in base64) this bounds the images kept."""
 CLIENT_QUEUE = 1_000
 """Events a client may fall behind before it is disconnected."""
 
@@ -106,6 +114,9 @@ class Bus:
         self._seq = count(1)
         self.last_seq = 0
         self._recent: deque[tuple[int, RecordedEvent]] = deque(maxlen=capacity)
+        self._with_images: deque[RecordedEvent] = deque()
+        """The recorded events whose `images` are still kept, oldest first; at most
+        `REPLAY_IMAGE_EVENTS` (`publish`)."""
         self._clients: list[Subscription] = []
         self.no_clients = anyio.Event()
         """Set while no client is subscribed; `calu run` waits for it before it ends a run that
@@ -135,13 +146,22 @@ class Bus:
         subscription is marked as overflowed and removed from the fan-out. It does wait for the
         callbacks registered with `watch`.
 
+        The replay buffer keeps the images of the newest `REPLAY_IMAGE_EVENTS` image-carrying
+        events only: publishing one more empties the `images` list of the oldest kept copy.
+        Clients get the event itself, with its images, either way.
+
         Args:
             event: The event; its `seq` is set to the next sequence number.
         """
         event.seq = self.last_seq = next(self._seq)
-        self._recent.append(
-            (event.seq, RecordedEvent(method=event.method, params=event.model_dump(mode="json")))
-        )
+        recorded = RecordedEvent(method=event.method, params=event.model_dump(mode="json"))
+        self._recent.append((event.seq, recorded))
+        if recorded.params.get("images"):
+            self._with_images.append(recorded)
+            while len(self._with_images) > REPLAY_IMAGE_EVENTS:
+                # `model_dump` made a copy, so this changes only the kept record, not the event
+                # that the clients receive below.
+                self._with_images.popleft().params["images"] = []
         for client in list(self._clients):
             client._push(event)
         for watcher in self._watchers:

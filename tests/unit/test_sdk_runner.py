@@ -405,3 +405,65 @@ async def test_an_attached_image_is_sent_as_an_image_block_and_reported_with_the
     replay = UserMessage(content=[TextBlock(text="what is this?")])
     (shown,) = [e for e in runner._translate(replay) if isinstance(e, UserInput)]
     assert shown.source == "user" and shown.images == [image]
+
+
+class _NullClient:
+    """Stands in for the SDK client: takes the sent messages and drops them."""
+
+    async def query(self, messages) -> None:
+        async for _ in messages:
+            pass
+
+
+def _image(payload: bytes) -> Any:
+    """Return a PNG `ChatImage` with `payload` as its (fake) file content."""
+    import base64
+
+    from calu.protocol.messages import ChatImage
+
+    return ChatImage(media_type="image/png", data=base64.b64encode(payload).decode())
+
+
+def _replayed_images(runner: SdkRunner, text: str) -> list[Any]:
+    """Translate the replay of `text` and return the images of its `UserInput`."""
+    from claude_agent_sdk import TextBlock
+
+    replay = UserMessage(content=[TextBlock(text=text)])
+    (shown,) = [e for e in runner._translate(replay) if isinstance(e, UserInput)]
+    assert shown.source == "user"
+    return shown.images
+
+
+@pytest.mark.anyio
+async def test_the_same_text_sent_twice_gets_its_own_images_in_order(tmp_path: Path):
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._client = _NullClient()  # type: ignore[assignment]
+    first, second = _image(b"first"), _image(b"second")
+    await runner.send("look", "later", [first])
+    await runner.send("look", "later")
+    await runner.send(" look ", "later", [second])
+    assert _replayed_images(runner, "look") == [first]
+    assert _replayed_images(runner, "look") == [], "the second send had no image"
+    assert _replayed_images(runner, "look") == [second]
+    assert runner._human_texts == []
+
+
+@pytest.mark.anyio
+async def test_images_of_unreplayed_texts_are_bounded(tmp_path: Path):
+    from calu.claude import sdk_runner
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner._client = _NullClient()  # type: ignore[assignment]
+    count = sdk_runner.MAX_PENDING_HUMAN_IMAGE_TEXTS + 3
+    images = [_image(f"img{i}".encode()) for i in range(count)]
+    for i, image in enumerate(images):
+        await runner.send(f"text {i}", "later", [image])
+    kept = [imgs for _, imgs in runner._human_texts if imgs]
+    assert len(kept) == sdk_runner.MAX_PENDING_HUMAN_IMAGE_TEXTS
+    # The oldest lost their images but are still recognised as the user's; the newest keep them.
+    assert _replayed_images(runner, "text 0") == []
+    assert _replayed_images(runner, f"text {count - 1}") == [images[-1]]
+    # Texts themselves stay bounded as well.
+    for i in range(sdk_runner.MAX_PENDING_HUMAN_TEXTS + 5):
+        await runner.send(f"plain {i}", "later")
+    assert len(runner._human_texts) == sdk_runner.MAX_PENDING_HUMAN_TEXTS

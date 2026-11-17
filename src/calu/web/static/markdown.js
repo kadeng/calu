@@ -7,9 +7,12 @@ window.caluMarkdown = (() => {
   const SAFE_LINK = /^(https?:\/\/|mailto:)/i;
 
   // Inline: `code`, **bold**, *italic* or _italic_, [text](url). Returns nodes.
+  // The pattern must stay linear on long lines (Claude's text can hold a line of thousands of
+  // brackets or backticks): a code span's fence is at most 10 backticks, link text holds no
+  // "[" and a link target no "(", so no starting position scans the rest of the line again.
   function inline(text) {
     const nodes = [];
-    const pattern = /(`+)([\s\S]*?)\1|\*\*([\s\S]+?)\*\*|(?<![\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])|(?<![\w_])_(?!\s)([^_\n]+?)_(?![\w_])|\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+    const pattern = /(`{1,10})([\s\S]*?)\1|\*\*([\s\S]+?)\*\*|(?<![\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])|(?<![\w_])_(?!\s)([^_\n]+?)_(?![\w_])|\[([^\[\]\n]+)\]\(([^()\s]+)\)/g;
     let last = 0;
     for (let found = pattern.exec(text); found; found = pattern.exec(text)) {
       if (found.index > last) nodes.push(document.createTextNode(text.slice(last, found.index)));

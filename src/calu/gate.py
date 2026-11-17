@@ -119,6 +119,7 @@ from calu.checkers.changeset import (
     changeset,
     classify_commit,
 )
+from calu.checkers.checker import HONESTY_CHECKER
 from calu.checkers.policy import SHELL_TOOLS
 from calu.checkers.rules import (
     OTHER_RULED_TOOLS,
@@ -320,6 +321,9 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
     Most restrictive wins: one DENY denies the step, else one ESCALATE escalates it, else it
     passes. ALLOW is the exception and needs every checker to say it, because ALLOW overrules
     Claude Code's own approval and an override should not rest on one voice out of four.
+    The honesty checker (`HONESTY_CHECKER`) does not count for ALLOW: it judges files and only
+    ever answers PASS or ESCALATE (`HonestyAnswer.decision`), so counting it would turn every
+    ALLOW into PASS. It can still escalate the step.
 
     The reason is composed of the reasons of the checkers that produced the winning decision,
     and every non-empty comment is kept; both name the checker they came from when more than one
@@ -343,11 +347,13 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
     if len(verdicts) == 1:
         return verdicts[0][1]
     kinds = [decision.decision for _, decision in verdicts]
+    # The votes on ALLOW: every checker except the honesty checker, which never says ALLOW.
+    voting = [decision.decision for name, decision in verdicts if name != HONESTY_CHECKER]
     if Decision.DENY in kinds:
         winner = Decision.DENY
     elif Decision.ESCALATE in kinds:
         winner = Decision.ESCALATE
-    elif all(kind is Decision.ALLOW for kind in kinds):
+    elif voting and all(kind is Decision.ALLOW for kind in voting):
         winner = Decision.ALLOW
     else:
         winner = Decision.PASS
@@ -966,6 +972,8 @@ class StepGate:
         """Tell whether a step counts as executing project code, from the checkers' answers.
 
         The checkers of the step's own route answer `CheckDecision.executes_project_code`.
+        The honesty checker's answer is not read: it judges files and never fills the field,
+        so taken as the first answer it would hide the command checker's.
 
             any of them answered True                        -> executes
             the route's first checker (the command checker)
@@ -990,7 +998,7 @@ class StepGate:
         answers = [
             outcome.decision.executes_project_code
             for checker, outcome in runs
-            if any(checker is one for one in own)
+            if any(checker is one for one in own) and not checker.judges_honesty
         ]
         if True in answers:
             return True

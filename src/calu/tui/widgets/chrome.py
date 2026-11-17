@@ -8,6 +8,7 @@ message with it; they hold no session data.
 import re
 from typing import Any
 
+from rich.cells import cell_len
 from rich.console import Group
 from rich.text import Text
 from textual import events
@@ -24,8 +25,9 @@ class Picked(Message):
             letter of the card), "option" (an option of a question), "answers" (send the
             answers) or "decline"; "slash" (a line of the command list) or "checker" (a line
             of the checkers screen's list), with the line's index as the key.
-        key: The agent key, the escalation id, the card's letter or the option's index; ""
-            for "follow", "answers" and "decline".
+        key: The agent key or the escalation id; for a button of the decision card
+            `<escalation id>:q<question index>:<letter or option index>` (the value is ""
+            for "answers" and "decline"); "" for "follow".
     """
 
     def __init__(self, kind: str, key: str = "") -> None:
@@ -172,8 +174,10 @@ def key_at(text: str, column: int) -> str | None:
 class KeyLine(Static):
     """A line of key hints: a click on a hint presses the key it names.
 
-    The line is drawn like any other text; what a click does is read from the text shown
-    (`key_at`), so a screen only has to show its hints here to make them work with the mouse.
+    The line is drawn like any other text; what a click does is read from the hints last set
+    with `update` or `show` (`key_at`), so a screen only has to show its hints here to make
+    them work with the mouse. A message shown with `say` covers the hints until the next
+    `update`; a click on it presses nothing, so a message such as "a page ..." is no key.
     """
 
     def __init__(self, content: Text | str = "", id: str | None = None) -> None:
@@ -185,17 +189,31 @@ class KeyLine(Static):
         """
         super().__init__(content, id=id)
         self.text = content.plain if isinstance(content, Text) else str(content)
-        """The plain text of the line as last shown."""
+        """The plain text of the line as last shown (hints or a message)."""
+        self.hints = self.text
+        """The plain text of the hints a click acts on; "" while a message is shown."""
 
     def update(self, content: Any = "", *, layout: bool = True) -> None:
         """Replace the hints.
 
         Args:
-            content: The new line.
+            content: The new line of hints.
             layout: Passed on to `Static.update`.
         """
         self.text = content.plain if isinstance(content, Text) else str(content)
+        self.hints = self.text
         super().update(content, layout=layout)
+
+    def say(self, message: Text) -> None:
+        """Show a message in place of the hints until the next `update`.
+
+        Side effects: a click on the line presses no key while the message is shown.
+
+        Args:
+            message: The message as it is drawn.
+        """
+        super().update(message)
+        self.text, self.hints = message.plain, ""
 
     def show(self, line: Text) -> None:
         """Replace the hints (the name `Line` uses).
@@ -211,18 +229,24 @@ class KeyLine(Static):
         Args:
             event: The click.
         """
-        key = key_at(self.text, event.x)
+        key = key_at(self.hints, event.x)
         if key is not None:
             event.stop()
             self.app.simulate_key(key)
 
 
 class Buttons(Static):
-    """A row of buttons for the mouse: each stands for what a key does.
+    """Rows of buttons for the mouse: each stands for what a key does.
 
-    A click posts `Picked(kind, key)` of the button under the pointer. The row is one line;
-    buttons that do not fit the width are cut off by the terminal, so labels are short.
+    The buttons are laid out left to right and wrap onto as many lines as the widget's width
+    needs (the stylesheet gives the widget `height: auto`), so that on a narrow terminal no
+    button is cut off. A button wider than the whole width gets a line of its own and is cut
+    by the terminal. A click posts `Picked(kind, key)` of the button under the pointer, found
+    by the clicked line (`event.y`) and column (`event.x`).
     """
+
+    GAP = 2
+    """Columns between two buttons on the same line."""
 
     def __init__(self, id: str | None = None) -> None:
         """Create the empty row.
@@ -231,12 +255,21 @@ class Buttons(Static):
             id: The widget id.
         """
         super().__init__("", id=id)
-        self._spans: list[tuple[int, int, str, str]] = []
+        self._buttons: list[tuple[str, str, str]] = []
+        self._style = ""
+        self._strong = ""
+        self._laid_for = -1
+        """The width the buttons were last laid out for; -1 before the first layout."""
+        self._spans: list[tuple[int, int, int, str, str]] = []
+        """`(line, first column, end column, kind, key)` per button."""
         self.text = ""
-        """The plain text of the row as last shown."""
+        """The plain text of the buttons as last shown, one line per row joined with newlines."""
 
     def show(self, buttons: list[tuple[str, str, str]], style: str, strong: str = "") -> None:
-        """Replace the buttons.
+        """Replace the buttons and lay them out for the current width.
+
+        Before the widget has a size (it was just mounted), the buttons are laid out on one
+        line; `on_resize` lays them out again once the width is known.
 
         Args:
             buttons: `(label, kind, key)` per button, left to right.
@@ -244,17 +277,43 @@ class Buttons(Static):
             strong: The key of the button drawn bold (the one a second click carries out);
                 "" for none.
         """
-        line = Text()
-        spans: list[tuple[int, int, str, str]] = []
-        for label, kind, key in buttons:
-            if line.plain:
-                line.append("  ")
-            start = len(line.plain)
-            line.append(f" {label} ", f"{style} bold" if key == strong else style)
-            spans.append((start, len(line.plain), kind, key))
+        self._buttons, self._style, self._strong = list(buttons), style, strong
+        self._lay_out(self.size.width)
+
+    def _lay_out(self, width: int) -> None:
+        """Place the buttons on lines no wider than `width` and draw them.
+
+        Side effects: replaces `text`, the click spans and the shown content.
+
+        Args:
+            width: The widget's width in columns; 0 or less means "unknown": one line.
+        """
+        self._laid_for = width
+        lines: list[Text] = [Text()]
+        spans: list[tuple[int, int, int, str, str]] = []
+        for label, kind, key in self._buttons:
+            cell = f" {label} "
+            line = lines[-1]
+            gap = self.GAP if line.plain else 0
+            if width > 0 and line.plain and line.cell_len + gap + cell_len(cell) > width:
+                line, gap = Text(), 0
+                lines.append(line)
+            line.append(" " * gap)
+            start = line.cell_len
+            line.append(cell, f"{self._style} bold" if key == self._strong else self._style)
+            spans.append((len(lines) - 1, start, line.cell_len, kind, key))
         self._spans = spans
-        self.text = line.plain
-        self.update(line)
+        self.text = "\n".join(line.plain for line in lines) if self._buttons else ""
+        self.update(Group(*lines) if self._buttons else "")
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Lay the buttons out again when the width changed.
+
+        Args:
+            event: The resize, with the new size.
+        """
+        if event.size.width != self._laid_for:
+            self._lay_out(event.size.width)
 
     def on_click(self, event: events.Click) -> None:
         """Post what the button under the pointer stands for.
@@ -262,8 +321,8 @@ class Buttons(Static):
         Args:
             event: The click.
         """
-        for start, end, kind, key in self._spans:
-            if start <= event.x < end:
+        for line, start, end, kind, key in self._spans:
+            if line == event.y and start <= event.x < end:
                 self.post_message(Picked(kind, key))
                 return
 

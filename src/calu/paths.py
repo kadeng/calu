@@ -1,8 +1,9 @@
 """Where calu keeps its own secrets and state on this machine.
 
-This module imports nothing from calu, so that both the configuration (`calu.config`, which
-puts these directories on the sandbox's read deny list) and the rules (`calu.checkers.rules`,
-whose built-in rule makes a tool call on them wait for a human) can use it.
+At import time this module imports nothing from calu, so that both the configuration
+(`calu.config`, which puts these directories on the sandbox's read deny list) and the rules
+(`calu.checkers.rules`, whose built-in rule makes a tool call on them wait for a human) can
+use it.
 
     $XDG_CONFIG_HOME/calu   credential store, env file with the checker API keys
     $XDG_STATE_HOME/calu    snapshot repositories (`calu.changes.default_root`)
@@ -81,19 +82,35 @@ def calu_private_paths(environ: Mapping[str, str] | None = None) -> list[str]:
             uses `os.environ`.
 
     Returns:
-        `calu_private_dirs(environ)` as text, in the same order. A path below the home
-        directory is written with "~", every other one as an absolute path; no entry is
-        relative, because Claude Code would resolve it against its own directory.
+        `calu_private_dirs(environ)` as text, in the same order. A path below Claude Code's
+        home directory is written with "~", every other one as an absolute path; no entry is
+        relative, because Claude Code would resolve it against its own directory. Claude Code's
+        home is calu's own, except after `calu.asuser.enter`: then it is the user's
+        (`RunAs.home`), the list starts with that user's `~/.config/calu` and
+        `~/.local/state/calu`, and calu's own directories below root's home are written as
+        absolute paths, because "~" would name the user's home to Claude Code.
 
     Example:
         With `XDG_CONFIG_HOME=/srv/cfg` and no `XDG_STATE_HOME`:
         `["~/.config/calu", "~/.local/state/calu", "/srv/cfg/calu"]`.
     """
+    # Imported here, so that importing this module imports nothing from calu (see above).
+    from calu import asuser
+
     home = Path.home()
+    run_as = asuser.active()
+    claude_home = home if run_as is None else Path(run_as.home)
+    directories = calu_private_dirs(environ, home)
+    if claude_home != home:
+        directories = [
+            claude_home / ".config" / "calu",
+            claude_home / ".local" / "state" / "calu",
+            *directories,
+        ]
     paths: list[str] = []
-    for directory in calu_private_dirs(environ, home):
+    for directory in directories:
         try:
-            text = "~/" + directory.relative_to(home).as_posix()
+            text = "~/" + directory.relative_to(claude_home).as_posix()
         except ValueError:
             text = directory.as_posix()
         if text not in paths:
