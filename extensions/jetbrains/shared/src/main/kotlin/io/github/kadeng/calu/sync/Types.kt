@@ -72,17 +72,40 @@ data class Manifest(val head: String?, val files: List<FileEntry>) {
  * One entry of an `ide.fs.changed` notification: the remote side changed a file.
  *
  * @property path project relative path with "/" separators.
- * @property beforeSha256 hash of the content before the change, null if the file did not exist
- *   or the bridge does not know it.
+ * @property beforeSha256 the last hash the bridge computed for the path before the change
+ *   (manifest, read, scan, its own write); null if this bridge never read the file. Null does
+ *   **not** say that the file did not exist (spec section 13): whether a file is new is decided
+ *   from the base of the [SyncState], never from this member.
  * @property afterSha256 hash of the content after the change, null if [deleted].
  * @property deleted true if the file no longer exists on the remote side.
+ * @property origin who changed the file, as the bridge reports it: [ORIGIN_IDE] (an `ide.fs.*`
+ *   request of this connection: the echo of the plugin's own write), [ORIGIN_AGENT] or
+ *   [ORIGIN_OTHER]. Only [ORIGIN_IDE] is reliable: "agent" is partly a guess of the bridge (a
+ *   change found while a command of the session ran), and "other" also covers the writes of
+ *   another bridge on the same directory. No decision of the engine depends on it.
+ * @constructor `origin` may be left out (also for callers compiled before it was added).
  */
-data class RemoteChange(
+data class RemoteChange @JvmOverloads constructor(
     val path: String,
     val beforeSha256: String?,
     val afterSha256: String?,
     val deleted: Boolean,
-)
+    val origin: String = ORIGIN_OTHER,
+) {
+    /** True if the change is the echo of a write of this connection (`origin` "ide"). */
+    val isOwnWrite: Boolean get() = origin == ORIGIN_IDE
+
+    companion object {
+        /** `origin` of a change that an `ide.fs.*` request of this connection made. */
+        const val ORIGIN_IDE: String = "ide"
+
+        /** `origin` of a change the bridge attributes to a tool call of the attached session. */
+        const val ORIGIN_AGENT: String = "agent"
+
+        /** `origin` of every other change. */
+        const val ORIGIN_OTHER: String = "other"
+    }
+}
 
 /** Why both sides cannot be brought together without the user. */
 enum class ConflictKind {
