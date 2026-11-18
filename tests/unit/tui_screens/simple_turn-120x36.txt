@@ -1,8 +1,8 @@
  calu  myproject   idle   opus / high   Checkers decide   $0.84 · 1 turn   ctx 21%   attached
-  main                                                                                                 alt+←/→ switches
+  main
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (0)
                                                                                     ▏
-  ┊ thinking                                                                        ▏ AGENTS (1)  alt+←/→
+  ┊ thinking                                                                        ▏ AGENTS (1)
   ┊ The helper is `check_step` in gate.py. It has two callers.                      ▏ >main         idle
   ┊ I rename it, update both, then run the unit tests.                              ▏   no subagents
                                                                                     ▏

@@ -21,4 +21,4 @@
 
  to main · next turn · tab changes
  >
- alt+←/→ agent   f3 side question   f2 panel   ^p palette   f1 help
+ esc esc interrupt   alt+←/→ agent   f2 panel   ^p palette   f1 help

@@ -1364,7 +1364,11 @@ class SessionModel:
         if not change.blocks_added:
             return change
         self.stored_blocks = len(self.blocks)
-        self.note("above: stored history · inputs, steps and answers, without thinking and diffs")
+        # A fork or a branch inherits the turns of its conversation, not their steps: the
+        # line names only what is shown.
+        with_steps = any(isinstance(self.blocks[index], StepBlock) for index in change.blocks_added)
+        shown = "inputs, steps and answers" if with_steps else "inputs and answers"
+        self.note(f"above: stored history · {shown}, without thinking and diffs")
         change.blocks_added.append(len(self.blocks) - 1)
         for agent in self.agents.values():
             agent.unread = False

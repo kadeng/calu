@@ -446,3 +446,31 @@ async def test_the_key_that_switches_agents_is_offered_only_with_subagents() -> 
         assert "alt+←/→" not in run.line("footer") and "enter send" in run.line("footer")
     async with running("two_subagents") as run:
         assert "alt+←/→ agent" in run.line("footer")
+
+
+# ------------------------------------------------------------------ undo
+
+
+async def test_rewind_asks_for_a_branch_before_a_turn_and_refuses_other_numbers() -> None:
+    """With a scripted session and a stand-in for the database; nothing is started."""
+    session = FakeSession()
+    access = FakeAdmin(session)
+    async with running("simple_turn", session=session, admin=access) as run:
+        ended = run.app.model.turn
+        assert ended >= 1
+        for wrong, said in (
+            ("/rewind", "usage: /rewind <turn>"),
+            ("/rewind one", "usage: /rewind <turn>"),
+            ("/rewind 1", "/new starts an empty session"),
+            (f"/rewind {ended + 2}", f"/rewind takes 2 to {ended + 1}"),
+        ):
+            await command(run, wrong)
+            assert said in run.app.message, wrong
+            assert not access.requests and run.app.switch_to is None
+        await command(run, f"/rewind {ended + 1} try it another way")
+        await run.pilot.pause()
+        (wanted,) = access.requests
+        assert (wanted.kind, wanted.fork_before_turn) == ("resume", ended + 1)
+        assert wanted.claude_session_id == session.claude_session_id
+        assert wanted.prompt == "try it another way"
+        assert run.app.switch_to is not None, "the client switches to the branch"

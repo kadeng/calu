@@ -710,10 +710,12 @@ class CaluApp(App[None]):
         ahead of the counts.
         """
         hints: list[tuple[int, str]] = []
+        several = len(self.model.tabs()) > 1
         if self.size.width >= WIDE:
-            hints.append((9, "alt+←/→ switches"))
+            if several:
+                hints.append((9, "alt+←/→ switches"))
         else:
-            if len(self.model.tabs()) > 1:
+            if several:
                 hints.append((9, "alt+←/→"))
             if self.model.queue:
                 hints.append((5, f"{len(self.model.queue)} queued"))
@@ -1174,14 +1176,14 @@ class CaluApp(App[None]):
             parts = [part for part in parts if part[1] in {"↑↓", "tab", "esc", "j k", "y", "n"}]
             parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
         elif self.model.working():
-            parts += [(5, "esc esc", "interrupt"), (3, "tab", "send mode")]
+            parts += [(7, "esc esc", "interrupt"), (3, "tab", "send mode")]
         elif not stopped and self.mode != "search" and self.ask is None:
-            parts += [(5, "enter", "send"), (1, "^j", "newline")]
+            parts += [(7, "enter", "send"), (1, "^j", "newline")]
         if len(self.model.tabs()) > 1:
             parts.append((7, "alt+←/→", "agent"))
         parts.append((4, "pgup/pgdn", "scroll"))
         if not detached:
-            parts.append((6, "f3", "side question"))
+            parts.append((4, "f3", "side question"))
         parts.append((3, "f4", "git"))
         parts.append((6 if self.size.width < WIDE else 1, "f2", "panel"))
         parts += [(8, "^p", "palette"), (8, "f1", "help")]
@@ -3157,7 +3159,46 @@ class CaluApp(App[None]):
             return
         self._request_session("fork", rest)
 
-    def _request_session(self, kind: Literal["new", "fork"], prompt: str) -> None:
+    def _cmd_rewind(self, rest: str) -> None:
+        """Start a session that branches off before a turn of this conversation (`/rewind`).
+
+        The undo of the terminal client: the new session knows the conversation up to the
+        turn before `N` and nothing after it; this session and its conversation stay as they
+        are. The turn numbers are those of the lines that end each turn (`── turn 3 ──`).
+        Files that later turns changed are not changed back.
+
+        Args:
+            rest: The turn number `N` (2 or more, at most the turn that runs or the one after
+                the last ended turn), then optionally the first message for Claude.
+        """
+        word, _, prompt = rest.strip().partition(" ")
+        last = self.model.turn + 1
+        if not self.model.claude_session_id:
+            self.flash("nothing to rewind yet: the session has no Claude session id", error=True)
+            return
+        if not word.isdigit():
+            self.flash(
+                "usage: /rewind <turn> [first message] · the new session starts before that "
+                f"turn (2 to {last}); this one stays as it is",
+                error=True,
+            )
+            return
+        turn = int(word)
+        if turn < 2:
+            self.flash("before turn 1 nothing was said: /new starts an empty session", error=True)
+            return
+        if turn > last:
+            self.flash(
+                f"this conversation has {self.model.turn} ended "
+                f"turn{'s' if self.model.turn != 1 else ''}: /rewind takes 2 to {last}",
+                error=True,
+            )
+            return
+        self._request_session("rewind", prompt, before_turn=turn)
+
+    def _request_session(
+        self, kind: Literal["new", "fork", "rewind"], prompt: str, before_turn: int | None = None
+    ) -> None:
         """File a session request with this machine's admin credential, then switch (D208).
 
             no credential            ──► say which command does the same
@@ -3171,11 +3212,19 @@ class CaluApp(App[None]):
         effort of the attached session, so that the new session runs as this one does.
 
         Args:
-            kind: "new" for a new conversation, "fork" for a copy of this one.
+            kind: "new" for a new conversation, "fork" for a copy of this one, "rewind" for a
+                branch of this one that starts before the turn `before_turn`.
             prompt: The first message for Claude, or "".
+            before_turn: With "rewind": the number of the turn the branch starts before.
         """
-        command = "calu start" + (
-            f" --fork {self.model.claude_session_id}" if kind == "fork" else ""
+        claude_id = self.model.claude_session_id
+        command = (
+            "calu start"
+            + {
+                "new": "",
+                "fork": f" --fork {claude_id}",
+                "rewind": f" --resume {claude_id} --fork-before-turn {before_turn}",
+            }[kind]
         )
         problem = self.admin.problem()
         if problem is not None:
@@ -3185,8 +3234,9 @@ class CaluApp(App[None]):
             hostname=socket.gethostname(),
             os_user=client_os_user(),
             directory=self.model.workspace,
-            kind=kind,
-            claude_session_id=self.model.claude_session_id if kind == "fork" else None,
+            kind="resume" if kind == "rewind" else kind,
+            claude_session_id=None if kind == "new" else claude_id,
+            fork_before_turn=before_turn if kind == "rewind" else None,
             prompt=prompt.strip() or None,
             model=self.model.model_name or None,
             effort=self.model.effort or None,

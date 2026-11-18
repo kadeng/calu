@@ -253,6 +253,14 @@ COMMANDS: tuple[Command, ...] = (
         "/fork [first message]",
         about="A copy of the conversation under a new session id; this one stays as it is.",
     ),
+    Command(
+        "rewind",
+        "Undo: a new session that starts before a turn of this conversation",
+        "",
+        "/rewind <turn> [first message]",
+        about="The new session knows the conversation up to the turn before; this one stays "
+        "as it is, and files that later turns changed are not changed back.",
+    ),
     Command("stop", "Stop the Claude session (calu keeps running)", "", "/stop"),
     Command("shutdown", "Shut down calu (asks for the word shutdown)", "", "/shutdown"),
     # ---- view

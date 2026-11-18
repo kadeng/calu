@@ -1,10 +1,10 @@
  calu  myproject   ● ESCALATED 0:00   1 needs you   opus / high   Checkers decide   ctx 21%   attached
-  main 1!                                                                                              alt+←/→ switches
+  main 1!
 ▌ you  Add tests for the gate.                                                      ▏ NEEDS YOU (1)
                                                                                     ▏ >#e1 main Question          0:00
   Before I start I need three decisions.                                            ▏    Which test runner should th…
                                                                                     ▏
-  QUESTION  Ask    Which test runner should the new tests use?        waiting 0:00  ▏ AGENTS (1)  alt+←/→
+  QUESTION  Ask    Which test runner should the new tests use?        waiting 0:00  ▏ AGENTS (1)
                                                                                     ▏ >main         waits for you
                                                                                     ▏   no subagents
                                                                                     ▏
@@ -33,4 +33,4 @@
    1 pytest    2 unittest    own answer    send    decline                          ▏
  to main · next turn · tab changes
  >
- 1-9 choose   o,o own answer   enter send   esc esc interrupt   f3 side question   ^p palette   f1 help
+ 1-9 choose   o,o own answer   enter send   esc esc interrupt   pgup/pgdn scroll   ^p palette   f1 help

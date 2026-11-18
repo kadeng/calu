@@ -976,6 +976,12 @@ async def test_the_card_buttons_wrap_and_every_option_has_one() -> None:
     async with running(size=(80, 30)) as run:
         await run.play(scenarios.question("e9", "t9", MANY_OPTIONS))
         row = run.app.query_one("#card-actions", Buttons)
+        for _ in range(40):
+            # The buttons are on one line until the widget has got its width (its resize
+            # event); on a busy machine that takes more than one pause.
+            if len(row.text.splitlines()) > 1 and row.size.height == len(row.text.splitlines()):
+                break
+            await run.pilot.pause(0.05)
         lines = row.text.splitlines()
         assert len(lines) > 1 and row.size.height == len(lines)
         assert all(len(line) <= row.size.width for line in lines)

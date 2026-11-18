@@ -43,6 +43,11 @@ STORED_ADMIN = "calu_admin"
 """The store entry in which `calu setup --no-password` keeps the login of the role
 `calu_admin` without a password (`calu.cli.ADMIN_ENTRY`, D228)."""
 
+CONFLICT_HELP = "the text stays in the editor; leave it with esc esc, press r, edit again"
+"""What follows "changed meanwhile to version N" when a checker's instructions were stored by
+someone else since the editor read them: the keys in the order they work (`r` reads again
+only outside the editor, and leaving the editor drops the text)."""
+
 NO_CREDENTIAL = (
     "this machine has no 'admin' credential (calu credential set admin stores one; it is the "
     "connection string of the database owner)"
@@ -564,9 +569,7 @@ class StoreAdmin:
             await admin.instructions(db, name)  # an unknown name must not create a checker
             stored = next((row for row in await admin.checkers(db) if row.name == name), None)
             if base_version is not None and stored is not None and stored.version != base_version:
-                raise AdminFailed(
-                    f"changed meanwhile to version {stored.version}: press r, then edit again"
-                )
+                raise AdminFailed(f"changed meanwhile to version {stored.version}: {CONFLICT_HELP}")
             row = await admin.set_checker(db, name, instructions_text=text)
             return SavedChecker(row.name, row.version)
 

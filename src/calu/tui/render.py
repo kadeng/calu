@@ -1781,7 +1781,10 @@ def panel_lines(
         head = Text.assemble(
             (mark, f"bold {palette.orange}"),
             (f"#{cut(decision.escalation_id, 5)} ", palette.orange),
-            (f"{cut(model.label(decision.agent_id), 10)} ", f"bold {palette.fg}"),
+            (
+                f"{cut(model.label(decision.agent_id), 12 - len(decision.escalation_id[:5]))} ",
+                f"bold {palette.fg}",
+            ),
             (cut("Question" if decision.is_question else decision.tool_name, 10), palette.fg),
         )
         if waited:
@@ -1795,7 +1798,7 @@ def panel_lines(
     lines.append(Text(""))
 
     subagents = [agent for agent in model.agents.values() if agent.key != MAIN]
-    lines.append(_section("AGENTS", len(model.agents), view, "alt+←/→"))
+    lines.append(_section("AGENTS", len(model.agents), view, "alt+←/→" if subagents else ""))
     for agent in model.agents.values():
         activity = model.activity_of(agent)
         mark = ">" if agent.key == view.tab else " "

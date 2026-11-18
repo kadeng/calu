@@ -274,7 +274,9 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
     ]
     with pytest.raises(AdminFailed, match="no checker named 'nope'"):
         await access.save_instructions("nope", "x", None)
-    with pytest.raises(AdminFailed, match="changed meanwhile to version 12: press r"):
+    with pytest.raises(
+        AdminFailed, match="changed meanwhile to version 12: the text stays in the editor"
+    ):
         await access.save_instructions("command", "newer text", None, base_version=11)
     assert ("set_checker", "command", "newer text") not in calls, "the other change is kept"
     assert (await access.save_instructions("command", "newer text", None, 12)).version == 13

@@ -31,6 +31,7 @@ from calu.protocol.client import OnEvent, RequestFailed
 from calu.protocol.messages import CLOSE_FELL_BEHIND, REQUESTS
 from calu.session_requests import SessionRequest
 from calu.tui.adminaccess import (
+    CONFLICT_HELP,
     NO_CREDENTIAL,
     AdminFailed,
     PasswordNeeded,
@@ -273,7 +274,7 @@ class FakeAdmin:
                 raise AdminFailed(f"no checker named {name!r}")
             now = int(found.get("version") or 0)
             if base_version is not None and now != base_version:
-                raise AdminFailed(f"changed meanwhile to version {now}: press r, then edit again")
+                raise AdminFailed(f"changed meanwhile to version {now}: {CONFLICT_HELP}")
             found["instructions"] = text
             found["version"] = version = now + 1
         self.saved.append((name, text))
