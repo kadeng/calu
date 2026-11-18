@@ -8,6 +8,7 @@
 #   $D shell 'bash /workspace/calu/uitest/setup-demo.sh'
 #   $D shell 'bash /workspace/calu/uitest/setup-demo.sh --no-vscode'   # everything but VSCode
 #   $D shell 'bash /workspace/calu/uitest/setup-demo.sh --stop-server' # stop the fake server
+#   $D shell 'bash /workspace/calu/uitest/setup-demo.sh --no-server'   # steps 1 to 5 only
 #
 # What it does:
 #   1. Installs PostgreSQL (apt) if missing and starts the cluster without systemd.
@@ -23,7 +24,10 @@
 #   7. Installs /share/calu.vsix into the `uitest-code` profile and opens ~/work/demo.
 #
 # Environment:
-#   CALU_UITEST_VSIX   the extension package (default /share/calu.vsix)
+#   CALU_UITEST_VSIX     the extension package (default /share/calu.vsix)
+#   CALU_UITEST_SOURCE   the checkout to install calu from (default /workspace/calu, the host's
+#                        working tree). Point it at an exported commit, e.g. /share/src, when
+#                        other work in progress in the working tree must stay out of the test.
 #
 # Nothing here is a secret worth protecting: the database lives in the test container, holds
 # no real data and listens on the container's loopback only.
@@ -31,7 +35,7 @@ set -euo pipefail
 
 OWNER_PASSWORD=calu-uitest
 VSIX="${CALU_UITEST_VSIX:-/share/calu.vsix}"
-SOURCE=/workspace/calu
+SOURCE="${CALU_UITEST_SOURCE:-/workspace/calu}"
 COPY="$HOME/work/calu"
 DEMO="$HOME/work/demo"
 TMUX_SESSION=calu-fake
@@ -132,6 +136,12 @@ EOF
 fi
 (cd "$DEMO" && calu project add . --name demo >/dev/null 2>&1 || true)
 git -C "$DEMO" status --short
+
+if [ "${1:-}" = "--no-server" ]; then
+    # setup-real.sh starts `calu serve` itself.
+    stop_server
+    exit 0
+fi
 
 say "6. Fake server (tmux session $TMUX_SESSION)"
 stop_server
