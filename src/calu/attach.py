@@ -224,7 +224,8 @@ class Console:
         try:
             await work()
         except RequestFailed as exc:
-            say(f"[error] {exc}", flush=True)
+            # The session's sentence without the JSON-RPC code, which tells a person nothing.
+            say(f"[error] {exc.error.get('message') or exc}", flush=True)
         except ConnectionError as exc:  # before OSError, of which it is a subclass
             say(f"[error] {exc}", flush=True)
             if getattr(self.client, "fell_behind", False):
@@ -234,7 +235,8 @@ class Console:
             else:
                 self.quit.set()
         except OSError as exc:  # /comment could not read the file
-            say(f"[error] {exc}", flush=True)
+            reason = exc.strerror or type(exc).__name__
+            say(f"[error] the file cannot be read ({reason}): {exc.filename or exc}", flush=True)
 
     async def _review(self) -> None:
         """Ask the session for an honesty review and print its answer (`/honesty-review`).

@@ -177,7 +177,7 @@ async def test_a_refused_request_is_printed_not_raised(capsys):
     con, client = console()
     client.fail = "chat.send"
     await con.line("hello")
-    assert "[error] no (code -32000)" in capsys.readouterr().out
+    assert capsys.readouterr().out.splitlines()[-1] == "[error] no", "the sentence, no code"
     assert not con.quit.is_set()
 
 
@@ -571,3 +571,14 @@ def test_the_line_client_prints_no_character_a_terminal_would_obey(capsys) -> No
     say("result: one\x1b[2J\x1b[Htwo\rXX \u202etxt.exe")
     out = capsys.readouterr().out
     assert out == "result: one␛[2J␛[Htwo␍XX ⟦RLO⟧txt.exe\n"
+
+
+async def test_a_comment_on_a_missing_file_names_the_file(tmp_path, capsys):
+    """Without a session: the console only needs a client that is never asked."""
+    from calu.attach import Console
+
+    console = Console(None, tmp_path)  # type: ignore[arg-type]
+    await console.line("/comment nofile.py 1 2 why?")
+    out = capsys.readouterr().out
+    assert out.startswith("[error] the file cannot be read (No such file or directory): ")
+    assert out.rstrip().endswith("nofile.py")

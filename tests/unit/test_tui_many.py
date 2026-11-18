@@ -178,6 +178,16 @@ def test_an_answered_question_shows_the_answer_and_no_error_line() -> None:
     assert not any(line.lstrip().startswith("error") for line in lines)
 
 
+def test_a_declined_question_is_not_shown_as_answered() -> None:
+    model = SessionModel()
+    feed(model, scenarios.question("9", "q1", scenarios.RUNNER_QUESTIONS))
+    declined = {"escalation_id": "9", "decision": "deny", "note": "The user denied this step."}
+    model.apply("escalation.resolved", declined)
+    step = model.step("q1")
+    assert isinstance(step, StepBlock) and step.waiting == "declined" and step.note == ""
+    assert plain(render.step_lines(step, model, view(100)))[0].lstrip().startswith("DECLINED")
+
+
 def test_the_cost_line_tells_a_session_without_a_cost_from_one_without_a_turn() -> None:
     model = SessionModel()
     lines, _ = render.panel_lines(model, view(34), Capabilities())

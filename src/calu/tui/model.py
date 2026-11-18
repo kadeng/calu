@@ -214,7 +214,8 @@ class StepBlock(Block):
     escalation_id: str | None = None
     waiting: str = ""
     """State of the step's escalation: "" (never escalated), "open", "allowed", "denied",
-    "cancelled", "answered" (a question) or "resolved" (ended while this client was away)."""
+    "cancelled", "answered" or "declined" (a question) or "resolved" (ended while this client
+    was away)."""
     opened_at: float | None = None
     """Client clock when the escalation arrived; None if it was replayed."""
     note: str = ""
@@ -2026,7 +2027,8 @@ class SessionModel:
         """Apply `escalation.resolved`.
 
         The session reports an answered question as "deny" with the answer in the note; the
-        model knows from the request that the item was a question and records "answered".
+        model knows from the request that the item was a question and records "answered", or
+        "declined" if the note is the session's sentence for a denial.
 
         Args:
             event: The event.
@@ -2037,8 +2039,11 @@ class SessionModel:
             return
         outcome = {"allow": "allowed", "deny": "denied", "cancelled": "cancelled"}[event.decision]
         if known.is_question and event.decision != "cancelled":
-            outcome = "answered"
-        note = known.answer_text() if outcome == "answered" and known.own else event.note
+            # A question the user declined comes with the session's sentence for a denial.
+            declined = (event.note or "").strip().startswith(DENIED_PREFIX)
+            outcome = "declined" if declined else "answered"
+        chosen = known.answer_text() if outcome == "answered" and known.own else ""
+        note = chosen or event.note
         self._close(event.escalation_id, outcome, own_words(note or ""), change)
         if outcome == "cancelled" and self.own_interrupt:
             change.notices.append(Notice("cancelled by your interrupt"))

@@ -33,4 +33,4 @@
    1 pytest    2 unittest    own answer    send    decline                          ▏
  to main · next turn · tab changes
  >
- 1-9 choose   o,o own answer   enter send   esc esc interrupt   pgup/pgdn scroll   ^p palette   f1 help
+ 1-9 choose   o,o own answer   enter next open question   esc esc interrupt   pgup/pgdn scroll   ^p palette   f1 help

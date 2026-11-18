@@ -1156,7 +1156,10 @@ class CaluApp(App[None]):
             parts.append((9, f"{letter} or enter" if soft else letter, f"again: {what}"))
             parts.append((9, "any other key", "types"))
         elif decision is not None and decision.is_question and not typed:
-            parts += [(9, "1-9", "choose"), (9, "o,o", "own answer"), (9, "enter", "send")]
+            # As on the card: Enter sends only once every question of the set has an answer.
+            several = len(decision.questions) > 1 and not decision.complete()
+            enter = "next open question" if several else "send"
+            parts += [(9, "1-9", "choose"), (9, "o,o", "own answer"), (9, "enter", enter)]
         elif decision is not None and typed:
             parts += [(9, "alt+a", "allow"), (9, "alt+d", "deny"), (9, "alt+w", "detail")]
         elif decision is not None and self.card_hidden(decision):
