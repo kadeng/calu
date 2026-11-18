@@ -1,1 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 14.3-4.9"/><path d="M20 12a8 8 0 0 1-14.3 4.9"/><path d="M18.5 3v4.2h-4.2"/><path d="M5.5 21v-4.2h4.2"/><circle cx="12" cy="12" r="2"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+  <!-- calu's mark in one colour, for the activity bar: the segmented outer ring and the check. -->
+  <circle cx="12" cy="12" r="9.2" stroke-width="1.7" stroke-dasharray="15.4 3.87" transform="rotate(-78 12 12)"/>
+  <path d="M8.3 12.3 L11 15 L15.8 9.4" stroke-width="1.9"/>
+</svg>

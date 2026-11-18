@@ -193,6 +193,9 @@ broken down or extended. Derived requirements and design decisions belong in
     indicates an edit happened should get us into a diff viewer showing the diff of the edit
     that was made. Clicking just on the filename might open the file and jump to the edited
     section. Niceties like these make it fluid to use." (stated 2026-11-18)
+    "We can also use a nice logo, try to go for something resembling the tron disc and tron
+    logo (without running into copyright conflicts, but the checkers HAVE the role of Tron in
+    the original Tron movie)" (stated 2026-11-18)
 35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
     powerful because it should support both local and remote mode and an operation where the
     remote server, the db and calu are being accessed over SSH only and changes are

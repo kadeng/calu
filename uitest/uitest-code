@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Start VSCode in the UI-testing desktop as the current (desktop) user.
+#
+# Usage: uitest-code [code arguments...]     e.g. uitest-code /workspace/calu
+#        uitest-code --install-extension /share/x.vsix
+#
+# --no-sandbox: the container has no user namespaces for Chromium's sandbox.
+# --password-store=basic: no keyring daemon runs in the desktop, and without
+#   this flag VSCode shows a keyring dialog.
+# The profile lives in ~/.vscode-uitest (user data) and
+# ~/.vscode-uitest/extensions, so `rm -rf ~/.vscode-uitest` resets VSCode.
+set -euo pipefail
+export DISPLAY="${DISPLAY:-:1}"
+# On a WSL2 host the container shares the Microsoft kernel, and `code` then
+# asks on the terminal whether to continue. This variable skips the question.
+export DONT_PROMPT_WSL_INSTALL=1
+DATA="${UITEST_VSCODE_DATA:-$HOME/.vscode-uitest}"
+exec code --no-sandbox --password-store=basic \
+    --user-data-dir "$DATA" --extensions-dir "$DATA/extensions" "$@"

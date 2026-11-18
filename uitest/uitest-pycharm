@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Start PyCharm in the UI-testing desktop as the current (desktop) user.
+#
+# Usage: uitest-pycharm [folder or file...]   e.g. uitest-pycharm ~/work/calu
+#
+# PyCharm writes a `.idea` directory into the project it opens. /workspace/calu
+# is mounted read-only, so open a writable copy instead (see README.md).
+# This script accepts no licence and signs in nowhere: the first start shows
+# JetBrains' own dialogs, which a person has to answer.
+set -euo pipefail
+export DISPLAY="${DISPLAY:-:1}"
+exec /opt/pycharm/bin/pycharm "$@"
