@@ -1,5 +1,8 @@
 """Lost database connections: `Db` and `Notifier` reconnect, and statements wait meanwhile."""
 
+import logging
+import os
+
 import anyio
 import psycopg
 import pytest
@@ -219,6 +222,40 @@ def test_which_refusals_of_a_login_do_not_heal() -> None:
     # The server is starting or stopping, is full, or gave no answer at all: these pass.
     for code in ("57P03", "57P01", "53300", "08006", None):
         assert not refuses_for_good(code), code
+
+
+async def test_a_refusal_is_recognised_by_a_python_without_memfd_create(
+    db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Python 3.14.0 that uv installs has no `os.memfd_create`: a wrong admin password
+    ended in an AttributeError traceback in the root box."""
+    wrong = make_conninfo(db_url, password="not-the-password", connect_timeout=5)
+    assert await anyio.to_thread.run_sync(connection_module._login_answer, wrong, 5.0) == "28P01"
+    monkeypatch.delattr(os, "memfd_create")
+    assert await anyio.to_thread.run_sync(connection_module._login_answer, wrong, 5.0) == "28P01"
+    # No system call number for the machine either: no answer, and no exception.
+    monkeypatch.setattr(connection_module, "SYS_MEMFD_CREATE", {})
+    assert await anyio.to_thread.run_sync(connection_module._login_answer, wrong, 5.0) is None
+
+
+async def test_a_failed_reconnect_is_a_warning_once_per_reason(
+    db_url: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The terminal of `calu serve` got one line per attempt of every connection."""
+    source = FlakySource(db_url, failures=0)
+    db = Db(await source.open(), source=source)
+    try:
+        pid = await db.scalar("SELECT pg_backend_pid()")
+        source.failures = source.attempts + 4
+        await kill(db_url, pid)
+        with caplog.at_level(logging.INFO, logger="calu.db.connection"), anyio.fail_after(10):
+            assert await db.scalar("SELECT 41 + 1") == 42
+    finally:
+        await db.aclose()
+    failed = [r for r in caplog.records if "reconnecting to the database failed" in r.message]
+    assert len(failed) >= 4
+    assert [r.levelno for r in failed].count(logging.WARNING) == 1
+    assert failed[0].levelno == logging.WARNING
 
 
 async def test_a_refused_login_ends_the_reconnecting_and_says_why(db_url: str) -> None:

@@ -473,3 +473,72 @@ def test_the_admin_password_works_on_rds_after_leaving_rds_iam(member: bool) -> 
         assert "calu_admin" in conn.statements[revokes[0]]
     else:
         assert revokes == []
+
+
+def test_ctrl_c_at_a_password_prompt_is_one_line(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`calu setup` and Ctrl-C at "Admin password:" printed a traceback (root box)."""
+    store.save("admin", bytearray(DSN.encode()), b"pw")
+
+    def interrupted(_prompt: str, confirm: bool = False) -> bytearray:
+        """Stand in for the prompt at which the user presses Ctrl-C."""
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "read_password", interrupted)
+    assert run_cli(monkeypatch, store, ["config", "get"], "") == 130
+    assert capsys.readouterr().err.strip() == "calu: interrupted"
+
+
+def test_the_end_of_input_at_a_password_prompt_is_an_error_in_words(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ctrl-D at a prompt on a terminal raised EOFError out of `calu`."""
+
+    class Terminal(io.StringIO):
+        """An input that says it is a terminal."""
+
+        def isatty(self) -> bool:
+            """Claim to be a terminal, so that the prompt uses `getpass`."""
+            return True
+
+    def ended(_prompt: str) -> str:
+        """Stand in for `getpass.getpass` when the input ends."""
+        raise EOFError
+
+    monkeypatch.setattr("sys.stdin", Terminal(""))
+    monkeypatch.setattr(cli.getpass, "getpass", ended)
+    with pytest.raises(cli.CliError, match="no password was entered"):
+        cli.read_password("Admin password: ")
+
+
+def test_a_client_that_ends_asks_no_second_password_for_its_token(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One calu password per command: the root box showed "Admin password:" again at /quit."""
+    store.save("operator", bytearray(b"postgresql://calu_operator@127.0.0.1/calu"), b"pw")
+    asked: list[str] = []
+    monkeypatch.setattr(cli, "read_password", lambda prompt, confirm=False: asked.append(prompt))
+    monkeypatch.setattr(cli, "_held", [])
+    monkeypatch.setattr(cli, "_shared_admin", lambda: None)
+    cli._revoke(store, 7, may_ask=False)
+    said = capsys.readouterr().err
+    assert asked == []
+    assert "client token 7 was not revoked" in said and "calu token revoke 7" in said
+    assert "editor" not in said, "that is the message of `calu acp`"
+
+
+def test_a_password_the_database_refuses_is_said_once(capsys: pytest.CaptureFixture[str]) -> None:
+    """libpq repeats the refusal per address it tried; one sentence is enough."""
+    refusal = (
+        'connection failed: connection to server at "127.0.0.1", port 5432 failed: FATAL:  '
+        'password authentication failed for user "calu_admin"\n'
+        'connection to server at "127.0.0.1", port 5432 failed: FATAL:  '
+        'password authentication failed for user "calu_admin"'
+    )
+    assert cli._error_text(cli.LoginRefused(refusal, "28P01")) == (
+        "the database refused the login, so the password is wrong: "
+        'password authentication failed for user "calu_admin"'
+    )
+    other = cli.LoginRefused("FATAL:  database gone", "3D000")
+    assert cli._error_text(other) == "LoginRefused: FATAL:  database gone"

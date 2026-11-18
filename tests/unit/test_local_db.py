@@ -238,6 +238,11 @@ def test_the_container_mounts_the_chosen_directory(docker: Path, tmp_path: Path)
     assert "${CALU_DB_DATA:-data}:/var/lib/postgresql" in compose
 
 
+def _no_docker() -> bool:
+    """Stand in for `local.volume_exists` on a machine without docker."""
+    raise local.DockerError("docker is not installed or not on PATH")
+
+
 def test_a_stopped_local_database_is_started_when_it_is_needed(
     docker: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -256,6 +261,11 @@ def test_a_stopped_local_database_is_started_when_it_is_needed(
     monkeypatch.setenv("STUB_EXIT", "1")  # `docker volume inspect` finds no volume
     assert local.ensure_running(local.DockerBlock(port=5544, data=local.VOLUME_DATA)) is False
     monkeypatch.delenv("STUB_EXIT")
+    # The same record on a machine without docker (a server or a tunnel on this machine's
+    # address): the root box got "docker is not installed" in place of "connection refused".
+    with monkeypatch.context() as patch:
+        patch.setattr(local, "volume_exists", _no_docker)
+        assert local.ensure_running(local.DockerBlock(port=5544, data=local.VOLUME_DATA)) is False
     docker.unlink()
     (Path(data) / "pg" / "18").mkdir()
     assert local.ensure_running(block) is True

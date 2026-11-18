@@ -401,6 +401,34 @@ def writable_by_others(paths: Sequence[Path]) -> list[str]:
     return problems
 
 
+def only_root_writes(path: Path, owner: int = 0) -> bool:
+    """Tell whether a file of calu can be read and changed by root alone.
+
+    Args:
+        path: The file, for example the credential store.
+        owner: The uid that stands for root (a test passes its own).
+
+    Returns:
+        True if this process runs as `owner`, the file is a regular file that belongs to
+        `owner` and grants nothing to its group or to others, and its directory belongs to
+        `owner` and cannot be written by its group or by others. False otherwise, also when
+        the file does not exist.
+    """
+    if os.geteuid() != owner:
+        return False
+    try:
+        own, directory = path.lstat(), path.parent.stat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(own.st_mode)
+        and own.st_uid == owner
+        and not own.st_mode & 0o077
+        and directory.st_uid == owner
+        and not directory.st_mode & 0o022
+    )
+
+
 def sudo_command(arguments: Sequence[str], user: str, executable: Path) -> list[str]:
     """Build the command that runs calu again as root for the invoking user.
 

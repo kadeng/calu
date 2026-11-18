@@ -5,8 +5,10 @@ This answers the question before that: is `claude` there, can the sandbox be bui
 credentials live, which checker keys are set, and — with the `admin` credential — does the
 database answer and is its schema current.
 
-    calu doctor          # everything that needs no password
-    calu doctor --db     # ... and the database, with the `admin` credential
+    calu doctor               # everything that needs no password
+    calu doctor --db          # ... and the database, with the `admin` credential
+    calu doctor --user ada    # as root: also what Claude Code would find as that user
+    calu doctor --sudo        # the same for you, through sudo
 
 Nothing here changes anything: it reads, and it says what to do about what it finds.
 """
@@ -15,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.util import find_spec
@@ -26,7 +29,10 @@ from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.credentials import CredentialStore
 from calu.db import applied_versions, migrations
+from calu.db import place as db_place
 from calu.db.connection import open_stored as connect
+from calu.db.target import PasswordAuth
+from calu.launch import RunAs
 
 VERSION_TIMEOUT_S = 10.0
 """How long `claude --version` may take before it is reported as not answering."""
@@ -140,7 +146,52 @@ def tool_findings() -> list[Finding]:
             "apt install git — the changeset checker and the write sets of a step need it.",
         )
     )
-    return found
+    return found + namespace_findings()
+
+
+def namespace_findings() -> list[Finding]:
+    """Check that bubblewrap can actually create a sandbox here, as the session's user.
+
+    `bwrap` on `PATH` says nothing about the kernel: in a Docker container without extra
+    rights, and on a distribution that keeps user namespaces from unprivileged programs,
+    every sandboxed command fails although the program is installed (run in the root box,
+    2026-11-18; `claude sandbox status` does not notice it either). This starts the smallest
+    sandbox, `bwrap --ro-bind / / true`.
+
+    Returns:
+        One finding when bubblewrap is installed and the start failed, with what it printed;
+        [] when it worked, when bubblewrap is missing (`tool_findings` says so) or when the
+        attempt itself could not be made.
+    """
+    bwrap = shutil.which("bwrap")
+    true = shutil.which("true")
+    if bwrap is None or true is None:
+        return []
+    try:
+        done = subprocess.run(  # fixed programs, no shell
+            [bwrap, "--ro-bind", "/", "/", true],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_TIMEOUT_S,
+            check=False,
+            **asuser.child(),  # as the user calu works for; a no-op without --user
+        )
+    except OSError, subprocess.SubprocessError:
+        return []
+    if done.returncode == 0:
+        return []
+    said = " ".join((done.stderr or done.stdout).split())[:200]
+    return [
+        Finding(
+            "sandbox start",
+            False,
+            f"bubblewrap is installed but cannot create a sandbox here ({said})",
+            "With the sandbox on (the default), every command Claude runs fails. A container "
+            "needs the right to create user namespaces; a distribution that restricts them "
+            "needs its setting for bubblewrap. Or switch the sandbox off with `calu config "
+            "set claude.sandbox.enabled false`, at the cost of its protection.",
+        )
+    ]
 
 
 def credential_findings(store: CredentialStore) -> list[Finding]:
@@ -152,7 +203,9 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
 
     Returns:
         A finding for each of the two credentials calu uses, and one more when an entry is
-        stored without a password (D104), which says so even when that is the right choice.
+        stored without a password (D104), which says so even when that is the right choice:
+        in a store that root alone can read (`calu.asuser.only_root_writes`) as a plain
+        statement, elsewhere with what it costs for `admin` and `session`.
     """
     names = set(store.names())
     unprotected = sorted(name for name in names if not store.needs_password(name))
@@ -161,8 +214,8 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
             "credential 'admin'",
             "admin" in names,
             "stored" if "admin" in names else "not stored",
-            "`calu db up` creates it for a local database, or `calu credential set admin` for "
-            "an existing server.",
+            "`calu setup` creates it (it asks which database to use), or `calu credential set "
+            "admin` stores the owner login of a database that is set up already.",
         ),
         Finding(
             "credential 'session'",
@@ -179,6 +232,18 @@ def credential_findings(store: CredentialStore) -> list[Finding]:
         # `session` cannot get here any more (D115 refuses it), but a store written by an
         # older calu can still hold one, and that is exactly when a report has to say so.
         risky = [name for name in unprotected if name in ("admin", "session")]
+        if asuser.only_root_writes(store.path):
+            # `sudo calu setup --no-password` (D228): the store is root's alone, which is
+            # what protects these entries; nothing Claude Code runs as its user reads it.
+            return [
+                *found,
+                Finding(
+                    "credential protection",
+                    True,
+                    f"{', '.join(unprotected)} stored without a password; only root can "
+                    f"read {store.path}",
+                ),
+            ]
         found.append(
             Finding(
                 "credential protection",
@@ -255,7 +320,7 @@ def key_findings(environ: Sequence[str] | None = None) -> list[Finding]:
                 if have
                 else "none of the known providers has a key"
             ),
-            "Put one in ~/.config/calu/.env, e.g. ANTHROPIC_API_KEY (an Anthropic subscription "
+            f"Put one in {env_file}, e.g. ANTHROPIC_API_KEY (an Anthropic subscription "
             "with API credits covers it) or MISTRAL_API_KEY. Without a key every check fails "
             "and escalates to you.",
         ),
@@ -310,6 +375,136 @@ def key_value_findings(environ: Mapping[str, str] | None = None) -> list[Finding
             )
         )
     return found
+
+
+def place_findings(owner: int = 0) -> list[Finding]:
+    """Report what the place file of root's database gives away (D228).
+
+    Args:
+        owner: The uid that must own the file (root; a test passes its own).
+
+    Returns:
+        [] if there is no place file. One finding otherwise: a note when the file cannot be
+        trusted (clients then ignore it), a note when it holds the password of the role
+        `calu_admin` (`calu setup --no-password`: every user and every program of the
+        machine can change calu's settings), else a line that says where root's database is.
+    """
+    path = db_place.default_path()
+    if not path.exists() and not path.is_symlink():
+        return []
+    try:
+        shared = db_place.read(path, owner)
+    except db_place.PlaceError as exc:
+        return [
+            Finding(
+                "place file",
+                False,
+                f"clients do not use it: {exc}",
+                "`sudo calu setup` writes it again.",
+            )
+        ]
+    if isinstance(shared.auth, PasswordAuth) and shared.auth.password:
+        return [
+            Finding(
+                "settings login",
+                False,
+                f"{path} holds the password of the role that changes calu's settings, and "
+                "every user and every program of this machine can read it (`calu setup "
+                "--no-password`)",
+                "Nothing but the checkers then keeps a program, Claude Code's commands "
+                "included, from changing the checkers. `sudo calu setup` without "
+                "--no-password gives the role a new password and takes it out of the file.",
+            )
+        ]
+    return [Finding("place file", True, f"{path} names {shared.place} and holds no secret")]
+
+
+def user_findings(run_as: RunAs, state_root: Path = asuser.STATE_ROOT) -> list[Finding]:
+    """Check what calu as root needs to run Claude Code as another user (D206).
+
+    Call it before `calu.asuser.enter`: it looks at calu's installation and at root's
+    directories. Nothing is created.
+
+    Args:
+        run_as: The user Claude Code is to run as (`calu.asuser.resolve`).
+        state_root: The root of calu's state for other users.
+
+    Returns:
+        Findings for the user and its home directory, for calu's installation (only root may
+        be able to change what runs as root) and for the launcher `calu-claude`.
+    """
+    who = run_as.user or f"uid {run_as.uid}"
+    home = Path(run_as.home)
+    identity = f"uid {run_as.uid}, gid {run_as.gid}"
+    if run_as.groups:
+        identity += f", groups {' '.join(str(group) for group in run_as.groups)}"
+    if run_as.user is None:
+        # A bare uid: calu creates the home at the first run (`calu.asuser.prepare`).
+        exists = home.is_dir()
+        user = Finding(
+            "session user",
+            True,
+            f"{who} ({identity}); Claude Code's home is {home}"
+            + ("" if exists else ", which calu creates at the first run"),
+        )
+    else:
+        user = Finding(
+            "session user",
+            home.is_dir(),
+            f"{who} ({identity}); home {home}" + ("" if home.is_dir() else " does not exist"),
+            "Claude Code keeps its login and its conversations in that user's home "
+            "directory; a number (`--user UID`) names a user without one.",
+            essential=True,
+        )
+    state = asuser.state_home(run_as, state_root)
+    script = Path(sys.executable).parent / "calu"
+    problems = asuser.writable_by_others(
+        [script, Path(sys.executable), Path(asuser.__file__).parent]
+    )
+    install = Finding(
+        "installation",
+        not problems,
+        "only root can change it"
+        if not problems
+        else "can be changed without root: " + "; ".join(problems[:2]),
+        "calu as root must not run code another user can edit, and `--sudo` refuses it. "
+        f"Install calu for root: {asuser.INSTALL_HINT}",
+    )
+    try:
+        launcher: Finding = Finding("launcher", True, str(launch.launcher_path()))
+    except launch.LaunchError as exc:
+        launcher = Finding(
+            "launcher",
+            False,
+            str(exc),
+            "Without it Claude Code cannot be started as another user.",
+            essential=True,
+        )
+    return [
+        user,
+        Finding("state directory", True, f"{state} (snapshots; created at the first run)"),
+        install,
+        launcher,
+    ]
+
+
+def root_without_user_findings() -> list[Finding]:
+    """Say what a report as root, without `--user`, did not look at.
+
+    Returns:
+        One note: sessions of a root calu need `--user`, and this report read root's own
+        Claude Code settings, not those of the user Claude Code will run as.
+    """
+    return [
+        Finding(
+            "session user",
+            False,
+            "calu runs as root here, and this report looked at root's own account",
+            "`calu run` and `calu serve` need `--user NAME` or `--user UID[:GID]` as root. "
+            "`calu doctor --user NAME` also checks that user's side: its home directory, "
+            "Claude Code's settings and sandbox as that user, and calu's installation.",
+        )
+    ]
 
 
 def directory_findings() -> list[Finding]:
@@ -464,16 +659,51 @@ def local_findings(store: CredentialStore) -> list[Finding]:
         store: The credential store.
 
     Returns:
-        The tool, the auto-mode, credential, key, directory and optional-dependency findings,
-        in that order.
+        The tool, the auto-mode, credential, place-file, key, directory and
+        optional-dependency findings, in that order (`machine_findings` around
+        `store_findings`).
+    """
+    machine = machine_findings()
+    cut = next(
+        (i for i, finding in enumerate(machine) if finding.name == "socket directory"),
+        len(machine),
+    )
+    return [*machine[:cut], *store_findings(store), *machine[cut:]]
+
+
+def store_findings(store: CredentialStore) -> list[Finding]:
+    """Collect what is read from calu's own files: credentials, the place file, the keys.
+
+    As root these are root's files (`/etc/calu`, `/var/lib/calu`), so `calu doctor --user`
+    calls this before it switches its file access to the user.
+
+    Args:
+        store: The credential store.
+
+    Returns:
+        The credential, self-approval, place-file and key findings, in that order.
+    """
+    return [
+        *credential_findings(store),
+        *self_approval_findings(store),
+        *place_findings(),
+        *key_findings(),
+        *key_value_findings(),
+    ]
+
+
+def machine_findings() -> list[Finding]:
+    """Collect what is asked of the machine and of Claude Code's own settings.
+
+    After `calu.asuser.enter` these are answered as the user Claude Code runs as: the
+    programs are started as that user, and the settings files are that user's.
+
+    Returns:
+        The tool, the auto-mode, directory and optional-dependency findings, in that order.
     """
     return [
         *tool_findings(),
         *permission_mode_findings(),
-        *credential_findings(store),
-        *self_approval_findings(store),
-        *key_findings(),
-        *key_value_findings(),
         *directory_findings(),
         *extra_findings(),
     ]

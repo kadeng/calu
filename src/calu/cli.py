@@ -61,11 +61,11 @@ import logging
 import math
 import os
 import pwd
+import re
 import secrets
 import shlex
 import shutil
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
@@ -105,8 +105,8 @@ from calu.config import (
     user_env_file,
 )
 from calu.configdoc import setting_rows
-from calu.credentials import CredentialError, CredentialStore, wipe
-from calu.db import Db, migrate
+from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
+from calu.db import Db, LoginRefused, migrate
 from calu.db import local as local_db
 from calu.db import place as db_place
 from calu.db import rds as rds_auth
@@ -185,6 +185,10 @@ class CliError(Exception):
     """An error to report to the user without a traceback (exit code 1)."""
 
 
+class NeedsPassword(CliError):
+    """A stored credential needs its password, and the caller said not to ask for one."""
+
+
 def read_password(prompt: str, confirm: bool = False) -> bytearray:
     """Read a password from the terminal (no echo) or, if stdin is no terminal, from a line.
 
@@ -196,7 +200,8 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
         The password; the caller should `wipe` it.
 
     Raises:
-        CliError: If the confirmation does not match. A blank answer is returned as it is.
+        CliError: If the confirmation does not match, or the terminal's input ended at the
+            prompt (Ctrl-D). A blank answer is returned as it is.
     """
 
     def ask(text: str) -> str:
@@ -207,9 +212,17 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
 
         Returns:
             The password without the line end.
+
+        Raises:
+            CliError: If the terminal's input ended at the prompt.
         """
         if sys.stdin.isatty():
-            return getpass.getpass(text)
+            try:
+                return getpass.getpass(text)
+            except EOFError:
+                # Ctrl-D: end the line the prompt is on, then say what happened.
+                print(file=sys.stderr)
+                raise CliError("no password was entered (the input ended)") from None
         return sys.stdin.readline().rstrip("\n")
 
     # A blank answer is passed on like any other: whether it is right is for the store or
@@ -1279,6 +1292,15 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
                     "\nlogin of calu_admin: a new generated password, kept in the store "
                     "only; the one a setup with --no-password had published stops working"
                 )
+            elif "admin" in _typed:
+                # A blank admin password is accepted for the stored entry (the owner's
+                # ruling, D230); PostgreSQL lets no role log in with one.
+                report += (
+                    "\nlogin of calu_admin: left as it is, because the admin password is "
+                    "blank and PostgreSQL accepts no blank password for a login. A client "
+                    "without the `admin` credential cannot change settings then, and `calu "
+                    "web` gives out an address with a token"
+                )
             else:
                 report += (
                     "\nlogin of calu_admin: left as it is, because the `admin` credential "
@@ -1630,7 +1652,7 @@ _ARGUMENTS: list[str] = []
 """calu's arguments as they were given, for the command `--sudo` runs again."""
 
 
-def _run_as(args: argparse.Namespace) -> RunAs | None:
+def _run_as(args: argparse.Namespace, prepare: bool = True) -> RunAs | None:
     """Decide which user Claude Code runs as, from `--user` and who calu runs as (D206).
 
         calu is root, no --user     ──► refused: Claude Code never runs as root by accident
@@ -1642,6 +1664,8 @@ def _run_as(args: argparse.Namespace) -> RunAs | None:
 
     Args:
         args: Parsed arguments (`user`, `sudo`, `from_sudo`).
+        prepare: Create the user's directories; False for a command that only reports
+            (`calu doctor`).
 
     Returns:
         The user to switch to, or None to run everything as calu's own user.
@@ -1675,7 +1699,8 @@ def _run_as(args: argparse.Namespace) -> RunAs | None:
             raise CliError(
                 "--user needs calu to run as root: only root can start Claude Code as another user"
             )
-        asuser.prepare(run_as)
+        if prepare:
+            asuser.prepare(run_as)
     except asuser.UserError as exc:
         raise CliError(str(exc)) from exc
     return run_as
@@ -1740,19 +1765,7 @@ def _only_root_writes(path: Path, owner: int = 0) -> bool:
         to its group or to others, and its directory belongs to `owner` and cannot be written
         by its group or by others. False otherwise, also when the file does not exist.
     """
-    if os.geteuid() != owner:
-        return False
-    try:
-        own, directory = path.lstat(), path.parent.stat()
-    except OSError:
-        return False
-    return (
-        stat.S_ISREG(own.st_mode)
-        and own.st_uid == owner
-        and not own.st_mode & 0o077
-        and directory.st_uid == owner
-        and not directory.st_mode & 0o022
-    )
+    return asuser.only_root_writes(path, owner)
 
 
 def _session_login(store: CredentialStore) -> bytearray:
@@ -2415,14 +2428,18 @@ def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None
     fill up with one row per attach. A failure here is reported and ignored: the client's work
     is done, and the token stays visible in `calu token list` either way.
 
-    Side effects: sets `revoked` on the `client_tokens` row; prints a line if that fails.
+    Side effects: sets `revoked` on the `client_tokens` row; prints a line if that fails or
+    is left out.
 
     Args:
         store: The credential store.
         token_id: The token to revoke.
-        may_ask: Whether a password may be asked for; False for `calu acp`, where a prompt
-            would read from the editor's protocol stream (see `_herd_value`). The token was
-            minted without asking, so this only matters if the credential changed meanwhile.
+        may_ask: Whether a password may be asked for. False for `calu acp`, where a prompt
+            would read from the editor's protocol stream (see `_herd_value`), and for a
+            client that ends: the password of a protected credential was asked once to find
+            the session, and a command asks for no calu password twice. The token is then
+            left as it is, with a line that says so: it was known to this process only and
+            ends with its session.
     """
 
     async def work(db: Db) -> bool:
@@ -2438,6 +2455,13 @@ def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None
 
     try:
         _herd_value(store, work, may_ask)
+    except NeedsPassword:
+        print(
+            f"note: the client token {token_id} was not revoked, because that would ask the "
+            "password a second time. Only this client knew it, and it ends with its "
+            f"session; `calu token revoke {token_id}` revokes it now",
+            file=sys.stderr,
+        )
     except (CliError, CredentialError, OSError, psycopg.Error) as exc:
         print(
             f"note: the client token {token_id} could not be revoked ({exc}); "
@@ -2483,8 +2507,8 @@ def _herd_value[T](
         What `work` returned.
 
     Raises:
-        CliError: If neither an `operator` nor an `admin` credential is stored, or if the one
-            that is needs a password and `may_ask` is False.
+        CliError: If neither an `operator` nor an `admin` credential is stored.
+        NeedsPassword: If the one that is stored needs a password and `may_ask` is False.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
@@ -2505,7 +2529,7 @@ def _herd_value[T](
     for name in names:
         if name in store:
             if not may_ask and store.needs_password(name):
-                raise CliError(
+                raise NeedsPassword(
                     f"the {name!r} credential is protected by a password, and this command has "
                     "no terminal to ask for one on -- its standard input carries the editor's "
                     "protocol. Either store it without a password (`calu credential set "
@@ -2517,7 +2541,10 @@ def _herd_value[T](
             try:
                 with contextlib.suppress(ValueError):  # also TargetError: no usable place
                     _admin_place[:] = [admin_login(Target.parse(url), "")]
-                    if _hold:
+                    if _hold or os.geteuid() == 0:
+                        # A root process is out of reach of what Claude Code starts, so it
+                        # keeps the login for its later steps (revoking its token at the
+                        # end) instead of asking the password a second time.
                         _held[:] = [Target.parse(url)]
                 return asyncio.run(_with_admin_value(url.decode(), work))
             finally:
@@ -2664,7 +2691,7 @@ def _attach(
                 print(f"[session] switching to {ended.switch_to}", flush=True)
                 following = _find_endpoint(store, ended.switch_to, "calu attach")
                 if endpoint.token_id is not None:
-                    _revoke(store, endpoint.token_id)
+                    _revoke(store, endpoint.token_id, may_ask=False)
                 endpoint, after_seq = following, 0
             print("\n".join(tui_start.exit_lines(ended)))
             code = ended.code
@@ -2674,7 +2701,8 @@ def _attach(
         raise CliError(_attach_failure(endpoint, exc)) from exc
     finally:
         if endpoint.token_id is not None:
-            _revoke(store, endpoint.token_id)
+            # Never a second password: one was asked, at most, to find the session.
+            _revoke(store, endpoint.token_id, may_ask=False)
     if code:
         raise CliError("the client ended with an error")
 
@@ -3169,27 +3197,49 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
     With `--db` the `admin` credential is used to ask whether the database answers and whether
     its schema is current. Nothing is changed.
 
+    As root with `--user` (or as a user with `--sudo`, which runs calu again through sudo)
+    the report is about the arrangement of requirement 26: calu's own files are read as
+    root, then the process switches its file access and the programs it starts to that user
+    (`calu.asuser.enter`), so that Claude Code's version, its settings files, the sandbox and
+    the workspace are judged as that user finds them. No directory is created for the user.
+    As root without `--user` the report says that it looked at root's own account.
+
     Args:
-        args: Parsed arguments (`db`, `keys`, `directory`).
+        args: Parsed arguments (`db`, `keys`, `directory`, `user`, `sudo`, `from_sudo`).
         store: The credential store.
 
     Raises:
         CliError: If something a session cannot run without is missing, after the whole report
-            was printed — so the reader sees everything, not only the first problem.
+            was printed — so the reader sees everything, not only the first problem; or if
+            the user cannot be used or `--sudo` cannot run calu again (`_run_as`).
         CredentialError: On a wrong password (only with `--db`).
     """
-    findings = doctor.local_findings(store)
+    run_as = _run_as(args, prepare=False) if args.sudo or args.user is not None else None
+    # Root's own files first: after the switch to the user they cannot be read.
+    stored = doctor.store_findings(store)
+    database: list[doctor.Finding] = []
+    if args.db:
+        url = load_credential(store, "admin", "Admin password: ")
+        try:
+            database = asyncio.run(doctor.database_findings(url.decode()))
+        finally:
+            wipe(url)
+    about_user: list[doctor.Finding] = []
+    if run_as is not None:
+        about_user = doctor.user_findings(run_as)
+        try:
+            asuser.enter(run_as)
+        except asuser.UserError as exc:
+            raise CliError(str(exc)) from exc
+    elif os.geteuid() == 0 and args.user is None:
+        about_user = doctor.root_without_user_findings()
+    findings = [*about_user, *doctor.machine_findings(), *stored]
     if args.directory:
         findings += doctor.workspace_findings(Path(args.directory).resolve())
     if args.keys:
         findings += doctor.key_validity_findings()
         findings += doctor.aws_findings()
-    if args.db:
-        url = load_credential(store, "admin", "Admin password: ")
-        try:
-            findings += asyncio.run(doctor.database_findings(url.decode()))
-        finally:
-            wipe(url)
+    findings += database
     # Flushed, so the report is on screen before the error line that may follow on stderr.
     print(doctor.report(findings), flush=True)
     if doctor.essential_missing(findings):
@@ -4845,6 +4895,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also ask each provider whether its key is accepted (a free model-list request)",
     )
+    p.add_argument(
+        "--user",
+        metavar="NAME|UID[:GID]",
+        help="as root: also check what Claude Code would find as this user (its home "
+        "directory, its settings, the sandbox, calu's installation)",
+    )
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="run the report as root through sudo, for you: what `calu run --sudo` would find",
+    )
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_doctor)
 
     p = sub.add_parser("summary", help="show or correct the chat summary the checkers read")
@@ -5062,8 +5124,8 @@ def main(
     stderr gets one line per error (D225).
 
     Returns:
-        The exit code: 0 on success, 1 on a reported error, 130 when `calu run` or `calu
-        serve` was interrupted with Ctrl-C.
+        The exit code: 0 on success, 1 on a reported error, 130 when the command was
+        interrupted with Ctrl-C (one line on stderr, no traceback).
     """
     global _ARGUMENTS
     _ARGUMENTS = list(sys.argv[1:] if argv is None else argv)
@@ -5080,6 +5142,10 @@ def main(
     try:
         load_secrets()
         args.handler(args, store_factory())
+    except KeyboardInterrupt:
+        # Ctrl-C, also at a password prompt: one line, as `calu run` and `calu serve` end.
+        print("\ncalu: interrupted", file=sys.stderr)
+        return 130
     except (
         CliError,
         CredentialError,
@@ -5092,9 +5158,31 @@ def main(
         OSError,
         TimeoutError,
     ) as exc:
-        print(f"calu: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"calu: {_error_text(exc)}", file=sys.stderr)
         return 1
     return 0
+
+
+def _error_text(exc: Exception) -> str:
+    """Put an error a command ended with into the text after "calu: ".
+
+    Args:
+        exc: The error.
+
+    Returns:
+        For a wrong password of a stored credential, a sentence that names the credential
+        (the exception itself carries only the credential's name); for a password the
+        database refused, the server's own sentence once; else "<type name>: <message>".
+    """
+    if isinstance(exc, WrongPassword):
+        return f"wrong password for the credential {str(exc)!r}"
+    if isinstance(exc, LoginRefused) and exc.code == "28P01":
+        # PostgreSQL's "password authentication failed": libpq repeats it once per address
+        # it tried, with the host and the port in front; the first statement is enough.
+        found = re.search(r"FATAL:\s*(.+?)(?=\s+connection to server|\n|$)", str(exc))
+        reason = found.group(1).strip() if found else str(exc)
+        return f"the database refused the login, so the password is wrong: {reason}"
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _logged(
@@ -5104,7 +5192,9 @@ def _logged(
 
     Side effects: sets up the log (`calu.logfile.setup`: the log file at
     `$XDG_STATE_HOME/calu/log/<name>.log` with every record and its traceback, stderr with one
-    line per warning or error); then everything the command's handler does. An error the
+    line per warning or error), unless the command was given `--sudo` and does not run as
+    root yet: it then replaces itself by `sudo calu ...`, which opens root's log; then
+    everything the command's handler does. An error the
     command ends with is written to the log file with its traceback and to stderr as one line;
     Ctrl-C ends the command with one line, too.
 
@@ -5116,7 +5206,10 @@ def _logged(
     Returns:
         The exit code: 0 on success, 1 on an error, 130 on Ctrl-C.
     """
-    path = logfile.setup(name)
+    # A command that is about to replace itself by `sudo calu ...` opens no log file: the
+    # log is root's (`/var/lib/calu/log`), and the invoking user's home gets nothing of calu's.
+    elevates = getattr(args, "sudo", False) and os.geteuid() != 0
+    path = None if elevates else logfile.setup(name)
     where = f"; details in {path}" if path is not None else ""
     try:
         load_secrets()
@@ -5126,9 +5219,11 @@ def _logged(
         print("calu: interrupted", file=sys.stderr)
         return 130
     except (CliError, CredentialError) as exc:
-        # Errors calu reports on purpose: their text is the whole message.
-        _log.info("calu %s: %s", name, exc)
-        print(f"calu: {logfile.one_line(str(exc))}", file=sys.stderr)
+        # Errors calu reports on purpose: their text is the whole message, and it is not
+        # cut, because it may end with the command to run next (the install hint of --sudo).
+        text = _error_text(exc) if isinstance(exc, WrongPassword) else str(exc)
+        _log.info("calu %s: %s", name, text)
+        print(f"calu: {logfile.one_line(text, limit=None)}", file=sys.stderr)
         return 1
     except Exception as exc:
         # At INFO: the traceback goes to the file only; stderr gets the line below.

@@ -247,3 +247,26 @@ async def test_a_setup_without_passwords_never_publishes_a_typed_password_and_is
     assert not await is_admin_password(owner, published), "the published login was revoked"
     kept = Target.parse(store.load("calu_admin"))
     assert await is_admin_password(owner, getattr(kept.auth, "password", ""))
+
+
+async def test_a_blank_admin_password_is_accepted_and_setup_says_what_it_costs(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A blank admin password protects the entry; the role `calu_admin` gets no login from it.
+
+    Run in the root box: the report said "the `admin` credential has no password and none was
+    typed", although the entry has one (a blank one) and it was typed.
+    """
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, b"")
+    monkeypatch.setattr("sys.stdin", io.StringIO("\nsession-pw\nsession-pw\n"))
+    code = await anyio.to_thread.run_sync(
+        lambda: cli.main(
+            ["setup", "--renew-session"], store_factory=lambda: cast(CredentialStore, store)
+        )
+    )
+    printed = capsys.readouterr().out
+    assert code == 0, printed
+    assert store.needs_password("admin") is True
+    assert "the admin password is blank and PostgreSQL accepts no blank password" in printed
+    assert "none was typed" not in printed

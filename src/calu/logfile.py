@@ -64,18 +64,19 @@ def innermost(exc: BaseException) -> BaseException:
     return exc
 
 
-def one_line(text: str, limit: int = LINE_LIMIT) -> str:
+def one_line(text: str, limit: int | None = LINE_LIMIT) -> str:
     """Return `text` on one line, cut to `limit` characters.
 
     Args:
         text: The text; line ends and runs of spaces become one space each.
-        limit: Most characters of the result before " [...]" is appended.
+        limit: Most characters of the result before " [...]" is appended; None cuts nothing
+            (a message calu wrote itself, whose end may be the command to run next).
 
     Returns:
         The single line.
     """
     joined = " ".join(text.split())
-    return joined if len(joined) <= limit else joined[:limit] + " [...]"
+    return joined if limit is None or len(joined) <= limit else joined[:limit] + " [...]"
 
 
 def describe(exc: BaseException) -> str:

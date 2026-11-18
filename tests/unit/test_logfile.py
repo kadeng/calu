@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from calu import cli, logfile
+from calu.credentials import WrongPassword
 
 
 @pytest.fixture
@@ -102,6 +103,65 @@ def test_an_unexpected_error_of_calu_run_is_one_line_on_stderr(
     err = capsys.readouterr().err.splitlines()
     assert err == [f"calu: RuntimeError: first line second line; details in {path}"]
     assert "Traceback (most recent call last)" in path.read_text()
+
+
+def test_an_error_calu_reports_itself_is_not_cut(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    clean_root: None,
+) -> None:
+    """The refusal of `--sudo` ends with the install command: the root box cut it at 300."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    hint = "install calu for root: " + "x" * 400 + " END"
+
+    def refuses(_args, _store) -> None:
+        """Stands in for `cmd_run` and refuses with a long message."""
+        raise cli.CliError(hint)
+
+    monkeypatch.setattr(cli, "cmd_run", refuses)
+    assert cli.main(["run", str(tmp_path)], store_factory=lambda: None) == 1  # type: ignore[arg-type]
+    assert capsys.readouterr().err.splitlines() == [f"calu: {hint}"]
+
+
+def test_a_wrong_session_password_is_said_in_words(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    clean_root: None,
+) -> None:
+    """It used to print `calu: session`: the exception carries the credential's name only."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+
+    def wrong(_args, _store) -> None:
+        """Stands in for `cmd_serve` at a wrong session password."""
+        raise WrongPassword("session")
+
+    monkeypatch.setattr(cli, "cmd_serve", wrong)
+    assert cli.main(["serve"], store_factory=lambda: None) == 1  # type: ignore[arg-type]
+    assert capsys.readouterr().err.splitlines() == [
+        "calu: wrong password for the credential 'session'"
+    ]
+
+
+def test_a_command_that_elevates_through_sudo_opens_no_log_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    clean_root: None,
+) -> None:
+    """`calu serve --sudo` as a user: the log is root's, the user's home gets no file."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+
+    def refused(_args, _store) -> None:
+        """Stands in for `cmd_serve` when the installation check refuses the elevation."""
+        raise cli.CliError("--sudo would run this installation of calu as root")
+
+    monkeypatch.setattr(cli, "cmd_serve", refused)
+    assert cli.main(["serve", "--sudo"], store_factory=lambda: None) == 1  # type: ignore[arg-type]
+    assert not (tmp_path / "calu").exists()
+    assert capsys.readouterr().err.startswith("calu: --sudo would run")
 
 
 def test_serve_passes_secure_on_to_every_session(

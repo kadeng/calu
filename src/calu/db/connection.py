@@ -19,6 +19,7 @@ number. Each runs in its own transaction and is recorded in `schema_migrations`.
 transaction-level advisory lock keeps two processes from migrating at the same time.
 """
 
+import ctypes
 import logging
 import os
 import re
@@ -153,6 +154,39 @@ def refuses_for_good(code: str | None) -> bool:
     return code is not None and (code[:2] in REFUSED_CLASSES or code in REFUSED_STATES)
 
 
+SYS_MEMFD_CREATE = {"x86_64": 319, "aarch64": 279}
+"""Number of the `memfd_create` system call per machine type, for a Python whose `os` module
+lacks the function (the standalone build of Python 3.14.0 that uv installs does)."""
+
+MFD_CLOEXEC = 1
+"""Flag of `memfd_create`: a program started by this process does not inherit the file."""
+
+
+def _memory_file(name: str) -> int:
+    """Create an anonymous file in memory that no other process can open by a name.
+
+    Args:
+        name: A label for the file, shown in `/proc/<pid>/fd`; it names nothing on disk.
+
+    Returns:
+        The file descriptor; the caller closes it.
+
+    Raises:
+        OSError: If neither Python nor the kernel offers such a file here.
+    """
+    create = getattr(os, "memfd_create", None)
+    if create is not None:
+        return create(name)
+    number = SYS_MEMFD_CREATE.get(os.uname().machine)
+    if number is None:
+        raise OSError(f"no memfd_create on {os.uname().machine}")
+    libc = ctypes.CDLL(None, use_errno=True)
+    descriptor = libc.syscall(number, name.encode(), MFD_CLOEXEC)
+    if descriptor < 0:
+        raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+    return descriptor
+
+
 def _login_answer(conninfo: str, timeout: float) -> str | None:
     """Try one login and return the SQLSTATE of the server's refusal; blocks the thread.
 
@@ -166,9 +200,13 @@ def _login_answer(conninfo: str, timeout: float) -> str | None:
 
     Returns:
         The SQLSTATE of the error the server answered with, or None if the login worked, the
-        server did not answer in time, or it could not be reached at all.
+        server did not answer in time, it could not be reached at all, or this machine
+        offers no memory file for the trace.
     """
-    trace = os.memfd_create("calu-login-trace")
+    try:
+        trace = _memory_file("calu-login-trace")
+    except OSError:
+        return None
     conn = None
     try:
         conn = pq.PGconn.connect_start(conninfo.encode())
@@ -618,13 +656,19 @@ class Db:
         self.waiting = True
         _call_all(self._on_lost, reason)
         refused = 0
+        told: str | None = None
         try:
             pause = RECONNECT_FIRST_S
             while True:
                 failure = await self._try_replace()
                 if failure is None:
                     break
-                log.warning("reconnecting to the database failed: %s", failure)
+                # A warning reaches the terminal of `calu run` and `calu serve`: one line
+                # per reason, not one per attempt of every connection. The repeats go to
+                # the log file only.
+                level = logging.INFO if str(failure) == told else logging.WARNING
+                told = str(failure)
+                log.log(level, "reconnecting to the database failed: %s", failure)
                 refused = refused + 1 if isinstance(failure, LoginRefused) else 0
                 if isinstance(failure, LoginRefused) and refused >= REFUSED_ATTEMPTS:
                     self._gone = failure

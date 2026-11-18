@@ -1,12 +1,17 @@
 """`calu doctor`: what it finds, and what it calls essential."""
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from calu import doctor
+from calu import cli, doctor
 from calu.credentials import CredentialStore
+from calu.db import place as db_place
+from calu.db.target import Target
 from calu.doctor import Finding
+from calu.launch import RunAs
 
 
 def test_a_finding_renders_its_advice_only_when_something_is_wrong() -> None:
@@ -386,3 +391,78 @@ def test_doctor_finds_the_claude_a_session_would_start(
     bundled.chmod(0o755)
     assert doctor.claude_executable() == str(bundled)
     assert doctor.claude_version() == (True, f"2.1.327 (Claude Code) ({bundled})")
+
+
+def test_a_store_only_root_reads_is_not_called_the_wrong_place(
+    store: CredentialStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After `sudo calu setup --no-password` the report called `/etc/calu` a wrong choice."""
+    store.save("admin", bytearray(b"postgresql://owner@db"), None)
+    store.save("session", bytearray(b"postgresql://session@db"), None)
+    risky = doctor.credential_findings(store)[-1]
+    assert not risky.ok and "wrong entry" in risky.advice
+    monkeypatch.setattr(doctor.asuser, "only_root_writes", lambda path: True)
+    stated = doctor.credential_findings(store)[-1]
+    assert stated.ok and "only root can read" in stated.detail and stated.advice == ""
+
+
+def test_the_place_file_is_reported_with_what_it_gives_away(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D228: a password in the place file is readable by every user of the machine."""
+    path = tmp_path / "database.json"
+    monkeypatch.setenv(db_place.PATH_ENV, str(path))
+    own = os.geteuid()
+    assert doctor.place_findings(own) == []
+    owner = Target.parse(b"postgresql://calu_owner:pw@127.0.0.1:5433/calu")
+    db_place.write(owner, path)
+    (plain,) = doctor.place_findings(own)
+    assert plain.ok and "holds no secret" in plain.detail and "5433" in plain.detail
+    db_place.write(owner, path, admin_password="generated")
+    (published,) = doctor.place_findings(own)
+    assert not published.ok and published.name == "settings login"
+    assert "generated" not in published.detail + published.advice
+    assert "every user and every program" in published.detail
+    # A file that is not root's is not trusted, and the report says that clients skip it.
+    (distrusted,) = doctor.place_findings(own + 1)
+    assert not distrusted.ok and "clients do not use it" in distrusted.detail
+
+
+def test_bubblewrap_that_cannot_create_a_namespace_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In a plain container `bwrap` is on PATH and every sandboxed command fails."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    answers = [
+        subprocess.CompletedProcess([], 1, "", "bwrap: Creating new namespace failed\n"),
+        subprocess.CompletedProcess([], 0, "", ""),
+    ]
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *args, **kwargs: answers.pop(0))
+    (failed,) = doctor.namespace_findings()
+    assert not failed.ok and not failed.essential
+    assert "Creating new namespace failed" in failed.detail
+    assert doctor.namespace_findings() == []
+
+
+def test_the_user_side_of_a_root_calu_is_reported_without_creating_anything(
+    tmp_path: Path,
+) -> None:
+    """`calu doctor --user`: the user, its home, the installation and the launcher."""
+    bare = RunAs(uid=4242, gid=4243, home=str(tmp_path / "claude" / "4242"))
+    user, state, install, _launcher = doctor.user_findings(bare, tmp_path)
+    assert user.ok and "uid 4242" in user.detail and "creates at the first run" in user.detail
+    assert str(tmp_path / "state" / "4242") in state.detail
+    assert not (tmp_path / "state").exists() and not (tmp_path / "claude").exists()
+    # The tests' installation belongs to the tests' user: that is what `--sudo` refuses.
+    assert not install.ok and "sudo env UV_TOOL_DIR=/usr/local/lib/calu" in install.advice
+    named = RunAs(uid=4242, gid=4243, home=str(tmp_path / "nobody-home"), user="nobody-here")
+    missing = doctor.user_findings(named, tmp_path)[0]
+    assert not missing.ok and missing.essential and "does not exist" in missing.detail
+
+
+def test_doctor_as_a_user_refuses_another_user(
+    store: CredentialStore, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--user` is root's option, as for `calu run`."""
+    assert cli.main(["doctor", "--user", "0"], store_factory=lambda: store) == 1
+    assert "--user needs calu to run as root" in capsys.readouterr().err

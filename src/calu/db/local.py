@@ -363,20 +363,27 @@ def ensure_running(block: DockerBlock) -> bool:
 
     Returns:
         True if the container was started; False if the port answered already, or if the
-        record names the old Docker volume and no such volume exists.
+        record names the old Docker volume and no such volume exists (also when docker is
+        not installed).
 
     Raises:
-        DockerError: If docker is missing, the start fails, or nothing is initialized in the
-            stored data directory.
+        DockerError: If the start fails (also because docker is missing while the stored
+            data directory holds a database), or nothing is initialized in the stored data
+            directory.
     """
     if listening(block.port):
         return False
-    if not initialized(block.data):
-        if mount_of(block.data) is None:
-            # A record of the old form on the named volume, and no such volume: this may be
-            # somebody's own local server or a tunnel that only looks like calu's container.
-            # Start nothing and let the connection attempt say what is wrong.
+    if mount_of(block.data) is None:
+        # A record of the old form (a plain connection string to this machine) is read as
+        # the named volume. Without that volume, or without docker at all, this may be
+        # somebody's own local server or a tunnel that only looks like calu's container:
+        # start nothing and let the connection attempt say what is wrong.
+        try:
+            if not volume_exists():
+                return False
+        except DockerError:
             return False
+    elif not initialized(block.data):
         raise DockerError(
             f"the local database does not answer on port {block.port} and {block.data} holds "
             "no database yet; `calu db up` creates it with the stored owner login"
