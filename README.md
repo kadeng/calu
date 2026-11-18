@@ -48,7 +48,7 @@ What you can do with it, if you want to:
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
 
-![An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below](docs/assets/vscode-approval.png)
+<img src="docs/assets/vscode-approval.png" width="720" alt="An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below">
 
 **Status: early.** What has and has not been tested is listed in [HANDOFF.md](HANDOFF.md).
 Not on PyPI yet. calu succeeds [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop).
@@ -188,6 +188,8 @@ differences, by area:
 - A background subagent can be sent a message.
 - An open decision of a subagent is shown in every view.
 
+<img src="docs/assets/vscode-subagents.png" width="560" alt="Subagents as tabs in the VSCode extension">
+
 ## Front ends
 
 All of them work on the same sessions: start a session in one, follow or answer it in another.
@@ -207,13 +209,11 @@ All of them work on the same sessions: start a session in one, follow or answer 
 - **Command line on the database**: `calu sessions`, `calu escalations`,
   `calu resolve 12 allow`.
 
-![Subagents as tabs in the VSCode extension](docs/assets/vscode-subagents.png)
-
-![Ten subagents in the web live view, one waiting for a decision](docs/assets/web-live-subagents.png)
-
-![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
-
-![The PyCharm plugin: a command waits for a decision in the tool window](docs/assets/pycharm-approval.png)
+<p>
+<img src="docs/assets/pycharm-approval.png" width="32%" alt="The PyCharm plugin: a command waits for a decision in the tool window">
+<img src="docs/assets/web-live-subagents.png" width="32%" alt="Ten subagents in the web live view, one waiting for a decision">
+<img src="docs/assets/vscode-settings.png" width="32%" alt="The settings dialog of the VSCode extension">
+</p>
 
 ## Where to go next
 
