@@ -47,55 +47,8 @@ MCP servers, skills and subagents work as your project configures them.
 
 ![An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below](docs/assets/vscode-approval.png)
 
-## What calu adds to Claude Code
-
-The agent and the chat are Claude Code's: images, rewind, fork, several sessions, slash
-commands, model and thinking level, context usage, questions, approvals, notifications. calu
-adds:
-
-| Area | What calu adds |
-|---|---|
-| Judging a step | Besides Claude Code's own rules and auto mode: checkers that apply your rules, on a model and provider you choose |
-| A step that needs a person | The session pauses; the answer can come from VSCode, PyCharm, the browser, a terminal or the database, on any machine |
-| Where a session lives | On a server (`calu serve`); front ends attach and detach, several at once; the session continues with none attached |
-| Several sessions, several machines | One overview of all of them, those that wait for a decision first |
-| Subagents | A tab each, with task and result; messages to a background subagent; its open decisions shown in every view |
-| The record | Every step with the checker's summary in PostgreSQL; optionally the conversation as redacted Markdown in the repository |
-| Names and docstrings | Tracked per file whether they match the code; unverified code can be kept from running or being committed |
-| Separation from the agent | With `--sudo`, calu runs as root and Claude Code as the user, so the agent cannot read calu's credentials or decide its own approvals |
-| The rules | Markdown instructions in a database the session cannot write, editable from every front end |
-
 **Status: early.** What has and has not been tested is listed in [HANDOFF.md](HANDOFF.md).
-Not on PyPI yet. calu succeeds
-[stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop).
-
-## The parts
-
-- **VSCode extension** ([extensions/vscode](extensions/vscode)): the chat on the right;
-  checker instructions, checker context and honesty one click away; a click on an edit opens
-  its diff, a click on a file name opens the file at the line. Runs where the workspace is:
-  WSL, SSH, a dev container.
-- **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), in progress: the same
-  chat as a native tool window, for JetBrains' remote development and for a local IDE that
-  reaches the server over SSH and syncs files through calu.
-- **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
-  settings.
-- **Terminal** (`calu attach`): a full-screen client, and a line client for pipes.
-- **ACP editors** (`calu acp`): Zed, Neovim, JetBrains' agent chat.
-- **The database alone**: `calu sessions`, `calu escalations`, `calu resolve 12 allow`.
-- **Session traces**: `traces.enabled` appends every step to
-  `.agent/traces/<date>/<user>/session_NNN.md`, with secrets and personal data replaced.
-  ([guide](CALU_GUIDE.md#session-traces-the-conversation-as-a-reviewable-file))
-- **Code honesty**: which code was verified to say what it does, file by file.
-  ([guide](CALU_GUIDE.md#code-honesty-enforcement))
-- **One model for every role** in one step, with presets for Anthropic, AWS Bedrock, Fireworks,
-  Mistral, or your Claude Code account without an API key.
-
-![Subagents as tabs in the VSCode extension](docs/assets/vscode-subagents.png)
-
-![Ten subagents in the web live view, one waiting for a decision](docs/assets/web-live-subagents.png)
-
-![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
+Not on PyPI yet. calu succeeds [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop).
 
 ## Pair programming instead of watching silently or babysitting
 
@@ -194,6 +147,67 @@ Then write your rules and see whether the checkers follow them:
 calu checker edit command    # the command checker's instructions, in $EDITOR
 calu evals                   # the checkers against the built-in cases
 ```
+
+## How a session with calu differs from Claude Code on its own
+
+The agent and the chat are Claude Code's: images, rewind, fork, several sessions, slash
+commands, model and thinking level, context usage, questions, approvals, notifications. The
+differences, by area:
+
+**Supervision**
+- Every command and edit is also judged by checkers that apply your instructions, on a model
+  and provider you choose.
+- A step that needs a person pauses the session until someone decides.
+- With honesty checking on, calu records per file whether names and documentation match the
+  code, and can keep unverified code from being run or committed.
+
+**Where a session runs**
+- A session belongs to a server process (`calu serve`), not to a window. Front ends attach and
+  detach, several at once; the session continues with none attached.
+- A decision can be made from any front end or from the database, on any machine.
+- One overview lists the sessions of all machines, those that wait for a decision first.
+
+**The record**
+- Every step is stored in PostgreSQL with the checker's summary and decision.
+- With `traces.enabled`, every step is also appended to
+  `.agent/traces/<date>/<user>/session_NNN.md` in the project, with secrets and personal data
+  replaced. ([guide](CALU_GUIDE.md#session-traces-the-conversation-as-a-reviewable-file))
+
+**What the agent can reach**
+- Checker instructions, settings and the record are in a database the session has no write
+  access to.
+- With `--sudo`, calu runs as root and Claude Code as the user, so the agent can neither read
+  calu's credentials nor decide its own approvals.
+  ([guide](CALU_GUIDE.md#calu-as-root-claude-code-as-another-user))
+
+**Subagents**
+- Each has its own tab or view with the task it was given and what it returned.
+- A background subagent can be sent a message.
+- An open decision of a subagent is shown in every view.
+
+## Front ends
+
+All of them work on the same sessions: start a session in one, follow or answer it in another.
+
+- **VSCode extension** ([extensions/vscode](extensions/vscode)): the chat on the right;
+  checker instructions, checker context and honesty one click away; a click on an edit opens
+  its diff, a click on a file name opens the file at the line; a settings dialog with one
+  model for every role. Runs where the workspace is: WSL, SSH, a dev container.
+- **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), in progress: the same
+  chat as a native tool window, for JetBrains' remote development and for a local IDE that
+  reaches the server over SSH and syncs files through calu.
+- **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
+  settings.
+- **Terminal** (`calu attach`): a full-screen client, and a line client for pipes.
+- **ACP editors** (`calu acp`): Zed, Neovim, JetBrains' agent chat.
+- **Command line on the database**: `calu sessions`, `calu escalations`,
+  `calu resolve 12 allow`.
+
+![Subagents as tabs in the VSCode extension](docs/assets/vscode-subagents.png)
+
+![Ten subagents in the web live view, one waiting for a decision](docs/assets/web-live-subagents.png)
+
+![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
 
 ## Where to go next
 
