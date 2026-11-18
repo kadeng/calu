@@ -1062,6 +1062,7 @@ export interface UserInput {
   seq?: number;
   source?: "user" | "cross_session" | "system";
   text: string;
+  to?: string;
   uuid?: string;
 }
 

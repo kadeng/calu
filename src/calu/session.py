@@ -2500,19 +2500,24 @@ class Session:
         """Send `chat.queue` with the messages that Claude has not taken in yet."""
         await self.emit(ChatQueue(messages=[message for message, _ in self._run_state.queue]))
 
-    async def _take_from_queue(self, text: str) -> None:
+    async def _take_from_queue(self, text: str) -> QueuedMessage | None:
         """Remove the oldest queued message whose sent text is `text`, then send `chat.queue`.
 
         Does nothing if no queued message matches.
 
         Args:
             text: The text of a user message that Claude took in.
+
+        Returns:
+            The removed message as the user sent it (its `text` is the user's own text, also
+            for a message that was wrapped for a subagent); None if none matched.
         """
-        for i, (_, sent) in enumerate(self._run_state.queue):
+        for i, (queued, sent) in enumerate(self._run_state.queue):
             if sent.strip() == text.strip():
                 del self._run_state.queue[i]
                 await self._emit_queue()
-                return
+                return queued
+        return None
 
     async def add_comment(self, params: CommentAddParams) -> Comment:
         """Build a `Comment` from a selection, inject it into Claude's session and store it.
@@ -3164,7 +3169,11 @@ class Session:
                             "calu does not show images to the checkers]"
                         )
                     self.context.user_input(seen, event.uuid)
-                    await self._take_from_queue(event.text)
+                    queued = await self._take_from_queue(event.text)
+                    if queued is not None and queued.to != "main":
+                        # Claude received the request to relay the text; the clients are
+                        # told what the user wrote and to whom.
+                        event = event.model_copy(update={"text": queued.text, "to": queued.to})
                 case AssistantText() if event.agent_id is None and event.uuid:
                     # Where a fork that keeps this turn resumes from (D36); the narrator case below
                     # also wants this event, so this branch records and falls through to it.

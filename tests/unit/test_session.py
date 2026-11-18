@@ -250,8 +250,13 @@ async def test_message_to_background_subagent_is_relayed(tmp_path: Path):
         with pytest.raises(SessionError, match="unknown subagent"):
             await session.send_chat(ChatSendParams(text="x", to="nope"))
         await session.stop()
-    relayed = rec.of(UserInput)[1].text
-    assert "SendMessage" in relayed and "psst" in relayed and "fake-agent-" in relayed
+        # The clients are told what the user wrote and to whom, not the request around it ...
+        relayed = rec.of(UserInput)[1]
+        assert (relayed.text, relayed.to) == ("psst", agent_id)
+        assert rec.of(UserInput)[0].to == "main"
+        # ... which is what Claude received and what the checkers read as the user's input.
+        sent = session.context.turns[0].user_inputs[1]
+        assert "SendMessage" in sent and "psst" in sent and "fake-agent-" in sent
 
 
 async def test_turns_are_folded_into_the_chat_summary(tmp_path: Path):

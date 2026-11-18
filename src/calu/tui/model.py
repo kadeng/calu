@@ -1932,9 +1932,11 @@ class SessionModel:
     def _user_input(self, event: m.UserInput, time: float | None, change: Change) -> None:
         """Apply `user.input`: add the message Claude has taken in.
 
-        A message for a subagent reaches Claude as a request to relay it. `user.input` does not
-        name its target, so the block is matched with the queue entry for a subagent whose text
-        the input contains, and then shows that text with "relayed to <agent>". A copy of it
+        A message for a subagent reaches Claude as a request to relay it. `user.input` names
+        the subagent in `to` and carries the user's own text. A session that does not say so
+        (an older calu) sends the whole request: the block is then matched with the queue
+        entry for a subagent whose text the input contains. Either way the block shows the
+        user's text with "relayed to <agent>". A copy of it
         (`UserBlock.echo`) goes into the subagent's own tab, so that the tab shows what the
         user sent to that agent.
 
@@ -1946,7 +1948,10 @@ class SessionModel:
         text = event.text
         relayed: str | None = None
         target: str | None = None
-        if event.source == "user":
+        if event.source == "user" and event.to != MAIN:
+            relayed = self.label(event.to)
+            target = event.to
+        elif event.source == "user":
             for entry in [*self._left_queue, *self.queue]:
                 if entry.to != MAIN and entry.text and entry.text in text:
                     relayed = self.label(entry.to)

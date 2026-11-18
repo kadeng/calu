@@ -824,6 +824,10 @@ class UserInput(Event):
     uuid: str = ""
     """The transcript entry's uuid, when Claude Code replays it (`replay-user-messages`). calu
     records it with the turn so that a later session can be forked before this prompt (D36)."""
+    to: str = "main"
+    """Whom the user wrote to: "main", or the `agent_id` of a background subagent
+    (`chat.send {to}`). For a subagent, `text` is the user's own text, without the request to
+    relay it that the main agent received around it."""
 
 
 class TurnResult(Event):

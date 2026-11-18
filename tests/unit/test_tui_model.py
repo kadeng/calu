@@ -220,6 +220,18 @@ def test_a_message_relayed_to_a_subagent_is_labelled_with_its_target() -> None:
     assert model.queue == []
 
 
+def test_a_message_for_a_subagent_that_names_its_target_needs_no_queue_entry() -> None:
+    """The session says whom the user wrote to (`user.input {to}`) and sends the user's own
+    text, so a client that attached after the message left the queue labels it too."""
+    model = SessionModel()
+    feed(model, scenarios.two_subagents())
+    model.apply("user.input", {"text": "also check docs/", "to": "a1"}, 2.0)
+    echo, block = model.blocks[-1], model.blocks[-2]
+    assert isinstance(block, UserBlock) and isinstance(echo, UserBlock)
+    assert (block.text, block.relayed_to, block.agent_id) == ("also check docs/", "explore", None)
+    assert (echo.text, echo.agent_id, echo.echo) == ("also check docs/", "a1", True)
+
+
 def test_a_snapshot_opens_escalations_the_events_did_not_carry_and_closes_stale_ones() -> None:
     session = FakeSession()
     scenarios.preload(session, scenarios.escalation_scenario())
