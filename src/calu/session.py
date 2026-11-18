@@ -148,7 +148,7 @@ from calu.checkers import (
 )
 from calu.checkers.honesty_review import HonestyReviewer, batches
 from calu.checkers.policy import EDIT_TOOLS
-from calu.checkers.render import changed_lines, edited_file
+from calu.checkers.render import changed_lines, edited_file, safe_name
 from calu.checkers.tools import StepTime
 from calu.claude.runner import (
     NOT_FROM_USER_LABEL,
@@ -360,6 +360,12 @@ SUBAGENT_NOTE_TEMPLATE = (
     "user, who sees the whole conversation] {note}"
 )
 """How the result checker's note is framed for Claude (sent as a priority "next" message)."""
+DECISION_NOTE_TEMPLATE = (
+    "[The user {decision} a {tool} step of this turn that waited for approval, and wrote this "
+    "note to Claude]\n{note}"
+)
+"""How the note a human wrote with a decision about an escalation is recorded as user input
+in the checkers' context. `decision` is "allowed" or "denied"."""
 RELAY_TEMPLATE = (
     "[Message from the user for your subagent {name}]\n"
     "Relay the following text verbatim to that subagent with the SendMessage tool "
@@ -2920,6 +2926,16 @@ class Session:
             # A human has seen the jump and decided: that answers the alarm. A jump that was
             # detected since then has another reason and stays.
             self._run_state.clock_alarm = None
+        note = asked.answer.note.strip()
+        if note and asked.outcome in ("allowed", "denied"):
+            # The note is the user's own text, and Claude acts on it ("not there, write it to
+            # X instead"). Without it the checkers see Claude follow an instruction nobody
+            # gave and refuse the step the user just asked for.
+            self.context.user_input(
+                DECISION_NOTE_TEMPLATE.format(
+                    decision=asked.outcome, tool=safe_name(step.tool_name), note=note
+                )
+            )
         if asked.answer.allow and step.tool_use_id:
             self._run_state.call(step.tool_use_id).running = True
             await self._refresh_state()

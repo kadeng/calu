@@ -901,3 +901,35 @@ def test_the_honesty_checker_neither_vetoes_allow_nor_hides_the_answer_on_execut
     ]
     executes = gate_module.StepGate._executes  # pyright: ignore[reportPrivateUsage]
     assert executes(fake, Route.COMMAND, runs, True) is False  # pyright: ignore[reportArgumentType]
+
+
+async def test_the_note_of_a_human_decision_is_user_input_for_the_checkers(tmp_path: Path):
+    """Seen with real checkers: the user denied a step with the note "write it to ./env.sh
+    instead", Claude did that, and the command checker refused the new step because "the user
+    never asked for env.sh". The note is the user's own text, so the checkers' context holds
+    it as user input; a decision without a note adds nothing."""
+    turn = [
+        {"tool": "Bash", "input": {"command": "one # calu:escalate"}, "result": "1"},
+        {"tool": "Bash", "input": {"command": "two # calu:escalate"}, "result": "2"},
+        {"tool": "Bash", "input": {"command": "three # calu:escalate"}, "result": "3"},
+        {"text": "Done."},
+    ]
+    session, rec, _store = make_session(tmp_path, [turn])
+    answers = [("deny", "not there, write it to ./env.sh"), ("allow", "  "), ("allow", "ok, once")]
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        for number, (decision, note) in enumerate(answers, start=1):
+            await wait_until(lambda n=number: len(rec.of(EscalationRequest)) >= n)
+            request = rec.of(EscalationRequest)[-1]
+            await session.decide_escalation(request.escalation_id, decision, note)
+        await rec.wait_for(TurnResult)
+        (recorded,) = session.context.turns
+        await session.stop()
+    assert recorded.user_inputs == [
+        "go",
+        "[The user denied a Bash step of this turn that waited for approval, and wrote this "
+        "note to Claude]\nnot there, write it to ./env.sh",
+        "[The user allowed a Bash step of this turn that waited for approval, and wrote this "
+        "note to Claude]\nok, once",
+    ]
