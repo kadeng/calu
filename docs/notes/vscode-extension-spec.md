@@ -267,6 +267,13 @@ decides where the table left it open:
 - **Reconnect**: after close 4002 at once, otherwise with a growing wait (0.25 s to 2 s) for
   15 s; a revoked or refused token and four connections in a row without a new event end in
   `lost` at once. `session.call` waits up to 15 s while the bridge is connecting again.
+- **`ide.unlock` (section 8)**: in `unlocked`, a store entry has its name (`operator`, `admin`,
+  `calu_admin`) and the login of the role `calu_admin` with a typed password is called
+  `calu_admin role`. The password is tried as the role's password only while no login that
+  changes settings is available. An unlock that opens nothing is -32010 only while a login
+  is still missing; with reading and changing both available it returns the state.
+  `ide.status` has `unlocked` (the held names) next to `locked`. Every -32010 carries
+  `data.unlocked`, also from a request that brought its own `password`.
 
 ## 7. Additions of 2026-11-18 (the owner's third message): parity with Claude Code's chat first
 
@@ -331,13 +338,6 @@ showing the mode and state; its menu switches off / track / enforce through
 - Consequence for the bridge: no code path of `calu ide` may require euid 0 or read
   `/etc/calu`; a request that cannot be served without them fails with a message that says
   what the person has to do on the server side.
-- **`ide.unlock` (section 8)**: in `unlocked`, a store entry has its name (`operator`, `admin`,
-  `calu_admin`) and the login of the role `calu_admin` with a typed password is called
-  `calu_admin role`. The password is tried as the role's password only while no login that
-  changes settings is available. An unlock that opens nothing is -32010 only while a login
-  is still missing; with reading and changing both available it returns the state.
-  `ide.status` has `unlocked` (the held names) next to `locked`. Every -32010 carries
-  `data.unlocked`, also from a request that brought its own `password`.
 
 ## 10. The one password, made precise (the owner, 2026-11-18)
 
@@ -352,3 +352,24 @@ more often is not. The client may keep the password in memory. So:
 - "Remember on this machine" (VSCode's secret storage) is therefore not needed and is not
   part of the first version; section 8's last point is withdrawn. If it was already built, it
   stays off by default and is not offered by a notification.
+
+## 11. Direct manipulation in the transcript (the owner, 2026-11-18)
+
+"Niceties like these make it fluid to use": what a row shows is what a click on it opens.
+
+| Click on | Opens |
+|---|---|
+| the row of an edit (Edit, Write, MultiEdit, NotebookEdit) | the native diff editor with that edit's before and after (`edit.diff`), scrolled to the first changed line |
+| the file name in that row | the file itself, cursor at the edited section (`start_line` of the edit) |
+| the row of a Read | the file, at the line range that was read |
+| a file path anywhere in Claude's text or in a tool's files list | the file (with `:line` if given) |
+| the row of a command | expands the command and its output in place; the row's menu offers "Copy command" |
+| a checker's decision chip | expands the reason; its menu offers "Open this checker's instructions" |
+| a subagent's launch row | that subagent's tab |
+| an escalation in the strip above the input | the tab and card of that escalation |
+| the context-usage meter | the usage popover |
+
+Rows that open something show it: pointer cursor, hover background, a tooltip naming the
+action ("Open diff", "Open file at line 42"), and the same action by keyboard (Enter on the
+focused row; the file name is a separate focus stop). An edit whose diff is no longer held
+(the store keeps the newest 300) opens the file instead and says so in the tooltip.

@@ -189,6 +189,10 @@ broken down or extended. Derived requirements and design decisions belong in
     "It IS ok if a single password is required on startup of the extension and on each IDE
     restart. But not more frequently like that. A session/db password may be retained
     in-memory in the client." (stated 2026-11-18)
+    "It must be user friendly and intuitive. Ideally, clicking on a line in the chat that
+    indicates an edit happened should get us into a diff viewer showing the diff of the edit
+    that was made. Clicking just on the filename might open the file and jump to the edited
+    section. Niceties like these make it fluid to use." (stated 2026-11-18)
 35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
     powerful because it should support both local and remote mode and an operation where the
     remote server, the db and calu are being accessed over SSH only and changes are
