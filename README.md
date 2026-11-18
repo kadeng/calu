@@ -18,6 +18,13 @@ write. Most steps pass. Where Claude drifts, the checker says so and Claude corr
 Where a person has to decide, the session waits until one does, from any front end.
 Afterwards every step is on record.
 
+- **Security.** A step is judged before it runs, by Claude Code's auto mode and by the
+  checkers. A step that needs a person stops the session until someone answers. The rules and
+  the record are in a database the session cannot write; with `--sudo` the agent runs as a
+  different user than calu.
+- **Honesty.** calu tracks, file by file, whether names and documentation still say what the
+  code does, and can keep unverified code from being run or committed.
+
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
 
