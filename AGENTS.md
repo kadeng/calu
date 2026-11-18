@@ -89,6 +89,8 @@ phases.
 | `tests/unit/` | Tests without database, `claude` or API keys |
 | `tests/db/` | Tests against the test database (marker `db`) |
 | `tests/browser/` | Tests in a headless browser (markers `browser` and `db`; `scripts/get-browser.sh` installs it without root) |
+| `tests/root/` | Tests that need real root (marker `root`; skipped unless root and `CALU_ROOT_TESTS=1`); they run in the root box: `docker exec calu-rootbox rootbox-tests` |
+| `uitest/rootbox/` | The root box: a container with root, sudo and three users for running the privileged arrangements for real; `fakecalu.py` is calu's command line with a scripted runner (`uitest/README.md`) |
 
 ## Commands
 

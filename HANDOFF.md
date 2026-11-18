@@ -186,6 +186,21 @@ Next steps for the extension, in order:
    Code's sandbox under the other uid (never switched on in a run); a named user with a
    real home (not run); `calu doctor` knows nothing of `--user`; the single-file binary has
    no launcher.
+   **2026-11-18, after the run in the root box** (`uitest/rootbox`, PLAN D234,
+   `docs/notes/test-plan.md` section E): a named user with a real home ran (`ada`, `bob`,
+   also through a real sudo with and without its password); `calu doctor` has `--user` and
+   `--sudo`; of the sandbox under the other uid only the settings calu generates were read,
+   because an unprivileged container may not create user namespaces (it needs a machine or
+   a container with that right); RDS and the single-file binary are as before. Found and
+   corrected there: `--user root` bound the token-free root socket (a command of Claude Code
+   was a root client), `calu run` ignored SIGTERM, a second password prompt at the end of
+   `calu attach`, tracebacks at Ctrl-C and Ctrl-D, and the smaller ones D234 lists. New:
+   `calu setup --set-passwords`, the root-only test layer `tests/root/` (`docker exec
+   calu-rootbox rootbox-tests`). Left for the owner: a command of `calu config` in an
+   account whose store holds an `admin` entry of another database than its `operator`
+   entry changes that other database and does not say which; under `--sudo` Claude Code
+   gets sudo's `PATH`; every `calu setup` after `--no-password` gives `calu_admin` a new
+   generated password, which a running `calu web` notices only when its connection drops.
 5. **RDS with IAM authentication has never run against a real instance** (D205;
    `docs/TESTING.md` item 26). Also not run: rootless Docker.
 6. **Publishing**: install is `uv tool install git+https://github.com/kadeng/calu` until

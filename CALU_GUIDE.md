@@ -915,6 +915,10 @@ is for the operator login, which reads and resolves and can change nothing else.
 design (REQUIREMENTS 17), and it asks once per session rather than several times an hour.
 `calu doctor` lists an unprotected credential and calls it a problem for `admin`, which owns
 the schema. `calu credential set operator` without the switch puts a password back on it.
+A command asks for calu's password once at most: `calu attach` with a password-protected
+credential asks it to find the session and does not ask again to revoke its token when it
+ends. It says that the token was left; only that client knew it, and it ends with its
+session (`calu token revoke <id>` revokes it at once).
 
 Claude runs as your user too, so calu keeps that credential from it in two ways. With the
 sandbox on, `~/.config/calu` is unreadable to Claude's commands; and a built-in rule makes
@@ -1492,7 +1496,9 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
 ```
 
 - **`--user` is required as root.** Claude Code never runs as root by accident; root itself
-  only when you name it (`--user root`).
+  only when you name it (`--user root`). Everything then runs as one user, as without root:
+  such a session has no socket for root clients, and every client shows a token, because a
+  command of Claude Code would be a root client too.
 - **A name** is a user of this machine: Claude Code uses that user's home directory, with its
   login and its conversations.
 - **A number** is a uid that needs neither a name nor a home directory, which is the usual
@@ -1545,7 +1551,14 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   `/var/lib/calu/database.json`, which every user and every program of the machine can
   read, so that your plain `calu attach` saves settings without a password too. Nothing but
   the checkers then keeps a program, Claude Code's commands included, from changing the
-  checkers. `sudo calu setup` without the option takes that back. Do not use
+  checkers. `sudo calu setup` without the option takes that back: the role gets a new
+  generated password, kept in `/etc/calu` only, and the file holds no secret again. The
+  logins in `/etc/calu` stay stored without a password, and nobody knows an admin password
+  then, so a client that is not root cannot change settings. `sudo calu setup
+  --set-passwords` puts typed passwords back: it asks for a new admin and a new session
+  password, encrypts the two stored logins with them and gives the role that changes
+  settings the admin password. Running sessions go on; the same option changes the
+  passwords of a setup that has them (the old ones are asked first). Do not use
   `--no-password` in your own account unless you accept that every program running as you,
   Claude Code's commands included, can read the logins. There the session password stays in any
   case: `calu run` accepts a session login without a password only from a store that root
@@ -1589,6 +1602,21 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   instructions or change `honesty.mode`. The password is typed each time and stored nowhere.
   The role changes settings and reads everything; it cannot change the schema or create
   logins. After an upgrade, run `sudo calu setup` once so that the role gets its password.
+- **Checking the arrangement before a session.** `calu doctor --sudo [DIR]` (as root: `calu
+  doctor --user NAME|UID [DIR]`) reports what `calu run --sudo` would find: the user and
+  its home directory, whether only root can change calu's installation, the launcher, the
+  credentials and checker keys in `/etc/calu`, and Claude Code's settings, sandbox and the
+  project as that user sees them. It starts nothing and creates no directory. `calu doctor`
+  as root without `--user` says that it looked at root's own account. It also reports a
+  bubblewrap that is installed but cannot create a sandbox (a container without the right
+  to create user namespaces): every command of Claude would fail there with the sandbox on.
+- **Stopping.** Ctrl-C and SIGTERM (`kill`, `docker stop`, a service manager) stop `calu
+  run` and `calu serve` in order: open escalations are cancelled, the sessions' rows say
+  "stopped", their sockets are removed.
+- **`PATH` under `--sudo`.** Claude Code is started with the `PATH` sudo gives calu (its
+  `secure_path`), not with the one of your shell. If a command of Claude does not find a
+  program that is installed in your home directory (`~/.local/bin`, a Node version
+  manager), that is the reason.
 - **Not yet:** the RDS variant of the database together with `--user`.
 
 ## The database

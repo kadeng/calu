@@ -190,7 +190,8 @@ changed are not changed back.
    too). Needs lazy imports in `calu.cli`.
 3. `calu attach` without a session prints "calu: CliError: no running session …" and names
    `calu run`, not `calu start`; with two sessions in the directory it lists two ids without
-   state, name or age. In `calu.cli`.
+   state, name or age. In `calu.cli`. **Fixed 15c9fc7** (section E): the message names
+   `calu start` first, and each session is listed with its state, start and name.
 4. A conversation that was stopped during its first turn has no input in the database (the
    input is stored with the finished turn), so `/sessions` and `calu list-sessions` cannot
    offer it.
@@ -282,6 +283,106 @@ subagents behind one unanswered decision were ten cards after five minutes.
 | D12 | `back` of an answer form | fixed: any address was followed; now only this interface's own |
 
 ### E. `calu serve`, `calu start`, `calu run`: with and without passwords, as a user and as root
+
+Run 2026-11-18 by an agent in the root box (`uitest/rootbox`, container `calu-rootbox`):
+Ubuntu 24.04, PostgreSQL 16 as the "existing server" variant (one cluster for root's calu,
+one for a user's own), `root`, `ada` (uid 1000, sudo without a password, a second calu in her
+home), `bob` (uid 1001, sudo asks a password), `carol` (uid 1002, no sudo). calu installed
+for root as the guide says. Sessions were scripted (`fakecalu`: calu's command line with the
+scripted runner and fake checkers, so the options, the store, `calu.asuser`, the sockets
+and the log are calu's own); who Claude Code is started as was read from a stand-in `claude`
+that records it, and once from the Claude Code the Agent SDK bundles. Prompts were counted
+on a terminal of their own (`ptyrun`). The lasting part is `tests/root/` (12 tests, run in
+the box).
+
+Not possible in the box: the `docker` database variant (no Docker inside), Claude Code's
+sandbox (an unprivileged container may not create user namespaces), a real conversation (no
+login, no keys), RDS, `/run/user/<uid>` (no login manager: the user's sockets are below
+`/tmp/calu-<uid>`). Not run here: the full-screen client as root (section C drives it).
+
+**E1. Setup**
+
+| # | Case | Result |
+|---|---|---|
+| E1.1 | `calu setup` as a user, passwords on standard input and on a terminal | ok. Store 0600 in `~/.config/calu` 0700 |
+| E1.2 | `calu setup --no-password` in a user's own store | ok: `admin` loses its password, the session password stays and the message says why; the warning names the store |
+| E1.3 | `sudo calu setup` with passwords | ok. `/etc/calu` 0700 root, `credentials.json` 0600 root; `/var/lib/calu` 0755 root, `database.json` 0644 root with host, port and database name, no secret; nothing in the user's home |
+| E1.4 | `sudo calu setup --no-password`, fresh and as a conversion | ok: the two old passwords are asked once; the typed admin password no longer logs in as `calu_admin` and is not in the file; the generated one is and logs in |
+| E1.5 | `sudo calu setup` again without the option | ok: the file holds no secret, the published password is refused. fixed (D234 (12)): the entries in `/etc/calu` stayed without a password, nobody knew an admin password afterwards and no command put typed passwords back; `calu setup --set-passwords` does, run on a terminal. Open (usability): every setup in that state gives `calu_admin` another generated password |
+| E1.6 | `--renew-session`; a second run that changes nothing | ok ("session login kept"); a running server keeps its connections and is refused at its next reconnect |
+| E1.7 | Blank passwords at every prompt | ok: accepted and working for both entries; a wrong one is refused. fixed 7e49cc3: with a blank admin password the report said "none was typed"; it now says that `calu_admin` gets no login from a blank password and what that costs |
+| E1.8 | Wrong passwords | fixed 7e49cc3: "calu: session" and libpq's text twice are now one sentence each |
+| E1.9 | Ctrl-C and Ctrl-D at a prompt | fixed 7e49cc3: both printed a traceback in every command but `run` and `serve`. Ctrl-C at the session password of a first setup keeps the `admin` entry, and the next `calu setup` goes on |
+| E1.10 | The database is down | ok for setup, `sessions`, `serve`, `run`, `doctor --db` (the server's refusal). fixed 7e49cc3: a client with a stored login to a server on this machine said "docker is not installed" |
+| E1.11 | An older schema (0036 taken out) | ok: `calu sessions` and `calu ide` list without names, `doctor --db` says one migration is missing, `calu setup` applies it |
+| E1.12 | `calu doctor` in each state | fixed 7e49cc3, 544b602: as root it called `/etc/calu` after `--no-password` "the wrong entry", named `~/.config/calu/.env`, and said nothing of `--user`. It now has `--user` and `--sudo`, says what a report as root did not look at, reports a password in the place file and a bubblewrap that cannot create namespaces |
+
+**E2. `calu serve` and `calu run`, per arrangement** (what Claude Code was started as is in the
+second table)
+
+| # | Arrangement | Result |
+|---|---|---|
+| E2.1 | `ada` alone, session password | ok; blank password ok; no local socket, every client shows a token |
+| E2.2 | `ada` alone, `--insecure` | ok: socket `/tmp/calu-1000/sessions/<id>.sock` 0600 in 0700 directories, hers; `carol` is let in on the loopback port (the option's stated cost) and cannot enter the directory |
+| E2.3 | `--secure` with `--insecure` | ok: refused |
+| E2.4 | root, no `--user` | ok: refused before the password |
+| E2.5 | root, `--user ada` / `1000` / `1000:1000` / `4242:4243` | ok: see the second table. `/run/calu/sessions/<id>.sock` 0600 root in 0700 root; `carol` and `ada` cannot enter it |
+| E2.6 | root, `--user root` | **fixed e7bb13b (security)**: it bound the token-free root socket although Claude Code is root there too |
+| E2.7 | `ada$ calu serve --sudo` | ok: no sudo prompt (her sudo asks none), "Session password:", the server answers ada's requests; root with ada's file access; none of her environment arrives; the note about provider keys is printed. fixed 7e49cc3: a log file was created in her home before the elevation |
+| E2.8 | `bob$ calu serve --sudo` | ok: sudo's prompt, then calu's; three wrong sudo passwords end with sudo's message |
+| E2.9 | `--sudo` from an installation in the home directory | fixed 7e49cc3: refused, but the install command was cut off the message for `run` and `serve` |
+| E2.10 | Terminal output | ok: the project, the ids, the client lines, `[stopped]`; nothing of the conversation |
+| E2.11 | An error in a session (a Claude Code that does not answer) | ok: one line per message on stderr, traceback in `/var/lib/calu/log/serve.log` (0600 root in 0700). Usability: three lines for one failure, and the advice names `claude` in a terminal where `calu login --user` is meant |
+| E2.12 | Ctrl-C in the middle of a turn, `serve` (two sessions) and `run` | ok: sessions "stopped", open escalation "cancelled", sockets removed, clients told |
+| E2.13 | SIGTERM | `serve` ok; `run` **fixed e7bb13b**: it ended at once, the row stayed "escalated", the socket stayed |
+| E2.14 | `--idle-timeout 1`, `--max-sessions 2`, a directory that does not exist | ok |
+| E2.15 | A claimed request whose server was killed | ok: after 180 s "the server claimed session request 9 and did not answer", row "failed" |
+| E2.16 | The database goes away under a running server | ok, it goes on when the database is back. fixed 7e49cc3: one stderr line per reconnect attempt of every connection |
+| E2.17 | A socket directory planted by another user (`/tmp/calu-1000`, 0777) | ok: refused ("no local socket"), clients use the address |
+
+**E3. Clients** (line client; "asked" counts calu's password prompts on a terminal)
+
+| Client | passwords (root's calu) | `--no-password` | `--insecure` | `--secure` |
+|---|---|---|---|---|
+| `ada` plain, `operator` without a password | attach, start, sessions, resolve, token: asked 0, ok (token). `config set`, `web`: admin password once | asked 0 everywhere, ok | attach: asked 0, no database, `local:` | as the first column |
+| `ada` plain, `operator` with a password | asked once per command. fixed 7e49cc3: attach asked it again at the end | n/a | — | — |
+| `ada --sudo` | attach: asked 0, no token, `root:`. start, `sudo calu sessions`, `web --sudo`: admin password once | asked 0 | asked 0 | attach: admin password once, token |
+| `bob --sudo` | sudo's password, then as ada | — | — | sudo's, then the admin password once |
+| `bob` plain on ada's session | attaches with his `operator` login (the database's logins decide, not the OS user) | — | — | — |
+| `carol` (no credential, no sudo) | reaches nothing: no socket directory, no store, loopback port wants a token | **by design** lists, resolves and changes settings without a prompt | loopback port: let in (the option's cost); socket: no | nothing |
+| root | attach in the project: asked 0, `root:`. fixed 7e49cc3: on a `--secure` session it asked the admin password twice and left a token | asked 0 | — | admin password once |
+| `calu web` | terminal: admin password once; front page 401 with the sign-in form; wrong password 401 after 1 s; right one opens the fleet | address with `?token=`; 401 without it | — | — |
+| `calu ide` | initialize, status, sessions, attach, `state.get`, settings: ok; `ide.unlock` with the admin password opens "calu_admin role" | no unlock needed | — | — |
+
+Decisions are recorded as `client:root:calu attach` (root socket), `client:local:calu attach`
+(`--insecure`), `client:calu attach` (token), `calu_operator` or `calu_admin` (`calu resolve`).
+
+**E4. Across restarts**: a server stopped with a client attached: ok (`[stopped]`, "the
+session closed the connection"). `calu_admin`'s password replaced by a setup while `calu web`
+runs: ok until its connection is lost, then 503 "The database cannot be reached" (open,
+usability: it does not say to start `calu web` again). Older schema: E1.11.
+
+**E5. Open in the privileged model (HANDOFF)**: a named user with a real home: ok (`ada`,
+`bob`). `calu doctor` and `--user`: fixed (E1.12). The sandbox under the other uid: the
+settings calu generates were read from the stand-in (deny-read list with `/etc/calu`, the
+user's `~/.config/calu` and `/var/lib/calu/state/<uid>/calu`; `failIfUnavailable`); whether
+it starts could not be run here. RDS: n/a here.
+
+**What Claude Code was started as, and who owns what**
+
+| Arrangement | uid:gid, groups | HOME | Environment (names) | Files |
+|---|---|---|---|---|
+| `ada` alone | 1000:1000, 1000 27 | `/home/ada` | hers, with the checker keys of the other providers present and empty (the SDK cannot unset them); `ANTHROPIC_API_KEY` is passed on, Claude Code uses it | everything hers: `~/.config/calu` 0700, `~/.local/state/calu/log/run.log` 0600 |
+| root `--user ada`, `--sudo` as ada | 1000:1000, 1000 27 | `/home/ada` | `PATH LANG TERM PWD HOME USER LOGNAME` + the SDK's four (`CALU_INSIDE_SESSION`, `CLAUDE_*`) | project files ada's; `/var/lib/calu/state/1000` 0700 ada; `/etc/calu`, the log, `/run/calu` root's alone |
+| `--sudo` as bob | 1001:1001, 1001 27 | `/home/bob` | the same | the same for 1001 |
+| root `--user 1000` or `1000:1000` | 1000:1000, no supplementary group | `/var/lib/calu/claude/1000` (0700, 1000's) | the same without `USER`, `LOGNAME` | project files 1000's |
+| root `--user 4242:4243` | 4242:4243, none | `/var/lib/calu/claude/4242` | the same | the same for 4242 |
+| root `--user root` | 0:0 | `/root` | root's; checker keys present and empty | root's; no `/run/calu` socket (E2.6) |
+
+With keys in `/etc/calu/.env`: none reaches Claude Code under `--user` (fixed e5f8554: the
+`ANTHROPIC_*` ones arrived present and empty; they are left out now). The working directory
+was the project in every case; `PATH` is root's (through sudo:
+`secure_path`), not the user's own (see the usability findings in `HANDOFF.md`).
 
 ### F. Session traces
 
