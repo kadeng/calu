@@ -1,0 +1,17 @@
+<idea-plugin>
+    <id>io.github.kadeng.calu</id>
+    <name>calu</name>
+    <vendor url="https://github.com/kadeng/calu">calu</vendor>
+
+    <description><![CDATA[
+        Chat with Claude Code sessions that calu runs and checks: the transcript with the checkers'
+        decisions, escalations to allow or deny, and diffs of every edit. Works in a local IDE, in
+        JetBrains remote development, and with a server that is reached over SSH only.
+    ]]></description>
+
+    <content>
+        <module name="calu.shared" loading="required"/>
+        <module name="calu.frontend"/>
+        <module name="calu.backend"/>
+    </content>
+</idea-plugin>
