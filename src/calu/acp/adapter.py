@@ -11,13 +11,31 @@ What maps onto what:
 
 | ACP | calu |
 |---|---|
-| `session/new` | attaches to the running session; its calu session id becomes the ACP `sessionId` |
+| `session/new` | attaches to the running session and hands out a fresh ACP `sessionId` for it |
 | `session/load` | replays `session.history` from the database as `session/update` notifications |
 | `session/prompt` | `chat.send`, then waits for a `turn.result` with no background task left |
 | `session/cancel` | `interrupt`; the prompt answers `stopReason: "cancelled"` |
 | `agent_message_chunk`, `agent_thought_chunk` | `assistant.delta`, `assistant.thinking` |
 | `tool_call`, `tool_call_update` | `tool.use`, `check.result`, `edit.diff`, `tool.result` |
 | `session/request_permission` | `escalation.request` -> `escalation.decide` |
+
+ACP session ids. An editor expects a new id from every `session/new` (PyCharm refuses a
+repeated one), while this adapter serves exactly one calu session. So every `session/new`
+answers with a fresh id of the form `<calu session id>~<8 hex digits>`, and all of them stand
+for the same calu session:
+
+    session/new  -> "abc~1f0c93aa" ─┐
+    session/new  -> "abc~77e02b14" ─┼─► the one calu session "abc"
+    session/load    "abc"          ─┘   (also "abc~<anything>", an id of an earlier `calu acp`)
+
+`session/list` names the calu session id itself, which stays valid across restarts of
+`calu acp`. While several ACP sessions are live, each of them shows the whole conversation:
+every `session/update` is sent once per live id, and every open escalation is asked in each of
+them; the first answer decides and the later ones are dropped. A prompt's own text is not
+echoed to the ACP session that sent it, and it is to the others. `session/cancel` interrupts
+the one calu session, so the waiting prompts of every ACP session answer `cancelled`.
+`session/close` ends one id; Claude's turn is interrupted only if that ACP session has a prompt
+waiting or was the last live one.
 
 Escalations that are already open when the editor attaches are asked as well: the adapter keeps
 every open escalation it hears of (from the events, the replay at connect and the `state.get`
@@ -33,6 +51,7 @@ goes to the adapter's own log, not to the editor.
 """
 
 import logging
+import secrets
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -103,14 +122,16 @@ class CaluSession(Protocol):
 class Turn:
     """The prompt turn a `session/prompt` call waits for."""
 
-    def __init__(self, text: str = "") -> None:
+    def __init__(self, text: str = "", session_id: str = "") -> None:
         """Create a turn that nothing has finished yet.
 
         Args:
             text: The message the prompt sent to the session, as `chat.queue` lists it while
                 Claude has not taken it in.
+            session_id: The ACP session id the prompt named.
         """
         self.text = text
+        self.session_id = session_id
         self.done = anyio.Event()
         self.stop_reason: acp.StopReason = "end_turn"
 
@@ -151,8 +172,10 @@ class Adapter:
         self.workspace = workspace
         self.name = name
         self.version = version
-        self.session_id: str | None = None
-        """The ACP session id handed to the client; None before `session/new`."""
+        self.calu_session_id: str | None = None
+        """The calu session's own id as `state.get` reported it; None before the first answer."""
+        self._sessions: list[str] = []
+        """The live ACP session ids, oldest first; all stand for the one calu session."""
         self.state: str = "starting"
         """Last state the calu session reported."""
         self.auto = AutoEscalate()
@@ -167,13 +190,24 @@ class Adapter:
         """Texts of the messages Claude has not taken in yet (the last `chat.queue` event)."""
         self._open: dict[str, dict[str, Any]] = {}
         """Open escalations by id, each as its `escalation.request` params."""
-        self._asking: set[str] = set()
-        """Ids of the escalations whose permission dialog is open in the editor."""
+        self._asking: set[tuple[str, str]] = set()
+        """(escalation id, ACP session id) of every permission dialog open in the editor."""
         self._deltas: set[str] = set()
         self._calls: dict[str, dict[str, Any]] = {}
         self._content: dict[str, list[dict[str, Any]]] = {}
         self._resolved: set[str] = set()
-        self._echo: deque[str] = deque(maxlen=ECHO_MEMORY)
+        self._echo: deque[tuple[str, str]] = deque(maxlen=ECHO_MEMORY)
+        """(text, ACP session id) of our own prompts whose `user.input` echo has not come."""
+
+    @property
+    def session_id(self) -> str | None:
+        """The ACP session id handed out or loaded last that is still live.
+
+        Returns:
+            That id, or None before `session/new` and `session/load` and after every id was
+            closed.
+        """
+        return self._sessions[-1] if self._sessions else None
 
     def attach(self, peer: Peer, tasks: anyio.abc.TaskGroup) -> None:
         """Give the adapter the peer it answers on and a task group for its own tasks.
@@ -331,8 +365,11 @@ class Adapter:
         Args:
             params: The `session/new` params.
 
+        Every call answers with an ACP session id that was never handed out before (see the
+        module docstring); the ids of earlier calls stay live.
+
         Returns:
-            `{"sessionId": ...}` with the calu session id.
+            `{"sessionId": ...}` with the new id, and the mode fields.
 
         Raises:
             RpcError: If `cwd` is outside the session's project directory.
@@ -346,11 +383,27 @@ class Adapter:
                 len(request.mcp_servers),
             )
         snapshot = await self.calu.request("state.get")
-        self.session_id = str(snapshot.get("calu_session_id") or "calu")
+        self.calu_session_id = _calu_id(snapshot)
+        session_id = self._fresh_id(self.calu_session_id)
+        self._sessions.append(session_id)
         self.state = str(snapshot.get("state", "starting"))
         self._read_auto(snapshot)
         self._remember_open(snapshot)  # asked after the answer, see `_after_response`
-        return {"sessionId": self.session_id, **self._mode_fields()}
+        return {"sessionId": session_id, **self._mode_fields()}
+
+    def _fresh_id(self, calu_id: str) -> str:
+        """Make an ACP session id that this adapter has not handed out and does not serve.
+
+        Args:
+            calu_id: The calu session's id.
+
+        Returns:
+            `<calu_id>~<8 hex digits>`.
+        """
+        while True:
+            candidate = f"{calu_id}{ID_SEPARATOR}{secrets.token_hex(4)}"
+            if candidate not in self._sessions:
+                return candidate
 
     def _remember_open(self, snapshot: dict[str, Any]) -> None:
         """Remember the open escalations of a `state.get` snapshot, without asking yet.
@@ -370,9 +423,14 @@ class Adapter:
         comes from the database (`session.history`), because the event buffer of the bus only
         covers the running process.
 
-        The requested id must be the running session's calu session id (as `state.get`
-        reports it), also when no `session/new` came first: an editor may remember the id of an
-        earlier calu run, and adopting that id would label this session's updates with it.
+        The requested id must stand for the running calu session: its calu session id (as
+        `state.get` reports it and `session/list` names it), or an id a `session/new` of this
+        or an earlier `calu acp` handed out for it (`<calu session id>~<suffix>`). An id of
+        another calu session is refused, also when no `session/new` came first: an editor may
+        remember the id of an earlier calu run, and adopting that id would label this
+        session's updates with it. An id that is live in this process loads as well (the
+        session may not have reported its calu session id yet when `session/new` answered).
+        A loaded id is live from then on, next to the others.
 
         Args:
             params: The `session/load` params.
@@ -387,18 +445,25 @@ class Adapter:
         request = acp.LoadSessionParams.model_validate(params)
         self._check_cwd(request.cwd)
         snapshot = await self.calu.request("state.get")
-        served = self.session_id or str(snapshot.get("calu_session_id") or "calu")
-        if request.session_id != served:
+        served = _calu_id(snapshot)
+        known = (
+            request.session_id == served
+            or request.session_id.startswith(served + ID_SEPARATOR)
+            or request.session_id in self._sessions
+        )
+        if not known:
             raise RpcError(
                 acp.UNKNOWN_SESSION,
                 f"calu does not serve {request.session_id}: this calu acp serves session {served}",
             )
-        self.session_id = served
+        self.calu_session_id = served
+        if request.session_id not in self._sessions:
+            self._sessions.append(request.session_id)
         self.state = str(snapshot.get("state", self.state))
         self._read_auto(snapshot)
         self._remember_open(snapshot)  # asked after the answer, see `_after_response`
         history = await self.calu.request("session.history", {})
-        await self._replay(history)
+        await self._replay(history, request.session_id)
         return self._mode_fields()
 
     async def _list_sessions(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -406,8 +471,9 @@ class Adapter:
 
         An adapter is attached to one running calu session, and `session/load` takes only
         that one, so nothing else is listed: an entry the editor could not open would be a
-        false offer. Asked for another directory than the session's (and not one inside it),
-        the list is empty.
+        false offer. The entry carries the calu session id, not one of the ids `session/new`
+        handed out: it is the id that a later `calu acp` process still loads. Asked for
+        another directory than the session's (and not one inside it), the list is empty.
 
         Args:
             params: The `session/list` params: an optional `cwd` and `cursor`.
@@ -430,7 +496,7 @@ class Adapter:
         except (RequestFailed, ConnectionError) as error:
             log.warning("session/list: the calu session did not answer state.get: %s", error)
             return {"sessions": []}
-        session_id = self.session_id or str(snapshot.get("calu_session_id") or "calu")
+        session_id = _calu_id(snapshot)
         state = str(snapshot.get("state", self.state))
         return {
             "sessions": [
@@ -476,10 +542,10 @@ class Adapter:
         if self.state in ("stopped", "failed"):
             await self.calu.request("session.start", {})
         self._ask_open()
-        turn = Turn(text)
+        turn = Turn(text, request.session_id)
         self._turns.append(turn)
         try:
-            self._echo.append(text)
+            self._echo.append((text, request.session_id))
             message: dict[str, Any] = {"text": text, "delivery": "queued"}
             if images:
                 message["images"] = images
@@ -492,25 +558,29 @@ class Adapter:
     async def _cancel(self, params: dict[str, Any]) -> None:
         """Handle `session/cancel`: interrupt Claude's turn.
 
-        Every pending prompt answers `cancelled`, as the protocol requires. A cancel for
-        another session is a notification and gets no answer, so it is only logged.
+        Every pending prompt answers `cancelled`, as the protocol requires; that includes
+        the prompts of the other live ACP session ids, because the interrupt ends the one
+        turn they all wait for. A cancel for an id that is not live is a notification and
+        gets no answer, so it is only logged.
 
         Args:
             params: The params holding the session id.
         """
         request = acp.SessionIdParams.model_validate(params)
-        if self.session_id is not None and request.session_id != self.session_id:
+        if self._sessions and request.session_id not in self._sessions:
             log.warning("ignoring a cancel for the unknown session %s", request.session_id)
             return
         self.finish_turns("cancelled")
         await self.calu.request("interrupt", {})
 
     async def _close(self, params: dict[str, Any]) -> None:
-        """Handle `session/close`: interrupt Claude's turn and forget the session id.
+        """Handle `session/close`: forget one ACP session id and end its prompts.
 
-        Every pending prompt answers `cancelled`. The calu session itself keeps running (it
-        belongs to `calu run`); only this editor's attachment ends, so a later request needs
-        a `session/new` or `session/load` first.
+        The prompts that named this id answer `cancelled`. Claude's turn is interrupted if
+        one of them was waiting, or if this was the last live id (then every pending prompt
+        answers `cancelled`); a spare ACP session that an editor closes does not stop the turn
+        another one started. The calu session itself keeps running (it belongs to `calu run`);
+        a later request with this id needs a `session/load` first.
 
         Args:
             params: The params holding the session id.
@@ -520,9 +590,11 @@ class Adapter:
         """
         request = acp.SessionIdParams.model_validate(params)
         self._require_session(request.session_id)
-        self.finish_turns("cancelled")
-        self.session_id = None
-        await self.calu.request("interrupt", {})
+        own = [turn for turn in self._turns if turn.session_id == request.session_id]
+        self._sessions.remove(request.session_id)
+        if own or not self._sessions:
+            self.finish_turns("cancelled")
+            await self.calu.request("interrupt", {})
 
     def _check_cwd(self, cwd: str) -> None:
         """Check that the editor's directory is inside the project this adapter serves.
@@ -554,17 +626,17 @@ class Adapter:
             )
 
     def _require_session(self, session_id: str) -> None:
-        """Check that a request names the session this adapter serves.
+        """Check that a request names a live ACP session id of this adapter.
 
         Args:
             session_id: The id from the request.
 
         Raises:
-            RpcError: If no session was created yet, or the id is a different one.
+            RpcError: If no session was created yet, or the id is not a live one.
         """
-        if self.session_id is None:
+        if not self._sessions:
             raise RpcError(acp.UNKNOWN_SESSION, "no session: call session/new first")
-        if session_id != self.session_id:
+        if session_id not in self._sessions:
             raise RpcError(acp.UNKNOWN_SESSION, f"calu does not serve {session_id}")
 
     # ------------------------------------------------------------------ session modes
@@ -809,17 +881,21 @@ class Adapter:
         """Forward a user message of another client, but not the echo of our own prompt.
 
         The editor already shows what its user typed, so echoing our own `chat.send` back would
-        duplicate it. Messages typed in another client (or relayed from another session) are
-        forwarded, so the editor shows the whole conversation.
+        duplicate it in the ACP session that sent it; the other live ACP sessions get it.
+        Messages typed in another client (or relayed from another session) are forwarded to
+        all, so the editor shows the whole conversation.
 
         Args:
             params: The `user.input` event.
         """
         text = _text(params)
-        if text in self._echo:
-            self._echo.remove(text)
-            return
-        await self._update(acp.message_chunk("user_message_chunk", text))
+        sender = next((entry for entry in self._echo if entry[0] == text), None)
+        if sender is not None:
+            self._echo.remove(sender)
+        await self._update(
+            acp.message_chunk("user_message_chunk", text),
+            skip=sender[1] if sender is not None else None,
+        )
 
     async def _on_tool_use(self, params: dict[str, Any]) -> None:
         """Announce a tool call to the editor, with whatever content already arrived for it.
@@ -987,21 +1063,23 @@ class Adapter:
         self._ask_open()
 
     def _ask_open(self) -> None:
-        """Open a permission dialog for every open escalation that has none.
+        """Open a permission dialog for every open escalation, in every live ACP session.
 
         Nothing is asked before `session/new` or `session/load`, because a permission request
         names the session id and an editor refuses one it does not know; the escalations stay
         remembered and are asked then. Each question runs in its own task: a human may take
-        hours, while the event stream and `session/cancel` must keep working.
+        hours, while the event stream and `session/cancel` must keep working. A pair of
+        escalation and ACP session whose dialog is already open is not asked again.
         """
-        if self._tasks is None or self._peer is None or self.session_id is None:
+        if self._tasks is None or self._peer is None:
             return
         for escalation_id, params in list(self._open.items()):
-            if escalation_id not in self._asking:
-                self._asking.add(escalation_id)
-                self._tasks.start_soon(self._ask_permission, params)
+            for session_id in list(self._sessions):
+                if (escalation_id, session_id) not in self._asking:
+                    self._asking.add((escalation_id, session_id))
+                    self._tasks.start_soon(self._ask_permission, params, session_id)
 
-    async def _ask_permission(self, params: dict[str, Any]) -> None:
+    async def _ask_permission(self, params: dict[str, Any], session_id: str) -> None:
         """Ask the editor's user about an escalated step and pass the answer to calu.
 
         Nothing is decided if the user's client answers `cancelled`, or if the escalation was
@@ -1011,17 +1089,22 @@ class Adapter:
 
         Args:
             params: The `escalation.request` event.
+            session_id: The ACP session id the dialog is opened in.
         """
         try:
-            await self._ask_and_decide(params)
+            await self._ask_and_decide(params, session_id)
         finally:
-            self._asking.discard(str(params.get("escalation_id", "")))
+            self._asking.discard((str(params.get("escalation_id", "")), session_id))
 
-    async def _ask_and_decide(self, params: dict[str, Any]) -> None:
+    async def _ask_and_decide(self, params: dict[str, Any], session_id: str) -> None:
         """Send one permission request and turn its answer into `escalation.decide`.
+
+        With several live ACP sessions the same escalation is asked once in each; the answer
+        that arrives after the escalation was resolved is dropped here.
 
         Args:
             params: The `escalation.request` event.
+            session_id: The ACP session id the dialog is opened in.
         """
         escalation_id = str(params.get("escalation_id", ""))
         call_id = str(params.get("tool_use_id") or f"escalation-{escalation_id}")
@@ -1039,9 +1122,9 @@ class Adapter:
         reason = str(params.get("reason") or "")
         rendered = str(params.get("rendered") or "")
         question = "\n\n".join(part for part in (f"escalated: {reason}", rendered) if part.strip())
-        content = self._add_content(call_id, acp.text_content(question))
+        content = self._question_content(call_id, question)
         try:
-            answer = await self._ask_client(call_id, content)
+            answer = await self._ask_client(call_id, content, session_id)
         except (RpcError, ConnectionError) as error:
             log.warning("the editor did not answer the permission request: %s", error)
             return
@@ -1070,12 +1153,34 @@ class Adapter:
             # the moment they chose -- otherwise they find out by being asked again.
             await self._update(acp.message_chunk("agent_message_chunk", f"{ALWAYS_HINT}\n", None))
 
-    async def _ask_client(self, call_id: str, content: list[dict[str, Any]]) -> Any:
+    def _question_content(self, call_id: str, question: str) -> list[dict[str, Any]]:
+        """Add an escalation's question to its tool call's content, once.
+
+        The same escalation is asked in every live ACP session and again after a closed
+        dialog, and each of those must not append the question another time.
+
+        Args:
+            call_id: The tool call the question is about.
+            question: The reason and the rendered step.
+
+        Returns:
+            All content entries of the call, oldest first.
+        """
+        entry = acp.text_content(question)
+        entries = self._content.setdefault(call_id, [])
+        if entry not in entries:
+            entries.append(entry)
+        return entries
+
+    async def _ask_client(
+        self, call_id: str, content: list[dict[str, Any]], session_id: str
+    ) -> Any:
         """Send the `session/request_permission` request to the editor.
 
         Args:
             call_id: The tool call the question is about.
             content: What the checker said, as tool call content.
+            session_id: The ACP session id the dialog is opened in.
 
         Returns:
             The result of the request.
@@ -1102,7 +1207,7 @@ class Adapter:
         return await self._peer.request(
             "session/request_permission",
             {
-                "sessionId": self.session_id,
+                "sessionId": session_id,
                 "toolCall": tool_call,
                 "options": acp.permission_options(),
             },
@@ -1110,15 +1215,17 @@ class Adapter:
 
     # ------------------------------------------------------------------ replay and sending
 
-    async def _replay(self, history: dict[str, Any]) -> None:
-        """Send a recorded conversation as `session/update` notifications.
+    async def _replay(self, history: dict[str, Any], session_id: str) -> None:
+        """Send a recorded conversation as `session/update` notifications of one ACP session.
 
         The turns carry the user's messages and Claude's answers, the steps the tool calls; a
         step is shown with its checker summary and the beginning of its result, which is what
-        the database keeps (the full output is not recorded, D3).
+        the database keeps (the full output is not recorded, D3). Only the loaded ACP session
+        gets the replay: the other live ones already show the conversation.
 
         Args:
             history: The result of `session.history`.
+            session_id: The ACP session id that was loaded.
         """
         steps = history.get("steps") or []
         by_turn: dict[Any, list[dict[str, Any]]] = {}
@@ -1126,21 +1233,26 @@ class Adapter:
             by_turn.setdefault(step.get("turn"), []).append(step)
         for turn in history.get("turns") or []:
             for text in turn.get("user_inputs") or []:
-                await self._update(acp.message_chunk("user_message_chunk", str(text)))
+                await self._update(
+                    acp.message_chunk("user_message_chunk", str(text)), only=session_id
+                )
             for step in by_turn.pop(turn.get("index"), []):
-                await self._replay_step(step)
+                await self._replay_step(step, session_id)
             answer = str(turn.get("answer") or "")
             if answer:
-                await self._update(acp.message_chunk("agent_message_chunk", answer))
+                await self._update(
+                    acp.message_chunk("agent_message_chunk", answer), only=session_id
+                )
         for remaining in by_turn.values():
             for step in remaining:
-                await self._replay_step(step)
+                await self._replay_step(step, session_id)
 
-    async def _replay_step(self, step: dict[str, Any]) -> None:
+    async def _replay_step(self, step: dict[str, Any], session_id: str) -> None:
         """Send one recorded step as a finished tool call.
 
         Args:
             step: A `StoredStep` as `session.history` returned it.
+            session_id: The ACP session id that was loaded.
         """
         tool_name = str(step.get("tool_name", ""))
         tool_input = step.get("tool_input") or {}
@@ -1154,7 +1266,8 @@ class Adapter:
                 status="completed",
                 raw_input=tool_input if isinstance(tool_input, dict) else None,
                 locations=_locations(tool_input),
-            )
+            ),
+            only=session_id,
         )
         parts = [
             f"{key}: {step.get(key)}"
@@ -1163,7 +1276,8 @@ class Adapter:
         ]
         if parts:
             await self._update(
-                acp.tool_call_update(call_id, content=[acp.text_content("\n".join(parts))])
+                acp.tool_call_update(call_id, content=[acp.text_content("\n".join(parts))]),
+                only=session_id,
             )
 
     def _add_content(self, call_id: str, entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1183,17 +1297,43 @@ class Adapter:
         entries.append(entry)
         return entries
 
-    async def _update(self, update: dict[str, Any]) -> None:
-        """Send one `session/update` notification.
+    async def _update(
+        self, update: dict[str, Any], only: str | None = None, skip: str | None = None
+    ) -> None:
+        """Send one `session/update` notification to the live ACP sessions.
 
-        Nothing is sent before `session/new`, because an update needs a session id.
+        Every live ACP session id stands for the same calu session, so each gets the update,
+        oldest id first. Nothing is sent before `session/new` or `session/load`, because an
+        update needs a session id.
 
         Args:
             update: The `update` object.
+            only: Send to this ACP session id alone (the replay of `session/load`).
+            skip: Leave this ACP session id out (the echo of its own prompt).
         """
-        if self._peer is None or self.session_id is None:
+        if self._peer is None:
             return
-        await self._peer.notify("session/update", {"sessionId": self.session_id, "update": update})
+        for session_id in [only] if only is not None else list(self._sessions):
+            if session_id != skip:
+                await self._peer.notify(
+                    "session/update", {"sessionId": session_id, "update": update}
+                )
+
+
+ID_SEPARATOR = "~"
+"""Between the calu session id and the per-`session/new` suffix of an ACP session id."""
+
+
+def _calu_id(snapshot: dict[str, Any]) -> str:
+    """Return the calu session's id from a `state.get` snapshot.
+
+    Args:
+        snapshot: The result of `state.get`.
+
+    Returns:
+        Its `calu_session_id`, or "calu" when the snapshot has none.
+    """
+    return str(snapshot.get("calu_session_id") or "calu")
 
 
 _LEVELS = {

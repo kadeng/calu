@@ -9,8 +9,11 @@ PyCharm log). Nothing here is built or decided. Items marked "not verified" need
   `C:\Users\KaiLo\.jetbrains\acp.json`, when started as `wsl.exe -d Ubuntu -- <script>`; a
   Linux path as the command fails (`EelPathException`).
 - The IDE then refused four times: `session/new reused existing ACP session id`. The IDE
-  expects a fresh id for every `session/new`; `calu acp` answers with the one session's id.
-  **To fix in `calu acp`.**
+  expects a fresh id for every `session/new`; `calu acp` answered with the one session's id.
+  **Fixed 2026-11-18** (`src/calu/acp/adapter.py`): every `session/new` answers with a new id
+  `<calu session id>~<8 hex digits>`; all of them stand for the one calu session, each gets
+  every update and every permission question, and the first answer decides. Not yet run
+  again in the owner's PyCharm.
 - Bundled in that PyCharm: SSH, SSH remote run, Deployment (FTP/SFTP), JCEF, terminal, remote
   development.
 

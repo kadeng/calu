@@ -1005,7 +1005,9 @@ project directory, with calu's own path:
 ```
 
 The adapter offers one session, the one that runs in that directory: an editor that lists
-an agent's sessions sees that one. A prompt may carry images, which Claude sees and the
+an agent's sessions sees that one. An editor that opens several chats with the agent gets a
+new ACP session id for each; all of them show the same calu session, and a step that waits
+for a decision is asked in each (the first answer counts). A prompt may carry images, which Claude sees and the
 checkers do not (see the web interface above). A step that waits for a decision appears as
 the editor's permission question, with the command or the file it is about.
 

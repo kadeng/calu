@@ -186,7 +186,8 @@ async def test_a_session_is_the_running_one_and_only_for_its_own_directory() -> 
         assert wrong["error"]["code"] == -32602
         assert "serves" in wrong["error"]["message"]
         answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
-        assert answer["result"]["sessionId"] == "abc"
+        first = answer["result"]["sessionId"]
+        assert first.startswith("abc~")
         assert h.calu.sent("state.get")
         # A directory **inside** the project is the same project: an editor opened on one
         # package of a repository works under the same rules, and `calu acp` with no address
@@ -194,7 +195,8 @@ async def test_a_session_is_the_running_one_and_only_for_its_own_directory() -> 
         inside = await h.editor.call(
             "session/new", {"cwd": str(WORKSPACE / "src" / "package"), "mcpServers": []}
         )
-        assert inside["result"]["sessionId"] == "abc"
+        assert inside["result"]["sessionId"].startswith("abc~")
+        assert inside["result"]["sessionId"] != first
         # One above it is not: the editor would act on files the session does not cover.
         above = await h.editor.call("session/new", {"cwd": str(WORKSPACE.parent), "mcpServers": []})
         assert above["error"]["code"] == -32602
@@ -593,12 +595,17 @@ async def test_a_prompt_for_another_session_and_an_unknown_method_are_refused() 
     calu = FakeCalu({"state.get": {"state": "idle", "calu_session_id": "s1"}})
 
     async def body(h: Harness) -> None:
-        await handshake(h.editor, h.calu)
+        session = await handshake(h.editor, h.calu)
         wrong = await h.editor.call(
             "session/prompt", {"sessionId": "other", "prompt": [{"type": "text", "text": "x"}]}
         )
         assert wrong["error"]["code"] == -32002
-        empty = await h.editor.call("session/prompt", {"sessionId": "s1", "prompt": []})
+        # The calu session id itself is served only after a `session/load` of it.
+        bare = await h.editor.call(
+            "session/prompt", {"sessionId": "s1", "prompt": [{"type": "text", "text": "x"}]}
+        )
+        assert bare["error"]["code"] == -32002
+        empty = await h.editor.call("session/prompt", {"sessionId": session, "prompt": []})
         assert empty["error"]["code"] == -32602
         # `session/set_mode` used to stand here; it is implemented now, so this needs a
         # method calu really does not have.
@@ -1447,7 +1454,9 @@ async def test_session_list_names_the_one_session_the_adapter_serves() -> None:
         session = await handshake(h.editor, h.calu)
         listed = (await h.editor.call("session/list", {"cwd": str(h.adapter.workspace)}))["result"]
         (entry,) = listed["sessions"]
-        assert entry["sessionId"] == session and entry["cwd"] == str(h.adapter.workspace)
+        # The listed id is the calu session's own: the one a later `calu acp` still loads.
+        assert entry["sessionId"] == "s1" != session
+        assert entry["cwd"] == str(h.adapter.workspace)
         assert entry["title"].endswith("(idle)") and entry["updatedAt"].endswith("Z")
         # Without a directory the session is listed too; for another project, nothing is.
         assert len((await h.editor.call("session/list", {}))["result"]["sessions"]) == 1
@@ -1576,8 +1585,128 @@ async def test_a_session_is_found_under_its_windows_name_too() -> None:
         await h.editor.call("initialize", {"protocolVersion": 1})
         share = f"//wsl.localhost/Ubuntu{WORKSPACE}"
         new = await h.editor.call("session/new", {"cwd": share, "mcpServers": []})
-        assert new["result"]["sessionId"] == "s1"
+        assert new["result"]["sessionId"].startswith("s1~")
         listed = await h.editor.call("session/list", {"cwd": share.replace("/", "\\")})
         assert len(listed["result"]["sessions"]) == 1
+
+    await run_adapter(calu, body)
+
+
+async def test_every_session_new_gets_a_fresh_id_for_the_one_calu_session() -> None:
+    """Found in PyCharm 2026.3: "session/new reused existing ACP session id"."""
+    calu = FakeCalu(
+        {
+            "state.get": {"state": "idle", "calu_session_id": "s1"},
+            "session.history": {"turns": [{"index": 0, "user_inputs": ["earlier"]}]},
+        }
+    )
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        ids = [
+            (await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []}))[
+                "result"
+            ]["sessionId"]
+            for _ in range(4)
+        ]
+        assert len(set(ids)) == 4 and all(one.startswith("s1~") for one in ids)
+        # Every live id gets each update of the one calu session, oldest id first.
+        await h.adapter.on_event("assistant.delta", {"text": "hi", "message_id": "m1"})
+        with anyio.fail_after(15):
+            while len(h.editor.updates()) < 4:
+                await anyio.sleep(0.005)
+        got = [m["params"]["sessionId"] for m in h.editor.inbox if m["method"] == "session/update"]
+        assert got == ids
+        h.editor.inbox.clear()
+        # An id of an earlier `calu acp` process for the same calu session loads, and only
+        # that id gets the replay.
+        loaded = await h.editor.call(
+            "session/load", {"sessionId": "s1~0000aaaa", "cwd": str(WORKSPACE), "mcpServers": []}
+        )
+        assert "error" not in loaded
+        replay = [m for m in h.editor.inbox if m["method"] == "session/update"]
+        assert [m["params"]["sessionId"] for m in replay] == ["s1~0000aaaa"]
+        # The next `session/new` still differs from all of them.
+        again = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        assert again["result"]["sessionId"] not in [*ids, "s1~0000aaaa", "s1"]
+        # Each mapped id takes the requests of a session.
+        for one in ids:
+            mode = await h.editor.call("session/set_mode", {"sessionId": one, "modeId": "edits"})
+            assert mode["result"] == {}
+
+    await run_adapter(calu, body)
+
+
+async def test_two_live_acp_sessions_both_see_the_turn_and_the_first_answer_decides() -> None:
+    calu = FakeCalu({"state.get": {"state": "running", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        first = await handshake(h.editor, h.calu)
+        second = (await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []}))[
+            "result"
+        ]["sessionId"]
+        answers: dict[str, dict[str, Any]] = {}
+
+        async def prompt() -> None:
+            answers["prompt"] = await h.editor.call(
+                "session/prompt",
+                {"sessionId": first, "prompt": [{"type": "text", "text": "go"}]},
+            )
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(prompt)
+            with anyio.fail_after(15):
+                while not h.calu.sent("chat.send"):
+                    await anyio.sleep(0.005)
+            # The prompt's echo goes to the other ACP session only.
+            await h.adapter.on_event("user.input", {"text": "go"})
+            await h.adapter.on_event(
+                "escalation.request",
+                {"escalation_id": "e1", "tool_use_id": "t1", "tool_name": "Bash", "reason": "r"},
+            )
+            asked = [await h.editor.expect("session/request_permission") for _ in range(2)]
+            assert {q["params"]["sessionId"] for q in asked} == {first, second}
+            echoes = [
+                m["params"]["sessionId"]
+                for m in h.editor.inbox
+                if m["method"] == "session/update"
+                and m["params"]["update"]["sessionUpdate"] == "user_message_chunk"
+            ]
+            assert echoes == [second]
+            chosen = {"outcome": {"outcome": "selected", "optionId": "allow-once"}}
+            await h.editor.send({"jsonrpc": "2.0", "id": asked[0]["id"], "result": chosen})
+            with anyio.fail_after(15):
+                while not h.calu.sent("escalation.decide"):
+                    await anyio.sleep(0.005)
+            await h.adapter.on_event("escalation.resolved", {"escalation_id": "e1"})
+            # The second dialog's late answer decides nothing.
+            late = {"outcome": {"outcome": "selected", "optionId": "reject-once"}}
+            await h.editor.send({"jsonrpc": "2.0", "id": asked[1]["id"], "result": late})
+            await anyio.sleep(0.05)
+            assert len(h.calu.sent("escalation.decide")) == 1
+            # A cancel named with the second id ends the first id's prompt as well: both
+            # wait for the one turn the interrupt ends.
+            await h.editor.notify("session/cancel", {"sessionId": second})
+        assert answers["prompt"]["result"] == {"stopReason": "cancelled"}
+        assert h.calu.sent("interrupt")
+
+    await run_adapter(calu, body)
+
+
+async def test_closing_a_spare_acp_session_does_not_interrupt_the_turn_of_another() -> None:
+    calu = FakeCalu({"state.get": {"state": "running", "calu_session_id": "s1"}})
+
+    async def body(h: Harness) -> None:
+        first = await handshake(h.editor, h.calu)
+        spare = (await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []}))[
+            "result"
+        ]["sessionId"]
+        closed = await h.editor.call("session/close", {"sessionId": spare})
+        assert closed["result"] == {}
+        assert not h.calu.sent("interrupt") and h.adapter.session_id == first
+        await h.adapter.on_event("assistant.delta", {"text": "hi", "message_id": "m1"})
+        await h.editor.wait_updates(1)
+        got = [m["params"]["sessionId"] for m in h.editor.inbox if m["method"] == "session/update"]
+        assert got == [first]
 
     await run_adapter(calu, body)
