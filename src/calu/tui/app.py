@@ -1180,7 +1180,15 @@ class CaluApp(App[None]):
             parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
         elif self.model.working():
             parts += [(7, "esc esc", "interrupt"), (3, "tab", "send mode")]
-        elif not stopped and self.mode != "search" and self.ask is None:
+        elif (
+            not stopped
+            and self.mode != "search"
+            and self.ask is None
+            and self.focused is not self.transcript
+            and not isinstance(self.focused, PanelList)
+        ):
+            # In the transcript and in the side panel Enter acts on the entry under the
+            # cursor (named above); it sends only from the input.
             parts += [(7, "enter", "send"), (1, "^j", "newline")]
         if len(self.model.tabs()) > 1:
             parts.append((7, "alt+←/→", "agent"))
@@ -3316,10 +3324,13 @@ class CaluApp(App[None]):
             ConfirmScreen(
                 "Shut down calu?",
                 [
-                    "the calu process of this session ends, and with it Claude's session",
+                    "this calu session ends, and with it Claude's session; a `calu serve` "
+                    "that runs it keeps running, with its other sessions",
                     "the running turn, its tool calls, background tasks and subagents end",
                     "steps that wait for a decision are cancelled",
-                    "calu run has to be started again in the project directory",
+                    "afterwards: `calu start` (with calu serve) or `calu run` in the project "
+                    "directory; `--resume` with the Claude session id of /state continues "
+                    "this conversation",
                 ],
                 self.palette,
                 typed="shutdown",

@@ -484,3 +484,13 @@ async def test_rewind_asks_for_a_branch_before_a_turn_and_refuses_other_numbers(
         assert wanted.claude_session_id == session.claude_session_id
         assert wanted.prompt == "try it another way"
         assert run.app.switch_to is not None, "the client switches to the branch"
+
+
+async def test_enter_is_offered_once_in_the_side_panel() -> None:
+    """In the panel Enter shows the entry under the cursor; the footer named "enter send" too."""
+    async with running("two_subagents") as run:
+        await run.press("f2")
+        footer = run.line("footer")
+        assert "enter" in footer and "enter send" not in footer, footer
+        await run.press("escape")
+        assert "enter send" in run.line("footer") or "esc esc interrupt" in run.line("footer")
