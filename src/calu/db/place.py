@@ -30,6 +30,22 @@ from calu.db.target import INHERITED, PasswordAuth, Target
 PATH = Path("/var/lib/calu/database.json")
 """The place file of root's calu on this machine."""
 
+PATH_ENV = "CALU_PLACE_FILE"
+"""Environment variable that names another place file. calu's own tests set it for every
+process they start, so that none of them reads the file of the machine they run on. The
+checks of `problems` apply to that file as well."""
+
+
+def default_path() -> Path:
+    """Return the place file this process uses.
+
+    Returns:
+        The path in `PATH_ENV` if that variable is set and not empty, else `PATH`.
+    """
+    chosen = os.environ.get(PATH_ENV)
+    return Path(chosen) if chosen else PATH
+
+
 FORMAT = 1
 """The number in `calu_place` of the file's format."""
 
@@ -38,7 +54,7 @@ class PlaceError(ValueError):
     """The place file cannot be trusted or read; the message says why."""
 
 
-def write(owner: Target, path: Path = PATH, admin_password: str | None = None) -> None:
+def write(owner: Target, path: Path | None = None, admin_password: str | None = None) -> None:
     """Write where the database of `owner` is. Needs the right to write the directory.
 
     Side effects: creates the directory if it is missing (mode 0755), writes the file under
@@ -47,7 +63,7 @@ def write(owner: Target, path: Path = PATH, admin_password: str | None = None) -
     Args:
         owner: Any login of the database; only `INHERITED` of its connection parameters is
             written (host, port, database name, how the server is verified).
-        path: The file.
+        path: The file; None is `default_path()`.
         admin_password: The password of the role `calu_admin`, to be readable by every user
             of the machine (`calu setup --no-password`); None writes no secret.
 
@@ -58,6 +74,7 @@ def write(owner: Target, path: Path = PATH, admin_password: str | None = None) -
     if "service" in owner.conninfo:
         raise PlaceError("the login names a libpq service; its place cannot be written down")
     conninfo = {key: owner.conninfo[key] for key in INHERITED if key in owner.conninfo}
+    path = default_path() if path is None else path
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}")
     data: dict[str, object] = {"calu_place": FORMAT, "conninfo": conninfo}
@@ -68,7 +85,7 @@ def write(owner: Target, path: Path = PATH, admin_password: str | None = None) -
     temporary.replace(path)
 
 
-def problems(path: Path = PATH, owner: int = 0) -> list[str]:
+def problems(path: Path | None = None, owner: int = 0) -> list[str]:
     """Say why the place file cannot be trusted to be root's word.
 
     Checked without following a symbolic link at the file's own name: it is a regular file,
@@ -76,12 +93,13 @@ def problems(path: Path = PATH, owner: int = 0) -> list[str]:
     others.
 
     Args:
-        path: The file.
+        path: The file; None is `default_path()`.
         owner: The uid that must own it (root; a test passes its own).
 
     Returns:
         One sentence per finding; empty if the file can be trusted.
     """
+    path = default_path() if path is None else path
     try:
         own = path.lstat()
         directory = path.parent.stat()
@@ -124,11 +142,11 @@ def _conninfo(path: Path) -> tuple[dict[str, str], str]:
     return conninfo, str(data.get("admin_password") or "")
 
 
-def read(path: Path = PATH, owner: int = 0) -> Target:
+def read(path: Path | None = None, owner: int = 0) -> Target:
     """Read the place file and return the login of `calu_admin` there.
 
     Args:
-        path: The file.
+        path: The file; None is `default_path()`.
         owner: The uid that must own it (root; a test passes its own).
 
     Returns:
@@ -140,6 +158,7 @@ def read(path: Path = PATH, owner: int = 0) -> Target:
         PlaceError: If the file is missing, is not `owner`'s alone to write (`problems`), or
             does not hold a place this version understands.
     """
+    path = default_path() if path is None else path
     wrong = problems(path, owner)
     if wrong:
         raise PlaceError("; ".join(wrong))

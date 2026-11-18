@@ -82,3 +82,24 @@ def test_a_setup_without_passwords_shares_the_admin_login(tmp_path: Path, monkey
     # After a setup with passwords the file holds no secret again.
     place.write(OWNER, path)
     assert "generated" not in path.read_text()
+
+
+def test_commands_use_the_shared_login_and_ask_nothing(tmp_path: Path, monkeypatch):
+    """D228: after a setup without passwords, also the commands of a user who cannot read
+    root's store find the database and its login in the place file."""
+    from calu import cli
+    from calu.credentials import CredentialStore
+
+    assert cli._shared_admin() is None, "the tests never read this machine's own place file"
+    path = tmp_path / "shared" / "database.json"
+    place.write(OWNER, path, admin_password="generated")
+    really = place.read
+    monkeypatch.setattr(place, "read", lambda: really(path, ME))
+    shared = cli._shared_admin()
+    assert shared is not None and shared.user == ADMIN_ROLE
+    store = CredentialStore(tmp_path / "empty-store.json")
+    secret = Target.parse(cli._admin_secret(store))
+    assert secret.user == ADMIN_ROLE and getattr(secret.auth, "password", "") == "generated"
+    # Without a password in the file, nothing is shared.
+    place.write(OWNER, path)
+    assert cli._shared_admin() is None

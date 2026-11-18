@@ -12,6 +12,12 @@ from pydantic_ai import models
 from calu.config import PROVIDER_KEYS_BY_PREFIX, load_secrets
 from calu.credentials import CredentialStore, KdfParams
 
+# Keep every test, and every `calu` process a test starts, away from
+# `/var/lib/calu/database.json` of the machine the tests run on: where calu is set up for
+# root, that file names the real database, and after `calu setup --no-password` it holds a
+# login for it (D228).
+os.environ["CALU_PLACE_FILE"] = "/nonexistent/calu-tests/database.json"
+
 load_secrets()
 """Checker API keys from `~/.config/calu/.env`, for the live tests."""
 

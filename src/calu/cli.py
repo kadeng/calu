@@ -320,6 +320,10 @@ def _admin_secret(store: CredentialStore) -> bytearray:
     if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
         # `calu setup --no-password`: nobody knows a password to type (D228).
         return store.load(ADMIN_ENTRY)
+    shared = _shared_admin()
+    if shared is not None:
+        # The same login, for a user who cannot read root's store: the place file.
+        return bytearray(shared.dump())
     if "admin" in store or "operator" not in store:
         return load_credential(store, "admin", "Admin password: ")
     place = load_target(store, "operator", "Operator password: ")
@@ -2031,6 +2035,11 @@ def _herd_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) 
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
+    shared = _shared_admin()
+    if shared is not None:
+        # `sudo calu setup --no-password` (D228): nothing is asked.
+        print(asyncio.run(_with_admin(shared.dump().decode(), work)))
+        return
     for name in OPERATOR_FIRST:
         if name in store:
             url = load_credential(store, name, f"{name.capitalize()} password: ")
@@ -2410,6 +2419,22 @@ def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None
         )
 
 
+def _shared_admin() -> Target | None:
+    """Return the login of `calu_admin` that `calu setup --no-password` made readable.
+
+    Returns:
+        The login with its password, from the place file (`calu.db.place`), or None if
+        there is no such file, it cannot be trusted, or it holds no password.
+    """
+    try:
+        shared = db_place.read()
+    except db_place.PlaceError:
+        return None
+    if isinstance(shared.auth, PasswordAuth) and shared.auth.password:
+        return shared
+    return None
+
+
 def _herd_value[T](
     store: CredentialStore, work: Callable[[Db], Awaitable[T]], may_ask: bool = True
 ) -> T:
@@ -2438,6 +2463,13 @@ def _herd_value[T](
     """
     if _held:
         return asyncio.run(_with_admin_value(_held[0], work))
+    shared = _shared_admin()
+    if shared is not None:
+        # `sudo calu setup --no-password`: the login every user of the machine may read
+        # (D228). Nothing is asked, and this user's own store, which may name another
+        # database, is not consulted.
+        _admin_place[:] = [shared]
+        return asyncio.run(_with_admin_value(shared, work))
     names = ("admin", "operator") if _hold else OPERATOR_FIRST
     if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
         # `calu setup --no-password`: the login that asks nothing and may do everything a
