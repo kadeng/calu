@@ -1,8 +1,8 @@
 # Handoff
 
 State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-28)
-and `PLAN.md` (decisions D1-D223, open questions §11, phases §12). Everything below is on
-`main` and pushed; the last commit is `8bd75f6` (`calu login`).
+and `PLAN.md` (decisions D1-D224, open questions §11, phases §12). Everything below is on
+`main` and pushed.
 
 ## Pick up here
 
@@ -63,11 +63,19 @@ the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The sui
    UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python "$(command
    -v uv)" tool install --reinstall git+https://github.com/kadeng/calu`) and runs
    `sudo calu setup` once (migrations 0033-0035, the `calu_admin` password).
-2. **Decisions waiting for the owner** (asked, no answer yet): should a `claude:` checker
-   under `--user` get the environment's Anthropic key (now it gets none and must use the
-   user's own login)? Cap parallel web login attempts? Should honesty judging move to the
-   honesty checker alone (the other checkers still write marks)? Should the check badge of
-   the honesty checker show HONEST/DISHONEST (needs a protocol and database change)?
+2. **Decided by the owner on 2026-11-18, recorded, not built** (D224, requirements 28 and
+   29; the owner said "do not implement yet"):
+   - **Honesty is judged by the honesty checker alone.** The other checkers lose the honesty
+     rules and the marks instructions and their marks are ignored; they keep the state note
+     and `executes_project_code`. D224 part 3 lists what to change, including the tests that
+     use `testing.marking_checker` on other checkers. Build this first when the owner says go.
+   - Settled, nothing to build: a `claude:` checker under `--user` runs in that user's
+     environment and uses the user's own login (`calu login`), never root's variables (the
+     code already does this); parallel web login attempts need no cap.
+   - Open question the owner asked: what the honesty checker's "badge" is. Answer given: the
+     PASS/ESCALATE/DENY label clients draw in front of a check; for the honesty checker it
+     says PASS even for a DISHONEST file. He has not decided whether it should show the
+     verdict instead (needs the verdict in the `check.result` event and `checker_runs`).
 3. **Open from the review (D222, "Left open")**: browser tests for the styled password page
    and pathological Markdown; Ctrl-C mid-turn under `calu serve`; no automated test for the
    root-only paths (`_client_user`, `_become_client_of`, `_local_endpoint`, the sudo

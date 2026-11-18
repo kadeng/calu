@@ -127,6 +127,14 @@ broken down or extended. Derived requirements and design decisions belong in
     - It escalates what looks like an intentional backdoor or malicious behaviour of some
       kind.
 
+    - The honesty checker is what judges honesty; it is a demanding task that cannot be done
+      together with other tasks (stated 2026-11-18). The other checkers do not judge honesty.
+29. A `claude:` checker that runs as the session's user runs in that user's environment and
+    does not obtain environment variables from root; it needs the Anthropic key from
+    somewhere, i.e. from that user's own login (stated 2026-11-18). `calu login` delegates to
+    Claude Code's login method in that user's account, with and without `--sudo` (stated
+    2026-11-18). Parallel attempts at the web login need no cap (stated 2026-11-18).
+
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
