@@ -1,0 +1,306 @@
+{
+  "name": "calu",
+  "displayName": "calu",
+  "description": "Attach to calu sessions: chat with Claude Code while checker agents and you review its commands and edits; edit checker instructions and calu's settings.",
+  "version": "0.1.0",
+  "publisher": "kadeng",
+  "license": "GPL-2.0-only",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kadeng/calu.git"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "The extension runs calu in the workspace folder."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "calu",
+          "title": "calu",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "calu": [
+        {
+          "type": "webview",
+          "id": "calu.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "calu.openChat",
+        "title": "Open Chat",
+        "category": "calu",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "calu.newSession",
+        "title": "New Session...",
+        "category": "calu",
+        "icon": "$(add)"
+      },
+      {
+        "command": "calu.attach",
+        "title": "Attach to Session...",
+        "category": "calu",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "calu.switchSession",
+        "title": "Switch Session...",
+        "category": "calu",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "calu.renameSession",
+        "title": "Rename Session...",
+        "category": "calu",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "calu.detach",
+        "title": "Detach from Session",
+        "category": "calu",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "calu.interrupt",
+        "title": "Interrupt Claude",
+        "category": "calu",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "calu.addComment",
+        "title": "Add Comment for Claude",
+        "category": "calu",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "calu.editCheckerInstructions",
+        "title": "Edit Checker Instructions",
+        "category": "calu",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "calu.showCheckerContext",
+        "title": "Show Checker Context",
+        "category": "calu",
+        "icon": "$(book)"
+      },
+      {
+        "command": "calu.openSettings",
+        "title": "Open Settings",
+        "category": "calu",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "calu.startServer",
+        "title": "Start calu Server",
+        "category": "calu",
+        "icon": "$(server-process)"
+      },
+      {
+        "command": "calu.showServerHelp",
+        "title": "How to Start the calu Server",
+        "category": "calu",
+        "icon": "$(question)"
+      },
+      {
+        "command": "calu.showRootInstall",
+        "title": "Show Root Installation Command (for --sudo)",
+        "category": "calu",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "calu.restartBridge",
+        "title": "Restart Bridge",
+        "category": "calu",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "calu.showLog",
+        "title": "Show Log",
+        "category": "calu",
+        "icon": "$(output)"
+      },
+      {
+        "command": "calu.install",
+        "title": "Install calu",
+        "category": "calu",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "calu.update",
+        "title": "Update calu",
+        "category": "calu",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "calu.checkSetup",
+        "title": "Check Setup",
+        "category": "calu",
+        "icon": "$(pulse)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "calu.addComment",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "calu.addComment",
+          "when": "editorTextFocus",
+          "group": "9_calu@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "calu.newSession",
+          "when": "view == calu.chat",
+          "group": "navigation@0"
+        },
+        {
+          "command": "calu.attach",
+          "when": "view == calu.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "calu.editCheckerInstructions",
+          "when": "view == calu.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "calu.showCheckerContext",
+          "when": "view == calu.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "calu.openSettings",
+          "when": "view == calu.chat",
+          "group": "navigation@4"
+        },
+        {
+          "command": "calu.startServer",
+          "when": "view == calu.chat",
+          "group": "overflow@1"
+        },
+        {
+          "command": "calu.restartBridge",
+          "when": "view == calu.chat",
+          "group": "overflow@2"
+        },
+        {
+          "command": "calu.showLog",
+          "when": "view == calu.chat",
+          "group": "overflow@3"
+        },
+        {
+          "command": "calu.update",
+          "when": "view == calu.chat",
+          "group": "overflow@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "calu",
+      "properties": {
+        "calu.command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "restricted": true,
+          "markdownDescription": "Command that runs calu, without arguments, e.g. `[\"uv\", \"run\", \"--project\", \"/home/me/calu\", \"calu\"]`. Empty: use `calu` from `PATH`, then `~/.local/bin/calu`."
+        },
+        "calu.install.source": {
+          "type": "string",
+          "default": "git+https://github.com/kadeng/calu",
+          "scope": "machine",
+          "markdownDescription": "What **calu: Install calu** passes to `uv tool install --python 3.14`: a package name, a `git+https://` address or the path of a checkout."
+        },
+        "calu.server.sudo": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "**calu: Start calu Server** adds `--sudo`: calu runs as root and Claude Code as an unprivileged user. Needs the root installation of calu; the terminal asks for the sudo password."
+        },
+        "calu.server.insecure": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "**calu: Start calu Server** adds `--insecure`: sessions run without the sandbox."
+        },
+        "calu.server.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "markdownDescription": "Further arguments that **calu: Start calu Server** appends to `calu serve`."
+        },
+        "calu.chat.showThinking": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show Claude's thinking in the chat, collapsed. When off, thinking is hidden; switching the setting back shows it again."
+        },
+        "calu.chat.escalationSound": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Play a short chime when a step waits for your decision (an escalation). The sound plays on your computer, also in remote windows."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit -p tsconfig.json",
+    "build": "npm run check-types && node esbuild.mjs",
+    "build:production": "npm run check-types && node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "gen:protocol": "node scripts/gen-protocol.mjs",
+    "test:unit": "vitest run",
+    "package": "vsce package --no-dependencies --skip-license -o calu.vsix",
+    "vscode:prepublish": "npm run build:production"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.2.0",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.100.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "json-schema-to-typescript": "^16.0.0",
+    "markdown-it": "^15.0.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

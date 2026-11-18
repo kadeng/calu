@@ -1,0 +1,11 @@
+/* PLACEHOLDER stylesheet of the chat view; the real one replaces it (see WEBVIEW_CONTRACT.md).
+   Rules: VSCode CSS variables only, no fixed colours. */
+body {
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  padding: 0 12px;
+}
+.placeholder {
+  color: var(--vscode-descriptionForeground);
+}
