@@ -65,9 +65,9 @@ async def test_an_interrupt_ends_a_slow_text_after_the_words_said(tmp_path: Path
         await played.runner.interrupt()
         await played.until(TurnResult)
         await played.runner.stop()
-    (said,) = played.of(AssistantText)
-    assert said.text and text.startswith(said.text) and said.text != text
-    assert played.of(TurnResult)[0].subtype == "interrupted"
+        (said,) = played.of(AssistantText)
+        assert said.text and text.startswith(said.text) and said.text != text
+        assert played.of(TurnResult)[0].subtype == "interrupted"
 
 
 async def test_an_interrupt_ends_a_long_tool_call_with_an_error_and_writes_nothing(tmp_path: Path):
@@ -79,9 +79,9 @@ async def test_an_interrupt_ends_a_long_tool_call_with_an_error_and_writes_nothi
         await played.runner.interrupt()
         await played.until(TurnResult)
         await played.runner.stop()
-    (result,) = played.of(ToolResult)
-    assert (result.is_error, result.content) == (True, INTERRUPTED_TOOL_RESULT)
-    assert not (tmp_path / "a").exists() and played.of(AssistantText) == []
+        (result,) = played.of(ToolResult)
+        assert (result.is_error, result.content) == (True, INTERRUPTED_TOOL_RESULT)
+        assert not (tmp_path / "a").exists() and played.of(AssistantText) == []
 
 
 async def test_a_tool_call_with_a_duration_that_passes_runs_as_scripted(tmp_path: Path):
@@ -90,7 +90,7 @@ async def test_a_tool_call_with_a_duration_that_passes_runs_as_scripted(tmp_path
         played = await play(tmp_path, [[call]], tg)
         await played.until(TurnResult)
         await played.runner.stop()
-    assert played.of(ToolResult)[0].content == "built" and (tmp_path / "a").read_text() == "x"
+        assert played.of(ToolResult)[0].content == "built" and (tmp_path / "a").read_text() == "x"
 
 
 async def test_a_failing_subagent_ends_failed_with_an_error_result(tmp_path: Path):
@@ -99,8 +99,8 @@ async def test_a_failing_subagent_ends_failed_with_an_error_result(tmp_path: Pat
         played = await play(tmp_path, [[{"agent": agent}]], tg)
         await played.until(TurnResult)
         await played.runner.stop()
-    assert played.of(AgentsUpdate)[-1].agents[0].status == "failed"
-    assert [(r.is_error, r.content) for r in played.of(ToolResult)] == [(True, "It crashed.")]
+        assert played.of(AgentsUpdate)[-1].agents[0].status == "failed"
+        assert [(r.is_error, r.content) for r in played.of(ToolResult)] == [(True, "It crashed.")]
 
 
 async def test_a_detached_subagent_outlives_its_turn_and_starts_the_next_one(tmp_path: Path):
@@ -120,11 +120,11 @@ async def test_a_detached_subagent_outlives_its_turn_and_starts_the_next_one(tmp
         assert played.of(AgentsUpdate)[-1].agents[0].status == "running"
         await played.until(TurnResult, 2)
         await played.runner.stop()
-    assert played.of(AgentsUpdate)[-1].agents[0].status == "completed"
-    assert [t.text for t in played.of(AssistantText)] == ["launched", "watched", "it finished"]
-    assert played.of(TurnResult)[1].background_tasks == 0
-    # Nobody typed the follow-up turn: the only user message is the first one.
-    assert [u.text for u in played.of(UserInput)] == ["go"]
+        assert played.of(AgentsUpdate)[-1].agents[0].status == "completed"
+        assert [t.text for t in played.of(AssistantText)] == ["launched", "watched", "it finished"]
+        assert played.of(TurnResult)[1].background_tasks == 0
+        # Nobody typed the follow-up turn: the only user message is the first one.
+        assert [u.text for u in played.of(UserInput)] == ["go"]
 
 
 async def test_parallel_branches_run_at_the_same_time(tmp_path: Path):
@@ -134,7 +134,7 @@ async def test_parallel_branches_run_at_the_same_time(tmp_path: Path):
         played = await play(tmp_path, [[{"parallel": [slow, fast]}, {"text": "after"}]], tg)
         await played.until(TurnResult)
         await played.runner.stop()
-    assert [t.text for t in played.of(AssistantText)] == ["fast", "slow", "after"]
+        assert [t.text for t in played.of(AssistantText)] == ["fast", "slow", "after"]
 
 
 async def test_transcript_uuids_are_given_only_when_asked_for(tmp_path: Path):
@@ -145,9 +145,9 @@ async def test_transcript_uuids_are_given_only_when_asked_for(tmp_path: Path):
         await marked.until(TurnResult)
         await plain.runner.stop()
         await marked.runner.stop()
-    assert [e.uuid for e in plain.of(UserInput) + plain.of(AssistantText)] == ["", ""]
-    uuids = [e.uuid for e in marked.of(UserInput) + marked.of(AssistantText)]
-    assert all(uuids) and len(set(uuids)) == 2
+        assert [e.uuid for e in plain.of(UserInput) + plain.of(AssistantText)] == ["", ""]
+        uuids = [e.uuid for e in marked.of(UserInput) + marked.of(AssistantText)]
+        assert all(uuids) and len(set(uuids)) == 2
 
 
 async def test_an_interrupt_ends_the_wait_for_a_humans_decision(tmp_path: Path):
