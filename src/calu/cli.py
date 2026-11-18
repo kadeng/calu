@@ -2879,7 +2879,10 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     run_as = _client_user(args)
     # After `calu setup --no-password` nobody knows the password of `calu_admin`, so a
     # browser cannot be asked for it: the address carries the token instead (D228).
-    typed_password = ADMIN_ENTRY not in store or store.needs_password(ADMIN_ENTRY)
+    # The same holds for a user who gets that login from the place file (`_shared_admin`).
+    typed_password = (
+        ADMIN_ENTRY not in store or store.needs_password(ADMIN_ENTRY)
+    ) and _shared_admin() is None
     url = _admin_secret(store)
     if run_as is not None:
         # As root for a user (`calu web --sudo`): the login was read from root's store and
