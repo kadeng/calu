@@ -247,6 +247,14 @@ broken down or extended. Derived requirements and design decisions belong in
     readme a bit, I think some sections can be shortened while the new features can be
     described more prominently. The ALLOW/ESCALATE/DENY response is a detail that doesn't need
     to take the center stage in the readme." (stated 2026-11-19)
+    "Lead the readme with a quote from the movie Tron. Where Flynn asks Tron what his function
+    is." Then: "The 'I fight for the users' part isn't bad either", and the two passages as he
+    recalls them from the 1982 film: Flynn: "Who's that guy?" / Program: "That's Tron. He
+    fights for the Users."; and Alan Bradley to Dillinger: "It's called Tron. It's a security
+    program itself, actually. It monitors all contacts between our system and other systems.
+    Finds anything going on that's not scheduled, it shuts it down. ... It'll run
+    independently and watchdog the MCP as well." (stated 2026-11-19; the wording is his and
+    was not checked against a transcript)
 
 ## Soft goals and priorities
 
