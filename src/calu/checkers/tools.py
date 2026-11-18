@@ -460,8 +460,8 @@ class CodeTools:
                 opened file).
 
         Raises:
-            ReadRefused: If `real` is outside `root`, inside calu's configuration directory, or
-                covered by a read deny rule.
+            ReadRefused: If `real` is outside `root`, inside calu's configuration directory,
+                inside the directory of the session traces, or covered by a read deny rule.
         """
         if real != root and root not in real.parents:
             raise ReadRefused(
@@ -471,6 +471,10 @@ class CodeTools:
         own = _calu_config_dir()
         if real == own or own in real.parents:
             raise ReadRefused("calu's own configuration is never readable")
+        if self.rules is not None and self.rules.in_trace_directory(real):
+            # The traces are calu's record of this and earlier sessions (D232): a checker
+            # judges the code, and reads the conversation in its own context only.
+            raise ReadRefused("calu's session traces are not part of what a checker reads")
         if self.rules is not None and (
             # Once as the rules name project files (relative to the workspace as configured,
             # which may itself be reached through a link), once as the absolute location.
@@ -843,7 +847,9 @@ def _scan_changed(
                 return sorted(found, key=lambda entry: entry[1])[:limit]
             absolute = Path(directory) / name
             relative = absolute.relative_to(root).as_posix()
-            if rules is not None and rules.read_denied(absolute):
+            if rules is not None and (
+                rules.read_denied(absolute) or rules.in_trace_directory(absolute)
+            ):
                 continue
             if not _matches(relative, pattern):
                 continue

@@ -1133,6 +1133,10 @@ class HonestyState:
         self.watched: set[str] = set()
         """Files git does not list (ignored, or outside the repository) that the session wrote
         or a person named. calu does not search for others."""
+        self.excluded: tuple[str, ...] = ()
+        """Directories, relative to the workspace, whose files are never unreviewed and that
+        no honesty review reads: calu's own output inside the project (the session traces,
+        PLAN.md D232). The session sets it when the configuration changes."""
         self.trusted_hashes: Mapping[str, TrustSource] = {}
         """SHA-256 -> source, from the table `trusted_files`, set by the session
         (`SessionStore.trusted_file_sources`). A file with such a content is verified wherever
@@ -1150,6 +1154,17 @@ class HonestyState:
         edit or reviewed file; it is empty after a restart."""
 
     # ------------------------------------------------------------------ paths and contents
+
+    def left_out(self, key: str) -> bool:
+        """Tell whether a file lies in a directory the state does not judge (`excluded`).
+
+        Args:
+            key: The file's name in the state (`key`).
+
+        Returns:
+            True if the file is one of the `excluded` directories or lies below one.
+        """
+        return any(key == path or key.startswith(path + "/") for path in self.excluded)
 
     def key(self, path: str | Path) -> str:
         """Return the name the state uses for a file.
@@ -1666,7 +1681,7 @@ class HonestyState:
             if unreviewed.everything:
                 return [], unreviewed.problem or "git did not list the files"
             found.update(unreviewed.paths)
-            return sorted(found), ""
+            return sorted(key for key in found if not self.left_out(key)), ""
         try:
             top = self._repository()
             output = run_git(top, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
@@ -1677,7 +1692,7 @@ class HonestyState:
             if os.path.lexists(top / inside):
                 found.add(self.key(top / inside))
         found.update(key for key in self.watched if os.path.lexists(self.workspace / key))
-        return sorted(found), ""
+        return sorted(key for key in found if not self.left_out(key)), ""
 
     @_locked
     def review_plan(self, max_files: int) -> ReviewPlan:
@@ -2145,7 +2160,8 @@ class HonestyState:
         unless it is at the commit the baseline records for it or is not checked out; the
         files inside it are not looked at. A directory that git names as one entry and the
         baseline does not record as a submodule is unreviewed. Not looked at: other ignored
-        files, other files outside the repository, deleted files.
+        files, other files outside the repository, deleted files, and the files of the
+        `excluded` directories (calu's own session traces).
 
         A commit records what the index holds, so a path is also unreviewed when its staged
         content is not reviewed. A staged content is reviewed when it is
@@ -2225,7 +2241,7 @@ class HonestyState:
             ids = self._content(key)
             if ids is None or self._verified_source(key, ids) is None:
                 found.add(key)
-        return Unreviewed(paths=tuple(sorted(found)))
+        return Unreviewed(paths=tuple(sorted(key for key in found if not self.left_out(key))))
 
     @_locked
     def snapshot(self) -> HonestySnapshot:

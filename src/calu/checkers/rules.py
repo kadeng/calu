@@ -32,7 +32,10 @@ Built-in rules that the lists cannot remove: reading or writing calu's own direc
 asks the human. These are the directory of the credentials and of the env file with the checker
 keys and the directory above the snapshots, at the place they really have on this machine
 (`calu.paths.calu_private_dirs`: `$XDG_CONFIG_HOME/calu`, `$XDG_STATE_HOME/calu` and the two
-defaults below the home directory), plus every path with a `.config/calu` component. An
+defaults below the home directory), plus every path with a `.config/calu` component. While
+session traces are written (`traces.enabled`, PLAN.md D232), writing into the trace directory
+always asks the human as well: the files there are calu's record of the session, and a change
+to them is not an ordinary edit (`Rules.trace_directory`). An
 invalid pattern makes every checked call ask the human until it is fixed, so a broken deny list
 never lets a call through.
 """
@@ -273,6 +276,11 @@ class Rules:
                 empty. None makes all lists empty.
         """
         self.workspace = workspace.resolve()
+        self.trace_directory: Path | None = None
+        """The directory of the session traces while they are written (absolute, or relative
+        to the workspace), else None. The session sets it from `traces.directory`. Writing
+        into it is covered by a built-in write deny rule (`trace_rule`), and the checkers'
+        code tools do not read it (`in_trace_directory`)."""
         self._lists: dict[str, tuple[list[Rule], list[str]]] = {}
         self.replace(lists or {})
 
@@ -732,12 +740,58 @@ class Rules:
         """
         return self._deny_rule(path, "read") is not None
 
+    def in_trace_directory(self, path: Path) -> bool:
+        """Tell whether `path` is the trace directory or lies in it.
+
+        The comparison is by path components after normalisation, with and without links
+        resolved, for the path and for the directory.
+
+        Args:
+            path: An absolute path.
+
+        Returns:
+            True if `trace_directory` is set and equals `path` or is one of its parents.
+        """
+        if self.trace_directory is None:
+            return False
+        directory = self.workspace / self.trace_directory
+        directories = {Path(os.path.abspath(directory))}
+        forms = {Path(os.path.abspath(path))}
+        try:
+            directories.add(directory.resolve())
+            forms.add(path.resolve())
+        except OSError, RuntimeError:
+            pass
+        return any(
+            form == directory or directory in form.parents
+            for form in forms
+            for directory in directories
+        )
+
+    def trace_rule(self, path: Path) -> Rule | None:
+        """Return the built-in rule that covers writing `path` as a session trace, if it is one.
+
+        Args:
+            path: An absolute path that a tool call writes.
+
+        Returns:
+            A rule with the source "built-in (calu's session traces)" whose pattern names the
+            trace directory, for messages; None if `path` is not inside `trace_directory`.
+        """
+        if self.trace_directory is None or not self.in_trace_directory(path):
+            return None
+        shown = self.display(self.workspace / self.trace_directory)
+        return Rule(
+            re.compile("^" + re.escape(shown) + "(/|$)"), "built-in (calu's session traces)"
+        )
+
     def _deny_rule(self, path: Path, kind: str) -> Rule | None:
         """Return the first deny rule that covers reading or writing `path`.
 
         The built-in rules come first and cannot be removed by a list: calu's own directories
-        at their real location (`built_in_path_rule`), then the built-in patterns, then the
-        `read-deny` or `write-deny` list.
+        at their real location (`built_in_path_rule`), for a write the directory of the
+        session traces (`trace_rule`), then the built-in patterns, then the `read-deny` or
+        `write-deny` list.
 
         Args:
             path: An absolute path.
@@ -748,6 +802,8 @@ class Rules:
             the path's matching form (`match_form`).
         """
         own = built_in_path_rule(path)
+        if own is None and kind == "write":
+            own = self.trace_rule(path)
         if own is not None:
             return own
         built_in = BUILT_IN_READ_DENY if kind == "read" else BUILT_IN_WRITE_DENY

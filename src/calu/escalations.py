@@ -106,6 +106,9 @@ class Escalation:
     "interrupted", which is what an escalation is whose wait was cancelled before any answer."""
     deciding: bool = False
     """True while a client's decision is being written to the database (`decide`)."""
+    resolved_by: str = ""
+    """Who decided, as the escalation's row records it (e.g. "client:tui"); "" while nobody
+    did, and for an escalation that ended without a decision."""
 
 
 @dataclass(frozen=True)
@@ -217,6 +220,10 @@ class EscalationDesk:
         self.escalations: dict[str, Escalation] = {}
         """The open escalations, by the id clients know them by (the row id as a string).
         Others read it; only the desk changes it."""
+        self.resolved_by: dict[str, str] = {}
+        """Escalation id -> who decided it, set right before its `escalation.resolved` event
+        is emitted. The receiver of that event takes the entry out (`Session.emit`), which
+        is how the session trace learns who decided without a change to the event."""
         self._closed = anyio.Event()
         """Set, and replaced by a new event, each time an escalation leaves `escalations` or
         stops being opened (`_wake_held`); `hold` waits for it."""
@@ -438,6 +445,7 @@ class EscalationDesk:
                     decision = "cancelled"
                 else:
                     decision = "allow" if answer.allow else "deny"
+                    self.resolved_by[escalation_id] = esc.resolved_by
                 await self._emit(
                     EscalationResolved(
                         escalation_id=escalation_id,
@@ -551,6 +559,7 @@ class EscalationDesk:
                 if row.answered:
                     # A question of the agent that an operator answered in the database (D35).
                     esc.answered = True
+                    esc.resolved_by = row.resolved_by or ""
                     esc.answer = HumanAnswer(
                         allow=False, message=ANSWER_TEMPLATE.format(answer=row.note)
                     )
@@ -565,6 +574,7 @@ class EscalationDesk:
                 if row.note:
                     message += f" Note from the user: {row.note}"
                 esc.answer = HumanAnswer(allow=row.allowed, message=message, note=row.note)
+                esc.resolved_by = row.resolved_by or ""
                 if row.allowed:
                     esc.outcome = "allowed"
                 else:
@@ -709,6 +719,7 @@ class EscalationDesk:
                             "what the database says"
                         )
                 if esc.answer is None:  # the poll may have adopted a resolution meanwhile
+                    esc.resolved_by = f"client:{client or 'unknown'}"
                     esc.answer = human
                     esc.answered = answer is not None
                     esc.outcome = outcome

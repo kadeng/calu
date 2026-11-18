@@ -36,6 +36,7 @@ without this machinery, is D32 (`calu.clock`, `calu.checkers.tools.changed_files
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -188,7 +189,14 @@ class SnapshotStore:
     max_patch_bytes: int = 200_000
     always_capture: Sequence[str] = ()
     """Paths to capture even though a `.gitignore` covers them, e.g. `.env`."""
+    exclude: Sequence[str] = ()
+    """Directories, relative to the project directory, that no snapshot holds: calu's own
+    output inside the project (the session traces, D232). It may be set again between two
+    snapshots; `take` applies the current value."""
     _ready: bool = field(default=False, init=False)
+    _excluded: tuple[str, ...] | None = field(default=None, init=False)
+    """The value of `exclude` that the repository's exclude file holds; None before the first
+    snapshot."""
 
     async def prepare(self) -> None:
         """Create the git directory and its configuration.
@@ -221,6 +229,7 @@ class SnapshotStore:
         """
         if not self._ready:
             raise SnapshotError("prepare() has not run")
+        await self._write_excludes()
         await self._git(["add", "-A", "--", "."])
         for path in self.always_capture:
             # A path a `.gitignore` covers is only captured when it is named explicitly; an
@@ -230,6 +239,40 @@ class SnapshotStore:
             except SnapshotError as exc:
                 log.debug("not capturing %s: %s", path, exc)
         return (await self._git(["write-tree"])).strip()
+
+    async def _write_excludes(self) -> None:
+        """Bring the repository's exclude file in line with `exclude`.
+
+        The snapshot repository's own `info/exclude` names the directories as patterns
+        anchored at the project root, so `git add -A` leaves them out like ignored files.
+        A directory that an earlier snapshot holds is taken out of the index.
+
+        Side effects: writes `<root>/info/exclude` when `exclude` changed since the last
+        snapshot.
+
+        Raises:
+            SnapshotError: If the file cannot be written.
+        """
+        wanted = tuple(path.strip("/") for path in self.exclude if path.strip("/"))
+        if wanted == self._excluded:
+            return
+        lines = ["/" + re.sub(r"([\\*?\[\]!# ])", r"\\\1", path) + "/" for path in wanted]
+
+        def write() -> None:
+            """Write the exclude file."""
+            info = self.root / "info"
+            info.mkdir(exist_ok=True)
+            (info / "exclude").write_text("".join(f"{line}\n" for line in lines))
+
+        try:
+            await anyio.to_thread.run_sync(write)
+        except OSError as exc:
+            raise SnapshotError(f"cannot write the exclude file of {self.root}: {exc}") from exc
+        for path in wanted:
+            await self._git(
+                ["rm", "-r", "-f", "--cached", "--quiet", "--ignore-unmatch", "--", path]
+            )
+        self._excluded = wanted
 
     async def changes(self, before: str, after: str) -> ChangeSet:
         """Return what changed between two snapshots.
@@ -251,7 +294,13 @@ class SnapshotStore:
         if before == after:
             return ChangeSet()
         listed = await self._git(["diff-tree", "-r", "--name-status", "-z", before, after])
-        changes = await self._parse(listed)
+        left_out = tuple(path.strip("/") for path in self.exclude if path.strip("/"))
+        changes = [
+            change
+            for change in await self._parse(listed)
+            # A directory that was excluded after a snapshot held it would show as deleted.
+            if not any(change.path == p or change.path.startswith(p + "/") for p in left_out)
+        ]
         if not changes:
             return ChangeSet()
         small = [

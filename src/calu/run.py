@@ -817,6 +817,7 @@ async def run_from(
                 on_serving,
                 on_ready,
                 on_event,
+                login_password=getattr(source.target.auth, "password", ""),
             )
         finally:
             with anyio.CancelScope(shield=True):
@@ -876,6 +877,7 @@ async def _run(
     on_serving: Serving | None = None,
     on_ready: Ready | None = None,
     on_event: EventSink | None = None,
+    login_password: str = "",
 ) -> int:
     """Load the settings, start the session and drive it until it ends.
 
@@ -890,6 +892,8 @@ async def _run(
         on_ready: Awaited with the session row's id and the address once a client can find the
             session in the database, or None.
         on_event: Awaited with every event of the session, or None.
+        login_password: The password of the session's database login, or "" if it has none.
+            It is only named to the session as a value its trace must never hold (D232).
 
     Returns:
         0 if the session ended normally, 1 if it failed or could not start.
@@ -935,7 +939,10 @@ async def _run(
         # A conversation that was started with `claude` itself: the checkers are told what
         # its transcript says the user asked for (D209).
         transcript_inputs=functools.partial(user_inputs, directory=options.workspace),
+        # A session trace never holds the values of these variables (D232).
+        secret_env=hidden,
     )
+    session.add_trace_secret(login_password, "password")
 
     async def on_settings(new: ProjectSettings) -> None:
         """Apply reloaded settings and report it.
@@ -1119,6 +1126,7 @@ async def _run(
                     # After the start, so that the session row and its id exist when the first
                     # client asks; the events of the start are in the bus and are replayed.
                     token = new_token()
+                    session.add_trace_secret(token, "client token")
                     server = SessionServer(
                         session, bus, token_hash(token), tg, insecure=options.insecure
                     )

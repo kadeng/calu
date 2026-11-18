@@ -218,6 +218,9 @@ class WriteSets:
         self._run_checkers = run_checkers
         self._check_context = check_context
         self._wrote = wrote
+        self.excluded: Sequence[str] = ()
+        """Directories, relative to the project directory, that no write set names: calu's
+        own output inside the project (the session traces, D232). The session sets it."""
 
     @property
     def _snapshots(self) -> SnapshotStore | None:
@@ -288,6 +291,7 @@ class WriteSets:
         if self._snapshots is None or not step.tool_use_id:
             return
         try:
+            self._snapshots.exclude = tuple(self.excluded)
             tree = await self._snapshots.take()
         except SnapshotError as exc:
             log.warning("no snapshot before %s: %s", step.tool_name, exc)
@@ -339,6 +343,7 @@ class WriteSets:
             return None
         before, step_id, summary = opened
         try:
+            self._snapshots.exclude = tuple(self.excluded)
             after = await self._snapshots.take()
             change = await self._snapshots.changes(before, after)
         except SnapshotError as exc:
