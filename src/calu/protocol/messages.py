@@ -233,6 +233,29 @@ class HonestyTrustParams(BaseModel):
     note: str = ""
 
 
+class FilesUserEditParams(BaseModel):
+    """`files.user_edit`: the user is about to write these files through an editor.
+
+    `calu ide` sends it immediately before it replaces, deletes or renames a file for the
+    editor's file synchronisation (`docs/notes/jetbrains-sync-spec.md`). Such a write is the
+    user's own edit, not a step of Claude: no checker judges it. The session leaves the paths
+    out of the write set of a command that runs at that moment and watches the files for the
+    code honesty state, where they count as unreviewed like any change made outside calu.
+    With an empty list nothing is recorded and only the result is of use.
+    """
+
+    paths: list[str] = Field(default_factory=list, max_length=1000)
+    """The files, relative to the workspace, with "/" separators; no `..` segment."""
+
+
+class FilesUserEditResult(BaseModel):
+    """Result of `files.user_edit`."""
+
+    excluded: list[str] = Field(default_factory=list)
+    """Directories, relative to the workspace, that hold calu's own output of this session
+    (the session traces while `traces.enabled` is on): an editor leaves them alone."""
+
+
 class HonestyTrustResult(BaseModel):
     """Result of `honesty.trust`: what was recorded."""
 
@@ -643,6 +666,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "honesty.clear": HonestyClearParams,
     "honesty.trust": HonestyTrustParams,
     "honesty.review": EmptyParams,
+    "files.user_edit": FilesUserEditParams,
     "interrupt": EmptyParams,
     "context.get": EmptyParams,
     "side.ask": SideAskParams,

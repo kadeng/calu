@@ -82,6 +82,7 @@ from calu.protocol.messages import (
     Event,
     EventsSubscribeParams,
     EventsSubscribeResult,
+    FilesUserEditParams,
     HonestyClearParams,
     HonestyTrustParams,
     InitializeParams,
@@ -1299,6 +1300,9 @@ class Client:
                 )
             case "honesty.review":
                 return await session.request_review(client=self.name or "unknown")
+            case "files.user_edit":
+                assert isinstance(params, FilesUserEditParams)
+                return await session.user_edit(params.paths, client=self.name or "unknown")
             case "interrupt":
                 await session.interrupt()
                 return {}

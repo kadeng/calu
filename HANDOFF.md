@@ -445,7 +445,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2031 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. 398 commits, ~62.5k lines of Python in `src` (~67k with the SQL, templates and
-default instructions), ~36k of tests, 35 migrations, 26 CLI commands, 22 protocol requests,
+default instructions), ~49k of tests, 35 migrations, 26 CLI commands, 23 protocol requests,
 19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

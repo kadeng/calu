@@ -37,7 +37,7 @@ without this machinery, is D32 (`calu.clock`, `calu.checkers.tools.changed_files
 import logging
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -274,12 +274,15 @@ class SnapshotStore:
             )
         self._excluded = wanted
 
-    async def changes(self, before: str, after: str) -> ChangeSet:
+    async def changes(self, before: str, after: str, skip: Collection[str] = ()) -> ChangeSet:
         """Return what changed between two snapshots.
 
         Args:
             before: Tree id from `take` before the command ran.
             after: Tree id from `take` after it ran.
+            skip: Paths, relative to the project directory, that are left out of the write
+                set and of its patch: files somebody else is known to have written between
+                the two snapshots (the user through an editor, `WriteSets.user_edited`).
 
         Returns:
             The write set: one `Change` per path, and a patch cut to `max_patch_bytes` that
@@ -300,6 +303,7 @@ class SnapshotStore:
             for change in await self._parse(listed)
             # A directory that was excluded after a snapshot held it would show as deleted.
             if not any(change.path == p or change.path.startswith(p + "/") for p in left_out)
+            and change.path not in skip
         ]
         if not changes:
             return ChangeSet()

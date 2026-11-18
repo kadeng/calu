@@ -150,7 +150,7 @@ from calu.checkers import (
 )
 from calu.checkers.honesty_review import HonestyReviewer, batches
 from calu.checkers.policy import EDIT_TOOLS
-from calu.checkers.render import changed_lines, edited_file, safe_name
+from calu.checkers.render import changed_lines, edited_file, inline, safe_name
 from calu.checkers.tools import StepTime
 from calu.claude.runner import (
     NOT_FROM_USER_LABEL,
@@ -240,6 +240,7 @@ from calu.protocol.messages import (
     EscalationContextResult,
     EscalationResolved,
     Event,
+    FilesUserEditResult,
     HonestyFileStatus,
     HonestyInfo,
     HonestyMarkInfo,
@@ -887,6 +888,41 @@ class Session:
         await self._emit_safely(Log(level="info", message=f"honesty: {by}: {what} {state}"))
         await self.announce_honesty()
         return result
+
+    async def user_edit(self, paths: Sequence[str], client: str = "unknown") -> FilesUserEditResult:
+        """Take note that the user writes files through an editor (`files.user_edit`).
+
+        The write is the user's own, not a step of Claude: no checker judges it. Side
+        effects: the paths are left out of the write set of a command that runs now
+        (`WriteSets.user_edited`); the files are watched for the code honesty state, where
+        their new content is unreviewed like any change made outside calu; one `log` event
+        names them. The honesty state is computed again at the next checked step.
+
+        Args:
+            paths: The files, relative to the workspace, with "/" separators. May be empty.
+            client: The client's name, for the log.
+
+        Returns:
+            The directories of the session's own output inside the workspace.
+
+        Raises:
+            SessionError: If a path is absolute or has a `..` segment.
+        """
+        for path in paths:
+            if not path or path.startswith("/") or ".." in path.split("/") or "\x00" in path:
+                raise SessionError(f"{path!r} is not a path relative to the workspace")
+        if paths:
+            self.write_sets.user_edited(paths)
+            self._watch_written(paths)
+            shown = ", ".join(inline(path, 200) for path in paths[:5])
+            more = f" and {len(paths) - 5} more" if len(paths) > 5 else ""
+            await self._emit_safely(
+                Log(
+                    level="info",
+                    message=f"{client or 'unknown'}: the user wrote {shown}{more} in the editor",
+                )
+            )
+        return FilesUserEditResult(excluded=list(self.write_sets.excluded))
 
     async def honesty_review(self, *, asked: bool = False, wait_s: float | None = None) -> str:
         """Run the honesty review: judge the unreviewed and the marked files (section 4).

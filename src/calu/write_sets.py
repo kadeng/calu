@@ -25,6 +25,9 @@ Guarantees:
   neither reviewed nor undone, because it cannot be attributed to one of them.
 - A failing snapshot never stops a run: it is reported, and the session goes on without write
   sets.
+- A file the user wrote through an editor while a command ran (`user_edited`, reported by
+  `calu ide` before it writes) is left out of that command's write set: it is neither
+  recorded as the command's, nor shown to the changeset checkers, nor undone with it.
 
 Where the state is: the snapshot repository of the run (`RunState.snapshots`) and the open
 "before" snapshot of each call (`PerCall.before`, `PerCall.overlapped`) are fields of the
@@ -111,6 +114,11 @@ WRITE_SET_NOT_REVERTED = (
     "the change yourself before you go on."
 )
 """Note for Claude when a refused change could not be reverted."""
+
+
+USER_EDIT_MARGIN_S = 10.0
+"""How long before a command's "before" snapshot a reported editor write still counts as
+falling into that command's window: the report precedes the write itself by a moment."""
 
 
 @dataclass(frozen=True)
@@ -221,6 +229,43 @@ class WriteSets:
         self.excluded: Sequence[str] = ()
         """Directories, relative to the project directory, that no write set names: calu's
         own output inside the project (the session traces, D232). The session sets it."""
+        self._user_edits: dict[str, float] = {}
+        """Path -> `time.monotonic()` of the last report that the user writes it."""
+        self._opened: dict[str, float] = {}
+        """Tool call id -> `time.monotonic()` just before its "before" snapshot was taken."""
+
+    def user_edited(self, paths: Sequence[str]) -> None:
+        """Take note that the user is writing these files now, outside any tool call.
+
+        `calu ide` reports the files an editor uploads immediately before it replaces them.
+        A command whose window (from its "before" snapshot to its measurement) holds such a
+        report, or begins up to `USER_EDIT_MARGIN_S` after it, gets a write set without
+        these paths. Side effect: forgets reports that no open or later window can hold.
+
+        Args:
+            paths: The files, relative to the project directory, with "/" separators.
+        """
+        now = time.monotonic()
+        oldest = min(self._opened.values(), default=now) - USER_EDIT_MARGIN_S
+        self._user_edits = {path: at for path, at in self._user_edits.items() if at >= oldest}
+        for path in paths:
+            self._user_edits[path] = now
+
+    def _user_edits_since(self, opened_at: float | None) -> frozenset[str]:
+        """Return the files the user was reported to write in a command's window.
+
+        Args:
+            opened_at: When the command's window opened (`time.monotonic()`), or None if
+                that is not known.
+
+        Returns:
+            The paths reported at or after `opened_at - USER_EDIT_MARGIN_S`; empty without
+            an opening time.
+        """
+        if opened_at is None:
+            return frozenset()
+        since = opened_at - USER_EDIT_MARGIN_S
+        return frozenset(path for path, at in self._user_edits.items() if at >= since)
 
     @property
     def _snapshots(self) -> SnapshotStore | None:
@@ -290,6 +335,7 @@ class WriteSets:
         """
         if self._snapshots is None or not step.tool_use_id:
             return
+        opened_at = time.monotonic()
         try:
             self._snapshots.exclude = tuple(self.excluded)
             tree = await self._snapshots.take()
@@ -303,6 +349,7 @@ class WriteSets:
                 open_call.overlapped = True
             call.overlapped = True
         call.before = (tree, step_id, summary)
+        self._opened[step.tool_use_id] = opened_at
 
     async def snapshot_after(self, tool_use_id: str) -> None:
         """Measure a finished command's write set if the review has not done it already (D31).
@@ -339,13 +386,15 @@ class WriteSets:
         opened, call.before = call.before, None
         overlapping, call.overlapped = call.overlapped, False
         self._run().release(tool_use_id)
+        opened_at = self._opened.pop(tool_use_id, None)
         if opened is None or self._snapshots is None:
             return None
         before, step_id, summary = opened
         try:
             self._snapshots.exclude = tuple(self.excluded)
             after = await self._snapshots.take()
-            change = await self._snapshots.changes(before, after)
+            # Read after the snapshot, so that a report from while it was taken counts.
+            change = await self._snapshots.changes(before, after, self._user_edits_since(opened_at))
         except SnapshotError as exc:
             log.warning("no write set for %s: %s", tool_use_id, exc)
             await self._emit(
