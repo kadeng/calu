@@ -924,8 +924,8 @@ async def test_the_note_of_a_human_decision_is_user_input_for_the_checkers(tmp_p
             request = rec.of(EscalationRequest)[-1]
             await session.decide_escalation(request.escalation_id, decision, note)
         await rec.wait_for(TurnResult)
-        (recorded,) = session.context.turns
         await session.stop()
+    (recorded,) = session.context.turns
     assert recorded.user_inputs == [
         "go",
         "[The user denied a Bash step of this turn that waited for approval, and wrote this "
