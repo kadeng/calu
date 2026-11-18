@@ -1242,6 +1242,19 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   with mode 0700). `calu attach --sudo` uses it: it checks that the socket and its directory
   are root's alone, and the session checks with the kernel that the peer is root. The TCP
   port with its tokens stays for every other client.
+- **Claude Code's login for that user.** Claude Code runs as that user and keeps its login
+  in that user's home: your own `~/.claude` for a name, `/var/lib/calu/claude/<uid>` for a
+  bare uid. `calu login` runs Claude Code's own login there (it prints or opens an address
+  to sign in with); `--status` shows it and `--logout` ends it:
+
+  ```bash
+  calu login --sudo            # for the sessions `calu run --sudo` starts as you
+  calu login --user 1000       # as root, e.g. in a container: for uid 1000
+  calu login console           # as yourself, with an Anthropic Console account
+  ```
+
+  Without a login Claude Code falls back to `ANTHROPIC_API_KEY` from its environment, which
+  sudo does not pass on.
 - **Changing settings from your own account.** What is privileged are calu's files, not the
   ability to change settings. `calu setup` gives the database role `calu_admin` the admin
   password you chose. With only an `operator` credential in your own store, `calu config`,

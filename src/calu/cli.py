@@ -69,7 +69,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -110,7 +110,7 @@ from calu.defaults.instructions import honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
 from calu.honesty import GitError, content_ids, resolve_commit
-from calu.launch import RunAs
+from calu.launch import LAUNCH_ENV, LaunchError, RunAs, claude_path, launcher_path
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
 from calu.protocol.client import RequestFailed
@@ -2273,6 +2273,86 @@ def _endpoint_of(
     return _find_endpoint(store, args.session, label, may_ask)
 
 
+def claude_login_command(
+    action: str, method: str | None, run_as: RunAs | None, environ: Mapping[str, str]
+) -> tuple[list[str], dict[str, str]]:
+    """Build the command line and environment of Claude Code's own login for `calu login`.
+
+    Claude Code keeps its login below the home directory of the user it runs as, so the login
+    has to run as that user: as calu's own user directly, as another user through calu's
+    launcher (`calu.launch`), which sets that user's ids and home -- the user's own home for a
+    name, `/var/lib/calu/claude/<uid>` for a bare uid -- the same way a session starts Claude
+    Code.
+
+    Args:
+        action: "login", "status" or "logout": the `claude auth` subcommand.
+        method: For a login: "claudeai", "console" or "sso" (`claude auth login --<method>`),
+            or None for Claude Code's default (a Claude subscription).
+        run_as: The user Claude Code runs as, or None for calu's own user.
+        environ: calu's environment.
+
+    Returns:
+        The command line and the environment to start it with.
+
+    Raises:
+        LaunchError: If no Claude Code executable is found, or (with `run_as`) this
+            installation has no launcher.
+    """
+    claude = claude_path(None)
+    arguments = ["auth", action]
+    if action == "login" and method:
+        arguments.append(f"--{method}")
+    if action == "status":
+        arguments.append("--text")
+    environment = dict(environ)
+    if run_as is None:
+        return [claude, *arguments], environment
+    environment[LAUNCH_ENV] = run_as.spec(claude).dump()
+    return [str(launcher_path()), *arguments], environment
+
+
+def cmd_login(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Log Claude Code in, out, or show its login, for the user it runs as in sessions.
+
+    Without options: as calu's own user. With `--sudo`: calu runs itself again as root
+    through sudo for you (`_run_again_through_sudo`), and the login is stored where Claude
+    Code finds it when a session runs it as you. As root, `--user` names the user, as for
+    `calu run`; for a bare uid the login is stored in the state directory calu gives it.
+    The login itself is Claude Code's (`claude auth login`): it opens or prints an address
+    to sign in with, in this terminal.
+
+    Args:
+        args: Parsed arguments (`method`, `status`, `logout`, `user`, `sudo`, `from_sudo`).
+        store: Unused; the login is Claude Code's, not a calu credential.
+
+    Raises:
+        CliError: If `--status` and `--logout` are both given, the user cannot be used
+            (`_run_as`), Claude Code or the launcher cannot be found, or the login ended with
+            an error.
+    """
+    if args.status and args.logout:
+        raise CliError("--status and --logout exclude each other")
+    if (args.status or args.logout) and args.method:
+        raise CliError("a login method goes with a login, not with --status or --logout")
+    run_as = _run_as(args)
+    action = "status" if args.status else "logout" if args.logout else "login"
+    try:
+        command, environment = claude_login_command(action, args.method, run_as, os.environ)
+    except LaunchError as exc:
+        raise CliError(str(exc)) from exc
+    who = "you" if run_as is None else (run_as.user or f"uid {run_as.uid}")
+    if action == "login":
+        home = "your home directory" if run_as is None else run_as.home
+        print(f"Claude Code's login for {who}, kept in {home}:", flush=True)
+    code = subprocess.call(command, env=environment)
+    if code and action == "status":
+        # `claude auth status` ends with 1 when nobody is logged in: say what to do.
+        again = " --sudo" if args.from_sudo else f" --user {args.user}" if args.user else ""
+        raise CliError(f"Claude Code is not logged in for {who}; `calu login{again}` logs it in")
+    if code:
+        raise CliError(f"claude auth {action} for {who} ended with exit code {code}")
+
+
 def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve a running session to an editor that speaks the Agent Client Protocol.
 
@@ -4147,6 +4227,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(handler=cmd_attach)
+
+    p = sub.add_parser(
+        "login",
+        help="log Claude Code in for the user it runs as in sessions (Claude Code's own login)",
+    )
+    p.add_argument(
+        "method",
+        nargs="?",
+        choices=["claudeai", "console", "sso"],
+        help="claudeai: a Claude subscription (Claude Code's default); console: Anthropic "
+        "Console, billed per use; sso: your organisation's single sign-on",
+    )
+    p.add_argument("--status", action="store_true", help="only show whether it is logged in")
+    p.add_argument("--logout", action="store_true", help="log it out")
+    p.add_argument(
+        "--sudo",
+        action="store_true",
+        help="for the sessions calu runs as root for you (`calu run --sudo`): the login is "
+        "stored where Claude Code finds it then",
+    )
+    p.add_argument(
+        "--user",
+        metavar="NAME|UID[:GID]",
+        help="as root: the user to log in for; a number is a uid whose login calu keeps in "
+        "/var/lib/calu/claude/<uid>",
+    )
+    p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(handler=cmd_login)
 
     p = sub.add_parser("acp", help="serve a running session to an ACP editor (stdin/stdout)")
     p.add_argument(
