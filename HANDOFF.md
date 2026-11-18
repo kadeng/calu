@@ -72,10 +72,11 @@ the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The sui
    - Settled, nothing to build: a `claude:` checker under `--user` runs in that user's
      environment and uses the user's own login (`calu login`), never root's variables (the
      code already does this); parallel web login attempts need no cap.
-   - Open question the owner asked: what the honesty checker's "badge" is. Answer given: the
-     PASS/ESCALATE/DENY label clients draw in front of a check; for the honesty checker it
-     says PASS even for a DISHONEST file. He has not decided whether it should show the
-     verdict instead (needs the verdict in the `check.result` event and `checker_runs`).
+   - **The honesty checker's result is not one label** (D224 part 4, the owner's
+     correction): it is a structured status per file and unit, plus an escalation when it
+     escalates; it may later mark through tools (`mark_dishonest` / `mark_honest`) instead
+     of structured output. Clients must show the per-file statuses, not "PASS". Do not ask
+     him again whether it should return "a label".
 3. **Open from the review (D222, "Left open")**: browser tests for the styled password page
    and pathological Markdown; Ctrl-C mid-turn under `calu serve`; no automated test for the
    root-only paths (`_client_user`, `_become_client_of`, `_local_endpoint`, the sudo
