@@ -239,4 +239,29 @@ class ChatActionsTest {
         waitUntil("the text for the input") { restored.toList() == listOf("fail") }
         job.cancel()
     }
+
+    @Test
+    fun `a comment on a selection is sent as calu's comment request, for a file and for a diff`() = runBlocking {
+        val c = attached()
+        val file = io.github.kadeng.calu.logic.CommentInput(
+            "src/a.py", io.github.kadeng.calu.logic.PlainSelection.of(1, 0, 3, 0), "  explain  ", fileText = "l1\nl2\nl3\n",
+        )
+        assertTrue(c.comment(file))
+        assertEquals(
+            jo("kind" to "file", "path" to "src/a.py", "side" to "after", "start_line" to 2, "end_line" to 3, "after_text" to "l1\nl2\nl3\n", "text" to "explain"),
+            requests.last { it.first == "comment.add" }.second,
+        )
+        val diff = jo(
+            "kind" to "diff", "path" to "a.py", "side" to "before", "start_line" to 1, "end_line" to 1,
+            "before_text" to "old\n", "after_text" to "new\n", "ref" to "edit:t-0", "text" to "why removed?",
+        )
+        assertEquals(true, c.act("comment", diff))
+        assertEquals(diff, requests.last { it.first == "comment.add" }.second)
+
+        val sent = requests.count { it.first == "comment.add" }
+        assertFalse(c.comment(file.copy(text = "  ")))
+        assertEquals("The comment was not sent: The comment is empty.", notices(c).last())
+        assertEquals(false, c.act("comment", jo("path" to "a.py", "text" to "x")))
+        assertEquals(sent, requests.count { it.first == "comment.add" })
+    }
 }

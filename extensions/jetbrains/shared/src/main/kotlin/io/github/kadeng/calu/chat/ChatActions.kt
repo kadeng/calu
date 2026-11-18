@@ -8,6 +8,7 @@
  *     act("forkConversation", {})    ──► ide.start {kind: "fork", claude_session_id, name: "fork of …"}
  *     act("sideAsk", {question})     ──► side.ask {question, history}  (state: `ViewState.side`)
  *     act("honestyReview" | "honestyTrust" | "honestyClear" {mark_id})  ──► honesty.review / .trust / .clear
+ *     act("comment", <params of comment.add>)                           ──► comment.add
  *
  * They are extension functions so that `ChatController.kt` stays readable; they behave like
  * its own actions: a failed request is reported as a notice in the chat and nothing is thrown.
@@ -23,6 +24,8 @@ import io.github.kadeng.calu.json.asObj
 import io.github.kadeng.calu.json.bool
 import io.github.kadeng.calu.json.int
 import io.github.kadeng.calu.json.str
+import io.github.kadeng.calu.logic.CommentInput
+import io.github.kadeng.calu.logic.buildCommentParams
 import io.github.kadeng.calu.logic.derivedSessionName
 import io.github.kadeng.calu.logic.parseOutgoingImages
 import io.github.kadeng.calu.state.MAIN
@@ -213,6 +216,41 @@ suspend fun ChatController.honestyClear(markId: Int): Boolean =
     run("Clearing the mark") { supervisor.session("honesty.clear", buildJsonObject { put("mark_id", JsonPrimitive(markId)) }) }
 
 /**
+ * Send a comment on a selection to Claude (`comment.add`): calu cuts the commented excerpt,
+ * relays the comment to Claude and stores it.
+ *
+ * @param params The params of `comment.add` as `buildCommentParams` builds them: `kind`, `path`,
+ *   `side`, `start_line`, `end_line`, `after_text`, `text`, and for a diff `before_text` and
+ *   optionally `ref`.
+ * @return True if the session accepted the comment; false (with a notice in the chat) if the
+ *   params lack `path`, `text` or `after_text`, no session is attached, or the session refused.
+ */
+suspend fun ChatController.comment(params: JsonObject): Boolean {
+    if (params.str("path").isNullOrEmpty() || params.str("text").isNullOrBlank() || params.str("after_text") == null) {
+        notice("warning", "The comment was not sent: it needs a file of the project and a text.")
+        return false
+    }
+    return run("Sending the comment") { supervisor.session("comment.add", params) }
+}
+
+/**
+ * Build the request of a comment from what the editor gave and send it (see the other overload).
+ *
+ * @param input The path, the selection, the document texts and the user's comment.
+ * @return True if the session accepted the comment; an input that `buildCommentParams` refuses
+ *   is reported as a notice.
+ */
+suspend fun ChatController.comment(input: CommentInput): Boolean {
+    val params = try {
+        buildCommentParams(input)
+    } catch (error: IllegalArgumentException) {
+        notice("warning", "The comment was not sent: ${error.message}")
+        return false
+    }
+    return comment(params)
+}
+
+/**
  * Run one chat action by its name: the actions that need nothing of the IDE. A backend calls
  * this first and handles what it returns `null` for (opening editors, diffs and terminals).
  *
@@ -225,7 +263,7 @@ suspend fun ChatController.honestyClear(markId: Int): Boolean =
  *     unlock {}                     refreshUsage {}
  *     rewind {turn, uuid?}          forkAt {turn, uuid?}          forkConversation {}
  *     sideAsk {question}            honestyReview {}              honestyTrust {}
- *     honestyClear {mark_id}
+ *     honestyClear {mark_id}        comment {kind, path, side, start_line, end_line, after_text, text, before_text?, ref?}
  *
  * @param action The action's name.
  * @param args Its arguments (missing members count as absent; a missing required member makes
@@ -256,5 +294,6 @@ suspend fun ChatController.act(action: String, args: JsonObject = EMPTY_OBJECT):
     "honestyReview" -> honestyReview()
     "honestyTrust" -> honestyTrust()
     "honestyClear" -> args.int("mark_id")?.let { honestyClear(it) } ?: false
+    "comment" -> comment(args)
     else -> null
 }
