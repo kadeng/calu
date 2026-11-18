@@ -351,6 +351,21 @@ class WriteSets:
         call.before = (tree, step_id, summary)
         self._opened[step.tool_use_id] = opened_at
 
+    def drop_before(self, tool_use_id: str) -> None:
+        """Forget the "before" snapshot of a call that does not start yet after all.
+
+        For an approved command that is held behind an escalation after its snapshot was
+        taken (`Session._held_late`): the snapshot is taken again when the command is
+        released, so that what other calls write meanwhile is not counted as its write set.
+
+        Args:
+            tool_use_id: Claude's id of the call; a call without a snapshot is ignored.
+        """
+        call = self._run().calls.get(tool_use_id)
+        if call is not None:
+            call.before = None
+        self._opened.pop(tool_use_id, None)
+
     async def snapshot_after(self, tool_use_id: str) -> None:
         """Measure a finished command's write set if the review has not done it already (D31).
 

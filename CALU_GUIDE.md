@@ -1012,8 +1012,9 @@ subagent's lines. Each open decision or question is a card of its own that names
 belongs to and its place ("Decision 1 of 2"); the cards are answered separately and in any
 order, and a note typed into one stays while another is answered. calu approves no other
 checked step while a decision is open, so the other subagents stop at their next such step;
-the page says so above the cards and in the list ("held"). A step that has been held for
-five minutes asks for a decision of its own, so a decision left open in a session with many
+the page says so above the cards and in the list ("held"). If one of the held steps needs a
+decision itself once the first one is made, the others wait again for that decision. A step
+that has been held for five minutes in all asks for a decision of its own, so a decision left open in a session with many
 subagents becomes several cards. A question of the agent holds nothing back; a call with
 several questions, or with a question that allows several choices, is answered with one
 "Send the answer".

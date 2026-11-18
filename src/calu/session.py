@@ -87,7 +87,9 @@ ASK (`EscalationDesk.expect_ask`), not only once its row exists. The gate looks 
     the decision is recorded
             │
             ▼
-    3. an escalation appeared while it was recorded: the approval becomes an escalation
+    3. an escalation appeared while it was recorded: wait again, for what is still left of
+       `HOLD_BUDGET_S`, and look again; still open after that: the approval becomes an
+       escalation of its own
 
 "Open" ends when the escalation is decided, timed out, or cancelled by a stop or an interrupt.
 "Being opened" ends when the row exists, when it could not be stored, or `ASK_PENDING_S` after
@@ -201,7 +203,6 @@ from calu.gate import CHANGESET_STAGE_FIRST as CHANGESET_STAGE_FIRST
 from calu.gate import CHANGESET_UNREAD as CHANGESET_UNREAD
 from calu.gate import CHECKER_DEADLINE_S as CHECKER_DEADLINE_S
 from calu.gate import GATE_BUDGET_S as GATE_BUDGET_S
-from calu.gate import HELD_LATE as HELD_LATE
 from calu.gate import HOLD_BUDGET_S as HOLD_BUDGET_S
 from calu.gate import Decided, PendingNarration, StepGate, route_checkers, unrecorded
 from calu.gate import _changeset_block as _changeset_block
@@ -2770,8 +2771,10 @@ class Session:
                                           `GATE_BUDGET_S` exceeded     ASK
             record the decision           exception after PASS/ALLOW   ASK
                                           exception after DENY/ASK     unchanged
-            last look before the answer   an escalation opened since   ASK instead of
-            (`StepGate.last_look`)        the gate looked              PASS/ALLOW
+            last look before the answer   an escalation opened since   the call waits again;
+            (`StepGate.last_look`)        the gate looked              ASK instead of PASS/ALLOW
+                                                                       only after `HOLD_BUDGET_S`
+                                          exception while it waits     ASK
 
         Args:
             step: The tool call.
@@ -2815,13 +2818,11 @@ class Session:
                 source = "internal"
                 self._run_state.peek(step.tool_use_id or "").running = False
                 self._run_state.release(step.tool_use_id or "")
-        if (late := self.gate.last_look(result, source)) is not None:
-            # The gate looked last before the decision was recorded, and recording takes time.
-            # No await stands between this look and the answer to Claude Code.
-            result = late
-            source, comment = "held", ""
-            self._run_state.peek(step.tool_use_id or "").running = False
-            self._run_state.release(step.tool_use_id or "")
+        if self.gate.last_look(result, source):
+            result, source, kept = await self._held_late(step, step_id, decided, result, source)
+            comment = comment if kept else ""
+        # No await stands between the last look (inside `_held_late`, or the one above) and
+        # the answer to Claude Code.
         if result.decision is Decision.ESCALATE:
             self.desk.expect_ask(step, source)
             if step.tool_use_id:
@@ -2836,6 +2837,70 @@ class Session:
         if comment:
             context = CHECKER_COMMENT_TEMPLATE.format(route=decided.route.value, comment=comment)
         return GateResult(verdict=verdict, reason=result.reason, context=context)
+
+    async def _held_late(
+        self,
+        step: Step,
+        step_id: int | None,
+        decided: Decided,
+        result: CheckDecision,
+        source: str,
+    ) -> tuple[CheckDecision, str, bool]:
+        """Hold an approved step because an escalation came up while its approval was recorded.
+
+        The gate looked last before the decision was recorded, and recording takes time. The
+        step waits here until no escalation is open or being opened, and is looked at again
+        after every wait, because the bookkeeping after a wait takes time too:
+
+            look (`StepGate.last_look`) ── nothing holds ──► return: the approval stands
+              │ held
+              ▼
+            the call no longer counts as running, its "before" snapshot is dropped
+              │
+              ▼
+            wait (`StepGate.wait_again`) ── `HOLD_BUDGET_S` used up ──► ESCALATE (source "held")
+              │ released
+              ▼
+            the call counts as running, the snapshot is taken again ──► look
+
+        Side effects: those of the diagram, and the session state follows them. No await
+        stands between the look that ends the loop and the return, so the caller answers
+        Claude Code without another look.
+
+        Args:
+            step: The tool call.
+            step_id: Its `steps` row, or None if it could not be stored.
+            decided: What `StepGate.decide` returned (route and what is left of the hold).
+            result: The recorded approval.
+            source: Who decided it.
+
+        Returns:
+            (the decision to answer, its source, whether the approval stands). An exception
+            in here yields an ESCALATE with source "internal", never an approval.
+        """
+        key = step.tool_use_id or ""
+        left = decided.hold_left
+        try:
+            while self.gate.last_look(result, source):
+                self._run_state.peek(key).running = False
+                self.write_sets.drop_before(key)
+                await self._refresh_state()
+                replaced, left = await self.gate.wait_again(step, result, source, left)
+                if replaced is not None:
+                    self._run_state.release(key)
+                    return replaced, "held", False
+                if step.tool_use_id:
+                    self._run_state.call(step.tool_use_id).running = True
+                await self._refresh_state()
+                if decided.route in (Route.COMMAND, Route.CHANGESET):
+                    await self.write_sets.snapshot_before(step, step_id, result.step_summary)
+        except Exception as exc:
+            log.exception("holding an approved step failed")
+            self._run_state.peek(key).running = False
+            self.write_sets.drop_before(key)
+            self._run_state.release(key)
+            return unrecorded(result, exc), "internal", False
+        return result, source, True
 
     async def _record_check(
         self, step: Step, step_id: int | None, pending: PendingNarration, decided: Decided

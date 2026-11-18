@@ -29,7 +29,7 @@ from calu.protocol.messages import (
     UserInput,
 )
 from calu.session import SessionError
-from calu.testing import fake_models, fixed_checker
+from calu.testing import _last_prompt, fake_models, fixed_checker
 from tests.unit.helpers import make_session
 from tests.unit.test_result_checker import agent_turn
 
@@ -715,27 +715,177 @@ async def test_an_escalation_that_cannot_be_stored_releases_the_held_steps(
         tg.cancel_scope.cancel()
 
 
-async def test_an_approval_does_not_stand_if_an_escalation_opens_while_it_is_recorded(
-    tmp_path: Path,
-):
-    """ga2: the last look is at the moment of the answer, after the records are written."""
-    session, _rec, store = make_session(tmp_path, [])
+def racing_store(session: Any, store: Any, blocker: Step) -> None:
+    """Make another step's verdict ASK while the first approval of the session is recorded."""
     original = store.decide_step
-    blocker = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
+    raced: list[bool] = []
 
     async def racing(step_id: int, decision: Any) -> None:
         await original(step_id, decision)
-        if decision.decision == "pass":
-            # Another step's verdict becomes ASK while this approval is being recorded.
+        if decision.decision == "pass" and not raced:
+            raced.append(True)
             session.desk.expect_ask(blocker, "checker")
 
-    store.decide_step = racing  # type: ignore[method-assign]
+    store.decide_step = racing
+
+
+async def test_an_approval_waits_if_an_escalation_opens_while_it_is_recorded(tmp_path: Path):
+    """ga2: the last look is at the moment of the answer; the step is held, not escalated."""
+    session, rec, store = make_session(tmp_path, [])
+    blocker = bash("git push # calu:escalate", "t1", tmp_path, agent_id="agent-a")
+    racing_store(session, store, blocker)
+    results: list[GateResult] = []
+
+    async def gate(step: Step) -> None:
+        results.append(await session.pre_tool_use(step))
+
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        tg.start_soon(gate, bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        await wait_until(lambda: [e for e in rec.of(Log) if "waits" in e.message])
+        await anyio.sleep(0.1)
+        assert not results, "the step was answered while an escalation was being opened"
+        assert not session._run_state.peek("t2").running
+        tg.start_soon(session.ask, blocker)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        await anyio.sleep(0.1)
+        assert not results and len(rec.of(EscalationRequest)) == 1
+        await session.decide_escalation(request.escalation_id, "deny", None)
+        await wait_until(lambda: results)
+        assert results[0].verdict is Verdict.PASS
+        assert session._run_state.peek("t2").running
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_approval_held_while_it_was_recorded_escalates_after_the_hold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ga2: the 300 s rule also ends the hold of a step that was held after its check."""
+    monkeypatch.setattr(gate_module, "HOLD_BUDGET_S", 0.2, raising=False)
+    session, _rec, store = make_session(tmp_path, [])
+    racing_store(session, store, bash("git push # calu:escalate", "t1", tmp_path))
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        with anyio.fail_after(5):
+            result = await session.pre_tool_use(bash("ls", "t2", tmp_path, agent_id="agent-b"))
+        assert result.verdict is Verdict.ASK
+        assert "No step is approved while a human decides" in result.reason
+        assert "an escalation that is being opened" in result.reason
+        assert not session._run_state.peek("t2").running
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_an_error_while_an_approved_step_is_held_asks_a_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ga2: the hold after the record fails closed like every other stage."""
+    session, _rec, store = make_session(tmp_path, [])
+    racing_store(session, store, bash("git push # calu:escalate", "t1", tmp_path))
+
+    async def broken(*args: object) -> tuple[None, float]:
+        raise RuntimeError("the hold broke")
+
+    monkeypatch.setattr(session.gate, "wait_again", broken)
     async with anyio.create_task_group() as tg:
         await session.start(tg)
         result = await session.pre_tool_use(bash("ls", "t2", tmp_path, agent_id="agent-b"))
-        assert result.verdict is Verdict.ASK
-        assert "No step is approved while a human decides" in result.reason
+        assert result.verdict is Verdict.ASK and "the hold broke" in result.reason
         assert not session._run_state.peek("t2").running
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+@pytest.mark.parametrize("run", range(20))
+async def test_held_steps_are_held_again_when_one_of_them_escalates(tmp_path: Path, run: int):
+    """Ten parallel steps behind a decision; after it one of them escalates.
+
+    Exactly one new escalation appears, whatever the order in which the checks finish, and
+    no step is answered between the verdict of the escalating step and its decision. Even
+    runs: every check ends at once and recording takes time, so the escalation comes up
+    while all eight other approvals are being recorded, and all eight are held. Odd runs:
+    checks and records take random times, so some steps may be approved and answered before
+    the escalating check ends; every other one is held.
+    """
+    import random
+
+    from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    rng = random.Random(run)
+
+    async def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        step = _last_prompt(messages).rpartition("# Step to check")[2]
+        if run % 2:
+            await anyio.sleep(rng.uniform(0.0, 0.05))
+        asks = "calu:escalate" in step
+        fields = {
+            "decision": "ESCALATE" if asks else "PASS",
+            "reason": "a person decides" if asks else "",
+            "step_summary": "s",
+            "comment": "",
+        }
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, fields)])
+
+    session, rec, store = make_session(
+        tmp_path, [], checker_models={**fake_models(), "command": FunctionModel(answer)}
+    )
+    original = store.decide_step
+
+    async def slow_record(step_id: int, decision: Any) -> None:
+        await anyio.sleep(rng.uniform(0.02, 0.05))  # recording takes time, as in a database
+        await original(step_id, decision)
+
+    store.decide_step = slow_record  # type: ignore[method-assign]
+    results: dict[str, GateResult] = {}
+
+    async def gate(step: Step) -> None:
+        results[step.tool_use_id or ""] = await session.pre_tool_use(step)
+
+    first = bash("deploy one # calu:escalate", "t0", tmp_path, agent_id="agent-0")
+    escalating = rng.randrange(1, 10)
+    others = [
+        bash(
+            f"make part{n}" + (" # calu:escalate" if n == escalating else ""),
+            f"t{n}",
+            tmp_path,
+            agent_id=f"agent-{n}",
+        )
+        for n in range(1, 10)
+    ]
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        assert (await session.pre_tool_use(first)).verdict is Verdict.ASK
+        tg.start_soon(session.ask, first)
+        request = (await rec.wait_for(EscalationRequest))[0]
+        for step in others:
+            tg.start_soon(gate, step)
+        await anyio.sleep(0.1)
+        assert not results, "a step was answered while the first decision was open"
+
+        await session.decide_escalation(request.escalation_id, "allow", None)
+        await wait_until(lambda: f"t{escalating}" in results)
+        assert results[f"t{escalating}"].verdict is Verdict.ASK
+        tg.start_soon(session.ask, others[escalating - 1])
+        await wait_until(lambda: len(rec.of(EscalationRequest)) == 2)
+        await anyio.sleep(0.3)  # every check and every record has long ended
+        # Whatever was answered before the escalating step's verdict was approved while
+        # nothing was open; nothing is answered after it.
+        assert list(results)[-1] == f"t{escalating}", "a held step was answered"
+        if run % 2 == 0:
+            assert list(results) == [f"t{escalating}"], "not every other step was held"
+        assert len(rec.of(EscalationRequest)) == 2, "a held step became an escalation"
+        held_lines = [e for e in rec.of(Log) if "waits" in e.message]
+        assert len(held_lines) >= 9 + (9 - len(results))
+
+        second = rec.of(EscalationRequest)[1]
+        await session.decide_escalation(second.escalation_id, "allow", None)
+        await wait_until(lambda: len(results) == 9)
+        passed = [key for key, result in results.items() if result.verdict is Verdict.PASS]
+        assert sorted(passed) == sorted(f"t{n}" for n in range(1, 10) if n != escalating)
+        assert all(session._run_state.peek(key).running for key in passed)
+        assert len(rec.of(EscalationRequest)) == 2
         await session.stop()
         tg.cancel_scope.cancel()
 

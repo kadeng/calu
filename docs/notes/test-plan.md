@@ -151,14 +151,16 @@ stop their next command or edit: after about 30 s all ten subagents were waiting
 escalation appears next to the first in three ways: two checks that ran at the same moment
 (both cards, decided in either order), a question, or a held step after the first decision.
 
-Open, in the gate (not changed here): when the last holding decision is made, all held steps
-are checked at the same time. If one of them escalates, `StepGate.last_look` turns the
-approvals of the others into escalations at once (reason "The check of this step ended with
-PASS. Before the step could start, an escalation that is being opened came up …") instead of
-holding them again. In one run that put seven cards in front of the user for `make` steps the
-checker had passed (capture `held-steps-become-escalations-120x36-before-fixes.txt`); in
-another run of the same scenario the same steps were held again, as the documents describe.
-Which of the two happens depends on the order in which the checks finish.
+Fixed in the gate (ITEM1): when the last holding decision was made, all held steps were
+checked at the same time, and if one of them escalated, `StepGate.last_look` turned the
+recorded approvals of the others into escalations at once (reason "The check of this step
+ended with PASS. Before the step could start, an escalation that is being opened came up …")
+instead of holding them again; in one run that put seven cards in front of the user for
+`make` steps the checker had passed (capture
+`held-steps-become-escalations-120x36-before-fixes.txt`), in another run the same steps were
+held again, depending on the order in which the checks finished. Now a step whose approval
+was recorded while another escalation came up waits again (`Session._held_late`,
+`StepGate.wait_again`) and becomes an escalation of its own only by the 300 s rule.
 
 **Long sessions (C11).** 60 turns, 840 blocks. Measured on this machine (16 cores, other work
 running): `calu --version` 3.5 s under load and 2.0 s without, nearly all of it imports
@@ -183,8 +185,8 @@ changed are not changed back.
 
 **Open, ranked**
 
-1. Gate: held steps turn into escalations when one of them escalates (above). Needs the
-   owner's decision: hold them again instead, or document the behaviour.
+1. Gate: held steps turn into escalations when one of them escalates (above): fixed
+   (ITEM1), they are held again.
 2. `calu` start-up time: 2 to 3.5 s of imports before any command does anything (`calu.cli`
    imports the checkers, Pydantic AI and the Agent SDK for `calu attach` and `calu --version`
    too). Needs lazy imports in `calu.cli`.

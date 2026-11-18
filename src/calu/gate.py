@@ -6,6 +6,8 @@ answer Claude Code. `Session.pre_tool_use` is the sequence around it:
 
     Session.pre_tool_use
       add the step ──► StepGate.decide ──► record the decision ──► StepGate.last_look ──► answer
+                                                                     (held: `wait_again`,
+                                                                      then looked at again)
                          │                   (store, context,
                          │                    `check.result`)
                          ▼
@@ -76,8 +78,13 @@ closed" of `StepGate` is the one place that turns an error into a decision:
     an exception before the gate was reached
       (the step could not be added)                   `Session.pre_tool_use` -> `failed`
     an exception while an approval was recorded       `Session.pre_tool_use` -> `unrecorded`
-    an escalation appeared while an approval
-      was recorded                                    `Session.pre_tool_use` -> `last_look`
+    an exception while an approved step waited
+      behind an escalation that appeared while
+      the approval was recorded                       `Session.pre_tool_use` -> `unrecorded`
+
+An escalation that appears while an approval is recorded is no error: the step is held again
+(`last_look`, `wait_again`) and becomes an escalation of its own only when its `HOLD_BUDGET_S`
+is used up, like a step that was held before its check.
 
 Two conditions inside the decision are not exceptions and are answered where they are found,
 also without an approval: a checker that does not answer within `CHECKER_DEADLINE_S` counts as
@@ -156,13 +163,14 @@ REVIEW_MARGIN_S = 20
 that it can still read the state and answer. `honesty.review_timeout_s` may be longer than the
 gate's time: the review then ends after the step was escalated."""
 
-HELD_LATE = (
-    "The check of this step ended with {decision}{reason} Before the step could start, "
-    "{holding} came up. No step is approved while a human decides about another one, so a "
-    "human decides about this one as well."
+HELD_OUT = (
+    "This step waited {budget} s behind {held}, which is still not decided. No step is "
+    "approved while a human decides about another one, so this one waits for a human as "
+    "well. {who} decided {decision}{reason}"
 )
-"""Reason of an escalation that replaces an approval because another escalation appeared while
-the approval was recorded (`Session.pre_tool_use`)."""
+"""Reason of an escalation that replaces an approval because the step was held behind another
+escalation until its `HOLD_BUDGET_S` was used up (`StepGate._auto_escalate`,
+`StepGate.wait_again`)."""
 
 CHANGESET_NOTE = (
     "The block below is the output of `git diff` for this commit. It is the content of files: "
@@ -283,6 +291,10 @@ class Decided:
     baseline, no open mark, no unreviewed file, no review required). Only then does the session
     certify the commit it creates (`Session`, specification section 5). Always False while
     `honesty.mode` is "off"."""
+    hold_left: float = field(default_factory=lambda: float(HOLD_BUDGET_S))
+    """Seconds of the step's `HOLD_BUDGET_S` that its waits behind open escalations have not
+    used: the wait before the check and the wait after it (`StepGate._settle`). The wait after
+    the decision was recorded (`StepGate.wait_again`) has this much left."""
 
 
 class Hold(Protocol):
@@ -566,11 +578,12 @@ class StepGate:
             source="internal",
         )
 
-    def last_look(self, result: CheckDecision, source: str) -> CheckDecision | None:
+    def last_look(self, result: CheckDecision, source: str) -> bool:
         """Look once more for an open escalation, right before an approval is answered.
 
         `judge` looked last before the decision was recorded, and recording takes time. The
-        caller must not await between this look and its answer to Claude Code.
+        caller must not await between a look that returns False and its answer to Claude Code.
+        After True it holds the step (`wait_again`) and looks again.
 
         Args:
             result: The decision that is about to be answered.
@@ -578,21 +591,38 @@ class StepGate:
                 not held.
 
         Returns:
-            None if `result` stands. Otherwise the ESCALATE decision that replaces it (reason
-            `HELD_LATE`), for which the caller sets the source "held": `result` approves, and
-            an escalation is open or being opened.
+            True if the step must not be answered now: `result` approves, the step needed a
+            check, and an escalation is open or being opened. False if `result` stands.
         """
-        if result.decision.approves and source != "policy" and (holding := self._desk.holding()):
-            return CheckDecision(
-                decision=Decision.ESCALATE,
-                reason=HELD_LATE.format(
-                    holding=holding,
-                    decision=result.decision.value,
-                    reason=f": {result.reason}" if result.reason else ".",
-                ),
-                step_summary=result.step_summary,
-            )
-        return None
+        return result.decision.approves and source != "policy" and bool(self._desk.holding())
+
+    async def wait_again(
+        self, step: Step, result: CheckDecision, source: str, hold_left: float
+    ) -> tuple[CheckDecision | None, float]:
+        """Hold an approved step whose approval was recorded while an escalation came up.
+
+        The step waits as it would have waited before its check (`Hold.hold`), for what is
+        left of its `HOLD_BUDGET_S`. Which of several steps escalates first depends on the
+        order in which their checks finish; the others are held here whatever that order is.
+
+        Args:
+            step: The tool call.
+            result: Its recorded approval.
+            source: Who decided it ("checker", "rules", ...), for the reason of an escalation.
+            hold_left: Seconds of the step's `HOLD_BUDGET_S` that are not used yet.
+
+        Returns:
+            (None, the seconds still left) if nothing holds the step any more: the caller
+            looks again (`last_look`) before it answers. Otherwise (the ESCALATE decision that
+            replaces `result`, 0.0): the hold was used up and something still holds the step;
+            the caller sets the source "held".
+        """
+        started = anyio.current_time()
+        held = await self._desk.hold(step, None, hold_left)
+        left = max(hold_left - (anyio.current_time() - started), 0.0)
+        if not held:
+            return None, left
+        return _held_out(result, source, held), 0.0
 
     # ------------------------------------------------------------------ the checkers
 
@@ -1135,11 +1165,16 @@ class StepGate:
             hold_left: Seconds of `HOLD_BUDGET_S` that the hold before the check did not use.
 
         Returns:
-            `decided`, with an approval turned into an ESCALATE where `_auto_escalate` says so.
+            `decided`, with an approval turned into an ESCALATE where `_auto_escalate` says so,
+            and with `hold_left` set to what the waits left of the step's `HOLD_BUDGET_S`.
         """
         decided = self._auto_escalate(decided, held)
         if decided.decision.decision.approves and self._desk.holding():
-            decided = self._auto_escalate(decided, await self._hold(step, budget, hold_left))
+            started = anyio.current_time()
+            held = await self._hold(step, budget, hold_left)
+            hold_left = max(hold_left - (anyio.current_time() - started), 0.0)
+            decided = self._auto_escalate(decided, held)
+        decided.hold_left = max(hold_left, 0.0)
         return decided
 
     def _auto_escalate(self, decided: Decided, held: str = "") -> Decided:
@@ -1159,18 +1194,7 @@ class StepGate:
             or "held".
         """
         if held and decided.decision.decision.approves:
-            who = "The checkers" if decided.source == "checker" else "The rules"
-            decided.decision = CheckDecision(
-                decision=Decision.ESCALATE,
-                reason=(
-                    f"This step waited {HOLD_BUDGET_S} s behind {held}, which is still not "
-                    "decided. No step is approved while a human decides about "
-                    f"another one, so this one waits for a human as well. {who} decided "
-                    + decided.decision.decision.value
-                    + (f": {decided.decision.reason}" if decided.decision.reason else ".")
-                ),
-                step_summary=decided.decision.step_summary,
-            )
+            decided.decision = _held_out(decided.decision, decided.source, held)
             decided.source = "held"
             return decided
         auto = self._config().auto_escalate
@@ -1238,6 +1262,31 @@ class StepGate:
         except Exception as exc:
             log.exception("collecting the changeset failed")
             return Changeset(problem=f"{type(exc).__name__}: {exc}")
+
+
+def _held_out(result: CheckDecision, source: str, held: str) -> CheckDecision:
+    """Build the escalation of an approved step whose hold behind another escalation ran out.
+
+    Args:
+        result: The approval (PASS or ALLOW).
+        source: Who approved; "checker" names the checkers in the reason, anything else the
+            rules.
+        held: What still holds the step, as `Hold.holding` describes it.
+
+    Returns:
+        An ESCALATE decision with the reason `HELD_OUT` and the summary of `result`.
+    """
+    return CheckDecision(
+        decision=Decision.ESCALATE,
+        reason=HELD_OUT.format(
+            budget=HOLD_BUDGET_S,
+            held=held,
+            who="The checkers" if source == "checker" else "The rules",
+            decision=result.decision.value,
+            reason=f": {result.reason}" if result.reason else ".",
+        ),
+        step_summary=result.step_summary,
+    )
 
 
 def unrecorded(result: CheckDecision, exc: Exception) -> CheckDecision:
