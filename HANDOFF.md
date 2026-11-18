@@ -27,6 +27,21 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
   (foreground, background, failing, two at once), slash commands, token usage, fork and undo,
   stopping, queued and injected messages, supervision level to manual and back, edge cases.
   Screenshots: `~/.cache/calu-uitest/share/run1/`.
+- **Three agents were started later the same evening** (the owner: "Both", and "continue
+  with the Pycharm plugin for real" once the VSCode extension is ready for his manual test):
+  (1) a second pass over the VSCode extension (the seven open defects of the first run:
+  empty transcript after fork or rewind, the relay text shown for a message to a subagent,
+  bidi control characters, bridge loss, tall approval cards, no progress without a server,
+  the honesty chip; plus the untried cases), in the main checkout and the desktop;
+  (2) **session traces** (D232) in a git worktree of its own (`git worktree list`; its
+  branch has to be merged; it may conflict in `src/calu/session.py`, `config.py`,
+  `HANDOFF.md`); (3) the **PyCharm plugin** in `extensions/jetbrains/` (skeleton with
+  `shared`/`frontend`/`backend` modules, three ways to start `calu ide`: local, on the
+  remote backend, over `ssh`; a native Swing transcript; `docs/notes/jetbrains-sync-spec.md`
+  for file sync through the bridge) and the fix of `calu acp`'s `session/new` id. A JDK for
+  it is under `~/.cache/calu-jdk/` (no Java was installed). The first run of the VSCode
+  extension is reported in the session only; its screenshots are in
+  `docs/notes/screenshots/run1-*.png`.
 - Before committing anything found in the tree: `uv run ruff check . && uv run pyright`, the
   affected Python tests, and in `extensions/vscode`: `npm run check-types && npm run
   test:unit && npm run build` (Node 24: `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`).
