@@ -7,80 +7,68 @@
 >
 > — *Tron* (1982)
 
-## Staying in control of a coding agent without babysitting it
+## Stay in control of a coding agent without babysitting each step
 
-Coding agents got fast. Fast enough that reading every step no longer scales, and good enough
-that it is tempting to stop reading at all. We tried both. Reading everything means you do
-nothing else. Not reading means the agent keeps working, keeps sounding reasonable, and an
-hour later has arrived somewhere you did not want to go.
+**The problem.** A coding agent is too fast to read step by step, and too unreliable to leave
+alone: unwatched, it drifts, and a wrong step costs more the later it is caught.
 
-calu is our attempt at the ground in between. It runs [Claude Code](https://claude.com/claude-code)
-for you and has a second set of eyes on every command it runs and every file it edits:
-**checker agents**, small models with instructions you write. They let nearly everything
-through, pull Claude back where it drifts, and stop and ask you only when a step needs a
-person. While they ask, the agent waits, so there is nothing to retry or talk its way around.
-What happened stays readable afterwards: one line per step, and if you want, the whole
-conversation as a redacted file next to your code.
+**What calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **checker
+agents** in front of every command and every edit: small models that follow instructions you
+write. Most steps pass. Where Claude drifts, the checker says so and Claude corrects course.
+Where a person has to decide, the session waits until one does, from any front end.
+Afterwards every step is on record.
 
-It is a layer on top of Claude Code, not a replacement. Its tools, permission rules, auto mode,
-plugins, MCP servers, skills and subagents keep working as your project configures them
-([which settings are read, and why](CALU_GUIDE.md#calu-does-not-replace-claude-code)).
+Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
+MCP servers, skills and subagents work as your project configures them.
 
 ![An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below](docs/assets/vscode-approval.png)
 
-**Status: early, and used by the people who write it.** Things work, things are rough, and the
-list of what we have not tested is in [HANDOFF.md](HANDOFF.md). It is not on PyPI yet. calu
-succeeds [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop), which did the same
-inside VSCode for one user.
+## Compared with Claude Code's own terminal, desktop, VSCode and JetBrains front ends
 
-## What is in the box
+The same agent, the same chat (images, rewind, fork, several sessions, slash commands, model
+and thinking level, context usage, questions, approvals, notifications). On top of that:
 
-**Front ends, all on the same sessions.** Start a session in one, watch or answer from another.
+| | Claude Code's front ends | calu |
+|---|---|---|
+| Who judges a step | Claude Code's own rules and auto mode | the same, plus checkers with **your** rules, on a model and provider you choose |
+| A step that needs a person | a prompt in the front end you are using | the session pauses; answer from VSCode, PyCharm, the browser, a terminal, or the database, on any machine |
+| Where a session lives | with the front end that started it | on a server (`calu serve`); front ends attach and detach, several at once, and the session keeps running without any |
+| Several sessions, several machines | a window or tab each | one overview of all of them, the ones that need you first |
+| Subagents | inside the main transcript | a tab each, with task and result; message a background subagent; its open decisions shown wherever you look |
+| The record | Claude Code's transcript files | every step with the checker's summary in PostgreSQL; optionally the conversation as redacted Markdown in the repository, to commit and review |
+| Names and docstrings that no longer match the code | not tracked | tracked per file; unverified code can be kept from running or being committed |
+| What the agent can reach of its supervisor | same user, same files | with `--sudo`, calu runs as root and Claude Code as you: the agent cannot read calu's credentials or approve itself |
+| Changing the rules | settings files in the project | Markdown instructions in a database the session cannot write, editable from every front end |
 
-- **A VSCode extension** ([extensions/vscode](extensions/vscode)): a chat on the right like the
-  one you know, with what calu adds one click away. Inline images, rewind and fork from any
-  message, several sessions with names, slash commands, model and thinking level, context usage,
-  questions and approvals as cards, notifications when something waits. A click on an edit
-  opens the diff; a click on the file name opens the file at the line. It runs wherever your
-  workspace is: WSL, SSH, a dev container.
-- **A PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), in the works: the same
-  chat as a native tool window, built for JetBrains' remote development and for a local IDE
-  that reaches the server over SSH and syncs files through calu.
-- **A web interface** (`calu web`): every session of every machine, the ones that need you
-  first; history, diffs, a live view, settings.
-- **A full-screen terminal client** (`calu attach`), and a line client for pipes.
-- **Any editor that speaks the Agent Client Protocol** (`calu acp`): Zed, Neovim, JetBrains'
-  agent chat.
-- **The database alone**: `calu sessions`, `calu escalations`, `calu resolve 12 allow`. A
-  decision never depends on reaching the machine the session runs on.
+**Status: early.** It works and it is rough in places; what has not been tested is listed in
+[HANDOFF.md](HANDOFF.md). Not on PyPI yet. calu succeeds
+[stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop).
+
+## The parts
+
+- **VSCode extension** ([extensions/vscode](extensions/vscode)): the chat on the right;
+  checker instructions, checker context and honesty one click away; a click on an edit opens
+  its diff, a click on a file name opens the file at the line. Runs where the workspace is:
+  WSL, SSH, a dev container.
+- **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), in progress: the same
+  chat as a native tool window, for JetBrains' remote development and for a local IDE that
+  reaches the server over SSH and syncs files through calu.
+- **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
+  settings.
+- **Terminal** (`calu attach`): a full-screen client, and a line client for pipes.
+- **ACP editors** (`calu acp`): Zed, Neovim, JetBrains' agent chat.
+- **The database alone**: `calu sessions`, `calu escalations`, `calu resolve 12 allow`.
+- **Session traces**: `traces.enabled` appends every step to
+  `.agent/traces/<date>/<user>/session_NNN.md`, with secrets and personal data replaced.
+  ([guide](CALU_GUIDE.md#session-traces-the-conversation-as-a-reviewable-file))
+- **Code honesty**: which code was verified to say what it does, file by file.
+  ([guide](CALU_GUIDE.md#code-honesty-enforcement))
+- **One model for every role** in one step, with presets for Anthropic, AWS Bedrock, Fireworks,
+  Mistral, or your Claude Code account without an API key.
 
 ![Subagents as tabs in the VSCode extension](docs/assets/vscode-subagents.png)
 
-**Subagents, in full.** Each gets its own tab or view with the task it was given and what it
-returned; you can message a background subagent; a step of one that waits for you shows up
-wherever you are looking.
-
 ![Ten subagents in the web live view, one waiting for a decision](docs/assets/web-live-subagents.png)
-
-**Sessions you can leave alone.** `calu serve` runs in tmux on a server, asks for its password
-once (or never, if you set it up that way) and starts sessions on request. They run for hours
-with no client attached and stop only when something needs you. Conversations can be resumed,
-forked, and rewound to before any message, including ones you started with plain `claude`.
-
-**The conversation as a file you can review.** Chat sessions are a kind of source code. With
-`traces.enabled`, calu appends every step as Markdown to
-`.agent/traces/<date>/<user>/session_NNN.md` inside the project, after a redaction pass that
-replaces secrets and personal data. Commit it with the change it produced.
-([Session traces](CALU_GUIDE.md#session-traces-the-conversation-as-a-reviewable-file))
-
-**Code that says what it does.** A name or a docstring that no longer matches the code is a
-lie the next reader believes, and agents produce those at speed. With honesty checking on, calu
-tracks which code was verified to say what it does, file by file, and can refuse to run or
-commit the rest. ([Code honesty](CALU_GUIDE.md#code-honesty-enforcement))
-
-**Settings you can find.** Checker instructions are plain Markdown, editable from every front
-end. One step sets one model for every role, with presets for Anthropic, AWS Bedrock,
-Fireworks, Mistral, or your Claude Code account without any API key.
 
 ![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
 
@@ -92,27 +80,21 @@ Fireworks, Mistral, or your Claude Code account without any API key.
 >
 > — *Tron* (1982)
 
-Before a step runs, a checker reads it together with a condensed view of the conversation and
-answers: nothing to say (the usual case), go ahead with a remark for Claude, don't (Claude is
-told why and carries on), or a person should look. The last one pauses the session until
-somebody answers, from any front end or straight from the database.
+Before a step runs, a checker reads it with a condensed view of the conversation and answers:
+nothing to say, go ahead with a remark, don't (Claude is told why), or a person should look.
 
-Three things about that arrangement matter more than how smart the checker is:
+- **Two opinions that fail differently.** Auto mode knows what is generally dangerous; your
+  checkers know your project. The shipped checker instructions are short and leave general
+  safety to auto mode, so switch it on: `calu config set claude.require_auto_mode true`. calu
+  warns at every start while it is off.
+- **Claude's words reach a checker as hearsay**, retold by a narrator in indirect speech, so
+  an instruction planted in a web page arrives as a report that someone wrote it.
+- **The rules are out of the session's reach**: instructions, settings and the record are in
+  PostgreSQL behind a login the session does not have. Checkers can only read, and only inside
+  the project.
 
-- **Two opinions that fail differently.** Claude Code's own auto mode knows what is generally
-  dangerous and nothing about your project. Your checkers know your project's rules and
-  nothing else. The checker instructions calu ships are short on purpose and leave general
-  safety to auto mode, so **switch it on**: `calu config set claude.require_auto_mode true`.
-  calu warns at every start while it is off.
-- **Claude's words reach a checker as hearsay.** A separate narrator retells them in indirect
-  speech ("Claude claimed that the user had already allowed pushing"), so an instruction
-  smuggled in through a web page arrives as a report that someone wrote it.
-- **The rules live where the session cannot write.** Instructions, settings and the record of
-  every step are in PostgreSQL, behind a login the session does not have. Checkers are
-  read-only: five tools, all reads, confined to the project.
-
-What a checker can hold Claude to is what a linter cannot see: scope creep, over-engineering,
-a test weakened to pass, a commit that does not match its message, rules from a contract.
+Checkers are for what a linter cannot see: scope creep, over-engineering, a test weakened to
+pass, a commit that does not match its message.
 ([What you can enforce](CALU_GUIDE.md#what-you-can-enforce-with-a-checker))
 
 ```
@@ -218,5 +200,3 @@ not a promise that nothing bad gets through.
 > **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
 >
 > — *Tron* (1982)
-
-The point of all this is that we don't.
