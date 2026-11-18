@@ -659,10 +659,14 @@ data class EscalationItem(override val id: Int, val escalationKey: String) : Ite
  *
  * @property subtype The result's subtype, e.g. "success".
  * @property isError True if the turn ended with an error.
- * @property costUsd The session's total cost as the turn reported it; `null` if not reported.
+ * @property costUsd What Claude Code reported at the end of the turn: the cost of the whole
+ *   session so far; `null` if not reported.
  * @property backgroundTasks Background tasks (subagents, shells) still running when the turn ended.
  * @property stored True for the end of a recorded turn (`ui.history`): outcome and cost are not
  *   recorded.
+ * @property costDelta The cost of this turn alone: `costUsd` minus the session's cost before the
+ *   turn. `null` when that earlier cost is not known (the first turn seen) or was higher (Claude
+ *   Code was started again and counts from zero).
  */
 @Serializable
 @SerialName(ItemKind.TURN)
@@ -673,6 +677,7 @@ data class TurnItem(
     val costUsd: Double?,
     val backgroundTasks: Int,
     val stored: Boolean? = null,
+    val costDelta: Double? = null,
 ) : Item {
     override val kind: String get() = ItemKind.TURN
 }

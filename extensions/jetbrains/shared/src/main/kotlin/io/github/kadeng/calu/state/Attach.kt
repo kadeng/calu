@@ -61,7 +61,10 @@ fun applyAttach(state: ViewState, p: JsonObject): ViewState {
     val init = p.objOrEmpty("initialize")
 
     val resumed = p.bool("resumed") && state.session.sessionId == sessionId
-    var next = if (resumed) unpendEscalations(state) else clearTranscript(state).copy(lastSeq = 0, turnBase = null)
+    // Cost, model calls and context belong to the session shown before; the limits are the
+    // account's and stay. The replayed turns and the next `ui.usage` bring this session's numbers.
+    val fresh = state.usage.copy(costUsd = null, numTurns = 0, context = null)
+    var next = if (resumed) unpendEscalations(state) else clearTranscript(state).copy(lastSeq = 0, turnBase = null, usage = fresh)
     for (raw in p.arr("events")) {
         val e = raw.asObj() ?: continue
         val method = e.str("method") ?: continue

@@ -15,7 +15,7 @@
  *     checker       checker name, decision, remark                  the checker's instructions
  *     escalation    a card (drawn by the surface from `escalation`)  Allow / Deny / Why?
  *     launch        the subagent's description                      the subagent's tab
- *     turn          how the turn ended, cost                        -
+ *     turn          how the turn ended (`turnLabel`), its cost and the session's (`turnCost`)   -
  *     notice, relay, divider   one line                             relay: the subagent's tab
  */
 package io.github.kadeng.calu.chat
@@ -23,6 +23,9 @@ package io.github.kadeng.calu.chat
 import io.github.kadeng.calu.json.CaluJsonPretty
 import io.github.kadeng.calu.json.int
 import io.github.kadeng.calu.json.str
+import io.github.kadeng.calu.logic.neutraliseBidi
+import io.github.kadeng.calu.logic.turnCost
+import io.github.kadeng.calu.logic.turnLabel
 import io.github.kadeng.calu.state.AssistantItem
 import io.github.kadeng.calu.state.CheckerItem
 import io.github.kadeng.calu.state.DividerItem
@@ -118,9 +121,26 @@ fun chipKindOf(decision: String): String = when (decision) {
  *
  * @param state The view state (for the tool call or escalation the item refers to).
  * @param item The item.
- * @return The row.
+ * @return The row. Its texts (`title`, `text`, `detail`, `linkText`, `tooltip`) are passed
+ *   through `neutraliseBidi`, so a row cannot be drawn in another order than it is stored in;
+ *   the `escalation` of an escalation row is the state's own object and is not changed (the
+ *   surface that draws the card calls `neutraliseBidi` on what it shows).
  */
-fun rowOf(state: ViewState, item: Item): RowModel = when (item) {
+fun rowOf(state: ViewState, item: Item): RowModel = rawRowOf(state, item).let { r ->
+    r.copy(
+        title = neutraliseBidi(r.title), text = neutraliseBidi(r.text), detail = neutraliseBidi(r.detail),
+        linkText = neutraliseBidi(r.linkText), tooltip = neutraliseBidi(r.tooltip),
+    )
+}
+
+/**
+ * Build the row of one item with its texts as calu sent them.
+ *
+ * @param state The view state.
+ * @param item The item.
+ * @return The row, before `neutraliseBidi`.
+ */
+private fun rawRowOf(state: ViewState, item: Item): RowModel = when (item) {
     is UserItem -> RowModel(
         item.id, item.kind,
         title = when (item.source) {
@@ -143,9 +163,9 @@ fun rowOf(state: ViewState, item: Item): RowModel = when (item) {
     is TurnItem -> RowModel(
         item.id, item.kind,
         text = listOfNotNull(
-            if (item.stored == true) "Turn (recorded)" else if (item.isError) "Turn failed (${item.subtype})" else if (item.subtype == "success") "Turn ended" else "Turn ended (${item.subtype})",
-            item.costUsd?.let { "$" + String.format(java.util.Locale.ROOT, "%.2f", it) },
-            item.backgroundTasks.takeIf { it > 0 }?.let { "$it background task${if (it == 1) "" else "s"} still running" },
+            if (item.stored == true) "end of the turn" else turnLabel(item.subtype, item.isError),
+            turnCost(item.costUsd, item.costDelta).takeIf { it.isNotEmpty() },
+            item.backgroundTasks.takeIf { it > 0 }?.let { "$it background task${if (it == 1) "" else "s"} running" },
         ).joinToString(" · "),
         chipKind = if (item.isError) "error" else "",
         dim = true,

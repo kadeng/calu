@@ -202,7 +202,7 @@ fun buildSessionPicks(sessions: JsonObject, attachedId: String?): List<SessionPi
         SessionPick.Entry(
             label = "New session…",
             description = "",
-            detail = "Start a session in this workspace folder, with an optional first message",
+            detail = "Start a session in this workspace folder",
             choice = SessionChoice.New,
             current = false,
         ),

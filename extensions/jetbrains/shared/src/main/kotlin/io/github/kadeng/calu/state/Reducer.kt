@@ -551,6 +551,9 @@ private fun onEscalationResolved(state: ViewState, p: JsonObject): ViewState {
  * Finishes what still streams, appends a "turn" item to Main, increments `turnCount`, and takes
  * the number of background tasks, Claude's session id, the cost and the turn count from the
  * event (cost, session id and turn count keep their value if the event does not give them).
+ * `cost_usd` is Claude Code's running total of the session; the item's `costDelta` is the
+ * difference to `usage.costUsd` before the event (`null` if one of the two is unknown or the
+ * total went down).
  *
  * @param state The current state (not modified).
  * @param p The params `{subtype?, is_error?, cost_usd?, background_tasks?, session_id?,
@@ -559,11 +562,13 @@ private fun onEscalationResolved(state: ViewState, p: JsonObject): ViewState {
  */
 private fun onTurnResult(state: ViewState, p: JsonObject): ViewState {
     val costUsd = p.num("cost_usd")
+    val before = state.usage.costUsd
+    val costDelta = if (costUsd != null && before != null && costUsd >= before) costUsd - before else null
     val backgroundTasks = p.int("background_tasks") ?: 0
     val subtype = p.str("subtype") ?: "success"
     val isError = p["is_error"].jsTruthy()
     val next = appendItem(finishStreaming(state), MAIN) { id ->
-        TurnItem(id = id, subtype = subtype, isError = isError, costUsd = costUsd, backgroundTasks = backgroundTasks)
+        TurnItem(id = id, subtype = subtype, isError = isError, costUsd = costUsd, backgroundTasks = backgroundTasks, costDelta = costDelta)
     }
     return next.copy(
         turnCount = next.turnCount + 1,

@@ -37,7 +37,32 @@ class RowsTest {
         assertEquals("You", rows[0].title)
         assertEquals("Looking at **it**.", rows[1].text)
         assertTrue(rows[1].markdown)
-        assertEquals("Turn ended · \$0.50", rows[7].text)
+        assertEquals("turn done · session \$0.5000", rows[7].text)
+    }
+
+    @Test
+    fun `a turn row names an interrupted turn and the turn's own cost`() {
+        val rows = rowsOf(
+            applyEvents(
+                initialViewState(),
+                listOf(
+                    ev("turn.result", """{"subtype":"success","cost_usd":0.5}"""),
+                    ev("turn.result", """{"subtype":"interrupted","cost_usd":0.75,"background_tasks":2}"""),
+                ),
+            ),
+            MAIN,
+        )
+        assertEquals("turn interrupted · \$0.2500 · session \$0.7500 · 2 background tasks running", rows[1].text)
+    }
+
+    @Test
+    fun `a row shows bidirectional control characters as placeholders`() {
+        val rows = rowsOf(
+            applyEvents(initialViewState(), listOf(ev("tool.use", """{"tool_use_id":"b1","name":"Bash","input":{"command":"rm -rf \u202egnp.tropxe"}}"""))),
+            MAIN,
+        )
+        assertEquals("rm -rf \u27e6RLO\u27e7gnp.tropxe", rows[0].text)
+        assertEquals("rm -rf \u27e6RLO\u27e7gnp.tropxe", rows[0].detail)
     }
 
     @Test

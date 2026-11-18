@@ -63,6 +63,50 @@ class ApplyEventTest {
     }
 
     @Test
+    fun `computes a turn's own cost from the session totals that Claude Code reports`() {
+        val s = applyEvents(
+            initialViewState(),
+            listOf(
+                ev("turn.result", "subtype" to "success", "cost_usd" to 0.0027, "num_turns" to 3),
+                ev("turn.result", "subtype" to "success", "cost_usd" to 0.004, "num_turns" to 5),
+                ev("turn.result", "subtype" to "success", "num_turns" to 1),
+                // A restarted Claude Code counts from zero: the difference is not this turn's cost.
+                ev("turn.result", "subtype" to "success", "cost_usd" to 0.001, "num_turns" to 1),
+            ),
+        )
+        val turns = list(s).filterIsInstance<TurnItem>()
+        assertEquals(0.0027, turns[0].costUsd)
+        assertNull(turns[0].costDelta)
+        assertEquals(0.004, turns[1].costUsd)
+        assertEquals(0.0013, turns[1].costDelta!!, 1e-6)
+        assertNull(turns[2].costUsd)
+        assertNull(turns[2].costDelta)
+        assertEquals(0.001, turns[3].costUsd)
+        assertNull(turns[3].costDelta)
+        assertEquals(0.001, s.usage.costUsd)
+        assertEquals(1, s.usage.numTurns)
+
+        // Another session starts without the cost and the context of the one shown before: the
+        // first turn of a fork showed the difference to the old session's total as its own cost.
+        val withContext = applyEvent(
+            s,
+            ev("ui.usage", "context" to mapOf("tokens" to 20000, "max_tokens" to 1000000), "rate_limits" to emptyList<Any>(), "cost_usd" to 0.0041, "num_turns" to 1),
+        )
+        assertEquals(20000, withContext.usage.context?.tokens)
+        val other = applyEvent(
+            withContext,
+            ev("ui.attached", "session_id" to "s2", "snapshot" to mapOf("state" to "idle", "workspace" to "/w"), "events" to emptyList<Any>()),
+        )
+        assertNull(other.usage.costUsd)
+        assertEquals(0, other.usage.numTurns)
+        assertNull(other.usage.context)
+        val first = applyEvent(other, ev("turn.result", "subtype" to "success", "cost_usd" to 0.0044, "num_turns" to 1))
+        val turn = list(first).filterIsInstance<TurnItem>()[0]
+        assertEquals(0.0044, turn.costUsd)
+        assertNull(turn.costDelta)
+    }
+
+    @Test
     fun `merges tool use, check result, edit diff and tool result by tool_use_id`() {
         val s = applyEvents(
             initialViewState(),
