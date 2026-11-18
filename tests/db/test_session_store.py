@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import psycopg
 import pytest
 
@@ -648,6 +650,63 @@ async def test_a_replay_covers_the_conversation_but_keeps_one_session_of_steps(
         # One step per seq, from the session that is being loaded.
         assert [s.tool_input["command"] for s in history.steps] == ["again"]
         assert [s.seq for s in history.steps] == [1]
+    finally:
+        await conn.close()
+
+
+async def test_the_history_of_a_fork_holds_the_turns_it_inherited(db_url: str) -> None:
+    """A client that attaches to a forked (or rewound) session shows the earlier turns from
+    `session.history`: the fork stores the turns it inherited under its own row (D36), with
+    the steps as the turn records hold them (tool, decision, summary) and the prompt uuids
+    that a client forks by. The `steps` rows are those the fork ran itself.
+    """
+    store, conn = await session_store(db_url)
+    try:
+        await store.start(IDENTITY)
+        await store.set_claude_session("claude-original")
+        inherited = [
+            TurnRecord(
+                index=i,
+                user_inputs=[f"turn {i}"],
+                prompt_uuid=f"u{i}",
+                steps=[StepRecord(tool_name="Bash", summary=f"step of turn {i}", decision="pass")],
+                answer=f"answer {i}",
+                ended_at=datetime(2026, 11, 18, 12, i, tzinfo=UTC),
+            )
+            for i in (1, 2, 3)
+        ]
+        for turn in inherited:
+            await store.save_turn(turn)
+        await store.add_step(StepRow(seq=1, tool_name="Bash", tool_input={"command": "old"}))
+
+        # A fork before turn 3: a new conversation id, the turns before the fork point copied.
+        fork = DatabaseSessionStore(Db(conn))
+        await fork.start(IDENTITY)
+        await fork.set_claude_session("claude-fork")
+        for turn in inherited[:2]:
+            await fork.save_turn(turn)
+
+        before = await fork.load_history()
+        assert [(t.index, t.user_inputs, t.prompt_uuid) for t in before.turns] == [
+            (1, ["turn 1"], "u1"),
+            (2, ["turn 2"], "u2"),
+        ]
+        assert [t.answer for t in before.turns] == ["answer 1", "answer 2"]
+        assert [(s.tool_name, s.summary, s.decision) for s in before.turns[0].steps] == [
+            ("Bash", "step of turn 1", "pass")
+        ]
+        assert before.steps == [], "the original's step rows are not the fork's"
+
+        # The fork's own turn takes the number of the first discarded one.
+        await fork.save_turn(TurnRecord(index=3, user_inputs=["another way"], prompt_uuid="f3"))
+        await fork.add_step(StepRow(seq=1, turn=3, tool_name="Bash", tool_input={"command": "new"}))
+        after = await fork.load_history()
+        assert [(t.index, t.user_inputs[0]) for t in after.turns] == [
+            (1, "turn 1"),
+            (2, "turn 2"),
+            (3, "another way"),
+        ]
+        assert [(s.turn, s.tool_input["command"]) for s in after.steps] == [(3, "new")]
     finally:
         await conn.close()
 

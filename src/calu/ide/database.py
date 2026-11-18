@@ -479,16 +479,16 @@ def pick_session(rows: list[herd.SessionRow], hint: str | None, workspace: Path)
             raise RpcError(
                 NO_SESSION,
                 f"no session on this machine whose id starts with {hint!r} is serving "
-                "clients (ide.sessions lists the running ones)",
+                "clients; the session list shows the running ones",
             )
     else:
         inside = [row for row in local if _within(workspace, row.directory)]
         if not inside:
             raise RpcError(
                 NO_SESSION,
-                f"no session of {workspace} is running on this machine: start one with "
-                "ide.start, which needs a running `calu serve`, or with `calu run` in a "
-                "terminal",
+                f"no session of {workspace} is running on this machine: start a new "
+                "session in the editor (it needs a running `calu serve`), or run `calu run` "
+                "in a terminal",
             )
         deepest = max(len(Path(row.directory).parts) for row in inside)
         chosen = [row for row in inside if len(Path(row.directory).parts) == deepest]

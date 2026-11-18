@@ -263,6 +263,16 @@ decides where the table left it open:
   missing; `advice` is `""` for a finding that is ok. Without a reachable database,
   `server.sessions_running` counts the token-free local sockets that answer.
 - **`ide.start`**: -32014 also when a server claimed the request and did not finish it in time.
+- **`ide.start.cancel`** (new, no params) → `{cancelled: n}`: takes back the `ide.start`
+  requests that still wait for a server. Each withdraws its `session_requests` row and fails
+  with the new error **-32018**. A request whose session has started is not affected. The
+  extension's "Cancel" on the waiting request uses it.
+- **`user.input`** (session protocol) has `to`: "main", or the `agent_id` of the background
+  subagent the user wrote to with `chat.send {to}`. For a subagent, `text` is the user's own
+  text; the request to relay it, which the main agent receives around it, is not sent to the
+  clients (the checkers' context keeps what Claude received).
+- **Error texts** name no protocol method: they say what a person can do ("start a new session
+  in the editor", "the session list shows the running ones").
 - **`ide.log`** is sent only when a minted token could not be revoked.
 - **Reconnect**: after close 4002 at once, otherwise with a growing wait (0.25 s to 2 s) for
   15 s; a revoked or refused token and four connections in a row without a new event end in

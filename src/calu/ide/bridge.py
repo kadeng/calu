@@ -61,6 +61,9 @@ SERVER_REFUSED = -32014
 NOT_ATTACHED = -32015
 """`session.call`: no session is attached, or the connection to it is lost."""
 
+START_CANCELLED = -32018
+"""`ide.start`: the editor took the request back with `ide.start.cancel`."""
+
 METHOD_NOT_FOUND = -32601
 """JSON-RPC's code for a method the bridge does not have."""
 
@@ -251,6 +254,8 @@ class Bridge:
         self._tasks = tasks
         self._link: SessionLink | None = None
         self._attaching = anyio.Lock()
+        self._start_waits: list[anyio.CancelScope] = []
+        """One scope per `ide.start` that waits for a server; `ide.start.cancel` cancels them."""
         self._handlers: dict[str, Handler] = {
             "ide.initialize": self._initialize,
             "ide.status": self._status,
@@ -260,6 +265,7 @@ class Bridge:
             "ide.attach": self._attach,
             "ide.detach": self._detach_request,
             "ide.start": self._start,
+            "ide.start.cancel": self._start_cancel,
             "session.call": self._call,
             "ide.settings.get": self._settings_get,
             "ide.settings.set": self._settings_set,
@@ -647,9 +653,37 @@ class Bridge:
             token_id, token = await herd.mint_token(db, done.session_id, "calu ide")
             return Endpoint(str(row[0]) if row else "", token, token_id, done.session_id, password)
 
-        async with self._attaching:
-            endpoint = await self.access.read(work, password)
-            return await self._attach_to(endpoint, 0)
+        # Only the wait for the server can be taken back (`ide.start.cancel`): once the
+        # session is started, the request attaches to it.
+        with anyio.CancelScope() as waiting:
+            self._start_waits.append(waiting)
+            try:
+                async with self._attaching:
+                    endpoint = await self.access.read(work, password)
+                    self._start_waits.remove(waiting)
+                    return await self._attach_to(endpoint, 0)
+            finally:
+                if waiting in self._start_waits:
+                    self._start_waits.remove(waiting)
+        raise RpcError(START_CANCELLED, "the request for a session was taken back")
+
+    async def _start_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `ide.start.cancel`: take back the `ide.start` requests that still wait.
+
+        Side effects: each waiting `ide.start` withdraws its `session_requests` row (so that
+        no server starts a session nobody waits for) and fails with `START_CANCELLED`. A
+        request whose session has already started is not affected: it attaches.
+
+        Args:
+            params: Unused.
+
+        Returns:
+            `{cancelled: n}`: how many requests were taken back.
+        """
+        waits = list(self._start_waits)
+        for waiting in waits:
+            waiting.cancel()
+        return {"cancelled": len(waits)}
 
     async def _call(self, params: dict[str, Any]) -> Any:
         """Answer `session.call`: forward one request to the attached session.
@@ -670,7 +704,9 @@ class Bridge:
             raise RpcError(INVALID_PARAMS, "the parameter 'params' must be an object")
         link = self._link
         if link is None:
-            raise RpcError(NOT_ATTACHED, "no session is attached (ide.attach or ide.start)")
+            raise RpcError(
+                NOT_ATTACHED, "no session is attached: attach to a session or start one first"
+            )
         try:
             return await link.request(method, inner or {})
         except RequestFailed as error:

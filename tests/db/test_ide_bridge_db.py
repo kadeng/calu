@@ -369,6 +369,37 @@ async def test_without_a_server_the_start_says_which_command_to_run(
         assert await db.all("SELECT state FROM session_requests") == [("withdrawn",)]
 
 
+async def test_a_waiting_start_is_taken_back_by_the_editor(
+    db_url: str, tmp_path: Path, store: CredentialStore
+):
+    await prepare(db_url, tmp_path)
+    store.save("operator", await operator_login(db_url), None)
+    async with bridged(tmp_path, store, user=USER, claim_wait_s=30) as editor:
+        # Nothing waits yet.
+        assert await editor.request("ide.start.cancel") == {"cancelled": 0}
+        outcome: list[Failed] = []
+
+        async def start() -> None:
+            with pytest.raises(Failed) as taken_back:
+                await editor.request("ide.start", {"kind": "new"})
+            outcome.append(taken_back.value)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(start)
+            async with owner_db(db_url) as db:
+                with anyio.fail_after(10):
+                    while not await db.all("SELECT 1 FROM session_requests"):
+                        await anyio.sleep(0.05)
+            assert await editor.request("ide.start.cancel") == {"cancelled": 1}
+        # The request failed long before the 30 s a server is waited for, and its row was
+        # withdrawn, so that no server starts a session nobody waits for.
+        assert outcome[0].code == -32018
+        # The bridge still serves requests.
+        assert (await editor.request("ide.sessions"))["running"] == []
+    async with owner_db(db_url) as db:
+        assert await db.all("SELECT state FROM session_requests") == [("withdrawn",)]
+
+
 async def test_a_protected_credential_is_asked_for_and_never_prompted(
     db_url: str, tmp_path: Path, store: CredentialStore
 ):
