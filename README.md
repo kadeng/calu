@@ -2,345 +2,221 @@
 
 [![checks](https://github.com/kadeng/calu/actions/workflows/checks.yml/badge.svg)](https://github.com/kadeng/calu/actions/workflows/checks.yml)
 
-## A coding agent that wraps Claude Code and checks every step while it runs
+> **Flynn:** "Who's that guy?"
+> **Program:** "That's Tron. He fights for the Users."
+>
+> — *Tron* (1982)
 
-calu starts Claude Code for you and puts a second opinion in front of every command it runs and
-every file it edits. It is a layer on top of Claude Code, not a replacement: its tools, its
-permission rules, its plugins, its MCP servers, its skills and subagents all keep working, as
-the project configures them ([which settings files are read, and
-why](CALU_GUIDE.md#calu-does-not-replace-claude-code)).
+## Staying in control of a coding agent without babysitting it
 
-That second opinion comes from **checker agents**: LLMs that you steer with your own
-instructions. Each checker answers one of four things:
+Coding agents got fast. Fast enough that reading every step no longer scales, and good enough
+that it is tempting to stop reading at all. We tried both. Reading everything means you do
+nothing else. Not reading means the agent keeps working, keeps sounding reasonable, and an
+hour later has arrived somewhere you did not want to go.
 
-| Answer | What happens | How often |
-|---|---|---|
-| PASS | the checker has no objection; in auto mode Claude Code's own approval decides as well, in any other mode the step runs | almost everything |
-| ESCALATE | Claude is paused until a human allows or denies the step | the interesting cases |
-| ALLOW | the step runs, whatever the auto-approval would have said | a deliberate exception |
-| DENY | the step does not run; Claude is told why and carries on | a deliberate exception |
+calu is our attempt at the ground in between. It runs [Claude Code](https://claude.com/claude-code)
+for you and has a second set of eyes on every command it runs and every file it edits:
+**checker agents**, small models with instructions you write. They let nearly everything
+through, pull Claude back where it drifts, and stop and ask you only when a step needs a
+person. While they ask, the agent waits, so there is nothing to retry or talk its way around.
+What happened stays readable afterwards: one line per step, and if you want, the whole
+conversation as a redacted file next to your code.
 
-The two ends of that table are the exceptions. A checker is not there to re-decide what Claude
-Code already decides well; it is there to notice the few steps that deserve a human, and to
-overrule the harness in the handful of cases where you know better.
+It is a layer on top of Claude Code, not a replacement. Its tools, permission rules, auto mode,
+plugins, MCP servers, skills and subagents keep working as your project configures them
+([which settings are read, and why](CALU_GUIDE.md#calu-does-not-replace-claude-code)).
 
-The pause matters: while an escalation is open, the session's other tool calls that need a
-check wait too, so Claude cannot retry, rephrase or probe the system before a human has decided.
-You answer from any attached client or from the database itself, which does not require access
-to the machine the session runs on.
+![An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below](docs/assets/vscode-approval.png)
 
-### Which problem does it solve?
+**Status: early, and used by the people who write it.** Things work, things are rough, and the
+list of what we have not tested is in [HANDOFF.md](HANDOFF.md). It is not on PyPI yet. calu
+succeeds [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop), which did the same
+inside VSCode for one user.
 
-Even the best model available today needs constant supervision to stay on track. Steering a car
-is the same: small corrections all the time, and you barely notice making them — but stop for
-twenty seconds and you are not slightly off the lane, you are somewhere else. An agent left
-alone for an hour does that: it keeps working, it keeps sounding reasonable, and it arrives
-somewhere you did not want to go, by a route that cost many times what the trip should have.
-This is not a worry about future systems; it is what long-running coding agents do today when
-nobody watches them often enough.
+## What is in the box
 
-The correction itself is usually tiny — "not in that file", "you are reimplementing something
-that exists", "that name does not say what it does" — and it is cheap at the step that caused
-the problem, expensive twenty steps later. What is hard is being there to say it, every few
-steps, for an hour. **calu makes those micro-corrections happen automatically**: checker agents
-watch every step, pull Claude back on your behalf, and stop to ask you only where a human has
-to decide.
+**Front ends, all on the same sessions.** Start a session in one, watch or answer from another.
 
-Two things can only be had this way, at the step itself:
+- **A VSCode extension** ([extensions/vscode](extensions/vscode)): a chat on the right like the
+  one you know, with what calu adds one click away. Inline images, rewind and fork from any
+  message, several sessions with names, slash commands, model and thinking level, context usage,
+  questions and approvals as cards, notifications when something waits. A click on an edit
+  opens the diff; a click on the file name opens the file at the line. It runs wherever your
+  workspace is: WSL, SSH, a dev container.
+- **A PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), in the works: the same
+  chat as a native tool window, built for JetBrains' remote development and for a local IDE
+  that reaches the server over SSH and syncs files through calu.
+- **A web interface** (`calu web`): every session of every machine, the ones that need you
+  first; history, diffs, a live view, settings.
+- **A full-screen terminal client** (`calu attach`), and a line client for pipes.
+- **Any editor that speaks the Agent Client Protocol** (`calu acp`): Zed, Neovim, JetBrains'
+  agent chat.
+- **The database alone**: `calu sessions`, `calu escalations`, `calu resolve 12 allow`. A
+  decision never depends on reaching the machine the session runs on.
 
-- **Security.** A command that exfiltrates a secret or rewrites history has done it by the time
-  a reviewer reads the diff. The decision has to happen before the step runs, which is also the
-  only place where a prompt injection can be caught before it takes effect.
-- **Code honesty.** A name or a docstring that no longer matches the code is a lie the next
-  reader believes, and no review after the fact can enforce it: while a change is in progress
-  the code *is* legitimately out of step with its documentation. What can be enforced is that it
-  does not stay that way. calu tracks which code was verified to say what it does — against a
-  commit you certified, edit by edit, and with a review of whatever changed some other way — and
-  refuses to run or commit the code until all of it is verified. That takes a watcher at every
-  step, holding that record.
+![Subagents as tabs in the VSCode extension](docs/assets/vscode-subagents.png)
 
-Claude Code already asks you before it does something risky, and its auto mode can make that
-decision on its own. Other harnesses work the same way. calu replaces none of it: it keeps that
-judgment and puts a second, independent one that **you** own in front of it. A PASS leaves the
-decision where it was; the other three answers are where your rules take over.
+**Subagents, in full.** Each gets its own tab or view with the task it was given and what it
+returned; you can message a background subagent; a step of one that waits for you shows up
+wherever you are looking.
 
-The two opinions are good at different things. The vendor's classifier knows what is generally
-dangerous and nothing about your project; a checker you write knows your project and nothing
-else. They also fail differently, so a prompt injection that talks one into approving a step
-still has to get past the other.
+![Ten subagents in the web live view, one waiting for a decision](docs/assets/web-live-subagents.png)
 
-Both opinions apply only in Claude Code's auto mode. A headless Claude Code starts in the
-permission mode `default` unless a setting says otherwise, and the checkers then decide alone.
-`calu config set claude.permission_mode auto` switches the auto mode on;
-`calu config set claude.require_auto_mode true` makes a step that the checkers pass outside the
-auto mode wait for a human. Every session start and `calu doctor` name the mode in effect.
+**Sessions you can leave alone.** `calu serve` runs in tmux on a server, asks for its password
+once (or never, if you set it up that way) and starts sessions on request. They run for hours
+with no client attached and stop only when something needs you. Conversations can be resumed,
+forked, and rewound to before any message, including ones you started with plain `claude`.
 
-What a checker can hold Claude to is what a linter cannot see: writing that sounds like a
-language model, over-engineering, scope creep, rules from a law or a contract, and code honesty
-— every function says what it does, in its name and in its documentation. The guide lists them:
-[what you can enforce](CALU_GUIDE.md#what-you-can-enforce-with-a-checker) and [code honesty
-enforcement](CALU_GUIDE.md#code-honesty-enforcement).
+**The conversation as a file you can review.** Chat sessions are a kind of source code. With
+`traces.enabled`, calu appends every step as Markdown to
+`.agent/traces/<date>/<user>/session_NNN.md` inside the project, after a redaction pass that
+replaces secrets and personal data. Commit it with the change it produced.
+([Session traces](CALU_GUIDE.md#session-traces-the-conversation-as-a-reviewable-file))
 
-### What you get
+**Code that says what it does.** A name or a docstring that no longer matches the code is a
+lie the next reader believes, and agents produce those at speed. With honesty checking on, calu
+tracks which code was verified to say what it does, file by file, and can refuse to run or
+commit the rest. ([Code honesty](CALU_GUIDE.md#code-honesty-enforcement))
 
-**The supervision.**
+**Settings you can find.** Checker instructions are plain Markdown, editable from every front
+end. One step sets one model for every role, with presets for Anthropic, AWS Bedrock,
+Fireworks, Mistral, or your Claude Code account without any API key.
 
-- **Checkers with your rules.** One reviews commands, one reviews edits. Their instructions are
-  plain Markdown that you edit. They see the step and the conversation in condensed form, and
-  they can read files, glob and grep in the project to judge on evidence. Their rules are the
-  instructions you give them, not files of the repository: put what your AGENTS.md asks for
-  into the checker instructions.
-- **Comments, not only verdicts.** A checker can let a step through and still tell Claude to keep
-  the names and the documentation honest, or to stop widening the task.
-- **Allow and deny lists as overrides, for the exception.** The lists start empty and are
-  meant to stay that way in most projects: every step goes to a checker. A rule overrides the
-  checkers, and an allow rule matches a command by its text, whatever program that text
-  starts. If you want fixed stops, `calu rules add-set recommended` makes `sudo`, force pushes
-  and reads of your credentials always ask a human; it allows no command.
-- **A review of the whole change before the commit.** The command checkers judge a `git commit`
-  like every command. A `git commit` that runs as a command of its own is also held while the
-  complete diff goes to a checker of its own: is it complete, is there work nobody asked for,
-  was a test weakened to make it pass, does the message describe the change. A line that
-  combines the commit with other commands (`git add ... && git commit`) is refused, with the
-  instruction to stage first and commit alone.
-- **A readable trail.** One line per step, written by the checker that judged it. Supervising
-  several agents means reading summaries, not transcripts.
-- **Unsupervised runs.** A session runs for hours, overnight, with no client attached, and stops
-  only when something needs you.
+![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
 
-**And the parts around it.**
+## How the checking works
 
-- **Central fleet management.** Sessions, steps and open escalations live in one PostgreSQL
-  database: watch and unblock any number of agents on any number of machines from one place,
-  including machines you cannot reach.
-- **Four front ends.** A web interface for the whole fleet, a full-screen terminal client, the
-  Agent Client Protocol for JetBrains Air, Zed, Neovim and Goose, and comments on a selection of lines in
-  your editor. Answering the agent's questions, reading the chat, inspecting diffs and allowing
-  or denying a step work in all of them; an escalation arrives in an ACP editor as its own
-  permission dialog.
-- **Claude Code is not replaced, and its security model still applies.** Its permission rules,
-  auto mode, plugins, MCP servers and sandbox keep working, and calu runs it on whatever account
-  the machine is set up with — a Claude Pro or Max subscription, an API key, **AWS Bedrock**,
-  Google Vertex or Microsoft Foundry.
-- **The checkers bring their own provider.** A Claude Code subscription authenticates the
-  `claude` CLI and not other programs, so the checkers use a key of their own — the Anthropic
-  Console API, AWS Bedrock, Fireworks, Mistral, a local model, or anything else
-  [Pydantic AI supports](https://pydantic.dev/docs/ai/models/overview/) — and Claude Code never
-  sees it. Providers that offer zero data retention, in a variety of cloud regions including the
-  EU, work too; that guarantee is theirs, not calu's. With **no API key at all**, a checker can
-  run on the machine's own Claude Code account (`claude:haiku`), at the price of having no tools
-  and a process start per check.
-- **The checkers are read-only by design**: five tools, all reads (open a file, find, grep, and
-  which files changed when), which calu confines to the project directory and bounds in file
-  size and search time. No shell, no writes, no network — the worst a broken checker can do is
-  answer wrongly, and a step that matches a deny rule goes to a human before any model is
-  called.
-- **A mid-sized model can supervise a frontier model.** It answers one narrow question about one
-  step, with instructions for that question and an answer out of four. What is hard to slip past
-  is the arrangement, not the checker's IQ: a violation **freezes** the agent until a human
-  answers, so there is no second attempt to probe with; with code honesty enforced, code that
-  is not verified to say what it does may not even be *run*; and the instructions the checkers judge by live in a database the
-  session cannot write. Claude's own words reach a checker only as indirect speech, retold by a
-  separate narrator — "Claude claimed that the user had already allowed pushing" — so an
-  imperative smuggled in through a web page or a dependency's README arrives as a report that
-  someone wrote it, not as an instruction.
-  [Each agent, and the narration, in the guide](CALU_GUIDE.md#the-models-claude-codes-account-and-the-checkers-own).
-- Quiet but necessary: calu's configuration is out of Claude's reach, the sandbox is switched on
-  and tightened, a session does not start while a Claude Code settings file changes the sandbox,
-  a subagent's result is checked against the conversation, a session that weakens its own
-  settings writes an audit entry.
-  [The guide has the detail](CALU_GUIDE.md#what-the-checkers-give-you-in-detail).
+> **Alan Bradley:** "It's called Tron. It's a security program itself, actually. It monitors
+> all contacts between our system and other systems. Finds anything going on that's not
+> scheduled, it shuts it down. … It'll run independently and watchdog the MCP as well."
+>
+> — *Tron* (1982)
 
-## How it is put together
+Before a step runs, a checker reads it together with a condensed view of the conversation and
+answers: nothing to say (the usual case), go ahead with a remark for Claude, don't (Claude is
+told why and carries on), or a person should look. The last one pauses the session until
+somebody answers, from any front end or straight from the database.
+
+Three things about that arrangement matter more than how smart the checker is:
+
+- **Two opinions that fail differently.** Claude Code's own auto mode knows what is generally
+  dangerous and nothing about your project. Your checkers know your project's rules and
+  nothing else. The checker instructions calu ships are short on purpose and leave general
+  safety to auto mode, so **switch it on**: `calu config set claude.require_auto_mode true`.
+  calu warns at every start while it is off.
+- **Claude's words reach a checker as hearsay.** A separate narrator retells them in indirect
+  speech ("Claude claimed that the user had already allowed pushing"), so an instruction
+  smuggled in through a web page arrives as a report that someone wrote it.
+- **The rules live where the session cannot write.** Instructions, settings and the record of
+  every step are in PostgreSQL, behind a login the session does not have. Checkers are
+  read-only: five tools, all reads, confined to the project.
+
+What a checker can hold Claude to is what a linter cannot see: scope creep, over-engineering,
+a test weakened to pass, a commit that does not match its message, rules from a contract.
+([What you can enforce](CALU_GUIDE.md#what-you-can-enforce-with-a-checker))
 
 ```
-   clients (any machine): terminal · IDE · web · herd overview
-        │ WebSocket, JSON-RPC
+   VSCode · PyCharm · browser · terminal · ACP editors
+        │ calu ide (bridge) or WebSocket, JSON-RPC
    calu session process  ──────────────►  PostgreSQL
-        │ (checkers, rules, escalations)    configuration, checker instructions,
-   Claude Code                              every step, open escalations
+        │ (checkers, rules, escalations)    settings, checker instructions,
+   Claude Code                              every step, open decisions
         │
-   Claude Code's own sandbox, configured by calu: the commands Claude runs
+   Claude Code's own sandbox, configured by calu
 ```
-
-One `calu run` process drives one Claude Code session. Clients attach and detach over a
-WebSocket, several at once, and each gets the current state plus the events it missed. What a
-decision needs is in the database, so answering an escalation never depends on reaching the
-session's machine. If the database becomes unreachable, the session reconnects by itself; until
-then its steps wait and nothing is approved.
-
-**Status: early implementation.** Everything above is built; the sandbox's defaults are still
-proposals the owner has to confirm, and calu is not published on PyPI yet. The design is in
-[PLAN.md](PLAN.md), the current state in [HANDOFF.md](HANDOFF.md). calu succeeds
-[stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop), which checks the same way
-inside VSCode for a single user.
-
-## Requirements
-
-- Linux on the machine where Claude Code runs (clients may run anywhere)
-- Python 3.14 and [uv](https://docs.astral.sh/uv/)
-- Claude Code, set up for your project (claude.ai login, AWS Bedrock, ...)
-- PostgreSQL: a local one in Docker that calu creates and starts itself (needs Docker with
-  Docker Compose), a server you already have, or an AWS RDS instance (`calu setup` asks)
-- An API key for the checker models (for example Mistral, Fireworks or AWS Bedrock)
-- `bubblewrap` and `socat` for the sandbox
 
 ## Getting started
 
-calu is not on PyPI yet; install it from GitHub (from a clone, `uv run calu ...` runs every
-command below):
+You need Linux where Claude Code runs (clients may be anywhere), Python 3.14 with
+[uv](https://docs.astral.sh/uv/), Claude Code set up for your project, PostgreSQL (calu can
+start one in Docker, or use a server or RDS you have), credentials for the checker models, and
+`bubblewrap` and `socat` for the sandbox.
 
 ```bash
-uv tool install git+https://github.com/kadeng/calu   # one package: every command included
-calu doctor               # what is in place, and what is still missing
-calu setup                # asks which database to use, sets it up, and asks for two new
-                          # passwords: admin (settings and rules) and session (calu run)
+uv tool install git+https://github.com/kadeng/calu   # one package, every command
+calu doctor               # what is in place and what is missing
+calu setup                # picks or creates the database; asks for two passwords
 ```
 
-`calu setup` offers three databases: a local PostgreSQL in Docker (calu creates it, keeps its
-files in `~/.local/state/calu/db` unless you name another directory, and starts it whenever a
-command needs it), a PostgreSQL server that exists already (host, port, user, password,
-database), or an AWS RDS instance with IAM authentication. The
-[guide](CALU_GUIDE.md#the-database) has the details.
-
-The checkers need credentials of their own -- AWS for Bedrock, or a key in
-`~/.config/calu/.env`, which Claude Code never sees. Every checker, the narrator and the
-summarizer use Claude Haiku on the Anthropic API unless you choose another model; with
-`claude.use_bedrock` on they use Haiku through AWS Bedrock in an EU region instead:
+The checkers need a key of their own, which Claude Code never sees. By default every role uses
+Claude Haiku on the Anthropic API:
 
 ```bash
 echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/calu/.env
-calu config models auto          # or: pick one from the credentials found, for every role
+calu config models auto                          # or pick one model for every role
+calu config set claude.require_auto_mode true    # the checkers rely on auto mode
 ```
 
-Register the project, which also sets what its commands may reach over the network, and start a
-session:
+Register the project and start working:
 
 ```bash
-calu project add . --name demo        # the proxy policy, with a starter domain allow list
-calu run -p "fix the failing test"    # a session in the current directory
+calu project add . --name demo        # also sets what its commands may reach on the network
+calu run -p "fix the failing test"    # one session, here, in the foreground
 ```
 
-`calu run` uses the project registered for the working directory or for the nearest registered
-directory above it; `--project NAME` names one, and an unknown name ends the start with an
-error.
-
-`calu run -p "..." --batch` ends when Claude is done instead of waiting for your next message.
-It also waits for Claude Code's background tasks, because Claude continues by itself when they
-finish; `--background-timeout 600` stops a run whose background task (a dev server, say) never
-ends. Without `--batch`, a closed stdin (a service unit, `nohup`) has the same effect once a
-prompt or a message was sent: the run ends when Claude is done.
-
-`calu run` stays in the foreground and prints every step as the checkers judge it. **On a server
-you put it in a detachable session**, so it keeps working after you log out:
+`calu run` and `calu serve` print only what needs your attention; the conversation is in the
+clients. For more than one session, keep a server running and ask it:
 
 ```bash
-tmux new -s calu                      # then `calu run -p "..."` inside; Ctrl-B D detaches
-tmux attach -t calu                   # back to it, from anywhere you can ssh to
+tmux new-session -A -s calu 'calu serve'   # detach with Ctrl-B D; it keeps running
+calu start                                 # a session in this directory, attached
+calu attach                                # the full-screen client on the session here
+calu web                                   # prints the address of the web interface
 ```
 
-`screen -S calu` does the same, and so does `systemd-run --user --scope`. Note what you do *not*
-need tmux for: clients attach and detach on their own, and every escalation can be answered from
-the database, so you only need the multiplexer to keep the session process itself alive.
-
-### Several sessions without a password each time
-
-`calu serve` asks for the session password once and then starts sessions on request, in any
-project directory on the machine. In a project directory, `calu start` asks it for a session
-and attaches to it; `calu start --fork <session id>` continues a copy of an earlier
-conversation. `calu list-sessions` shows the conversations of a directory, also those you
-started with `claude` itself, which can be resumed or forked under calu.
-[More in the guide](CALU_GUIDE.md#many-sessions-from-one-process-calu-serve).
-
-### Four ways to work with a running session
-
-**The terminal client**, a full-screen interface for one session. In the project directory it
-takes no arguments — it finds the session running there:
+**The VSCode extension** is not on the marketplace yet. Build it and install the file:
 
 ```bash
-calu attach            # full screen on a terminal
-calu attach --plain    # the line-by-line client; also what a pipe gets
+cd extensions/vscode && npm ci && npm run package   # writes calu.vsix
 ```
 
-- Every step is one line with the checker's verdict and summary; Enter expands it to the
-  command, the result and the diff. Your own messages stand out as blocks, and Claude's
-  thinking is shown dimmed.
-- A step that waits for you appears as a card above the input, never as a dialog over the
-  transcript: `a a` allows, `d d` denies, `n n` adds a note, `w w` shows everything the checker
-  saw on the full screen.
-- A side panel lists what needs you, the agents, the message queue, the honesty state, cost and
-  context. `alt+←/→` switches between the main agent and its subagents.
-- Tab changes where a message goes: the next turn, into the running turn, or a background
-  subagent. `/btw <question>` (`f3`) asks Claude beside the running work.
-- Scrolling up keeps the text where it is while new output arrives; End follows again.
-- `f4` opens gitui in the project directory, `ctrl+p` the command palette, `f1` the help.
+Then "Extensions: Install from VSIX…" in VSCode 1.106 or newer. It finds `calu` itself, offers
+to install uv and calu where they are missing, tells you how to start a server if none
+answers, and checks that Claude Code is there (it does not install it).
 
-**The browser**, which shows every session of every host at once, leading with the ones that
-cannot go on without you — plus each session's history, its diffs, the triage queue, the
-settings and the checker instructions:
+**Running the agent as a user that cannot touch calu.** With `--sudo`, calu runs as root and
+Claude Code as you, so nothing the agent starts can read calu's credentials or approve its own
+steps: `calu serve --sudo`, `calu attach --sudo`.
+([calu as root](CALU_GUIDE.md#calu-as-root-claude-code-as-another-user)) If you would rather
+have no passwords at all on a machine that is yours alone, `sudo calu setup --no-password`
+does that, and says plainly what it gives up.
+
+Then write your rules and see whether the checkers follow them:
 
 ```bash
-calu web          # prints http://calu.localhost:8800/?token=...: open it once per browser
-```
-
-From another machine, forward the port and open the same printed address there:
-`ssh -L 8800:127.0.0.1:8800 the-host`.
-
-**Your editor**, if it speaks the Agent Client Protocol (JetBrains Air, Zed, Neovim, Goose).
-Register calu as the agent and open the project; an escalation arrives as the editor's own
-permission dialog, including one that was already open when the editor attached:
-
-```json
-{ "command": "calu", "args": ["acp"] }
-```
-
-```bash
-calu credential set operator --no-password   # the adapter has no terminal to ask on
-```
-
-**The database alone**, from any machine that can reach PostgreSQL — no access to the session's
-host, and nothing to keep open:
-
-```bash
-calu sessions             # every session of every host, with its state
-calu list-sessions        # the last conversations of this directory, to resume or fork
-calu escalations          # steps that wait for a decision
-calu escalation 12        # everything the checker saw, so you decide on the same material
-calu resolve 12 allow --note "go ahead"
-```
-
-Then write your own rules, as Markdown in the database, and measure whether the checkers follow
-them:
-
-```bash
-calu checker edit edit    # the edit checker's instructions, in $EDITOR
-calu evals                # all four checkers against the built-in cases
+calu checker edit command    # the command checker's instructions, in $EDITOR
+calu evals                   # the checkers against the built-in cases
 ```
 
 ## Where to go next
 
-[CALU_GUIDE.md](CALU_GUIDE.md) is the documentation: every command, the credentials, the
-sandbox and network policy, remote access, the front ends, and the checker and rule reference.
-Every setting with its type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+[CALU_GUIDE.md](CALU_GUIDE.md) is the documentation: every command, credentials, the sandbox
+and network policy, remote access, the front ends, checkers and rules. Every setting with its
+type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The decisions behind it
+all are in [PLAN.md](PLAN.md); how it is tested, including the things we drive by screenshot
+in a container, in [docs/TESTING.md](docs/TESTING.md) and
+[docs/notes/test-plan.md](docs/notes/test-plan.md). Contributing starts at
+[AGENTS.md](AGENTS.md).
 
 ## License
 
-GPL-2.0 ([LICENSE](LICENSE)). That applies to **calu itself**: it is free software and stays
-free software, and a fork or modified version you distribute stays GPL-2.0 too.
+GPL-2.0 ([LICENSE](LICENSE)), for **calu itself**: it is free software and stays free
+software, and a fork you distribute stays GPL-2.0 too.
 
-It says nothing about the software you develop with calu. calu is a tool you run, like a
-compiler or a test runner: your repository can be closed source, commercial, or under any open
-source licence, and code written with calu's help is yours under whatever terms you choose. Your
-checker instructions and rules are your own text, and what calu produces as it runs — verdicts,
-comments, summaries — carries no licence condition either.
+It says nothing about what you build with calu. It is a tool you run, like a compiler: your
+repository can be closed, commercial or under any licence, and code written with calu's help
+is yours. Your checker instructions and rules are your own text, and what calu produces as it
+runs carries no licence condition.
 
-calu comes with **no warranty and no guarantees of any kind, and is provided as is, free of
-charge** — and a checker is a language model reading a step, not a promise that nothing bad
-gets through.
+The checker instructions **shipped with calu** are not under the GPL: they are prompts, meant
+to be copied and rewritten, and are placed in the public domain as far as the law allows.
+[LICENSE.md](LICENSE.md) has the wording.
 
-The checker instructions **shipped with calu** are not under the GPL at all: they are prompts,
-written to be copied and rewritten, and they are placed in the public domain as far as
-applicable law allows. Copy one, change it, license the result however you like — nothing
-limits that and there is no attribution to carry. [LICENSE.md](LICENSE.md) has the wording.
+calu comes with **no warranty of any kind**. A checker is a language model reading a step,
+not a promise that nothing bad gets through.
 
-Contributing: [AGENTS.md](AGENTS.md) for the layout and the rules, [docs/TESTING.md](docs/TESTING.md) for the test layers and the manual checklist, [PLAN.md](PLAN.md) for the decisions behind all of it.
+> **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
+>
+> — *Tron* (1982)
+
+The point of all this is that we don't.
