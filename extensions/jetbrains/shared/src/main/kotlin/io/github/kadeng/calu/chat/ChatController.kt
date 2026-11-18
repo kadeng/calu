@@ -32,9 +32,12 @@ import io.github.kadeng.calu.json.bool
 import io.github.kadeng.calu.json.obj
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.HintInput
+import io.github.kadeng.calu.logic.OutgoingImage
 import io.github.kadeng.calu.logic.ServerCommandInput
 import io.github.kadeng.calu.logic.buildHints
 import io.github.kadeng.calu.logic.buildServerHelp
+import io.github.kadeng.calu.logic.chatSendParams
+import io.github.kadeng.calu.logic.checkSend
 import io.github.kadeng.calu.logic.findingOk
 import io.github.kadeng.calu.protocol.BridgeError
 import io.github.kadeng.calu.rpc.RpcEvent
@@ -476,28 +479,46 @@ class ChatController(
     }
 
     /**
-     * Send a chat message to the agent of a tab.
+     * Send a chat message without images to the agent of a tab (see `sendMessage`).
      *
      * @param text The message; blank text is not sent.
      * @param inject True to deliver it into the running turn ("inject"), false for the next turn.
      * @param tab The visible tab: "main" or a subagent's id (see `messageTarget`).
      * @return True if the session accepted the message.
      */
-    suspend fun send(text: String, inject: Boolean, tab: String): Boolean {
-        if (text.isBlank()) return false
+    suspend fun send(text: String, inject: Boolean, tab: String): Boolean = sendMessage(text, inject, tab, emptyList())
+
+    /**
+     * Send a chat message, with or without images, to the agent of a tab (`chat.send`).
+     *
+     *     the tab's agent cannot receive messages     -> warning notice, false
+     *     `checkSend` refuses the text or an image    -> warning notice, false (nothing is sent)
+     *     the session refuses or cannot be reached    -> error notice, the event
+     *                                                    `ui.restoreInput {text}`, false
+     *
+     * @param text The message; may be blank only if there is an image.
+     * @param inject True to deliver it into the running turn ("inject"), false for the next turn.
+     * @param tab The visible tab: "main" or a subagent's id (see `messageTarget`).
+     * @param images The attached images (`outgoingImage`); only the main agent takes images.
+     * @return True if the session accepted the message.
+     */
+    suspend fun sendMessage(text: String, inject: Boolean, tab: String, images: List<OutgoingImage>): Boolean {
+        if (text.isBlank() && images.isEmpty()) return false
         val target = messageTarget(state, tab)
         val to = target.to
         if (to == null) {
             notice("warning", target.reason ?: "This tab cannot receive messages.")
             return false
         }
-        return run("Sending the message") {
-            supervisor.session("chat.send", buildJsonObject {
-                put("text", JsonPrimitive(text))
-                put("delivery", JsonPrimitive(if (inject) "inject" else "queued"))
-                put("to", JsonPrimitive(to))
-            })
+        checkSend(text, to, images)?.let { problem ->
+            notice("warning", problem)
+            return false
         }
+        val sent = run("Sending the message") {
+            supervisor.session("chat.send", chatSendParams(text, if (inject) "inject" else "queued", to, images))
+        }
+        if (!sent) dispatch("ui.restoreInput", buildJsonObject { put("text", JsonPrimitive(text)) })
+        return sent
     }
 
     /**

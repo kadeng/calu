@@ -79,6 +79,7 @@ class ChatActionsTest {
                 "turns" to listOf(mapOf("index" to 4, "prompt_uuid" to "u-1"), mapOf("index" to 5, "prompt_uuid" to "u-2")),
                 "steps" to emptyList<Any>(),
             )
+            "chat.send" -> if (params.obj("params")?.str("text") == "fail") throw ScriptedError(-32000, "the session is stopping") else EMPTY_OBJECT
             "side.ask" -> jo("answer" to "It parses.")
             "honesty.review" -> jo("ran" to false, "problem" to "honesty is off")
             else -> EMPTY_OBJECT
@@ -190,5 +191,52 @@ class ChatActionsTest {
         assertEquals(true, c.act("honestyTrust"))
         assertEquals(jo("rev" to "HEAD"), requests.last { it.first == "honesty.trust" }.second)
         assertNull(c.act("openDiff", jo("tool_use_id" to "t")))
+    }
+
+    @Test
+    fun `send carries images as base64 with their media type, to the main agent only`() = runBlocking {
+        val c = attached()
+        val png = io.github.kadeng.calu.logic.outgoingImage("image/png", byteArrayOf(1, 2, 3))
+        assertTrue(c.sendMessage("look at this", inject = false, tab = MAIN, images = listOf(png)))
+        assertEquals(
+            jo("text" to "look at this", "delivery" to "queued", "to" to "main", "images" to listOf(mapOf("data" to "AQID", "media_type" to "image/png"))),
+            requests.last { it.first == "chat.send" }.second,
+        )
+        // An image alone is a message; the action takes the images as JSON.
+        assertEquals(true, c.act("send", jo("text" to "", "inject" to true, "tab" to MAIN, "images" to listOf(mapOf("data" to "AQID", "mediaType" to "image/gif")))))
+        assertEquals(
+            jo("text" to "", "delivery" to "inject", "to" to "main", "images" to listOf(mapOf("data" to "AQID", "media_type" to "image/gif"))),
+            requests.last { it.first == "chat.send" }.second,
+        )
+        // A message without images has no `images` member.
+        assertTrue(c.send("plain", inject = false, tab = MAIN))
+        assertEquals(jo("text" to "plain", "delivery" to "queued", "to" to "main"), requests.last { it.first == "chat.send" }.second)
+
+        val sent = requests.count { it.first == "chat.send" }
+        assertFalse(c.sendMessage("", inject = false, tab = MAIN, images = emptyList()))
+        assertFalse(c.sendMessage("x", inject = false, tab = MAIN, images = listOf(png.copy(mediaType = "image/svg+xml"))))
+        assertEquals("Only PNG, JPEG, GIF and WebP images can be attached.", notices(c).last())
+        assertFalse(c.sendMessage("x", inject = false, tab = MAIN, images = List(5) { png }))
+        assertEquals("At most 4 images fit into one message.", notices(c).last())
+        assertEquals(false, c.act("send", jo("text" to "x", "images" to "nope")))
+        assertEquals(sent, requests.count { it.first == "chat.send" })
+    }
+
+    @Test
+    fun `a message the session refuses is offered to the input again`() = runBlocking {
+        val c = attached()
+        val restored = CopyOnWriteArrayList<String>()
+        val subscribed = java.util.concurrent.atomic.AtomicBoolean()
+        val job = scope.launch {
+            c.updates().collect { u ->
+                if (u is ChatUpdate.Snapshot) subscribed.set(true)
+                if (u is ChatUpdate.Event && u.event.method == "ui.restoreInput") restored.add(u.event.params.str("text").orEmpty())
+            }
+        }
+        waitUntil("the subscription") { subscribed.get() }
+        assertFalse(c.send("fail", inject = false, tab = MAIN))
+        assertTrue(notices(c).last().startsWith("Sending the message failed"))
+        waitUntil("the text for the input") { restored.toList() == listOf("fail") }
+        job.cancel()
     }
 }

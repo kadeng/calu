@@ -24,6 +24,7 @@ import io.github.kadeng.calu.json.bool
 import io.github.kadeng.calu.json.int
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.derivedSessionName
+import io.github.kadeng.calu.logic.parseOutgoingImages
 import io.github.kadeng.calu.state.MAIN
 import io.github.kadeng.calu.state.UserItem
 import io.github.kadeng.calu.state.isAttached
@@ -217,7 +218,8 @@ suspend fun ChatController.honestyClear(markId: Int): Boolean =
  *
  *     attach {session?}             start {kind, claude_session_id?, fork_before_turn?, prompt?, name?}
  *     cancelStart {}                detach {}                     refreshSessions {}
- *     send {text, inject, tab}      decide {key, allow, note?, answer?}
+ *     send {text, inject, tab, images?: [{data: base64, mediaType}]}
+ *     decide {key, allow, note?, answer?}
  *     interrupt {}                  setModel {model}              setEffort {effort}
  *     setLevel {level}              rename {session_id, name}     restartBridge {}
  *     unlock {}                     refreshUsage {}
@@ -237,7 +239,7 @@ suspend fun ChatController.act(action: String, args: JsonObject = EMPTY_OBJECT):
     "cancelStart" -> cancelStart()
     "detach" -> { detach(); true }
     "refreshSessions" -> { refreshStatus(); refreshSessions(true) != null }
-    "send" -> send(args.str("text").orEmpty(), args.bool("inject"), args.str("tab") ?: MAIN)
+    "send" -> parseOutgoingImages(args["images"])?.let { sendMessage(args.str("text").orEmpty(), args.bool("inject"), args.str("tab") ?: MAIN, it) } ?: false
     "decide" -> args.str("key")?.let { decide(it, args.bool("allow"), args.str("note"), args.str("answer")) } ?: false
     "interrupt" -> interrupt()
     "setModel" -> { setModel(args.str("model")); true }
