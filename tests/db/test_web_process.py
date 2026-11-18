@@ -132,7 +132,7 @@ async def test_calu_web_serves_the_fleet_and_refuses_a_public_address(
             # what to do rather than showing an empty table.
             assert "project directory" in answer.text
             # And it refreshes itself, which is what makes it usable as a watch window.
-            assert "location.reload" in answer.text
+            assert "data-reload-after" in answer.text
     finally:
         # Only if it is still running: `terminate()` on an exited process raises
         # ProcessLookupError, which turns a passing test into a flake (see

@@ -931,10 +931,45 @@ do not: they are told that the message had images, not what the images show, so 
 instruction that exists only inside an image is unknown to them.
 
 The live view of a session shows Claude's text formatted (headings, lists, code, tables,
-links), leaves a gap after each turn, and shows an image file that Claude reads as a small
+links), what an edit removed and added (folded under the file's name), leaves a gap after each
+turn, and shows an image file that Claude reads as a small
 picture under the tool call; a click opens it. The picture is read from the project
 directory by the web interface, so it appears only for a session on the same machine and
 for a file inside that directory.
+
+With subagents the live view lists them above the stream, each with a number, its task and
+what it does now (working, waits for your decision, asks you a question, held, finished).
+Every line of the stream starts with the label of the subagent it belongs to, and a click on
+a subagent in the list (or "show only this subagent" on a card) reduces the stream to that
+subagent's lines. Each open decision or question is a card of its own that names the agent it
+belongs to and its place ("Decision 1 of 2"); the cards are answered separately and in any
+order, and a note typed into one stays while another is answered. calu approves no other
+checked step while a decision is open, so the other subagents stop at their next such step;
+the page says so above the cards and in the list ("held"). A step that has been held for
+five minutes asks for a decision of its own, so a decision left open in a session with many
+subagents becomes several cards. A question of the agent holds nothing back; a call with
+several questions, or with a question that allows several choices, is answered with one
+"Send the answer".
+
+The same page has the three switches "always ask me about commands / file edits / subagent
+results", shows the context usage and the account's limits, enables only the controls that
+can act in the present state, and keeps the place of a reader who scrolled back in the stream
+(a button jumps to the latest line). "Recorded turns" above the stream holds the finished
+turns from the database: what a fork took over, and what happened before the page was
+opened. When `calu web` was restarted the page says that a new sign-in is needed instead of
+trying to attach for ever.
+
+A session can be given a name on its page ("payment refactoring"); the list of sessions, the
+filter, the jump palette and the tab titles show it. Bidirectional control characters in any
+text the pages show (a command, a file name, a checker's reason) are displayed by name, for
+example `⟦RLO⟧`, so that a command is read in the order in which it is stored and run; in an
+edit field a save stores the visible name in place of the hidden character.
+
+Two people who edit the same checker's instructions do not overwrite each other silently:
+the second save is refused once, keeps its text in the editor and says which version is
+stored; saving again replaces the stored text. Enter in a "note for Claude" field decides
+nothing, on every page: a decision is always a button (or `a` and `d` in triage, after
+Escape leaves the note). The pages that reload themselves do not reload while you type.
 
 The web interface can change what steers the checkers, so it holds a database login in
 memory for as long as it runs. Started as yourself, that process is within reach of

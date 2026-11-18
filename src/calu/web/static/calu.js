@@ -36,7 +36,10 @@
   }
 
   function render() {
-    document.title = waiting ? `(${waiting}) ${base}` : base;
+    // The live view writes its own title (what waits in that session): it is left alone.
+    if (!document.body.dataset.ownTitle) {
+      document.title = waiting ? `(${waiting}) ${base}` : base;
+    }
     if (!badge) return;
     if (failed >= 2) {
       badge.textContent = "not connected";
@@ -76,7 +79,8 @@
     box.className = "palette-box";
     const input = document.createElement("input");
     input.type = "text";
-    input.placeholder = "jump to a session: host, directory or state";
+    input.placeholder = "jump to a session: name, host, directory or state";
+    input.setAttribute("aria-label", "jump to a session");
     const list = document.createElement("div");
     list.className = "palette-list";
     box.append(input, list);
@@ -87,7 +91,7 @@
     const draw = () => {
       const needle = input.value.trim().toLowerCase();
       const found = sessions.filter((s) =>
-        !needle || `${s.where} ${s.state} ${s.id}`.toLowerCase().includes(needle));
+        !needle || `${s.name || ""} ${s.where} ${s.state} ${s.id}`.toLowerCase().includes(needle));
       chosen = Math.max(0, Math.min(chosen, found.length - 1));
       list.innerHTML = "";
       found.slice(0, 12).forEach((s, index) => {
@@ -95,7 +99,8 @@
         row.href = s.live || s.url;
         row.className = index === chosen ? "palette-row chosen" : "palette-row";
         const waits = s.open_escalations ? ` · ${s.open_escalations} waiting` : "";
-        row.textContent = `${s.where} — ${s.state}${waits}`;
+        const named = s.name ? `${s.name} · ` : "";
+        row.textContent = window.caluShared.visible(`${named}${s.where} — ${s.state}${waits}`);
         row.onmouseenter = () => { chosen = index; draw(); };
         list.appendChild(row);
       });
@@ -224,3 +229,32 @@ document.addEventListener("click", async (event) => {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", reveal);
   else reveal();
 })();
+
+// Pages that show a state which changes without them (the fleet, the escalations) reload
+// themselves: `<main data-reload-after="5000">`. A reload would wipe what a person is typing
+// (a filter, a note for Claude), so it is skipped while a field has the focus, while a text
+// field holds something that was not sent, and while the jump palette is open.
+(() => {
+  const main = document.querySelector("main[data-reload-after]");
+  if (!main) return;
+  const every = Number(main.dataset.reloadAfter) || 5000;
+  setInterval(() => {
+    const at = document.activeElement;
+    const typing = at && ["INPUT", "TEXTAREA", "SELECT"].includes(at.tagName);
+    const unsent = [...document.querySelectorAll("input[type=text], textarea")]
+      .some((field) => field.value !== field.defaultValue);
+    if (typing || unsent || document.getElementById("palette")) return;
+    location.reload();
+  }, every);
+})();
+
+// Enter in a note for Claude decides nothing. Without this a browser submits the form with its
+// first button, which is "Allow": a note typed before a denial would approve the step.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  const field = event.target;
+  if (field instanceof HTMLInputElement && field.name === "note" && field.form
+      && field.form.querySelector('button[name="decision"]')) {
+    event.preventDefault();
+  }
+});

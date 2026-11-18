@@ -64,6 +64,7 @@
     </div>
     <div class="st-row-control">
       {{ control(f, id) }}
+      {% if f.version is not none and not f.locked %}<input type="hidden" name="version:{{ f.name }}" value="{{ f.version }}">{% endif %}
       {% if f.key and not ':' in f.name and not f.locked %}
         <button type="button" class="st-reset" data-reset="{{ f.name }}" title="Reset to {{ f.base_label }}"{{ '' if f.is_set else ' hidden' }}>Reset</button>
       {% endif %}

@@ -1,10 +1,27 @@
 {% extends "base.html" %}
-{% block title %}Session · calu{% endblock %}
+{% block title %}{{ session.name or session.directory.rstrip('/').rsplit('/', 1)[-1] or 'Session' }} · session · calu{% endblock %}
 {% block body %}
 <h1>
   <span class="state {{ session.state }}">{{ session.state }}</span>
-  <span class="mono">{{ session.hostname }}:{{ session.directory }}</span>
+  {% if session.name %}<span class="session-name">{{ session.name }}</span>{% endif %}
+  <span class="mono path" title="{{ session.hostname }}:{{ session.directory }}">{{ session.hostname }}:{{ session.directory }}</span>
 </h1>
+<p class="row">
+  {% if session.address and not session.ended_at and not session.stale %}
+  <a class="button primary" href="{{ url_for('live', session_id=session.id) }}">Open the live view</a>
+  {% elif session.stale %}
+  <span class="muted">The session's process stopped saying it is running {{ (session.silent_for_s / 60) | round | int }} min ago: there is no live view, only this record.</span>
+  {% elif session.ended_at %}
+  <span class="muted">This session has ended {{ session.ended_at.strftime('%Y-%m-%d %H:%M') }}: there is no live view, only this record. "Continue this conversation" below starts it again.</span>
+  {% else %}
+  <span class="muted">This session serves no clients, so it has no live view.</span>
+  {% endif %}
+</p>
+<form class="inline rename" method="post" action="{{ url_for('rename', session_id=session.id) }}">
+  <input type="text" name="name" value="{{ session.name }}" maxlength="{{ max_names }}" placeholder="a name for this session, e.g. payment refactoring" aria-label="the session's name" class="wide">
+  <button>{{ 'Rename' if session.name else 'Name it' }}</button>
+  {% if renamed %}<span class="muted" role="status">saved</span>{% endif %}
+</form>
 <p class="muted">
   session <span class="mono">{{ session.id }}</span>
   {% if project %}· project <strong>{{ project }}</strong>{% endif %}
@@ -30,7 +47,7 @@
 {% if escalations %}
 <h2>Waiting for a decision</h2>
 {% for e in escalations %}
-<div class="card">
+<div class="card escalation">
   <p>{{ e.reason }}</p>
   <pre>{{ e.rendered }}</pre>
   <form class="inline" method="post" action="{{ url_for('resolve', escalation_id=e.id) }}">
@@ -60,6 +77,10 @@ session shows the real thinking as it streams.</p>
 
 {% if not turns and not steps %}
 <p class="empty">Nothing has been recorded for this session yet.</p>
+{% endif %}
+{% if turn_count > turns | length %}
+<p class="notice">This session has {{ turn_count }} turns; the newest {{ turns | length }} are shown
+  (turns {{ turns[0].index }} to {{ turns[-1].index }}), with at most {{ steps | length }} of the newest tool calls.</p>
 {% endif %}
 
 {% if detail == 'summary' %}
@@ -94,7 +115,7 @@ session shows the real thinking as it streams.</p>
         <p>
           <span class="mono">{{ s.tool_name }}</span>
           <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span>
-          {% if s.agent_id %}<span class="muted">subagent {{ s.agent_id }}</span>{% endif %}
+          {% if s.agent_id %}<span class="who" title="subagent {{ s.agent_id }}">{{ agent_names.get(s.agent_id, s.agent_id) }}</span>{% endif %}
           {{ s.summary }}
         </p>
         {% if detail != 'compact' and s.reason %}<p class="muted">checker: {{ s.reason }}</p>{% endif %}
@@ -123,10 +144,18 @@ session shows the real thinking as it streams.</p>
   {% endfor %}
   {% if by_turn.get(None) %}
   <div class="card">
-    <p class="muted">Steps of the running turn</p>
+    <p class="muted">Steps of the turn that is running (a turn is recorded with your message and
+      Claude's answer when it ends{% if session.address and not session.ended_at %}; the <a href="{{ url_for('live', session_id=session.id) }}">live view</a> shows it as it happens{% endif %})</p>
     {% for s in by_turn.get(None, []) %}
-      <p><span class="mono">{{ s.tool_name }}</span>
-         <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span> {{ s.summary }}</p>
+      <div class="step">
+        {% if detail != 'compact' and s.narration %}<p class="muted">{{ s.narration }}</p>{% endif %}
+        <p><span class="mono">{{ s.tool_name }}</span>
+         <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span>
+         {% if s.agent_id %}<span class="who" title="subagent {{ s.agent_id }}">{{ agent_names.get(s.agent_id, s.agent_id) }}</span>{% endif %}
+         {{ s.summary }}</p>
+        {% if detail != 'compact' and s.reason %}<p class="muted">checker: {{ s.reason }}</p>{% endif %}
+        {% if detail == 'full' %}<pre>{{ s.tool_input | tojson(indent=2) }}</pre>{% if s.result_summary %}<pre>{{ s.result_summary }}</pre>{% endif %}{% endif %}
+      </div>
     {% endfor %}
   </div>
   {% endif %}
@@ -139,8 +168,8 @@ session shows the real thinking as it streams.</p>
   <tbody>
   {% for a in agents %}
     <tr>
-      <td class="mono">{{ a.agent_id }}{{ ' (background)' if a.background }}</td>
-      <td class="mono muted">{{ a.parent_agent_id or 'main agent' }}</td>
+      <td class="mono" data-label="Agent">{{ a.agent_id }}{{ ' (background)' if a.background }}</td>
+      <td class="muted" data-label="Parent">{{ agent_names.get(a.parent_agent_id, a.parent_agent_id) if a.parent_agent_id else 'main agent' }}</td>
       <td class="muted">{{ a.subagent_type or '–' }}</td>
       <td>{{ a.description }}</td>
       <td><span class="state {{ a.status }}">{{ a.status }}</span></td>

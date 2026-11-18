@@ -131,9 +131,16 @@ async def test_triage_answers_one_escalation_after_another_by_keyboard(db_url: s
             )
             assert "1 waiting" in await page.inner_text("#count")
 
-            # The second one is answered with a note, typed into the focused field.
+            # The second one is answered with a note, typed into the focused field. Enter in
+            # the note decides nothing (a note is typed before a denial as often as before an
+            # approval); Escape leaves the field and "a" allows.
             await page.fill("#note", "go ahead")
             await page.keyboard.press("Enter")
+            await page.wait_for_timeout(300)
+            assert "an edit to judge" in await page.inner_text("#current")
+            assert len(await herd.escalations(db)) == 1
+            await page.keyboard.press("Escape")
+            await page.keyboard.press("a")
             await page.wait_for_function(
                 "document.getElementById('current').textContent.includes('Nothing is waiting')"
             )

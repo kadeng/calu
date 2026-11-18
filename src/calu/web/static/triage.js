@@ -66,7 +66,7 @@
     for (const other of rest) {
       const row = document.createElement("p");
       row.className = "muted";
-      row.textContent = `${other.where} — ${other.reason}`;
+      row.textContent = window.caluShared.visible(`${other.where} — ${other.reason}`);
       if (skipped.has(other.id)) row.textContent += " (skipped)";
       el("queue").appendChild(row);
     }
@@ -80,10 +80,10 @@
     where.className = "muted";
     const link = document.createElement("a");
     link.href = entry.session_url;
-    link.textContent = entry.where;
+    link.textContent = window.caluShared.visible(entry.where);
     where.append(`escalation ${entry.id} · `, link, ` · since ${entry.created_at.slice(11, 19)}`);
     const why = document.createElement("p");
-    why.textContent = entry.reason;
+    why.textContent = window.caluShared.visible(entry.reason);
     // The session's process stopped saying it is there, so a decision would be recorded and
     // never acted on: say so above the buttons, not after one was pressed (D56, D57).
     let gone = null;
@@ -96,33 +96,22 @@
     }
     const parts = gone ? [where, gone, why] : [where, why];
     const rendered = document.createElement("pre");
-    rendered.textContent = entry.rendered || "";
+    rendered.textContent = window.caluShared.visible(entry.rendered || "");
     if ((entry.questions || []).length) {
-      // A question of the agent: the options are the answer (PLAN.md D35).
-      card.append(...parts);
-      for (const question of entry.questions) {
-        const asked = document.createElement("p");
-        asked.textContent = question.question || question.header || "a question";
-        const choices = document.createElement("p");
-        choices.className = "row";
-        for (const option of question.options || []) {
-          const button = document.createElement("button");
-          button.className = "option";
-          button.textContent = option.label;
-          button.title = option.description || "";
-          button.onclick = () => answer("answer", option.label);
-          choices.appendChild(button);
-        }
-        const free = document.createElement("input");
-        free.type = "text";
-        free.id = "note";
-        free.placeholder = "or answer in your own words, then Enter";
-        choices.appendChild(free);
-        card.append(asked, choices);
-      }
+      // A question of the agent: the options are the answer (PLAN.md D35). The form is the
+      // one of the live view (shared.js): several questions and several choices make one
+      // answer text.
+      const form = window.caluShared.questionForm(entry.questions, (text) => answer("answer", text));
+      const skipRow = document.createElement("p");
+      skipRow.className = "row";
+      const skipButton = document.createElement("button");
+      skipButton.textContent = "Skip";
+      skipButton.onclick = () => { skipped.add(entry.id); shown = null; render(); };
+      skipRow.appendChild(skipButton);
+      card.append(...parts, form, skipRow);
       el("current").innerHTML = "";
       el("current").appendChild(card);
-      const free = el("note");
+      const free = card.querySelector("input.own-answer");
       if (free) free.focus();
       asking = true;
       return;
@@ -133,7 +122,7 @@
     const note = document.createElement("input");
     note.type = "text";
     note.id = "note";
-    note.placeholder = "note for Claude (optional)";
+    note.placeholder = "note for Claude (optional); then Allow or Deny";
     const allow = document.createElement("button");
     allow.className = "allow";
     allow.textContent = "Allow (a)";
@@ -154,7 +143,7 @@
       box.id = "remember";
       const label = document.createElement("label");
       label.htmlFor = "remember";
-      label.textContent = ` and remember exactly this command: ${entry.command}`;
+      label.textContent = window.caluShared.visible(` and remember exactly this command: ${entry.command}`);
       remember.append(box, label);
       card.appendChild(remember);
     }
@@ -220,10 +209,8 @@
   addEventListener("keydown", (event) => {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const typing = document.activeElement && document.activeElement.id === "note";
-    if (event.key === "Enter" && typing) {
-      answer(asking ? "answer" : "allow");
-      return;
-    }
+    // Enter in the note decides nothing: a note is typed before a denial as often as before
+    // an approval, so the decision is always a button or its key (Escape leaves the note).
     if (asking) return;  // a, d and s mean nothing for a question: an answer is needed
     if (typing && event.key !== "Escape") return;
     if (event.key === "a") { event.preventDefault(); answer("allow"); }

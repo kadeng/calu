@@ -13,6 +13,7 @@
   } catch (e) { /* storage blocked: follow the system */ }
 </script>
 <link rel="stylesheet" href="{{ url_for('static', path='/calu.css') }}">
+<script src="{{ url_for('static', path='/shared.js') }}"></script>
 <script src="{{ url_for('static', path='/calu.js') }}" defer></script>
 </head>
 <body data-sessions-api="{{ url_for('sessions_json') }}" data-triage-url="{{ url_for('triage') }}">

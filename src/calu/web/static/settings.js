@@ -89,7 +89,10 @@
     let dirty = 0;
     for (const el of controls) {
       const row = el.closest(".st-row");
-      const changed = valueOf(el) !== initial.get(el) || Boolean(row && pendingReset(row));
+      // A value the last save refused is still only in this page: it counts as unsaved, so
+      // that it can be saved again and leaving the page asks first.
+      const changed = valueOf(el) !== initial.get(el) || Boolean(row && pendingReset(row))
+        || Boolean(row && row.classList.contains("has-error") && row.dataset.field === el.name);
       row?.classList.toggle("is-dirty", changed);
       if (!changed) continue;
       dirty += 1;

@@ -101,6 +101,52 @@ def _prose(text: str) -> Markup:
 TEMPLATES.env.filters["prose"] = _prose
 """The page templates; they ship with the package."""
 
+BIDI_NAMES = {
+    "\u061c": "ALM",
+    "\u200e": "LRM",
+    "\u200f": "RLM",
+    "\u202a": "LRE",
+    "\u202b": "RLE",
+    "\u202c": "PDF",
+    "\u202d": "LRO",
+    "\u202e": "RLO",
+    "\u2066": "LRI",
+    "\u2067": "RLI",
+    "\u2068": "FSI",
+    "\u2069": "PDI",
+}
+"""Unicode's bidirectional control characters with the names the pages show for them."""
+
+_BIDI = re.compile("[" + "".join(BIDI_NAMES) + "]")
+
+
+def visible(value: Any) -> Any:
+    """Make the bidirectional control characters of a value visible, for a page.
+
+    These characters are invisible and change the order in which the text after them is
+    drawn, so a command or a file name could be displayed in another order than it is stored
+    and run in. Each is replaced by its name in white square brackets; letters of
+    right-to-left scripts are not touched. The templates apply this to every value they
+    print (`finalize`), and `static/shared.js` does the same for what the scripts render.
+
+        visible("report_\u202egpj.exe") == "report_⟦RLO⟧gpj.exe"
+
+    Args:
+        value: What a template is about to print.
+
+    Returns:
+        A text with each such character replaced by `⟦NAME⟧`, of the same kind as the input
+        (`Markup` stays `Markup`); any value that is not a text, and a text without such a
+        character, is returned as it is.
+    """
+    if not isinstance(value, str) or not _BIDI.search(value):
+        return value
+    shown = _BIDI.sub(lambda found: f"⟦{BIDI_NAMES[found.group()]}⟧", value)
+    return Markup(shown) if isinstance(value, Markup) else shown
+
+
+TEMPLATES.env.finalize = visible
+
 MAX_STEPS = 300
 """Steps one session page shows (the newest ones)."""
 
@@ -124,6 +170,7 @@ LIVE_METHODS = frozenset(
         "honesty.clear",
         "honesty.trust",
         "honesty.review",
+        "usage.get",
     }
 )
 """What a browser may ask a session to do. `shutdown` is deliberately absent: it would end the
@@ -243,6 +290,12 @@ def create_app(
             "/sessions/{session_id:uuid}/token", _page(mint, state), methods=["POST"], name="mint"
         ),
         Route("/sessions/{session_id:uuid}/live", _page(live_page, state), name="live"),
+        Route(
+            "/sessions/{session_id:uuid}/name",
+            _page(rename, state),
+            methods=["POST"],
+            name="rename",
+        ),
         Route("/sessions/{session_id:uuid}/file", _page(session_file, state), name="file"),
         Route(
             "/sessions/{session_id:uuid}/request",
@@ -1109,9 +1162,22 @@ async def _session_view(
     runs = await herd.checker_runs(state.db, session_id)
     project = await herd.project_of(state.db, session_id)
     remote = project[1] if project else ""
+    turns = await herd.turns(state.db, session_id, MAX_TURNS)
+    recorded = {turn.index for turn in turns}
+    newest = turns[-1].index if turns else 0
     by_turn: dict[int | None, list[herd.StepRow]] = {}
     for step in steps:
-        by_turn.setdefault(step.turn, []).append(step)
+        # A step carries its turn's number from the start, but the turn is recorded when it
+        # ends: the steps of a turn that still runs are shown as such (key None).
+        running = step.turn is None or (step.turn not in recorded and step.turn > newest)
+        by_turn.setdefault(None if running else step.turn, []).append(step)
+    agents = await herd.agents(state.db, session_id)
+    turn_count = int(
+        await state.db.scalar(
+            "SELECT count(*) FROM turns WHERE session_id = %s::uuid", (session_id,)
+        )
+        or 0
+    )
     return _render(
         request,
         "session.html",
@@ -1121,14 +1187,20 @@ async def _session_view(
             "runs": runs,
             "detail": detail,
             "levels": DETAIL_LEVELS,
-            "turns": await herd.turns(state.db, session_id, MAX_TURNS),
+            "turns": turns,
+            "turn_count": turn_count,
+            "max_names": herd.MAX_NAME_CHARS,
+            "renamed": request.query_params.get("renamed") == "1",
+            "agent_names": {
+                agent.agent_id: agent.description or agent.agent_id for agent in agents
+            },
             "forks": {point.turn: point for point in await herd.fork_points(state.db, session_id)},
             "origin": await herd.fork_origin(state.db, session_id),
             "forked_into": await herd.forks_of(state.db, row.claude_session_id)
             if row.claude_session_id
             else [],
             "by_turn": by_turn,
-            "agents": await herd.agents(state.db, session_id),
+            "agents": agents,
             "setting_changes": await herd.setting_changes(state.db, session_id),
             "checker_names": [row.name for row in await admin.checkers(state.db)],
             "escalations": await herd.escalations(state.db, session_id),
@@ -1141,6 +1213,35 @@ async def _session_view(
             "connect": _connect(row, minted[1] if minted else ""),
         },
     )
+
+
+async def rename(request: Request, state: _State) -> Response:
+    """Give a session a name, or take its name away (`sessions.name`, migration 0036).
+
+    The name is what the fleet, the session's pages and the jump palette show first; the
+    session itself does not read it.
+
+    Side effect: writes `sessions.name`.
+
+    Args:
+        request: The request; its path holds the session id, its form `name` ("" removes the
+            name).
+        state: The shared state.
+
+    Returns:
+        A redirect to the session's page; a 400 page if the name is too long or holds a line
+        break; a 404 page if no session has that id.
+    """
+    session_id = str(request.path_params["session_id"])
+    form = await request.form()
+    try:
+        await herd.rename_session(state.db, session_id, str(form.get("name") or ""))
+    except ValueError as exc:
+        return _bad(request, str(exc))
+    except LookupError:
+        return _not_found(request, session_id)
+    url = request.url_for("session", session_id=session_id).include_query_params(renamed="1")
+    return RedirectResponse(url, 303)
 
 
 MAX_TOKEN_LABEL = 200
@@ -1432,6 +1533,20 @@ async def _live(websocket: WebSocket, state: _State, session_id: str) -> None:
         TimeoutError: If the database does not answer in time.
     """
     row = await herd.session(state.db, session_id)
+    if row is not None and row.ended_at is not None:
+        # Said before any connection attempt: the row keeps the address the process had, and
+        # "cannot reach it" would send the reader to look for a networking problem.
+        await websocket.send_json(
+            {
+                "type": "closed",
+                "message": (
+                    f"this session ended at {row.ended_at:%Y-%m-%d %H:%M} (UTC), so there is "
+                    "nothing live to show. The recorded history has what was stored and can "
+                    "continue the conversation in a new session."
+                ),
+            }
+        )
+        return
     if row is None or not row.address:
         await websocket.send_json(
             {
@@ -1500,8 +1615,10 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
             "and an escalation of it can be cleared with `calu resolve <id> cancel`."
         )
     return (
-        f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}; "
-        "run `calu web` on that host, or forward the port with an SSH tunnel."
+        f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}: if that is "
+        "another machine, run `calu web` on it or forward the port with an SSH tunnel; if it "
+        "is this machine, the session's process is gone, and the session list will say so "
+        "after a few minutes without a heartbeat."
     )
 
 
@@ -1594,8 +1711,9 @@ async def _relay(
                         "type": "closed",
                         "message": (
                             "the session closed the connection: its process ended or was "
-                            "restarted. Nothing more arrives here; the session list shows "
-                            "whether it runs again."
+                            "restarted. Nothing more arrives here. The recorded history has "
+                            "what was stored and can continue the conversation in a new "
+                            "session; the session list shows whether this one runs again."
                         ),
                     }
                 )
@@ -1710,7 +1828,14 @@ async def resolve(request: Request, state: _State) -> Response:
         return _bad(request, f"{decision!r} is neither allow nor deny")
     resolved = await herd.resolve(state.db, escalation_id, decision, note)
     log.info("escalation %s %s by the web interface (%s)", escalation_id, decision, resolved)
-    back = str(form.get("back") or request.url_for("escalations"))
+    # Only a path of this interface: the field travels through the browser, and an address
+    # elsewhere would turn the answer into a redirect to a page of someone else's choosing.
+    back = str(form.get("back") or "")
+    target = urlparse(back)
+    here = (request.url.scheme, request.url.netloc)
+    local = back.startswith("/") and not back.startswith("//") and "\\" not in back
+    if not local and (target.scheme, target.netloc) != here:
+        back = str(request.url_for("escalations"))
     return RedirectResponse(back, 303)
 
 
@@ -1753,6 +1878,7 @@ async def sessions_json(request: Request, state: _State) -> Response:
             "sessions": [
                 {
                     "id": row.id,
+                    "name": row.name,
                     "where": f"{row.hostname}:{row.directory}",
                     "state": row.state,
                     "open_escalations": row.open_escalations,
@@ -2010,11 +2136,13 @@ def _searchable(row: herd.SessionRow) -> str:
         row: The session.
 
     Returns:
-        Host, user, directory, state, project directory and Claude's session id, lower case.
+        The session's name, host, user, directory, state, Claude's session id and the
+        session's own id, lower case.
     """
     return " ".join(
         part.lower()
         for part in (
+            row.name,
             row.hostname,
             row.os_user,
             row.directory,

@@ -182,6 +182,10 @@ class Field:
     """What was typed when a save refused the field, shown again instead of `value`."""
     meta: str = ""
     """A short fact shown beside the editor, e.g. "8 patterns" or "version 3"."""
+    version: int | None = None
+    """For a checker's instructions: the version of the definition the page was built from.
+    The form posts it back as `version:<field name>`, and a save is refused when the stored
+    version is another one by then (somebody else saved meanwhile). None for other fields."""
     tone: str = ""
     """"allow" or "deny" for a rule list, which colours its editor; else ""."""
     extra_title: str = ""
@@ -517,6 +521,18 @@ async def _save_field(
         if not new:
             raise ValueError("the instructions may not be empty")
         if new != str(item.value).replace("\r\n", "\n").strip():
+            read = posted.get(f"version:{item.name}", "")
+            if read and item.version is not None and read != str(item.version):
+                # Another tab, the terminal client or an editor saved meanwhile: storing this
+                # text would silently undo that change. The page that reports the refusal
+                # carries the stored version, so a second save is a deliberate overwrite.
+                raise ValueError(
+                    f"these instructions were changed by someone else meanwhile (version "
+                    f"{item.version} is stored, this page had read version {read}). Your "
+                    "text is kept in the editor and nothing was stored. Compare it with the "
+                    f"stored text (`calu checker show {rest}`, or this page in another "
+                    "tab), then save again to replace the stored text with yours"
+                )
             await admin.set_checker(db, rest, instructions_text=new)
             result.count += 1
     elif space == "rules":
@@ -953,6 +969,7 @@ def _prompt_field(src: Sources, row: admin.CheckerRow) -> Field:
             else "Markdown. Running sessions use a change at their next step."
         ),
         meta=f"version {row.version}",
+        version=row.version,
         locked=_shared(src),
         extra_title="What calu puts in front of your instructions" if fixed else "",
         extra=fixed,

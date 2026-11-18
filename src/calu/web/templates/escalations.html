@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Escalations · calu{% endblock %}
+{% block main_attrs %} data-reload-after="5000"{% endblock %}
 {% block body %}
 <h1>{{ escalations | length }} escalation{{ '' if escalations | length == 1 else 's' }} waiting</h1>
 {% if escalations %}
-<p class="muted">Each one holds its session until someone answers. This page reloads every 5 seconds.</p>
+<p class="muted">Each one holds its session until someone answers. This page reloads every 5 seconds (not while you type a note).</p>
 {% for e in escalations %}
 <div class="card">
   <p class="muted">
@@ -25,9 +26,7 @@
   <p class="muted"><a href="{{ url_for('escalation', escalation_id=e.id) }}">what the checker saw</a></p>
 </div>
 {% endfor %}
-<script>setTimeout(() => location.reload(), 5000);</script>
 {% else %}
 <p class="empty">Nothing is waiting. Sessions run on.</p>
-<script>setTimeout(() => location.reload(), 5000);</script>
 {% endif %}
 {% endblock %}
