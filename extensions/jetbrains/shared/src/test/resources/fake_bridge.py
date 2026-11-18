@@ -27,9 +27,21 @@ def main() -> None:
     parser.add_argument("--no-session", action="store_true")
     parser.add_argument("--exit-after", type=int, default=0)
     args = parser.parse_args()
-    state = {"seq": 0, "unlocked": [], "answered": 0, "events": [], "open": None,
-             "checker": {"name": "command-default", "route": "command", "model": "", "version": 3,
-                         "enabled": True, "instructions": "Deny what deletes files."}}
+    state = {
+        "seq": 0,
+        "unlocked": [],
+        "answered": 0,
+        "events": [],
+        "open": None,
+        "checker": {
+            "name": "command-default",
+            "route": "command",
+            "model": "",
+            "version": 3,
+            "enabled": True,
+            "instructions": "Deny what deletes files.",
+        },
+    }
 
     def send(message: dict) -> None:
         sys.stdout.write(json.dumps(message) + "\n")
@@ -60,31 +72,66 @@ def main() -> None:
             event("assistant.delta", text="I will ", message_id="m-1")
             event("assistant.delta", text="run a command.", message_id="m-1")
             event("assistant.text", text="I will run a command.", message_id="m-1")
-            event("tool.use", tool_use_id="t-0", name="Edit", input={"file_path": args.cwd + "/a.py"})
-            event("edit.diff", tool_use_id="t-0", path="a.py", before="x = 1\n", after="x = 2\n",
-                  start_line=1, end_line=1)
-            event("check.result", tool_use_id="t-0", tool_name="Edit", route="edit", decision="ALLOW",
-                  step_summary="Changes x")
+            event(
+                "tool.use", tool_use_id="t-0", name="Edit", input={"file_path": args.cwd + "/a.py"}
+            )
+            event(
+                "edit.diff",
+                tool_use_id="t-0",
+                path="a.py",
+                before="x = 1\n",
+                after="x = 2\n",
+                start_line=1,
+                end_line=1,
+            )
+            event(
+                "check.result",
+                tool_use_id="t-0",
+                tool_name="Edit",
+                route="edit",
+                decision="ALLOW",
+                step_summary="Changes x",
+            )
             event("tool.result", tool_use_id="t-0", content="edited", is_error=False)
             event("tool.use", tool_use_id="t-1", name="Bash", input={"command": "make test"})
-            event("check.result", tool_use_id="t-1", tool_name="Bash", route="command",
-                  decision="ESCALATE", reason="runs project code", step_summary="Runs the tests")
-            state["open"] = {"escalation_id": "e-1", "tool_use_id": "t-1", "tool_name": "Bash",
-                             "tool_input": {"command": "make test"}, "reason": "runs project code",
-                             "rendered": "```\nmake test\n```"}
+            event(
+                "check.result",
+                tool_use_id="t-1",
+                tool_name="Bash",
+                route="command",
+                decision="ESCALATE",
+                reason="runs project code",
+                step_summary="Runs the tests",
+            )
+            state["open"] = {
+                "escalation_id": "e-1",
+                "tool_use_id": "t-1",
+                "tool_name": "Bash",
+                "tool_input": {"command": "make test"},
+                "reason": "runs project code",
+                "rendered": "```\nmake test\n```",
+            }
             event("escalation.request", **state["open"])
             return {}
         if method == "escalation.decide":
             state["open"] = None
-            event("escalation.resolved", escalation_id=params["escalation_id"],
-                  decision=params.get("decision", "deny"), note=params.get("note"))
+            event(
+                "escalation.resolved",
+                escalation_id=params["escalation_id"],
+                decision=params.get("decision", "deny"),
+                note=params.get("note"),
+            )
             event("tool.result", tool_use_id="t-1", content="ok", is_error=False)
             event("turn.result", subtype="success", is_error=False, cost_usd=0.01, num_turns=1)
             event("session.state", state="idle")
             return {}
         if method == "usage.get":
-            return {"context": {"tokens": 1000, "max_tokens": 200000, "percent": 0.5, "model": "fable"},
-                    "rate_limits": [], "cost_usd": 0.01, "num_turns": 1}
+            return {
+                "context": {"tokens": 1000, "max_tokens": 200000, "percent": 0.5, "model": "fable"},
+                "rate_limits": [],
+                "cost_usd": 0.01,
+                "num_turns": 1,
+            }
         if method == "session.history":
             return {"turns": [], "steps": []}
         return {}
@@ -92,35 +139,69 @@ def main() -> None:
     def handle(method: str, params: dict) -> dict:
         needs_login = method in ("ide.sessions", "ide.attach", "ide.start", "ide.settings.get")
         if args.locked and needs_login and not state["unlocked"]:
-            raise RpcError(-32010, "the 'operator' credential needs its password",
-                           {"needs": "operator", "unlocked": []})
+            raise RpcError(
+                -32010,
+                "the 'operator' credential needs its password",
+                {"needs": "operator", "unlocked": []},
+            )
         if method == "ide.initialize":
-            return {"bridge_version": "0.0-fake", "protocol_version": 1, "workspace": args.cwd,
-                    "capabilities": ["cwd"]}
+            return {
+                "bridge_version": "0.0-fake",
+                "protocol_version": 1,
+                "workspace": args.cwd,
+                "capabilities": ["cwd"],
+            }
         if method == "ide.status":
-            return {"findings": [{"name": "tmux", "ok": True, "level": "ok", "message": "", "advice": ""}],
-                    "database": {"reachable": True, "place": "fake", "problem": ""},
-                    "server": {"sessions_running": 0 if args.no_session else 1},
-                    "locked": args.locked and not state["unlocked"], "unlocked": state["unlocked"]}
+            return {
+                "findings": [
+                    {"name": "tmux", "ok": True, "level": "ok", "message": "", "advice": ""}
+                ],
+                "database": {"reachable": True, "place": "fake", "problem": ""},
+                "server": {"sessions_running": 0 if args.no_session else 1},
+                "locked": args.locked and not state["unlocked"],
+                "unlocked": state["unlocked"],
+            }
         if method == "ide.unlock":
             if params.get("password") != "secret":
-                raise RpcError(-32010, "wrong password for the 'operator' credential",
-                               {"needs": "operator", "unlocked": []})
+                raise RpcError(
+                    -32010,
+                    "wrong password for the 'operator' credential",
+                    {"needs": "operator", "unlocked": []},
+                )
             state["unlocked"] = ["operator", "admin"]
             return {"unlocked": state["unlocked"], "reading": True, "changing": True}
         if method == "ide.sessions":
-            running = [] if args.no_session else [
-                {"id": "s-1", "name": "", "directory": args.cwd, "state": "idle",
-                 "claude_session_id": None, "open_escalations": 0, "started_at": "", "stale": False,
-                 "here": True}]
+            running = (
+                []
+                if args.no_session
+                else [
+                    {
+                        "id": "s-1",
+                        "name": "",
+                        "directory": args.cwd,
+                        "state": "idle",
+                        "claude_session_id": None,
+                        "open_escalations": 0,
+                        "started_at": "",
+                        "stale": False,
+                        "here": True,
+                    }
+                ]
+            )
             return {"running": running, "stored": []}
         if method == "ide.attach":
             if args.no_session:
                 raise RpcError(-32011, "no session runs in this directory")
             after = int(params.get("after_seq") or 0)
             events = [e for e in state["events"] if e["params"]["seq"] > after]
-            return {"attached": True, "session_id": "s-1", "initialize": {"workspace": args.cwd},
-                    "snapshot": snapshot(), "events": events, "complete": True}
+            return {
+                "attached": True,
+                "session_id": "s-1",
+                "initialize": {"workspace": args.cwd},
+                "snapshot": snapshot(),
+                "events": events,
+                "complete": True,
+            }
         if method == "ide.settings.get":
             listed = {k: v for k, v in state["checker"].items() if k != "instructions"}
             return {"schema": {}, "rows": [], "checkers": [listed], "projects": []}
@@ -128,9 +209,14 @@ def main() -> None:
             return dict(state["checker"])
         if method == "ide.checker.save":
             if params.get("base_version") not in (None, state["checker"]["version"]):
-                raise RpcError(-32016, "the checker was changed elsewhere",
-                               {"version": state["checker"]["version"],
-                                "instructions": state["checker"]["instructions"]})
+                raise RpcError(
+                    -32016,
+                    "the checker was changed elsewhere",
+                    {
+                        "version": state["checker"]["version"],
+                        "instructions": state["checker"]["instructions"],
+                    },
+                )
             state["checker"]["version"] += 1
             state["checker"]["instructions"] = params["instructions"]
             return {"version": state["checker"]["version"]}
@@ -163,6 +249,13 @@ class RpcError(Exception):
     """An error answer: code, message and optional data."""
 
     def __init__(self, code: int, message: str, data: dict | None = None) -> None:
+        """Create the error.
+
+        Args:
+            code: The JSON-RPC error code.
+            message: The text for the editor.
+            data: Fields of the error object's `data`, or None.
+        """
         super().__init__(message)
         self.code = code
         self.message = message
