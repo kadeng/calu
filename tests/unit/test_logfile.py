@@ -120,4 +120,8 @@ def test_serve_passes_secure_on_to_every_session(
     monkeypatch.setattr(cli, "serve_sessions", fake_serve)
     assert cli.main(["serve", "--secure"], store_factory=lambda: None) == 0  # type: ignore[arg-type]
     assert cli.main(["serve"], store_factory=lambda: None) == 0  # type: ignore[arg-type]
-    assert [options.secure for options in seen] == [True, False]
+    assert cli.main(["serve", "--insecure"], store_factory=lambda: None) == 0  # type: ignore[arg-type]
+    assert [options.secure for options in seen] == [True, False, False]
+    assert [options.insecure for options in seen] == [False, False, True]  # D227
+    assert cli.main(["serve", "--secure", "--insecure"], store_factory=lambda: None) == 1  # type: ignore[arg-type]
+    assert len(seen) == 3, "the two together start no server"

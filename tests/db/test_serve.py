@@ -415,3 +415,42 @@ async def test_the_web_interface_asks_the_server_for_a_session(
         async with web:
             nobody = await web.post(f"/sessions/{first.session_id}/request", data={"kind": "new"})
         assert nobody.status_code == 503 and "calu serve" in nobody.text
+
+
+async def test_an_insecure_server_lets_local_clients_into_its_sessions_without_a_token(
+    db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """D227: `calu serve --insecure` gives every session it starts what `calu run --insecure`
+    gives one: a loopback client needs no token, and the session listens on a socket of its
+    user where `calu attach` finds it without the database. Without the flag, both are off."""
+    import tempfile
+
+    from calu import cli, localsocket
+    from calu.protocol.client import RequestFailed, probe
+
+    session_url = await prepare(db_url, tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    with tempfile.TemporaryDirectory(prefix="calu-sv-") as short:  # socket paths are short
+        sockets = Path(short) / "calu" / "sessions"
+        monkeypatch.setattr(localsocket, "user_root", lambda *args, **kwargs: sockets)
+        async with owner_db(db_url) as db, serving(session_url, insecure=True):
+            done = await ask(db, request(project))
+            assert done.state == "started" and done.session_id
+            row = await herd.session(db, done.session_id)
+            assert row is not None
+            answer = await probe(row.address, "", "test")
+            assert answer["workspace"] == str(project)
+            path = localsocket.path_of(done.session_id, sockets)
+            assert path.is_socket() and path.stat().st_mode & 0o777 == 0o600
+            monkeypatch.chdir(project)
+            found = await anyio.to_thread.run_sync(cli._root_socket_endpoint, None)
+            assert found is not None and found.address == f"unix:{path}"
+        async with owner_db(db_url) as db, serving(session_url):
+            done = await ask(db, request(project))
+            assert done.state == "started" and done.session_id
+            row = await herd.session(db, done.session_id)
+            assert row is not None
+            with pytest.raises(RequestFailed):
+                await probe(row.address, "", "test")
+            assert not localsocket.path_of(done.session_id, sockets).exists()
