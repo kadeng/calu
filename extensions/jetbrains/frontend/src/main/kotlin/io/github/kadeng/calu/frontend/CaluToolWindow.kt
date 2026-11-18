@@ -33,7 +33,7 @@ class CaluToolWindowFactory : ToolWindowFactory, DumbAware {
                 action("New Session", AllIcons.General.Add) { surface.newSession() },
                 action("Checker Instructions", AllIcons.Actions.Edit) { chooseChecker(project, service) },
                 action("Checker Context", AllIcons.Actions.Preview) { service.act("showContext") },
-                action("Models: Use One Model for Everything", AllIcons.Actions.Lightning) { ModelsDialog(project, service).show() },
+                action("Models: Use One Model for Everything", AllIcons.Actions.Lightning) { showCaluSettings(project, service, SettingsPages.MODELS) },
                 action("calu Settings (All)", AllIcons.General.Settings) { showCaluSettings(project, service) },
                 action("Plugin Settings: How calu Is Reached", AllIcons.General.GearPlain) { ShowSettingsUtil.getInstance().showSettingsDialog(project, "calu") },
             ),

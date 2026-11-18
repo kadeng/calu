@@ -16,4 +16,13 @@
         <projectConfigurable parentId="tools" id="calu" displayName="calu"
                              instance="io.github.kadeng.calu.frontend.CaluConfigurable"/>
     </extensions>
+
+    <actions>
+        <action id="calu.AddComment" class="io.github.kadeng.calu.frontend.CommentAction"
+                text="Add Comment for Claude" description="Send a comment on the selected lines to the attached calu session">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="Diff.EditorPopupMenu" anchor="last"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt K"/>
+        </action>
+    </actions>
 </idea-plugin>

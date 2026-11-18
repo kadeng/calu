@@ -114,7 +114,7 @@ fun rowsOf(state: ViewState, tab: String): List<RowModel> = state.items[tab].orE
  * @return "ok" for PASS and ALLOW, "error" for DENY, "warning" for ESCALATE, else "".
  */
 fun chipKindOf(decision: String): String = when (decision) {
-    "PASS", "ALLOW" -> "ok"
+    "PASS", "ALLOW", "ACCEPT" -> "ok"
     "DENY" -> "error"
     "ESCALATE" -> "warning"
     else -> ""

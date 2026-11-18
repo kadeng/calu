@@ -5,7 +5,7 @@
  *     │ [thumbnail ×] [thumbnail ×]            attached images   │
  *     │ /mo                                    the text          │
  *     │ ┌ /model   Change the model of the session ┐ completions │
- *     │ 📎                         [■ Stop] [Send now] [Send]    │
+ *     │ Add image                  [■ Stop] [Send now] [Send]    │
  *     └──────────────────────────────────────────────────────────┘
  *       model ▾   effort ▾   level ▾                 42% · 84k
  *
@@ -25,6 +25,7 @@ import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
 import com.intellij.ui.CollectionListModel
+import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -109,7 +110,12 @@ class Composer(private val project: Project, private val host: ComposerHost) {
     private class Attached(val image: OutgoingImage, val bytes: ByteArray)
 
     private val attached = ArrayList<Attached>()
-    private val input = JBTextArea(3, 20).apply {
+    private val input = object : JBTextArea(3, 20) {
+        // The IDE's Paste action ends here (not in a key listener): an image on the clipboard is attached instead.
+        override fun paste() {
+            if (!pasteImage()) super.paste()
+        }
+    }.apply {
         lineWrap = true
         wrapStyleWord = true
         font = JBFont.label()
@@ -119,13 +125,25 @@ class Composer(private val project: Project, private val host: ComposerHost) {
     private val thumbs = JPanel(WrapLayout()).apply { isOpaque = false; isVisible = false }
     private val completionModel = CollectionListModel<Completion>()
     private val completionList = JBList(completionModel).apply {
-        cellRenderer = textRenderer<Completion> { "${it.label}   ${it.description}" }
+        cellRenderer = object : com.intellij.ui.ColoredListCellRenderer<Completion?>() {
+            override fun customizeCellRenderer(list: javax.swing.JList<out Completion?>, value: Completion?, index: Int, selected: Boolean, hasFocus: Boolean) {
+                if (value == null) return
+                append(value.label, com.intellij.ui.SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                append("   " + value.description, com.intellij.ui.SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            }
+        }
         isFocusable = false
         visibleRowCount = 6
     }
-    private val completionPane = JBScrollPane(completionList).apply { isVisible = false; border = JBUI.Borders.customLine(UiStyle.outline, 1) }
+    private val completionPane = JBScrollPane(completionList).apply {
+        isVisible = false
+        border = JBUI.Borders.customLine(UiStyle.outline, 1)
+        horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+    }
     private val problem = JBLabel().apply { foreground = UiStyle.chipColor("error"); font = JBFont.small(); isVisible = false }
-    private val attach = JBLabel(AllIcons.General.Add)
+    private val attach = ActionLink("Add image") { chooseImages() }.apply {
+        toolTipText = "Attach an image (PNG, JPEG, GIF or WebP; up to 5 MiB; $MAX_IMAGES per message). Paste attaches an image from the clipboard."
+    }
     private val stop = JButton("Stop", AllIcons.Actions.Suspend).apply { toolTipText = "Interrupt Claude's running turn" }
     private val inject = JButton("Send Now").apply { toolTipText = "Send into the running turn: Claude reads it after the running tool calls (Ctrl+Enter)" }
     private val send = JButton("Send")
@@ -160,7 +178,6 @@ class Composer(private val project: Project, private val host: ComposerHost) {
             add(card, BorderLayout.CENTER)
         }
         for (b in listOf(stop, inject, send)) b.isDefaultCapable = false
-        clickable(attach, "Attach an image (PNG, JPEG, GIF or WebP; up to 5 MiB; $MAX_IMAGES per message). Ctrl+V pastes one from the clipboard.") { chooseImages() }
         send.addActionListener { submit(false) }
         inject.addActionListener { submit(true) }
         stop.addActionListener { host.interrupt() }
@@ -243,7 +260,6 @@ class Composer(private val project: Project, private val host: ComposerHost) {
                 if (e.keyCode == KeyEvent.VK_ENTER && chosen.insert.trim() == input.text.trim()) submit(false) else take(chosen)
             }
             e.keyCode == KeyEvent.VK_ENTER && !e.isShiftDown -> { e.consume(); submit(control) }
-            e.keyCode == KeyEvent.VK_V && control -> if (pasteImage()) e.consume()
         }
     }
 

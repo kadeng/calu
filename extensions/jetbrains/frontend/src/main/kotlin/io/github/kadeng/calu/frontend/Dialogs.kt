@@ -1,7 +1,5 @@
 /**
- * Dialogs over calu's own settings (stored in calu's database, read and written through the
- * bridge): the checker picker, "Models: use one model for everything", and the list of all
- * settings as a generated table.
+ * The checker picker and the entry to the dialog of calu's own settings (`SettingsDialog.kt`).
  */
 package io.github.kadeng.calu.frontend
 
@@ -65,146 +63,13 @@ fun chooseChecker(project: Project, host: ChatHost) {
 }
 
 /**
- * "Models: use one model for everything": the presets of `ide.models.presets` and a custom
- * model string; OK sets every role with `ide.models.set_all`.
- *
- * @param project The project.
- * @param host State and requests.
- */
-class ModelsDialog(private val project: Project, private val host: ChatHost) : DialogWrapper(project) {
-    private val presets = JBList<JsonObject>()
-    private val custom = JBTextField().apply { emptyText.text = "or a model string, e.g. anthropic:claude-haiku-5-5" }
-    private val roles = JBLabel("Loading the presets…")
-
-    init {
-        title = "calu: Use One Model for Everything"
-        setOKButtonText("Use for All Roles")
-        presets.cellRenderer = textRenderer<JsonObject> { "${it.str("label")}  —  ${it.str("note").orEmpty()}" }
-        init()
-        val modality = ModalityState.any().asContextElement()
-        host.launch {
-            val answer = host.call("ide.models.presets")
-            val result = parseObjectOrNull(answer.resultJson)
-            withContext(Dispatchers.EDT + modality) {
-                presets.setListData(result?.arr("presets")?.mapNotNull { it.asObj() }.orEmpty().toTypedArray())
-                roles.text = if (!answer.ok) answer.message else "<html>" + (result?.arr("roles")?.mapNotNull { it.asObj() }.orEmpty()
-                    .joinToString("<br>") { "${it.str("label")}: ${it.str("model")?.ifEmpty { "default" }}" }.ifEmpty { result?.str("problem") ?: "No roles." }) + "</html>"
-            }
-        }
-    }
-
-    override fun createCenterPanel(): JComponent = JPanel(BorderLayout(0, JBUI.scale(8))).apply {
-        preferredSize = Dimension(JBUI.scale(640), JBUI.scale(420))
-        add(roles, BorderLayout.NORTH)
-        add(JBScrollPane(presets), BorderLayout.CENTER)
-        add(custom, BorderLayout.SOUTH)
-    }
-
-    override fun doOKAction() {
-        val model = custom.text.trim().ifEmpty { presets.selectedValue?.str("id").orEmpty() }
-        if (model.isEmpty()) {
-            setErrorText("Choose a preset or enter a model string.")
-            return
-        }
-        host.launch {
-            val answer = host.call("ide.models.set_all", buildJsonObject { put("model", JsonPrimitive(model)) })
-            withContext(Dispatchers.EDT) {
-                if (answer.ok) Messages.showInfoMessage(project, "Every role now uses $model.", "calu: Models")
-                else Messages.showErrorDialog(project, answer.message, "calu: Models")
-            }
-        }
-        super.doOKAction()
-    }
-}
-
-/**
- * All of calu's settings as a table generated from `ide.settings.get` (global scope): key,
- * value, default, description. "Edit" changes the selected setting (`ide.settings.set`; the
- * text is read as JSON, and as a plain string if it is not JSON), "Reset" removes the stored
- * value (`ide.settings.unset`). calu validates; its message is shown.
- *
- * @param project The project.
- * @param host State and requests.
- */
-class CaluSettingsDialog(private val project: Project, private val host: ChatHost) : DialogWrapper(project) {
-    private val model = object : DefaultTableModel(arrayOf("Setting", "Value", "Set", "Default", "Description"), 0) {
-        override fun isCellEditable(row: Int, column: Int): Boolean = false
-    }
-    private val table = JBTable(model)
-    private val modality = ModalityState.any().asContextElement()
-
-    init {
-        title = "calu Settings (Global)"
-        init()
-        reload()
-    }
-
-    override fun createActions(): Array<Action> = arrayOf(okAction)
-
-    override fun createCenterPanel(): JComponent = JPanel(BorderLayout(0, JBUI.scale(6))).apply {
-        preferredSize = Dimension(JBUI.scale(900), JBUI.scale(520))
-        add(JBScrollPane(table), BorderLayout.CENTER)
-        add(JPanel().apply {
-            add(JButton("Edit…").apply { addActionListener { edit() } })
-            add(JButton("Reset to Default").apply { addActionListener { change(null) } })
-            add(JButton("Reload").apply { addActionListener { reload() } })
-        }, BorderLayout.SOUTH)
-    }
-
-    /** Load the settings and fill the table; rows of kind "section" are left out. */
-    private fun reload() {
-        host.launch {
-            val answer = host.call("ide.settings.get", buildJsonObject { put("project", JsonNull) })
-            val rows = parseObjectOrNull(answer.resultJson)?.arr("rows")?.mapNotNull { it.asObj() }.orEmpty().filter { it.str("kind") != "section" }
-            withContext(Dispatchers.EDT + modality) {
-                model.rowCount = 0
-                for (r in rows) {
-                    val value = r["value"]
-                    model.addRow(arrayOf(r.str("key"), (value as? JsonPrimitive)?.takeIf { it.isString }?.content ?: value?.toString().orEmpty(), if (r.bool("is_set")) "yes" else "", r.str("default"), r.str("description")))
-                }
-                if (!answer.ok) setErrorText(answer.message)
-            }
-        }
-    }
-
-    /** Ask for the new value of the selected setting and store it. */
-    private fun edit() {
-        val row = table.selectedRow.takeIf { it >= 0 } ?: return
-        val text = Messages.showInputDialog(project, "${model.getValueAt(row, 0)}\n${model.getValueAt(row, 4)}", "calu: Change Setting", null, model.getValueAt(row, 1)?.toString(), null) ?: return
-        change(text)
-    }
-
-    /**
-     * Store or remove the value of the selected setting, then reload the table.
-     *
-     * @param text The new value as typed; `null` removes the stored value.
-     */
-    private fun change(text: String?) {
-        val row = table.selectedRow.takeIf { it >= 0 } ?: return
-        val key = model.getValueAt(row, 0).toString()
-        host.launch {
-            val answer = if (text == null) {
-                host.call("ide.settings.unset", buildJsonObject { put("key", JsonPrimitive(key)); put("project", JsonNull) })
-            } else {
-                val value: JsonElement = try {
-                    CaluJson.parseToJsonElement(text)
-                } catch (_: Exception) {
-                    JsonPrimitive(text)
-                }
-                host.call("ide.settings.set", buildJsonObject { put("key", JsonPrimitive(key)); put("value", value); put("project", JsonNull) })
-            }
-            withContext(Dispatchers.EDT + modality) { setErrorText(if (answer.ok) null else answer.message) }
-            if (answer.ok) reload()
-        }
-    }
-}
-
-/**
  * Open the dialog with all of calu's settings.
  *
  * @param project The project.
  * @param host State and requests.
+ * @param page The page to show first: `SettingsPages.MODELS`, `SettingsPages.CHECKERS`, a
+ *   section id, or "" for the first page.
  */
-fun showCaluSettings(project: Project, host: ChatHost) {
-    CaluSettingsDialog(project, host).show()
+fun showCaluSettings(project: Project, host: ChatHost, page: String = "") {
+    CaluSettingsDialog(project, host, page).show()
 }

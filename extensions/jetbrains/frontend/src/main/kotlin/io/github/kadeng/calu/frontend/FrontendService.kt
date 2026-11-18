@@ -104,6 +104,7 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
     private val log = Logger.getInstance(CaluFrontendService::class.java)
     private val stateFlow = MutableStateFlow(initialViewState())
     private val notified = HashSet<String>()
+    private val shownNotifications = java.util.concurrent.ConcurrentHashMap<String, Notification>()
     private var started = false
     private val uiListeners = java.util.concurrent.CopyOnWriteArrayList<(String, JsonObject) -> Unit>()
 
@@ -229,6 +230,12 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
         if (openEscalationCount(before) != openEscalationCount(next)) {
             withContext(Dispatchers.EDT) { WindowManager.getInstance().getStatusBar(project)?.updateWidget(STATUS_WIDGET_ID) }
         }
+        // A notification whose escalation is decided (here, in another client, or by a cancel) goes away.
+        val closed = shownNotifications.keys.filter { key -> next.escalations[key]?.status != EscalationStatus.OPEN }
+        if (closed.isNotEmpty()) {
+            val gone = closed.mapNotNull { shownNotifications.remove(it) }
+            withContext(Dispatchers.EDT) { for (n in gone) n.expire() }
+        }
         if (!settings.notifications) return
         val fresh = next.escalations.values.filter { it.status == EscalationStatus.OPEN && it.key !in before.escalations && notified.add(it.key) }
         if (fresh.isEmpty()) return
@@ -247,6 +254,7 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
                     n.addAction(NotificationAction.createSimpleExpiring("Deny") { decide(e.key, false) })
                 }
                 n.addAction(NotificationAction.createSimpleExpiring("Open") { ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.activate(null) })
+                shownNotifications[e.key] = n
                 n.notify(project)
             }
         }

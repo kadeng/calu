@@ -17,10 +17,10 @@ import javax.swing.JComponent
 
 /** The choices of "How calu is reached": stored value and label. */
 val MODE_CHOICES: List<Pair<String, String>> = listOf(
-    "auto" to "Automatic (WSL for a project inside WSL, else on this machine)",
-    "local" to "On this machine (also the host of JetBrains remote development)",
-    "wsl" to "Inside WSL (Windows IDE, project below \\\\wsl.localhost)",
-    "ssh" to "On a server, over SSH only (this project is a local copy)",
+    "auto" to "Automatic",
+    "local" to "On this machine",
+    "wsl" to "Inside WSL",
+    "ssh" to "On a server, over SSH",
 )
 
 /** The choices of "Sync": stored value and label. */
@@ -55,13 +55,14 @@ class CaluConfigurable(private val project: Project) : Configurable {
 
     override fun createComponent(): JComponent = FormBuilder.createFormBuilder()
         .addLabeledComponent("How calu is reached:", mode)
+        .addComponent(note("Automatic: inside WSL for a project below \\\\wsl.localhost on Windows, else on this machine. \"On this machine\" is also right for JetBrains remote development, where the plugin's backend runs on the host. \"On a server, over SSH\": this project is a local copy."))
         .addLabeledComponent("calu command:", command)
         .addSeparator()
         .addLabeledComponent("SSH host:", sshHost)
         .addLabeledComponent("Remote project directory:", sshDirectory)
         .addLabeledComponent("Extra ssh options:", sshOptions)
         .addLabeledComponent("Sync (SSH mode):", sync)
-        .addComponent(JBLabel("SSH uses the system's OpenSSH client with BatchMode: the key must be in your SSH agent. Sync through calu is not built yet (docs/notes/jetbrains-sync-spec.md)."))
+        .addComponent(note("SSH uses the system's OpenSSH client with BatchMode: the key must be in your SSH agent. Sync through calu is not wired in the plugin yet: choose \"None\" and synchronise the copy yourself."))
         .addSeparator()
         .addComponent(notifications)
         .addComponent(sudo)
@@ -69,6 +70,14 @@ class CaluConfigurable(private val project: Project) : Configurable {
         .addLabeledComponent("Extra arguments of calu serve:", extraArgs)
         .addComponentFillVertically(javax.swing.JPanel(), 0)
         .panel
+
+    /**
+     * Build an explanation that wraps to the page's width.
+     *
+     * @param text The explanation.
+     * @return The component.
+     */
+    private fun note(text: String): JComponent = textArea(text).apply { foreground = UiStyle.dim; columns = 40 }
 
     /**
      * Read the fields.

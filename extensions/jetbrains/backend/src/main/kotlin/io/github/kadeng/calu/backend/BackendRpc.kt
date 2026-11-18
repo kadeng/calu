@@ -79,6 +79,7 @@ class BackendCaluRemoteApi : CaluRemoteApi {
             "showContext" -> editor.showContext(a.str("escalation_id"))
             "showChanges" -> editor.openFile(a.str("path") ?: return false, a.int("line"))
             "showLog" -> editor.showLog()
+            "install" -> Installer(project).install()
             "setHonesty" -> setHonesty(c, a.str("mode") ?: return false)
             else -> false
         }

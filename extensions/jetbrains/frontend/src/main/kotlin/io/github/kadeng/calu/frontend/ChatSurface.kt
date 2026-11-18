@@ -121,7 +121,7 @@ const val MAX_OPEN_TABS: Int = 6
  *
  *     ● Review the greeter          running
  *     ✓ Watch the test run          finished
- *     ⚠ Run the migration · 1 waiting   an open decision (warning colour, bold)
+ *     ⚠ Run the migration           an open decision (warning colour, bold; "· 2" for two)
  *     ● Lint · held                 a step calu holds back until the open decision is made
  *
  * @param onSelect Called with the tab's key on a click.
@@ -154,11 +154,11 @@ private class TabChip(private val onSelect: (String) -> Unit) : JBLabel() {
         }
         val label = neutraliseBidi(tab.label)
         val suffix = when {
-            tab.openEscalations > 0 -> " · ${tab.openEscalations} waiting"
-            held > 0 -> " · held"
+            tab.openEscalations > 1 -> " · ${tab.openEscalations}"
+            tab.openEscalations == 0 && held > 0 -> " · held"
             else -> ""
         }
-        text = mark + (if (label.length > 28) label.take(27) + "…" else label) + suffix
+        text = mark + (if (label.length > 22) label.take(21) + "…" else label) + suffix
         font = if (tab.openEscalations > 0 || isSelected) JBFont.label().asBold() else JBFont.label()
         foreground = when {
             tab.openEscalations > 0 || held > 0 -> UiStyle.chipColor("warning")
@@ -326,6 +326,10 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             switchDraft()
             seen.clear()
             lastDuration = null
+            // Another session: start from Main with fresh rows (ids of items and of subagents repeat between sessions).
+            active = MAIN
+            for (view in transcripts.values) transcriptsPanel.remove(view.component)
+            transcripts.clear()
         }
         renderHeader()
         renderCards()
@@ -542,12 +546,17 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         if (key == attentionShown) return
         attentionShown = key
         attention.removeAll()
+        // One line, however many wait: the tab chips name the tabs, this line leads to the next one.
         if (others.isNotEmpty()) {
-            attention.add(JBLabel("Waiting for you in:", AllIcons.General.Warning, JBLabel.LEADING).apply { foreground = UiStyle.chipColor("warning") })
-            for (o in others) attention.add(ActionLink(neutraliseBidi(o.label).take(40)) { select(o.tab) })
+            val n = others.size
+            attention.add(JBLabel("$n decision${if (n == 1) " waits" else "s wait"} in ${if (n == 1) "another tab" else "other tabs"}", AllIcons.General.Warning, JBLabel.LEADING).apply {
+                foreground = UiStyle.chipColor("warning")
+                toolTipText = "<html>" + others.joinToString("<br>") { io.github.kadeng.calu.logic.escapeHtml(neutraliseBidi(it.label)) } + "</html>"
+            })
+            attention.add(ActionLink("Show next") { select(others.first().tab) })
         }
         if (held > 0) {
-            attention.add(JBLabel("$held other step${if (held == 1) " is" else "s are"} held until you decide").apply {
+            attention.add(JBLabel("$held step${if (held == 1) "" else "s"} held until you decide").apply {
                 foreground = UiStyle.dim
                 toolTipText = "While a decision is open, calu lets no other checked step run. A step held for five minutes asks for a decision of its own."
             })
