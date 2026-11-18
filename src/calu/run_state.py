@@ -46,7 +46,8 @@ class PendingHonesty:
     marks: list[tuple[str, list[CodeMark], list[CodeMark]]] = field(
         default_factory=list[tuple[str, list[CodeMark], list[CodeMark]]]
     )
-    """(checker name, its `marks_dirty`, its `marks_clean`) for each checker that wrote marks."""
+    """(checker name, its `marks_dirty`, its `marks_clean`) for each run of the honesty checker
+    that wrote marks. Marks of other checkers are not kept (PLAN.md D224)."""
     edit_path: str | None = None
     """The file an Edit, Write, MultiEdit or NotebookEdit call targets, as the tool names it;
     None for every other call."""
@@ -54,7 +55,8 @@ class PendingHonesty:
     """The SHA-256 of the content the edit produces, computed before the checkers judged it
     (`HonestyState.expect_edit`); None if it could not be predicted."""
     checked: bool = False
-    """True if checkers of the edit route judged the edit and every one of them approved."""
+    """True if the honesty checker judged the edit and every checker of the edit route approved
+    it (PLAN.md D224): only then does the edit verify its file."""
     clean_commit: bool = False
     """True for a plain `git commit` that the gate decided while the honesty state was clean."""
     head_before: str | None = None

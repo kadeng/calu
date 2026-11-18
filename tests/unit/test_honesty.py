@@ -17,6 +17,7 @@ import pytest
 from calu.acp.adapter import Adapter
 from calu.attach import HELP, describe_honesty
 from calu.checkers import CheckDecision, Checker, CheckOutcome, CodeMark, Decision, Route, Step
+from calu.checkers.model import StepVerdict
 from calu.config import Config, HonestyConfig
 from calu.defaults.instructions import compose_instructions
 from calu.gate import COMMITS, EXECUTES, StepGate
@@ -138,19 +139,18 @@ def test_the_state_is_clean_only_with_a_baseline_and_nothing_open():
 
 
 def test_the_instruction_part_says_what_the_specification_asks_for():
-    """Section 6: do not rely on listed code; how to record and clear; clean marks ignored
-    while a review is required; the command checker's answer about executing project code."""
-    prompt = compose_instructions("command", "x", marks=True)
+    """Section 6 as changed by D224: do not rely on listed code; the command checker says
+    whether a call executes project code; no checker but the honesty checker records marks."""
+    prompt = compose_instructions("command", "x", honesty_state=True)
     for text in (
         "Do not rely on the names or the documentation",
-        "or ESCALATE",
-        "`marks_dirty`",
-        "`marks_clean`",
-        '"Review required: yes"',
+        "judged by the honesty checker, not by you",
         "`executes_project_code`",
     ):
         assert text in prompt, text
-    assert "executes_project_code" not in compose_instructions("command", "x")
+    assert "marks_dirty" not in prompt and "marks_clean" not in prompt
+    assert "marks_dirty" not in StepVerdict.model_json_schema()["properties"]
+    assert "executes_project_code" in StepVerdict.model_json_schema()["properties"]
     assert "executes_project_code" in CheckDecision.model_json_schema()["properties"]
     plain = CheckDecision(decision=Decision.PASS, reason="", step_summary="s")
     assert plain.executes_project_code is None

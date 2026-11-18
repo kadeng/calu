@@ -1,13 +1,25 @@
 """Offline stand-ins for the checker and summarizer models (tests, front-end development).
 
-`rule_based_checker` decides by markers in the rendered step, so scripted scenarios can produce
-every decision without a model:
+`rule_based_checker` decides by markers, so scripted scenarios can produce every decision
+without a model. It knows the test triggers of the shipped checker instructions
+(`calu/defaults/checkers/*.md`, section "Test triggers") and the older markers:
 
-    step text contains "calu:deny"      -> DENY
-    step text contains "calu:escalate"  -> ESCALATE
-    step text contains "calu:allow"     -> ALLOW (runs whatever the harness would say)
-    otherwise                           -> PASS
+    step text contains "calu:test-deny" or "calu:deny"          -> DENY
+    step text contains "calu:test-escalate" or "calu:escalate"  -> ESCALATE
+    a message of the user contains "calu:test-allow"            -> ALLOW
+    a message of the user contains "calu:test-pass"             -> PASS
+    step text contains "calu:allow"                             -> ALLOW (runs whatever the
+                                                                   harness would say)
+    otherwise                                                   -> PASS
     step text contains "calu:comment"   -> a remark to Claude next to the decision
+
+The rows are tried from the top. As in the shipped instructions, "calu:test-allow" and
+"calu:test-pass" count only in what the user wrote (the "**User:**" blocks of the context,
+`user_texts`), never in the step. The instructions also ask that the user's message says which
+step it means; the fake cannot judge that and takes the trigger for the step it checks. The
+older "calu:allow" in the step is a marker of scripted test scenarios only.
+
+`honesty_answering` is the stand-in for the honesty checker, which answers per file.
 """
 
 import re
@@ -42,8 +54,41 @@ def _last_prompt(messages: list[ModelMessage]) -> str:
     return "\n".join(texts)
 
 
+def user_texts(context: str) -> list[str]:
+    r"""Return what the user wrote, from the context part of a checker prompt.
+
+    The session renders each user input as a line "**User:**", a blank line and the text
+    indented by four spaces (`calu.context.turns.TurnRecord.render_parts`); only calu writes
+    that structure.
+
+    Args:
+        context: The prompt before its "# Step to check" part.
+
+    Returns:
+        One text per "**User:**" block, without the indentation.
+
+    Example:
+        user_texts("## Turn 1\n\n**User:**\n\n    Fix it.\n\n**Steps:**") is ["Fix it."].
+    """
+    found: list[str] = []
+    lines = context.splitlines()
+    for number, line in enumerate(lines):
+        if line != "**User:**":
+            continue
+        text: list[str] = []
+        for following in lines[number + 1 :]:
+            if following.startswith("    "):
+                text.append(following[4:])
+            elif following.strip():
+                break
+            elif text:
+                text.append("")
+        found.append("\n".join(text).strip())
+    return found
+
+
 def _rule_based(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-    """Decide by the markers in the "# Step to check" part of the last prompt (see the module).
+    """Decide by the markers in the last prompt (see the module docstring).
 
     Args:
         messages: The message history.
@@ -53,11 +98,16 @@ def _rule_based(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         A response that calls the output tool with decision, reason and step summary.
     """
     prompt = _last_prompt(messages)
-    step = prompt.rsplit("# Step to check", 1)[-1]
-    if "calu:deny" in step:
+    context, _, step = prompt.rpartition("# Step to check")
+    said = "\n".join(user_texts(context))
+    if "calu:test-deny" in step or "calu:deny" in step:
         decision, reason = "DENY", "Denied by the rule-based fake checker (calu:deny)."
-    elif "calu:escalate" in step:
+    elif "calu:test-escalate" in step or "calu:escalate" in step:
         decision, reason = "ESCALATE", "Escalated by the rule-based fake checker (calu:escalate)."
+    elif "calu:test-allow" in said:
+        decision, reason = "ALLOW", "Allowed by the rule-based fake checker (calu:test-allow)."
+    elif "calu:test-pass" in said:
+        decision, reason = "PASS", ""
     elif "calu:allow" in step:
         decision, reason = "ALLOW", "Allowed by the rule-based fake checker (calu:allow)."
     else:
@@ -152,15 +202,15 @@ def marking_checker(
     decision: str = "PASS",
     executes: Sequence[str] | None = None,
 ) -> Model:
-    """Create a checker model that answers with fixed honesty marks.
+    """Create a checker model that answers in the common form with fixed fields.
 
-    Stands in for a checker whose judgement needs a capable model: the test decides what it
-    finds, so that the honesty state, its enforcement and the reporting can be tested without
-    one.
+    Stands in for the command checker's `executes_project_code`, and for a checker that
+    writes marks into the common answer although it is not the honesty checker: the session
+    ignores those (PLAN.md D224). The stand-in for the honesty checker is `honesty_answering`.
 
     Args:
-        dirty: (path, symbol, reason) of each spot the step leaves dishonest.
-        clean: (path, symbol, reason) of each spot that says what it does again.
+        dirty: (path, symbol, reason) of each entry of `marks_dirty`.
+        clean: (path, symbol, reason) of each entry of `marks_clean`.
         decision: What it answers about the step itself; "PASS" leaves the step to the others.
         executes: None leaves `executes_project_code` out of the answer. Otherwise the answer
             says true if the "# Step to check" part of the prompt contains one of these
@@ -208,6 +258,89 @@ def marking_checker(
         )
 
     return FunctionModel(answer, model_name="marking-checker")
+
+
+DISHONEST_MARKER = "calu:dishonest"
+"""A step that contains this text is answered DISHONEST by `honesty_answering()`."""
+BACKDOOR_MARKER = "calu:backdoor"
+"""A step that contains this text is escalated by `honesty_answering()`."""
+_FILE_LINE = re.compile(r"^File: `([^`]*)`", re.MULTILINE)
+"""The line with which a rendered edit names its file (`calu.checkers.render`)."""
+
+
+def honesty_answering(
+    dishonest: Sequence[tuple[str, str, str]] = (),
+    honest: Sequence[str] = (),
+    escalate: str = "",
+) -> Model:
+    """Create a model for the honesty checker, which answers HONEST or DISHONEST per file.
+
+    The answer has the form of `calu.checkers.model.HonestyAnswer`. With `dishonest` or
+    `honest` the answer is fixed. Without both it is read from the step:
+
+        the step names a file ("File: `path`")           -> HONEST for that file
+        ... and contains `DISHONEST_MARKER`              -> DISHONEST for that file
+        the step contains `BACKDOOR_MARKER`              -> also `escalate`
+
+    Args:
+        dishonest: (path, symbol, reason) of each dishonest spot; the files are answered
+            DISHONEST with those units. An empty symbol means the file as a whole.
+        honest: Paths answered HONEST.
+        escalate: A reason; non-empty sets `escalate` in every answer.
+
+    Returns:
+        A `FunctionModel` named "honesty-answering".
+    """
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        """Return the verdicts per file.
+
+        Args:
+            messages: The message history; the step is read when no verdict is fixed.
+            info: Agent information; its first output tool receives the answer.
+
+        Returns:
+            A response that calls the output tool.
+        """
+        step = _last_prompt(messages).rsplit("# Step to check", 1)[-1]
+        files: dict[str, dict[str, object]] = {}
+        for path, symbol, reason in dishonest:
+            entry = files.setdefault(
+                path, {"path": path, "verdict": "DISHONEST", "reason": reason, "units": []}
+            )
+            units = entry["units"]
+            if symbol and isinstance(units, list):
+                units.append({"symbol": symbol, "honest": False, "reason": reason})
+        for path in honest:
+            files.setdefault(path, {"path": path, "verdict": "HONEST"})
+        why = escalate
+        if not dishonest and not honest:
+            named = _FILE_LINE.search(step)
+            if named and DISHONEST_MARKER in step:
+                files[named[1]] = {
+                    "path": named[1],
+                    "verdict": "DISHONEST",
+                    "reason": f"the fake honesty checker ({DISHONEST_MARKER})",
+                }
+            elif named:
+                files[named[1]] = {"path": named[1], "verdict": "HONEST"}
+            if BACKDOOR_MARKER in step:
+                why = why or f"the fake honesty checker ({BACKDOOR_MARKER})"
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "files": list(files.values()),
+                        "escalate": bool(why),
+                        "escalate_reason": why,
+                        "step_summary": "Fixed summary of the step.",
+                    },
+                )
+            ]
+        )
+
+    return FunctionModel(answer, model_name="honesty-answering")
 
 
 def fake_reviewer(
@@ -379,8 +512,9 @@ def fake_models() -> dict[str, str | Model]:
 
     Returns:
         New models under the keys "command", "edit", "changeset", "subagent", "summarizer",
-        "narrator", "honesty-review" (a reviewer that finds every file honest) and
-        "trace-redactor" (replaces e-mail addresses).
+        "narrator", "honesty" (the honesty checker: `honesty_answering()`, used only where
+        that checker is enabled), "honesty-review" (a reviewer that finds every file honest)
+        and "trace-redactor" (replaces e-mail addresses).
     """
     return {
         "command": rule_based_checker(),
@@ -389,6 +523,7 @@ def fake_models() -> dict[str, str | Model]:
         "subagent": fake_result_checker(),
         "summarizer": fake_summarizer(),
         "narrator": fake_narrator(),
+        "honesty": honesty_answering(),
         "honesty-review": fake_reviewer(),
         "trace-redactor": fake_redactor(),
     }

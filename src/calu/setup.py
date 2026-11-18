@@ -20,7 +20,7 @@ from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
 from calu.db import migrate
 from calu.db.connection import open_stored
 from calu.db.target import PasswordAuth, RdsIamAuth, Target
-from calu.defaults.instructions import legacy_instructions
+from calu.defaults.instructions import superseded_instructions
 
 DEFAULT_CHECKER_MODEL = ""
 """The model new checker types are stored with: blank, which means the default model of
@@ -147,7 +147,9 @@ async def seed_defaults(
 ) -> tuple[int, int]:
     """Insert the built-in checker types, and the default rules where no global rules exist.
 
-    A checker type is inserted only if no type of that name exists. The default rules -- none
+    A checker type is inserted only if no type of that name exists. A type that still holds
+    an earlier shipped text unchanged (`superseded_instructions`) gets the present one; a text
+    somebody edited is left as it is. The default rules -- none
     since D179 -- would be inserted only if there are no global rules at all, so rules an
     administrator removed are not restored, and a database set up earlier keeps its rules.
 
@@ -182,16 +184,15 @@ async def seed_defaults(
                 ),
             )
             checkers += cur.rowcount
-            # D181: the shipped instructions were split into calu's fixed system part and a
-            # compact user part. A row that still holds the old shipped text unchanged gets
-            # the new user part -- otherwise the session would put the system part in front of
-            # the old text, which repeats it. A text somebody edited is left as it is.
-            legacy = legacy_instructions(name)
-            if legacy is not None:
+            # A row that still holds an earlier shipped text unchanged gets the present one:
+            # the text from before the split of D181 (the session would put the system part
+            # in front of it, which repeats it) and the compact one from before the short
+            # instructions of requirement 38. A text somebody edited is left as it is.
+            for earlier in superseded_instructions(name):
                 await conn.execute(
                     "UPDATE checker_types SET instructions = %s"
                     " WHERE name = %s AND instructions = %s",
-                    (base.joinpath(path).read_text(encoding="utf-8"), name, legacy),
+                    (base.joinpath(path).read_text(encoding="utf-8"), name, earlier),
                 )
         cur = await conn.execute("SELECT count(*) FROM rules WHERE project_id IS NULL")
         row = await cur.fetchone()

@@ -24,8 +24,10 @@ misses rather than the accuracy.
 from collections.abc import Sequence
 from pathlib import Path
 
+from calu.checkers.checker import HONESTY_CHECKER
+from calu.config import default_model
 from calu.db import Db
-from calu.defaults.instructions import compose_instructions
+from calu.defaults.instructions import compose_instructions, review_instructions
 from calu.evals.cases import (
     CheckerName,
     EvalCase,
@@ -58,7 +60,9 @@ def _rows_to_measure(settings: ProjectSettings) -> list[tuple[CheckerName, str]]
 
     Returns:
         (kind of case, row name) pairs: the four built-in rows in their usual order, then every
-        other enabled row whose route is one the evaluation can run.
+        other enabled row whose route is one the evaluation can run. The enabled honesty
+        checker is measured on the cases of the kind "honesty", and the honesty reviewer
+        (`REVIEWER_ROW`) on the kind "honesty-review" follows it.
     """
     by_route: dict[str, CheckerName] = {
         "command": "command",
@@ -70,11 +74,22 @@ def _rows_to_measure(settings: ProjectSettings) -> list[tuple[CheckerName, str]]
     for name, definition in sorted(settings.checkers.items()):
         if name in ROW_NAMES.values():
             continue
+        if name == HONESTY_CHECKER:
+            # Its own kind of case (HONEST or DISHONEST per file), and with it the reviewer
+            # of the honesty review, which reads the same honesty rules.
+            pairs.append(("honesty", name))
+            pairs.append(("honesty-review", REVIEWER_ROW))
+            continue
         kind = by_route.get(definition.route)
         if kind is not None:
             pairs.append((kind, name))
     return pairs
 
+
+REVIEWER_ROW = "honesty-review"
+"""Name under which the reviewer agent of the honesty review is reported. It is no row of
+`checker_types`: its prompt is fixed plus the honesty rules, its model is
+`honesty.reviewer_model`."""
 
 ROW_NAMES: dict[CheckerName, str] = {
     "command": "command",
@@ -151,6 +166,23 @@ async def run_evals(
     cases = await collect_cases(db, files, from_db, builtin)
     reports: list[Report] = []
     for checker, row_name in _rows_to_measure(settings):
+        if checker == "honesty-review":
+            honesty = settings.config.honesty
+            reports.append(
+                await run_cases(
+                    cases,
+                    checker,
+                    row_name,
+                    review_instructions(honesty.rules),
+                    model
+                    or honesty.reviewer_model.strip()
+                    or default_model(settings.config.claude.use_bedrock),
+                    repeat=repeat,
+                    request_limit=honesty.reviewer_request_limit,
+                    rules=settings.rules,
+                )
+            )
+            continue
         definition = settings.checkers.get(row_name)
         if definition is None or not definition.instructions:
             # Reported as "none" rather than skipped: `calu evals` must not look as if it had
@@ -160,10 +192,10 @@ async def run_evals(
         # The full prompt a session builds from the stored part (D181): measuring the user's
         # part alone would measure a checker no session runs.
         instructions = compose_instructions(
-            checker,
+            "edit" if checker == "honesty" else checker,
             definition.instructions,
             settings.config.honesty.rules,
-            marks=settings.config.honesty.mode != "off" or row_name == "honesty",
+            honesty_state=settings.config.honesty.mode != "off",
             name=row_name,
         )
         configured = {
@@ -171,6 +203,7 @@ async def run_evals(
             "edit": settings.config.edit_checker,
             "changeset": settings.config.changeset_checker,
             "subagent": settings.config.subagent_checker,
+            "honesty": settings.config.edit_checker,
         }[checker]
         # Its own row's model and limits where it has them, because an extra checker on a
         # route (D81) is configured by its row and not by the route's `*_checker` settings.

@@ -16,10 +16,26 @@ A case is one tool call with the decision(s) a good checker would make:
       result: ""                            # subagent cases: what it handed back
       diff: ""                              # changeset cases: the diff the commit would record
       cwd: ""                               # the working directory to claim; "" is EVAL_CWD
+      user_messages: []                     # what the user wrote, shown as the user's turn
+      narration: ""                         # Claude's narrated text before the step
+      requires: ""                          # run only if the instructions contain this text
+      exact: false                          # true: PASS and ALLOW are not interchangeable
+      executes: null                        # command cases: the expected executes_project_code
+      dishonest: []                         # honesty cases: units that must be marked
+      honest: []                            # honesty cases: units that must not be marked
+      base_files: {}                        # honesty-review cases: the files at the baseline
+      review: {}                            # honesty-review cases: path -> honest (true/false)
+
+A case for the honesty checker (`checker: honesty`) is an edit; `expected` is [PASS] for an
+edit that leaves the file HONEST, [DENY] for one that leaves it DISHONEST and [ESCALATE] for
+what looks deliberate (`runner.CaseResult.by_marks`). A case for the honesty reviewer
+(`checker: honesty-review`) is a batch of `files`, shown whole or, for a path that is also in
+`base_files`, as the diff against that content; `review` says for each file whether it is
+honest.
 
 Sources of cases:
 
-- the built-in set `calu/defaults/evals/checker_cases.yaml`;
+- the built-in sets, the files of `BUILTIN_FILES` in `calu/defaults/evals/`;
 - further YAML files in the same format, named on the command line;
 - the `escalations` table: every escalation that a checker caused and a human then resolved
   becomes a case whose expected decision is the human's (allowed -> ALLOW, denied -> DENY),
@@ -40,8 +56,13 @@ from calu.checkers.model import Decision
 from calu.checkers.policy import EDIT_TOOLS
 from calu.db import Db
 
-CheckerName = Literal["command", "edit", "changeset", "subagent"]
+CheckerName = Literal["command", "edit", "changeset", "subagent", "honesty", "honesty-review"]
 """The checkers an evaluation can measure.
+
+"honesty" is the honesty checker (PLAN.md D217): such a case is an edit, and what is scored is
+whether the checker calls the file HONEST or DISHONEST, or escalates. "honesty-review" is the
+reviewer agent of the honesty review (`calu.checkers.honesty_review`), which judges a batch of
+files.
 
 "changeset" is the checker that reviews a whole commit (PLAN.md D26): such a case is a `git
 commit` call plus the `diff` the commit would record, which is what the session hands the
@@ -88,29 +109,83 @@ class EvalCase(BaseModel):
     computes it from the snapshots and passes it to the checker after the step (D26), so a case
     states it instead (D75). Required for a changeset case and refused for the others, where
     nothing would read it."""
+    user_messages: list[str] = Field(default_factory=list)
+    """What the user wrote in the conversation before the step, verbatim. The checker sees
+    them as the session shows a user's input: a turn with one "**User:**" block per message."""
+    narration: str = ""
+    """What Claude thought and wrote before the step, as the narrator would retell it. The
+    checker sees it marked as Claude's own statements (`Step.narration`)."""
+    requires: str = ""
+    """A text the checker's own instructions must contain for the case to apply, e.g.
+    "calu:test-deny" for a case about the test triggers of the shipped defaults. `calu evals`
+    leaves the case out for a checker whose instructions do not contain it."""
+    exact: bool = False
+    """True if PASS and ALLOW are not interchangeable for this case: only a decision that is
+    in `expected` counts. Used where the difference is the point, e.g. a test trigger that
+    must give ALLOW, or must not."""
+    executes: bool | None = None
+    """For a `command` case: the expected `executes_project_code`; None expects nothing."""
+    dishonest: list[str] = Field(default_factory=list)
+    """For a `honesty` case: the functions, methods or classes the checker has to name as
+    dishonest. A mark on the whole file names none of them."""
+    honest: list[str] = Field(default_factory=list)
+    """For a `honesty` case: units the checker must not name as dishonest."""
+    base_files: dict[str, str] = Field(default_factory=dict)
+    """For a `honesty-review` case: the content of files at the baseline. A file of `files`
+    that is also here is shown to the reviewer as the diff between the two."""
+    review: dict[str, bool] = Field(default_factory=dict)
+    """For a `honesty-review` case: path -> whether a good reviewer calls the file honest.
+    Every path is one of `files`."""
     source: str = ""
     """Where the case came from (file name or "escalations"); set when loading."""
 
     @model_validator(mode="after")
     def _diff_belongs_to_a_changeset_case(self) -> EvalCase:
-        """Check that `diff` is present exactly for a changeset case.
+        """Check that every field that belongs to one kind of case is used with that kind.
 
         A changeset case without a diff would measure the checker on a commit command alone,
-        which is not what the session gives it (PLAN.md D26); a diff on any other case would
-        silently not be read.
+        which is not what the session gives it (PLAN.md D26); a field on a case of another
+        kind would silently not be read.
 
         Returns:
             The case, unchanged.
 
         Raises:
-            ValueError: If a changeset case has no diff, or another case has one.
+            ValueError: If a changeset case has no diff or another case has one; if a
+                honesty-review case lacks a `review` entry for one of its files or its
+                `expected` does not follow from them; if `review`, `base_files`, `dishonest`,
+                `honest`, `executes`, `prompt` or `result` is set on a case of another kind;
+                if a case that needs one has no `tool_input`.
         """
         if self.checker == "changeset" and not self.diff.strip():
             raise ValueError(f"the changeset case {self.name!r} needs a `diff`")
         if self.checker != "changeset" and self.diff.strip():
             raise ValueError(f"`diff` is only read for a changeset case, not for {self.name!r}")
-        if self.checker != "subagent" and not self.tool_input:
+        if self.checker == "honesty-review":
+            if not self.review or set(self.review) != set(self.files):
+                raise ValueError(
+                    f"the honesty-review case {self.name!r} needs `review` with one entry "
+                    "for each of its `files`"
+                )
+            wanted = Decision.PASS if all(self.review.values()) else Decision.DENY
+            if self.expected != [wanted]:
+                raise ValueError(
+                    f"the honesty-review case {self.name!r} expects [{wanted.value}] by its "
+                    "`review` entries"
+                )
+        elif self.review or self.base_files:
+            raise ValueError(
+                f"`review` and `base_files` are only read for a honesty-review case, not "
+                f"for {self.name!r}"
+            )
+        if self.checker not in ("subagent", "honesty-review") and not self.tool_input:
             raise ValueError(f"the case {self.name!r} needs a `tool_input`")
+        if self.checker != "honesty" and (self.dishonest or self.honest):
+            raise ValueError(
+                f"`dishonest` and `honest` are only read for a honesty case, not for {self.name!r}"
+            )
+        if self.checker != "command" and self.executes is not None:
+            raise ValueError(f"`executes` is only read for a command case, not for {self.name!r}")
         if self.checker == "subagent":
             if not self.prompt.strip() or not self.result.strip():
                 raise ValueError(f"the subagent case {self.name!r} needs a `prompt` and a `result`")
@@ -144,7 +219,7 @@ class EvalCase(BaseModel):
                 _check_relative(str(value))
         return tool_input
 
-    @field_validator("files")
+    @field_validator("files", "base_files")
     @classmethod
     def _relative_files(cls, files: dict[str, str]) -> dict[str, str]:
         """Reject file names that could leave the temporary case workspace.
@@ -201,19 +276,48 @@ def load_cases(path: Path) -> list[EvalCase]:
     return cases
 
 
-def builtin_cases() -> list[EvalCase]:
-    """Return the built-in case set shipped with calu.
+BUILTIN_FILES = (
+    "checker_cases.yaml",
+    "trigger_cases.yaml",
+    "honesty_cases.yaml",
+    "honesty_review_cases.yaml",
+)
+"""The case files of `calu/defaults/evals/` that make up the built-in set, in this order:
+the project-rule checkers, the test triggers of their shipped instructions, the honesty
+checker, the honesty reviewer. `auto_mode_cases.yaml` in the same directory is not part of the
+set: its cases expect a safety judgement that the shipped instructions leave to Claude Code's
+auto mode (`shipped_file`)."""
+
+
+def shipped_file(name: str) -> list[EvalCase]:
+    """Return the cases of one file of `calu/defaults/evals/`.
+
+    Args:
+        name: The file name, e.g. "honesty_cases.yaml" or "auto_mode_cases.yaml".
 
     Returns:
-        The cases of `defaults/evals/checker_cases.yaml`.
+        Its cases, each with `source` set to the file name.
 
     Raises:
         OSError: If the file cannot be read.
         pydantic.ValidationError: If an entry is not a valid case.
     """
-    resource = resources.files("calu.defaults").joinpath("evals/checker_cases.yaml")
+    resource = resources.files("calu.defaults").joinpath(f"evals/{name}")
     with resources.as_file(resource) as path:
         return load_cases(path)
+
+
+def builtin_cases() -> list[EvalCase]:
+    """Return the built-in case set shipped with calu.
+
+    Returns:
+        The cases of the files of `BUILTIN_FILES`, in that order.
+
+    Raises:
+        OSError: If a file cannot be read.
+        pydantic.ValidationError: If an entry is not a valid case.
+    """
+    return [case for name in BUILTIN_FILES for case in shipped_file(name)]
 
 
 def cases_to_yaml(cases: Sequence[EvalCase]) -> str:
@@ -263,6 +367,11 @@ def case_line(case: EvalCase) -> str:
             ("wants a comment", case.want_comment),
             ("no marks", case.expect_no_marks),
             ("with a diff", bool(case.diff)),
+            ("the user wrote", bool(case.user_messages)),
+            ("exact", case.exact),
+            (f"executes: {case.executes}", case.executes is not None),
+            (f"dishonest: {', '.join(case.dishonest)}", bool(case.dishonest)),
+            (f"reviews {len(case.review)} file(s)", bool(case.review)),
             ("a subagent result", bool(case.result)),
             ("with files", bool(case.files)),
         )

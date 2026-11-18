@@ -11,6 +11,7 @@ from calu.defaults.instructions import (
     compose_instructions,
     default_instructions,
     legacy_instructions,
+    superseded_instructions,
 )
 from calu.setup import seed_defaults, setup
 from calu.store import ConfigStore
@@ -360,10 +361,12 @@ async def test_the_honesty_checker_is_seeded_off_and_switched_on_in_two_steps(db
         definition = next(c for c in await admin.checkers(db) if c.name == "honesty")
         assert definition.enabled is False
         assert definition.route == "edit", "it judges edits, beside the edit checker (D81)"
-        # Its own text is the compact user part; how to record a spot is calu's fixed part,
-        # added while honesty.mode is on (D181).
+        # Its own text is the project's standard; the form of its answer (HONEST or DISHONEST
+        # per file) is calu's fixed part, and it alone reads the honesty rules (D217, D224).
         own = await admin.instructions(db, "honesty")
-        assert "marks_dirty" in compose_instructions("edit", own, marks=True)
+        prompt = compose_instructions("edit", own, name="honesty")
+        assert "`verdict`" in prompt and "# Honesty rules" in prompt
+        assert "# Honesty rules" not in compose_instructions("edit", own, honesty_state=True)
 
         # What a session loads: nothing while the checker is off.
         settings = await ConfigStore(db, Path("/w")).load()
@@ -430,10 +433,15 @@ async def test_setup_replaces_an_unedited_old_default_but_keeps_an_edited_text(d
     try:
         old = legacy_instructions("edit")
         assert old is not None
+        # Both earlier shipped texts: from before the split, and the compact one that the
+        # short instructions of requirement 38 replaced.
+        compact = superseded_instructions("changeset")[-1]
         await admin.set_checker(db, "edit", instructions_text=old)
+        await admin.set_checker(db, "changeset", instructions_text=compact)
         await admin.set_checker(db, "command", instructions_text="Our own command rules.")
         await seed_defaults(conn, "test:model")
         assert await admin.instructions(db, "edit") == default_instructions("edit")
+        assert await admin.instructions(db, "changeset") == default_instructions("changeset")
         assert await admin.instructions(db, "command") == "Our own command rules."
     finally:
         await conn.close()

@@ -52,10 +52,12 @@ honesty state (`Session.honesty`) and keeps it up to date:
     `honesty.trust`                           again (`_refresh_trust`)
     a step reaches the gate                   the state is computed (`honesty_snapshot`) and
                                               given to the gate and, as a note, to the checkers
-    the checkers answered                     their marks and the edit's expected content are
-                                              kept with the call (`_keep_honesty`), not applied
-    the checkers of a command or a commit     their dirty marks are recorded at once
-    answered                                  (`_mark_at_once`): they name existing code
+    the checkers answered                     the honesty checker's marks and the edit's
+                                              expected content are kept with the call
+                                              (`_keep_honesty`), not applied. Marks that any
+                                              other checker returned are ignored (D224).
+    the honesty checker answered about a      its dirty marks are recorded at once
+    command or a commit                       (`_mark_at_once`): they name existing code
     the tool result arrived without error     they are applied (`_apply_honesty`): marks,
                                               the verification of a checked edit, the
                                               certification of a commit made in a clean state
@@ -238,10 +240,12 @@ from calu.protocol.messages import (
     EscalationContextResult,
     EscalationResolved,
     Event,
+    HonestyFileStatus,
     HonestyInfo,
     HonestyMarkInfo,
     HonestyReviewResult,
     HonestyTrustResult,
+    HonestyUnitStatus,
     HonestyUpdate,
     InitializeResult,
     Log,
@@ -686,14 +690,15 @@ class Session:
             name: The checker type, whose stored instructions are the user's part.
 
         Returns:
-            The prompt `compose_instructions` builds, with the configured honesty rules and the
-            part about recording marks while `honesty.mode` is on.
+            The prompt `compose_instructions` builds: for the honesty checker with the
+            configured honesty rules; for the other checkers of the command, edit and
+            changeset routes with the part about unverified code while `honesty.mode` is on.
         """
         return compose_instructions(
             route,
             self._instructions(name),
             self.config.honesty.rules,
-            marks=self.config.honesty.mode != "off",
+            honesty_state=self.config.honesty.mode != "off",
             name=name,
         )
 
@@ -1533,6 +1538,12 @@ class Session:
         For a step on the command route only the clean marks are kept: its dirty marks are
         recorded when the checkers answer (`_mark_at_once`).
 
+        Marks are taken from the honesty checker's run alone (`Checker.judges_honesty`,
+        PLAN.md D224); marks in the answer of any other checker are ignored. An edit verifies
+        its file only if the honesty checker judged it and every checker of the route
+        approved: without the honesty checker nothing judges honesty per step, and the file
+        stays unreviewed until an honesty review or a person's trust.
+
         Args:
             step: The tool call.
             decided: The gate's decision with the checkers' answers.
@@ -1551,7 +1562,8 @@ class Session:
                 list(run.decision.marks_clean),
             )
             for checker, run in decided.runs
-            if (run.decision.marks_dirty and not at_once) or run.decision.marks_clean
+            if checker.judges_honesty
+            and ((run.decision.marks_dirty and not at_once) or run.decision.marks_clean)
         ]
         edit_path: str | None = None
         if step.tool_name in EDIT_TOOLS:
@@ -1559,7 +1571,7 @@ class Session:
             edit_path = str(Path(step.cwd or self.workspace) / raw) if raw else None
         checked = (
             decided.route is Route.EDIT
-            and bool(decided.runs)
+            and any(checker.judges_honesty for checker, _run in decided.runs)
             and all(run.decision.decision.approves for _checker, run in decided.runs)
         )
         if not marks and edit_path is None and not decided.clean_commit:
@@ -1585,13 +1597,15 @@ class Session:
         await self._apply_honesty(step.tool_use_id or "", ok=True)
 
     async def _mark_at_once(self, step: Step, decided: Decided) -> None:
-        """Record the dirty marks of a command's or a commit's checkers when they answer.
+        """Record the dirty marks the honesty checker returned about a command or a commit.
 
-        The checkers of the command route, and the changeset checkers of a commit, mark code
-        that exists in the project whatever the command does. So their `marks_dirty` are
-        recorded for every decision, also for a step that is denied, escalated or fails. The
-        marks of an edit are different: they name what the edit would write, and are applied
-        only after it ran (`_keep_honesty`, `_apply_honesty`).
+        A honesty checker that runs on the command route, or with the changeset checkers of a
+        commit, marks code that exists in the project whatever the command does. So its
+        `marks_dirty` are recorded for every decision, also for a step that is denied,
+        escalated or fails. The marks of an edit are different: they name what the edit would
+        write, and are applied only after it ran (`_keep_honesty`, `_apply_honesty`). Marks in
+        the answer of any other checker are ignored (PLAN.md D224). The shipped honesty
+        checker is on the edit route, so with the defaults this records nothing.
 
         Side effects: as `_apply_record`. Never raises.
 
@@ -1604,7 +1618,7 @@ class Session:
         marks = [
             (checker.name, list(run.decision.marks_dirty), list[CodeMark]())
             for checker, run in decided.runs
-            if run.decision.marks_dirty
+            if checker.judges_honesty and run.decision.marks_dirty
         ]
         if marks:
             await self._apply_record(PendingHonesty(marks=marks))
@@ -1811,10 +1825,11 @@ class Session:
         """Run the checkers that review a command's write set, with the honesty state.
 
         Like `StepGate.run_checkers`, with two additions while `honesty.mode` is not "off":
-        the checkers get the note of the honesty state, and the marks of their answers are
-        recorded at once, because the command has already run (`_apply_record`). A change the
-        checkers deny is undone, so the marks of a DENY, which name that change, are not
-        recorded.
+        the checkers get the note of the honesty state, and the marks of a honesty checker
+        among them are recorded at once, because the command has already run
+        (`_apply_record`); marks in the answer of any other checker are ignored (PLAN.md
+        D224). A change the checkers deny is undone, so the marks of a DENY, which name that
+        change, are not recorded.
 
         Args:
             route: The route whose checkers run (the changeset route).
@@ -1841,7 +1856,8 @@ class Session:
                 marks=[
                     (checker.name, list(run.decision.marks_dirty), list(run.decision.marks_clean))
                     for checker, run in runs
-                    if run.decision.marks_dirty or run.decision.marks_clean
+                    if checker.judges_honesty
+                    and (run.decision.marks_dirty or run.decision.marks_clean)
                 ]
             )
             if pending.marks:
@@ -2866,6 +2882,7 @@ class Session:
                 step_summary=result.step_summary,
                 comment=comment,
                 git_head=await self._git_head(),
+                **_honesty_result(decided.runs),
             )
         )
         if result.decision.approves and step.tool_use_id:
@@ -4135,6 +4152,43 @@ def _some(items: Sequence[str]) -> str:
     """
     rest = f"; and {len(items) - 5} more" if len(items) > 5 else ""
     return "; ".join(shown(one, NOTE_PATH_CHARS) for one in items[:5]) + rest
+
+
+def _honesty_result(runs: Sequence[tuple[Checker, CheckOutcome]]) -> dict[str, Any]:
+    """Return the honesty checker's own result of a step for the `check.result` event.
+
+    Args:
+        runs: The checkers that judged the step, with their outcomes.
+
+    Returns:
+        {} if no honesty checker answered. Otherwise the fields `honesty` (one
+        `HonestyFileStatus` per file of its answer) and `honesty_escalation` (its reason if it
+        asked for a person, else "") of `calu.protocol.messages.CheckResult`.
+    """
+    for _checker, run in runs:
+        answer = run.honesty
+        if answer is None:
+            continue
+        return {
+            "honesty": [
+                HonestyFileStatus(
+                    path=entry.path,
+                    verdict=entry.verdict,
+                    reason=entry.reason,
+                    units=[
+                        HonestyUnitStatus(symbol=u.symbol, honest=u.honest, reason=u.reason)
+                        for u in entry.units
+                    ],
+                )
+                for entry in answer.files
+            ],
+            "honesty_escalation": (
+                (answer.escalate_reason or "The honesty checker asks for a human.")
+                if answer.escalate
+                else ""
+            ),
+        }
+    return {}
 
 
 def _mark_info(mark: HonestyMark) -> HonestyMarkInfo:

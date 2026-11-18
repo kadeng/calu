@@ -185,18 +185,42 @@ export interface ChatSendParams {
 }
 /**
  * The routing and (if checked) the checker decision for one tool call.
+ *
+ * `decision`, `reason` and `comment` are the combined answer of the checkers that approve or
+ * refuse a step. The honesty checker is not one of them: its result is `honesty`, a status
+ * per file, and `honesty_escalation` when it asks for a person. A client shows those and
+ * does not show the honesty checker's run as a decision.
  */
 export interface CheckResult {
   agent_id?: string | null;
   comment?: string;
   decision: Decision;
   git_head?: string | null;
+  honesty?: HonestyFileStatus[];
+  honesty_escalation?: string;
   reason?: string;
   route: Route;
   seq?: number;
   step_summary?: string;
   tool_name: string;
   tool_use_id: string | null;
+}
+/**
+ * The honesty checker's status of one file a step changes (PLAN.md D224 part 4).
+ */
+export interface HonestyFileStatus {
+  path: string;
+  reason?: string;
+  units?: HonestyUnitStatus[];
+  verdict: "HONEST" | "DISHONEST";
+}
+/**
+ * The honesty checker's status of one function, method or class of a file.
+ */
+export interface HonestyUnitStatus {
+  honest: boolean;
+  reason?: string;
+  symbol: string;
 }
 /**
  * Result of `context.get`: the conversation context as the checkers see it.

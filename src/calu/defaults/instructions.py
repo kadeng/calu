@@ -1,21 +1,24 @@
 """The built-in checker instructions, and how a checker's full prompt is put together.
 
-A checker's prompt has up to four parts (PLAN.md D181, the owner's answer to Q16):
+A checker's prompt has up to three parts (PLAN.md D181, D224):
 
-    system/<route>.md       calu's own: role, tools, how to answer        fixed
-    <checker>.md            the user's: what to pass, deny, escalate       `calu checker edit`
-    honesty-rules.md        the honesty standard (contracts, dishonesty)   `honesty.rules`
-    system/marks.md         the honesty state and how to record marks      fixed, honesty on
+    system/<route>.md         calu's own: the task, how to answer            fixed
+    <checker>.md              the user's: the project's rules, and the      `calu checker edit`
+                              test triggers of the shipped defaults
+    system/honesty-state.md   not to rely on unverified code                 fixed, honesty on
+
+The command, edit, changeset and subagent-result checkers are a thin layer of project rules:
+general safety is judged by Claude Code's auto mode, which the system parts say in one
+sentence. Honesty is judged by the honesty checker alone (D224): its prompt is the fixed
+`system/honesty.md`, the user's part `honesty.md` and the honesty rules (`honesty.rules`, or
+the shipped `honesty-rules.md`). No other checker reads the honesty rules.
 
 The honesty reviewer (`calu.checkers.honesty_review`) is no checker type: its prompt is the
 fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`). The
 redaction agent of the session traces (`calu.traces.redact`) is none either: its prompt is the
 fixed `system/trace-redaction.md` (`redaction_instructions`).
 
-The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one. The
-honesty rules are a setting, so a project can adapt them to its documentation standards; they
-reach the checkers that judge changes (command, edit, changeset). The marks part is added only
-while `honesty.mode` is not "off", because only then is a mark used.
+The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one.
 """
 
 from importlib import resources
@@ -29,7 +32,12 @@ SYSTEM_PARTS = {
 """Route -> the file of its system part in `checkers/system/`."""
 
 HONESTY_ROUTES = frozenset({"command", "edit", "changeset"})
-"""Routes whose checkers judge changes and therefore read the honesty rules."""
+"""Routes whose checkers get the code honesty state as a note of the step, and therefore the
+fixed part `system/honesty-state.md` while `honesty.mode` is not "off"."""
+
+TEST_TRIGGERS_HEADING = "# Test triggers"
+"""Heading of the section of a shipped default that holds the test triggers. The section runs
+to the next heading of the first level or to the end of the text (`without_test_triggers`)."""
 
 
 def _read(relative: str) -> str:
@@ -83,9 +91,6 @@ def default_instructions(name: str) -> str:
 def legacy_instructions(name: str) -> str | None:
     """Return the instructions calu shipped for a checker type before the split of D181.
 
-    `calu setup` compares a stored text with this to tell an unedited old default, which it may
-    replace with the new compact one, from a text somebody wrote.
-
     Args:
         name: Checker type name.
 
@@ -96,6 +101,77 @@ def legacy_instructions(name: str) -> str | None:
         return _read(f"legacy/{name}.md")
     except FileNotFoundError:
         return None
+
+
+def superseded_instructions(name: str) -> list[str]:
+    """Return every text calu shipped earlier as the user's part of a checker type.
+
+    `calu setup` compares a stored text with these to tell an unedited old default, which it
+    replaces with the present one, from a text somebody wrote.
+
+    Args:
+        name: Checker type name.
+
+    Returns:
+        The earlier shipped texts, oldest first: the one from before the split of D181
+        (`legacy/`) and the compact one from before the short instructions of requirement 38
+        (`legacy/v2/`). Empty for a type that had none.
+    """
+    found: list[str] = []
+    for directory in ("legacy", "legacy/v2"):
+        try:
+            found.append(_read(f"{directory}/{name}.md"))
+        except FileNotFoundError:
+            continue
+    return found
+
+
+def without_test_triggers(text: str) -> str:
+    r"""Return a checker's instructions without the section of test triggers.
+
+    The shipped defaults hold a section `TEST_TRIGGERS_HEADING` with which a person can
+    provoke each decision on purpose. A project that relies on its checkers removes it.
+
+    Args:
+        text: The user's part of a checker's instructions.
+
+    Returns:
+        The text without that section: from the heading line up to the next line that starts
+        a first-level heading ("# "), or to the end. A text without the section is returned
+        unchanged. The result ends with one newline unless it is empty.
+
+    Example:
+        without_test_triggers("# Project rules\n\nA.\n\n# Test triggers\n\nB.\n") is
+        "# Project rules\n\nA.\n".
+    """
+    lines = text.splitlines()
+    kept: list[str] = []
+    skipping = False
+    found = False
+    for line in lines:
+        if line.strip() == TEST_TRIGGERS_HEADING:
+            skipping = found = True
+            continue
+        if skipping and line.startswith("# "):
+            skipping = False
+        if not skipping:
+            kept.append(line)
+    if not found:
+        return text
+    stripped = "\n".join(kept).strip()
+    return stripped + "\n" if stripped else ""
+
+
+def has_test_triggers(text: str) -> bool:
+    """Tell whether a checker's instructions hold the section of test triggers.
+
+    Args:
+        text: The user's part of a checker's instructions.
+
+    Returns:
+        True if a line of the text is exactly `TEST_TRIGGERS_HEADING`.
+    """
+    return any(line.strip() == TEST_TRIGGERS_HEADING for line in text.splitlines())
 
 
 def honesty_rules() -> str:
@@ -133,31 +209,34 @@ def review_instructions(rules: str | None = None) -> str:
 
 
 def compose_instructions(
-    route: str, user: str, rules: str | None = None, marks: bool = False, name: str = ""
+    route: str, user: str, rules: str | None = None, honesty_state: bool = False, name: str = ""
 ) -> str:
-    """Put a checker's full prompt together from its parts (D181).
+    """Put a checker's full prompt together from its parts (D181, D224).
 
     Args:
         route: The checker's route: "command", "edit", "changeset" or "subagent". Any other
             value gets no system part (the user's text is then the whole prompt).
         user: The checker's own instructions, as `checker_types` holds them.
-        rules: The honesty rules to include (`honesty.rules`, or None for the shipped ones);
-            used only for `HONESTY_ROUTES`.
-        marks: Whether to add the part about the code honesty state and the marks
-            (`honesty.mode` is not "off").
+        rules: The honesty rules (`honesty.rules`, or None for the shipped ones). Only the
+            honesty checker reads them; for every other checker the value is not used.
+        honesty_state: Whether `honesty.mode` is not "off". The checkers of `HONESTY_ROUTES`
+            then get the fixed part `system/honesty-state.md`, which says not to rely on the
+            names and documentation of code the honesty state lists.
         name: The checker type. The honesty checker ("honesty") answers per file and not
             with a decision, so it gets its own system part (`system/honesty.md`) in place of
-            the route's, and no part about recording marks.
+            the route's, followed by the user's part and the honesty rules.
 
     Returns:
-        The system part, the user's instructions under their own heading, and -- for a
-        checker that judges changes -- the honesty rules and, with `marks`, how to record.
+        For the honesty checker: its system part, the user's instructions under their own
+        heading, and the honesty rules. For every other checker: the route's system part, the
+        user's instructions under their own heading and, with `honesty_state` on a route of
+        `HONESTY_ROUTES`, the part about unverified code. No other checker gets the honesty
+        rules or a way to record marks.
 
     Example:
-        compose_instructions("edit", "# What to pass ...") starts with "# Edit checker" and
+        compose_instructions("edit", "# Project rules ...") starts with "# Edit checker" and
         contains "# The user's instructions" followed by the given text.
     """
-    parts: list[str] = []
     if name == "honesty":
         return (
             "\n\n".join(
@@ -169,14 +248,13 @@ def compose_instructions(
             )
             + "\n"
         )
+    parts: list[str] = []
     system = system_part(route)
     if system:
         parts.append(system.strip())
         parts.append("# The user's instructions\n\n" + user.strip())
     else:
         parts.append(user.strip())
-    if route in HONESTY_ROUTES:
-        parts.append((rules if rules else honesty_rules()).strip())
-        if marks:
-            parts.append(_read("system/marks.md").strip())
+    if honesty_state and route in HONESTY_ROUTES:
+        parts.append(_read("system/honesty-state.md").strip())
     return "\n\n".join(parts) + "\n"

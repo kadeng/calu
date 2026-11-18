@@ -37,11 +37,12 @@ class Decision(StrEnum):
 
 
 class CodeMark(BaseModel):
-    """A file or a symbol that a checker calls dishonest, or honest again.
+    """A file or a symbol that the honesty checker calls dishonest, or honest again.
 
-    "Dishonest" means that the code and what it says about itself disagree: a name, a docstring
-    or a document promises something the code does not do. A checker records the spot, and calu
-    keeps it in the session's honesty state (`calu.honesty.HonestyState`) after the step ran.
+    "Dishonest" means that the code and what it says about itself disagree: a name or a
+    documentation comment promises something the code does not do. calu builds the marks from
+    the honesty checker's answer (`HonestyAnswer.decision`) and keeps them in the session's
+    honesty state (`calu.honesty.HonestyState`) after the step ran.
     """
 
     path: str = Field(
@@ -82,34 +83,35 @@ class CodeMark(BaseModel):
         return f"{self.path}:{self.symbol}" if self.symbol else self.path
 
 
-class CheckDecision(BaseModel):
-    """Structured output of a checker agent.
+class StepVerdict(BaseModel):
+    """Structured output of a checker that approves or refuses a step.
 
-    Field descriptions are part of the JSON schema the checker model sees.
+    This is the form the model of the command, edit and changeset checkers and of every
+    user-defined checker answers in. Field descriptions are part of the JSON schema the
+    checker model sees. It has no field for honesty marks: honesty is judged by the honesty
+    checker alone (PLAN.md D224), which answers with an `HonestyAnswer`.
     """
 
     decision: Decision = Field(
         description=(
-            "PASS if you have no objection and the usual approval of the coding tool may decide "
-            "(the normal answer); ESCALATE to pause the step and ask the human; ALLOW to run it "
-            "even if the coding tool would refuse; DENY to stop it. Use ALLOW and DENY only "
-            "where your instructions clearly call for them."
+            "PASS if no rule of your instructions applies (the normal answer); ALLOW if a "
+            "rule explicitly approves the step; DENY if a rule forbids it; ESCALATE to pause "
+            "the step and ask a person."
         )
     )
     reason: str = Field(
         description=(
             "Why this decision was made. For DENY, say what Claude should do instead; Claude "
-            "reads this text. For ESCALATE, say what the human should look at. For ALLOW, say "
-            "which rule allows it. May be empty for PASS. At most about 100 words."
+            "reads this text. For ESCALATE, say what the person should look at. For ALLOW, "
+            "name the rule. May be empty for PASS. At most about 100 words."
         )
     )
     comment: str = Field(
         default="",
         description=(
             "Only for PASS and ALLOW: an optional remark to Claude that does not block the "
-            "step, e.g. a minor style issue to fix in a later edit, or a reminder to keep "
-            "names and API documentation honest. Claude reads it and it is shown in the user's "
-            "chat. Leave empty if there is nothing worth saying. At most about 100 words."
+            "step. Claude reads it and it is shown in the user's chat. Leave empty if there "
+            "is nothing worth saying. At most about 100 words."
         ),
     )
     step_summary: str = Field(
@@ -121,33 +123,38 @@ class CheckDecision(BaseModel):
             "This becomes the record of the step in the context of later checks."
         )
     )
-    marks_dirty: list[CodeMark] = Field(
-        default_factory=list,
-        description=(
-            "Only for a checker whose instructions ask for it: code that this step leaves "
-            "dishonest. Leave empty otherwise."
-        ),
-    )
-    marks_clean: list[CodeMark] = Field(
-        default_factory=list,
-        description=(
-            "Only for a checker whose instructions ask for it: code that was recorded as "
-            "dishonest and now says what it does. Leave empty otherwise."
-        ),
-    )
     executes_project_code: bool | None = Field(
         default=None,
         description=(
-            "Whenever the step's notes hold the code honesty state computed by calu, for a "
-            "command and for any other tool call: true if the step executes code of this "
-            "project (tests, a build that runs code, a script, an interpreter, a package "
-            "script, a make target), false if it does not (reading, searching, editing, git, "
-            "formatting). Leave empty otherwise."
+            "Answered by the command checker, for a shell command and for any other tool "
+            "call: true if the step executes code of this project (tests, a build that runs "
+            "code, a script, an interpreter, a package script, a make target), false if it "
+            "does not (reading, searching, editing, git, formatting). Other checkers leave "
+            "it empty."
         ),
     )
     """Whether the step executes code of the project. The gate reads it while `honesty.mode`
     is "enforce" and the honesty state is not clean (`calu.gate`): for a shell command an
     answer without it counts as true there, for another tool as false."""
+
+
+class CheckDecision(StepVerdict):
+    """The decision of one checker about a step, as the gate and the session take it.
+
+    A `StepVerdict` plus the honesty marks. `marks_dirty` and `marks_clean` belong to the
+    honesty checker (PLAN.md D224): calu fills them when it converts an `HonestyAnswer`
+    (`HonestyAnswer.decision`), and the session reads them only from the honesty checker's
+    runs. No other checker's model can write them: its answer is a `StepVerdict`.
+    """
+
+    marks_dirty: list[CodeMark] = Field(
+        default_factory=list,
+        description="Code the step leaves dishonest, from the honesty checker's answer.",
+    )
+    marks_clean: list[CodeMark] = Field(
+        default_factory=list,
+        description="Code that says what it does again, from the honesty checker's answer.",
+    )
 
 
 ALL_SYMBOLS = "*"

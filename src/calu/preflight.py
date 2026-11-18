@@ -28,6 +28,7 @@ from calu.config import (
     user_env_file,
 )
 from calu.credentials import CredentialError, CredentialStore
+from calu.defaults.instructions import default_instructions, without_test_triggers
 
 
 def claude_home() -> Path:
@@ -300,9 +301,10 @@ def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str
     """Warn when code honesty is switched on by halves.
 
     The honesty checker (an extra checker of the edit route) and `honesty.mode` are set
-    separately. With the mode on and the checker disabled, the route's own checkers still
-    judge edits and may record marks, but no checker judges honesty alone. With the checker
-    enabled and the mode off, its marks are dropped.
+    separately. Honesty is judged by the honesty checker alone (PLAN.md D224): with the mode
+    on and the checker disabled, no step is judged for honesty, no edit verifies its file, and
+    only the honesty review and a person's trust decide. With the checker enabled and the mode
+    off, its marks are dropped.
 
     Args:
         config: The session configuration.
@@ -317,10 +319,11 @@ def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str
     enabled = "honesty" in set(checkers)
     if mode != "off" and not enabled:
         return [
-            f"honesty.mode is '{mode}', but the honesty checker is disabled, so no checker "
-            "judges edits for honesty alone. Switch it on with `calu checker set "
-            "honesty --enable`, or set honesty.mode to 'off'. (If another checker of yours "
-            "records the marks, this warning does not apply.)"
+            f"honesty.mode is '{mode}', but the honesty checker is disabled, so nothing judges "
+            "honesty per step: no mark is recorded, no edit verifies its file, and only the "
+            "honesty review and `calu honesty trust` decide what counts as verified. Switch "
+            "the checker on with `calu checker set honesty --enable`, or set honesty.mode to "
+            "'off'."
         ]
     if mode == "off" and enabled:
         return [
@@ -800,6 +803,66 @@ def permission_mode_warnings(
     return [] if active else [line]
 
 
+SHORT_DEFAULTS = ("command", "edit", "changeset", "subagent-result")
+"""The checker types whose shipped instructions are a thin layer of project rules and leave
+general safety to Claude Code's auto mode (requirement 38)."""
+
+
+def thin_checker_warnings(
+    config: Config,
+    checkers: Collection[str] | Mapping[str, object] = (),
+    home: Path | None = None,
+    workspace: Path | None = None,
+) -> list[str]:
+    """Warn when the shipped short checker instructions run without auto mode's classifier.
+
+    The shipped instructions of `SHORT_DEFAULTS` hold a project's own rules and nothing about
+    general safety (destructive commands, secrets, data leaving the machine): that judgement
+    is Claude Code's auto mode. A session whose permission mode is not expected to be "auto"
+    and that does not set `claude.require_auto_mode` would run a step on those checkers' PASS
+    alone, which says only that no project rule applied.
+
+    Args:
+        config: The session configuration.
+        checkers: The enabled checker definitions by name, each with its stored text in an
+            attribute `instructions` (`ProjectSettings.checkers`). Names alone, or definitions
+            without that attribute, give no warning: the texts are then unknown.
+        home: The home directory; None uses `claude_home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        [] if auto mode is expected (`expected_permission_mode`), if
+        `claude.require_auto_mode` is set, or if no enabled checker of `SHORT_DEFAULTS` holds
+        the shipped text (with or without its section of test triggers). Otherwise one
+        warning that names those checkers and the settings that close the gap.
+    """
+    if not isinstance(checkers, Mapping) or config.claude.require_auto_mode:
+        return []
+    mode, source = expected_permission_mode(config, home, workspace)
+    if mode == AUTO_MODE:
+        return []
+    thin: list[str] = []
+    for name in SHORT_DEFAULTS:
+        stored = getattr(checkers.get(name), "instructions", None)
+        if not isinstance(stored, str):
+            continue
+        shipped = default_instructions(name)
+        if stored.strip() in (shipped.strip(), without_test_triggers(shipped).strip()):
+            thin.append(name)
+    if not thin:
+        return []
+    return [
+        f"The checkers {', '.join(thin)} run with calu's short default instructions, which "
+        "hold project rules only and leave general safety (destructive commands, secrets, "
+        "data leaving the machine) to Claude Code's auto mode -- and auto mode's classifier "
+        f'is not expected to be active (permission mode "{mode}": {source}). A step that no '
+        "project rule covers then runs without any safety judgement. Set "
+        'claude.permission_mode to "auto", or set claude.require_auto_mode so that such a '
+        "step waits for a person, or write your own safety rules into the instructions "
+        "(`calu checker edit command`)."
+    ]
+
+
 def _nested(document: dict[str, object], keys: tuple[str, ...]) -> object:
     """Look up a value below nested JSON objects.
 
@@ -897,7 +960,7 @@ def _json_object(path: Path) -> dict[str, object]:
 def warnings(
     config: Config,
     environ: Mapping[str, str] | None = None,
-    checkers: Collection[str] = (),
+    checkers: Collection[str] | Mapping[str, object] = (),
     workspace: Path | None = None,
 ) -> list[str]:
     """Return all start-up warnings (sandbox, API keys, write sets, network, permission mode).
@@ -906,13 +969,16 @@ def warnings(
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
         checkers: Names of the enabled checker definitions, for the checks that depend on
-            which checkers exist rather than only on the configuration.
+            which checkers exist rather than only on the configuration; given as a mapping
+            name -> definition (`ProjectSettings.checkers`), `thin_checker_warnings` also
+            reads each definition's `instructions`.
         workspace: The project directory, for `setting_source_warnings`,
             `settings_file_sandbox_warnings` and `permission_mode_warnings`; None skips the
             project's files.
 
     Returns:
-        The warnings of `sandbox_warnings`, `permission_mode_warnings`, `key_warnings`,
+        The warnings of `sandbox_warnings`, `permission_mode_warnings`,
+        `thin_checker_warnings`, `key_warnings`,
         `unknown_provider_warnings`, `change_warnings`, `network_warnings`,
         `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`, `bedrock_warnings`,
         `setting_source_warnings`, `settings_file_sandbox_warnings` and
@@ -921,6 +987,7 @@ def warnings(
     return (
         sandbox_warnings(config)
         + permission_mode_warnings(config, workspace=workspace)
+        + thin_checker_warnings(config, checkers, workspace=workspace)
         + key_warnings(config, environ)
         + unknown_provider_warnings(config, environ=environ)
         + change_warnings(config)

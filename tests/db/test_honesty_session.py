@@ -56,7 +56,8 @@ async def test_a_session_certifies_by_hand_and_after_a_clean_commit(
         rec = Recorder()
         session = Session(
             repo,
-            default_settings(repo, Config(honesty=HonestyConfig(mode="enforce"))),
+            # With the honesty checker, whose HONEST verifies the edited file (D224).
+            default_settings(repo, Config(honesty=HonestyConfig(mode="enforce")), honesty=True),
             store,
             lambda: FakeRunner(FakeScript(turns=turns), repo),
             rec,

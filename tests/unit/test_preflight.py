@@ -261,6 +261,54 @@ def test_honesty_switched_on_by_halves_is_warned_about():
 
     # And it reaches the start-up warnings, which is where a user sees it.
     assert said in preflight.warnings(enforcing, {}, ["command", "edit"])
+    # D224: the warning says what follows: nothing judges honesty per step.
+    assert "nothing judges" in said and "calu honesty trust" in said
+
+
+def test_short_default_instructions_without_auto_mode_are_warned_about(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Requirement 38: the shipped instructions hold project rules only and leave general
+    safety to auto mode, so a start without the classifier says so."""
+    from types import SimpleNamespace
+
+    from calu.defaults.instructions import default_instructions, without_test_triggers
+
+    def rows(**texts: str) -> dict[str, object]:
+        """Return checker definitions with the given instructions.
+
+        Args:
+            texts: Checker name (underscores for dashes) -> its stored instructions.
+
+        Returns:
+            Name -> an object with `instructions`.
+        """
+        return {
+            name.replace("_", "-"): SimpleNamespace(instructions=text)
+            for name, text in texts.items()
+        }
+
+    shipped = rows(
+        command=default_instructions("command"),
+        edit=without_test_triggers(default_instructions("edit")),
+        changeset="Our own rules for commits.",
+    )
+    plain = Config()
+    (said,) = preflight.thin_checker_warnings(plain, shipped, home=tmp_path, workspace=tmp_path)
+    assert said.startswith("The checkers command, edit run with calu's short default")
+    assert "auto mode's classifier is not expected to be active" in said
+    assert 'claude.permission_mode to "auto"' in said and "claude.require_auto_mode" in said
+    monkeypatch.setattr(preflight, "claude_home", lambda: tmp_path)
+    assert said in preflight.warnings(plain, {}, shipped, workspace=tmp_path)
+    # Quiet with the classifier, with the setting that makes a passed step wait, with
+    # instructions somebody wrote, and when only the names of the checkers are known.
+    auto = Config(claude=ClaudeConfig(permission_mode="auto"))
+    required = Config(claude=ClaudeConfig(require_auto_mode=True))
+    own = rows(command="Deny every push.", edit="Plain language only.")
+    assert preflight.thin_checker_warnings(auto, shipped, tmp_path, tmp_path) == []
+    assert preflight.thin_checker_warnings(required, shipped, tmp_path, tmp_path) == []
+    assert preflight.thin_checker_warnings(plain, own, tmp_path, tmp_path) == []
+    assert preflight.thin_checker_warnings(plain, ["command", "edit"], tmp_path, tmp_path) == []
 
 
 def test_a_checker_on_the_machine_s_claude_account_is_reported_once():

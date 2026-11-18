@@ -47,6 +47,7 @@ def default_settings(
     config: Config | None = None,
     rules: Rules | None = None,
     model: str = "test:model",
+    honesty: bool = False,
 ) -> ProjectSettings:
     """Return the settings that `calu setup` loads into an empty database.
 
@@ -55,10 +56,12 @@ def default_settings(
         config: The configuration; None uses the defaults.
         rules: The rules; None uses the built-in ones.
         model: Model string of the checker definitions.
+        honesty: True also enables the honesty checker, which `calu setup` seeds switched
+            off; it is the only checker that judges honesty (PLAN.md D224).
 
     Returns:
-        Settings with the four built-in checker definitions (version 1), the built-in rules and
-        `config`.
+        Settings with the enabled built-in checker definitions (version 1), the built-in
+        rules and `config`.
     """
     checkers = {
         name: CheckerDefinition(
@@ -76,7 +79,7 @@ def default_settings(
         for name, route, _, request_limit, enabled in CHECKER_DEFAULTS
         # Only the enabled ones: that is what `ConfigStore.load` returns, and the
         # honesty checker is seeded off (PLAN.md D85).
-        if enabled
+        if enabled or (honesty and name == "honesty")
     }
     return ProjectSettings(
         config=config or Config(),

@@ -870,8 +870,40 @@ class AgentsUpdate(Event):
     agents: list[AgentInfo]
 
 
+class HonestyUnitStatus(BaseModel):
+    """The honesty checker's status of one function, method or class of a file."""
+
+    symbol: str
+    """E.g. `fields` or `Parser.fields`."""
+    honest: bool
+    """True if its name and documentation comment agree with what it does after the step."""
+    reason: str = ""
+    """For a dishonest unit: what disagrees with what."""
+
+
+class HonestyFileStatus(BaseModel):
+    """The honesty checker's status of one file a step changes (PLAN.md D224 part 4)."""
+
+    path: str
+    """The file, relative to the project root as the checker named it."""
+    verdict: Literal["HONEST", "DISHONEST"]
+    """HONEST: after the step the names and documentation comments in the file agree with
+    what the code does. DISHONEST: some unit in it does not."""
+    reason: str = ""
+    """For DISHONEST: what disagrees with what and what would settle it."""
+    units: list[HonestyUnitStatus] = Field(default_factory=list[HonestyUnitStatus])
+    """The units whose honesty the step changed or that are dishonest now; empty when the
+    verdict is about the file as a whole."""
+
+
 class CheckResult(Event):
-    """The routing and (if checked) the checker decision for one tool call."""
+    """The routing and (if checked) the checker decision for one tool call.
+
+    `decision`, `reason` and `comment` are the combined answer of the checkers that approve or
+    refuse a step. The honesty checker is not one of them: its result is `honesty`, a status
+    per file, and `honesty_escalation` when it asks for a person. A client shows those and
+    does not show the honesty checker's run as a decision.
+    """
 
     method: ClassVar[str] = "check.result"
     tool_use_id: str | None
@@ -885,6 +917,15 @@ class CheckResult(Event):
     """A remark of the checker to Claude on an allowed step; front ends show it in the chat."""
     git_head: str | None = None
     """Commit id of the workspace's git HEAD when the step was checked (None outside git)."""
+    honesty: list[HonestyFileStatus] = Field(default_factory=list[HonestyFileStatus])
+    """The honesty checker's status of every file the step changes, if that checker judged
+    the step; empty otherwise (it is disabled, the step is no edit, or its call failed). The
+    statuses say what the checker found. They take effect in the honesty state
+    (`honesty.update`) only after the tool call succeeded."""
+    honesty_escalation: str = ""
+    """Non-empty if the honesty checker asked for a person, with its reason: something in the
+    step looks like a deliberate backdoor or malicious behaviour. `decision` is then
+    ESCALATE (unless another checker denied the step)."""
 
 
 class EscalationRequest(Event):

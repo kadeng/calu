@@ -41,7 +41,14 @@ from pydantic_ai.capabilities import Caching, Toolset
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
-from calu.checkers.model import CheckDecision, CheckerEffort, Decision, HonestyAnswer, Step
+from calu.checkers.model import (
+    CheckDecision,
+    CheckerEffort,
+    Decision,
+    HonestyAnswer,
+    Step,
+    StepVerdict,
+)
 from calu.checkers.render import render_step_cut
 from calu.checkers.rules import Rules
 from calu.checkers.tools import CodeTools, StepTimes
@@ -139,6 +146,10 @@ class CheckOutcome:
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
     duration_ms: int = 0
+    honesty: HonestyAnswer | None = None
+    """The honesty checker's own result: a status per file and its units (PLAN.md D224 part
+    4). `decision` is only the adapter the gate and the honesty state take
+    (`HonestyAnswer.decision`). None for every other checker and for a failed call."""
 
 
 def elapsed_ms(started: float) -> int:
@@ -246,7 +257,7 @@ class Checker:
 
         Returns:
             The agent with the current instructions and the validator of its answer:
-            `_require_reason` for a `CheckDecision`, `_require_verdict_reason` for the
+            `_require_reason` for a `StepVerdict`, `_require_verdict_reason` for the
             honesty checker's `HonestyAnswer`.
         """
         instructions = self.instructions
@@ -270,8 +281,9 @@ class Checker:
                 judging.output_validator(_require_verdict_reason)
                 agent = judging
             else:
-                deciding: Agent[None, CheckDecision] = Agent(
-                    output_type=CheckDecision,
+                # A `StepVerdict`, which has no field for honesty marks (PLAN.md D224).
+                deciding: Agent[None, StepVerdict] = Agent(
+                    output_type=StepVerdict,
                     instructions=instructions,
                     name=name,
                     capabilities=capabilities,
@@ -430,9 +442,13 @@ class Checker:
             )
         unseen = unseen or (-1 if extra_cut or EXTRA_CUT.search(extra) else 0)
         answered = result.output
+        judged: HonestyAnswer | None = None
         if isinstance(answered, HonestyAnswer):
-            answered = answered.decision()
+            judged, answered = answered, answered.decision()
+        elif not isinstance(answered, CheckDecision):
+            answered = CheckDecision(**answered.model_dump())
         return CheckOutcome(
+            honesty=judged,
             decision=escalate_if_cut(answered, unseen, self.name),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
@@ -469,7 +485,7 @@ def _require_verdict_reason(output: HonestyAnswer) -> HonestyAnswer:
     return output
 
 
-def _require_reason(output: CheckDecision) -> CheckDecision:
+def _require_reason(output: StepVerdict) -> StepVerdict:
     """Check that DENY and ESCALATE decisions carry a non-empty reason (output validator).
 
     Args:

@@ -14,6 +14,7 @@ from typing import Any
 import anyio
 import pytest
 from pydantic_ai.models import Model
+from pydantic_ai.models.function import FunctionModel
 
 from calu.checkers import CodeMark, Decision, Route
 from calu.config import ChangesConfig, Config, HonestyConfig
@@ -30,7 +31,13 @@ from calu.protocol.messages import (
 )
 from calu.session import Session, SessionError
 from calu.store import MemorySessionStore
-from calu.testing import fake_models, fake_reviewer, marking_checker
+from calu.testing import (
+    fake_models,
+    fake_reviewer,
+    fixed_checker,
+    honesty_answering,
+    marking_checker,
+)
 from tests.unit.helpers import Recorder, default_settings, make_session
 from tests.unit.test_protocol_server import Events, client, served
 
@@ -111,7 +118,8 @@ async def session_on(
         mode: `honesty.mode`.
         trusted: Whether HEAD is recorded as trusted (source "user") before the session.
         models: Checker models that replace the defaults: the command checker says that a
-            command with one of `EXECUTING` executes project code, the others pass.
+            command with one of `EXECUTING` executes project code, the honesty checker
+            (enabled here, key "honesty") calls every edited file HONEST, the others pass.
         honesty: Further `honesty.*` settings.
 
     Returns:
@@ -121,7 +129,7 @@ async def session_on(
     session, rec, store = make_session(
         root,
         turns,
-        settings=default_settings(root, config),
+        settings=default_settings(root, config, honesty=True),
         checker_models={
             **fake_models(),
             "command": marking_checker(executes=EXECUTING),
@@ -253,7 +261,7 @@ async def test_with_the_mode_off_nothing_of_this_runs(repo: Path):
         repo,
         [[write("src/parser.py", CHANGED), bash("make test")]],
         mode="off",
-        models={"edit": marking_checker(dirty=[("src/parser.py", "fields", "unsorted")])},
+        models={"honesty": honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")])},
     )
     seen = notes_of(session, Route.COMMAND)
     await run_turns(session, rec)
@@ -268,7 +276,7 @@ async def test_marks_are_applied_only_after_a_successful_tool_result(repo: Path)
     session, rec, _store = await session_on(
         repo,
         [[write("src/parser.py", CHANGED, fails=True)], [write("src/parser.py", CHANGED)]],
-        models={"edit": marking_checker(dirty=[("src/parser.py", "fields", "unsorted")])},
+        models={"honesty": honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")])},
     )
     async with anyio.create_task_group() as tg:
         await session.start(tg)
@@ -281,7 +289,7 @@ async def test_marks_are_applied_only_after_a_successful_tool_result(repo: Path)
         await rec.wait_for(TurnResult, 2)
         await session.stop()
     (open_mark,) = session.honesty.open_marks
-    assert open_mark.label() == "src/parser.py:fields" and open_mark.opened_by == "edit"
+    assert open_mark.label() == "src/parser.py:fields" and open_mark.opened_by == "honesty"
     assert rec.of(HonestyUpdate)[-1].marks[0].reason == "unsorted"
 
 
@@ -291,9 +299,8 @@ async def test_a_denied_edit_changes_nothing(repo: Path):
         repo,
         [[write("src/parser.py", CHANGED)]],
         models={
-            "edit": marking_checker(
-                dirty=[("src/parser.py", "fields", "unsorted")], decision="DENY"
-            )
+            "edit": fixed_checker("DENY", "no"),
+            "honesty": honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")]),
         },
     )
     await run_turns(session, rec)
@@ -318,7 +325,7 @@ async def test_an_edit_that_leaves_a_mark_is_not_stored_as_verified(repo: Path):
     session, rec, store = await session_on(
         repo,
         [[write("src/parser.py", CHANGED)]],
-        models={"edit": marking_checker(dirty=[("src/parser.py", "fields", "unsorted")])},
+        models={"honesty": honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")])},
     )
     await run_turns(session, rec)
     assert store.trusted_files == {}
@@ -337,11 +344,11 @@ async def test_a_file_a_command_wrote_is_unreviewed(repo: Path):
 
 
 async def test_a_closing_mark_needs_an_edit_of_that_file(repo: Path):
-    """Section 3: `marks_clean` from the edit of the file closes the mark."""
+    """Section 3: the honesty checker's HONEST for the edited file closes its mark."""
     session, rec, _store = await session_on(
         repo,
         [[write("src/parser.py", PARSER + "\n")]],
-        models={"edit": marking_checker(clean=[("src/parser.py", "fields()", "agrees again")])},
+        models={"honesty": honesty_answering(honest=["src/parser.py"])},
     )
     mark(session)
     await run_turns(session, rec)
@@ -356,7 +363,7 @@ async def test_more_marks_than_allowed_require_a_review_and_clean_marks_are_igno
     session, rec, _store = await session_on(
         repo,
         [[write("src/parser.py", PARSER + "\n")]],
-        models={"edit": marking_checker(clean=[("src/parser.py", "fields", "agrees again")])},
+        models={"honesty": honesty_answering(honest=["src/parser.py"])},
     )
     mark(session)
     for name in ("a", "b", "c"):
@@ -435,8 +442,12 @@ async def test_every_checker_gets_the_computed_state_with_its_own_marks_first(re
     assert "Review required: no." in note
     # `ls` is on the allow lists, and `track` leaves them in force: no checker ran for it.
     assert command_notes == []
-    assert "marks_dirty" in session.checkers[Route.COMMAND][0].instructions
-    assert "executes_project_code" in session.checkers[Route.COMMAND][0].instructions
+    # D224: the other checkers are told about unverified code and record no marks.
+    command = session.checkers[Route.COMMAND][0].instructions
+    assert "marks_dirty" not in command and "# Honesty rules" not in command
+    assert "# Unverified code" in command and "executes_project_code" in command
+    (honesty,) = [c for c in session.checkers[Route.EDIT] if c.judges_honesty]
+    assert "# Honesty rules" in honesty.instructions
 
 
 # ------------------------------------------------------------------ enforcement: running code
@@ -861,10 +872,10 @@ async def test_a_client_certifies_and_asks_for_a_review_over_the_protocol(repo: 
                     await anyio.sleep(0.01)
 
 
-async def test_the_review_of_a_write_set_gets_the_state_and_its_marks_are_recorded(repo: Path):
-    """Sections 3, 6 and 12: the changeset checkers that review what a command wrote get the
-    note; their marks are recorded at once, because the command has run; and the written file
-    is watched even where git ignores it."""
+async def test_the_review_of_a_write_set_gets_the_state_and_its_marks_are_ignored(repo: Path):
+    """Sections 6 and 12, D224: the changeset checkers that review what a command wrote get
+    the note; marks in their answer are ignored, because only the honesty checker judges
+    honesty; and the written file is watched even where git ignores it."""
     config = Config(
         honesty=HonestyConfig(mode="track"),
         changes=ChangesConfig(snapshot=True, review=True, always_capture=["build/gen.py"]),
@@ -890,8 +901,7 @@ async def test_the_review_of_a_write_set_gets_the_state_and_its_marks_are_record
     seen = notes_of(session, Route.CHANGESET)
     await run_turns(session, rec)
     assert any("Code honesty state, computed by calu." in note for note in seen)
-    assert [m.label() for m in session.honesty.open_marks] == ["src/parser.py:fields"]
-    assert session.honesty.open_marks[0].opened_by == "changeset"
+    assert session.honesty.open_marks == []
     assert "build/gen.py" in session.honesty.watched
     update = rec.of(HonestyUpdate)[-1]
     assert update.unreviewed == ["build/gen.py", "src/parser.py"]
@@ -913,15 +923,44 @@ def tool(name: str, **tool_input: Any) -> dict[str, Any]:
     return {"tool": name, "input": tool_input, "result": "ok"}
 
 
+def in_turn(*models: Model) -> Model:
+    """Create a model that answers its n-th call as the n-th of the given models would.
+
+    Args:
+        models: `FunctionModel`s; the last one answers every further call.
+
+    Returns:
+        A `FunctionModel`.
+    """
+    calls = iter(range(10**6))
+
+    def answer(messages: Any, info: Any) -> Any:
+        """Delegate to the model whose turn it is.
+
+        Args:
+            messages: The message history.
+            info: Agent information.
+
+        Returns:
+            That model's response.
+        """
+        chosen = models[min(next(calls), len(models) - 1)]
+        assert isinstance(chosen, FunctionModel) and chosen.function is not None
+        return chosen.function(messages, info)
+
+    return FunctionModel(answer, model_name="in-turn")
+
+
 async def test_a_mark_withdraws_the_stored_trust_of_the_marked_content(repo: Path):
-    """Section 13: a content stored as verified and later found dishonest by a command's
+    """Section 13: a content stored as verified and later found dishonest by the honesty
     checker loses its stored row, so a fresh state (a restart) does not count it as verified."""
     session, rec, store = await session_on(
         repo,
-        [[write("src/parser.py", CHANGED)], [bash("make lint")]],
+        [[write("src/parser.py", CHANGED)], [write("src/parser.py", CHANGED)]],
         models={
-            "command": marking_checker(
-                dirty=[("src/parser.py", "fields", "unsorted")], executes=EXECUTING
+            "honesty": in_turn(
+                honesty_answering(),
+                honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")]),
             )
         },
     )
@@ -945,14 +984,32 @@ async def test_a_mark_does_not_withdraw_what_a_person_certified(repo: Path):
     """Section 13: the session never removes a record of the source "user"."""
     session, rec, store = await session_on(
         repo,
-        [[bash("make lint")]],
-        models={"command": marking_checker(dirty=[("src/parser.py", "", "x")], executes=())},
+        [[write("src/parser.py", CHANGED)]],
+        models={"honesty": honesty_answering(dishonest=[("src/parser.py", "", "x")])},
     )
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     await session.trust(path="src/parser.py", client="tester")
     await run_turns(session, rec)
     assert [row.method for row in store.trusted_files.values()] == ["user"]
     assert len(session.honesty.open_marks) == 1
+
+
+async def test_without_the_honesty_checker_an_edit_verifies_nothing(repo: Path):
+    """D224: with the honesty checker disabled no step is judged for honesty, so an edit the
+    edit checker approved leaves its file unreviewed and nothing is stored as verified."""
+    config = Config(honesty=HonestyConfig(mode="track"))
+    session, rec, store = make_session(
+        repo,
+        [[write("src/parser.py", CHANGED)]],
+        settings=default_settings(repo, config),
+        checker_models=fake_models(),
+    )
+    head = git(repo, "rev-parse", "HEAD")
+    await store.certify_commit(head, git(repo, "rev-parse", "HEAD^{tree}"), "user", "tester")
+    await run_turns(session, rec)
+    assert checks(rec)[0].honesty == [], "no honesty checker judged the step"
+    assert store.trusted_files == {} and session.honesty.verified == {}
+    assert rec.of(HonestyUpdate)[-1].unreviewed == ["src/parser.py"]
 
 
 async def test_a_staged_content_nobody_verified_stops_a_commit(repo: Path):
@@ -1083,27 +1140,57 @@ async def test_another_tool_is_stopped_when_its_checker_says_it_executes(repo: P
     assert fetch.decision is Decision.PASS
 
 
-@pytest.mark.parametrize("outcome", ["denied", "failed"])
-async def test_a_command_checker_s_mark_is_recorded_whatever_becomes_of_the_command(
-    repo: Path, outcome: str
-):
-    """Section 3: the dirty marks of a command's checkers name code that exists, so they are
-    recorded when the checkers answer, also for a command that is denied or fails."""
-    decision = "DENY" if outcome == "denied" else "PASS"
+async def test_the_check_result_carries_the_honesty_checker_s_status_per_file(repo: Path):
+    """D224 part 4: the honesty checker's result is a status per file with its units, sent in
+    `check.result` beside the decision of the checkers that approve or refuse the step."""
     session, rec, _store = await session_on(
         repo,
-        [[bash("make test", fails=outcome == "failed", result="1 failed")]],
+        [[write("src/parser.py", CHANGED), write("src/parser.py", CHANGED + "\n")]],
         mode="track",
         models={
-            "command": marking_checker(
-                dirty=[("src/parser.py", "fields", "unsorted")], decision=decision
+            "honesty": in_turn(
+                honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")]),
+                honesty_answering(escalate="looks deliberate"),
             )
         },
     )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        request = (await rec.wait_for(EscalationRequest))[0]
+        await session.decide_escalation(request.escalation_id, "allow", "")
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    first, second = checks(rec)
+    assert first.decision is Decision.PASS and first.honesty_escalation == ""
+    (status,) = first.honesty
+    assert (status.path, status.verdict, status.reason) == (
+        "src/parser.py",
+        "DISHONEST",
+        "unsorted",
+    )
+    assert [(u.symbol, u.honest, u.reason) for u in status.units] == [("fields", False, "unsorted")]
+    assert second.decision is Decision.ESCALATE
+    assert second.honesty_escalation == "looks deliberate"
+    assert [(f.path, f.verdict) for f in second.honesty] == [("src/parser.py", "HONEST")]
+
+
+async def test_marks_in_another_checker_s_answer_are_ignored(repo: Path):
+    """D224: honesty is judged by the honesty checker alone. Marks that the command checker
+    or the edit checker write into the common answer open and close nothing."""
+    session, rec, _store = await session_on(
+        repo,
+        [[write("src/parser.py", CHANGED), bash("make test", result="1 failed")]],
+        mode="track",
+        models={
+            "command": marking_checker(dirty=[("src/parser.py", "fields", "unsorted")]),
+            "edit": marking_checker(dirty=[("src/parser.py", "fields", "unsorted")]),
+        },
+    )
     await run_turns(session, rec)
-    assert checks(rec)[0].decision is Decision[decision]
-    assert [m.label() for m in session.honesty.open_marks] == ["src/parser.py:fields"]
-    assert logs(rec).count("1 spot(s) recorded as dishonest") == 1
+    assert session.honesty.open_marks == []
+    assert "recorded as dishonest" not in logs(rec)
+    assert session.honesty.verified["src/parser.py"].source == "check"
 
 
 async def test_files_of_a_write_set_reach_the_state_with_its_next_computation(repo: Path):

@@ -1,8 +1,10 @@
-# Honesty only
+# This project's standard
 
-Judge honesty alone, by the honesty rules: whether each unit's name and documentation comment
-agree with what it does. A missing or thin documentation comment is not dishonesty; a wrong one
-is. A README or a guide is not held to these rules.
+Honesty is judged by the honesty rules below. Add here what is particular to your project:
 
-Add here what your project's documentation standard asks of a documentation comment, if it
-asks for more than the rules below.
+- **Trusted third parties**: none listed, so the default of the rules applies (the standard
+  library, widely used and well documented packages, the operating system's programs). List
+  the packages and tools your project trusts, or does not trust.
+- **Documentation standard**: none beyond the rules. A missing or short documentation comment
+  is not dishonest by itself; a wrong one is. If your project requires more (for example a
+  documented contract on every public function), say so here.

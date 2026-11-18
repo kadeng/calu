@@ -1,5 +1,6 @@
 """Evaluation of the checkers: the case format, the metrics and a run with a fake model."""
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,15 @@ from pydantic import ValidationError
 
 from calu.checkers import CheckDecision, Decision, Step
 from calu.evals import EvalCase, builtin_cases, load_cases, run_cases, runner
-from calu.evals.cases import case_line, cases_to_yaml
+from calu.evals.cases import BUILTIN_FILES, case_line, cases_to_yaml, shipped_file
 from calu.evals.runner import EVAL_CWD, CaseResult, Report, acceptable, shipped_rules
-from calu.testing import rule_based_checker
+from calu.testing import (
+    fake_reviewer,
+    honesty_answering,
+    marking_checker,
+    rule_based_checker,
+    user_texts,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -61,8 +68,15 @@ def result(
 
 def test_the_builtin_cases_load_and_cover_every_checker():
     cases = builtin_cases()
-    assert len(cases) > 15
-    assert {c.checker for c in cases} == {"command", "edit", "changeset", "subagent"}
+    assert len(cases) > 100
+    assert {c.checker for c in cases} == {
+        "command",
+        "edit",
+        "changeset",
+        "subagent",
+        "honesty",
+        "honesty-review",
+    }
     # A subagent case is the task and the result, with no tool input to judge (D77).
     subagent = [c for c in cases if c.checker == "subagent"]
     assert subagent and all(c.prompt and c.result and not c.tool_input for c in subagent)
@@ -73,10 +87,136 @@ def test_the_builtin_cases_load_and_cover_every_checker():
         c.diff.strip() and "git commit" in str(c.tool_input) for c in changeset
     )
     assert all(not c.diff for c in cases if c.checker != "changeset")
-    assert all(c.source == "checker_cases.yaml" for c in cases)
+    assert {c.source for c in cases} == set(BUILTIN_FILES)
     assert all(c.expected for c in cases)
-    # No built-in case expects ALLOW: that answer is for overruling the harness (D21).
-    assert all(Decision.ALLOW not in c.expected for c in cases)
+    # Only a test trigger typed by the user expects ALLOW: that answer is for overruling the
+    # harness (D21).
+    allowing = [c for c in cases if Decision.ALLOW in c.expected]
+    assert allowing and all(c.requires == "calu:test-allow" and c.user_messages for c in allowing)
+
+
+def test_the_honesty_sets_have_the_required_size_and_classes():
+    """Requirement 38: at least 40 labelled edits for the honesty checker, honest, dishonest
+    and to escalate, in several languages, and at least 12 batches for the reviewer."""
+    honesty = [c for c in builtin_cases() if c.checker == "honesty"]
+    classes = Counter(c.expected[0] for c in honesty)
+    assert len(honesty) >= 40
+    assert classes[Decision.PASS] >= 15 and classes[Decision.DENY] >= 15
+    assert classes[Decision.ESCALATE] >= 5
+    suffixes = {str(c.tool_input["file_path"]).rsplit(".", 1)[-1] for c in honesty}
+    assert {"py", "ts", "sh", "sql"} <= suffixes
+    assert any(c.dishonest and c.honest for c in honesty), "a case with several units"
+    review = [c for c in builtin_cases() if c.checker == "honesty-review"]
+    assert len(review) >= 12 and any(c.base_files for c in review)
+    assert sum(len(c.review) for c in review) >= 30
+
+
+def test_the_cases_about_safety_are_shipped_beside_the_builtin_set():
+    """The cases that expect a safety judgement are left to auto mode: shipped, not built in."""
+    moved = shipped_file("auto_mode_cases.yaml")
+    assert {"force-push", "curl-pipe-shell", "secret-in-code"} <= {c.name for c in moved}
+    assert not {c.name for c in moved} & {c.name for c in builtin_cases()}
+
+
+async def test_a_trigger_case_is_left_out_without_the_trigger_in_the_instructions():
+    """`requires`: a project that deleted the test triggers is not measured on them."""
+    cases = [c for c in builtin_cases() if c.name in ("trigger-command-deny", "list-files")]
+    report = await run_cases(cases, "command", "command", "No triggers.", rule_based_checker())
+    assert [r.case.name for r in report.results] == ["list-files"] and report.skipped == 1
+    assert "1 case(s) left out" in report.render()
+    report = await run_cases(
+        cases, "command", "command", "calu:test-deny denies.", rule_based_checker()
+    )
+    assert {r.case.name: r.actual for r in report.results} == {
+        "list-files": "PASS",
+        "trigger-command-deny": "DENY",
+    }
+
+
+async def test_the_fake_checker_follows_the_trigger_rule_on_every_trigger_case():
+    """The rule-based fake of `calu.testing` gives what the trigger cases of the command, edit
+    and changeset checkers expect, except where the user's message names another step, which
+    the fake cannot judge."""
+    cases = [c for c in shipped_file("trigger_cases.yaml") if c.checker != "subagent"]
+    for kind in ("command", "edit", "changeset"):
+        report = await run_cases(cases, kind, kind, "calu:test-", rule_based_checker())
+        wrong = {r.case.name for r in report.results if not r.ok}
+        assert wrong <= {
+            "trigger-command-allow-names-another-command",
+            # The fake has no project rule to apply when no trigger counts.
+            "trigger-commit-pass-only-in-the-message",
+        }, wrong
+
+
+async def test_a_honesty_case_is_scored_by_verdict_and_units(tmp_path: Path):
+    """D217, D224: HONEST or DISHONEST per file, the named units, precision and recall."""
+    cases = [
+        c
+        for c in builtin_cases()
+        if c.name in ("one-of-four-functions-writes-a-log-file", "plain-test")
+    ]
+    assert len(cases) == 2
+    model = honesty_answering(dishonest=[("src/textutils.py", "slugify", "wrong unit")])
+    report = await run_cases(cases, "honesty", "honesty", "x", model)
+    by_name = {r.case.name: r for r in report.results}
+    marked = by_name["one-of-four-functions-writes-a-log-file"]
+    assert marked.actual == "DENY" and marked.ok
+    assert marked.unit_errors == [
+        "normalize_whitespace is not named as dishonest",
+        "slugify is named as dishonest",
+    ]
+    assert by_name["plain-test"].actual == "DENY", "the fixed answer marks every case"
+    text = report.render()
+    assert "expected \\ actual    HONEST DISHONEST  ESCALATE" in text
+    assert "DISHONEST: precision 50%, recall 100% (1 expected)" in text
+    assert "[miss] plain-test (honesty_cases.yaml): expected HONEST, got DISHONEST" in text
+    assert "[unit] one-of-four-functions-writes-a-log-file" in text
+
+
+async def test_a_review_case_gives_one_data_point_per_file():
+    """A batch of the honesty reviewer: every file is scored, findings make a file dishonest."""
+    (case,) = [c for c in builtin_cases() if c.name == "review-three-files-two-dishonest"]
+    dishonest = [path for path, honest in case.review.items() if not honest]
+    seen: list[str] = []
+    model = fake_reviewer({dishonest[0]: [("f", "does less")]}, seen=seen)
+    report = await run_cases([case], "honesty-review", "honesty-review", "x", model)
+    (result,) = report.results
+    assert result.error == "" and result.actual == "DENY" and result.ok
+    assert sorted(result.file_pairs) == sorted(
+        (path, honest, path != dishonest[0]) for path, honest in case.review.items()
+    )
+    assert report.class_metrics()["DISHONEST"] == (1.0, 0.5, 2)
+    assert f"[file] {case.name} (honesty_review_cases.yaml): {dishonest[1]} expected DISHONEST" in (
+        report.render()
+    )
+    assert all(f"## File {n}: " in seen[0] for n in (1, 2, 3))
+
+
+async def test_a_command_case_states_whether_it_executes_project_code():
+    """`executes`: a wrong or missing `executes_project_code` is reported beside the decision."""
+    cases = [c for c in builtin_cases() if c.name in ("run-tests", "list-files")]
+    report = await run_cases(
+        cases, "command", "command", "x", marking_checker(executes=["pytest", "ls"])
+    )
+    assert [r.case.name for r in report.results if r.executes_wrong] == ["list-files"]
+    assert report.summary()["executes_wrong"] == 1 and all(r.ok for r in report.results)
+    assert "[executes] list-files" in report.render()
+
+
+def test_exact_cases_do_not_take_pass_for_allow():
+    """`exact`: where the difference is the point, ALLOW and PASS are not interchangeable."""
+    (case,) = [c for c in builtin_cases() if c.name == "trigger-command-allow-by-the-user"]
+    assert runner.acceptable(case, Decision.ALLOW) and not runner.acceptable(case, Decision.PASS)
+    plain = case.model_copy(update={"exact": False})
+    assert runner.acceptable(plain, Decision.PASS)
+
+
+def test_the_user_s_messages_reach_the_checker_as_the_user_s_turn():
+    """`user_messages` are rendered as the session renders user input."""
+    (case,) = [c for c in builtin_cases() if c.name == "trigger-command-allow-by-the-user"]
+    context = runner.case_context(case)
+    assert "**User:**\n\n    Clean up, please. calu:test-allow" in context.turns
+    assert user_texts(context.turns) == list(case.user_messages)
 
 
 def test_cases_may_not_reach_outside_their_workspace():

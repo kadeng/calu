@@ -213,7 +213,7 @@ async def test_the_collected_cases_can_be_listed_and_kept(db_url: str, tmp_path:
         assert [c.expected for c in again] == [c.expected for c in cases]
         assert [c.tool_input for c in again] == [c.tool_input for c in cases]
         # `source` says where a case came from, so the file sets it rather than carrying it.
-        assert "source:" not in document
+        assert not any(line.startswith("  source:") for line in document.splitlines())
         assert {c.source for c in again} == {"kept.yaml"}
 
         # An empty set is a document that still reads back.
@@ -254,9 +254,11 @@ async def test_every_enabled_checker_is_measured_including_an_extra_one(db_url: 
         settings = await ConfigStore(db, Path("/w")).load()
         measured = [row for _kind, row in cli_rows(settings)]
         assert "honesty" in measured, "an enabled extra checker has to be measured"
-        # Its kind is the one its route judges, so it gets the edit cases.
+        # It has a kind of case of its own (HONEST or DISHONEST per file, D224), and the
+        # reviewer of the honesty review is measured with it.
         kinds = {row: kind for kind, row in cli_rows(settings)}
-        assert kinds["honesty"] == "edit"
+        assert kinds["honesty"] == "honesty"
+        assert kinds["honesty-review"] == "honesty-review"
         assert kinds["edit"] == "edit"
         # The built-in rows keep their order, so a report reads as before without extras.
         assert measured[:4] == ["command", "edit", "changeset", "subagent-result"]
@@ -264,6 +266,7 @@ async def test_every_enabled_checker_is_measured_including_an_extra_one(db_url: 
         # A disabled checker is not measured at all: `ConfigStore` only loads enabled rows.
         await admin.set_checker(db, "honesty", enabled=False)
         again = await ConfigStore(db, Path("/w")).load()
-        assert "honesty" not in [row for _kind, row in cli_rows(again)]
+        rows = [row for _kind, row in cli_rows(again)]
+        assert "honesty" not in rows and "honesty-review" not in rows
     finally:
         await conn.close()

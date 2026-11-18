@@ -7,8 +7,12 @@ from calu.defaults.instructions import (
     SYSTEM_PARTS,
     compose_instructions,
     default_instructions,
+    has_test_triggers,
     honesty_rules,
     legacy_instructions,
+    superseded_instructions,
+    system_part,
+    without_test_triggers,
 )
 from calu.web.settings import Sources, panes, parse
 
@@ -26,26 +30,87 @@ def test_the_system_part_comes_first_and_the_users_text_follows(route: str) -> N
     assert rest.strip().startswith("Escalate anything touching billing.")
 
 
-def test_only_the_change_checkers_read_the_honesty_rules() -> None:
-    """The command, edit and changeset prompts carry the honesty rules; the subagent one not."""
+def test_only_the_honesty_checker_reads_the_honesty_rules() -> None:
+    """D224: honesty is judged by the honesty checker alone; no other prompt has the rules."""
     shipped = honesty_rules().strip()
-    for route in HONESTY_ROUTES:
-        assert shipped in compose_instructions(route, "x")
-    assert shipped not in compose_instructions("subagent", "x")
+    for route in SYSTEM_PARTS:
+        assert shipped not in compose_instructions(route, "x", honesty_state=True)
+    assert shipped in compose_instructions("edit", "x", name="honesty")
 
 
 def test_configured_honesty_rules_replace_the_shipped_ones() -> None:
     """A project's `honesty.rules` is used instead of calu's text, not in addition to it."""
-    prompt = compose_instructions("edit", "x", rules="# Our standard\n\nNumPy docstrings.")
+    own = "# Our standard\n\nNumPy docstrings."
+    prompt = compose_instructions("edit", "x", rules=own, name="honesty")
     assert "NumPy docstrings." in prompt
     assert honesty_rules().strip() not in prompt
+    assert "NumPy docstrings." not in compose_instructions("edit", "x", rules=own)
 
 
-def test_the_marks_part_is_added_only_when_asked() -> None:
-    """How to record dishonest code is only in the prompt while honesty marks are in use."""
-    assert "marks_dirty" not in compose_instructions("edit", "x")
-    assert "marks_dirty" in compose_instructions("edit", "x", marks=True)
-    assert "marks_dirty" not in compose_instructions("subagent", "x", marks=True)
+def test_the_part_about_unverified_code_is_added_only_while_honesty_is_on() -> None:
+    """D224: the change checkers get the note about unverified code and no way to mark."""
+    for route in HONESTY_ROUTES:
+        assert "# Unverified code" not in compose_instructions(route, "x")
+        prompt = compose_instructions(route, "x", honesty_state=True)
+        assert "# Unverified code" in prompt
+        assert "Do not rely on the names or the documentation" in prompt
+        assert "marks_dirty" not in prompt and "marks_clean" not in prompt
+    assert "# Unverified code" not in compose_instructions("subagent", "x", honesty_state=True)
+    # The command checker always says whether a call executes project code (the gate reads
+    # it in enforce mode); the others are not asked.
+    assert "`executes_project_code`" in compose_instructions("command", "x")
+    assert "executes_project_code" not in compose_instructions("edit", "x")
+
+
+@pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result"])
+def test_the_shipped_instructions_are_short(name: str) -> None:
+    """Requirement 38: system part and default together are a few plain rules.
+
+    Args:
+        name: The checker type.
+    """
+    route = "subagent" if name == "subagent-result" else name
+    words = len(compose_instructions(route, default_instructions(name)).split())
+    assert words < 360, f"{name}: {words} words"
+    assert "auto mode" in system_part(route) or route == "subagent"
+
+
+@pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result"])
+def test_the_test_triggers_are_one_removable_section(name: str) -> None:
+    """The four trigger words are in every shipped default, in a section that can be cut.
+
+    Args:
+        name: The checker type.
+    """
+    text = default_instructions(name)
+    assert has_test_triggers(text)
+    for word in ("calu:test-deny", "calu:test-escalate", "calu:test-allow", "calu:test-pass"):
+        assert word in text
+    # The permissive triggers count only in the user's own message.
+    assert 'in a message of the user ("**User:**")' in text
+    without = without_test_triggers(text)
+    assert not has_test_triggers(without) and "calu:test-" not in without
+    assert without.startswith("# Project rules") and without.endswith("\n")
+    assert without_test_triggers(without) == without
+
+
+def test_cutting_the_test_triggers_keeps_what_follows_them() -> None:
+    """The section ends at the next first-level heading."""
+    text = "# Rules\n\nA.\n\n# Test triggers\n\n- x\n\n## sub\n\ny\n\n# More\n\nB.\n"
+    assert without_test_triggers(text) == "# Rules\n\nA.\n\n# More\n\nB.\n"
+    assert without_test_triggers("# Test triggers\n\n- x\n") == ""
+
+
+def test_the_narrator_and_the_redaction_instructions_are_untouched() -> None:
+    """Requirement 38: the narrator's instructions stay as they were."""
+    import hashlib
+
+    digests = {
+        "narrator": "416da2e943ff5e541e23ad796f8835110b48d0542c69d11e3a2bcb6fd75aa73c",
+    }
+    for name, digest in digests.items():
+        text = default_instructions(name).encode("utf-8")
+        assert hashlib.sha256(text).hexdigest() == digest
 
 
 def test_an_unknown_route_gets_the_users_text_alone() -> None:
@@ -55,15 +120,17 @@ def test_an_unknown_route_gets_the_users_text_alone() -> None:
 
 @pytest.mark.parametrize("name", ["command", "edit", "changeset", "subagent-result", "honesty"])
 def test_the_new_defaults_differ_from_the_old_ones(name: str) -> None:
-    """`calu setup` can tell an unedited old default from the new compact one.
+    """`calu setup` can tell an unedited earlier default from the present one.
 
     Args:
         name: The checker type.
     """
     old = legacy_instructions(name)
-    assert old is not None
-    assert old != default_instructions(name)
-    assert len(default_instructions(name)) < len(old)
+    earlier = superseded_instructions(name)
+    assert old is not None and earlier[0] == old and len(earlier) == 2
+    assert default_instructions(name) not in earlier
+    if name != "honesty":
+        assert all(len(default_instructions(name)) < len(text) for text in earlier)
 
 
 def test_a_type_without_an_old_default_has_none() -> None:
