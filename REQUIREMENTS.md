@@ -260,6 +260,9 @@ broken down or extended. Derived requirements and design decisions belong in
     readme with the quote 'Dr. Walter Gibbs: Computers and programs will start thinking, and
     the people will stop.'" (stated 2026-11-19; source he named: IMDb's quotes page of the
     film, which could not be fetched from here)
+    On the README's tone: "I dislike the "What you get" heading, it sounds as if I'm selling
+    something. Make it sound human, from nerds, for nerds. Make it clear this is an attempt
+    to stay in control of coding without having to babysit each step." (stated 2026-11-19)
 40. "put an easter egg into calu (use a subagent): When you run "calu lightcycles" it should
     launch a multiplayer game modeled after the old C64 game "Ultimate Tron II"". After the
     check of that game's public reverse-engineered source showed no licence: "Alternatively,
