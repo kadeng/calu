@@ -40,7 +40,9 @@ subprojects {
 
 dependencies {
     intellijPlatform {
-        pycharm(intellijPlatformVersion)
+        // -PlocalIde=/opt/pycharm builds and runs against an installed PyCharm instead of a download.
+        val localIde = providers.gradleProperty("localIde").orNull
+        if (localIde != null) local(localIde) else pycharm(intellijPlatformVersion)
 
         pluginModule(implementation(project(":shared")))
         pluginModule(implementation(project(":frontend")))

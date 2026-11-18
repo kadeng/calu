@@ -204,6 +204,39 @@ A long `desktop.py shell` line is cut off after 120 seconds; start the script de
 | A foreground `sleep N` | refused by Claude Code's Bash tool ("Blocked: standalone sleep"); use `python3 -c 'import time; time.sleep(N)'` for a long command | runs |
 | Questions | AskUserQuestion with a header, options with descriptions | the scripted questions |
 
+## Running the PyCharm plugin in the desktop
+
+The plugin (`extensions/jetbrains`) runs in the desktop's PyCharm against the same scripted
+server as the VSCode extension.
+
+```bash
+# host: build the plugin (extensions/jetbrains/README.md, "Building") and put it into the exchange directory
+(cd extensions/jetbrains && ./gradlew check buildPlugin)
+cp extensions/jetbrains/build/distributions/calu-*.zip ~/.cache/calu-uitest/share/
+
+# container: calu, database, demo project, scripted server; then the plugin into PyCharm's plugins directory
+$D shell 'bash /workspace/calu/uitest/setup-demo.sh --no-vscode'
+$D shell 'pkill -f "[/]opt/pycharm/bin/pycharm"; sleep 3; cd ~/.local/share/JetBrains/PyCharm2026.3 && rm -rf calu && unzip -q /share/calu-*.zip'
+$D open-pycharm /home/cua/work/demo
+```
+
+- Write `pkill -f "[/]opt/..."` with the bracket: `desktop.py shell` runs the line through a
+  shell whose own command line would match the plain pattern.
+- PyCharm asks once whether to trust `~/work/demo` (and once more for `~/work`); the tool
+  window "calu" is in the right stripe, under "More tool windows" until it was opened once.
+  The notification "Cannot update plugin" at each start belongs to a plugin unpacked by hand.
+- Menus and popups of the IDE react only after a mouse move: move, then click
+  (`DISPLAY=:1 xdotool mousemove X Y; sleep 0.2; xdotool click 1`). `desktop.py key` knows no
+  `grave`; use `xdotool key ctrl+grave` (Quick Switch Scheme: theme light / dark).
+- The IDE's log: `~/.cache/JetBrains/PyCharm2026.3/log/idea.log`; the plugin's lines contain
+  `[calu]`, among them the time of the chat's renders (every 500th, and each one over 100 ms).
+- `calu serve` runs at most ten sessions (`--max-sessions`); the scripted server keeps the default.
+
+| Script | What it adds |
+| --- | --- |
+| `setup-password-store.sh` | a second calu store with passwords, for the one-password flow: its own XDG directories below `~/pwstore`, its own PostgreSQL cluster on port 5433 (calu's roles are server-wide), a scripted server in the tmux session `calu-fake-pw`. Admin password `admin-pw`, session password `sess-pw`. The plugin reaches it with Settings, Tools, calu, "calu command" = `/home/cua/pwstore/calu`. `--stop` stops its server |
+| `pycharm-split.sh` | JetBrains remote development on the desktop: copies the plugin's sources to `~/work/jb` and runs `./gradlew runIdeSplitMode -PlocalIde=/opt/pycharm` in the tmux session `calu-split` (a JDK 25 in `/share/jdk` is needed once; close the ordinary PyCharm first: backend, client and Gradle need about 6 GB). `--stop` ends it. The thin client shows the "JetBrains Team Tools User Agreement" at its first start; a person decides |
+
 ## What is installed, and where
 
 | Tool | Version (2026-11-18) | Location | Source |
