@@ -146,6 +146,9 @@ broken down or extended. Derived requirements and design decisions belong in
     `--secure` requires a token on every socket, root's included (2026-11-18).
 32. "Now let's also allow to pass --insecure, which allows to bypass token/password for all
     unix socket connections as well as localhost TCP connections." (stated 2026-11-18)
+33. "It should be possible to set up the DB without password if this is wished." (stated
+    2026-11-18) A client that found its session through a socket learns the session's
+    database from a root-owned file, not from the session ("Build as proposed", 2026-11-18).
 
 ## Soft goals and priorities
 

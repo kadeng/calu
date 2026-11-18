@@ -1,7 +1,7 @@
 # Handoff
 
-State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-32)
-and `PLAN.md` (decisions D1-D227, open questions §11, phases §12). Everything below is on
+State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-33)
+and `PLAN.md` (decisions D1-D228, open questions §11, phases §12). Everything below is on
 `main` and pushed.
 
 ## Pick up here
@@ -23,6 +23,14 @@ the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The sui
   and loopback-TCP client in without a token. The owner ruled that a session running
   Claude Code as calu's own uid keeps asking for a token without `--insecure` (the kernel
   cannot tell the client from Claude Code's commands). Manual checklist items 33 and 34.
+- **Place file and `calu setup --no-password`** (requirement 33; D228, 2026-11-18).
+  `sudo calu setup` writes `/var/lib/calu/database.json` (`src/calu/db/place.py`, no
+  secret); a client that found a root session through a socket takes the database from it
+  and never from the user's own store. `--no-password` stores `admin`, `session` and a
+  `calu_admin` login protected by the store file's mode alone. The owner had asked for a
+  root-only database socket as one of two options; it was built as the stored login instead
+  (D228 says why). He has to run `sudo calu setup` once for the place file. Checklist
+  item 35. The local database listens on TCP 127.0.0.1:5433 only.
 - **calu as root, Claude Code as an unprivileged user** (requirement 26; D206, D207,
   D211-D216, D223). `--user NAME|UID[:GID]` (required as root) and `--sudo` (re-runs calu
   through sudo with `--user <you>`) on `calu run`, `serve`, `start`, `attach`, `web` and

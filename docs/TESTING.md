@@ -497,6 +497,14 @@ escalation resolved from the database alone.
    sudo), `calu attach` in the project must attach without a password, and `calu attach
    ws://127.0.0.1:<port>` without `--token`; without `--insecure` the latter must say it
    wants a token. **Never run outside the tests.**
+35. The place file and a setup without passwords (D228): after `sudo calu setup`,
+   `/var/lib/calu/database.json` must exist (`-rw-r--r-- root root`) and hold no password.
+   With a session from `calu run --sudo --insecure`, your own `calu attach` must save a
+   checker's instructions after asking the admin password once. After `sudo calu setup
+   --no-password` (it asks the old admin and session passwords one last time): `calu run
+   --sudo` and `calu attach --sudo` must ask for no calu password, saving a checker's
+   instructions in the `--sudo` client must ask nothing, and `calu web --sudo` must print an
+   address with `?token=`. **Never run outside the tests.**
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of

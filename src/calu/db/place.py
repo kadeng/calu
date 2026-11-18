@@ -1,0 +1,143 @@
+"""Where root's calu database is, written down without any secret (PLAN.md D228).
+
+    /var/lib/calu/database.json     root, 0644; the directory is root's and only root writes it
+
+`calu setup` as root writes the file. A client that found a root session through a local
+socket, and therefore asked no database which session to attach to, reads it to learn which
+database that session uses, so that it can log in there as `calu_admin` with the admin
+password a person types. The file holds the host, the port, the database name and how the
+server is verified; never a user's password.
+
+Why a file and not the session's word: a socket in a user's runtime directory can be created
+by any program of that user. A client that sent the admin password to whatever database such
+a "session" named would hand the password to that program. Only root can write this file, and
+the client checks that before it reads it.
+"""
+
+import json
+import os
+import stat
+from pathlib import Path
+
+from calu.db.target import INHERITED, PasswordAuth, Target
+
+PATH = Path("/var/lib/calu/database.json")
+"""The place file of root's calu on this machine."""
+
+FORMAT = 1
+"""The number in `calu_place` of the file's format."""
+
+
+class PlaceError(ValueError):
+    """The place file cannot be trusted or read; the message says why."""
+
+
+def write(owner: Target, path: Path = PATH) -> None:
+    """Write where the database of `owner` is. Needs the right to write the directory.
+
+    Side effects: creates the directory if it is missing (mode 0755), writes the file under
+    a temporary name and renames it over `path`, mode 0644.
+
+    Args:
+        owner: Any login of the database; only `INHERITED` of its connection parameters is
+            written (host, port, database name, how the server is verified).
+        path: The file.
+
+    Raises:
+        OSError: If the file cannot be written.
+        PlaceError: If the login names a libpq service instead of a host and a port.
+    """
+    if "service" in owner.conninfo:
+        raise PlaceError("the login names a libpq service; its place cannot be written down")
+    conninfo = {key: owner.conninfo[key] for key in INHERITED if key in owner.conninfo}
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}")
+    temporary.write_text(
+        json.dumps({"calu_place": FORMAT, "conninfo": conninfo}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.chmod(0o644)
+    temporary.replace(path)
+
+
+def problems(path: Path = PATH, owner: int = 0) -> list[str]:
+    """Say why the place file cannot be trusted to be root's word.
+
+    Checked without following a symbolic link at the file's own name: it is a regular file,
+    it and its directory belong to `owner`, and neither can be written by a group or by
+    others.
+
+    Args:
+        path: The file.
+        owner: The uid that must own it (root; a test passes its own).
+
+    Returns:
+        One sentence per finding; empty if the file can be trusted.
+    """
+    try:
+        own = path.lstat()
+        directory = path.parent.stat()
+    except OSError as exc:
+        return [f"{path}: {exc}"]
+    found: list[str] = []
+    if not stat.S_ISREG(own.st_mode):
+        found.append(f"{path} is no regular file")
+    for place, status in ((path, own), (path.parent, directory)):
+        if status.st_uid != owner:
+            found.append(f"{place} belongs to uid {status.st_uid}, not to uid {owner}")
+        if status.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            found.append(f"{place} is writable by its group or by others")
+    return found
+
+
+def _conninfo(path: Path) -> dict[str, str]:
+    """Read the connection parameters out of the place file.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The parameters named in `INHERITED` that the file holds.
+
+    Raises:
+        PlaceError: If the file cannot be read or does not hold a place this version
+            understands.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        known = isinstance(data, dict) and data.get("calu_place") == FORMAT
+        found = data.get("conninfo") if known else None
+    except (OSError, ValueError) as exc:
+        raise PlaceError(f"{path}: {exc}") from exc
+    if not isinstance(found, dict):
+        raise PlaceError(f"{path}: unknown format")
+    return {str(key): str(value) for key, value in found.items() if key in INHERITED}
+
+
+def read(path: Path = PATH, owner: int = 0) -> Target:
+    """Read the place file and return the login of `calu_admin` there, without a password.
+
+    Args:
+        path: The file.
+        owner: The uid that must own it (root; a test passes its own).
+
+    Returns:
+        The login of the role `calu_admin` with an empty password; a client fills in the
+        password a person types (`calu.tui.adminaccess.StoreAdmin`).
+
+    Raises:
+        PlaceError: If the file is missing, is not `owner`'s alone to write (`problems`), or
+            does not hold a place this version understands.
+    """
+    wrong = problems(path, owner)
+    if wrong:
+        raise PlaceError("; ".join(wrong))
+    conninfo = _conninfo(path)
+    # Imported here: `calu.setup` imports from `calu.db`.
+    from calu.setup import ADMIN_ROLE
+
+    return Target(
+        variant="server",
+        conninfo={**conninfo, "user": ADMIN_ROLE},
+        auth=PasswordAuth(password=""),
+    )

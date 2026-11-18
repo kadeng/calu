@@ -15,6 +15,7 @@ import pytest
 from calu import cli, herd
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
+from calu.db.connection import open_stored
 from calu.db.target import Target
 from calu.store.config import ConfigStore
 
@@ -68,6 +69,40 @@ async def test_calu_setup_fills_an_empty_database_and_stores_the_session_credent
         assert "command" in settings.checkers and "edit" in settings.checkers
     finally:
         await conn.close()
+
+
+async def test_calu_setup_without_passwords_asks_nothing_and_stores_the_admin_login(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D228: `calu setup --no-password` asks no password; the logins are in the store,
+    protected by its file mode, and the stored `calu_admin` login works."""
+    from calu.setup import ADMIN_ROLE
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))  # a prompt would fail on this
+
+    code = await anyio.to_thread.run_sync(
+        lambda: cli.main(
+            ["setup", "--renew-session", "--no-password"],
+            store_factory=lambda: cast(CredentialStore, store),
+        )
+    )
+    captured = capsys.readouterr()
+    assert code == 0, captured.out + captured.err
+    assert "stored credential 'calu_admin' (no password)" in captured.out
+    assert "WARNING: no password protects the logins" in captured.err  # not root here
+    for name in ("admin", "session", "calu_admin"):
+        assert store.needs_password(name) is False
+    login = Target.parse(store.load("calu_admin"))
+    assert login.user == ADMIN_ROLE
+    conn = await open_stored(login)
+    try:
+        assert await Db(conn).scalar("SELECT current_user") == ADMIN_ROLE
+    finally:
+        await conn.close()
+    # What changes settings from the command line uses that login and asks nothing.
+    assert Target.parse(cli._admin_secret(store)).user == ADMIN_ROLE
 
 
 async def test_a_mismatched_session_password_leaves_the_database_alone(

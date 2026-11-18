@@ -267,3 +267,19 @@ def test_the_insecure_socket_directory_of_a_user(tmp_path: Path):
     if mine.is_dir():
         assert localsocket.user_root({}) == mine / "calu" / "sessions"
         assert localsocket.user_root(uid=os.geteuid()) == mine / "calu" / "sessions"
+
+
+def test_the_kernel_names_the_user_that_listens_on_a_socket(short: Path):
+    """D228: a client tells a session of root's calu from one of its own user by this."""
+    from calu import cli
+    from calu.tui.adminaccess import StoreAdmin
+
+    path = localsocket.path_of("s", short / "calu" / "s")
+    listener = localsocket.bind(path, owner=ME)
+    try:
+        assert cli._server_uid(path) == ME
+    finally:
+        listener.close()
+    assert cli._server_uid(short / "nothing.sock") is None
+    # Without a known database the client says why, and reads no store of this user.
+    assert StoreAdmin(unavailable="no database known").problem() == "no database known"

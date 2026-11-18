@@ -107,6 +107,7 @@ from calu.configdoc import setting_rows
 from calu.credentials import CredentialError, CredentialStore, wipe
 from calu.db import Db, migrate
 from calu.db import local as local_db
+from calu.db import place as db_place
 from calu.db import rds as rds_auth
 from calu.db.connection import open_stored
 from calu.db.target import (
@@ -298,6 +299,8 @@ def _remember_admin_password(password: bytes | bytearray) -> None:
 def _admin_secret(store: CredentialStore) -> bytearray:
     """Return a login that may change settings, asking for what it needs (PLAN.md D213).
 
+        `calu_admin` stored here
+        without a password        ──► that entry (`calu setup --no-password`, D228)
         `admin` stored here       ──► that entry (the owner login), with its password
         only `operator` stored    ──► the login of `calu_admin` at the operator's database,
                                       with the admin password typed now; nothing is stored
@@ -313,6 +316,9 @@ def _admin_secret(store: CredentialStore) -> bytearray:
         CredentialError: On a wrong password of a stored entry.
         TargetError: If the operator entry holds no database login this version can read.
     """
+    if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
+        # `calu setup --no-password`: nobody knows a password to type (D228).
+        return store.load(ADMIN_ENTRY)
     if "admin" in store or "operator" not in store:
         return load_credential(store, "admin", "Admin password: ")
     place = load_target(store, "operator", "Operator password: ")
@@ -414,7 +420,7 @@ def ask(prompt: str, default: str | None, flag: str) -> str:
     return answer
 
 
-def _store_new_admin(store: CredentialStore, owner: Target, password: bytearray) -> None:
+def _store_new_admin(store: CredentialStore, owner: Target, password: bytearray | None) -> None:
     """Store the owner login of a database that was just chosen, as `admin`.
 
     Side effects: saves the `admin` entry; removes a `session` entry, which belongs to the
@@ -426,17 +432,41 @@ def _store_new_admin(store: CredentialStore, owner: Target, password: bytearray)
     Args:
         store: The credential store; it holds no `admin` entry.
         owner: The owner login.
-        password: The admin password, which encrypts the entry; the caller wipes it.
+        password: The admin password, which encrypts the entry (the caller wipes it); None
+            stores the entry protected by the file's mode alone (`calu setup
+            --no-password`).
     """
     store.save("admin", owner.dump(), password)
-    _remember_admin_password(password)
+    if password is not None:
+        _remember_admin_password(password)
     if store.remove("session"):
         print(
             "removed the stored 'session' credential, which belongs to the database set up before"
         )
 
 
-def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
+def _new_admin_password(no_password: bool, protects: str) -> bytearray | None:
+    """Ask for the new admin password, unless the setup is to have none.
+
+    Args:
+        no_password: `calu setup --no-password`: nothing is asked.
+        protects: What the password protects, for the line printed before the question.
+
+    Returns:
+        The password (the caller wipes it), or None with `no_password`.
+
+    Raises:
+        CliError: If the passwords are empty or do not match.
+    """
+    if no_password:
+        return None
+    print(f"Choose the admin password (it protects {protects}).")
+    return read_password("New admin password: ", confirm=True)
+
+
+def _first_start_local(
+    store: CredentialStore, port: int, data: str, no_password: bool = False
+) -> Target:
     """Create the local database: store the `admin` credential, then start the container.
 
     The credential is saved before the container starts, so that a start that fails can be
@@ -448,6 +478,7 @@ def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
         port: The port on 127.0.0.1.
         data: An absolute directory prepared with `local_db.prepare_data_dir`, or
             `local_db.VOLUME_DATA`.
+        no_password: Ask for no admin password; the entry is protected by the file's mode.
 
     Returns:
         The owner login.
@@ -456,13 +487,13 @@ def _first_start_local(store: CredentialStore, port: int, data: str) -> Target:
         CliError: If the passwords are empty or do not match.
         local_db.DockerError: If docker fails.
     """
-    print("Choose the admin password (it protects the database owner login).")
-    password = read_password("New admin password: ", confirm=True)
+    password = _new_admin_password(no_password, "the database owner login")
     owner = local_db.owner_target(local_db.new_owner_password(), port, data)
     try:
         _store_new_admin(store, owner, password)
     finally:
-        wipe(password)
+        if password is not None:
+            wipe(password)
     assert isinstance(owner.auth, PasswordAuth)
     local_db.up(port, owner.auth.password, data)
     where = "the Docker volume calu-db_data" if data == local_db.VOLUME_DATA else data
@@ -1085,14 +1116,14 @@ def _new_database(args: argparse.Namespace, store: CredentialStore) -> Target:
         )
         port = args.port or _port(ask("Port on 127.0.0.1", str(local_db.DEFAULT_PORT), "--port"))
         data = str(local_db.prepare_data_dir(Path(chosen)))
-        return _first_start_local(store, port, data)
+        return _first_start_local(store, port, data, args.no_password)
     owner = _setup_server(args, store) if variant == "server" else _setup_rds(args, store)
-    print("Choose the admin password (it protects the stored owner login on this machine).")
-    password = read_password("New admin password: ", confirm=True)
+    password = _new_admin_password(args.no_password, "the stored owner login on this machine")
     try:
         _store_new_admin(store, owner, password)
     finally:
-        wipe(password)
+        if password is not None:
+            wipe(password)
     return owner
 
 
@@ -1134,7 +1165,7 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`checker_model`, `database` and the options of its variants,
-            `renew_session`, `session_auth`).
+            `renew_session`, `session_auth`, `no_password`).
         store: The credential store.
 
     Raises:
@@ -1158,6 +1189,9 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             )
         _check_setup_options(args, None)
         owner = load_target(store, "admin", "Admin password: ")
+        if args.no_password and store.needs_password("admin"):
+            store.save("admin", owner.dump(), None)
+            print("the 'admin' credential is now stored without a password")
         block = owner.docker
         if (
             block is not None
@@ -1181,6 +1215,9 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
         session_iam = RdsIamAuth(
             region=owner.auth.region, profile=args.session_aws_profile or owner.auth.profile
         )
+
+    admin_password: list[str] = []
+    """The password `run` gave the role `calu_admin`, if it gave it one."""
 
     async def run() -> tuple[str, Target | None]:
         """Connect and run the setup steps.
@@ -1213,11 +1250,17 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
                 # The password a person knows also opens the role that changes settings,
                 # from any client and without a stored login (D213).
                 await enable_admin_login(conn, _typed["admin"])
+                admin_password.append(_typed["admin"])
                 report += "\nlogin of calu_admin: set to the admin password"
+            elif args.no_password:
+                # Nobody chose a password: a generated one, which only the store holds.
+                admin_password.append(secrets.token_urlsafe(32))
+                await enable_admin_login(conn, admin_password[0])
+                report += "\nlogin of calu_admin: a generated password, kept in the store"
             else:
                 report += (
-                    "\nlogin of calu_admin: not set, because the `admin` credential has no "
-                    "password; clients on other accounts cannot change settings"
+                    "\nlogin of calu_admin: left as it is, because the `admin` credential "
+                    "has no password and none was typed"
                 )
             if explicit:
                 await admin.set_all_models(db, model, effort)
@@ -1235,26 +1278,95 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             await conn.close()
 
     if not renew:
+        if args.no_password and store.needs_password("session"):
+            # Before the database is touched, as below: a mistyped password changes nothing.
+            kept = load_credential(store, "session", "Session password: ")
+            try:
+                store.save("session", kept, None)
+            finally:
+                wipe(kept)
+            print("the 'session' credential is now stored without a password")
         report, _ = asyncio.run(run())
         print(report)
         print(
             "session login kept (`calu setup --renew-session` replaces it and stops the "
             "sessions that use it)"
         )
+        _after_setup(args, store, owner, admin_password)
         return
     # Asked before the database is touched: a mistyped password must not leave the role with
     # a new login that nothing holds.
-    print("Choose the session password (needed to start sessions with `calu run`).")
-    session_password = read_password("New session password: ", confirm=True)
+    session_password: bytearray | None = None
+    if not args.no_password:
+        print("Choose the session password (needed to start sessions with `calu run`).")
+        session_password = read_password("New session password: ", confirm=True)
     try:
         report, session = asyncio.run(run())
         assert session is not None
         store.save("session", session.dump(), session_password)
     finally:
-        wipe(session_password)
+        if session_password is not None:
+            wipe(session_password)
     print(report)
     print("stored credential 'session'")
+    _after_setup(args, store, owner, admin_password)
     print("next: `calu project add . --name NAME` in a project directory, then `calu run`")
+
+
+ADMIN_ENTRY = "calu_admin"
+"""The store entry `calu setup --no-password` keeps the login of the role `calu_admin` in,
+protected by the file's mode alone (D228)."""
+
+
+def _after_setup(
+    args: argparse.Namespace, store: CredentialStore, owner: Target, admin_password: list[str]
+) -> None:
+    """Finish a setup: the password-free admin login and the place file (D228).
+
+    Side effects: with `--no-password` and a password in `admin_password`, saves the login of
+    `calu_admin` as the entry `ADMIN_ENTRY` without a password, and says who can read the
+    store; without the option, removes that entry when the role got another password, so
+    that no stale login is kept. As root, writes where the database is to
+    `calu.db.place.PATH` (no secret); a failure of that is reported and does not fail the
+    setup.
+
+    Args:
+        args: Parsed arguments (`no_password`).
+        store: The credential store.
+        owner: The owner login, for the place.
+        admin_password: The password the role `calu_admin` was given in this run; empty if
+            it was left as it is.
+    """
+    if admin_password and args.no_password:
+        try:
+            store.save(ADMIN_ENTRY, admin_login(owner, admin_password[0]).dump(), None)
+        except ValueError as exc:  # TargetError: the owner login names a libpq service
+            print(f"note: the login of calu_admin could not be stored ({exc})", file=sys.stderr)
+        else:
+            print(f"stored credential {ADMIN_ENTRY!r} (no password)")
+    elif admin_password and ADMIN_ENTRY in store:
+        store.remove(ADMIN_ENTRY)
+        print(f"removed the stored {ADMIN_ENTRY!r} credential: the role has a typed password now")
+    if args.no_password:
+        if os.geteuid() == 0:
+            print(
+                f"no password protects the logins in {store.path}: only root can read them, "
+                "so `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu "
+                "web --sudo` ask for none"
+            )
+        else:
+            print(
+                f"WARNING: no password protects the logins in {store.path}. Every program "
+                "that runs as you can read them, the commands of Claude Code included, and "
+                "can then change settings and decide escalations. `calu setup` without "
+                "--no-password, or calu installed for root (--sudo), avoids that.",
+                file=sys.stderr,
+            )
+    if os.geteuid() == 0:
+        try:
+            db_place.write(owner)
+        except (OSError, ValueError) as exc:
+            print(f"note: {db_place.PATH} was not written ({exc})", file=sys.stderr)
 
 
 def _new_operator(store: CredentialStore) -> None:
@@ -1908,6 +2020,10 @@ class Endpoint:
     for a token the user passed on the command line."""
     session_id: str = ""
     """Which session it belongs to, for messages."""
+    server_uid: int | None = None
+    """For a session found through a local socket: the uid of the process that listens on
+    it, as the kernel reports it; None otherwise. 0 is a session of root's calu, whose
+    database a client that is not root learns from `calu.db.place` (D228)."""
 
 
 def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.SessionRow:
@@ -2078,7 +2194,30 @@ def _root_socket_endpoint(hint: str | None) -> Endpoint | None:
         lines = "\n".join(f"    {entry[1]}  {entry[2]}" for entry in chosen)
         raise CliError(f"{len(chosen)} sessions match; name one with --session <id>:\n{lines}")
     path, session_id, _directory = chosen[0]
-    return Endpoint(f"unix:{path}", "", None, session_id)
+    return Endpoint(f"unix:{path}", "", None, session_id, _server_uid(path))
+
+
+def _server_uid(path: Path) -> int | None:
+    """Ask the kernel which user listens on a Unix socket.
+
+    Side effect: one connection, opened and closed.
+
+    Args:
+        path: The socket.
+
+    Returns:
+        The uid of the process that listens, or None if the socket cannot be connected to
+        or the kernel does not say.
+    """
+    probe_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe_socket.settimeout(2.0)
+        probe_socket.connect(str(path))
+        return localsocket.peer_uid(probe_socket)
+    except OSError:
+        return None
+    finally:
+        probe_socket.close()
 
 
 def _hold_password_free(store: CredentialStore) -> None:
@@ -2087,7 +2226,8 @@ def _hold_password_free(store: CredentialStore) -> None:
     A client that runs as root for a user (`_hold`) cannot read root's credential store after
     it switched to the user's file identity, so it keeps a login in memory (`_held`). Found
     through a root-owned socket it needed none to attach (D226); it takes one here only if
-    root's store has an entry that needs no password (`admin`, else `operator`), and asks
+    root's store has an entry that needs no password (`calu_admin`, `admin`, else
+    `operator`), and asks
     for nothing. Without one, the client attaches anyway and its database features
     (`/running`, `/switch`, `/new`, `/fork`, saving settings) say that they are not available.
 
@@ -2098,7 +2238,7 @@ def _hold_password_free(store: CredentialStore) -> None:
     """
     if not _hold or _held:
         return
-    for name in ("admin", "operator"):
+    for name in (ADMIN_ENTRY, "admin", "operator"):
         try:
             if name not in store or store.needs_password(name):
                 continue
@@ -2241,7 +2381,12 @@ def _herd_value[T](
     """
     if _held:
         return asyncio.run(_with_admin_value(_held[0], work))
-    for name in ("admin", "operator") if _hold else OPERATOR_FIRST:
+    names = ("admin", "operator") if _hold else OPERATOR_FIRST
+    if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
+        # `calu setup --no-password`: the login that asks nothing and may do everything a
+        # client needs comes first (D228).
+        names = (ADMIN_ENTRY, *names)
+    for name in names:
         if name in store:
             if not may_ask and store.needs_password(name):
                 raise CliError(
@@ -2363,22 +2508,25 @@ def _attach(
     """
     if run_as is not None:
         _become_client_of(run_as)
+    admin_problem: str | None = None
     if _held and _held[0].user == ADMIN_ROLE:
         database: Target | None = _held[0]
     elif _admin_place:
         # The admin password is asked when a change needs it, and not kept (D213).
         database = _admin_place[0]
-    elif run_as is not None:
-        # Root's store cannot be read after the switch below, and the user's store is the
-        # wrong one: the client's database features say they are not available (D226).
-        database = None
-        print(
-            "[client] attached through root's socket without a database login: /running, "
-            "/switch, /new, /fork and saving settings need one; `sudo calu credential set "
-            "operator --no-password` provides it",
-            file=sys.stderr,
-            flush=True,
-        )
+    elif run_as is not None or endpoint.server_uid == 0:
+        # A session of root's calu, found through a socket: nothing was asked of a database,
+        # so which database it is comes from the file only root writes (D228). This user's
+        # own store would name another database.
+        try:
+            database = db_place.read()
+        except db_place.PlaceError as exc:
+            database = None
+            admin_problem = (
+                "this client does not know the database of root's calu "
+                f"({exc}); `sudo calu setup` writes {db_place.PATH}"
+            )
+            print(f"[client] {admin_problem}", file=sys.stderr, flush=True)
     else:
         database = None
     try:
@@ -2390,6 +2538,7 @@ def _attach(
                     endpoint.token,
                     after_seq,
                     database=database,
+                    admin_problem=admin_problem,
                 )
                 if ended.switch_to is None:
                     break
@@ -2615,6 +2764,9 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
         # Port 0 would bind a random port, and the address printed below would name port 0.
         raise CliError(f"--port takes a number from 1 to 65535, not {args.port}")
     run_as = _client_user(args)
+    # After `calu setup --no-password` nobody knows the password of `calu_admin`, so a
+    # browser cannot be asked for it: the address carries the token instead (D228).
+    typed_password = ADMIN_ENTRY not in store or store.needs_password(ADMIN_ENTRY)
     url = _admin_secret(store)
     if run_as is not None:
         # As root for a user (`calu web --sudo`): the login was read from root's store and
@@ -2637,7 +2789,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
             # Where `calu setup` gave `calu_admin` its password, a browser logs in with the
             # admin password, which the database checks (D216); the token is then not shown.
             place = Target.parse(url)
-            by_password = bool(
+            by_password = typed_password and bool(
                 await db.scalar(
                     "SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (ADMIN_ROLE,)
                 )
@@ -4229,6 +4381,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="give calu_session a new login although one exists; sessions and machines that "
         "use the old one stop working",
+    )
+    p.add_argument(
+        "--no-password",
+        action="store_true",
+        help="ask for no admin and no session password: the logins are stored protected by "
+        "the store file's mode alone. Meant for a calu installed for root (the store is then "
+        "/etc/calu, which only root reads); in your own account every program that runs as "
+        "you could read them. An existing setup is converted",
     )
     p.add_argument(
         "--checker-model",

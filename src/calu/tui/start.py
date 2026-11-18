@@ -177,6 +177,7 @@ def run_tui(
     after_seq: int = 0,
     show_thinking: bool = True,
     database: Target | None = None,
+    admin_problem: str | None = None,
 ) -> TuiExit:
     """Run the full-screen client until the user detaches or the session closes the connection.
 
@@ -192,6 +193,9 @@ def run_tui(
         database: The login of `calu_admin` at the session's database, without a password
             (`calu.setup.admin_login`): settings are then changed there with the admin
             password the user types. None uses this machine's `admin` credential.
+        admin_problem: Why nothing can be changed from this client, when there is no
+            `database` and this machine's `admin` credential is not the session's (D228);
+            None otherwise.
 
     Returns:
         What the client knew when it ended.
@@ -209,7 +213,11 @@ def run_tui(
     options.show_thinking = options.show_thinking and show_thinking
     from calu.tui.adminaccess import StoreAdmin
 
-    app = CaluApp(protocol_connector(address, token), options, admin=StoreAdmin(database=database))
+    app = CaluApp(
+        protocol_connector(address, token),
+        options,
+        admin=StoreAdmin(database=database, unavailable=admin_problem),
+    )
     app.run()
     if app.link.error is not None:
         raise app.link.error

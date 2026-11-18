@@ -1256,6 +1256,20 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   database login: one that root's store holds without a password (`sudo calu credential set
   operator --no-password`), and the admin password when a setting is saved. The TCP port
   with its tokens stays for every other client.
+- **Without passwords.** `sudo calu setup --no-password` stores the logins in `/etc/calu`
+  protected by the file's mode alone (only root reads that directory) and gives the role
+  that changes settings a generated password, stored the same way. `calu run --sudo`,
+  `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` then ask for no calu
+  password at all, and `calu web --sudo` prints its address with a token. An existing setup
+  is converted; its passwords are asked one last time. A client that does not run as root
+  cannot change settings then: nobody knows the password it would have to type. Do not use
+  `--no-password` in your own account unless you accept that every program running as you,
+  Claude Code's commands included, can read the logins.
+- **Which database a client changes settings in.** `sudo calu setup` writes
+  `/var/lib/calu/database.json`: where root's database is, no secret. A client that found a
+  root session through a socket reads it (after checking that only root can write it) and
+  logs in there with the admin password you type. Until `sudo calu setup` has run once
+  after an update, such a client says that it does not know the database.
 - **Your own `calu attach`, without `--sudo`, needs a token** also on a session that runs
   Claude Code as you: every program Claude Code starts runs as you too, and the kernel
   cannot tell your client from it.

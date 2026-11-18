@@ -214,7 +214,10 @@ class StoreAdmin:
     """`AdminAccess` over the local credential store and `calu.admin`."""
 
     def __init__(
-        self, store: CredentialStore | None = None, database: Target | None = None
+        self,
+        store: CredentialStore | None = None,
+        database: Target | None = None,
+        unavailable: str | None = None,
     ) -> None:
         """Create the access.
 
@@ -225,19 +228,27 @@ class StoreAdmin:
                 change logs in there as `calu_admin` with the admin password the user types;
                 nothing is read from the store and nothing is stored (PLAN.md D213). None
                 uses the store's `admin` credential.
+            unavailable: Why nothing can be changed from this client, when neither a
+                database login nor this user's store applies (a session of root's calu whose
+                database is not known, D228); `problem` then returns it and the store is
+                not read. None otherwise.
         """
         self.store = store or CredentialStore()
         self.database = database
+        self.unavailable = unavailable
 
     def problem(self) -> str | None:
         """Say why nothing can be changed from this machine.
 
         Returns:
-            None if the `admin` credential is stored, `NO_CREDENTIAL` if not, or the store's
-            own message if its file cannot be read.
+            None with a database login or a stored `admin` credential; `unavailable` if that
+            was given; `NO_CREDENTIAL` without the credential; or the store's own message if
+            its file cannot be read.
         """
         if self.database is not None:
             return None
+        if self.unavailable is not None:
+            return self.unavailable
         try:
             return None if CREDENTIAL in self.store else NO_CREDENTIAL
         except CredentialError as error:
