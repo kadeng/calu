@@ -162,6 +162,11 @@ broken down or extended. Derived requirements and design decisions belong in
     Bedrock Haiku 5.5 and Sonnet 5.5 as well as the other default models we use." (stated
     2026-11-18) Also: "calu web must also support attaching without a password." (stated
     2026-11-18)
+    "The VSCode extension must also allow switching sessions between those running on the
+    machine easily, maybe with a dropdown. It should be possible to give names to sessions.
+    The VSCode session must be able to run when connected to a remote machine, in this case
+    everything runs remotely. If there's no calu serve running, it should give instructions
+    how to launch it in a tmux or screen session persistently." (stated 2026-11-18)
 
 ## Soft goals and priorities
 

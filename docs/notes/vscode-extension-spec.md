@@ -197,3 +197,28 @@ the settings dialog.
 Each preset carries a note on what it needs (which key or sign-in). No Mistral Medium or Large
 preset (project rule). The extension shows what `ide.models.presets` returns and holds no
 model names of its own.
+
+## 6. Additions of 2026-11-18 (the owner's second message)
+
+- **Switching sessions**: the chat header has a session dropdown that lists the sessions
+  running on this machine (name, directory, state, open escalations; those of the workspace
+  first) and switches with one click (`ide.attach {session}`); "New session…", "Resume a
+  stored conversation…" are entries of the same dropdown. The QuickPick command stays.
+- **Names for sessions**: a session has a `name` (free text, at most 80 characters, "" = none),
+  stored in the `sessions` row (migration 0036, column `name`; `calu_operator` and
+  `calu_admin` may update that column, the session login may not). Bridge: `ide.sessions`
+  returns `name` per running session; `ide.session.rename {session_id, name, password?}` →
+  `{name}`; `ide.start` takes an optional `name`, set on the row once the session started.
+  `calu sessions` shows the name. The dropdown shows the name before the directory, and
+  "Rename session…" sets it.
+- **Remote**: nothing new: `extensionKind: ["workspace"]`, so with Remote-SSH, WSL or a Dev
+  Container the extension host, `calu ide`, the server and the sessions all run on the remote
+  machine; installing uv and calu happens there too.
+- **No `calu serve` running** (`ide.start` error -32013, or the status says so): the extension
+  shows how to start it so that it survives the editor: with tmux
+  (`tmux new-session -A -s calu 'calu serve [--sudo] [--insecure]'`, detach with Ctrl+B D),
+  else with screen (`screen -S calu -D -R calu serve ...`, detach with Ctrl+A D), and offers
+  "Open terminal with this command" and "Copy command". Which of tmux and screen is installed
+  is part of `ide.status` (`findings` named `tmux` and `screen`). "calu: Start calu server"
+  uses the tmux form when tmux is installed, else the screen form, else the plain command with
+  a note that it ends with the terminal.
