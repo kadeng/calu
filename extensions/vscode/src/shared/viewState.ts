@@ -202,6 +202,11 @@ export type Item =
       messageId?: string;
       /** True while `assistant.delta` fragments arrive and the final `assistant.text` is due. */
       streaming?: boolean;
+      /**
+       * True if an attach found this block still streaming: the replay ended in the middle of
+       * it, so later fragments and the final text of the same message continue this item.
+       */
+      cut?: boolean;
     }
   | {
       id: number;
@@ -210,6 +215,8 @@ export type Item =
       text: string;
       messageId?: string;
       streaming?: boolean;
+      /** As for "assistant". */
+      cut?: boolean;
     }
   | { id: number; kind: 'tool'; toolUseId: string }
   | {
@@ -880,8 +887,9 @@ function findLatestStream(
 }
 
 /**
- * Append a streamed fragment: extend the latest streaming item of the same message and kind,
- * or start a new streaming item (also after a finalized block of the same message).
+ * Append a streamed fragment: extend the latest streaming item of the same message and kind
+ * (also one that an attach cut off, see `StreamItem.cut`), or start a new streaming item (also
+ * after a finalized block of the same message).
  *
  * @param state The current state (not modified).
  * @param key The agent's list.
@@ -892,10 +900,11 @@ function findLatestStream(
  */
 function appendFragment(state: ViewState, key: AgentKey, kind: StreamKind, messageId: string, text: string): ViewState {
   const found = findLatestStream(state, key, messageId, kind);
-  if (!found || !found.item.streaming) {
+  if (!found || !(found.item.streaming || found.item.cut)) {
     return appendItem(state, key, { kind, text, messageId, streaming: true });
   }
-  return replaceItem(state, key, found.index, { ...found.item, text: found.item.text + text });
+  const { cut: _cut, ...item } = found.item;
+  return replaceItem(state, key, found.index, { ...item, text: item.text + text, streaming: true });
 }
 
 /**
@@ -911,8 +920,9 @@ function appendFragment(state: ViewState, key: AgentKey, kind: StreamKind, messa
  */
 function completeBlock(state: ViewState, key: AgentKey, kind: StreamKind, messageId: string | undefined, text: string): ViewState {
   const found = messageId ? findLatestStream(state, key, messageId, kind) : undefined;
-  if (found && found.item.streaming) {
-    return replaceItem(state, key, found.index, { ...found.item, text, streaming: false });
+  if (found && (found.item.streaming || found.item.cut)) {
+    const { cut: _cut, ...item } = found.item;
+    return replaceItem(state, key, found.index, { ...item, text, streaming: false });
   }
   return appendItem(state, key, { kind, text, ...(messageId ? { messageId } : {}) });
 }
@@ -1064,12 +1074,14 @@ function cancelOpenEscalations(state: ViewState): ViewState {
 
 /**
  * Mark every streaming text or thinking item as finished (used at turn end, session stop,
- * bridge exit).
+ * bridge exit, attach).
  *
  * @param state The current state (not modified).
+ * @param cut True at an attach: the items are marked `cut`, so that the fragments and the final
+ *   text that arrive after the replay continue them instead of starting a second item.
  * @returns The new state; the same object if nothing was streaming.
  */
-function finishStreaming(state: ViewState): ViewState {
+function finishStreaming(state: ViewState, cut = false): ViewState {
   let items = state.items;
   for (const key of Object.keys(state.items)) {
     const list = state.items[key];
@@ -1078,7 +1090,7 @@ function finishStreaming(state: ViewState): ViewState {
     items = withEntry(
       items,
       key,
-      list.map((i) => (streaming(i) ? ({ ...i, streaming: false } as Item) : i)),
+      list.map((i) => (streaming(i) ? ({ ...i, streaming: false, ...(cut ? { cut: true } : {}) } as Item) : i)),
     );
   }
   return items === state.items ? state : { ...state, items };
@@ -1699,7 +1711,7 @@ export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewS
 
   const snapshotSeq = typeof snapshot.last_seq === 'number' ? snapshot.last_seq : 0;
   const stateName = typeof snapshot.state === 'string' ? (snapshot.state as SessionStateName) : 'idle';
-  next = finishStreaming(next);
+  next = finishStreaming(next, true);
   return {
     ...next,
     link: { status: 'attached' },

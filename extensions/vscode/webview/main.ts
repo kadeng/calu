@@ -67,7 +67,7 @@ import {
   own,
   type ViewState,
 } from '../src/shared/viewState';
-import { actionButton, copyText, el, icon, iconButton, logo, sameChildren, setSection } from './dom';
+import { actionButton, copyText, el, icon, iconButton, logo, reveal, sameChildren, setSection } from './dom';
 import { draftOf, itemDeps, renderItem, renderSubagentHead, subagentHeadDeps, type Ctx } from './items';
 import { markdown } from './markdown';
 import { closePopup, closePopupIfOutside, openPopup, openPopupId, refreshPopup } from './popup';
@@ -535,8 +535,9 @@ function renderTabs(): void {
   const sig = JSON.stringify(tabList(view, ui.tab, seen));
   if (setSection(tabsSlot, sig, buildTabs)) {
     const active = tabsSlot.querySelector<HTMLElement>('[aria-selected="true"]');
-    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    if (focused) active?.focus();
+    const strip = tabsSlot.querySelector<HTMLElement>('.tabs');
+    if (strip) reveal(strip, active);
+    if (focused) active?.focus({ preventScroll: true });
   }
   const selected = tabsSlot.querySelector('[aria-selected="true"]');
   if (selected) list.setAttribute('aria-label', `Transcript: ${selected.querySelector('.tab-label')?.textContent ?? ''}`);
@@ -757,11 +758,11 @@ function focusOpenCard(): void {
   const cards = list.querySelectorAll<HTMLElement>('.esc.open');
   const card = cards[cards.length - 1];
   if (!card) return;
-  card.scrollIntoView({ block: 'nearest' });
+  reveal(list, card);
   const active = document.activeElement;
   const typing = (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) && active.value.trim() !== '';
   if (!document.hasFocus() || typing) return;
-  card.querySelector<HTMLElement>('.esc-actions button:not(:disabled), .option:not(:disabled)')?.focus();
+  card.querySelector<HTMLElement>('.esc-actions button:not(:disabled), .option:not(:disabled)')?.focus({ preventScroll: true });
 }
 
 /**
@@ -997,13 +998,17 @@ function renderComposer(): void {
   const busy = attached && (phase === 'busy' || phase === 'waiting');
   const blocked = !ui.side && target.to === null;
   input.disabled = !attached || blocked;
-  input.placeholder = !attached
+  const placeholder = !attached
     ? 'No session is attached.'
     : ui.side
       ? 'Ask a side question…'
       : target.to === null
         ? target.reason
         : `Message ${target.label}…`;
+  if (input.placeholder !== placeholder) {
+    input.placeholder = placeholder;
+    if (input.value === '') growInput();
+  }
   composer.className = `composer${ui.side ? ' side-mode' : ''}${input.disabled ? ' disabled' : ''}`;
   const hasContent = input.value.trim() !== '' || attachments.length > 0;
   sendButton.disabled = input.disabled || !hasContent;
@@ -1053,7 +1058,13 @@ function renderComposer(): void {
 function growInput(): void {
   input.style.height = 'auto';
   const max = Math.max(80, Math.round(window.innerHeight * 0.4));
-  input.style.height = `${Math.min(input.scrollHeight + 2, max)}px`;
+  // An empty field is measured with its placeholder, which may be a sentence that wraps (why
+  // this tab takes no message); `scrollHeight` alone ignores the placeholder.
+  const empty = input.value === '';
+  if (empty) input.value = input.placeholder;
+  const height = input.scrollHeight;
+  if (empty) input.value = '';
+  input.style.height = `${Math.min(height + 2, max)}px`;
 }
 
 /**
@@ -1235,7 +1246,7 @@ function drawCompletions(): void {
     }),
   );
   input.setAttribute('aria-activedescendant', `completion-${completionIndex}`);
-  completionBox.children[completionIndex]?.scrollIntoView({ block: 'nearest' });
+  reveal(completionBox, completionBox.children[completionIndex]);
 }
 
 /**
@@ -1645,7 +1656,7 @@ function onClick(event: MouseEvent): void {
     case 'jumpEsc':
       focusNewCard = true;
       if (data.tab) switchTab(data.tab);
-      requestAnimationFrame(() => list.querySelector(`[data-esc="${CSS.escape(data.key ?? '')}"]`)?.scrollIntoView({ block: 'center' }));
+      requestAnimationFrame(() => reveal(list, list.querySelector(`[data-esc="${CSS.escape(data.key ?? '')}"]`), 'center'));
       render();
       return;
     case 'expand':
@@ -1968,6 +1979,18 @@ list.addEventListener('scroll', () => {
   stick = nearBottom();
   jumpButton.hidden = stick || list.childElementCount === 0;
 });
+// The tab strip scrolls sideways and shows no scrollbar: the mouse wheel moves it, so that the
+// tabs of many subagents can be reached with the mouse.
+tabsSlot.addEventListener(
+  'wheel',
+  (event) => {
+    const tabs = tabsSlot.querySelector<HTMLElement>('.tabs');
+    if (!tabs || tabs.scrollWidth <= tabs.clientWidth || event.deltaY === 0 || event.shiftKey) return;
+    tabs.scrollLeft += event.deltaY;
+    event.preventDefault();
+  },
+  { passive: false },
+);
 // The dock grows and shrinks (queue, strip, composer): keep following the newest output.
 new ResizeObserver(() => {
   if (stick) list.scrollTop = list.scrollHeight;

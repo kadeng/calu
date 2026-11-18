@@ -23,6 +23,7 @@ import {
   splitByFiles,
   tabList,
   toolHead,
+  turnLabel,
   usageMeter,
 } from '../../src/shared/chatModel';
 import { MAX_IMAGES } from '../../src/shared/messages';
@@ -77,6 +78,14 @@ describe('texts', () => {
     expect(toolHead({ input: { pattern: 'TODO' } }).text).toBe('TODO');
     expect(toolHead({ input: { questions: [{ question: 'Which\n runner?', options: [] }] } })).toEqual({ text: 'Which runner?', isPath: false });
     expect(toolHead({ input: { questions: 'nope' } }).text).toBe('{"questions":"nope"}');
+  });
+
+  it('words the outcome of a turn', () => {
+    expect(turnLabel({ subtype: 'success', isError: false })).toBe('turn done');
+    expect(turnLabel({ subtype: 'interrupted', isError: false })).toBe('turn interrupted');
+    expect(turnLabel({ subtype: 'error_max_turns', isError: true })).toBe('turn ended: error max turns');
+    expect(turnLabel({ subtype: 'success', isError: true })).toBe('turn ended: success');
+    expect(turnLabel({ subtype: '', isError: true })).toBe('turn ended: error');
   });
 
   it('shows the error chip only where the decision chip does not already say it', () => {

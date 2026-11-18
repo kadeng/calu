@@ -27,6 +27,7 @@ import {
   splitByFiles,
   splitPath,
   toolHead,
+  turnLabel,
   type FileIndex,
 } from '../src/shared/chatModel';
 import { fileClick, menuFor, rowClick, toolKind } from '../src/shared/itemMenu';
@@ -287,7 +288,7 @@ function renderChecker(item: Extract<Item, { kind: 'checker' }>): HTMLElement {
  * @returns The element (`role="separator"`).
  */
 function renderTurn(item: Extract<Item, { kind: 'turn' }>): HTMLElement {
-  const parts = [item.isError ? `turn ended: ${item.subtype.replace(/_/g, ' ')}` : 'turn done'];
+  const parts = [turnLabel(item)];
   if (item.costUsd !== null) parts.push(`$${item.costUsd.toFixed(4)}`);
   if (item.backgroundTasks > 0) parts.push(`${item.backgroundTasks} background task${item.backgroundTasks === 1 ? '' : 's'} running`);
   const box = el('div', `item turn${item.isError ? ' error' : ''}`, undefined, { role: 'separator' });

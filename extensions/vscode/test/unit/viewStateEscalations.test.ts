@@ -252,6 +252,20 @@ describe('attaching', () => {
     expect(s.lastSeq).toBe(9);
   });
 
+  it('continues a text that the replay of an attach cut off, instead of showing it twice', () => {
+    const delta = (text: string) => ev('assistant.delta', { agent_id: null, message_id: 'm1', text });
+    let s = applyAttach(initialViewState(), { session_id: 'S', snapshot: { state: 'running' }, events: [delta('Building, ')] });
+    expect(s.items[MAIN]).toMatchObject([{ kind: 'assistant', text: 'Building, ', streaming: false, cut: true }]);
+    s = applyEvent(s, delta('then '));
+    expect(s.items[MAIN]).toEqual([{ id: 1, kind: 'assistant', text: 'Building, then ', messageId: 'm1', streaming: true }]);
+    s = applyEvent(s, ev('assistant.text', { agent_id: null, message_id: 'm1', text: 'Building, then uploading.' }));
+    expect(s.items[MAIN]).toEqual([{ id: 1, kind: 'assistant', text: 'Building, then uploading.', messageId: 'm1', streaming: false }]);
+    // The final text alone also replaces the cut item.
+    let t = applyAttach(initialViewState(), { session_id: 'S', snapshot: {}, events: [delta('Buil')] });
+    t = applyEvent(t, ev('assistant.text', { agent_id: null, message_id: 'm1', text: 'Built.' }));
+    expect(t.items[MAIN].map((i) => (i.kind === 'assistant' ? i.text : ''))).toEqual(['Built.']);
+  });
+
   it('survives a result without members and ignores one without a session id', () => {
     const s0 = initialViewState();
     expect(applyAttach(s0, {})).toBe(s0);

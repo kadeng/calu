@@ -191,6 +191,22 @@ export function showsErrorChip(tool: Pick<ToolView, 'name' | 'check' | 'result'>
   return decisionKind(tool.check?.decision) !== 'deny';
 }
 
+/**
+ * Word the outcome of a turn for its separator line.
+ *
+ *     success                         -> "turn done"
+ *     interrupted                     -> "turn interrupted"
+ *     any other subtype, or an error  -> "turn ended: <subtype, underscores as spaces>"
+ *
+ * @param turn The turn item's `subtype` (of `turn.result`) and `isError`.
+ * @returns The text.
+ */
+export function turnLabel(turn: { subtype: string; isError: boolean }): string {
+  if (turn.subtype === 'interrupted') return 'turn interrupted';
+  if (!turn.isError && (turn.subtype === 'success' || turn.subtype === '')) return 'turn done';
+  return `turn ended: ${(turn.subtype || 'error').replace(/_/g, ' ')}`;
+}
+
 // ------------------------------------------------------------------ session dropdown
 
 /** One row of the session dropdown. */

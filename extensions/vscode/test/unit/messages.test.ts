@@ -11,8 +11,15 @@ describe('package.json', () => {
   it('is a workspace extension named calu under the GPL', () => {
     expect(manifest.extensionKind).toEqual(['workspace']);
     expect(manifest).toMatchObject({ name: 'calu', displayName: 'calu', publisher: 'kadeng', license: 'GPL-2.0-only' });
-    expect(manifest.activationEvents).toEqual(['onStartupFinished']);
+    // The second event opens a checker's editor that VSCode restores before the start-up ended.
+    expect(manifest.activationEvents).toEqual(['onStartupFinished', 'onFileSystem:calu-checker']);
     expect(manifest.dependencies).toBeUndefined();
+  });
+
+  it('puts the chat into the secondary side bar, which needs VSCode 1.106', () => {
+    expect(manifest.contributes.viewsContainers).toEqual({ secondarySidebar: [{ id: 'calu', title: 'calu', icon: 'media/icon.svg' }] });
+    expect(manifest.contributes.views.calu).toEqual([{ type: 'webview', id: 'calu.chat', name: 'Chat' }]);
+    expect(manifest.engines.vscode).toBe('^1.106.0');
   });
 
   it('binds the comment command to ctrl+alt+k / cmd+alt+k in text editors', () => {

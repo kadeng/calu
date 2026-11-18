@@ -204,3 +204,30 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/**
+ * Scroll one container so that an element inside it is visible, and nothing else.
+ *
+ * `Element.scrollIntoView` also scrolls every ancestor, the frames around the webview included:
+ * VSCode's own view then shifts by a few pixels. This function changes only `container`.
+ *
+ * @param container The scrolling ancestor of `target` (it scrolls vertically, horizontally or both).
+ * @param target The element to show; nothing happens if it is not inside `container`.
+ * @param block "nearest" scrolls as little as needed; "center" puts the element in the middle
+ *   of the container's height.
+ * @returns Nothing.
+ */
+export function reveal(container: HTMLElement, target: Element | null | undefined, block: 'nearest' | 'center' = 'nearest'): void {
+  if (!target || !container.contains(target)) return;
+  const box = container.getBoundingClientRect();
+  const rect = target.getBoundingClientRect();
+  if (block === 'center') {
+    container.scrollTop += rect.top - box.top - (container.clientHeight - rect.height) / 2;
+  } else if (rect.top < box.top || rect.height > container.clientHeight) {
+    container.scrollTop += rect.top - box.top;
+  } else if (rect.bottom > box.bottom) {
+    container.scrollTop += rect.bottom - box.bottom;
+  }
+  if (rect.left < box.left) container.scrollLeft += rect.left - box.left;
+  else if (rect.right > box.right) container.scrollLeft += rect.right - box.right;
+}

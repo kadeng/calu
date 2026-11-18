@@ -38,10 +38,6 @@ body {
   font-size: var(--vscode-font-size);
   line-height: 1.45;
   overflow: hidden;
-  /* "clip" also refuses programmatic scrolling: `scrollIntoView` and focus on a card must
-     scroll the transcript only, never shift the whole view by the few pixels that elements
-     outside the layout (`.sr-only`) add below it. */
-  overflow: clip;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -55,13 +51,20 @@ body {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+  top: 0;
+  left: 0;
 }
 
+/* The view never scrolls as a whole: `scrollIntoView` and focus on a card may scroll the
+   transcript only. A viewport with `overflow: hidden` still scrolls from script, so the root
+   is taken out of the flow and clips ("clip" is no scroll container). */
 #app {
+  position: fixed;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
   min-width: 0;
+  overflow: clip;
 }
 
 /* ---- Shared controls ------------------------------------------------------------------------ */
