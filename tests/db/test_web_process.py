@@ -19,7 +19,7 @@ import pytest
 from calu.db import Db, connect
 from calu.setup import setup
 
-pytestmark = [pytest.mark.db, pytest.mark.anyio]
+pytestmark = [pytest.mark.db, pytest.mark.anyio, pytest.mark.slow]
 
 START_TIMEOUT_S = 40
 

@@ -267,6 +267,7 @@ async def test_calu_start_as_a_process_gets_a_session_and_attaches(db_url: str, 
                     await process.wait()
 
 
+@pytest.mark.slow
 async def test_calu_start_without_a_server_says_what_to_do(db_url: str, tmp_path: Path):
     await prepare(db_url, tmp_path)
     config = tmp_path / "config"

@@ -39,6 +39,10 @@ services:
       POSTGRES_USER: calu_owner
       POSTGRES_PASSWORD: calu-dev
       POSTGRES_DB: calu
+    # Test data only: without the waits for the disk, creating, migrating and dropping a
+    # database per test costs about 0.15 s instead of 0.35 s. A host crash can corrupt this
+    # cluster; `docker compose down -v` and `up` make a new one.
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
     ports:
       - "127.0.0.1:55432:5432"
     volumes:

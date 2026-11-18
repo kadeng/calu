@@ -244,6 +244,7 @@ async def test_the_live_page_attaches_again_when_its_own_connection_drops(
         assert await page.inner_text("#state") == "running"
 
 
+@pytest.mark.slow
 async def test_the_triage_says_when_its_list_may_be_out_of_date(db_url: str, page) -> None:
     """wa3: a poll that failed left the last queue on screen without a word."""
     conn = await connect(db_url)

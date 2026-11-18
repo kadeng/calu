@@ -5,12 +5,22 @@ from pathlib import Path
 
 import psycopg
 import pytest
+
+# Textual's test driver waits for the app to be idle by sleeping in steps of 1/50 s, about
+# 2800 times in one of the client's test files. A shorter step saves over a minute of the unit
+# layer (measured 2026-11-18: the six `test_tui_*` files 169 s -> 95 s). The attribute is
+# private to Textual: if a release renames it, the assertion says so instead of the tests
+# silently getting slow again.
+import textual._wait as _textual_wait
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from pydantic_ai import models
 
 from calu.config import PROVIDER_KEYS_BY_PREFIX, load_secrets
 from calu.credentials import CredentialStore, KdfParams
+
+assert hasattr(_textual_wait, "SLEEP_GRANULARITY"), "Textual renamed its idle sleep step"
+_textual_wait.SLEEP_GRANULARITY = 0.004
 
 # Keep every test, and every `calu` process a test starts, away from
 # `/var/lib/calu/database.json` of the machine the tests run on: where calu is set up for

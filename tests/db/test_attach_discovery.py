@@ -19,7 +19,7 @@ from calu.credentials import CredentialStore
 from calu.db import Db, connect
 from tests.db.test_web_live import running
 
-pytestmark = [pytest.mark.db, pytest.mark.anyio]
+pytestmark = [pytest.mark.db, pytest.mark.anyio, pytest.mark.slow]
 
 TIMEOUT_S = 60
 

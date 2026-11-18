@@ -61,6 +61,7 @@ dev = [
     "playwright>=1.65.0",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.17.4",
     "types-pyyaml>=6.0.12.20261103",
 ]
@@ -97,6 +98,7 @@ markers = [
     "live: needs a real `claude` CLI and/or real model API keys (run with `-m live`)",
     "db: needs the PostgreSQL test database (`docker compose up -d caludb`, run with `-m db`)",
     "browser: needs a headless browser (`scripts/get-browser.sh`, run with `-m browser`)",
+    "slow: starts a `calu` process or waits out a real timer (deselect with `-m 'not slow'` for a quick loop; part of every full run)",
 ]
 
 [tool.pyright]

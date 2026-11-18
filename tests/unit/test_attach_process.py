@@ -17,7 +17,7 @@ import pytest
 
 from tests.unit.test_protocol_server import served
 
-pytestmark = pytest.mark.anyio
+pytestmark = [pytest.mark.anyio, pytest.mark.slow]
 
 TIMEOUT_S = 40
 

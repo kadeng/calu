@@ -72,6 +72,38 @@ state as SVG; with the headless Chromium of the browser layer (`scripts/get-brow
 renders a PNG beside each. Look at the pictures after a change to `render.py` or `tui.tcss`:
 the tests compare texts, not alignment or colour.
 
+## Running a part of the suite, and running it faster (measured 2026-11-18)
+
+The whole suite took 8 minutes in one process. Half of the time was 5 % of the tests: the
+full-screen client's tests (Textual's test driver sleeps between key presses), tests that
+start a `calu` process (3 s of imports each), and tests that wait out a real timer. Three
+changes made then: `tests/conftest.py` shortens Textual's idle step, `pytest-xdist` is a
+development dependency, and the test database of `docker-compose.yml` runs without waiting
+for the disk (recreate it once: `docker compose up -d caludb --wait`).
+
+| What | Command | Time |
+|---|---|---|
+| The unit layer, in parallel | `uv run pytest -n 8` | about 30 s |
+| A quick loop: no process starts, no waited-out timers | `uv run pytest -n 8 -m 'not slow and not live and not db and not browser'` | about 25 s |
+| The full-screen client only | `uv run pytest -n 8 tests/unit/test_tui_*.py` | about 25 s |
+| The database layer without the slow ones | `uv run pytest -m 'db and not browser and not slow'` | about 100 s |
+| The database and browser layers | `uv run pytest -m 'db and not live'` | about 3 min |
+| One area | by path, e.g. `tests/unit/test_web_*.py tests/db/test_web*.py tests/browser`, or `-k 'honesty or trust'` | under a minute |
+| Everything before a push | `uv run pytest -n 8 && uv run pytest -m 'db and not live'` | about 3.5 min |
+
+- The marker `slow` is on the tests that start a `calu` process or wait out a real timer.
+  They belong to every full run and to CI; only a quick loop leaves them out.
+- **Do not run the database layer with `-n`**: the roles are server-wide and every test's
+  setup renews the login of `calu_session`, so parallel tests break each other (19 failures in
+  a trial). For the same reason two runs against the one test server at the same time fail
+  with `password authentication failed for user "calu_session"` or `tuple concurrently
+  updated`. One PostgreSQL server per worker would lift this (measured: the whole suite in
+  104 s with eight workers); not built.
+- Not done yet, with what they would save: starting `calu` without importing the checker and
+  Agent SDK packages for client commands (about 2.5 s per start, also for users); the
+  `calu start` test that waits ten seconds for a server that does not come; the browser test
+  that waits for real polling intervals.
+
 ## Continuous integration
 
 `.github/workflows/checks.yml` runs on every push to `main` and on every pull request:
