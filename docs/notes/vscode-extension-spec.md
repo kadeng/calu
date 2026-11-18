@@ -381,3 +381,9 @@ where the editor's own chat sits, not in the primary side bar on the left. The u
 drag it elsewhere; VSCode remembers that. If the VSCode version in use cannot place a
 contributed view container there by default, the extension moves the view once, at first
 activation, and says so in the README.
+
+As built: `contributes.viewsContainers.secondarySidebar` in `package.json`, which VSCode offers
+from 1.106 on (release notes of 1.106, "View containers in Secondary Side Bar"), so
+`engines.vscode` is `^1.106.0` and nothing is moved at activation. Checked in VSCode 1.147 with
+a new profile: the container opens on the right next to the editor's chat, its tab carries the
+badge of open escalations, and "calu: Open Chat" shows it there.

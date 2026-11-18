@@ -4,8 +4,16 @@ Attach to [calu](https://github.com/kadeng/calu) sessions from the editor: chat 
 while checker agents and you review its commands and edits, answer escalations, edit the checker
 instructions and calu's settings.
 
-Status: the extension host side is in place; the chat and settings webviews are placeholders
-until their UIs land (`WEBVIEW_CONTRACT.md` is their contract).
+Status: first version; the chat and the settings dialog follow `WEBVIEW_CONTRACT.md`.
+
+## Where the chat is
+
+The view **calu** opens in the secondary side bar (on the right in VSCode's default layout,
+next to the editor's own chat), not in the activity bar on the left. Show it with
+**calu: Open Chat** or **View: Toggle Secondary Side Bar** (Ctrl+Alt+B). Drag the view's title
+to the activity bar or the panel to keep it elsewhere; VSCode remembers the place. The
+extension needs VSCode 1.106 or newer: that version introduced view containers of extensions
+in the secondary side bar (`contributes.viewsContainers.secondarySidebar`).
 
 ## How it runs
 

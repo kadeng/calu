@@ -40,6 +40,10 @@ page is the overview.
 
 ## Chat (`webview/main.ts`)
 
+The view `calu.chat` is the only view of the container `calu`, which `package.json` contributes
+to the secondary side bar (spec section 12). The view may be as narrow as 280 px there, and the
+user may move it to the primary side bar or the panel.
+
 ### Start-up and state
 
     webview: post {type: "ready"}

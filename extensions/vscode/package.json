@@ -12,7 +12,7 @@
     "url": "https://github.com/kadeng/calu.git"
   },
   "engines": {
-    "vscode": "^1.100.0"
+    "vscode": "^1.106.0"
   },
   "extensionKind": [
     "workspace"
@@ -34,7 +34,7 @@
   },
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
+      "secondarySidebar": [
         {
           "id": "calu",
           "title": "calu",
