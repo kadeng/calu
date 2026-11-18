@@ -2201,9 +2201,10 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
     if not matching:
         raise CliError(
             f"no running session of {here} on this host\n"
-            "`calu sessions` lists the sessions of every host; a session elsewhere is reached "
-            "with its address and `--token=<token>` through an SSH tunnel, and `calu run` "
-            "starts one here"
+            "`calu start` asks a running `calu serve` for one and attaches, and `calu run` "
+            "starts one in this terminal. `calu sessions` lists the sessions of every host; "
+            "a session elsewhere is reached with its address and `--token=<token>` through "
+            "an SSH tunnel"
         )
     # The nearest project directory wins: a session of a subproject is meant before the
     # session of the directory above it. Every candidate contains `here`, so of two candidate
@@ -2213,7 +2214,9 @@ def _pick_session(rows: list[herd.SessionRow], hint: str | None) -> herd.Session
     nearest = [row for row in matching if len(Path(row.directory).parts) == deepest]
     if len(nearest) > 1:
         lines = "\n".join(
-            f"    {row.id}  started {row.started_at:%Y-%m-%d %H:%M:%S}" for row in nearest
+            f"    {row.id}  {row.state}, started {row.started_at:%Y-%m-%d %H:%M:%S}"
+            + (f', "{row.name}"' if row.name else "")
+            for row in nearest
         )
         raise CliError(
             f"{len(nearest)} sessions of {nearest[0].directory} are running; "

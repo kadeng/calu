@@ -1,5 +1,6 @@
 """Finding the session a client means when it is given no address (PLAN.md D105)."""
 
+import dataclasses
 import io
 import socket
 from datetime import UTC, datetime
@@ -78,6 +79,7 @@ def test_sessions_that_cannot_be_reached_are_left_out(
         assert "no running session of" in str(raised.value)
         # The message has to say what to do instead, in both directions.
         assert "calu sessions" in str(raised.value) and "--token=" in str(raised.value)
+        assert "`calu start`" in str(raised.value), "the way to get one from a running server"
     assert _pick_session([elsewhere, silent, clientless, row(str(tmp_path))], None).address
 
 
@@ -106,6 +108,14 @@ def test_two_sessions_of_one_directory_have_to_be_named(
     assert "2 sessions" in message
     assert first.id in message and second.id in message, "a choice needs the ids to choose from"
     assert "--session" in message
+    # ... and something to tell them apart by: the state, the start and a name if it has one.
+    named = dataclasses.replace(second, name="payment refactoring", state="escalated")
+    with pytest.raises(CliError) as raised:
+        _pick_session([first, named], None)
+    assert f'{second.id}  escalated, started 2026-11-10 12:02:00, "payment refactoring"' in str(
+        raised.value
+    )
+    assert f"{first.id}  running, started 2026-11-10 12:01:00\n" in str(raised.value)
 
     # The beginning of an id is enough, and an ambiguous or unknown one is an error.
     assert _pick_session([first, second], "bbbb").id == second.id
