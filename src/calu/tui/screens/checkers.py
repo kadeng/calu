@@ -23,6 +23,7 @@ next step on.
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import anyio
 from rich.console import Group, RenderableType
 from rich.text import Text
 from textual import events
@@ -36,6 +37,14 @@ from calu.tui.render import markdown_lines
 from calu.tui.screens.password import PasswordScreen
 from calu.tui.theme import Palette
 from calu.tui.widgets.chrome import KeyLine, Lines, Picked
+
+CATCH_UP_S = 6.0
+"""How long, after a save, the session is asked for the saved instructions before the screen
+says that the session does not show them. The session re-reads its settings when the database
+announces the change, usually within a second."""
+
+CATCH_UP_STEP_S = 0.5
+"""Time between two such questions."""
 
 NARROW = 100
 """Below this width the list of checkers is narrower."""
@@ -383,9 +392,10 @@ class CheckersScreen(Screen[None]):
         async def store(password: str | None) -> None:
             """Store the text and show the new version, or why it was not stored.
 
-            After the save the session is asked again. If it does not report the saved
-            text for this checker, the message says that the change went to the database of
-            this machine's credential and that the session does not show it.
+            After the save the session is asked again, for up to `CATCH_UP_S` seconds. If
+            it still does not report the saved text for this checker, the message says that
+            the change went to the database of this machine's credential and that the
+            session does not show it.
 
             Args:
                 password: The credential's password, or None if it has none.
@@ -407,11 +417,21 @@ class CheckersScreen(Screen[None]):
             self.message_error = False
             self._draw()
             self.query_one("#checkers-scroll").focus()
-            await self.reload(keep_message=True)
-            if not self.is_attached:
-                return
-            seen = next((c for c in self.checkers if c.get("name") == name), None)
-            if seen is None or str(seen.get("instructions") or "") != text:
+            # The session re-reads its settings when the database announces the change, a
+            # moment after the save: it is asked until it shows the saved text, and the
+            # warning below is for a session that still does not after `CATCH_UP_S`.
+            waited = 0.0
+            while True:
+                await self.reload(keep_message=True)
+                if not self.is_attached:
+                    return
+                seen = next((c for c in self.checkers if c.get("name") == name), None)
+                caught_up = seen is not None and str(seen.get("instructions") or "") == text
+                if caught_up or waited >= CATCH_UP_S:
+                    break
+                await anyio.sleep(CATCH_UP_STEP_S)
+                waited += CATCH_UP_STEP_S
+            if not caught_up:
                 reads = f"version {seen.get('version')}" if seen is not None else "no such checker"
                 self.message = (
                     f"stored as version {saved.version} in the database of this machine's "

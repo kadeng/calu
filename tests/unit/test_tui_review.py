@@ -840,7 +840,15 @@ async def test_falling_behind_during_the_first_attach_is_not_a_failed_attach() -
 # ------------------------------------------------------------------ the admin credential
 
 
-async def test_a_save_that_the_session_does_not_show_is_reported_as_such() -> None:
+async def test_a_save_that_the_session_does_not_show_is_reported_as_such(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session is given a moment to re-read its settings first (a session that is only
+    slower than the save is no other database); here that moment is cut to two questions."""
+    from calu.tui.screens import checkers
+
+    monkeypatch.setattr(checkers, "CATCH_UP_S", 0.02)
+    monkeypatch.setattr(checkers, "CATCH_UP_STEP_S", 0.02)
     session = FakeSession()
     access = FakeAdmin(session)
     access.other_database = True
@@ -852,7 +860,7 @@ async def test_a_save_that_the_session_does_not_show_is_reported_as_such() -> No
         await run.press("e")
         screen.query_one("#checkers-editor").insert("One more rule.\n")  # type: ignore[attr-defined]
         await run.press("ctrl+s")
-        await run.pilot.pause()
+        await run.pilot.pause(0.2)
         assert access.saved and screen.message_error
         assert "in the database of this machine's admin credential" in screen.message
         assert "the attached session reads version" in screen.message
