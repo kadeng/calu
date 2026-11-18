@@ -34,9 +34,10 @@ What you can do with it, if you want to:
 - **Honest and readable docs at every step.** Names, docstrings and comments can be checked
   with each edit instead of at the end of the task.
 - **You are not a bystander. Contribute whenever you like and review at every level of
-  detail.** Send a message into the running turn or queue one for the next; read one line per
-  step, the step's diff, the conversation as the checkers see it, or the whole session as a
-  file in the repository.
+  detail.** The chat sits in your IDE, VSCode or PyCharm: edit the code yourself, run it, set
+  a breakpoint and step through it in the debugger, while the session goes on. Send a message
+  into the running turn or queue one for the next. Read one line per step, the step's diff,
+  the conversation as the checkers see it, or the whole session as a file in the repository.
 
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
