@@ -9,8 +9,8 @@
 
 ## Stay in control of a coding agent without babysitting each step
 
-**The problem.** A coding agent is too fast to read step by step, and too unreliable to leave
-alone: unwatched, it drifts, and a wrong step costs more the later it is caught.
+**The problem.** A coding agent produces steps faster than a person can read them. Left
+unwatched it drifts from the task, and a wrong step costs more the later it is caught.
 
 **What calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **checker
 agents** in front of every command and every edit: small models that follow instructions you
@@ -23,25 +23,26 @@ MCP servers, skills and subagents work as your project configures them.
 
 ![An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below](docs/assets/vscode-approval.png)
 
-## Compared with Claude Code's own terminal, desktop, VSCode and JetBrains front ends
+## What calu adds to Claude Code
 
-The same agent, the same chat (images, rewind, fork, several sessions, slash commands, model
-and thinking level, context usage, questions, approvals, notifications). On top of that:
+The agent and the chat are Claude Code's: images, rewind, fork, several sessions, slash
+commands, model and thinking level, context usage, questions, approvals, notifications. calu
+adds:
 
-| | Claude Code's front ends | calu |
-|---|---|---|
-| Who judges a step | Claude Code's own rules and auto mode | the same, plus checkers with **your** rules, on a model and provider you choose |
-| A step that needs a person | a prompt in the front end you are using | the session pauses; answer from VSCode, PyCharm, the browser, a terminal, or the database, on any machine |
-| Where a session lives | with the front end that started it | on a server (`calu serve`); front ends attach and detach, several at once, and the session keeps running without any |
-| Several sessions, several machines | a window or tab each | one overview of all of them, the ones that need you first |
-| Subagents | inside the main transcript | a tab each, with task and result; message a background subagent; its open decisions shown wherever you look |
-| The record | Claude Code's transcript files | every step with the checker's summary in PostgreSQL; optionally the conversation as redacted Markdown in the repository, to commit and review |
-| Names and docstrings that no longer match the code | not tracked | tracked per file; unverified code can be kept from running or being committed |
-| What the agent can reach of its supervisor | same user, same files | with `--sudo`, calu runs as root and Claude Code as you: the agent cannot read calu's credentials or approve itself |
-| Changing the rules | settings files in the project | Markdown instructions in a database the session cannot write, editable from every front end |
+| Area | What calu adds |
+|---|---|
+| Judging a step | Besides Claude Code's own rules and auto mode: checkers that apply your rules, on a model and provider you choose |
+| A step that needs a person | The session pauses; the answer can come from VSCode, PyCharm, the browser, a terminal or the database, on any machine |
+| Where a session lives | On a server (`calu serve`); front ends attach and detach, several at once; the session continues with none attached |
+| Several sessions, several machines | One overview of all of them, those that wait for a decision first |
+| Subagents | A tab each, with task and result; messages to a background subagent; its open decisions shown in every view |
+| The record | Every step with the checker's summary in PostgreSQL; optionally the conversation as redacted Markdown in the repository |
+| Names and docstrings | Tracked per file whether they match the code; unverified code can be kept from running or being committed |
+| Separation from the agent | With `--sudo`, calu runs as root and Claude Code as the user, so the agent cannot read calu's credentials or decide its own approvals |
+| The rules | Markdown instructions in a database the session cannot write, editable from every front end |
 
-**Status: early.** It works and it is rough in places; what has not been tested is listed in
-[HANDOFF.md](HANDOFF.md). Not on PyPI yet. calu succeeds
+**Status: early.** What has and has not been tested is listed in [HANDOFF.md](HANDOFF.md).
+Not on PyPI yet. calu succeeds
 [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop).
 
 ## The parts
