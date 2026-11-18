@@ -320,7 +320,8 @@ class Server:
             say(f"[serve] refused: {exc}", error=True)
         except Exception as exc:
             # One session's failure must not end the server and the other sessions.
-            log.exception("the session of request %d failed", request.id)
+            # The traceback to the log file only; the line below is what stderr shows.
+            log.info("the session of request %d failed", request.id, exc_info=True)
             say(f"[serve] failed: {exc}", error=True)
         finally:
             with anyio.CancelScope(shield=True):

@@ -8,7 +8,8 @@
     load configuration, rules and checker instructions (calu.store.ConfigStore)
     create the sessions row, start Claude Code (calu.session.Session, calu.claude.SdkRunner)
     serve the protocol on a WebSocket (calu.protocol.server) and print its address and token
-    print events to the terminal, read further messages from stdin
+    print the session's status to the terminal (never the conversation), read further
+    messages from stdin
     reload the configuration on `config_changed`, continue on `escalation_resolved`
 
 The Claude Code process never gets calu's secrets: the connection string is in no environment
@@ -32,8 +33,9 @@ database or a dropped connection:
 same user, which is what "out of reach of the Claude Code session" (REQUIREMENTS 15) rests on.
 
 Clients (`calu attach`, an IDE, a web interface) connect to the WebSocket address with the
-token; several at once. The terminal output of this command shows the same events, so a
-session can also be watched where it was started.
+token; several at once. They show the conversation. The terminal of this command shows only the
+session's status (`STATUS_EVENTS`) and one line per error; the tracebacks go to the log file
+(`calu.logfile`, D225).
 """
 
 import contextvars
@@ -146,6 +148,9 @@ Ready = Callable[[str | None, str], Awaitable[None]]
 address, once the protocol server listens and the address is recorded: a client that looks
 the session up in the database finds it from then on."""
 
+EventSink = Callable[[Event], Awaitable[None]]
+"""Receives the events of a session, one at a time."""
+
 LABEL: contextvars.ContextVar[str] = contextvars.ContextVar("calu_run_label", default="")
 """What `say` puts in front of each line. `calu run` leaves it empty; `calu serve` sets it per
 session, because the lines of several sessions share one terminal."""
@@ -165,10 +170,13 @@ def say(text: str, error: bool = False) -> None:
 
     Args:
         text: The line, without the label.
-        error: Whether the line reports a failure.
+        error: Whether the line reports a failure; such a line is put on one line.
     """
-    if error and (collected := ERRORS.get()) is not None:
-        collected.append(text)
+    if error:
+        # stderr gets one line per error (D225); the full story is in the log file.
+        text = one_line(text, 500)
+        if (collected := ERRORS.get()) is not None:
+            collected.append(text)
     print(f"{LABEL.get()}{text}", file=sys.stderr if error else sys.stdout, flush=True)
 
 
@@ -195,7 +203,6 @@ class RunOptions:
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
     interactive: bool = True
-    show_thinking: bool = False
     socket_path: Path | None = None
     """Serve a Unix socket at this path instead of a TCP port (PLAN.md §6): the file system then
     decides who may connect, and `sessions.address` records it as `unix:<path>` (D29)."""
@@ -216,9 +223,9 @@ class RunOptions:
     """With `stay`: end the session after it has been idle this long with no client attached.
     None (the default) lets it wait for ever."""
     quiet: bool = False
-    """Print the lines about the session's life (project, ids, address, errors) but not the
-    conversation: `calu serve` shares one terminal among its sessions, and the clients show
-    the conversation."""
+    """Print the lines about the session's life (project, ids, address, errors) but not its
+    status events: `calu serve` shares one terminal among its sessions. The conversation is
+    never printed (`STATUS_EVENTS`)."""
     run_as: RunAs | None = None
     """The user Claude Code runs as, when that is not the user calu runs as (D206); None
     starts it as calu's own user."""
@@ -365,7 +372,7 @@ def format_event(event: Event) -> str | None:
                 limit_text(limit) for limit in event.rate_limits
             )
         case Log():
-            return f"[{event.level}] {event.message}"
+            return f"[{event.level}] {one_line(event.message, 500)}"
         case _:
             return None
 
@@ -396,26 +403,39 @@ def one_line(text: str, limit: int = 300) -> str:
     return joined if len(joined) <= limit else joined[:limit] + " [...]"
 
 
-class Console:
-    """Prints session events to stdout. The stand-in client until phase 4."""
+STATUS_EVENTS = (
+    SessionState,
+    EscalationRequest,
+    EscalationResolved,
+    TurnResult,
+    HonestyUpdate,
+    AutoEscalateChanged,
+    UsageUpdate,
+    Log,
+)
+"""The events `calu run` and `calu serve` print (D225): the session's status. The conversation
+(the user's input, Claude's text and thinking, the tool calls, their results and the checkers'
+verdicts) is never printed; the clients show it."""
 
-    def __init__(self, show_thinking: bool = False, quiet: bool = False) -> None:
+
+class Console:
+    """Prints the status of a session to stdout: the events in `STATUS_EVENTS`, one line each."""
+
+    def __init__(self, quiet: bool = False) -> None:
         """Create a console printer.
 
         Args:
-            show_thinking: Also print Claude's thinking.
             quiet: Print only `log` events of the level "error" (`RunOptions.quiet`).
         """
-        self.show_thinking = show_thinking
         self.quiet = quiet
 
     async def __call__(self, event: Event) -> None:
-        """Print one event.
+        """Print one event if it is a status event.
 
         Args:
-            event: The event.
+            event: The event; the conversation's events are dropped.
         """
-        if isinstance(event, AssistantThinking) and not self.show_thinking:
+        if not isinstance(event, STATUS_EVENTS):
             return
         if self.quiet and not (isinstance(event, Log) and event.level == "error"):
             return
@@ -686,6 +706,7 @@ async def run_session(
     runner_factory: RunnerFactory | None = None,
     checker_models: dict[str, str | Model] | None = None,
     on_serving: Serving | None = None,
+    on_event: EventSink | None = None,
 ) -> int:
     """Run one session until it ends, and report what happened.
 
@@ -694,11 +715,11 @@ async def run_session(
     `calu.asuser.prepare`). Clears the process's "dumpable" flag (`harden_process`; `calu run`
     has done that already before it read the password, this call covers a caller that embeds the
     function, and the flag then stays cleared for the rest of that process), opens two database
-    connections, creates a `sessions` row, starts a Claude Code process, prints events to stdout
-    and, with `options.interactive`, reads messages from stdin. A `bytearray` passed as `url` is
-    wiped before Claude Code starts; a copy of the connection string stays in a
-    `ConnectionSource` inside this process until the function returns, so that a lost
-    connection can be reopened (see the module docstring).
+    connections, creates a `sessions` row, starts a Claude Code process, prints the session's
+    status to stdout (`Console`) and, with `options.interactive`, reads messages from stdin. A
+    `bytearray` passed as `url` is wiped before Claude Code starts; a copy of the connection
+    string stays in a `ConnectionSource` inside this process until the function returns, so
+    that a lost connection can be reopened (see the module docstring).
 
     Args:
         url: The `calu_session` connection string (a `bytearray` is wiped by this function).
@@ -709,6 +730,8 @@ async def run_session(
             from the database (tests pass fake models).
         on_serving: Awaited with the WebSocket address and the client token once the protocol
             server listens, in addition to printing them (a supervisor or a test uses it).
+        on_event: Awaited with every event of the session, the conversation included, after
+            the clients and the console got it (a supervisor or a test uses it); None for none.
 
     Returns:
         0 if the session ended normally, 1 if it failed or could not start (the reason was
@@ -728,7 +751,9 @@ async def run_session(
         # The caller's buffer is not needed any more. The copy in `source` stays in this
         # process's memory; nothing of it reaches Claude Code, which starts below.
         wipe(url)
-    return await run_from(source, hidden, options, runner_factory, checker_models, on_serving)
+    return await run_from(
+        source, hidden, options, runner_factory, checker_models, on_serving, on_event=on_event
+    )
 
 
 async def run_from(
@@ -739,6 +764,7 @@ async def run_from(
     checker_models: dict[str, str | Model] | None = None,
     on_serving: Serving | None = None,
     on_ready: Ready | None = None,
+    on_event: EventSink | None = None,
 ) -> int:
     """Run one session on connections of its own, opened from `source`, until it ends.
 
@@ -756,6 +782,7 @@ async def run_from(
         on_serving: Awaited with the address and the token once the server listens, or None.
         on_ready: Awaited with the session row's id and the address once a client can find the
             session in the database, or None.
+        on_event: Awaited with every event of the session, or None.
 
     Returns:
         0 if the session ended normally, 1 if it failed or could not start.
@@ -776,6 +803,7 @@ async def run_from(
                 checker_models,
                 on_serving,
                 on_ready,
+                on_event,
             )
         finally:
             with anyio.CancelScope(shield=True):
@@ -834,6 +862,7 @@ async def _run(
     checker_models: dict[str, str | Model] | None = None,
     on_serving: Serving | None = None,
     on_ready: Ready | None = None,
+    on_event: EventSink | None = None,
 ) -> int:
     """Load the settings, start the session and drive it until it ends.
 
@@ -847,6 +876,7 @@ async def _run(
         on_serving: Awaited with the address and the token once the server listens, or None.
         on_ready: Awaited with the session row's id and the address once a client can find the
             session in the database, or None.
+        on_event: Awaited with every event of the session, or None.
 
     Returns:
         0 if the session ended normally, 1 if it failed or could not start.
@@ -866,11 +896,13 @@ async def _run(
         # rules and nobody would be told.
         say(f"calu: {exc}; nothing was started", error=True)
         return 1
-    console = Console(options.show_thinking, options.quiet)
+    console = Console(options.quiet)
     idle = IdleSignal(lambda: activity(session), options.background_timeout_s)
     bus = Bus()
     store = DatabaseSessionStore(db)
     emit = both(bus.publish, both(console, idle))
+    if on_event is not None:
+        emit = both(emit, on_event)
     session = Session(
         options.workspace,
         settings,

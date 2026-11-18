@@ -1,7 +1,7 @@
 # Handoff
 
-State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-28)
-and `PLAN.md` (decisions D1-D224, open questions §11, phases §12). Everything below is on
+State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-31)
+and `PLAN.md` (decisions D1-D226, open questions §11, phases §12). Everything below is on
 `main` and pushed.
 
 ## Pick up here

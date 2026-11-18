@@ -281,7 +281,6 @@ def test_run_maps_every_flag_onto_the_session_options(
                 "--effort",
                 "high",
                 "--batch",
-                "--thinking",
             ],
             "",
         )
@@ -298,7 +297,6 @@ def test_run_maps_every_flag_onto_the_session_options(
     assert options.model == "opus"
     assert options.effort == "high"
     assert options.interactive is False  # --batch
-    assert options.show_thinking is True  # --thinking
     assert options.socket_path is None  # no --socket: a TCP port
 
 

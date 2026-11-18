@@ -19,9 +19,38 @@ from calu.config import SETTINGS_KEY
 from calu.db import Db, connect
 from calu.db import connect as connect_db
 from calu.protocol.client import connect as connect_client
-from calu.run import RunOptions, run_session
+from calu.protocol.messages import Event
+from calu.run import RunOptions, format_event, run_session
 from calu.setup import setup
 from calu.testing import _last_prompt, _rule_based, fake_models
+
+
+class Heard:
+    """Records every event of a session as the line `format_event` makes of it.
+
+    `calu run` prints only the session's status (D225); a test that checks what Claude said
+    reads it here, through `run_session(..., on_event=...)`.
+    """
+
+    def __init__(self) -> None:
+        """Start with nothing heard."""
+        self.lines: list[str] = []
+
+    async def __call__(self, event: Event) -> None:
+        """Record one event.
+
+        Args:
+            event: The event.
+        """
+        line = format_event(event)
+        if line is not None:
+            self.lines.extend(line.splitlines())
+
+    @property
+    def text(self) -> str:
+        """Everything heard, one line per event line."""
+        return "\n".join(self.lines)
+
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
@@ -84,6 +113,7 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
 ) -> None:
     session_url = await prepare(db_url, tmp_path)
     options = RunOptions(workspace=tmp_path, prompt="have a look", interactive=False)
+    heard = Heard()
 
     codes: list[int] = []
 
@@ -94,6 +124,7 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
                 options,
                 runner_factory=lambda workspace, _config, _hidden: FakeRunner(SCRIPT, workspace),
                 checker_models=fake_models(),
+                on_event=heard,
             )
         )
 
@@ -102,14 +133,17 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
         tg.start_soon(run)
     assert codes == [0]
     output = capsys.readouterr().out
-    assert "All done." in output
+    assert "All done." in heard.text
+    # D225: the terminal shows the status, never the conversation.
+    assert "All done." not in output and "have a look" not in output
     assert "escalation" in output and "calu resolve" in output
+    assert "[turn ended: success]" in output
     # D203: the id that `calu run --resume` takes is printed when the session starts, before
     # the first turn, on a line of its own. calu chose it, so it is a UUID.
     (printed,) = [line for line in output.splitlines() if line.startswith("[session] ")]
     session_id = printed.removeprefix("[session] ")
     assert str(uuid.UUID(session_id)) == session_id
-    assert output.index(printed) < output.index("have a look")
+    assert output.index(printed) < output.index("[turn ended")
 
     owner = await connect(db_url)
     try:
@@ -399,16 +433,18 @@ async def test_a_batch_run_waits_for_claude_codes_background_tasks(
             [{"text": "The build finished."}],
         ]
     )
+    heard = Heard()
     code = await run_session(
         session_url,
         options,
         runner_factory=lambda workspace, _c, _h: FakeRunner(script, workspace),
         checker_models=fake_models(),
+        on_event=heard,
     )
     assert code == 0
     output = capsys.readouterr().out
     assert "1 background task(s) still running" in output
-    assert "The build finished." in output
+    assert "The build finished." in heard.text
 
 
 # ------------------------------------------------------------------ lost connections (sd1, cs3)
@@ -428,6 +464,7 @@ async def test_a_session_survives_the_loss_of_both_database_connections(
     monkeypatch.setattr("calu.db.notify.RECONNECT_FIRST_S", 0.05)
     session_url = await prepare(db_url, tmp_path)
     codes: list[int] = []
+    heard = Heard()
 
     async def run() -> None:
         codes.append(
@@ -436,6 +473,7 @@ async def test_a_session_survives_the_loss_of_both_database_connections(
                 RunOptions(workspace=tmp_path, prompt="have a look", interactive=False),
                 runner_factory=lambda workspace, _config, _hidden: FakeRunner(SCRIPT, workspace),
                 checker_models=fake_models(),
+                on_event=heard,
             )
         )
 
@@ -484,7 +522,7 @@ async def test_a_session_survives_the_loss_of_both_database_connections(
     output = capsys.readouterr().out
     assert "the database connection is lost" in output
     assert "the database connection is back" in output
-    assert "All done." in output
+    assert "All done." in heard.text
     # The change made during the outage reached the session without a notification.
     assert "what waits for a human: edits" in output
 
@@ -521,6 +559,7 @@ async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
     monkeypatch.setattr("calu.db.notify.RECONNECT_FIRST_S", 0.05)
     session_url = await prepare(db_url, tmp_path)
     codes: list[int] = []
+    heard = Heard()
 
     async def run() -> None:
         codes.append(
@@ -529,6 +568,7 @@ async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
                 RunOptions(workspace=tmp_path, prompt="have a look", interactive=False),
                 runner_factory=lambda workspace, _config, _hidden: FakeRunner(SCRIPT, workspace),
                 checker_models=fake_models(),
+                on_event=heard,
             )
         )
 
@@ -559,7 +599,7 @@ async def test_a_session_whose_login_is_refused_for_good_stops_and_says_why(
     assert "password authentication failed" in captured.err
     assert "calu setup" in captured.err
     assert "the database refuses the session's login" in captured.out, "clients are told too"
-    assert "shipped" not in captured.out, "the step that waited for a human did not run"
+    assert "shipped" not in heard.text, "the step that waited for a human did not run"
 
     owner = await connect(db_url)
     try:
@@ -791,6 +831,7 @@ async def test_a_closed_stdin_does_not_stop_a_session_that_has_work(
     session_url = await prepare(db_url, tmp_path)
     monkeypatch.setattr("sys.stdin", io.StringIO(""))
     codes: list[int] = []
+    heard = Heard()
 
     async def run() -> None:
         codes.append(
@@ -799,6 +840,7 @@ async def test_a_closed_stdin_does_not_stop_a_session_that_has_work(
                 RunOptions(workspace=tmp_path, prompt="have a look", interactive=True),
                 runner_factory=lambda w, _c, _h: FakeRunner(SCRIPT, w),
                 checker_models=fake_models(),
+                on_event=heard,
             )
         )
 
@@ -809,7 +851,7 @@ async def test_a_closed_stdin_does_not_stop_a_session_that_has_work(
     assert codes == [0]
     captured = capsys.readouterr()
     assert "stdin closed; waiting for Claude to finish" in captured.err
-    assert "All done." in captured.out
+    assert "All done." in heard.text
     owner = await connect(db_url)
     try:
         cur = await owner.execute("SELECT seq, decision, result_summary FROM steps ORDER BY seq")
@@ -956,7 +998,12 @@ SLOW_TEXT_TURNS = FakeScript(turns=[[{"sleep": 0.5}, {"text": f"Answer {n}."}] f
 
 
 async def text_only_run(
-    db_url: str, workspace: Path, options: RunOptions, narrate: bool, on_serving=None
+    db_url: str,
+    workspace: Path,
+    options: RunOptions,
+    narrate: bool,
+    on_serving=None,
+    heard: Heard | None = None,
 ) -> int:
     """Run a session whose turns take a moment and call no tool; return its exit code."""
     session_url = await prepare(db_url, workspace)
@@ -979,6 +1026,7 @@ async def text_only_run(
         runner_factory=lambda w, _c, _h: FakeRunner(SLOW_TEXT_TURNS, w),
         checker_models=fake_models(),
         on_serving=on_serving,
+        on_event=heard,
     )
 
 
@@ -995,16 +1043,17 @@ async def test_a_run_whose_stdin_ended_finishes_after_its_queued_messages(
     import io
 
     monkeypatch.setattr("sys.stdin", io.StringIO("second\nthird\n"))
+    heard = Heard()
     with anyio.fail_after(25):
         code = await text_only_run(
             db_url,
             tmp_path,
             RunOptions(workspace=tmp_path, prompt="first", interactive=True, serve=False),
             narrate,
+            heard=heard,
         )
     assert code == 0
-    out = capsys.readouterr().out
-    assert [line for line in out.splitlines() if line.startswith("Answer ")] == [
+    assert [line for line in heard.lines if line.startswith("Answer ")] == [
         "Answer 1.",
         "Answer 2.",
         "Answer 3.",
@@ -1026,6 +1075,7 @@ async def test_a_batch_run_finishes_after_a_message_a_client_queued(
         async with connect_client(address, token, "test-client", _ignore) as client:
             await client.request("chat.send", {"text": "second"})
 
+    heard = Heard()
     with anyio.fail_after(25):
         code = await text_only_run(
             db_url,
@@ -1033,10 +1083,10 @@ async def test_a_batch_run_finishes_after_a_message_a_client_queued(
             RunOptions(workspace=tmp_path, prompt="first", interactive=False),
             narrate,
             on_serving=queue_one,
+            heard=heard,
         )
     assert code == 0
-    out = capsys.readouterr().out
-    assert [line for line in out.splitlines() if line.startswith("Answer ")] == [
+    assert [line for line in heard.lines if line.startswith("Answer ")] == [
         "Answer 1.",
         "Answer 2.",
     ]

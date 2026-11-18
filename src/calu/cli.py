@@ -57,6 +57,7 @@ import contextlib
 import functools
 import getpass
 import json
+import logging
 import math
 import os
 import pwd
@@ -77,7 +78,16 @@ from typing import Any
 import anyio
 import psycopg
 
-from calu import __version__, admin, asuser, doctor, herd, localsocket, session_requests
+from calu import (
+    __version__,
+    admin,
+    asuser,
+    doctor,
+    herd,
+    localsocket,
+    logfile,
+    session_requests,
+)
 from calu.acp import serve_acp
 from calu.attach import attach
 from calu.claude.transcripts import transcripts, user_inputs
@@ -137,6 +147,8 @@ from calu.setup import (
 from calu.store import trust
 from calu.store.projects import register_directory
 from calu.tui import start as tui_start
+
+_log = logging.getLogger("calu.cli")
 
 
 class CliError(Exception):
@@ -1602,7 +1614,7 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     finally:
         wipe(url)
     if code:
-        raise CliError("the server ended with an error (see the messages above)")
+        raise CliError("the server ended with an error (see the lines above and the log file)")
 
 
 def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -1726,7 +1738,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `fork`,
-            `fork_before_turn`, `model`, `effort`, `batch`, `thinking`).
+            `fork_before_turn`, `model`, `effort`, `batch`).
         store: The credential store.
 
     Raises:
@@ -1758,19 +1770,21 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         model=args.model,
         effort=args.effort,
         interactive=not args.batch,
-        show_thinking=args.thinking,
         background_timeout_s=args.background_timeout,
         run_as=run_as,
     )
     if options.interactive and not options.prompt and sys.stdin.isatty():
-        print("Type a message for Claude; /quit ends the session.")
+        print(
+            "Type a message for Claude; /quit ends the session. This terminal shows the "
+            "session's status only: `calu attach` in another terminal shows the conversation."
+        )
     url = _session_login(store)
     try:
         code = asyncio.run(run_session(url, options))
     finally:
         wipe(url)
     if code:
-        raise CliError("the session ended with an error (see the messages above)")
+        raise CliError("the session ended with an error (see the lines above and the log file)")
 
 
 async def _with_admin(url: str, work: Callable[[Db], Awaitable[str]]) -> str:
@@ -4114,8 +4128,7 @@ def build_parser() -> argparse.ArgumentParser:
         "with Claude Code as you. Needs an installation only root can change",
     )
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--thinking", action="store_true", help="also print Claude's thinking")
-    p.set_defaults(handler=cmd_run)
+    p.set_defaults(handler=cmd_run, log_name="run")
 
     p = sub.add_parser(
         "serve",
@@ -4149,7 +4162,7 @@ def build_parser() -> argparse.ArgumentParser:
         "with Claude Code as you. Needs an installation only root can change",
     )
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
-    p.set_defaults(handler=cmd_serve)
+    p.set_defaults(handler=cmd_serve, log_name="serve")
 
     p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")
     p.add_argument("directory", nargs="?", default=".", help="project directory (default: .)")
@@ -4528,8 +4541,12 @@ def main(
     `calu evals` ran its checkers without one (PLAN.md D131). The keys stay hidden from Claude
     Code, which only `calu run` starts and which removes them (`SdkRunner.hidden_env`).
 
+    `calu run` and `calu serve` run through `_logged`: tracebacks go to their log file and
+    stderr gets one line per error (D225).
+
     Returns:
-        The exit code: 0 on success, 1 on a reported error.
+        The exit code: 0 on success, 1 on a reported error, 130 when `calu run` or `calu
+        serve` was interrupted with Ctrl-C.
     """
     global _ARGUMENTS
     _ARGUMENTS = list(sys.argv[1:] if argv is None else argv)
@@ -4540,6 +4557,9 @@ def main(
     # program) must not reach this command's `calu setup`.
     _typed.clear()
     args = build_parser().parse_args(argv)
+    log_name = getattr(args, "log_name", None)
+    if log_name is not None:
+        return _logged(log_name, args, store_factory)
     try:
         load_secrets()
         args.handler(args, store_factory())
@@ -4556,5 +4576,46 @@ def main(
         TimeoutError,
     ) as exc:
         print(f"calu: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _logged(
+    name: str, args: argparse.Namespace, store_factory: Callable[[], CredentialStore]
+) -> int:
+    """Run `calu run` or `calu serve` with the log file and one-line errors on stderr (D225).
+
+    Side effects: sets up the log (`calu.logfile.setup`: the log file at
+    `$XDG_STATE_HOME/calu/log/<name>.log` with every record and its traceback, stderr with one
+    line per warning or error); then everything the command's handler does. An error the
+    command ends with is written to the log file with its traceback and to stderr as one line;
+    Ctrl-C ends the command with one line, too.
+
+    Args:
+        name: The command's name, which names the log file.
+        args: The parsed arguments; `args.handler` is the command.
+        store_factory: Creates the credential store.
+
+    Returns:
+        The exit code: 0 on success, 1 on an error, 130 on Ctrl-C.
+    """
+    path = logfile.setup(name)
+    where = f"; details in {path}" if path is not None else ""
+    try:
+        load_secrets()
+        args.handler(args, store_factory())
+    except KeyboardInterrupt:
+        _log.info("calu %s: interrupted", name)
+        print("calu: interrupted", file=sys.stderr)
+        return 130
+    except (CliError, CredentialError) as exc:
+        # Errors calu reports on purpose: their text is the whole message.
+        _log.info("calu %s: %s", name, exc)
+        print(f"calu: {logfile.one_line(str(exc))}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        # At INFO: the traceback goes to the file only; stderr gets the line below.
+        _log.info("calu %s ended with an error", name, exc_info=True)
+        print(f"calu: {logfile.describe(exc)}{where}", file=sys.stderr)
         return 1
     return 0

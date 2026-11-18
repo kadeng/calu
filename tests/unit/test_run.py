@@ -69,11 +69,27 @@ def test_an_escalation_names_the_resolve_command():
     assert "escalation 17: Bash" in line and "calu resolve 17 allow|deny" in line
 
 
-async def test_the_console_hides_thinking_unless_asked(capsys):
-    await Console()(AssistantThinking(text="hmm"))
+async def test_the_console_prints_the_status_and_never_the_conversation(capsys):
+    """D225: `calu run` and `calu serve` print the session's status; the clients show the
+    conversation."""
+    console = Console()
+    for event in (
+        UserInput(text="secret plan"),
+        AssistantThinking(text="hmm"),
+        AssistantText(text="Hello"),
+        ToolUse(tool_use_id="t", name="Bash", input={"command": "ls"}),
+        ToolResult(tool_use_id="t", content="a.py"),
+    ):
+        await console(event)
     assert capsys.readouterr().out == ""
-    await Console(show_thinking=True)(AssistantThinking(text="hmm"))
-    assert "(thinking) hmm" in capsys.readouterr().out
+    await console(SessionState(state="checking"))
+    await console(TurnResult(result="done"))
+    await console(Log(level="warning", message="two\nlines"))
+    assert capsys.readouterr().out.splitlines() == [
+        "[checking]",
+        "[turn ended: success]",
+        "[warning] two lines",
+    ]
 
 
 class Watched:

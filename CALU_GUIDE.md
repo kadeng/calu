@@ -695,6 +695,13 @@ a program that ignores the proxy variables gets nowhere either.
 
 ## Watching and unblocking a session
 
+The terminal of `calu run` and of `calu serve` shows the session's **status** only: its state,
+escalations and their outcome, the end of each turn, the honesty state and the usage limits.
+It never shows the conversation (what you or Claude wrote, the tool calls and their results);
+`calu attach`, the web interface or an editor show that. An error is one line on stderr; the
+full report with its traceback is in the log file that the line names,
+`~/.local/state/calu/log/run.log` or `serve.log` (as root, `/var/lib/calu/log/`).
+
 While a session runs, another terminal — or another machine with access to the database — can
 watch and unblock it:
 

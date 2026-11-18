@@ -134,6 +134,16 @@ broken down or extended. Derived requirements and design decisions belong in
     somewhere, i.e. from that user's own login (stated 2026-11-18). `calu login` delegates to
     Claude Code's login method in that user's account, with and without `--sudo` (stated
     2026-11-18). Parallel attempts at the web login need no cap (stated 2026-11-18).
+30. "calu run and calu serve should not print interactions (neither user input nor claude
+    responses) to stdout/stderr, they are supposed to just print a status. Full exception
+    tracebacks should go to a logfile, stderr should only show a 1-liner in case of errors."
+    (stated 2026-11-18)
+31. "When calu attach or calu web connect locally through a Unix socket, they should be
+    trusted and not require input of a session token/password. Only require these for network
+    connections, unless --secure is passed during run or serve startup." (stated 2026-11-18)
+    On the case where Claude Code runs as the same OS user as calu, the owner chose: trust
+    only other uids, so a same-user session keeps requiring a token on its socket too; and
+    `--secure` requires a token on every socket, root's included (2026-11-18).
 
 ## Soft goals and priorities
 
