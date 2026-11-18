@@ -38,6 +38,9 @@ What you can do with it, if you want to:
   a breakpoint and step through it in the debugger, while the session goes on. Send a message
   into the running turn or queue one for the next. Read one line per step, the step's diff,
   the conversation as the checkers see it, or the whole session as a file in the repository.
+- **Version-control the chat history.** A session can be written step by step as Markdown
+  into the project, with secrets and personal data replaced, so the conversation is committed
+  and reviewed with the change it produced.
 
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
