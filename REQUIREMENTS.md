@@ -167,6 +167,11 @@ broken down or extended. Derived requirements and design decisions belong in
     The VSCode session must be able to run when connected to a remote machine, in this case
     everything runs remotely. If there's no calu serve running, it should give instructions
     how to launch it in a tmux or screen session persistently." (stated 2026-11-18)
+35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
+    powerful because it should support both local and remote mode and an operation where the
+    remote server, the db and calu are being accessed over SSH only and changes are
+    synchronized back and forth (via rsync, scp, sftp or pycharm internal methods)." (stated
+    2026-11-18)
 
 ## Soft goals and priorities
 
