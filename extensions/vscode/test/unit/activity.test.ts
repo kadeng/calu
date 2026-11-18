@@ -31,7 +31,7 @@ describe('activity line', () => {
 
   it('shows waiting, done, idle and stopped states', () => {
     expect(activityLine(true, 'escalated', 0, undefined, 40_000, 0)).toMatchObject({
-      icon: '⏸',
+      icon: '‖',
       label: WAITING_LABEL,
       elapsed: '40s',
       active: true,

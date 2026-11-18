@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAIN,
+  answerFromNote,
   applyAttach,
   applyEvent,
   applyEvents,
@@ -115,6 +116,17 @@ describe('questions of the agent', () => {
     expect(s.escalations.q).toMatchObject({ pending: true, answer: 'SQLite' });
     s = applyEvent(s, ev('escalation.resolved', { escalation_id: 'q', decision: 'allow' }));
     expect(s.escalations.q).toMatchObject({ status: 'answered', answer: 'SQLite', pending: false });
+  });
+
+  it('shows a question that was answered elsewhere, or replayed, as answered with its answer', () => {
+    const note = 'The user answered your question: Database: SQLite\nWhich checks?: lint\nThe AskUserQuestion call itself was not run; this is the answer. Carry on with it.';
+    let s = applyEvent(initialViewState(), request('q', { tool_name: 'AskUserQuestion', questions }));
+    s = applyEvent(s, ev('escalation.resolved', { escalation_id: 'q', decision: 'deny', note }));
+    expect(s.escalations.q).toMatchObject({ status: 'answered', answer: 'Database: SQLite\nWhich checks?: lint', note: null });
+    expect(answerFromNote('another text')).toBe('another text');
+    let cancelled = applyEvent(initialViewState(), request('q', { tool_name: 'AskUserQuestion', questions }));
+    cancelled = applyEvent(cancelled, ev('escalation.resolved', { escalation_id: 'q', decision: 'cancelled' }));
+    expect(cancelled.escalations.q.status).toBe('cancelled');
   });
 });
 

@@ -631,6 +631,20 @@ export function parseQuestions(raw: unknown): QuestionView[] {
 }
 
 /**
+ * Extract the user's answer from the note of an `escalation.resolved` event of a question.
+ *
+ * calu sends the text Claude receives: "The user answered your question: <answer>\nThe
+ * AskUserQuestion call itself was not run; ..." (`ANSWER_TEMPLATE` in `calu.escalations`).
+ *
+ * @param note The event's note.
+ * @returns The answer without calu's frame; the whole note if it has another form.
+ */
+export function answerFromNote(note: string): string {
+  const match = /^The user answered your question: ([\s\S]*?)\nThe AskUserQuestion call itself was not run;/.exec(note);
+  return match ? match[1] : note;
+}
+
+/**
  * Build the answer text for the questions of an escalation from the user's choices.
  *
  * @param questions The questions of the escalation, in order.
@@ -1486,15 +1500,22 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       const old = findOpenEscalation(state, e.escalation_id);
       if (!old) return state;
       const decided = (['allow', 'deny', 'cancelled'] as const).includes(e.decision) ? e.decision : 'cancelled';
-      // An escalation closed by the user's answer is reported as allowed; show it as answered.
-      const status = old.answer !== undefined && decided !== 'cancelled' ? 'answered' : decided;
+      // calu reports a question closed by an answer as "deny" (the AskUserQuestion call itself
+      // does not run) with the text Claude receives as the note. The card shows it as answered:
+      // also after a replay and when another client answered, where no `ui.decisionPending`
+      // of this view recorded the answer.
+      const question = old.questions.length > 0;
+      const answered = decided !== 'cancelled' && (question || old.answer !== undefined);
+      const note = str(e.note) ? e.note : null;
+      const answer = old.answer ?? (answered && note !== null ? answerFromNote(note) : undefined);
       return {
         ...state,
         escalations: withEntry(state.escalations, old.key, {
           ...old,
-          status,
+          status: answered ? 'answered' : decided,
           pending: false,
-          note: str(e.note) ? e.note : null,
+          ...(answer !== undefined ? { answer } : {}),
+          note: answered && question ? null : note,
         }),
       };
     }

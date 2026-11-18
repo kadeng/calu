@@ -58,7 +58,7 @@ export function buildHints(input: HintInput): SetupHint[] {
       id: 'claude-missing',
       level: 'error',
       message:
-        `${claude.message || 'Claude Code (`claude`) was not found on this machine.'} The extension does not ` +
+        `Claude Code (\`claude\`) was not found on this machine${claude.message ? ` (${claude.message})` : ''}. The extension does not ` +
         'install Claude Code: follow the instructions, then run `claude` once in a terminal in the project folder.',
       action: 'openLink',
       actionLabel: 'How to install Claude Code',

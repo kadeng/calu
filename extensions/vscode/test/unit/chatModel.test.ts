@@ -19,6 +19,7 @@ import {
   sessionMenu,
   setupCards,
   shortDirectory,
+  showsErrorChip,
   splitByFiles,
   tabList,
   toolHead,
@@ -74,6 +75,19 @@ describe('texts', () => {
     expect(toolHead({ input: { file_path: '/w/a.py' } })).toEqual({ text: '/w/a.py', isPath: true });
     expect(toolHead({ input: {}, diffPath: 'b.py' })).toEqual({ text: 'b.py', isPath: true });
     expect(toolHead({ input: { pattern: 'TODO' } }).text).toBe('TODO');
+    expect(toolHead({ input: { questions: [{ question: 'Which\n runner?', options: [] }] } })).toEqual({ text: 'Which runner?', isPath: false });
+    expect(toolHead({ input: { questions: 'nope' } }).text).toBe('{"questions":"nope"}');
+  });
+
+  it('shows the error chip only where the decision chip does not already say it', () => {
+    const check = (decision: string) => ({ route: 'command', decision, reason: '', summary: '', comment: '', checkerRoute: 'command' as const });
+    const failed = { content: 'x', isError: true };
+    expect(showsErrorChip({ name: 'Bash', check: check('PASS'), result: failed })).toBe(true);
+    expect(showsErrorChip({ name: 'Bash', check: check('ESCALATE'), result: failed })).toBe(true);
+    expect(showsErrorChip({ name: 'Bash', check: check('DENY'), result: failed })).toBe(false);
+    expect(showsErrorChip({ name: 'AskUserQuestion', check: check('ESCALATE'), result: failed })).toBe(false);
+    expect(showsErrorChip({ name: 'Bash', check: check('PASS'), result: { content: 'x', isError: false } })).toBe(false);
+    expect(showsErrorChip({ name: 'Bash' })).toBe(false);
     expect(toolHead({ input: {} }).text).toBe('');
     expect(toolHead({ input: { n: 1 } }).text).toBe('{"n":1}');
   });

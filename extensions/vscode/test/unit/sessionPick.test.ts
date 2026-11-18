@@ -87,6 +87,13 @@ describe('buildHints', () => {
     expect(hints.map((h) => [h.id, h.action])).toEqual([['calu-missing', 'install']]);
   });
 
+  it('names Claude Code in the hint about a missing claude, with the finding as the detail', () => {
+    const missing = status({ findings: [{ name: 'claude', ok: false, level: 'missing', message: 'not on PATH', advice: '' }] });
+    const [hint] = buildHints({ caluMissing: false, status: missing, attached: true, noServer: false });
+    expect(hint).toMatchObject({ id: 'claude-missing', action: 'openLink' });
+    expect(hint.message.startsWith('Claude Code (`claude`) was not found on this machine (not on PATH). The extension does not install')).toBe(true);
+  });
+
   it('offers a new session, and the server command when no server answered', () => {
     expect(buildHints({ caluMissing: false, status: status(), attached: false, noServer: false }).map((h) => h.id)).toEqual(['no-session']);
     expect(buildHints({ caluMissing: false, status: status(), attached: false, noServer: true }).map((h) => [h.id, h.action])).toEqual([

@@ -6,7 +6,7 @@
  *
  *     | icon | label (LABEL_COLUMN_CH wide) | elapsed |
  *     | ✻    | Combobulating…               | 12s     |   busy (spinner and verb change)
- *     | ⏸    | Waiting for you…             | 40s     |   waiting (an approval is open)
+ *     | ‖    | Waiting for you…             | 40s     |   waiting (an approval is open)
  *     | ✓    | Done                         | 52s     |   idle after a turn
  *     |      | Idle / Starting… / Stopped / Not connected |
  */
@@ -59,7 +59,7 @@ export const VERB_MS = 4000;
 
 /** What the activity line shows. */
 export interface Activity {
-  /** First column: spinner frame, "⏸", "✓" or "". */
+  /** First column: spinner frame, "‖", "✓" or "". */
   icon: string;
   /** Second column, e.g. "Combobulating…". */
   label: string;
@@ -131,7 +131,7 @@ export function activityLine(
     const verb = ACTIVITY_VERBS[(seed + Math.floor(elapsed / VERB_MS)) % ACTIVITY_VERBS.length];
     return activity(frame, `${verb}…`, formatElapsed(elapsed), true, 'busy');
   }
-  if (phase === 'waiting') return activity('⏸', WAITING_LABEL, formatElapsed(elapsed), true, 'waiting');
+  if (phase === 'waiting') return activity('‖', WAITING_LABEL, formatElapsed(elapsed), true, 'waiting');
   if (phase === 'starting') return activity('', 'Starting…', '', false, 'idle');
   if (phase === 'failed') return activity('', 'Failed', '', false, 'idle');
   if (phase === 'stopped') return activity('', 'Stopped', '', false, 'idle');

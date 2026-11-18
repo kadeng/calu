@@ -38,6 +38,10 @@ body {
   font-size: var(--vscode-font-size);
   line-height: 1.45;
   overflow: hidden;
+  /* "clip" also refuses programmatic scrolling: `scrollIntoView` and focus on a card must
+     scroll the transcript only, never shift the whole view by the few pixels that elements
+     outside the layout (`.sr-only`) add below it. */
+  overflow: clip;
 }
 
 *, *::before, *::after { box-sizing: border-box; }

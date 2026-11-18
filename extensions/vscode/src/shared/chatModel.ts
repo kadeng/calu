@@ -105,7 +105,7 @@ export function previewLines(text: string, count: number, from: 'head' | 'tail')
 
 /**
  * Describe a tool input in one line: the command of Bash, the file of an edit or read, the
- * pattern of a search, else the input as JSON.
+ * pattern of a search, the first question of `AskUserQuestion`, else the input as JSON.
  *
  * @param tool The tool view.
  * @returns `text` for display and `isPath` true if the text is a file path (it is then cut in
@@ -121,6 +121,8 @@ export function toolHead(tool: Pick<ToolView, 'input' | 'diffPath'>): { text: st
   for (const key of ['description', 'pattern', 'query', 'url', 'skill', 'prompt']) {
     if (typeof input[key] === 'string') return { text: oneLine(input[key] as string, 300), isPath: false };
   }
+  const first = Array.isArray(input.questions) ? (input.questions[0] as { question?: unknown } | null | undefined) : undefined;
+  if (typeof first?.question === 'string') return { text: oneLine(first.question, 300), isPath: false };
   const json = JSON.stringify(input);
   return { text: json === '{}' ? '' : oneLine(json, 300), isPath: false };
 }
@@ -170,6 +172,23 @@ export function decisionKind(decision: string | undefined): 'pass' | 'allow' | '
   if (d === 'DENY') return 'deny';
   if (d === 'ESCALATE') return 'escalate';
   return 'pending';
+}
+
+/**
+ * Tell whether a tool row shows the "error" chip next to the checker's decision.
+ *
+ *     result is no error                         -> no
+ *     AskUserQuestion                            -> no (its "error" result carries the user's answer)
+ *     the checker denied the call (DENY)         -> no (the DENY chip says why the call did not run)
+ *     every other failed call                    -> yes
+ *
+ * @param tool The tool view.
+ * @returns True if the chip is shown.
+ */
+export function showsErrorChip(tool: Pick<ToolView, 'name' | 'check' | 'result'>): boolean {
+  if (!tool.result?.isError) return false;
+  if (tool.name === 'AskUserQuestion') return false;
+  return decisionKind(tool.check?.decision) !== 'deny';
 }
 
 // ------------------------------------------------------------------ session dropdown

@@ -23,6 +23,7 @@ import {
   middleTruncate,
   oneLine,
   previewLines,
+  showsErrorChip,
   splitByFiles,
   splitPath,
   toolHead,
@@ -328,7 +329,7 @@ function renderTool(tool: ToolView | undefined, ctx: Ctx): HTMLElement {
   });
   row.append(icon(launch ? 'agent' : TOOL_ICONS[kind], 'tool-icon'), el('span', 'tool-name', tool.name), toolHeadElement(tool));
   const decision = decisionKind(tool.check?.decision);
-  if (tool.result?.isError) row.append(el('span', 'chip decision deny', 'error'));
+  if (showsErrorChip(tool)) row.append(el('span', 'chip decision deny', 'error'));
   if (launch) row.append(agentChip(tool, ctx));
   if (tool.check) {
     row.append(

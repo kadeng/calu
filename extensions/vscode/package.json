@@ -23,7 +23,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onFileSystem:calu-checker"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
