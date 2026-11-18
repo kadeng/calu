@@ -60,6 +60,23 @@ describe('applyEvent', () => {
     expect(new Set(s.items[MAIN].map((i) => i.id)).size).toBe(4);
   });
 
+  it("computes a turn's own cost from the session totals that Claude Code reports", () => {
+    const s = applyEvents(initialViewState(), [
+      ev('turn.result', { subtype: 'success', cost_usd: 0.0027, num_turns: 3 }),
+      ev('turn.result', { subtype: 'success', cost_usd: 0.004, num_turns: 5 }),
+      ev('turn.result', { subtype: 'success', num_turns: 1 }),
+      // A restarted Claude Code counts from zero: the difference is not this turn's cost.
+      ev('turn.result', { subtype: 'success', cost_usd: 0.001, num_turns: 1 }),
+    ]);
+    const turns = s.items[MAIN].filter((i) => i.kind === 'turn');
+    expect(turns[0]).toMatchObject({ costUsd: 0.0027, costDelta: null });
+    expect(turns[1]).toMatchObject({ costUsd: 0.004 });
+    expect((turns[1] as { costDelta: number }).costDelta).toBeCloseTo(0.0013, 6);
+    expect(turns[2]).toMatchObject({ costUsd: null, costDelta: null });
+    expect(turns[3]).toMatchObject({ costUsd: 0.001, costDelta: null });
+    expect(s.usage).toMatchObject({ costUsd: 0.001, numTurns: 1 });
+  });
+
   it('merges tool.use, check.result, edit.diff and tool.result by tool_use_id', () => {
     const s = applyEvents(initialViewState(), [
       ev('tool.use', { tool_use_id: 't1', name: 'Edit', input: { file_path: 'a.py' } }),

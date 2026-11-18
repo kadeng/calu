@@ -636,7 +636,9 @@ select.pill option {
   opacity: 0.75;
 }
 .path-base, .tool-head.path .line-range { flex: none; }
-a.tool-head.file-link { color: var(--vscode-textLink-foreground); }
+/* The link is as wide as the path, not as the row: a click beside it is a click on the row
+   (the diff of an edit). The margin keeps the chips at the right edge. */
+a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-textLink-foreground); }
 .tool-head .file-link { text-decoration: underline dotted; }
 .line-range { color: var(--calu-muted); }
 .row-chevron { color: var(--calu-muted); width: 12px; height: 12px; }

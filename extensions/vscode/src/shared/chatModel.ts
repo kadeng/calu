@@ -207,6 +207,42 @@ export function turnLabel(turn: { subtype: string; isError: boolean }): string {
   return `turn ended: ${(turn.subtype || 'error').replace(/_/g, ' ')}`;
 }
 
+/**
+ * Word the cost on a turn's separator line. Claude Code reports the cost of the whole session
+ * at the end of every turn; the turn's own cost is the difference to the turn before.
+ *
+ *     total 0.0050, turn 0.0003  -> "$0.0003 · session $0.0050"
+ *     total 0.0027, turn unknown -> "session $0.0027"
+ *     total unknown              -> ""
+ *
+ * @param turn `costUsd`: the session's cost when the turn ended, or `null`; `costDelta`: the
+ *   cost of this turn alone, or `null`/`undefined` if not known.
+ * @returns The text, "" without a cost. Amounts have four decimals.
+ */
+export function turnCost(turn: { costUsd: number | null; costDelta?: number | null }): string {
+  if (turn.costUsd === null) return '';
+  const session = `session $${turn.costUsd.toFixed(4)}`;
+  return typeof turn.costDelta === 'number' ? `$${turn.costDelta.toFixed(4)} · ${session}` : session;
+}
+
+/**
+ * Word the session line of the usage popover.
+ *
+ *     (0.005, 2) -> "Cost $0.0050 (Claude Code, whole session) · last turn: 2 model calls"
+ *     (null, 0)  -> "Cost unknown"
+ *
+ * The checkers' models are billed to their own keys and are not in this number.
+ *
+ * @param costUsd The session's cost as Claude Code reported it last, or `null`.
+ * @param numTurns `num_turns` of the last `turn.result`: the model calls of that turn; 0 if no
+ *   turn ended yet.
+ * @returns The line.
+ */
+export function usageCostLine(costUsd: number | null, numTurns: number): string {
+  const cost = costUsd !== null ? `Cost $${costUsd.toFixed(4)} (Claude Code, whole session)` : 'Cost unknown';
+  return numTurns > 0 ? `${cost} · last turn: ${numTurns} model call${numTurns === 1 ? '' : 's'}` : cost;
+}
+
 // ------------------------------------------------------------------ session dropdown
 
 /** One row of the session dropdown. */

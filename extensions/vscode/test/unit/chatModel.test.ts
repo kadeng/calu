@@ -23,7 +23,9 @@ import {
   splitByFiles,
   tabList,
   toolHead,
+  turnCost,
   turnLabel,
+  usageCostLine,
   usageMeter,
 } from '../../src/shared/chatModel';
 import { MAX_IMAGES } from '../../src/shared/messages';
@@ -86,6 +88,16 @@ describe('texts', () => {
     expect(turnLabel({ subtype: 'error_max_turns', isError: true })).toBe('turn ended: error max turns');
     expect(turnLabel({ subtype: 'success', isError: true })).toBe('turn ended: success');
     expect(turnLabel({ subtype: '', isError: true })).toBe('turn ended: error');
+  });
+
+  it('words the cost of a turn next to the cost of the session', () => {
+    expect(turnCost({ costUsd: 0.005, costDelta: 0.0003 })).toBe('$0.0003 · session $0.0050');
+    expect(turnCost({ costUsd: 0.0027, costDelta: null })).toBe('session $0.0027');
+    expect(turnCost({ costUsd: 0.0027 })).toBe('session $0.0027');
+    expect(turnCost({ costUsd: null, costDelta: 0.1 })).toBe('');
+    expect(usageCostLine(0.005, 2)).toBe('Cost $0.0050 (Claude Code, whole session) · last turn: 2 model calls');
+    expect(usageCostLine(0.005, 1)).toBe('Cost $0.0050 (Claude Code, whole session) · last turn: 1 model call');
+    expect(usageCostLine(null, 0)).toBe('Cost unknown');
   });
 
   it('shows the error chip only where the decision chip does not already say it', () => {

@@ -261,7 +261,14 @@ export type Item =
       kind: 'turn';
       subtype: string;
       isError: boolean;
+      /** What Claude Code reported at the end of the turn: the cost of the whole session so far. */
       costUsd: number | null;
+      /**
+       * The cost of this turn alone: `costUsd` minus the session's cost before the turn. `null`
+       * when that earlier cost is not known (the first turn seen) or was higher (Claude Code
+       * was started again and counts from zero).
+       */
+      costDelta?: number | null;
       /** Background tasks (subagents, shells) still running when the turn ended. */
       backgroundTasks: number;
       /** True for the end of a recorded turn (`ui.history`): outcome and cost are not recorded. */
@@ -1654,13 +1661,17 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
     }
     case 'turn.result': {
       const e = p as unknown as TurnResult;
+      // `cost_usd` is Claude Code's running total of the session, not the turn's own cost.
       const costUsd = typeof e.cost_usd === 'number' ? e.cost_usd : null;
+      const before = state.usage.costUsd;
+      const costDelta = costUsd !== null && before !== null && costUsd >= before ? costUsd - before : null;
       const backgroundTasks = typeof e.background_tasks === 'number' ? e.background_tasks : 0;
       const next = appendItem(finishStreaming(state), MAIN, {
         kind: 'turn',
         subtype: str(e.subtype) ? e.subtype : 'success',
         isError: Boolean(e.is_error),
         costUsd,
+        costDelta,
         backgroundTasks,
       });
       return {

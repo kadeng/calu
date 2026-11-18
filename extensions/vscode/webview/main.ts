@@ -34,6 +34,7 @@ import {
   sessionMenu,
   setupCards,
   tabList,
+  usageCostLine,
   usageMeter,
   linkMessage,
   type FileIndex,
@@ -1008,8 +1009,7 @@ function buildUsagePopover(): HTMLElement {
   if (view.usage.rateLimits.length === 0) box.append(el('div', 'usage-line', 'None reported (an API key or a cloud provider has none).'));
   for (const limit of view.usage.rateLimits) box.append(el('div', 'usage-line', rateLimitLine(limit)));
   box.append(el('div', 'menu-heading', 'Session'));
-  const cost = view.usage.costUsd !== null ? `$${view.usage.costUsd.toFixed(4)}` : 'unknown';
-  box.append(el('div', 'usage-line', `Cost ${cost} · ${view.usage.numTurns} turn(s)`));
+  box.append(el('div', 'usage-line', usageCostLine(view.usage.costUsd, view.usage.numTurns)));
   box.append(actionButton('Refresh', 'post', { class: 'menu-item', 'data-type': 'refreshUsage' }));
   return box;
 }

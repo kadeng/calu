@@ -27,6 +27,7 @@ import {
   splitByFiles,
   splitPath,
   toolHead,
+  turnCost,
   turnLabel,
   type FileIndex,
 } from '../src/shared/chatModel';
@@ -340,7 +341,8 @@ function renderChecker(item: Extract<Item, { kind: 'checker' }>): HTMLElement {
  */
 function renderTurn(item: Extract<Item, { kind: 'turn' }>): HTMLElement {
   const parts = [item.stored ? 'end of the turn' : turnLabel(item)];
-  if (item.costUsd !== null) parts.push(`$${item.costUsd.toFixed(4)}`);
+  const cost = turnCost(item);
+  if (cost) parts.push(cost);
   if (item.backgroundTasks > 0) parts.push(`${item.backgroundTasks} background task${item.backgroundTasks === 1 ? '' : 's'} running`);
   const box = el('div', `item turn${item.isError ? ' error' : ''}`, undefined, { role: 'separator' });
   box.append(el('span', 'turn-text', parts.join(' · ')));
