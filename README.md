@@ -176,7 +176,7 @@ calu evals                   # the checkers against the built-in cases
 [CALU_GUIDE.md](CALU_GUIDE.md) is the documentation: every command, credentials, the sandbox
 and network policy, remote access, the front ends, checkers and rules. Every setting with its
 type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The decisions behind it
-all are in [PLAN.md](PLAN.md); how it is tested, including the things we drive by screenshot
+all are in [PLAN.md](PLAN.md); how it is tested, including the tests driven by screenshot
 in a container, in [docs/TESTING.md](docs/TESTING.md) and
 [docs/notes/test-plan.md](docs/notes/test-plan.md). Contributing starts at
 [AGENTS.md](AGENTS.md).
