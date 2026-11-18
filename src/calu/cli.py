@@ -65,10 +65,12 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
@@ -1989,6 +1991,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
             is below 2, or the session could not be started.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
+        KeyboardInterrupt: On Ctrl-C or SIGTERM, after the session was stopped in order.
     """
     workspace, prompt = _workspace_and_prompt(args)
     if args.background_timeout is not None and (
@@ -2023,12 +2026,34 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
             "session's status only: `calu attach` in another terminal shows the conversation."
         )
     url = _session_login(store)
+    # SIGTERM (a service manager, `docker stop`, `kill`) stops the session in order, as
+    # Ctrl-C does; a handler can only be installed in the main thread.
+    in_main = threading.current_thread() is threading.main_thread()
+    previous = signal.signal(signal.SIGTERM, _terminate_as_interrupt) if in_main else None
     try:
         code = asyncio.run(run_session(url, options))
     finally:
+        if in_main:
+            signal.signal(signal.SIGTERM, previous)
         wipe(url)
     if code:
         raise CliError("the session ended with an error (see the lines above and the log file)")
+
+
+def _terminate_as_interrupt(_number: int, _frame: object) -> None:
+    """Handle SIGTERM of `calu run` as Ctrl-C: the session stops in order.
+
+    Without it the process ended at once: the session's row kept its last state, its
+    sockets stayed behind and nothing was said (found in the root box, 2026-11-18).
+
+    Side effect: sends this process SIGINT, which the running event loop turns into a
+    cancellation of the session; `calu run` then ends with "calu: interrupted" and 130.
+
+    Args:
+        _number: The signal's number (unused).
+        _frame: The interrupted frame (unused).
+    """
+    signal.raise_signal(signal.SIGINT)
 
 
 async def _with_admin(url: str, work: Callable[[Db], Awaitable[str]]) -> str:

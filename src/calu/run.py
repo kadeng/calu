@@ -236,7 +236,9 @@ class RunOptions:
     together with `secure`."""
     secure: bool = False
     """Every client shows a token (`--secure`, D226). Without it, a session that runs as root
-    also listens on a root-owned Unix socket, where a root client needs no token (D215)."""
+    for another user (`run_as`) also listens on a root-owned Unix socket, where a root client
+    needs no token (D215). A root session whose Claude Code is root too (`--user root`) binds
+    no such socket: its own commands would be root clients."""
 
 
 def honesty_lines(info: HonestyInfo) -> list[str]:
@@ -1377,10 +1379,19 @@ async def _listen(
                 else:
                     tg.start_soon(_serve_root_clients, server, listener, path)
                     say(f"[clients] local clients, without a token: unix:{path}")
-            if not options.secure and os.geteuid() == 0 and store.session_id is not None:
-                # A root session also accepts root clients on a socket only root can reach,
-                # without a token (D215). Created with root's file access, which this
-                # process may have given up for its own work.
+            if (
+                not options.secure
+                and os.geteuid() == 0
+                and options.run_as is not None
+                and store.session_id is not None
+            ):
+                # A root session whose Claude Code runs as another user also accepts root
+                # clients on a socket only root can reach, without a token (D215): there
+                # the kernel tells the client apart from Claude Code (D226). With `--user
+                # root` everything Claude Code starts is root as well and would pass that
+                # check, so such a session binds no socket and every client shows a token.
+                # Created with root's file access, which this process has given up for its
+                # own work.
                 path = localsocket.path_of(str(store.session_id))
                 try:
                     listener = await anyio.to_thread.run_sync(
