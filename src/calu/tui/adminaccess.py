@@ -290,7 +290,7 @@ class StoreAdmin:
         """
         if _has_secret(database):
             login = database
-        elif not password:
+        elif password is None:
             raise PasswordNeeded("changing this needs the admin password")
         else:
             login = database.model_copy(update={"auth": PasswordAuth(password=password)})
@@ -303,7 +303,8 @@ class StoreAdmin:
                     f"the database did not answer within {CONNECT_TIMEOUT_S:.0f} seconds"
                 ) from error
             except psycopg.OperationalError as error:
-                if "password authentication failed" in str(error):
+                refused = ("password authentication failed", "no password supplied")
+                if any(text in str(error) for text in refused):
                     raise PasswordNeeded("wrong admin password") from error
                 first = str(error).strip().splitlines()[0] if str(error).strip() else ""
                 raise AdminFailed(f"the database cannot be reached: {first}") from error
@@ -339,7 +340,7 @@ class StoreAdmin:
         missing = self.problem()
         if missing is not None:
             raise AdminFailed(missing)
-        if self.store.needs_password(CREDENTIAL) and not password:
+        if self.store.needs_password(CREDENTIAL) and password is None:
             raise PasswordNeeded("the 'admin' credential needs its password")
         try:
             # deriving the key takes a noticeable time: not on the event loop

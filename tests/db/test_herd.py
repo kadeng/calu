@@ -909,3 +909,19 @@ async def test_a_client_with_no_address_finds_the_session_and_mints_its_own_toke
         await anyio.to_thread.run_sync(_revoke, credentials, endpoint.token_id)
     finally:
         await owner.close()
+
+
+async def test_sessions_are_listed_on_a_schema_from_before_session_names(db_url: str, tmp_path):
+    """A newer calu on a database nobody ran `calu setup` on since migration 0036: the
+    sessions are listed without names instead of not at all."""
+    from calu.setup import setup
+
+    owner = await connect(db_url)
+    try:
+        await setup(owner, db_url, "")
+        await owner.execute("ALTER TABLE sessions DROP COLUMN name CASCADE")
+        assert await herd.sessions(Db(owner)) == []
+        # The connection is still usable afterwards.
+        assert await Db(owner).scalar("SELECT 1") == 1
+    finally:
+        await owner.close()

@@ -1267,13 +1267,9 @@ class Client:
                     params.decision,
                     params.note,
                     # A trusted client has no token of its own, so the decision is recorded
-                    # under the session's token (`SessionServer.recorded`); the name tells them
-                    # apart: "root:" on the root socket, "local:" on an `--insecure` session.
-                    client=(
-                        f"{'local' if self.server.insecure else 'root'}:{self.name}"
-                        if self.trusted
-                        else self.name
-                    ),
+                    # under the session's token (`SessionServer.recorded`); its name carries
+                    # "root:" or "local:" (`_initialize`).
+                    client=self.name,
                     answer=params.answer,
                     token_sha256=self.server.recorded(self.token_sha256),
                 )
@@ -1348,7 +1344,10 @@ class Client:
         """
         if self.trusted:
             self.authenticated = self._initialized = True
-            self.name = params.client
+            # The name a token-free client is recorded under says how it got in, for
+            # everything it does (decisions, certifications, changed settings): "root:" on
+            # the root socket, "local:" on an `--insecure` session.
+            self.name = f"{'local' if self.server.insecure else 'root'}:{params.client}"
             log.info("client %r connected without a token (local, trusted)", self.name)
             return self.server.session.initialize_result().model_copy(
                 update={"last_seq": self.server.bus.last_seq}

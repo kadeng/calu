@@ -72,6 +72,7 @@ phases.
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
 | `src/calu/web/` | `calu web`: the herd overview (Starlette), the settings form generated from `Config` (`settings.py`), the live relay to a session's own WebSocket, links into a git browser (`git.py`) |
 | `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |
+| `src/calu/ide/` | `calu ide`: the bridge an editor extension starts (JSON-RPC over newline-delimited JSON on stdin and stdout, `docs/notes/vscode-extension-spec.md`) — the requests (`bridge.py`), the connection to the attached session with its reconnects (`link.py`), the database logins chosen without a prompt (`access.py`), what the editor reads and writes in the database (`database.py`), the model presets (`presets.py`), the entry point (`serve.py`) |
 | `src/calu/comments/` | User comments on selections in diffs and files |
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
 | `src/calu/model_choice.py` | Which model the checkers get when none is named: the first provider whose credentials are found (D129) |

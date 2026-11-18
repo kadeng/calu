@@ -230,7 +230,7 @@ async def test_an_insecure_session_lets_local_clients_in_without_a_token(
                 pass
     (short / "runtime").mkdir()  # $XDG_RUNTIME_DIR exists; calu adds the two below it
     root = short / "runtime" / "calu" / "sessions"
-    monkeypatch.setattr(localsocket, "user_root", lambda: root)
+    monkeypatch.setattr(localsocket, "user_root", lambda *args, **kwargs: root)
     path = localsocket.path_of("11111111-2222-4333-8444-555555555555", root)
     async with served(workspace, insecure=True) as run, anyio.create_task_group() as tg:
         async with connect(run.server.address, "", "tcp-client", Events()) as client:

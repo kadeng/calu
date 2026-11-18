@@ -672,7 +672,8 @@ class TokenGate:
             onward = "/"
         problem = "Type the admin password."
         delay = 0.0
-        if password:
+        if "password" in fields:
+            # Also a blank one: the database says whether it is right.
             async with self._checking:
                 try:
                     right = await self.check_password(password)

@@ -194,3 +194,56 @@ async def test_project_add_records_the_directory_it_was_given(
         assert await cur.fetchone() == (None,)
     finally:
         await conn.close()
+
+
+async def test_a_setup_without_passwords_never_publishes_a_typed_password_and_is_taken_back(
+    db_url: str,
+    store: CredentialStore,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D228, as root (the tests' uid stands for it): converting a setup that has an admin
+    password publishes a generated password, never the typed one; a later setup without the
+    option gives the role a new password, so the published one stops working, and the place
+    file holds no secret again."""
+    import json
+
+    from calu.db import place
+    from calu.setup import is_admin_password
+
+    place_file = tmp_path / "state" / "database.json"
+    monkeypatch.setenv("CALU_PLACE_FILE", str(place_file))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "_only_root_writes", lambda path: True)
+    really_read = place.read
+    monkeypatch.setattr(place, "read", lambda: really_read(None, os.getuid()))
+    store.save("admin", db_url, "typed-admin-pw")
+    owner = Target.parse(db_url)
+
+    def setup(*options: str, typed: str = "") -> int:
+        """Run `calu setup` with the given options and stdin."""
+        monkeypatch.setattr("sys.stdin", io.StringIO(typed))
+        return cli.main(["setup", *options], store_factory=lambda: cast(CredentialStore, store))
+
+    code = await anyio.to_thread.run_sync(
+        lambda: setup("--renew-session", "--no-password", typed="typed-admin-pw\n")
+    )
+    assert code == 0, capsys.readouterr()
+    published = json.loads(place_file.read_text())["admin_password"]
+    assert published != "typed-admin-pw" and "typed-admin-pw" not in place_file.read_text()
+    assert await is_admin_password(owner, published)
+    assert not await is_admin_password(owner, "typed-admin-pw")
+
+    # Without the option: nothing is asked (the entries have no password any more), the role
+    # gets a new password that only the store holds, and the file loses the secret.
+    code = await anyio.to_thread.run_sync(setup)
+    said = capsys.readouterr()
+    assert code == 0, said
+    assert "the one a setup with --no-password had published stops working" in said.out
+    assert "admin_password" not in json.loads(place_file.read_text())
+    assert not await is_admin_password(owner, published), "the published login was revoked"
+    kept = Target.parse(store.load("calu_admin"))
+    assert await is_admin_password(owner, getattr(kept.auth, "password", ""))

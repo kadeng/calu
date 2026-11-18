@@ -122,6 +122,7 @@ from calu.defaults.instructions import honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.evals.cli import collect_cases, run_evals
 from calu.honesty import GitError, content_ids, resolve_commit
+from calu.ide import serve_ide
 from calu.launch import LAUNCH_ENV, LaunchError, RunAs, claude_path, launcher_path
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
@@ -195,7 +196,7 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
         The password; the caller should `wipe` it.
 
     Raises:
-        CliError: If the password is empty or the confirmation does not match.
+        CliError: If the confirmation does not match. A blank answer is returned as it is.
     """
 
     def ask(text: str) -> str:
@@ -211,9 +212,9 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
             return getpass.getpass(text)
         return sys.stdin.readline().rstrip("\n")
 
+    # A blank answer is passed on like any other: whether it is right is for the store or
+    # the server to say, not for the prompt (the owner, 2026-11-18).
     first = ask(prompt)
-    if not first:
-        raise CliError("empty password")
     if confirm and ask("Repeat: ") != first:
         raise CliError("passwords do not match")
     return bytearray(first.encode())
@@ -317,13 +318,14 @@ def _admin_secret(store: CredentialStore) -> bytearray:
         CredentialError: On a wrong password of a stored entry.
         TargetError: If the operator entry holds no database login this version can read.
     """
-    if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
-        # `calu setup --no-password`: nobody knows a password to type (D228).
-        return store.load(ADMIN_ENTRY)
     shared = _shared_admin()
     if shared is not None:
-        # The same login, for a user who cannot read root's store: the place file.
+        # `sudo calu setup --no-password` (D228): the login of the place file, before any
+        # entry of this user's own store, as the fleet commands choose (`_herd_value`).
         return bytearray(shared.dump())
+    if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
+        # A generated password that only the store holds: nobody knows one to type.
+        return store.load(ADMIN_ENTRY)
     if "admin" in store or "operator" not in store:
         return load_credential(store, "admin", "Admin password: ")
     place = load_target(store, "operator", "Operator password: ")
@@ -1223,6 +1225,8 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
 
     admin_password: list[str] = []
     """The password `run` gave the role `calu_admin`, if it gave it one."""
+    typed_admin: list[bool] = []
+    """Non-empty if that password is one a person typed, not a generated one."""
 
     async def run() -> tuple[str, Target | None]:
         """Connect and run the setup steps.
@@ -1251,17 +1255,30 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
                 report, session = await setup_database(conn, owner, model, renew, session_iam)
             except SetupRefused as exc:
                 raise CliError(f"calu cannot be set up in {owner.place} as it is:\n{exc}") from exc
-            if _typed.get("admin"):
+            if args.no_password:
+                # Always a generated password, also when an admin password was typed in
+                # this run to convert the setup: this one is written where every user of
+                # the machine can read it, and a password a person chose must not be.
+                admin_password.append(secrets.token_urlsafe(32))
+                await enable_admin_login(conn, admin_password[0])
+                report += "\nlogin of calu_admin: a generated password, kept in the store"
+            elif _typed.get("admin"):
                 # The password a person knows also opens the role that changes settings,
                 # from any client and without a stored login (D213).
                 await enable_admin_login(conn, _typed["admin"])
                 admin_password.append(_typed["admin"])
+                typed_admin.append(True)
                 report += "\nlogin of calu_admin: set to the admin password"
-            elif args.no_password:
-                # Nobody chose a password: a generated one, which only the store holds.
+            elif ADMIN_ENTRY in store or _shared_admin() is not None:
+                # An earlier `--no-password` gave the role a password that the store, and
+                # perhaps the place file, hold. Without the option that is taken back: the
+                # role gets a new one, which whoever copied the old one does not have.
                 admin_password.append(secrets.token_urlsafe(32))
                 await enable_admin_login(conn, admin_password[0])
-                report += "\nlogin of calu_admin: a generated password, kept in the store"
+                report += (
+                    "\nlogin of calu_admin: a new generated password, kept in the store "
+                    "only; the one a setup with --no-password had published stops working"
+                )
             else:
                 report += (
                     "\nlogin of calu_admin: left as it is, because the `admin` credential "
@@ -1306,7 +1323,7 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             "session login kept (`calu setup --renew-session` replaces it and stops the "
             "sessions that use it)"
         )
-        _after_setup(args, store, owner, admin_password)
+        _after_setup(args, store, owner, admin_password, bool(typed_admin))
         return
     # Asked before the database is touched: a mistyped password must not leave the role with
     # a new login that nothing holds.
@@ -1323,7 +1340,7 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             wipe(session_password)
     print(report)
     print("stored credential 'session'")
-    _after_setup(args, store, owner, admin_password)
+    _after_setup(args, store, owner, admin_password, bool(typed_admin))
     print("next: `calu project add . --name NAME` in a project directory, then `calu run`")
 
 
@@ -1333,14 +1350,18 @@ protected by the file's mode alone (D228)."""
 
 
 def _after_setup(
-    args: argparse.Namespace, store: CredentialStore, owner: Target, admin_password: list[str]
+    args: argparse.Namespace,
+    store: CredentialStore,
+    owner: Target,
+    admin_password: list[str],
+    typed: bool = False,
 ) -> None:
     """Finish a setup: the password-free admin login and the place file (D228).
 
-    Side effects: with `--no-password` and a password in `admin_password`, saves the login of
-    `calu_admin` as the entry `ADMIN_ENTRY` without a password, and says who can read the
-    store and the place file; without the option, removes that entry when the role got
-    another password, so that no stale login is kept. As root, writes where the database is
+    Side effects: saves a generated password of `calu_admin` as the entry `ADMIN_ENTRY`
+    without a password, and with `--no-password` says who can read the store and the place
+    file; removes that entry when the role got a typed password, so that no stale login is
+    kept. As root, writes where the database is
     to `calu.db.place.PATH`: without a secret, or with `--no-password` together with the
     password of `calu_admin`, readable by every user of the machine. A failure of that is
     reported and does not fail the setup.
@@ -1351,15 +1372,17 @@ def _after_setup(
         owner: The owner login, for the place.
         admin_password: The password the role `calu_admin` was given in this run; empty if
             it was left as it is.
+        typed: Whether that password is one a person typed. A generated one is stored as
+            `ADMIN_ENTRY`; it is written to the place file only with `--no-password`.
     """
-    if admin_password and args.no_password:
+    if admin_password and not typed:
         try:
             store.save(ADMIN_ENTRY, admin_login(owner, admin_password[0]).dump(), None)
         except ValueError as exc:  # TargetError: the owner login names a libpq service
             print(f"note: the login of calu_admin could not be stored ({exc})", file=sys.stderr)
         else:
             print(f"stored credential {ADMIN_ENTRY!r} (no password)")
-    elif admin_password and ADMIN_ENTRY in store:
+    elif typed and ADMIN_ENTRY in store:
         store.remove(ADMIN_ENTRY)
         print(f"removed the stored {ADMIN_ENTRY!r} credential: the role has a typed password now")
     if args.no_password:
@@ -1375,7 +1398,8 @@ def _after_setup(
                     "which every user and every program of this machine can read (Claude "
                     "Code's commands included): a client asks for no password, and nothing "
                     "but the checkers keeps a program from changing the checkers. `sudo calu "
-                    "setup` without --no-password takes that back.",
+                    "setup` without --no-password gives the role a new password and "
+                    "removes it from that file.",
                     file=sys.stderr,
                 )
         else:
@@ -2226,7 +2250,10 @@ def _root_socket_endpoint(hint: str | None) -> Endpoint | None:
     if os.geteuid() == 0:
         paths = asuser.as_root(localsocket.listed)
     else:
-        paths = localsocket.listed(localsocket.user_root(), os.geteuid())
+        # Both places a session may have chosen: this user's runtime directory as this
+        # process sees it, and the one a root session derives from the uid alone.
+        roots = {localsocket.user_root(), localsocket.user_root(uid=os.geteuid())}
+        paths = [path for root in sorted(roots) for path in localsocket.listed(root, os.geteuid())]
     if not paths:
         return None
 
@@ -2836,6 +2863,22 @@ def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
             _revoke(store, endpoint.token_id, may_ask=False)
     if code:
         raise CliError("the adapter ended with an error")
+
+
+def cmd_ide(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Serve an editor extension: JSON-RPC on stdin and stdout, one JSON object per line.
+
+    The extension starts this command in its workspace folder (`calu.ide`). stdout carries
+    protocol lines only; every message goes to stderr and to the log file
+    (`$XDG_STATE_HOME/calu/log/ide.log`). Nothing is asked on the terminal: a credential that
+    needs a password is reported to the extension as an error, and the extension repeats the
+    request with the password its user typed.
+
+    Args:
+        args: Parsed arguments (none).
+        store: The credential store.
+    """
+    asyncio.run(serve_ide(Path.cwd(), store))
 
 
 def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -4502,9 +4545,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-password",
         action="store_true",
         help="ask for no admin and no session password: the logins are stored protected by "
-        "the store file's mode alone. Meant for a calu installed for root (the store is then "
-        "/etc/calu, which only root reads); in your own account every program that runs as "
-        "you could read them. An existing setup is converted",
+        "the store file's mode alone, and the login that changes settings is written to "
+        "/var/lib/calu/database.json, which every user and program of the machine can read "
+        "(Claude Code's commands included), so that no client asks for a password. Weak "
+        "security by choice; `calu setup` without the option takes it back. An existing "
+        "setup is converted",
     )
     p.add_argument(
         "--checker-model",
@@ -4664,7 +4709,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--sudo",
         action="store_true",
         help="run this client as root through sudo, for you: it reads calu's credentials in "
-        "/etc/calu, asks one password, and nothing Claude Code runs can reach it",
+        "/etc/calu (it asks for a calu password only if they need one), and nothing Claude "
+        "Code runs can reach it",
     )
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
@@ -4677,7 +4723,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="WebSocket address that `calu run` printed; left out, the session running in this "
         "directory is used",
     )
-    p.add_argument("--token", help="client token that `calu run` printed (needed with an address)")
+    p.add_argument(
+        "--token",
+        help="client token that `calu run` printed, for an address; without it the client "
+        "tries without one, which a session started with --insecure accepts",
+    )
     p.add_argument("--session", help="session id, when several run in this directory")
     p.add_argument(
         "--after-seq", type=int, default=0, help="continue after this event sequence number"
@@ -4692,7 +4742,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--sudo",
         action="store_true",
         help="run this client as root through sudo, for you: it reads calu's credentials in "
-        "/etc/calu, asks one password, and nothing Claude Code runs can reach it",
+        "/etc/calu (it asks for a calu password only if they need one), and nothing Claude "
+        "Code runs can reach it",
     )
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
@@ -4733,9 +4784,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="address of the session, e.g. ws://127.0.0.1:8765; left out, the session running "
         "in this directory is used, which is what an editor is configured with",
     )
-    p.add_argument("--token", help="client token that `calu run` printed (needed with an address)")
+    p.add_argument(
+        "--token",
+        help="client token that `calu run` printed, for an address; without it the client "
+        "tries without one, which a session started with --insecure accepts",
+    )
     p.add_argument("--session", help="session id, when several run in this directory")
     p.set_defaults(handler=cmd_acp)
+
+    p = sub.add_parser(
+        "ide", help="serve an editor extension, e.g. VSCode's (JSON-RPC on stdin/stdout)"
+    )
+    p.set_defaults(handler=cmd_ide, log_name="ide")
 
     p = sub.add_parser("web", help="the herd overview in a browser (127.0.0.1 only)")
     p.add_argument("--host", default="127.0.0.1", help="address to bind (loopback only)")

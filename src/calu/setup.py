@@ -432,12 +432,11 @@ async def is_admin_password(place: Target, password: str) -> bool:
             for another reason than the password.
         TargetError: If `place` cannot be taken over (`Target.for_role`).
     """
-    if not password:
-        return False
     try:
         conn = await open_stored(admin_login(place, password), False)
     except psycopg.OperationalError as exc:
-        if "password authentication failed" in str(exc):
+        # A blank password is sent like any other; the server's two ways of refusing one.
+        if "password authentication failed" in str(exc) or "no password supplied" in str(exc):
             return False
         raise
     await conn.close()

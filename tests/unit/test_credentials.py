@@ -72,11 +72,17 @@ def test_corrupt_file(store: CredentialStore) -> None:
         store.names()
 
 
-def test_empty_name_or_password_rejected(store: CredentialStore) -> None:
+def test_an_empty_name_is_rejected_and_a_blank_password_is_a_password(
+    store: CredentialStore,
+) -> None:
+    """The owner, 2026-11-18: a blank password can be right; the store says whether it is."""
     with pytest.raises(ValueError):
         store.save("", "x", "pw")
-    with pytest.raises(ValueError):
-        store.save("admin", "x", "")
+    store.save("admin", "x", "")
+    assert store.needs_password("admin") is True
+    assert bytes(store.load("admin", "")) == b"x"
+    with pytest.raises(WrongPassword):
+        store.load("admin", "not blank")
 
 
 def test_wipe_zeroes_in_place() -> None:

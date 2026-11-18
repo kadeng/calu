@@ -258,21 +258,20 @@ class CredentialStore:
         Args:
             name: The credential name, e.g. "admin" or "session". Must not be empty.
             secret: The secret, e.g. a connection URL.
-            password: The password that will be needed to decrypt it; must not be empty.
+            password: The password that will be needed to decrypt it; a blank one is a
+                password like any other (the entry is encrypted, and `load` asks for it).
                 `None` writes the secret **unprotected** (base64, no encryption), so that
                 `load` returns it without asking anything. Only the file's mode (0600) and the
                 directory's (0700) then stand between the secret and another process of the
                 same user. See the module docstring.
 
         Raises:
-            ValueError: If `name` is empty, or `password` is given but empty.
+            ValueError: If `name` is empty.
             CorruptStore: If the existing file has an unknown format.
             OSError: If the file cannot be read or written.
         """
         if not name:
             raise ValueError("name must not be empty")
-        if password is not None and not password:
-            raise ValueError("password must not be empty")
         if password is None:
             entries = self._read()
             entries[name] = {

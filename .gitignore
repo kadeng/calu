@@ -15,3 +15,10 @@ dist/
 .coverage
 .coverage.*
 htmlcov/
+
+# VSCode extension build output
+extensions/vscode/node_modules/
+extensions/vscode/dist/
+extensions/vscode/out/
+*.vsix
+.claude/worktrees/

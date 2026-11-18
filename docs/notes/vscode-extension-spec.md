@@ -222,3 +222,48 @@ model names of its own.
   is part of `ide.status` (`findings` named `tmux` and `screen`). "calu: Start calu server"
   uses the tmux form when tmux is installed, else the screen form, else the plain command with
   a note that it ends with the terminal.
+
+## Deviations (the Python side as built, 2026-11-18)
+
+Method names and the shapes of sections 2 and 6 are as specified. What `calu ide` adds or
+decides where the table left it open:
+
+- **`password` on every request that reads the database**, not only on the changing ones:
+  `ide.sessions`, `ide.attach`, `ide.start`, `ide.session.rename`, `ide.settings.get`,
+  `ide.models.presets`, `ide.checker.get`. A store with only protected entries answers each
+  of them with -32010. For a change with only an `operator` entry stored, `data.needs` is
+  `"admin"` and `password` is the admin password (the login is `calu_admin`, nothing is stored).
+- **Error -32017** (new): no database credential is stored here, or the database cannot be
+  reached or refuses. The message names the command that helps.
+- **`ide.attach`** takes two more optional parameters, `address` and `token`: an explicit
+  endpoint, for which no socket and no database is asked. Without them the order is: a local
+  socket that needs no token, then the database. An address that cannot be reached is -32011;
+  a token the session refuses is the session's own error (its code, -32001).
+- **`ide.link`** params carry two more members: `session_id`, and for `attached` `complete`
+  (false after a reconnect whose replay has a gap: read `state.get` again). The first
+  `ide.link attached` follows the response to `ide.attach` / `ide.start`; no notification of a
+  session is written before that response.
+- **`ide.settings.get` rows**: `default` is the text of `calu.configdoc` (without backticks);
+  `default_value` is the default as JSON; `inherits` is `"global"` or `"default"`. `value` is
+  what the scope stores, else what it inherits. `kind` is one of `bool`, `choice`, `int`,
+  `number`, `text`, `model`, `markdown`, `lines`, `json`, `section` (a nested group: no control).
+- **`ide.sessions`**: `all: true` adds the sessions of other hosts (they cannot be attached
+  from here); each running row also has `hostname`. `stored` holds at most 20 conversations.
+- **`ide.models.presets`** takes optional `project` and `password`, and also returns
+  `default_model`. Without a database login it still returns the presets, with `roles: []`,
+  `claude: null` and `problem`. Role keys are the configuration keys (`command_checker.model`,
+  `edit_checker.model`, `changeset_checker.model`, `subagent_checker.model`,
+  `context.narrator_model`, `context.summarizer_model`, `honesty.reviewer_model`) and
+  `checker:<name>` for an extra checker type.
+- **`ide.models.set_all` / `ide.models.set`**: `model` may also be a preset id; `"default"`
+  (for `set` also `""`) stores no model. `set` takes an optional `project`. `changed` holds
+  role keys.
+- **`ide.checker.save`**: `base_version: null` stores without the version check.
+- **`ide.status`**: `database` has `needs` (the credential's name) when only a password is
+  missing; `advice` is `""` for a finding that is ok. Without a reachable database,
+  `server.sessions_running` counts the token-free local sockets that answer.
+- **`ide.start`**: -32014 also when a server claimed the request and did not finish it in time.
+- **`ide.log`** is sent only when a minted token could not be revoked.
+- **Reconnect**: after close 4002 at once, otherwise with a growing wait (0.25 s to 2 s) for
+  15 s; a revoked or refused token and four connections in a row without a new event end in
+  `lost` at once. `session.call` waits up to 15 s while the bridge is connecting again.

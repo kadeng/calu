@@ -79,6 +79,8 @@ class SessionRow:
     silent_for_s: float = 0.0
     """Seconds since `last_seen`, measured by the database, so a reader needs no clock of its
     own and clock differences between hosts do not matter."""
+    name: str = ""
+    """The name a person gave the session (`rename_session`); "" for none."""
 
     @property
     def stale(self) -> bool:
@@ -98,15 +100,16 @@ class SessionRow:
         """Return the session as one terminal line.
 
         Returns:
-            Id, state, host and directory, the number of open escalations if there are any,
-            Claude's session id, which `calu run --resume` takes (D27), and a mark when the
-            process has stopped saying it is there (D56).
+            Id, the session's name if it has one, state, host and directory, the number of
+            open escalations if there are any, Claude's session id, which `calu run --resume`
+            takes (D27), and a mark when the process has stopped saying it is there (D56).
         """
+        name = f'  "{self.name}"' if self.name else ""
         waiting = f" ({self.open_escalations} open)" if self.open_escalations else ""
         resume = f"  resume {self.claude_session_id}" if self.claude_session_id else ""
         silent = f"  SILENT for {self.silent_for_s / 60:.0f} min" if self.stale else ""
         return (
-            f"{self.id}  {self.state}{waiting}  {self.hostname}:{self.directory}"
+            f"{self.id}{name}  {self.state}{waiting}  {self.hostname}:{self.directory}"
             f"  since {self.state_since:%Y-%m-%d %H:%M:%S}{resume}{silent}"
         )
 
@@ -299,19 +302,75 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
         psycopg.Error: On database errors.
     """
     await close_gone(db)
-    rows = await db.all(
-        "SELECT s.id::text, h.hostname, s.os_user, s.directory, s.state, s.state_since,"
-        " s.started_at, s.ended_at, s.claude_session_id,"
-        " (SELECT count(*) FROM escalations e"
-        "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
-        " coalesce(s.address, ''), s.last_seen,"
-        # The database measures the silence, so a reader needs no clock of its own.
-        " extract(epoch FROM (now() - s.last_seen))::float8"
-        " FROM sessions s JOIN hosts h ON h.id = s.host_id"
-        " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC",
-        (active_only,),
-    )
+
+    def query(name: str) -> str:
+        """Build the statement.
+
+        Args:
+            name: The SQL expression of the session's name.
+
+        Returns:
+            The statement.
+        """
+        return (
+            "SELECT s.id::text, h.hostname, s.os_user, s.directory, s.state, s.state_since,"
+            " s.started_at, s.ended_at, s.claude_session_id,"
+            " (SELECT count(*) FROM escalations e"
+            "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
+            " coalesce(s.address, ''), s.last_seen,"
+            # The database measures the silence, so a reader needs no clock of its own.
+            f" extract(epoch FROM (now() - s.last_seen))::float8, {name}"
+            " FROM sessions s JOIN hosts h ON h.id = s.host_id"
+            " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC"
+        )
+
+    try:
+        rows = await db.all(query("s.name"), (active_only,))
+    except psycopg.errors.UndefinedColumn:
+        # A schema from before migration 0036 (a newer calu on a database nobody ran `calu
+        # setup` on since): the sessions are listed without names instead of not at all.
+        rows = await db.all(query("''"), (active_only,))
     return [SessionRow(*row) for row in rows]
+
+
+MAX_NAME_CHARS = 80
+"""How long a session's name may be (the database checks the same limit, migration 0036)."""
+
+
+async def rename_session(db: Db, session_id: str, name: str) -> str:
+    """Give a session a name, or take its name away.
+
+    Side effect: writes `sessions.name`. The name is for people who watch several sessions;
+    the session itself does not read it.
+
+    Args:
+        db: A connection of `calu_operator`, `calu_admin` or the owner.
+        session_id: Id of the `sessions` row.
+        name: The name; surrounding white space is removed, and "" removes the name.
+
+    Returns:
+        The stored name.
+
+    Raises:
+        ValueError: If the name is longer than `MAX_NAME_CHARS` characters or holds a line
+            break.
+        LookupError: If no session has that id.
+        psycopg.Error: On database errors, among them a schema older than migration 0036 and
+            an id that is not a UUID.
+    """
+    cleaned = name.strip()
+    if len(cleaned) > MAX_NAME_CHARS:
+        raise ValueError(
+            f"a session's name has at most {MAX_NAME_CHARS} characters, not {len(cleaned)}"
+        )
+    if "\n" in cleaned or "\r" in cleaned:
+        raise ValueError("a session's name is one line")
+    row = await db.one(
+        "UPDATE sessions SET name = %s WHERE id = %s::uuid RETURNING name", (cleaned, session_id)
+    )
+    if row is None:
+        raise LookupError(f"no session with id {session_id}")
+    return str(row[0])
 
 
 def age_text(seconds: float) -> str:

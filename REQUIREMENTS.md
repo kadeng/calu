@@ -152,6 +152,9 @@ broken down or extended. Derived requirements and design decisions belong in
     "When I use --no-password, security is weak. This should be allowed." and "not having a
     password when the password is actually empty is ok." (stated 2026-11-18, after a client
     without `--sudo` asked for an admin password nobody knew)
+    "check that we don't have code that refuses client-side just because it's given a blank
+    password. Blank passwords can be ok, the client should not decide it's invalid." (stated
+    2026-11-18)
 34. "write a VSCode extension similar to the one of stay-in-the-loop, just for calu this time.
     It should support all relevant settings. The checker instructions should be readily
     accessible, as should it be possible to easily look at the checker context. Subagents

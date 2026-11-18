@@ -17,6 +17,7 @@ from calu.protocol.messages import (
     CheckerContextResult,
     CheckerListResult,
     CommentAddResult,
+    ContextUsage,
     EscalationContextResult,
     EventsSubscribeResult,
     HonestyReviewResult,
@@ -25,7 +26,11 @@ from calu.protocol.messages import (
     SessionHistoryResult,
     SessionListResult,
     SessionSnapshot,
+    SideAskResult,
+    UsageResult,
 )
+
+__all__ = ["ContextUsage", "SideAskResult", "UsageResult", "protocol_schema"]
 
 
 def protocol_schema() -> dict[str, Any]:
@@ -49,6 +54,9 @@ def protocol_schema() -> dict[str, Any]:
         CheckerContextResult,
         HonestyTrustResult,
         HonestyReviewResult,
+        SideAskResult,
+        UsageResult,
+        ContextUsage,
     ]
     refs, defs = models_json_schema(
         [(m, "validation") for m in models], ref_template="#/$defs/{model}"
@@ -71,6 +79,8 @@ def protocol_schema() -> dict[str, Any]:
             "comment.add": refs[CommentAddResult, "validation"],
             "honesty.trust": refs[HonestyTrustResult, "validation"],
             "honesty.review": refs[HonestyReviewResult, "validation"],
+            "side.ask": refs[SideAskResult, "validation"],
+            "usage.get": refs[UsageResult, "validation"],
         },
         "$defs": defs.get("$defs", {}),
     }

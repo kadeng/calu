@@ -229,10 +229,12 @@ def test_watching_a_herd_prefers_the_operator_credential(
 
     # Commands that change the configuration have no stored `admin` entry to use here: they
     # find the database through the operator entry and ask for the admin password, to log in
-    # as `calu_admin` (D213). The empty input is refused before anything connects.
+    # as `calu_admin` (D213). A blank input is a password like any other: it is tried on the
+    # operator entry, whose password it is not, and the store says so.
     for argv in (["config", "get"], ["checker", "list"], ["rules", "list"], ["project", "list"]):
         assert run_cli(monkeypatch, store, argv, "") == 1
-        assert "empty password" in capsys.readouterr().err
+        said = capsys.readouterr().err
+        assert "empty password" not in said and "password" in said.lower()
 
 
 def test_run_maps_every_flag_onto_the_session_options(
