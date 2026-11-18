@@ -7,7 +7,7 @@
 >
 > — *Tron* (1982)
 
-## Stay in control of a coding agent without babysitting each step
+## Stay in control of Claude Code
 
 **The problem.** A coding agent produces steps faster than a person can read them. Left
 unwatched it drifts from the task, and a wrong step costs more the later it is caught.
@@ -73,7 +73,7 @@ Not on PyPI yet. calu succeeds
 
 ![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
 
-## How the checking works
+## Pair programming instead of watching silently or babysitting
 
 > **Alan Bradley:** "It's called Tron. It's a security program itself, actually. It monitors
 > all contacts between our system and other systems. Finds anything going on that's not
