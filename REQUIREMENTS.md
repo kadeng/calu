@@ -217,6 +217,16 @@ broken down or extended. Derived requirements and design decisions belong in
     review and therefore should be run through an additional redaction agent which (by
     default) censors potential secrets and personally identifiable information (PII) in the
     chat logs. Also, images are not included of course." (stated 2026-11-18, "for the plan")
+37. "over the course of this development session, test it all in this: The pycharm extension,
+    the VSCode extension, the TUI, the web app, calu serve with/without password. Develop test
+    plans and go through them, ensuring everything works as intended and has a good
+    usability, exploring even visual/layout corner cases like many subagents, long chat
+    sessions, many chat sessions, undo, forking etc. and maybe also what happens if an
+    escalation in a subagent halts one but not other subagents, and another escalation pops
+    up. Try to arrive at a fully functional, tested and well useable application that is well
+    rounded. Push whenever you have reached a milestone." (stated 2026-11-18) For tests with a
+    real Claude Code: his Anthropic API key with a tightly limited budget, Haiku only; he
+    revokes the key after testing (stated 2026-11-18).
 
 ## Soft goals and priorities
 
