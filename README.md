@@ -24,12 +24,15 @@ Afterwards every step is on record.
   different user than calu.
 - **Honesty.** calu tracks, file by file, whether names and documentation still say what the
   code does, and can keep unverified code from being run or committed.
+
+What you can do with it, if you want to:
+
 - **Stop overengineering right there.** A checker sees a change before it lands and can send
   it back: an abstraction nobody asked for, work beyond the task, a test weakened to pass.
-- **Your repo, your rules.** The checkers follow instructions you write, in Markdown. They are
-  stored where the session cannot change them.
-- **Honest and readable docs at every step.** Names, docstrings and comments are checked with
-  each edit, not at the end of the task.
+- **Your repo, your rules.** The instructions are yours, in Markdown, stored where the session
+  cannot change them.
+- **Honest and readable docs at every step.** Names, docstrings and comments can be checked
+  with each edit instead of at the end of the task.
 - **You are not a bystander: review at every level of abstraction.** One line per step, the
   step's diff, the conversation as the checkers see it, or the whole session as a file in the
   repository.
