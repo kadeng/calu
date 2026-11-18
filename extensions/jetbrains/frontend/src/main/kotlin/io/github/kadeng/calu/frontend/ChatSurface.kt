@@ -674,6 +674,8 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     override fun answer(key: String, answer: String) =
         host.act("decide", buildJsonObject { put("key", JsonPrimitive(key)); put("allow", JsonPrimitive(false)); put("answer", JsonPrimitive(answer)) })
 
+    override fun showDiff(toolUseId: String) = host.act("openDiff", args("tool_use_id" to toolUseId))
+
     override fun why(escalationId: String) = host.act("showContext", args("escalation_id" to escalationId))
 
     // ------------------------------------------------------------------ menus

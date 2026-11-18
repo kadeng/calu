@@ -10,7 +10,9 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import io.github.kadeng.calu.chat.EDIT_TOOLS
 import io.github.kadeng.calu.chat.RowModel
+import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.neutraliseBidi
 import io.github.kadeng.calu.state.AnswerChoice
 import io.github.kadeng.calu.state.EscalationStatus
@@ -53,6 +55,13 @@ interface CardActions {
      * @param escalationId calu's id of the escalation.
      */
     fun why(escalationId: String)
+
+    /**
+     * Open the diff of the edit that waits.
+     *
+     * @param toolUseId The tool call of the edit.
+     */
+    fun showDiff(toolUseId: String)
 }
 
 /**
@@ -186,7 +195,7 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
             add(answerField)
         } else {
             if (reason.isNotEmpty()) add(textArea(reason))
-            for ((label, text) in literalToolInput(e.toolInput).dropLast(1)) add(stepBox(label, neutraliseBidi(text), e, nowAttached))
+            for ((label, text) in stepParts(e)) add(stepBox(label, neutraliseBidi(text), e, nowAttached))
             add(note)
         }
         val buttons = JPanel(WrapLayout(8, 4)).apply { isOpaque = false }
@@ -206,6 +215,10 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
             buttons.add(allowButton)
             buttons.add(denyButton)
         }
+        val toolUseId = e.toolUseId
+        if (!question && toolUseId != null && e.toolName in EDIT_TOOLS) {
+            buttons.add(ActionLink("Show Diff") { actions.showDiff(toolUseId) }.apply { toolTipText = "Open the edit in the diff viewer" })
+        }
         buttons.add(ActionLink("Why?") { actions.why(e.escalationId) }.apply { toolTipText = "Open what the checker knew and said" })
         if (e.pending == true) buttons.add(JBLabel("sending…", com.intellij.ui.AnimatedIcon.Default(), JBLabel.LEADING).apply { foreground = UiStyle.dim })
         if (!nowAttached) buttons.add(JBLabel("connection lost").apply { foreground = UiStyle.chipColor("error") })
@@ -213,6 +226,23 @@ class EscalationCard(private val actions: CardActions, private val attached: () 
         add(buttons)
         revalidate()
         repaint()
+    }
+
+    /**
+     * Return what the card shows of the step: the command, the file, the texts of an edit
+     * (what is replaced, what replaces it, a new file's content), and the whole input as JSON
+     * for a tool that has none of these.
+     *
+     * @param e The escalation.
+     * @return `(label, text)` pairs in display order; never empty.
+     */
+    private fun stepParts(e: EscalationView): List<Pair<String, String>> {
+        val literal = literalToolInput(e.toolInput)
+        val parts = ArrayList(literal.dropLast(1))
+        for ((key, label) in listOf("old_string" to "Replace", "new_string" to "With", "content" to "Content", "new_source" to "New source")) {
+            e.toolInput.str(key)?.let { parts.add(label to it) }
+        }
+        return parts.ifEmpty { literal }
     }
 
     /**

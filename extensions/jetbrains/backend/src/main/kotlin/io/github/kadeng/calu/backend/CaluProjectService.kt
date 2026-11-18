@@ -23,7 +23,9 @@ import io.github.kadeng.calu.bridge.PasswordMemory
 import io.github.kadeng.calu.bridge.PasswordPrompt
 import io.github.kadeng.calu.chat.ChatController
 import io.github.kadeng.calu.chat.ServerSettings
+import io.github.kadeng.calu.logic.ResolveResult
 import io.github.kadeng.calu.logic.promptText
+import io.github.kadeng.calu.logic.resolveCaluCommand
 import io.github.kadeng.calu.logic.splitArgs
 import io.github.kadeng.calu.remote.PasswordRequestDto
 import io.github.kadeng.calu.remote.PluginSettingsDto
@@ -145,9 +147,27 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         val supervisor = BridgeSupervisor(choice.launcher, scope, CLIENT_VERSION, prompt, service<CaluPasswords>().memory(choice.target), log = { log.info(it) })
         val controller = ChatController(supervisor, scope, {
             val s = CaluSettings.of(project).toDto()
-            ServerSettings(splitArgs(s.caluCommand), s.serverSudo, s.serverInsecure, splitArgs(s.serverExtraArgs))
+            ServerSettings(serverCalu(choice.mode, splitArgs(s.caluCommand)), s.serverSudo, s.serverInsecure, splitArgs(s.serverExtraArgs))
         }, log = { log.info(it) })
         return Wiring(choice, supervisor, controller)
+    }
+
+    /**
+     * Return the calu command the server command line starts with.
+     *
+     * A terminal's shell does not always have `~/.local/bin` on its PATH (a shell that is no
+     * login shell, the shell tmux starts). If calu was found there and not on PATH, the server
+     * command names the file, so that the command works where it is pasted.
+     *
+     * @param mode The effective mode ("local", "wsl" or "ssh").
+     * @param configured The calu command of the settings, split into arguments; empty if unset.
+     * @return The configured command; else the path of calu if this machine has it outside
+     *   PATH; else empty, which stands for `calu`.
+     */
+    private fun serverCalu(mode: String, configured: List<String>): List<String> {
+        if (configured.isNotEmpty() || mode != "local") return configured
+        val found = resolveCaluCommand(configured, hostFacts())
+        return if (found is ResolveResult.Found && found.source == "local-bin") found.command else configured
     }
 
     override fun dispose() {
