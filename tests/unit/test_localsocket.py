@@ -252,3 +252,18 @@ def test_secure_and_insecure_together_are_refused(monkeypatch):
         args = cli.build_parser().parse_args([*command, "--secure", "--insecure"])
         with pytest.raises(cli.CliError, match="contradict"):
             cli._check_security_flags(args)
+
+
+def test_the_insecure_socket_directory_of_a_user(tmp_path: Path):
+    """D227: a root session and that user's `calu attach` agree on the directory."""
+    assert (
+        localsocket.user_root({"XDG_RUNTIME_DIR": str(tmp_path)}) == tmp_path / "calu" / "sessions"
+    )
+    # A uid without /run/user/<uid>: the temporary directory, named by the uid.
+    assert localsocket.user_root(uid=987654321) == Path(
+        tempfile.gettempdir(), "calu-987654321", "sessions"
+    )
+    mine = Path("/run/user") / str(os.geteuid())
+    if mine.is_dir():
+        assert localsocket.user_root({}) == mine / "calu" / "sessions"
+        assert localsocket.user_root(uid=os.geteuid()) == mine / "calu" / "sessions"

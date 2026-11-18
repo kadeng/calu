@@ -82,14 +82,14 @@ async def test_the_console_prints_the_status_and_never_the_conversation(capsys):
     ):
         await console(event)
     assert capsys.readouterr().out == ""
+    # Nor the course of the work: states other than the end, the end of a turn.
     await console(SessionState(state="checking"))
+    await console(SessionState(state="idle"))
     await console(TurnResult(result="done"))
+    assert capsys.readouterr().out == ""
     await console(Log(level="warning", message="two\nlines"))
-    assert capsys.readouterr().out.splitlines() == [
-        "[checking]",
-        "[turn ended: success]",
-        "[warning] two lines",
-    ]
+    await console(SessionState(state="stopped"))
+    assert capsys.readouterr().out.splitlines() == ["[warning] two lines", "[stopped]"]
 
 
 class Watched:

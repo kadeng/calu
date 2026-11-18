@@ -344,7 +344,7 @@ state is kept. They are the setting `honesty.rules` (empty: calu's text), editab
 project can use its own documentation standard -- NumPy docstrings instead of Google style,
 say -- but not meant to change often.
 
-You see the state where you watch the session: `calu run` and `calu attach` print a line that
+You see the state where you watch the session: `calu attach --plain` prints a line that
 starts with `*** code honesty` whenever it changes, the full-screen client has a HONESTY panel
 and the `/honesty` page, the web interface's live view has a "Code honesty" panel with "Trust
 HEAD", "Review now" and a Clear button per mark, and an ACP editor shows the state. The
@@ -695,10 +695,12 @@ a program that ignores the proxy variables gets nowhere either.
 
 ## Watching and unblocking a session
 
-The terminal of `calu run` and of `calu serve` shows the session's **status** only: its state,
-escalations and their outcome, the end of each turn, the honesty state and the usage limits.
-It never shows the conversation (what you or Claude wrote, the tool calls and their results);
-`calu attach`, the web interface or an editor show that. An error is one line on stderr; the
+The terminal of `calu run` and of `calu serve` shows only what you have to know or act on:
+escalations and their outcome, warnings and errors, what waits for a human, usage limits, and
+the end of the session (`[stopped]`, `[failed]`). It shows neither the conversation (what you
+or Claude wrote, the tool calls and their results) nor the course of the work (`[idle]`, the
+end of each turn, the honesty state); `calu attach`, the web interface or an editor show
+those. An error is one line on stderr; the
 full report with its traceback is in the log file that the line names,
 `~/.local/state/calu/log/run.log` or `serve.log` (as root, `/var/lib/calu/log/`).
 

@@ -415,15 +415,18 @@ STATUS_EVENTS = (
     SessionState,
     EscalationRequest,
     EscalationResolved,
-    TurnResult,
-    HonestyUpdate,
     AutoEscalateChanged,
     UsageUpdate,
     Log,
 )
-"""The events `calu run` and `calu serve` print (D225): the session's status. The conversation
-(the user's input, Claude's text and thinking, the tool calls, their results and the checkers'
-verdicts) is never printed; the clients show it."""
+"""The events `calu run` and `calu serve` print (D225): what a person at the terminal has to
+know or act on. A `SessionState` is printed only for the end of the session (`END_STATES`).
+Not printed: the conversation (the user's input, Claude's text and thinking, the tool calls,
+their results and the checkers' verdicts) and the course of the work (the other states, the
+end of each turn, the honesty state); the clients show those."""
+
+END_STATES = ("stopped", "failed")
+"""The session states the terminal shows."""
 
 
 class Console:
@@ -444,6 +447,8 @@ class Console:
             event: The event; the conversation's events are dropped.
         """
         if not isinstance(event, STATUS_EVENTS):
+            return
+        if isinstance(event, SessionState) and event.state not in END_STATES:
             return
         if self.quiet and not (isinstance(event, Log) and event.level == "error"):
             return
@@ -1339,11 +1344,25 @@ async def _listen(
                     "loopback address) need no token; every process here that can reach "
                     "them can act as a client"
                 )
-            if options.insecure and os.geteuid() != 0 and store.session_id is not None:
-                path = localsocket.path_of(str(store.session_id), localsocket.user_root())
+            # The user whose `calu attach` should find an `--insecure` session: calu's own user,
+            # or, for a root session, the user Claude Code runs as. This process already has
+            # that user's file identity (`asuser.enter`), so the socket and its directories
+            # are created as that user; `bind` refuses them otherwise.
+            local_uid = (
+                os.geteuid()
+                if os.geteuid() != 0
+                else (options.run_as.uid if options.run_as is not None else None)
+            )
+            if options.insecure and local_uid is not None and store.session_id is not None:
+                root = (
+                    localsocket.user_root()
+                    if os.geteuid() != 0
+                    else localsocket.user_root(uid=local_uid)
+                )
+                path = localsocket.path_of(str(store.session_id), root)
                 try:
                     listener = await anyio.to_thread.run_sync(
-                        functools.partial(localsocket.bind, path, owner=os.geteuid())
+                        functools.partial(localsocket.bind, path, owner=local_uid)
                     )
                 except OSError as exc:
                     say(f"calu: no local socket ({exc}); clients use the address", True)

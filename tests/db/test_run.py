@@ -137,13 +137,14 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
     # D225: the terminal shows the status, never the conversation.
     assert "All done." not in output and "have a look" not in output
     assert "escalation" in output and "calu resolve" in output
-    assert "[turn ended: success]" in output
+    assert "[turn ended" not in output and "[idle]" not in output, "the course of the work"
+    assert "[stopped]" in output
     # D203: the id that `calu run --resume` takes is printed when the session starts, before
     # the first turn, on a line of its own. calu chose it, so it is a UUID.
     (printed,) = [line for line in output.splitlines() if line.startswith("[session] ")]
     session_id = printed.removeprefix("[session] ")
     assert str(uuid.UUID(session_id)) == session_id
-    assert output.index(printed) < output.index("[turn ended")
+    assert output.index(printed) < output.index("[stopped]")
 
     owner = await connect(db_url)
     try:
@@ -442,8 +443,8 @@ async def test_a_batch_run_waits_for_claude_codes_background_tasks(
         on_event=heard,
     )
     assert code == 0
-    output = capsys.readouterr().out
-    assert "1 background task(s) still running" in output
+    assert "[turn ended" not in capsys.readouterr().out
+    assert "1 background task(s) still running" in heard.text
     assert "The build finished." in heard.text
 
 

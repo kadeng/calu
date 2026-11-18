@@ -486,8 +486,8 @@ escalation resolved from the database alone.
    database without a password for `calu_admin`, the address must carry `?token=`. Run on
    2026-11-13 only as a test of the gate against the database; **not in a browser**.
 33. Status-only terminal and the log file (D225): `calu run -p "say hi" --batch` must print
-   the project, the session id, the client lines and states such as `[turn ended: success]`,
-   but not "say hi" nor Claude's answer; `calu attach` must show both. A failure (e.g. a
+   the project, the session id, the client lines and `[stopped]` at the end, but neither
+   "say hi", Claude's answer, `[idle]` nor `[turn ended ...]`; `calu attach` must show both. A failure (e.g. a
    stopped database during the run) must be one line on stderr that names
    `~/.local/state/calu/log/run.log`, and that file must hold the traceback. Ctrl-C must print
    `calu: interrupted`. Run only by the tests.

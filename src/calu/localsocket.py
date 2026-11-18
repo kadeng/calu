@@ -36,21 +36,33 @@ class NotTrusted(OSError):
     """A socket that is not root's alone; the message says what is wrong with it."""
 
 
-def user_root(environ: Mapping[str, str] | None = None) -> Path:
-    """Return where a session that does not run as root puts its `--insecure` socket (D227).
+def user_root(environ: Mapping[str, str] | None = None, uid: int | None = None) -> Path:
+    """Return where the `--insecure` sockets of one user's sessions are (D227).
+
+    A session that runs as that user, and a root session whose Claude Code runs as that user,
+    put their socket there; that user's `calu attach` looks there.
+
+        uid not given, $XDG_RUNTIME_DIR set  ──► $XDG_RUNTIME_DIR/calu/sessions
+        /run/user/<uid> is a directory        ──► /run/user/<uid>/calu/sessions
+        otherwise                             ──► <temporary directory>/calu-<uid>/sessions
 
     Args:
         environ: The environment to read `XDG_RUNTIME_DIR` from; None uses `os.environ`.
+            It is read only when `uid` is not given.
+        uid: The user; None is this process's effective uid.
 
     Returns:
-        `$XDG_RUNTIME_DIR/calu/sessions`, or `<temporary directory>/calu-<uid>/sessions`
-        without the variable. Its two directories get mode 0700 when `bind` creates them.
+        The directory; its two lowest directories get mode 0700 when `bind` creates them.
     """
-    env = os.environ if environ is None else environ
-    base = env.get("XDG_RUNTIME_DIR")
-    if base:
-        return Path(base) / "calu" / "sessions"
-    return Path(tempfile.gettempdir()) / f"calu-{os.geteuid()}" / "sessions"
+    if uid is None:
+        base = (os.environ if environ is None else environ).get("XDG_RUNTIME_DIR")
+        if base:
+            return Path(base) / "calu" / "sessions"
+        uid = os.geteuid()
+    runtime = Path("/run/user") / str(uid)
+    if runtime.is_dir():
+        return runtime / "calu" / "sessions"
+    return Path(tempfile.gettempdir()) / f"calu-{uid}" / "sessions"
 
 
 def path_of(session_id: str, root: Path = ROOT) -> Path:
