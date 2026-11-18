@@ -329,6 +329,20 @@ async def test_the_status_reports_the_tools_and_a_missing_database(
     assert status["database"]["reachable"] is False
     assert "no database credential" in status["database"]["problem"]
     assert status["server"] == {"sessions_running": 0}
+    assert status["locked"] is False and status["unlocked"] == []
+
+
+async def test_an_unlock_without_anything_to_open_says_the_password_was_wrong(
+    tmp_path: Path, store: CredentialStore
+):
+    async with bridged(tmp_path, store) as editor:
+        with pytest.raises(Failed) as nothing:
+            await editor.request("ide.unlock", {"password": "anything"})
+        assert nothing.value.code == -32010 and "wrong password" in nothing.value.message
+        assert nothing.value.data == {"needs": "admin", "unlocked": []}
+        with pytest.raises(Failed) as missing:
+            await editor.request("ide.unlock", {"password": None})
+        assert missing.value.code == -32602
 
 
 async def test_the_bridge_ends_when_asked_or_when_the_editor_closes_its_end(

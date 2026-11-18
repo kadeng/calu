@@ -98,6 +98,24 @@ def _text(params: dict[str, Any], key: str, required: bool = False) -> str | Non
     return value
 
 
+def _password(params: dict[str, Any]) -> str | None:
+    """Read the `password` parameter; a blank password is a password like any other.
+
+    Args:
+        params: The request's params.
+
+    Returns:
+        The password, also an empty one, or None if the parameter is absent or null.
+
+    Raises:
+        RpcError: `INVALID_PARAMS` if the value is not a string.
+    """
+    value = params.get("password")
+    if value is not None and not isinstance(value, str):
+        raise RpcError(INVALID_PARAMS, "the parameter 'password' must be a string")
+    return value
+
+
 def _number(params: dict[str, Any], key: str) -> int | None:
     """Read an integer parameter.
 
@@ -236,6 +254,7 @@ class Bridge:
         self._handlers: dict[str, Handler] = {
             "ide.initialize": self._initialize,
             "ide.status": self._status,
+            "ide.unlock": self._unlock,
             "ide.sessions": self._sessions,
             "ide.session.rename": self._rename,
             "ide.attach": self._attach,
@@ -340,6 +359,28 @@ class Bridge:
         """
         return {}
 
+    async def _unlock(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `ide.unlock`: try one password on every login it may open, and hold them.
+
+        Side effects: `calu.ide.access.Access.unlock`. From then on the requests use the
+        held logins and need no `password`; nothing is written to disk or to the log.
+
+        Args:
+            params: `password` (required; a blank one is tried like any other).
+
+        Returns:
+            `{unlocked, reading, changing}`.
+
+        Raises:
+            RpcError: `INVALID_PARAMS` without `password`; `NEEDS_PASSWORD` if the password
+                opened nothing (`data.needs`, `data.unlocked`); `NO_DATABASE` if the store
+                cannot be read.
+        """
+        password = _password(params)
+        if password is None:
+            raise RpcError(INVALID_PARAMS, "the parameter 'password' is missing")
+        return await self.access.unlock(password)
+
     async def _status(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.status`: what is installed, and whether the database answers.
 
@@ -353,9 +394,11 @@ class Bridge:
         Returns:
             `findings` (`calu.doctor.local_findings` plus uv, tmux and screen, each as
             `finding_json`), `database` (`{reachable, place, problem}`, and `needs` with the
-            credential's name when only a password is missing) and `server`
+            credential's name when only a password is missing), `server`
             (`{sessions_running}`: the sessions of this host that say they are running;
-            whether a `calu serve` answers is not known without asking it for a session).
+            whether a `calu serve` answers is not known without asking it for a session),
+            `locked` (a protected credential exists and no login is held: the editor asks
+            for the one password, `ide.unlock`) and `unlocked` (the held logins' names).
         """
         local = await anyio.to_thread.run_sync(doctor.local_findings, self.store)
         programs = await anyio.to_thread.run_sync(program_findings)
@@ -387,6 +430,8 @@ class Bridge:
             "findings": [finding_json(finding) for finding in [*local, *programs]],
             "database": state,
             "server": {"sessions_running": running},
+            "locked": self.access.locked(),
+            "unlocked": self.access.unlocked(),
         }
 
     # --------------------------------------------------------------------------- sessions
@@ -406,7 +451,7 @@ class Bridge:
         every_host = bool(params.get("all"))
         return await self.access.read(
             lambda db: database.sessions_view(db, self.workspace, every_host),
-            _text(params, "password"),
+            _password(params),
         )
 
     async def _rename(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -451,7 +496,7 @@ class Bridge:
             except LookupError as error:
                 raise RpcError(NO_SESSION, str(error)) from error
 
-        return await self.access.read(work, _text(params, "password"))
+        return await self.access.read(work, _password(params))
 
     async def _attach(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.attach`: attach to a running session.
@@ -480,7 +525,7 @@ class Bridge:
         hint = _text(params, "session")
         after_seq = _number(params, "after_seq") or 0
         address = _text(params, "address")
-        password = _text(params, "password")
+        password = _password(params)
         async with self._attaching:
             if address:
                 endpoint = Endpoint(address, _text(params, "token") or "")
@@ -552,7 +597,7 @@ class Bridge:
             project=_text(params, "project"),
             label=f"calu ide ({user})",
         )
-        password = _text(params, "password")
+        password = _password(params)
 
         async def work(db: Db) -> Endpoint:
             """File the request, wait for the session, name it and mint a token.
@@ -808,7 +853,7 @@ class Bridge:
         """
         project = _text(params, "project")
         return await self.access.read(
-            lambda db: database.settings_view(db, project), _text(params, "password")
+            lambda db: database.settings_view(db, project), _password(params)
         )
 
     async def _settings_set(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -841,7 +886,7 @@ class Bridge:
             stored = await admin.set_setting(db, key, value, project)
             return {"value": _lookup(stored, key)}
 
-        return await self.access.change(work, _text(params, "password"))
+        return await self.access.change(work, _password(params))
 
     async def _settings_unset(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.settings.unset`: remove one setting, so that the default applies.
@@ -870,7 +915,7 @@ class Bridge:
             await admin.unset_setting(db, key, project)
             return {}
 
-        return await self.access.change(work, _text(params, "password"))
+        return await self.access.change(work, _password(params))
 
     async def _models_presets(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.models.presets`: the presets, and the model each role has now.
@@ -894,7 +939,7 @@ class Bridge:
         try:
             result.update(
                 await self.access.read(
-                    lambda db: database.model_roles(db, project), _text(params, "password")
+                    lambda db: database.model_roles(db, project), _password(params)
                 )
             )
         except RpcError as error:
@@ -932,7 +977,7 @@ class Bridge:
             """
             return {"changed": await database.set_all_models(db, model, effort, project)}
 
-        return await self.access.change(work, _text(params, "password"))
+        return await self.access.change(work, _password(params))
 
     async def _models_set(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.models.set`: store the model of one role.
@@ -964,7 +1009,7 @@ class Bridge:
             await database.set_role_model(db, role, model, project)
             return {}
 
-        return await self.access.change(work, _text(params, "password"))
+        return await self.access.change(work, _password(params))
 
     async def _checker_get(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.checker.get` (`calu.ide.database.checker_view`).
@@ -980,9 +1025,7 @@ class Bridge:
                 `NO_DATABASE`.
         """
         name = _text(params, "name", required=True) or ""
-        return await self.access.read(
-            lambda db: database.checker_view(db, name), _text(params, "password")
-        )
+        return await self.access.read(lambda db: database.checker_view(db, name), _password(params))
 
     async def _checker_save(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.checker.save` (`calu.ide.database.save_instructions`).
@@ -1006,7 +1049,7 @@ class Bridge:
         base_version = _number(params, "base_version")
         return await self.access.change(
             lambda db: database.save_instructions(db, name, text, base_version),
-            _text(params, "password"),
+            _password(params),
         )
 
 

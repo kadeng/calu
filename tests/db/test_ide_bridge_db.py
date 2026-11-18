@@ -1,5 +1,7 @@
 """`calu ide` against the test database: settings, models, checkers, sessions, `ide.start`."""
 
+import json
+import logging
 import socket
 import tempfile
 from collections.abc import Iterator
@@ -13,6 +15,7 @@ from calu import admin, herd
 from calu.config import BEDROCK_EU_HAIKU
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
+from calu.db.target import PasswordAuth, Target
 from calu.setup import enable_admin_login, enable_operator_login
 from tests.db.test_run import prepare
 from tests.db.test_serve import owner_db, serving
@@ -339,7 +342,7 @@ async def test_a_session_is_started_named_listed_renamed_and_attached_again(
             with pytest.raises(Failed) as needs_admin:
                 await editor.request("ide.settings.set", {"key": "claude.model", "value": "x"})
             assert needs_admin.value.code == -32010
-            assert needs_admin.value.data == {"needs": "admin"}
+            assert needs_admin.value.data == {"needs": "admin", "unlocked": []}
 
     # The session login may not name a session: it must not be able to relabel itself.
     session = await connect(session_url)
@@ -374,7 +377,7 @@ async def test_a_protected_credential_is_asked_for_and_never_prompted(
     async with bridged(tmp_path, store) as editor:
         with pytest.raises(Failed) as asked:
             await editor.request("ide.sessions")
-        assert asked.value.code == -32010 and asked.value.data == {"needs": "admin"}
+        assert asked.value.code == -32010 and asked.value.data == {"needs": "admin", "unlocked": []}
         with pytest.raises(Failed) as wrong:
             await editor.request("ide.sessions", {"password": "not it"})
         assert wrong.value.code == -32010 and "wrong password" in wrong.value.message
@@ -383,7 +386,10 @@ async def test_a_protected_credential_is_asked_for_and_never_prompted(
 
         with pytest.raises(Failed) as change:
             await editor.request("ide.settings.set", {"key": "claude.model", "value": "haiku"})
-        assert change.value.code == -32010 and change.value.data == {"needs": "admin"}
+        assert change.value.code == -32010 and change.value.data == {
+            "needs": "admin",
+            "unlocked": [],
+        }
         assert await editor.request(
             "ide.settings.set",
             {"key": "claude.model", "value": "haiku", "password": "store password"},
@@ -413,7 +419,7 @@ async def test_with_an_operator_credential_a_change_takes_the_admin_password(
                 "ide.settings.set",
                 {"key": "honesty.mode", "value": "track", "password": "not the admin's"},
             )
-        assert wrong.value.code == -32010 and wrong.value.data == {"needs": "admin"}
+        assert wrong.value.code == -32010 and wrong.value.data == {"needs": "admin", "unlocked": []}
         assert await editor.request(
             "ide.settings.set",
             {"key": "honesty.mode", "value": "track", "password": ADMIN_PASSWORD},
@@ -457,3 +463,137 @@ async def test_the_operator_may_set_a_session_name_and_no_other_column(db_url: s
     async with owner_db(db_url) as db:
         with pytest.raises(psycopg.errors.CheckViolation):
             await db.execute("UPDATE sessions SET name = %s", ("x" * 81,))
+
+
+def secrets_of(*logins: str) -> list[str]:
+    """Return the database passwords inside connection strings, for "is not logged" checks.
+
+    Args:
+        *logins: Connection strings as the credential store holds them.
+    """
+    found = []
+    for login in logins:
+        auth = Target.parse(login).auth
+        assert isinstance(auth, PasswordAuth) and auth.password
+        found.append(auth.password)
+    return found
+
+
+async def test_one_password_at_the_start_covers_reading_and_changing(
+    db_url: str, tmp_path: Path, store: CredentialStore, caplog: pytest.LogCaptureFixture
+):
+    await prepare(db_url, tmp_path)
+    store.save("admin", db_url, "the one password")
+    caplog.set_level(logging.DEBUG)
+    async with bridged(tmp_path, store) as editor:
+        status = await editor.request("ide.status")
+        assert status["locked"] is True and status["unlocked"] == []
+        with pytest.raises(Failed) as wrong:
+            await editor.request("ide.unlock", {"password": "not it"})
+        assert wrong.value.code == -32010 and "wrong password" in wrong.value.message
+        assert wrong.value.data == {"needs": "admin", "unlocked": []}
+        with pytest.raises(Failed) as blank:
+            await editor.request("ide.unlock", {"password": ""})
+        assert blank.value.code == -32010
+        with pytest.raises(Failed) as missing:
+            await editor.request("ide.unlock", {})
+        assert missing.value.code == -32602
+
+        assert await editor.request("ide.unlock", {"password": "the one password"}) == {
+            "unlocked": ["admin"],
+            "reading": True,
+            "changing": True,
+        }
+        # From here on no request carries a password.
+        assert (await editor.request("ide.sessions"))["running"] == []
+        assert await editor.request(
+            "ide.settings.set", {"key": "claude.model", "value": "haiku"}
+        ) == {"value": "haiku"}
+        read = await editor.request("ide.checker.get", {"name": "command"})
+        await editor.request(
+            "ide.checker.save",
+            {"name": "command", "instructions": "Be strict.", "base_version": read["version"]},
+        )
+        await editor.request("ide.models.set_all", {"model": "default"})
+        status = await editor.request("ide.status")
+        assert status["locked"] is False and status["unlocked"] == ["admin"]
+        assert status["database"]["reachable"] is True
+        # A second unlock with any password has nothing left to open and is no error.
+        assert (await editor.request("ide.unlock", {"password": "whatever"}))["changing"] is True
+        written = json.dumps(editor.wire)
+    # Neither the password nor the login it opened reached a log record or the editor.
+    for secret in ("the one password", *secrets_of(db_url)):
+        assert secret not in caplog.text and secret not in written
+
+    # A new bridge process holds nothing.
+    async with bridged(tmp_path, store) as editor:
+        assert (await editor.request("ide.status"))["locked"] is True
+        with pytest.raises(Failed) as again:
+            await editor.request("ide.sessions")
+        assert again.value.code == -32010
+
+
+async def test_a_blank_password_is_a_password_like_any_other(
+    db_url: str, tmp_path: Path, store: CredentialStore
+):
+    await prepare(db_url, tmp_path)
+    store.save("admin", db_url, "")
+    async with bridged(tmp_path, store) as editor:
+        with pytest.raises(Failed) as asked:
+            await editor.request("ide.sessions")
+        assert asked.value.code == -32010
+        # Per request, and once for the whole process.
+        assert (await editor.request("ide.sessions", {"password": ""}))["running"] == []
+        assert (await editor.request("ide.unlock", {"password": ""}))["unlocked"] == ["admin"]
+        assert (await editor.request("ide.sessions"))["running"] == []
+
+
+async def test_a_second_password_is_needed_only_where_the_first_does_not_reach(
+    db_url: str, tmp_path: Path, store: CredentialStore, caplog: pytest.LogCaptureFixture
+):
+    await prepare(db_url, tmp_path)
+    owner = await connect(db_url)
+    try:
+        await enable_admin_login(owner, ADMIN_PASSWORD)
+        operator_url = await enable_operator_login(owner, db_url)
+    finally:
+        await owner.close()
+    store.save("operator", operator_url, "password A")
+    caplog.set_level(logging.DEBUG)
+    async with bridged(tmp_path, store) as editor:
+        assert (await editor.request("ide.status"))["locked"] is True
+        assert await editor.request("ide.unlock", {"password": "password A"}) == {
+            "unlocked": ["operator"],
+            "reading": True,
+            "changing": False,
+        }
+        assert (await editor.request("ide.sessions"))["running"] == []
+        assert (await editor.request("ide.settings.get"))["rows"]
+        with pytest.raises(Failed) as change:
+            await editor.request("ide.settings.set", {"key": "honesty.mode", "value": "track"})
+        assert change.value.code == -32010
+        assert change.value.data == {"needs": "admin", "unlocked": ["operator"]}
+        # The first password again opens nothing new and does not reach the change.
+        with pytest.raises(Failed) as same:
+            await editor.request("ide.unlock", {"password": "password A"})
+        assert same.value.code == -32010
+        assert same.value.data == {"needs": "admin", "unlocked": ["operator"]}
+
+        assert await editor.request("ide.unlock", {"password": ADMIN_PASSWORD}) == {
+            "unlocked": ["operator", "calu_admin role"],
+            "reading": True,
+            "changing": True,
+        }
+        assert await editor.request(
+            "ide.settings.set", {"key": "honesty.mode", "value": "track"}
+        ) == {"value": "track"}
+        # The per-request password keeps working for clients that send one.
+        assert await editor.request(
+            "ide.settings.set",
+            {"key": "honesty.mode", "value": "enforce", "password": ADMIN_PASSWORD},
+        ) == {"value": "enforce"}
+        written = json.dumps(editor.wire)
+    for secret in ("password A", ADMIN_PASSWORD, *secrets_of(operator_url)):
+        assert secret not in caplog.text and secret not in written
+    async with owner_db(db_url) as db:
+        assert (await admin.settings(db))["honesty"]["mode"] == "enforce"
