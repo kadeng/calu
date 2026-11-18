@@ -260,6 +260,14 @@ broken down or extended. Derived requirements and design decisions belong in
     readme with the quote 'Dr. Walter Gibbs: Computers and programs will start thinking, and
     the people will stop.'" (stated 2026-11-19; source he named: IMDb's quotes page of the
     film, which could not be fetched from here)
+40. "put an easter egg into calu (use a subagent): When you run "calu lightcycles" it should
+    launch a multiplayer game modeled after the old C64 game "Ultimate Tron II"". After the
+    check of that game's public reverse-engineered source showed no licence: "Alternatively,
+    clone this game which I personally hold the authorship rights of (I wrote it):
+    https://sourceforge.net/projects/metatron/files/OldFiles/MetaTron1-2-src.zip/download",
+    and: "It does not matter which license it states: I wrote it and hold the copyright. My
+    name is Kai Londenberg ... The user who uploaded that archive to sourceforge is called
+    "klondenberg", that's me." (stated 2026-11-19)
 
 ## Soft goals and priorities
 
