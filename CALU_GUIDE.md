@@ -1261,14 +1261,19 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   that changes settings a generated password, stored the same way. `calu run --sudo`,
   `calu serve --sudo`, `calu attach --sudo` and `calu web --sudo` then ask for no calu
   password at all, and `calu web --sudo` prints its address with a token. An existing setup
-  is converted; its passwords are asked one last time. A client that does not run as root
-  cannot change settings then: nobody knows the password it would have to type. Do not use
+  is converted; its passwords are asked one last time. **Security is weak then, on
+  purpose:** the login that changes settings is also written to
+  `/var/lib/calu/database.json`, which every user and every program of the machine can
+  read, so that your plain `calu attach` saves settings without a password too. Nothing but
+  the checkers then keeps a program, Claude Code's commands included, from changing the
+  checkers. `sudo calu setup` without the option takes that back. Do not use
   `--no-password` in your own account unless you accept that every program running as you,
   Claude Code's commands included, can read the logins. There the session password stays in any
   case: `calu run` accepts a session login without a password only from a store that root
   alone can write.
 - **Which database a client changes settings in.** `sudo calu setup` writes
-  `/var/lib/calu/database.json`: where root's database is, no secret. A client that found a
+  `/var/lib/calu/database.json`: where root's database is, and no secret unless you chose
+  `--no-password`. A client that found a
   root session through a socket reads it (after checking that only root can write it) and
   logs in there with the admin password you type. Until `sudo calu setup` has run once
   after an update, such a client says that it does not know the database.

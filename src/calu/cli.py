@@ -1335,10 +1335,11 @@ def _after_setup(
 
     Side effects: with `--no-password` and a password in `admin_password`, saves the login of
     `calu_admin` as the entry `ADMIN_ENTRY` without a password, and says who can read the
-    store; without the option, removes that entry when the role got another password, so
-    that no stale login is kept. As root, writes where the database is to
-    `calu.db.place.PATH` (no secret); a failure of that is reported and does not fail the
-    setup.
+    store and the place file; without the option, removes that entry when the role got
+    another password, so that no stale login is kept. As root, writes where the database is
+    to `calu.db.place.PATH`: without a secret, or with `--no-password` together with the
+    password of `calu_admin`, readable by every user of the machine. A failure of that is
+    reported and does not fail the setup.
 
     Args:
         args: Parsed arguments (`no_password`).
@@ -1364,6 +1365,15 @@ def _after_setup(
                 "so `calu run --sudo`, `calu serve --sudo`, `calu attach --sudo` and `calu "
                 "web --sudo` ask for none"
             )
+            if admin_password:
+                print(
+                    f"WARNING: the login that changes settings is also in {db_place.PATH}, "
+                    "which every user and every program of this machine can read (Claude "
+                    "Code's commands included): a client asks for no password, and nothing "
+                    "but the checkers keeps a program from changing the checkers. `sudo calu "
+                    "setup` without --no-password takes that back.",
+                    file=sys.stderr,
+                )
         else:
             print(
                 f"WARNING: no password protects the logins in {store.path}. Every program "
@@ -1374,7 +1384,10 @@ def _after_setup(
             )
     if os.geteuid() == 0:
         try:
-            db_place.write(owner)
+            # With --no-password the admin login goes in as well: the owner's ruling is that
+            # such a setup has weak security and that this is allowed (D228).
+            shared = admin_password[0] if args.no_password and admin_password else None
+            db_place.write(owner, admin_password=shared)
         except (OSError, ValueError) as exc:
             print(f"note: {db_place.PATH} was not written ({exc})", file=sys.stderr)
 
@@ -2573,6 +2586,7 @@ def _attach(
             print(f"[client] {admin_problem}", file=sys.stderr, flush=True)
     else:
         database = None
+    database = _with_shared_password(database)
     try:
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
@@ -2623,6 +2637,29 @@ def _attach_failure(endpoint: Endpoint, exc: Exception) -> str:
             "with --insecure"
         )
     return message
+
+
+def _with_shared_password(database: Target | None) -> Target | None:
+    """Fill in the admin password that `calu setup --no-password` made readable (D228).
+
+    Args:
+        database: The login of `calu_admin` a client would use, or None.
+
+    Returns:
+        `database` with the password of the place file (`calu.db.place`), if it has none of
+        its own and the file names the same database and holds one; else `database` as it
+        is.
+    """
+    if database is None or not isinstance(database.auth, PasswordAuth) or database.auth.password:
+        return database
+    try:
+        shared = db_place.read()
+    except db_place.PlaceError:
+        return database
+    same = shared.place == database.place and shared.user == database.user
+    if not same or not isinstance(shared.auth, PasswordAuth) or not shared.auth.password:
+        return database
+    return database.model_copy(update={"auth": shared.auth})
 
 
 def _endpoint_of(

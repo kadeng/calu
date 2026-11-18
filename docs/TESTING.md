@@ -498,7 +498,9 @@ escalation resolved from the database alone.
    ws://127.0.0.1:<port>` without `--token`; without `--insecure` the latter must say it
    wants a token. **Never run outside the tests.**
 35. The place file and a setup without passwords (D228): after `sudo calu setup`,
-   `/var/lib/calu/database.json` must exist (`-rw-r--r-- root root`) and hold no password.
+   `/var/lib/calu/database.json` must exist (`-rw-r--r-- root root`) and hold no password
+   (after `--no-password` it holds `admin_password`, and your plain `calu attach` must save
+   a checker's instructions without asking anything).
    With a session from `calu run --sudo --insecure`, your own `calu attach` must save a
    checker's instructions after asking the admin password once. After `sudo calu setup
    --no-password` (it asks the old admin and session passwords one last time): `calu run

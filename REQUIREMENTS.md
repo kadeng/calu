@@ -149,6 +149,9 @@ broken down or extended. Derived requirements and design decisions belong in
 33. "It should be possible to set up the DB without password if this is wished." (stated
     2026-11-18) A client that found its session through a socket learns the session's
     database from a root-owned file, not from the session ("Build as proposed", 2026-11-18).
+    "When I use --no-password, security is weak. This should be allowed." and "not having a
+    password when the password is actually empty is ok." (stated 2026-11-18, after a client
+    without `--sudo` asked for an admin password nobody knew)
 
 ## Soft goals and priorities
 

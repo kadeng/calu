@@ -29,7 +29,10 @@ the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The sui
   and never from the user's own store. `--no-password` stores `admin`, `session` and a
   `calu_admin` login protected by the store file's mode alone. The owner had asked for a
   root-only database socket as one of two options; it was built as the stored login instead
-  (D228 says why). He has to run `sudo calu setup` once for the place file. Checklist
+  (D228 says why). With `--no-password` the generated `calu_admin` password is also in the
+  place file, readable by everybody, so that a client without `--sudo` saves settings
+  without a password: the owner ruled that this weak security is allowed (D228 (4b)). A
+  password-free `session` entry is accepted only from a store root alone writes (4a). Checklist
   item 35. The local database listens on TCP 127.0.0.1:5433 only.
 - **calu as root, Claude Code as an unprivileged user** (requirement 26; D206, D207,
   D211-D216, D223). `--user NAME|UID[:GID]` (required as root) and `--sudo` (re-runs calu

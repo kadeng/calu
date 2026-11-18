@@ -1,4 +1,4 @@
-"""Where root's calu database is, written down without any secret (PLAN.md D228).
+"""Where root's calu database is, written down for every user of the machine (PLAN.md D228).
 
     /var/lib/calu/database.json     root, 0644; the directory is root's and only root writes it
 
@@ -6,7 +6,13 @@
 socket, and therefore asked no database which session to attach to, reads it to learn which
 database that session uses, so that it can log in there as `calu_admin` with the admin
 password a person types. The file holds the host, the port, the database name and how the
-server is verified; never a user's password.
+server is verified.
+
+After `calu setup --no-password` it also holds the generated password of the role
+`calu_admin` (`admin_password`): the owner's ruling of 2026-11-18 is that a setup without
+passwords has weak security and that this is allowed. Every user and every program of the
+machine can then read the file and change calu's settings; a client asks for nothing. After
+a setup with passwords the file holds no secret.
 
 Why a file and not the session's word: a socket in a user's runtime directory can be created
 by any program of that user. A client that sent the admin password to whatever database such
@@ -32,7 +38,7 @@ class PlaceError(ValueError):
     """The place file cannot be trusted or read; the message says why."""
 
 
-def write(owner: Target, path: Path = PATH) -> None:
+def write(owner: Target, path: Path = PATH, admin_password: str | None = None) -> None:
     """Write where the database of `owner` is. Needs the right to write the directory.
 
     Side effects: creates the directory if it is missing (mode 0755), writes the file under
@@ -42,6 +48,8 @@ def write(owner: Target, path: Path = PATH) -> None:
         owner: Any login of the database; only `INHERITED` of its connection parameters is
             written (host, port, database name, how the server is verified).
         path: The file.
+        admin_password: The password of the role `calu_admin`, to be readable by every user
+            of the machine (`calu setup --no-password`); None writes no secret.
 
     Raises:
         OSError: If the file cannot be written.
@@ -52,10 +60,10 @@ def write(owner: Target, path: Path = PATH) -> None:
     conninfo = {key: owner.conninfo[key] for key in INHERITED if key in owner.conninfo}
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}")
-    temporary.write_text(
-        json.dumps({"calu_place": FORMAT, "conninfo": conninfo}, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    data: dict[str, object] = {"calu_place": FORMAT, "conninfo": conninfo}
+    if admin_password:
+        data["admin_password"] = admin_password
+    temporary.write_text(json.dumps(data, sort_keys=True) + "\n", encoding="utf-8")
     temporary.chmod(0o644)
     temporary.replace(path)
 
@@ -90,14 +98,15 @@ def problems(path: Path = PATH, owner: int = 0) -> list[str]:
     return found
 
 
-def _conninfo(path: Path) -> dict[str, str]:
-    """Read the connection parameters out of the place file.
+def _conninfo(path: Path) -> tuple[dict[str, str], str]:
+    """Read the connection parameters and the admin password out of the place file.
 
     Args:
         path: The file.
 
     Returns:
-        The parameters named in `INHERITED` that the file holds.
+        The parameters named in `INHERITED` that the file holds, and the password of
+        `calu_admin` if the file holds one, else "".
 
     Raises:
         PlaceError: If the file cannot be read or does not hold a place this version
@@ -111,19 +120,21 @@ def _conninfo(path: Path) -> dict[str, str]:
         raise PlaceError(f"{path}: {exc}") from exc
     if not isinstance(found, dict):
         raise PlaceError(f"{path}: unknown format")
-    return {str(key): str(value) for key, value in found.items() if key in INHERITED}
+    conninfo = {str(key): str(value) for key, value in found.items() if key in INHERITED}
+    return conninfo, str(data.get("admin_password") or "")
 
 
 def read(path: Path = PATH, owner: int = 0) -> Target:
-    """Read the place file and return the login of `calu_admin` there, without a password.
+    """Read the place file and return the login of `calu_admin` there.
 
     Args:
         path: The file.
         owner: The uid that must own it (root; a test passes its own).
 
     Returns:
-        The login of the role `calu_admin` with an empty password; a client fills in the
-        password a person types (`calu.tui.adminaccess.StoreAdmin`).
+        The login of the role `calu_admin`: with the password the file holds (`calu setup
+        --no-password`), else with an empty one, which a client replaces by the password a
+        person types (`calu.tui.adminaccess.StoreAdmin`).
 
     Raises:
         PlaceError: If the file is missing, is not `owner`'s alone to write (`problems`), or
@@ -132,12 +143,12 @@ def read(path: Path = PATH, owner: int = 0) -> Target:
     wrong = problems(path, owner)
     if wrong:
         raise PlaceError("; ".join(wrong))
-    conninfo = _conninfo(path)
+    conninfo, password = _conninfo(path)
     # Imported here: `calu.setup` imports from `calu.db`.
     from calu.setup import ADMIN_ROLE
 
     return Target(
         variant="server",
         conninfo={**conninfo, "user": ADMIN_ROLE},
-        auth=PasswordAuth(password=""),
+        auth=PasswordAuth(password=password),
     )

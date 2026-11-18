@@ -56,3 +56,29 @@ def test_a_place_file_others_could_have_written_is_refused(tmp_path: Path):
     path.write_text('{"calu_place": 99}')
     with pytest.raises(place.PlaceError, match="unknown format"):
         place.read(path, ME)
+
+
+def test_a_setup_without_passwords_shares_the_admin_login(tmp_path: Path, monkeypatch):
+    """D228, the owner's ruling: without passwords, security is weak, and a client asks for
+    nothing. The login is then in the file every user can read."""
+    from calu import cli
+    from calu.setup import admin_login
+
+    path = tmp_path / "database.json"
+    place.write(OWNER, path, admin_password="generated")
+    login = place.read(path, ME)
+    assert getattr(login.auth, "password", None) == "generated"
+
+    # A client that knows the database without a password takes the shared one ...
+    monkeypatch.setattr(cli.db_place, "read", lambda: login)
+    asked = admin_login(OWNER, "")
+    filled = cli._with_shared_password(asked)
+    assert filled is not None and getattr(filled.auth, "password", None) == "generated"
+    # ... but not for another database, and it keeps a password it already has.
+    other = admin_login(Target.parse("postgresql://u:p@db.example:5432/calu"), "")
+    assert cli._with_shared_password(other) is other
+    typed = admin_login(OWNER, "typed")
+    assert cli._with_shared_password(typed) is typed
+    # After a setup with passwords the file holds no secret again.
+    place.write(OWNER, path)
+    assert "generated" not in path.read_text()
