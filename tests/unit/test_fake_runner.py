@@ -148,3 +148,23 @@ async def test_transcript_uuids_are_given_only_when_asked_for(tmp_path: Path):
     assert [e.uuid for e in plain.of(UserInput) + plain.of(AssistantText)] == ["", ""]
     uuids = [e.uuid for e in marked.of(UserInput) + marked.of(AssistantText)]
     assert all(uuids) and len(set(uuids)) == 2
+
+
+async def test_an_interrupt_ends_the_wait_for_a_humans_decision(tmp_path: Path):
+    from calu.protocol.messages import ChatSendParams, EscalationRequest, EscalationResolved
+    from tests.unit.helpers import make_session
+
+    call = {"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "writes": {"a": "x"}}
+    session, rec, _store = make_session(tmp_path, [[call, {"text": "never"}]])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(EscalationRequest)
+        await session.interrupt()
+        await rec.wait_for(TurnResult)
+        assert [e.decision for e in rec.of(EscalationResolved)] == ["cancelled"]
+        (result,) = rec.of(ToolResult)
+        assert (result.is_error, result.content) == (True, INTERRUPTED_TOOL_RESULT)
+        assert rec.of(TurnResult)[0].subtype == "interrupted" and not (tmp_path / "a").exists()
+        await session.stop()
+        tg.cancel_scope.cancel()

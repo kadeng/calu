@@ -25,6 +25,9 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"tool": "Bash", "input": {...}, "duration": 2}   ... the approved call takes that many
                                                       seconds; an interrupt during them ends it
                                                       with an error result and writes nothing
+                                                      (a call that waits for a human's decision
+                                                      at an interrupt stops waiting, with the
+                                                      same error result)
     {"sleep": 0.5}                                    pause (lets tests inject messages); an
                                                       interrupt ends it early
     {"rate_limit": {"type": "five_hour", "utilization": 0.4}}
@@ -187,6 +190,8 @@ class FakeRunner:
         """If True, every user message and every text of the main agent carries a transcript
         uuid, as with the real runner, so that the session records fork points (D36)."""
         self._tasks: TaskGroup | None = None
+        self._asks: set[anyio.CancelScope] = set()
+        """The scopes of the tool calls that wait for a human; an interrupt cancels them."""
         self._detached = 0
         """How many detached background subagents are running."""
 
@@ -281,9 +286,15 @@ class FakeRunner:
             await self._send.send((text, list(images)))
 
     async def interrupt(self) -> None:
-        """Skip the remaining actions of the current turn; its result becomes "interrupted"."""
+        """Skip the remaining actions of the current turn; its result becomes "interrupted".
+
+        A tool call that waits for a human's decision stops waiting, and a slow text or tool
+        call ends early (see the module docstring).
+        """
         self._interrupted = True
         self._interrupt_seen.set()
+        for waiting in list(self._asks):
+            waiting.cancel()
 
     async def stop(self) -> None:
         """Cancel `run`; does nothing if `run` has not started."""
@@ -578,8 +589,17 @@ class FakeRunner:
         )
         gate_result = await gate.pre_tool_use(step)
         if gate_result.verdict is Verdict.ASK:
-            answer = await gate.ask(step)
-            allowed, message = answer.allow, answer.message or "The user denied this step."
+            # An interrupt cancels the waiting call, as Claude Code cancels its permission
+            # request; the gate then closes the escalation as cancelled.
+            allowed, message = False, INTERRUPTED_TOOL_RESULT
+            with anyio.CancelScope() as waiting:
+                self._asks.add(waiting)
+                try:
+                    answer = await gate.ask(step)
+                    allowed = answer.allow
+                    message = answer.message or "The user denied this step."
+                finally:
+                    self._asks.discard(waiting)
         else:
             # The fake runner has no auto mode of its own, so PASS runs the step (PLAN.md D21).
             allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
