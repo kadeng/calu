@@ -170,6 +170,18 @@ broken down or extended. Derived requirements and design decisions belong in
     The VSCode session must be able to run when connected to a remote machine, in this case
     everything runs remotely. If there's no calu serve running, it should give instructions
     how to launch it in a tmux or screen session persistently." (stated 2026-11-18)
+    "aim for a modern UI with good UX. Go for dark mode first. Consider that calu needs to be
+    not just as good as Claude Code's plugin, it must be able to do more. But to do more, it
+    must first support Claude Code's basic chat UI, including inline images, undo, fork,
+    multiple chat sessions, settings dialogue, dash-commands, model and thinking level choice,
+    display of context usage (at least percent or absolute number of tokens), display and
+    handle questions and escalations as well as notifications. Then on top it needs to support
+    the calu specific features: Take a quick look at the checker context, specify checker
+    instructions. Configure calu's various settings. Enable honesty checking etc. - all of
+    this must be smooth and well structured, so the most commonly used features are easily
+    accessible while others are still easy to find in a settings dialogue etc. -
+    stay-in-the-loop is a good first draft, but UX-wise it's certainly not perfect yet."
+    (stated 2026-11-18)
 35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
     powerful because it should support both local and remote mode and an operation where the
     remote server, the db and calu are being accessed over SSH only and changes are

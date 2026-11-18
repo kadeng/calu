@@ -267,3 +267,27 @@ decides where the table left it open:
 - **Reconnect**: after close 4002 at once, otherwise with a growing wait (0.25 s to 2 s) for
   15 s; a revoked or refused token and four connections in a row without a new event end in
   `lost` at once. `session.call` waits up to 15 s while the bridge is connecting again.
+
+## 7. Additions of 2026-11-18 (the owner's third message): parity with Claude Code's chat first
+
+Dark theme first (the other themes must still work through the VSCode variables). The chat
+must offer what Claude Code's own extension offers, then calu's features on top, with the
+common actions one click away and the rest in the settings dialog:
+
+| Claude Code basics | In the extension |
+|---|---|
+| inline images | thumbnails in user messages; paste, drop, attach |
+| undo | "Rewind to before this message" on a user message: a new session that continues the conversation from before that turn (`ide.start` kind `resume` with `fork_before_turn`), after a confirmation that says files are not reverted |
+| fork | "Fork from here" on a user message (same call, the original session keeps running), and "Fork conversation" (kind `fork`) in the session menu |
+| multiple chat sessions | the session dropdown; switching keeps each session's draft |
+| settings dialogue | the gear in the view title and in the header |
+| slash commands | typing `/` opens a completion list: Claude Code's commands the session reports or a built-in list (`/compact`, `/clear`, `/usage`, `/context`, ...), which are sent as chat text, and the extension's own actions (`/model`, `/effort`, `/level`, `/honesty`, `/checkers`, `/context` (checker context), `/sessions`, `/new`, `/fork`, `/rename`, `/settings`, `/interrupt`) |
+| model and thinking level | selectors in the composer footer |
+| context usage | always visible in the composer footer: percent and tokens (`usage.get`, refreshed after each turn), rate limits in its tooltip/popover |
+| questions and escalations | cards, as section 3.1 |
+| notifications | a VSCode notification with Allow / Deny / Open when an escalation or a question arrives while the view is hidden or the window unfocused, and when a turn ends then; a badge on the view; optional sound |
+
+calu's own features one click away: a header row of three quiet buttons - **Checkers** (opens
+the instructions picker), **Context** (the checker context document), **Honesty** (a chip
+showing the mode and state; its menu switches off / track / enforce through
+`ide.settings.set honesty.mode`, shows open marks and "Review now", "Trust HEAD").
