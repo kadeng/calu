@@ -21,7 +21,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from calu import __version__, asuser, preflight
+from calu import __version__, asuser, launch, preflight
 from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
 from calu.credentials import CredentialStore
@@ -57,6 +57,23 @@ class Finding:
         return f"{mark:7} {self.name}: {self.detail}{tail}"
 
 
+def claude_executable() -> str | None:
+    """Return the Claude Code executable a session starts when `claude.cli_path` is not set.
+
+    The same lookup as the session's (`calu.launch.claude_path`): the executable bundled with
+    the Agent SDK, else the `claude` on `PATH`. A check that looked at `PATH` alone called
+    Claude Code missing on a machine whose sessions run the bundled one, for example in the
+    bridge an editor starts, whose `PATH` has no `~/.local/bin`.
+
+    Returns:
+        The path, or None when neither exists.
+    """
+    try:
+        return launch.claude_path(None)
+    except launch.LaunchError:
+        return None
+
+
 def claude_version() -> tuple[bool, str]:
     """Ask the Claude Code CLI for its version.
 
@@ -64,9 +81,9 @@ def claude_version() -> tuple[bool, str]:
         (whether it answered, the version or the reason it did not). Never raises: a missing or
         broken CLI is a finding, not an error.
     """
-    path = shutil.which("claude")
+    path = claude_executable()
     if path is None:
-        return False, "not on PATH"
+        return False, "not bundled with the Agent SDK and not on PATH"
     try:
         done = subprocess.run(  # a fixed program, no shell
             [path, "--version"],
@@ -495,7 +512,7 @@ def sandbox_posture(workspace: Path) -> dict[str, Any] | None:
         The parsed JSON, or None if the CLI is missing, failed, timed out or printed something
         that is not JSON. Never raises.
     """
-    path = shutil.which("claude")
+    path = claude_executable()
     if path is None or not workspace.is_dir():
         return None
     try:

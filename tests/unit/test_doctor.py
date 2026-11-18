@@ -362,3 +362,27 @@ def test_the_claude_cli_runs_as_the_user_calu_works_for(tmp_path: Path, monkeypa
     seen.clear()
     doctor.claude_version()
     assert "user" not in seen[0] and "env" not in seen[0]
+
+
+def test_doctor_finds_the_claude_a_session_would_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check uses the session's lookup: the executable bundled with the Agent SDK counts,
+    also when no `claude` is on PATH (the bridge of an editor has no ~/.local/bin on PATH)."""
+    import claude_agent_sdk
+
+    from calu import doctor
+
+    package = tmp_path / "claude_agent_sdk"
+    (package / "_bundled").mkdir(parents=True)
+    monkeypatch.setattr(claude_agent_sdk, "__file__", str(package / "__init__.py"))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    assert doctor.claude_executable() is None
+    answered, detail = doctor.claude_version()
+    assert not answered and "not on PATH" in detail and "bundled" in detail
+
+    bundled = package / "_bundled" / "claude"
+    bundled.write_text("#!/bin/sh\necho '2.1.327 (Claude Code)'\n", encoding="utf-8")
+    bundled.chmod(0o755)
+    assert doctor.claude_executable() == str(bundled)
+    assert doctor.claude_version() == (True, f"2.1.327 (Claude Code) ({bundled})")
