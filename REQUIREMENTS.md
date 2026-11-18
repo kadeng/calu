@@ -227,6 +227,14 @@ broken down or extended. Derived requirements and design decisions belong in
     rounded. Push whenever you have reached a milestone." (stated 2026-11-18) For tests with a
     real Claude Code: his Anthropic API key with a tightly limited budget, Haiku only; he
     revokes the key after testing (stated 2026-11-18).
+38. "Also go through the workflow for honesty. The checker instructions are way too verbose at
+    the moment, they should be *much* shorter, we will mostly rely on Claude's auto mode
+    classifier for everything that's already described in there. Instead, make them as simple
+    as possible and put in test instructions that make it easy to trigger escalations, pass,
+    deny and approve for everything. The honesty checker and related agents should get real
+    instructions, though. These instructions themselves need to be tested (with Haiku or
+    Sonnet as agents doing the checking). The narrator instructions seem to work well, leave
+    them as-is." (stated 2026-11-18)
 
 ## Soft goals and priorities
 
