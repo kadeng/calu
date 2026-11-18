@@ -373,3 +373,11 @@ Rows that open something show it: pointer cursor, hover background, a tooltip na
 action ("Open diff", "Open file at line 42"), and the same action by keyboard (Enter on the
 focused row; the file name is a separate focus stop). An edit whose diff is no longer held
 (the store keeps the newest 300) opens the file instead and says so in the tooltip.
+
+## 12. The chat sits on the right by default (the owner, 2026-11-18)
+
+The calu view opens in VSCode's secondary side bar (the right side in the default layout),
+where the editor's own chat sits, not in the primary side bar on the left. The user can still
+drag it elsewhere; VSCode remembers that. If the VSCode version in use cannot place a
+contributed view container there by default, the extension moves the view once, at first
+activation, and says so in the README.

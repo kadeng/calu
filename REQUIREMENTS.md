@@ -196,6 +196,8 @@ broken down or extended. Derived requirements and design decisions belong in
     "We can also use a nice logo, try to go for something resembling the tron disc and tron
     logo (without running into copyright conflicts, but the checkers HAVE the role of Tron in
     the original Tron movie)" (stated 2026-11-18)
+    "I would prefer to have the chat bar sit on the right side of the screen by default, by
+    the way. Currently it's on the left." (stated 2026-11-18)
 35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
     powerful because it should support both local and remote mode and an operation where the
     remote server, the db and calu are being accessed over SSH only and changes are
