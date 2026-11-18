@@ -75,6 +75,15 @@ describe('applyEvent', () => {
     expect(turns[2]).toMatchObject({ costUsd: null, costDelta: null });
     expect(turns[3]).toMatchObject({ costUsd: 0.001, costDelta: null });
     expect(s.usage).toMatchObject({ costUsd: 0.001, numTurns: 1 });
+
+    // Another session starts without the cost and the context of the one shown before: the
+    // first turn of a fork showed the difference to the old session's total as its own cost.
+    const withContext = applyEvent(s, ev('ui.usage', { context: { tokens: 20000, max_tokens: 1000000 }, rate_limits: [], cost_usd: 0.0041, num_turns: 1 }));
+    expect(withContext.usage.context).toMatchObject({ tokens: 20000 });
+    const other = applyEvent(withContext, ev('ui.attached', { session_id: 's2', snapshot: { state: 'idle', workspace: '/w' }, events: [] }));
+    expect(other.usage).toMatchObject({ costUsd: null, numTurns: 0, context: null });
+    const first = applyEvent(other, ev('turn.result', { subtype: 'success', cost_usd: 0.0044, num_turns: 1 }));
+    expect(first.items[MAIN].filter((i) => i.kind === 'turn')[0]).toMatchObject({ costUsd: 0.0044, costDelta: null });
   });
 
   it('merges tool.use, check.result, edit.diff and tool.result by tool_use_id', () => {

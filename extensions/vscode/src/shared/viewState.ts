@@ -1819,7 +1819,10 @@ export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewS
   const init = obj(p.initialize);
 
   const resumed = p.resumed === true && state.session.sessionId === p.session_id;
-  let next: ViewState = resumed ? unpendEscalations(state) : { ...clearTranscript(state), lastSeq: 0, turnBase: null };
+  // Cost, model calls and context belong to the session shown before; the limits are the
+  // account's and stay. The replayed turns and the next `ui.usage` bring this session's numbers.
+  const fresh = { ...state.usage, costUsd: null, numTurns: 0, context: null };
+  let next: ViewState = resumed ? unpendEscalations(state) : { ...clearTranscript(state), lastSeq: 0, turnBase: null, usage: fresh };
   for (const raw of Array.isArray(p.events) ? p.events : []) {
     const e = obj(raw);
     if (typeof e.method !== 'string' || NOT_REPLAYED.has(e.method) || e.method.startsWith('ui.') || e.method === 'bridge.status') continue;
