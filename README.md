@@ -41,6 +41,9 @@ What you can do with it, if you want to:
 - **Version control the redacted LLM chat history along with the code changes.** A session
   can be written step by step as Markdown into the project, with secrets and personal data
   replaced, and committed and reviewed with the change it produced.
+- **Run a herd of agents and stay in control of it.** The web interface lists every session
+  on every machine, those that wait for a decision first, with each one's history, diffs and
+  live view.
 
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
