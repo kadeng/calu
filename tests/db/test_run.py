@@ -162,7 +162,19 @@ async def test_a_batch_run_records_the_session_and_waits_for_the_operator(
         cur = await owner.execute("SELECT state, note, resolved_by FROM escalations ORDER BY id")
         assert await cur.fetchall() == [("allowed", "ship it", "calu_owner")]
         cur = await owner.execute("SELECT number, user_inputs, answer FROM turns")
-        assert await cur.fetchall() == [(1, ["have a look"], "All done.")]
+        # The operator's note on the allowed step is part of what the user said in this turn:
+        # the checkers judge later steps by it.
+        assert await cur.fetchall() == [
+            (
+                1,
+                [
+                    "have a look",
+                    "[The user allowed a Bash step of this turn that waited for approval, "
+                    "and wrote this note to Claude]\nship it",
+                ],
+                "All done.",
+            )
+        ]
         cur = await owner.execute("SELECT checker_name, decision FROM checker_runs ORDER BY id")
         assert await cur.fetchall() == [("command", "escalate")]
     finally:

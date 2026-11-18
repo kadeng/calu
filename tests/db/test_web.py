@@ -505,7 +505,7 @@ async def test_an_extra_checker_is_switched_on_and_given_a_model_on_the_page(db_
             await client.post("/settings", data={"honesty.rules": ""})
             assert "rules" not in (await admin.settings(db))["honesty"]
             page = (await client.get("/settings")).text
-            assert "What dishonesty is" in area(page, "honesty.rules")
+            assert "# Honesty rules" in area(page, "honesty.rules")
     finally:
         await conn.close()
 
