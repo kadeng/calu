@@ -83,6 +83,14 @@ interface ChatHost {
      * @param block The work.
      */
     fun launch(block: suspend CoroutineScope.() -> Unit)
+
+    /**
+     * Register a listener for the events that change no state but ask the surface for
+     * something (`ui.restoreInput {text}`: put a text back into the composer).
+     *
+     * @param listener Called on the EDT with the event's method and params.
+     */
+    fun onUi(listener: (String, JsonObject) -> Unit)
 }
 
 /**
@@ -97,6 +105,7 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
     private val stateFlow = MutableStateFlow(initialViewState())
     private val notified = HashSet<String>()
     private var started = false
+    private val uiListeners = java.util.concurrent.CopyOnWriteArrayList<(String, JsonObject) -> Unit>()
 
     @Volatile
     private var settings = PluginSettingsDto()
@@ -123,6 +132,11 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
                     }
                     stateFlow.value = next
                     onStateChanged(before, next)
+                    val method = update.method
+                    if (json == null && method != null && method.startsWith("ui.") && uiListeners.isNotEmpty()) {
+                        val params = update.paramsJson?.let(::parseObjectOrNull) ?: EMPTY_OBJECT
+                        withContext(Dispatchers.EDT) { for (l in uiListeners) l(method, params) }
+                    }
                 }
             }
         }
@@ -139,6 +153,10 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
     }
 
     override fun act(action: String, args: JsonObject) {
+        if (action == "openTerminal") {
+            openServerTerminal()
+            return
+        }
         scope.launch {
             try {
                 CaluRemoteApi.getInstance().act(project.projectId(), action, CaluJson.encodeToString(JsonObject.serializer(), args))
@@ -150,11 +168,37 @@ class CaluFrontendService(private val project: Project, private val scope: Corou
         }
     }
 
+    /**
+     * Open a terminal tab that runs the server command. If the terminal cannot be opened, the
+     * command is copied to the clipboard and a notification says so.
+     */
+    private fun openServerTerminal() {
+        scope.launch {
+            val command = CaluRemoteApi.getInstance().serverTerminalCommand(project.projectId())
+            if (command.isEmpty()) return@launch
+            withContext(Dispatchers.EDT) {
+                try {
+                    TerminalOpener.open(project, command)
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    log.warn("calu: the terminal could not be opened", error)
+                    com.intellij.openapi.ide.CopyPasteManager.getInstance().setContents(java.awt.datatransfer.StringSelection(command))
+                    Notification(NOTIFICATION_GROUP, "calu: the terminal could not be opened", "The server command is in the clipboard: $command", NotificationType.INFORMATION).notify(project)
+                }
+            }
+        }
+    }
+
     override suspend fun call(method: String, params: JsonObject, session: Boolean): CallResultDto =
         CaluRemoteApi.getInstance().call(project.projectId(), method, CaluJson.encodeToString(JsonObject.serializer(), params), session)
 
     override fun launch(block: suspend CoroutineScope.() -> Unit) {
         scope.launch(block = block)
+    }
+
+    override fun onUi(listener: (String, JsonObject) -> Unit) {
+        uiListeners.add(listener)
     }
 
     /**

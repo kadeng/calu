@@ -24,6 +24,7 @@ import io.github.kadeng.calu.json.CaluJsonPretty
 import io.github.kadeng.calu.json.int
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.neutraliseBidi
+import io.github.kadeng.calu.logic.showsErrorChip
 import io.github.kadeng.calu.logic.turnCost
 import io.github.kadeng.calu.logic.turnLabel
 import io.github.kadeng.calu.state.AssistantItem
@@ -75,6 +76,8 @@ data class RowAction(val name: String, val args: JsonObject)
  * @property streaming True while the text still grows.
  * @property dim True for rows drawn less prominently (recorded history, system messages).
  * @property escalation The escalation of an "escalation" row; `null` otherwise.
+ * @property failed True for a tool call that ended with an error which the decision chip does
+ *   not explain already (`showsErrorChip`); drawn as a second chip.
  */
 data class RowModel(
     val id: Int,
@@ -92,6 +95,7 @@ data class RowModel(
     val streaming: Boolean = false,
     val dim: Boolean = false,
     val escalation: EscalationView? = null,
+    val failed: Boolean = false,
 )
 
 /**
@@ -203,7 +207,7 @@ private fun toolRow(id: Int, tool: ToolView): RowModel {
         check?.comment?.takeIf { it.isNotEmpty() }?.let { "Remark: $it" },
     )
     val output = result?.let { (if (it.isError) "Failed:\n" else "Output:\n") + it.content }
-    val base = RowModel(id, "tool", title = tool.name, chip = chip, chipKind = if (result?.isError == true) "error" else chipKindOf(chip), dim = tool.stored != null)
+    val base = RowModel(id, "tool", title = tool.name, chip = chip, chipKind = chipKindOf(chip), failed = showsErrorChip(tool), dim = tool.stored != null)
     val fileArgs = { line: Int? -> buildJsonObject { put("path", JsonPrimitive(path ?: "")); line?.let { put("line", JsonPrimitive(it)) } } }
     if (tool.name in EDIT_TOOLS && path != null) {
         val line = tool.editRange?.start
@@ -228,8 +232,9 @@ private fun toolRow(id: Int, tool: ToolView): RowModel {
     val summary = command ?: tool.input.str("description") ?: tool.input.str("pattern") ?: tool.input.str("query") ?: tool.input.str("url") ?: ""
     val input = command ?: if (tool.input.isEmpty()) "" else CaluJsonPretty.encodeToString(JsonObject.serializer(), tool.input)
     return base.copy(
-        text = check?.summary?.takeIf { it.isNotEmpty() } ?: summary.lineSequence().firstOrNull().orEmpty(),
-        detail = (listOf(input).filter { it.isNotEmpty() } + why.drop(if (check?.summary.isNullOrEmpty()) 0 else 1) + listOfNotNull(output)).joinToString("\n\n"),
+        // The row names what runs (the command); what the checker said about it is in the detail.
+        text = summary.lineSequence().firstOrNull().orEmpty(),
+        detail = (listOf(input).filter { it.isNotEmpty() } + why + listOfNotNull(output)).joinToString("\n\n"),
         tooltip = "Show the command and its output",
     )
 }

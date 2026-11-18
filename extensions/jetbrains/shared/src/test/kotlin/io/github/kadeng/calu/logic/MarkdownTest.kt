@@ -35,6 +35,14 @@ class MarkdownTest {
     }
 
     @Test
+    fun `a pipe table becomes a table, and a line with a pipe alone stays text`() {
+        val html = markdownToHtml("| file | change |\n|---|---|\n| `a.py` | the <b> word |\n\nafter | this")
+        assertTrue(html.contains("<th align=\"left\">file</th><th align=\"left\">change</th>"), html)
+        assertTrue(html.contains("<tr><td><code>a.py</code></td><td>the &lt;b&gt; word</td></tr></table>"), html)
+        assertTrue(html.endsWith("<p>after | this</p>"), html)
+    }
+
+    @Test
     fun `quoted text gets lower headings outside fences and a fence it cannot close`() {
         assertEquals("## A\n```\n# not\n```\n### B", demoteHeadings("# A\n```\n# not\n```\n## B"))
         assertEquals("````\na ``` b\n````", fenced("a ``` b"))

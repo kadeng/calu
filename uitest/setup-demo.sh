@@ -86,7 +86,7 @@ say "3. calu from the checkout"
 mkdir -p "$COPY"
 rsync -a --delete \
     --exclude .git --exclude .venv --exclude node_modules --exclude .env \
-    --exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache --exclude '*.vsix' \
+    --exclude __pycache__ --exclude .pytest_cache --exclude .ruff_cache --exclude '*.vsix' --exclude .intellijPlatform --exclude .gradle --exclude .kotlin \
     "$SOURCE/" "$COPY/"
 uv tool install --quiet --python 3.14 --reinstall "$COPY"
 calu --version 2>/dev/null || true

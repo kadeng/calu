@@ -1,6 +1,7 @@
 dependencies {
     intellijPlatform {
         bundledModule("intellij.platform.frontend")
+        bundledPlugin("org.jetbrains.plugins.terminal")
     }
     compileOnly(libs.kotlin.serialization.core.jvm)
     compileOnly(libs.kotlin.serialization.json.jvm)

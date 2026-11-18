@@ -2,6 +2,8 @@
     <dependencies>
         <module name="intellij.platform.frontend"/>
         <module name="calu.shared"/>
+        <plugin id="org.jetbrains.plugins.terminal"/>
+        <module name="intellij.terminal.frontend"/>
     </dependencies>
 
     <extensions defaultExtensionNs="com.intellij">

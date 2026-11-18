@@ -283,25 +283,16 @@ class EditorActions(private val project: Project) {
     }
 
     /**
-     * Open a terminal tab named "calu server" that runs the server command; the user types a
-     * sudo or credential password there. If the terminal cannot be opened, the command is
-     * copied to the clipboard and the chat says so.
+     * Open the IDE's log file in an editor tab and say in the chat how to find the plugin's lines.
      *
-     * @return True if a terminal was opened.
+     * @return True if the log file was opened.
      */
-    suspend fun openServerTerminal(): Boolean {
-        val command = serverTerminalCommand()
-        val opened = try {
-            withContext(Dispatchers.EDT) { TerminalOpener.open(project, command) }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            false
-        }
-        if (!opened) {
-            CopyPasteManager.getInstance().setContents(StringSelection(command))
-            service.controller.notice("info", "The terminal could not be opened. The server command is in the clipboard: $command")
-        }
-        return opened
+    suspend fun showLog(): Boolean {
+        val path = com.intellij.openapi.application.PathManager.getLogPath() + "/idea.log"
+        val file = withContext(Dispatchers.IO) { LocalFileSystem.getInstance().refreshAndFindFileByPath(path) }
+        service.controller.notice("info", "The plugin's lines in the IDE's log contain \"[calu]\" (Help | Show Log).")
+        if (file == null) return false
+        withContext(Dispatchers.EDT) { OpenFileDescriptor(project, file).navigate(true) }
+        return true
     }
 }

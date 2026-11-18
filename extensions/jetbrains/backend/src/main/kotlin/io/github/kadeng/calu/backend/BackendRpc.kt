@@ -12,6 +12,7 @@ import com.intellij.platform.rpc.backend.RemoteApiProvider
 import fleet.rpc.remoteApiDescriptor
 import io.github.kadeng.calu.bridge.errorText
 import io.github.kadeng.calu.chat.ChatUpdate
+import io.github.kadeng.calu.chat.act
 import io.github.kadeng.calu.json.CaluJson
 import io.github.kadeng.calu.json.EMPTY_OBJECT
 import io.github.kadeng.calu.json.bool
@@ -67,27 +68,17 @@ class BackendCaluRemoteApi : CaluRemoteApi {
         val c = CaluProjectService.of(project).controller
         val a = parseObjectOrNull(argsJson) ?: EMPTY_OBJECT
         val editor = EditorActions(project)
+        // The chat's own actions (attach, start, send, decide, rewind, ...) are the controller's;
+        // what opens editors, terminals and dialogs of the IDE is handled here.
+        c.act(action, a)?.let { return it }
         return when (action) {
-            "attach" -> c.attach(a.str("session"))
-            "start" -> c.startSession(a.str("kind") ?: "new", a.str("claude_session_id"), a.int("fork_before_turn"), a.str("prompt"), a.str("name"))
-            "cancelStart" -> c.cancelStart()
-            "detach" -> { c.detach(); true }
-            "refreshSessions" -> { c.refreshStatus(); c.refreshSessions(true) != null }
-            "send" -> c.send(a.str("text").orEmpty(), a.bool("inject"), a.str("tab") ?: "main")
-            "decide" -> c.decide(a.str("key") ?: return false, a.bool("allow"), a.str("note"), a.str("answer"))
-            "interrupt" -> c.interrupt()
-            "setModel" -> { c.setModel(a.str("model")); true }
-            "setEffort" -> { c.setEffort(a.str("effort") ?: "default"); true }
-            "setLevel" -> c.setLevel(a.str("level").orEmpty())
-            "rename" -> { c.rename(a.str("session_id") ?: return false, a.str("name").orEmpty()); true }
-            "restartBridge" -> { c.restartBridge(); true }
-            "unlock" -> c.unlock()
             "openDiff" -> editor.openDiff(a.str("tool_use_id") ?: return false)
             "openFile" -> editor.openFile(a.str("path") ?: return false, a.int("line"))
             "editChecker" -> editor.editChecker(a.str("name") ?: return false)
             "editCheckerRoute" -> editor.editCheckerOfRoute(a.str("route") ?: return false)
             "showContext" -> editor.showContext(a.str("escalation_id"))
-            "openTerminal" -> editor.openServerTerminal()
+            "showChanges" -> editor.openFile(a.str("path") ?: return false, a.int("line"))
+            "showLog" -> editor.showLog()
             "setHonesty" -> setHonesty(c, a.str("mode") ?: return false)
             else -> false
         }
@@ -141,4 +132,7 @@ class BackendCaluRemoteApi : CaluRemoteApi {
     override suspend fun setSettings(projectId: ProjectId, settings: PluginSettingsDto) {
         projectId.findProjectOrNull()?.let { CaluProjectService.of(it).applySettings(settings) }
     }
+
+    override suspend fun serverTerminalCommand(projectId: ProjectId): String =
+        projectId.findProjectOrNull()?.let { EditorActions(it).serverTerminalCommand() }.orEmpty()
 }

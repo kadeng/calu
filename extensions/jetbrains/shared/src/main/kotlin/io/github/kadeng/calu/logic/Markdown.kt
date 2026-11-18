@@ -3,7 +3,8 @@
  * `javax.swing.text.html` renders it). Pure.
  *
  * Supported: paragraphs, headings (#..######), fenced code blocks, bullet and numbered lists
- * (one level), block quotes, horizontal rules; inline: `code`, **bold**, *italic*, [text](url)
+ * (one level), block quotes, horizontal rules, pipe tables (a header row, a row of dashes, body
+ * rows); inline: `code`, **bold**, *italic*, [text](url)
  * with http, https and mailto addresses, and bare line breaks inside a paragraph. Everything else
  * is shown as the text it is. All text is HTML-escaped first, so no markup of the input reaches
  * the pane; raw HTML in the input is shown literally.
@@ -19,6 +20,21 @@ private val CODE_SPAN = Regex("`([^`\n]+)`")
 private val BOLD = Regex("\\*\\*([^*\n]+)\\*\\*")
 private val ITALIC = Regex("(?<![*\\w])\\*([^*\n]+)\\*(?![*\\w])")
 private val LINK = Regex("\\[([^\\]\n]+)]\\(((?:https?://|mailto:)[^\\s)\"<>]+)\\)")
+
+private val TABLE_RULE = Regex("^\\s*\\|?\\s*:?-{1,}:?\\s*(\\|\\s*:?-{1,}:?\\s*)*\\|?\\s*$")
+
+/**
+ * Split one row of a pipe table into its cells.
+ *
+ * @param line The row, with or without the outer pipes.
+ * @return The trimmed cell texts; a pipe written as `\|` stays in its cell.
+ */
+private fun tableCells(line: String): List<String> {
+    var t = line.trim()
+    if (t.startsWith("|")) t = t.substring(1)
+    if (t.endsWith("|") && !t.endsWith("\\|")) t = t.substring(0, t.length - 1)
+    return t.split(Regex("(?<!\\\\)\\|")).map { it.trim().replace("\\|", "|") }
+}
 
 /**
  * Escape a text for HTML.
@@ -85,6 +101,21 @@ fun markdownToHtml(markdown: String): String {
         val heading = HEADING_LINE.find(line)
         val bullet = BULLET.find(line)
         val numbered = NUMBERED.find(line)
+        if ('|' in line && i + 1 < lines.size && '-' in lines[i + 1] && '|' in lines[i + 1] && TABLE_RULE.matches(lines[i + 1])) {
+            flushParagraph(); closeList()
+            out.append("<table border=\"0\" cellspacing=\"0\" cellpadding=\"3\"><tr>")
+            for (c in tableCells(line)) out.append("<th align=\"left\">").append(inline(escapeHtml(c))).append("</th>")
+            out.append("</tr>")
+            i += 2
+            while (i < lines.size && '|' in lines[i] && lines[i].isNotBlank()) {
+                out.append("<tr>")
+                for (c in tableCells(lines[i])) out.append("<td>").append(inline(escapeHtml(c))).append("</td>")
+                out.append("</tr>")
+                i++
+            }
+            out.append("</table>")
+            continue
+        }
         when {
             line.isBlank() -> { flushParagraph(); closeList() }
             RULE.matches(line) -> { flushParagraph(); closeList(); out.append("<hr>") }

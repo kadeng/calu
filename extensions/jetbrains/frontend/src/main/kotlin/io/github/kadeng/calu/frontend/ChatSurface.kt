@@ -1,73 +1,104 @@
 /**
  * The chat of the tool window, drawn with Swing and JetBrains components.
  *
- *     ┌ header: [session ▾] state · level · honesty            ┐
- *     │ hints (what is missing, with its button), server command│
- *     ├ tabs: Main | subagent … ────────────────────────────────┤
- *     │ transcript of the tab (TranscriptView)                  │
- *     ├ queued messages ────────────────────────────────────────┤
- *     │ composer: Enter = next turn, Ctrl+Enter = into the turn │
- *     └ [Send] [Into turn] [Interrupt]  model effort level usage┘
+ *     ┌ header: session ▾   activity (what Claude does, since when)      honesty ┐
+ *     │ setup cards: what is missing, each with its button; the server command  │
+ *     │ attention: decisions that wait in other tabs, steps that calu holds     │
+ *     ├ tabs: Main | subagent … (wraps; finished ones fold away beyond six) ────┤
+ *     │ transcript of the tab (TranscriptView)                                  │
+ *     ├ messages that wait to be read ──────────────────────────────────────────┤
+ *     │ composer (Composer)                                                     │
+ *     └ model ▾  effort ▾  level ▾                              context usage ──┘
  *
  * `ChatSurface` is the seam for a second way to draw the chat (an embedded browser that reuses
  * the VSCode webviews, for local mode, after a spike); the native surface is the one that also
  * works in remote development. Everything here runs on the EDT; requests go through `ChatHost`.
+ * What is shown is decided by the pure functions of `shared` (`sessionMenu`, `setupCards`,
+ * `tabList`, `usageMeter`, `userMessageMenu`, ...); this file only draws their results.
  */
 package io.github.kadeng.calu.frontend
 
+import com.intellij.icons.AllIcons
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.Separator
+import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.EDT
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.ComboBox
+import com.intellij.openapi.ui.JBPopupMenu
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.ui.AnimatedIcon
+import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
-import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import io.github.kadeng.calu.chat.RowAction
-import io.github.kadeng.calu.chat.rowsOf
 import io.github.kadeng.calu.json.parseObjectOrNull
 import io.github.kadeng.calu.json.str
+import io.github.kadeng.calu.logic.CLAUDE_EFFORTS
+import io.github.kadeng.calu.logic.CLAUDE_MODELS
+import io.github.kadeng.calu.logic.CardAction
+import io.github.kadeng.calu.logic.OutgoingImage
+import io.github.kadeng.calu.logic.REWIND_CONFIRM_DETAIL
+import io.github.kadeng.calu.logic.REWIND_CONFIRM_TITLE
+import io.github.kadeng.calu.logic.ResolvedAction
 import io.github.kadeng.calu.logic.SessionChoice
+import io.github.kadeng.calu.logic.SessionMenuEntry
 import io.github.kadeng.calu.logic.SessionPick
+import io.github.kadeng.calu.logic.SetupCard
+import io.github.kadeng.calu.logic.TabView
+import io.github.kadeng.calu.logic.activityLine
 import io.github.kadeng.calu.logic.buildSessionPicks
-import io.github.kadeng.calu.logic.derivedSessionName
+import io.github.kadeng.calu.logic.heldByAgent
+import io.github.kadeng.calu.logic.neutraliseBidi
+import io.github.kadeng.calu.logic.otherOpenEscalations
+import io.github.kadeng.calu.logic.rateLimitLine
+import io.github.kadeng.calu.logic.resolveItemAction
+import io.github.kadeng.calu.logic.sessionLabel
+import io.github.kadeng.calu.logic.sessionMenu
+import io.github.kadeng.calu.logic.setupCards
+import io.github.kadeng.calu.logic.tabList
+import io.github.kadeng.calu.logic.usageCostLine
+import io.github.kadeng.calu.logic.usageMeter
 import io.github.kadeng.calu.logic.validateSessionName
-import io.github.kadeng.calu.state.BridgeStatus
+import io.github.kadeng.calu.state.EscalationStatus
 import io.github.kadeng.calu.state.LEVELS
 import io.github.kadeng.calu.state.LinkStatus
 import io.github.kadeng.calu.state.MAIN
-import io.github.kadeng.calu.state.SetupHint
+import io.github.kadeng.calu.state.UserItem
 import io.github.kadeng.calu.state.ViewState
 import io.github.kadeng.calu.state.honestyChip
 import io.github.kadeng.calu.state.honestyStoredNote
 import io.github.kadeng.calu.state.isAttached
 import io.github.kadeng.calu.state.levelLabel
 import io.github.kadeng.calu.state.levelOf
-import io.github.kadeng.calu.state.messageTarget
-import io.github.kadeng.calu.state.openEscalationCount
 import io.github.kadeng.calu.state.sessionTitle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.awt.BorderLayout
-import java.awt.FlowLayout
+import java.awt.CardLayout
+import java.awt.Graphics
 import java.awt.datatransfer.StringSelection
-import java.awt.event.InputEvent
-import java.awt.event.KeyAdapter
-import java.awt.event.KeyEvent
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JPanel
-import javax.swing.JPopupMenu
+import javax.swing.Timer
+
+private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(NativeChatSurface::class.java)
 
 /** A way to draw the chat. `render` is called on the EDT with every new state. */
 interface ChatSurface : Disposable {
@@ -82,11 +113,86 @@ interface ChatSurface : Disposable {
     fun render(state: ViewState)
 }
 
-/** Models offered in the composer's selector ("default" = Claude Code's own default). */
-val MODEL_CHOICES: List<String> = listOf("default", "fable", "opus", "sonnet", "haiku")
+/** Number of tabs up to which every tab has its own chip; beyond it finished subagents fold away. */
+const val MAX_OPEN_TABS: Int = 6
 
-/** Efforts offered in the composer's selector ("default" removes the stored value). */
-val EFFORT_CHOICES: List<String> = listOf("default", "low", "medium", "high", "xhigh", "max")
+/**
+ * The chip of one tab in the tab strip: a status mark, the label, and what waits there.
+ *
+ *     ● Review the greeter          running
+ *     ✓ Watch the test run          finished
+ *     ⚠ Run the migration · 1 waiting   an open decision (warning colour, bold)
+ *     ● Lint · held                 a step calu holds back until the open decision is made
+ *
+ * @param onSelect Called with the tab's key on a click.
+ */
+private class TabChip(private val onSelect: (String) -> Unit) : JBLabel() {
+    private var key: String = MAIN
+    private var selected = false
+
+    init {
+        border = JBUI.Borders.empty(3, 8)
+        clickable(this) { onSelect(key) }
+    }
+
+    /**
+     * Draw a tab.
+     *
+     * @param tab The tab.
+     * @param isSelected True for the visible tab.
+     * @param held Number of the tab's steps that calu holds back.
+     */
+    fun show(tab: TabView, isSelected: Boolean, held: Int) {
+        key = tab.key
+        selected = isSelected
+        val mark = when {
+            tab.openEscalations > 0 -> "⚠ "
+            tab.key == MAIN -> ""
+            tab.status == "running" -> "● "
+            tab.status == "failed" -> "✕ "
+            else -> "✓ "
+        }
+        val label = neutraliseBidi(tab.label)
+        val suffix = when {
+            tab.openEscalations > 0 -> " · ${tab.openEscalations} waiting"
+            held > 0 -> " · held"
+            else -> ""
+        }
+        text = mark + (if (label.length > 28) label.take(27) + "…" else label) + suffix
+        font = if (tab.openEscalations > 0 || isSelected) JBFont.label().asBold() else JBFont.label()
+        foreground = when {
+            tab.openEscalations > 0 || held > 0 -> UiStyle.chipColor("warning")
+            tab.status == "failed" -> UiStyle.chipColor("error")
+            isSelected || tab.key == MAIN || tab.status == "running" -> JBUI.CurrentTheme.Label.foreground()
+            else -> UiStyle.dim
+        }
+        toolTipText = listOfNotNull(
+            label,
+            tab.status.takeIf { it.isNotEmpty() }?.let { if (tab.background) "$it, background" else it },
+            if (tab.openEscalations > 0) "${tab.openEscalations} decision(s) wait for you here" else null,
+            if (held > 0) "$held step(s) held until the open decision is made" else null,
+            if (tab.attention && tab.openEscalations == 0) "new output" else null,
+        ).joinToString(" · ")
+        repaint()
+    }
+
+    override fun paintComponent(g: Graphics) {
+        val g2 = UiStyle.smooth(g.create())
+        try {
+            val arc = JBUI.scale(UiStyle.ARC)
+            if (selected) {
+                g2.color = UiStyle.selection
+                g2.fillRoundRect(0, 0, width, height, arc, arc)
+            } else {
+                g2.color = UiStyle.outline
+                g2.drawRoundRect(0, 0, width - 1, height - 1, arc, arc)
+            }
+        } finally {
+            g2.dispose()
+        }
+        super.paintComponent(g)
+    }
+}
 
 /**
  * The native Swing surface.
@@ -94,281 +200,462 @@ val EFFORT_CHOICES: List<String> = listOf("default", "low", "medium", "high", "x
  * @param project The project (parent of dialogs and popups).
  * @param host State and actions.
  */
-class NativeChatSurface(private val project: Project, private val host: ChatHost) : ChatSurface, CardActions {
+class NativeChatSurface(private val project: Project, private val host: ChatHost) : ChatSurface, RowHost, ComposerHost {
     private var state: ViewState = host.state.value
-    private var updating = false
+    private var active: String = MAIN
     private var handledFocus = 0
-    private var requestedModel: String? = null
-    private val drawn = HashMap<String, List<Any?>>()
+    private var focusComposerOnAttach = false
     private val drafts = HashMap<String?, String>()
     private var draftSession: String? = null
+    private val dismissed = HashSet<String>()
+    private val seen = HashMap<String, Int>()
+    private var phaseState = ""
+    private var phaseSince = System.currentTimeMillis()
+    private var lastDuration: Long? = null
+    private var turnSince = System.currentTimeMillis()
+    private val seed = (System.nanoTime() % 1000).toInt()
+    private var renders = 0
+    private var renderTotalMs = 0.0
+    private var renderMaxMs = 0.0
 
-    private val sessionButton = JButton("No session").apply { toolTipText = "Switch, start, resume, fork or rename a session" }
-    private val status = JBLabel()
-    private val honesty = JButton().apply { isVisible = false; toolTipText = "Code honesty: click to change the mode" }
-    private val hints = JPanel(VerticalLayout(JBUI.scale(4))).apply { border = JBUI.Borders.empty(0, 8, 4, 8) }
-    private val tabs = JBTabbedPane()
+    private val sessionLink = ActionLink("No session") { sessionMenu() }.apply {
+        setDropDownLinkIcon()
+        font = JBFont.label().asBold()
+    }
+    private val activity = JBLabel().apply { foreground = UiStyle.dim }
+    private val honesty = Chip().apply { isVisible = false }
+    private val cards = JPanel(VerticalLayout(JBUI.scale(6))).apply { border = JBUI.Borders.empty(0, 10, 6, 10); isOpaque = false }
+    private var cardsShown: List<Any?> = emptyList()
+    private val attention = JPanel(WrapLayout(8, 2)).apply { border = JBUI.Borders.empty(0, 10, 4, 10); isOpaque = false; isVisible = false }
+    private var attentionShown: List<Any?> = emptyList()
+    private val tabStrip = JPanel(WrapLayout(4, 4)).apply { border = JBUI.Borders.empty(0, 10, 6, 10); isOpaque = false; isVisible = false }
+    private val chips = ArrayList<TabChip>()
+    private val folded = ActionLink("") { foldedMenu() }.apply { setDropDownLinkIcon() }
+    private var foldedTabs: List<TabView> = emptyList()
+    private val deck = CardLayout()
+    private val transcriptsPanel = JPanel(deck)
     private val transcripts = LinkedHashMap<String, TranscriptView>()
-    private val queue = JBLabel().apply { foreground = UiStyle.dim; border = JBUI.Borders.empty(2, 8) }
-    private val input = JBTextArea(3, 20).apply { lineWrap = true; wrapStyleWord = true; border = JBUI.Borders.empty(4) }
-    private val send = JButton("Send").apply { toolTipText = "Send for the next turn (Enter)" }
-    private val inject = JButton("Into turn").apply { toolTipText = "Send into the running turn (Ctrl+Enter)" }
-    private val interrupt = JButton("Interrupt").apply { toolTipText = "Interrupt Claude's running turn" }
-    private val model = ComboBox(MODEL_CHOICES.toTypedArray()).apply { isEditable = true; toolTipText = "Model of the session" }
-    private val effort = ComboBox(EFFORT_CHOICES.toTypedArray()).apply { toolTipText = "Effort of sessions started from now on" }
-    private val level = ComboBox((LEVELS.map { it.name } + "Custom").toTypedArray()).apply { toolTipText = "Supervision level: what waits for you" }
-    private val usage = JBLabel().apply { foreground = UiStyle.dim }
+    private val queue = JPanel(VerticalLayout(JBUI.scale(2))).apply { border = JBUI.Borders.empty(2, 12); isOpaque = false; isVisible = false }
+    private var queueShown: Any? = null
+    private val composer = Composer(project, this)
+    private val model = ActionLink("model") { modelMenu() }.apply { setDropDownLinkIcon(); toolTipText = "Model of the session" }
+    private val effort = ActionLink("effort") { effortMenu() }.apply { setDropDownLinkIcon(); toolTipText = "Thinking effort of sessions started from now on" }
+    private val level = ActionLink("level") { levelMenu() }.apply { setDropDownLinkIcon() }
+    private val usage = Chip().apply { toolTipText = "" }
     private val root = JPanel(BorderLayout())
+    private val clock = Timer(1000) { renderActivity() }
 
     override val component: JComponent get() = root
+    override val current: ViewState get() = state
+    override val activeTab: String get() = active
 
     /** The text area of the composer (for tests). */
-    val inputArea: JBTextArea get() = input
+    val inputArea: JBTextArea get() = composer.inputArea
 
-    /** The transcript of a tab, `null` if the tab does not exist (for tests). */
+    /**
+     * Return the transcript of a tab.
+     *
+     * @param tab The tab's key.
+     * @return The transcript, or `null` if the tab does not exist (for tests).
+     */
     fun transcript(tab: String): TranscriptView? = transcripts[tab]
 
     /** The keys of the tabs, in order (for tests). */
     val tabKeys: List<String> get() = transcripts.keys.toList()
 
-    /** The texts of the hints shown now (for tests). */
+    /** The texts of the setup cards shown now (for tests). */
     var hintTexts: List<String> = emptyList()
         private set
 
     init {
-        val header = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), JBUI.scale(4))).apply { add(sessionButton); add(status); add(honesty) }
-        root.add(JPanel(VerticalLayout(0)).apply { add(header); add(hints) }, BorderLayout.NORTH)
-        root.add(tabs, BorderLayout.CENTER)
-        val footer = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), JBUI.scale(2)))
-        for (c in listOf(send, inject, interrupt, model, effort, level, usage)) footer.add(c)
-        val south = JPanel(BorderLayout())
-        south.add(queue, BorderLayout.NORTH)
-        south.add(JBScrollPane(input), BorderLayout.CENTER)
-        south.add(footer, BorderLayout.SOUTH)
+        val header = JPanel(BorderLayout(JBUI.scale(10), 0)).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(6, 10)
+            add(sessionLink, BorderLayout.WEST)
+            add(activity, BorderLayout.CENTER)
+            add(honesty, BorderLayout.EAST)
+        }
+        root.add(JPanel(VerticalLayout(0)).apply { isOpaque = false; add(header); add(cards); add(attention); add(tabStrip) }, BorderLayout.NORTH)
+        root.add(transcriptsPanel, BorderLayout.CENTER)
+        val footer = JPanel(WrapLayout(12, 2)).apply { isOpaque = false; add(model); add(effort); add(level); add(usage) }
+        val south = JPanel(VerticalLayout(JBUI.scale(4))).apply {
+            isOpaque = false
+            border = JBUI.Borders.empty(4, 8, 6, 8)
+            add(queue); add(composer.component); add(footer)
+        }
         root.add(south, BorderLayout.SOUTH)
-
-        sessionButton.addActionListener { sessionMenu() }
-        honesty.addActionListener { honestyMenu() }
-        send.addActionListener { submit(false) }
-        inject.addActionListener { submit(true) }
-        interrupt.addActionListener { host.act("interrupt") }
-        input.addKeyListener(object : KeyAdapter() {
-            override fun keyPressed(e: KeyEvent) {
-                if (e.keyCode != KeyEvent.VK_ENTER || e.isShiftDown) return
-                e.consume()
-                submit(e.modifiersEx and (InputEvent.CTRL_DOWN_MASK or InputEvent.META_DOWN_MASK) != 0)
-            }
-        })
-        model.addActionListener {
-            // An editable combo box reports "edited" and "changed" for one choice: act once, and only on a change.
-            val chosen = model.editor.item?.toString()?.trim().orEmpty().ifEmpty { "default" }
-            if (!updating && chosen != (state.session.model ?: "default") && chosen != requestedModel) {
-                requestedModel = chosen
-                host.act("setModel", args("model" to chosen))
-            }
-        }
-        effort.addActionListener { if (!updating) host.act("setEffort", args("effort" to effort.selectedItem.toString())) }
-        level.addActionListener {
-            val i = level.selectedIndex
-            if (!updating && i in LEVELS.indices) host.act("setLevel", args("level" to LEVELS[i].id))
-        }
-        tabs.addChangeListener { if (!updating) renderComposer() }
+        clickable(honesty, "Code honesty: what is verified to say what it does. Click for the mode, the marks and a review.") { honestyMenu() }
+        clickable(usage) { usageMenu() }
+        host.onUi { method, params -> if (method == "ui.restoreInput") params.str("text")?.let { if (composer.text.isBlank()) composer.text = it } }
         render(state)
     }
 
-    override fun dispose() {}
+    override fun dispose() {
+        clock.stop()
+    }
 
     override fun render(state: ViewState) {
+        val started = System.nanoTime()
+        draw(state)
+        val ms = (System.nanoTime() - started) / 1_000_000.0
+        renders++
+        renderTotalMs += ms
+        renderMaxMs = maxOf(renderMaxMs, ms)
+        if (renders % 500 == 0 || ms > 100) {
+            LOG.info("[calu] render ${"%.1f".format(ms)} ms; $renders renders, mean ${"%.2f".format(renderTotalMs / renders)} ms, max ${"%.1f".format(renderMaxMs)} ms, ${state.items[active]?.size ?: 0} rows in the tab")
+        }
+    }
+
+    /**
+     * Draw a state (the body of `render`, which measures it).
+     *
+     * @param state The view state.
+     */
+    private fun draw(state: ViewState) {
         val previous = this.state
         this.state = state
-        updating = true
-        try {
-            renderHeader()
-            renderHints()
-            renderTabs()
-            if (previous.session.sessionId != state.session.sessionId) switchDraft()
-            renderComposer()
-        } finally {
-            updating = false
+        if (state.session.state != phaseState) {
+            val now = System.currentTimeMillis()
+            val idle = setOf("", "idle", "stopped", "failed")
+            if (phaseState in idle && state.session.state !in idle) turnSince = now
+            if (phaseState !in idle && state.session.state == "idle") lastDuration = now - turnSince
+            phaseState = state.session.state
+            phaseSince = now
+        }
+        if (previous.session.sessionId != state.session.sessionId) {
+            switchDraft()
+            seen.clear()
+            lastDuration = null
+        }
+        renderHeader()
+        renderCards()
+        renderTabs()
+        renderAttention()
+        renderQueue()
+        renderFooter()
+        composer.render(state, active)
+        if (focusComposerOnAttach && isAttached(state)) {
+            focusComposerOnAttach = false
+            composer.focus()
         }
     }
 
     /** Keep the composer's text per session: store the old session's draft, show the new one's. */
     private fun switchDraft() {
-        drafts[draftSession] = input.text
+        drafts[draftSession] = composer.text
         draftSession = state.session.sessionId
-        input.text = drafts[draftSession].orEmpty()
+        composer.clear()
+        composer.text = drafts[draftSession].orEmpty()
     }
 
-    /** Draw the session button, the connection state and the honesty chip. */
+    /** Draw the session link, the activity line and the honesty chip. */
     private fun renderHeader() {
         val s = state
-        val attached = s.sessions.list.find { it.id == s.sessions.attachedId }
-        sessionButton.text = when {
-            attached != null -> sessionTitle(attached) + " ▾"
-            s.sessions.attachedId != null -> s.sessions.attachedId!!.take(8) + " ▾"
-            else -> "No session ▾"
-        }
-        val open = openEscalationCount(s)
-        status.text = when {
-            s.bridge.status == BridgeStatus.STARTING -> s.bridge.message ?: "starting calu…"
-            s.bridge.status != BridgeStatus.RUNNING -> s.bridge.message ?: "calu is ${s.bridge.status}"
-            s.starting != null -> s.starting!!.title + if (s.starting!!.slow) " (still waiting: is a calu server running?)" else "…"
-            s.link.status == LinkStatus.RECONNECTING -> "reconnecting to the session…"
-            s.link.status == LinkStatus.LOST -> "the session's connection is lost"
-            !isAttached(s) -> "not attached"
-            else -> listOfNotNull(s.session.state, levelLabel(s.autoEscalate), if (open > 0) "$open waiting for you" else null).joinToString(" · ")
-        }
-        status.foreground = if (s.bridge.status in setOf(BridgeStatus.ERROR, BridgeStatus.MISSING, BridgeStatus.EXITED) || s.link.status == LinkStatus.LOST) UiStyle.chipColor("error") else UiStyle.dim
+        val label = sessionLabel(s)
+        sessionLink.text = neutraliseBidi(label.label)
+        sessionLink.toolTipText = "<html>" + io.github.kadeng.calu.logic.escapeHtml(neutraliseBidi(label.title)).replace("\n", "<br>") + "<br>Click to switch, start, resume, fork or rename a session.</html>"
+        renderActivity()
         val chip = honestyChip(s.honesty)
         val stored = honestyStoredNote(s.honesty, s.honestyStored)
         honesty.isVisible = isAttached(s)
         honesty.text = listOf(chip.label.ifEmpty { "Honesty: off" }, stored).filter { it.isNotEmpty() }.joinToString(" · ")
-        honesty.foreground = UiStyle.chipColor(when (chip.kind) { "clean" -> "ok"; "open" -> "warning"; else -> "" })
+        honesty.kind = when (chip.kind) { "clean" -> "ok"; "open" -> "warning"; "review" -> "info"; else -> "" }
     }
 
-    /** Draw the setup hints and, while no session is attached, the server command. */
-    private fun renderHints() {
-        val shown = state.hints.map { it.message } + listOfNotNull(state.serverHelp?.command)
-        if (shown == hintTexts && hints.componentCount > 0 == shown.isNotEmpty()) return
-        hintTexts = shown
-        hints.removeAll()
-        for (h in state.hints) hints.add(hintRow(h))
-        state.serverHelp?.let { help ->
-            hints.add(textArea(help.note + if (help.detach.isNotEmpty()) " Detach with ${help.detach}." else "").apply { foreground = UiStyle.dim })
-            hints.add(JBTextField(help.command).apply { isEditable = false; font = JBFont.create(java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.PLAIN, JBFont.label().size)) })
-            hints.add(JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0)).apply {
-                add(JButton("Open terminal with this command").apply { addActionListener { host.act("openTerminal") } })
-                add(JButton("Copy command").apply { addActionListener { CopyPasteManager.getInstance().setContents(StringSelection(help.command)) } })
-            })
+    /** Draw the activity line; while Claude works a timer calls this every second. */
+    private fun renderActivity() {
+        val s = state
+        val attached = isAttached(s)
+        // A turn passes through several states (running, checking, tool_call): the time shown is the turn's,
+        // except while the session waits for the user, where it is the time waited.
+        val since = if (s.session.state == "escalated") phaseSince else turnSince
+        val a = activityLine(attached, s.session.state, since, lastDuration, System.currentTimeMillis(), seed)
+        val open = s.escalations.values.count { it.status == EscalationStatus.OPEN }
+        activity.text = when {
+            s.link.status == LinkStatus.RECONNECTING -> "Reconnecting to the session…"
+            s.link.status == LinkStatus.LOST -> "The session's connection is lost"
+            !attached -> ""
+            open > 0 -> "$open waiting for you · ${a.elapsed}"
+            a.active -> listOf(a.label, a.elapsed).filter { it.isNotEmpty() }.joinToString(" ")
+            else -> a.label
         }
-        hints.revalidate()
-        hints.repaint()
+        activity.icon = if (attached && a.kind == "busy") AnimatedIcon.Default() else null
+        activity.foreground = when {
+            s.link.status == LinkStatus.LOST -> UiStyle.chipColor("error")
+            attached && open > 0 -> UiStyle.chipColor("warning")
+            else -> UiStyle.dim
+        }
+        if (attached && a.active) { if (!clock.isRunning) clock.start() } else clock.stop()
+    }
+
+    /** Draw the setup cards (`setupCards`): what is missing and the button that fixes it. */
+    private fun renderCards() {
+        val list = setupCards(state, dismissed)
+        val key = listOf(list, state.serverHelp, if (list.any { it.sessionList }) state.sessions.list else null)
+        if (key == cardsShown) return
+        cardsShown = key
+        hintTexts = list.map { it.message } + listOfNotNull(state.serverHelp?.command?.takeIf { list.any { c -> c.serverHelp } })
+        cards.removeAll()
+        for (card in list) cards.add(if (card.compact) compactCard(card) else setupCard(card))
+        cards.isVisible = list.isNotEmpty()
+        cards.revalidate()
+        cards.repaint()
     }
 
     /**
-     * Build the line of one hint: its message and the button that fixes it.
+     * Build a setup card: the sentence, the server command or the running sessions if the card
+     * has them, and its buttons.
      *
-     * @param h The hint.
+     * @param card The card.
      * @return The component.
      */
-    private fun hintRow(h: SetupHint): JComponent {
-        val row = JPanel(BorderLayout(JBUI.scale(6), 0))
-        row.add(textArea(h.message).apply { foreground = UiStyle.chipColor(h.level) }, BorderLayout.CENTER)
-        if (h.action.isNotEmpty()) {
-            row.add(JButton(h.actionLabel).apply {
-                addActionListener {
-                    when (h.action) {
-                        "openLink" -> h.href?.let { com.intellij.ide.BrowserUtil.browse(it) }
-                        "openSettings", "install" -> com.intellij.openapi.options.ShowSettingsUtil.getInstance().showSettingsDialog(project, "calu")
-                        "startServer" -> host.act("openTerminal")
-                        "newSession" -> newSession()
-                        "attach" -> host.act("attach")
-                        else -> host.act(h.action)
-                    }
-                }
-            }, BorderLayout.EAST)
+    private fun setupCard(card: SetupCard): JComponent {
+        val color = if (card.level == "info") null else UiStyle.chipColor(card.level)
+        val panel = RoundedPanel(VerticalLayout(JBUI.scale(6)), fill = UiStyle.cardBackground, line = UiStyle.outline, stripe = color)
+        panel.border = JBUI.Borders.empty(8, 12, 8, 10)
+        val head = JPanel(BorderLayout(JBUI.scale(6), 0)).apply { isOpaque = false }
+        if (card.busy) head.add(JBLabel(AnimatedIcon.Default()), BorderLayout.WEST)
+        head.add(textArea(card.message), BorderLayout.CENTER)
+        panel.add(head)
+        val help = state.serverHelp
+        if (card.serverHelp && help != null) {
+            panel.add(textArea(help.note + if (help.detach.isNotEmpty()) " Detach with ${help.detach}." else "").apply { foreground = UiStyle.dim })
+            panel.add(JBTextField(help.command).apply { isEditable = false; font = UiStyle.mono })
         }
-        return row
+        if (card.sessionList) {
+            for (e in state.sessions.list.take(8)) {
+                val marks = listOfNotNull(e.state, if (e.openEscalations > 0) "${e.openEscalations} waiting" else null, if (e.stale) "stale" else null).joinToString(", ")
+                panel.add(ActionLink("${neutraliseBidi(sessionTitle(e))}  ($marks) · ${e.id.take(6)}") { host.act("attach", args("session" to e.id)) }.apply { toolTipText = e.directory })
+            }
+            if (state.sessions.list.size > 8) panel.add(ActionLink("All ${state.sessions.list.size} sessions…") { sessionMenu() })
+        }
+        val buttons = JPanel(WrapLayout(8, 4)).apply { isOpaque = false }
+        for (a in listOfNotNull(card.primary) + card.secondary) {
+            buttons.add(JButton(a.label).apply { isDefaultCapable = false; addActionListener { cardAction(a) } })
+        }
+        if (buttons.componentCount > 0) panel.add(buttons)
+        return panel
     }
 
-    /** Draw the tabs (Main and one per subagent) and their transcripts; follow a focus request. */
+    /**
+     * Build the one-line form of a card that matters less while a session works.
+     *
+     * @param card A compact card.
+     * @return The line: the short text, its button as a link, and "Dismiss".
+     */
+    private fun compactCard(card: SetupCard): JComponent {
+        val line = JPanel(WrapLayout(8, 0)).apply { isOpaque = false }
+        line.add(JBLabel(card.short ?: card.message, if (card.level == "error") AllIcons.General.Error else AllIcons.General.Warning, JBLabel.LEADING).apply { toolTipText = card.message })
+        card.primary?.let { a -> line.add(ActionLink(a.label) { cardAction(a) }) }
+        line.add(ActionLink("Dismiss") { dismissed.add(card.id); cardsShown = emptyList(); renderCards() })
+        return line
+    }
+
+    /**
+     * Run the button of a setup card.
+     *
+     * @param a The button.
+     */
+    private fun cardAction(a: CardAction) {
+        when (a.action) {
+            "openLink" -> a.href?.let { BrowserUtil.browse(it) }
+            "openSettings" -> ShowSettingsUtil.getInstance().showSettingsDialog(project, "calu")
+            "install" -> host.act("install")
+            "startServer" -> host.act("openTerminal")
+            "copyServerCommand" -> state.serverHelp?.let { CopyPasteManager.getInstance().setContents(StringSelection(it.command)) }
+            "newSession" -> newSession()
+            "attach" -> if (state.sessions.list.isEmpty()) resumeMenu() else sessionMenu()
+            else -> host.act(a.action)
+        }
+    }
+
+    /** Draw the tab strip (Main and one chip per subagent) and the transcript of the visible tab. */
     private fun renderTabs() {
         val wanted = listOf(MAIN) + state.agents.map { it.agentId }.filter { it != MAIN }
         if (wanted != transcripts.keys.toList()) {
-            val selected = selectedTab()
-            transcripts.keys.retainAll(wanted.toSet())
-            drawn.keys.retainAll(wanted.toSet())
-            tabs.removeAll()
-            for (key in wanted) {
-                val view = transcripts.getOrPut(key) { TranscriptView(::handle) { EscalationCard(this) { isAttached(state) } } }
-                tabs.addTab(key, view.component)
-            }
-            // LinkedHashMap keeps the insertion order of the first creation; rebuild it in tab order.
-            val ordered = wanted.associateWith { transcripts[it]!! }
+            for (gone in transcripts.keys - wanted.toSet()) transcriptsPanel.remove(transcripts[gone]!!.component)
+            val ordered = LinkedHashMap<String, TranscriptView>()
+            for (key in wanted) ordered[key] = transcripts[key] ?: TranscriptView(this).also { transcriptsPanel.add(it.component, key) }
             transcripts.clear()
             transcripts.putAll(ordered)
-            tabs.selectedIndex = maxOf(0, wanted.indexOf(selected))
-        }
-        wanted.forEachIndexed { i, key ->
-            val agent = state.agents.find { it.agentId == key }
-            val waiting = state.escalations.values.count { it.agentKey == key && it.status == "open" }
-            val title = if (key == MAIN) "Main" else (agent?.description?.takeIf { it.isNotEmpty() } ?: key.take(8)).take(24) + (agent?.status?.takeIf { it != "running" }?.let { " ($it)" } ?: "")
-            tabs.setTitleAt(i, title + if (waiting > 0) " ●" else "")
-            // The reducer copies on write: a tab whose parts are the same objects has the same rows.
-            val parts = listOf(state.items[key], state.tools, state.escalations, isAttached(state))
-            val before = drawn[key]
-            val same = before != null && before.size == parts.size && before.indices.all { before[it] === parts[it] || (it == 3 && before[it] == parts[it]) }
-            if (!same) {
-                drawn[key] = parts
-                transcripts[key]!!.update(rowsOf(state, key))
-            }
+            if (active !in transcripts) active = MAIN
+            deck.show(transcriptsPanel, active)
         }
         val focus = state.focus
         if (focus != null && focus.seq > handledFocus) {
             handledFocus = focus.seq
-            wanted.indexOf(focus.tab).takeIf { it >= 0 }?.let { tabs.selectedIndex = it }
+            if (focus.tab in transcripts) select(focus.tab, render = false)
+        }
+        // Only the visible tab is drawn; a hidden one is drawn when it is selected.
+        transcripts[active]?.update(state, active)
+        state.items[active]?.lastOrNull()?.let { seen[active] = it.id }
+        val tabs = tabList(state, active, seen)
+        val held = heldByAgent(state)
+        val fold = tabs.size > MAX_OPEN_TABS
+        val shown = tabs.filter { !fold || it.key == MAIN || it.key == active || it.status == "running" || it.openEscalations > 0 || (held[it.key] ?: 0) > 0 }
+        foldedTabs = tabs - shown.toSet()
+        while (chips.size < shown.size) chips.add(TabChip { select(it) })
+        val components = shown.indices.map { chips[it] as JComponent } + listOfNotNull(folded.takeIf { foldedTabs.isNotEmpty() })
+        if (tabStrip.components.toList() != components) {
+            tabStrip.removeAll()
+            for (c in components) tabStrip.add(c)
+        }
+        shown.forEachIndexed { i, tab -> chips[i].show(tab, tab.key == active, held[tab.key] ?: 0) }
+        folded.text = "${foldedTabs.size} finished"
+        tabStrip.isVisible = tabs.size > 1
+        tabStrip.revalidate()
+        tabStrip.repaint()
+    }
+
+    /**
+     * Show a tab.
+     *
+     * @param tab The tab's key; an unknown key is ignored.
+     * @param render True to draw the tabs again now (false inside `renderTabs`).
+     */
+    private fun select(tab: String, render: Boolean = true) {
+        if (tab !in transcripts) return
+        active = tab
+        deck.show(transcriptsPanel, tab)
+        if (render) {
+            renderTabs()
+            renderAttention()
+            composer.render(state, active)
         }
     }
 
-    /**
-     * Return the key of the visible tab.
-     *
-     * @return "main" or a subagent's id.
-     */
-    private fun selectedTab(): String = transcripts.keys.elementAtOrNull(tabs.selectedIndex) ?: MAIN
+    /** Offer the folded (finished) subagents in a popup; choosing one shows its tab. */
+    private fun foldedMenu() {
+        JBPopupFactory.getInstance().createPopupChooserBuilder(foldedTabs)
+            .setTitle("Finished Subagents")
+            .setRenderer(textRenderer<TabView> { "${neutraliseBidi(it.label)}  (${it.status})" })
+            .setNamerForFiltering { it.label }
+            .setItemChosenCallback { select(it.key) }
+            .createPopup().showUnderneathOf(folded)
+    }
 
-    /** Draw the composer: who receives the message, the buttons, the selectors and the usage. */
-    private fun renderComposer() {
+    /** Draw the attention strip: decisions that wait in other tabs, and the steps calu holds back. */
+    private fun renderAttention() {
+        val others = otherOpenEscalations(state, active)
+        val held = heldByAgent(state).values.sum()
+        val key = listOf(others, held)
+        if (key == attentionShown) return
+        attentionShown = key
+        attention.removeAll()
+        if (others.isNotEmpty()) {
+            attention.add(JBLabel("Waiting for you in:", AllIcons.General.Warning, JBLabel.LEADING).apply { foreground = UiStyle.chipColor("warning") })
+            for (o in others) attention.add(ActionLink(neutraliseBidi(o.label).take(40)) { select(o.tab) })
+        }
+        if (held > 0) {
+            attention.add(JBLabel("$held other step${if (held == 1) " is" else "s are"} held until you decide").apply {
+                foreground = UiStyle.dim
+                toolTipText = "While a decision is open, calu lets no other checked step run. A step held for five minutes asks for a decision of its own."
+            })
+        }
+        attention.isVisible = attention.componentCount > 0
+        attention.revalidate()
+        attention.repaint()
+    }
+
+    /** Draw the messages that wait to be read by Claude. */
+    private fun renderQueue() {
+        if (state.queue === queueShown) return
+        queueShown = state.queue
+        queue.removeAll()
+        for (q in state.queue) {
+            val how = if (q.delivery == "inject") "into the running turn" else "for the next turn"
+            queue.add(JBLabel("Waiting ($how): " + neutraliseBidi(q.text.lineSequence().first()).take(120), AllIcons.General.ArrowRight, JBLabel.LEADING).apply {
+                foreground = UiStyle.dim
+                toolTipText = "Claude has not read this message yet."
+            })
+        }
+        queue.isVisible = state.queue.isNotEmpty()
+        queue.revalidate()
+    }
+
+    /** Draw the selectors below the composer and the context usage. */
+    private fun renderFooter() {
         val s = state
         val attached = isAttached(s)
-        val target = messageTarget(s, selectedTab())
-        val can = attached && target.to != null
-        input.isEnabled = can
-        input.emptyText.text = if (!attached) "Attach to a session to write to Claude" else target.reason ?: "Message to ${target.label}: Enter sends, Ctrl+Enter sends into the running turn, Shift+Enter starts a new line"
-        send.isEnabled = can
-        val working = s.session.state !in setOf("idle", "stopped", "failed")
-        inject.isEnabled = can && working
-        interrupt.isEnabled = attached && working
-        queue.isVisible = s.queue.isNotEmpty()
-        queue.text = "Waiting to be read: " + s.queue.joinToString(" | ") { (if (it.delivery == "inject") "(into turn) " else "") + it.text.lineSequence().first().take(60) }
-        model.isEnabled = attached
+        model.text = s.session.model?.takeIf { it.isNotEmpty() } ?: "default model"
+        model.isVisible = attached
+        level.isVisible = attached
+        effort.text = "effort: " + (s.session.effort ?: "default")
+        level.text = levelLabel(s.autoEscalate)
         level.isEnabled = attached
-        if (requestedModel == (s.session.model ?: "default")) requestedModel = null
-        if (!model.editor.editorComponent.hasFocus()) model.editor.item = s.session.model ?: "default"
-        effort.selectedItem = s.session.effort?.takeIf { it in EFFORT_CHOICES } ?: "default"
-        val lv = levelOf(s.autoEscalate)
-        level.selectedIndex = LEVELS.indexOfFirst { it.id == lv }.takeIf { it >= 0 } ?: LEVELS.size
-        val c = s.usage.context
-        usage.text = if (c == null) "" else "context ${"%.0f".format(c.percent)}% (${c.tokens / 1000}k of ${c.maxTokens / 1000}k)"
-        usage.toolTipText = (listOfNotNull(s.usage.costUsd?.let { "cost \$%.2f".format(it) }, "${s.usage.numTurns} turns") +
-            s.usage.rateLimits.map { "${it.type}: ${it.status}" + (it.utilization?.let { u -> " ${(u * 100).toInt()}%" } ?: "") }).joinToString(" · ")
+        level.toolTipText = "Supervision level: what waits for you. " + (LEVELS.firstOrNull { it.id == levelOf(s.autoEscalate) }?.description ?: "")
+        val working = attached && s.session.state !in setOf("idle", "stopped", "failed")
+        val meter = usageMeter(s.usage, working)
+        usage.isVisible = attached
+        usage.text = if (meter.percent == null) meter.label else "ctx ${meter.label}"
+        usage.kind = when (meter.level) { "ok" -> "ok"; "warn" -> "warning"; "high" -> "error"; else -> "" }
+        usage.toolTipText = meter.title
     }
 
-    /**
-     * Send the composer's text and clear it.
-     *
-     * @param intoTurn True to deliver into the running turn, false for the next turn.
-     */
-    private fun submit(intoTurn: Boolean) {
-        val text = input.text
-        if (text.isBlank() || !send.isEnabled) return
+    // ------------------------------------------------------------------ ComposerHost
+
+    override fun send(text: String, intoTurn: Boolean, images: List<OutgoingImage>) {
         host.act("send", buildJsonObject {
-            put("text", JsonPrimitive(text)); put("inject", JsonPrimitive(intoTurn && inject.isEnabled)); put("tab", JsonPrimitive(selectedTab()))
+            put("text", JsonPrimitive(text)); put("inject", JsonPrimitive(intoTurn)); put("tab", JsonPrimitive(active))
+            put("images", JsonArray(images.map { buildJsonObject { put("data", JsonPrimitive(it.data)); put("mediaType", JsonPrimitive(it.mediaType)) } }))
         })
-        input.text = ""
+        transcripts[active]?.toEnd()
     }
 
-    /**
-     * Run the action of a clicked row.
-     *
-     * @param action The action; "openTab" switches the tab here, "editCheckerRoute" opens the
-     *   checker of a route, everything else goes to the backend.
-     */
-    private fun handle(action: RowAction) {
+    override fun act(action: String, args: JsonObject) {
+        if (action == "start" && args.str("kind") == "new") newSession() else host.act(action, args)
+    }
+
+    override fun slashUi(action: String) {
+        when (action) {
+            "model" -> modelMenu()
+            "effort" -> effortMenu()
+            "level" -> levelMenu()
+            "honesty" -> honestyMenu()
+            "sessions" -> sessionMenu()
+            "checkers" -> chooseChecker(project, host)
+            "rename" -> rename()
+            "settings" -> showCaluSettings(project, host)
+        }
+    }
+
+    override fun interrupt() = host.act("interrupt")
+
+    // ------------------------------------------------------------------ RowHost
+
+    override fun handle(action: RowAction) {
         when (action.name) {
-            "openTab" -> transcripts.keys.indexOf(action.args.str("tab")).takeIf { it >= 0 }?.let { tabs.selectedIndex = it }
+            "openTab" -> action.args.str("tab")?.let { select(it) }
             else -> host.act(action.name, action.args)
+        }
+    }
+
+    override fun userAction(id: String, item: UserItem) {
+        val where = buildJsonObject { put("turn", JsonPrimitive(item.turn)); item.uuid?.let { put("uuid", JsonPrimitive(it)) } }
+        when (id) {
+            "copy" -> CopyPasteManager.getInstance().setContents(StringSelection(item.text))
+            "forkAt" -> host.act("forkAt", where)
+            "rewind" -> if (Messages.showOkCancelDialog(project, REWIND_CONFIRM_DETAIL, REWIND_CONFIRM_TITLE, "Rewind", "Cancel", Messages.getQuestionIcon()) == Messages.OK) {
+                focusComposerOnAttach = true
+                host.act("rewind", where)
+            }
+        }
+    }
+
+    override fun toolAction(id: String, toolUseId: String) {
+        val resolved = try {
+            resolveItemAction(state.tools[toolUseId], id, state.session.workspace.orEmpty())
+        } catch (error: IllegalArgumentException) {
+            composer.showProblem(error.message.orEmpty())
+            return
+        }
+        when (resolved) {
+            is ResolvedAction.Copy -> CopyPasteManager.getInstance().setContents(StringSelection(resolved.text))
+            is ResolvedAction.ShowEdit -> host.act("openDiff", args("tool_use_id" to resolved.toolUseId))
+            is ResolvedAction.OpenFile -> host.act(
+                if (resolved.action == io.github.kadeng.calu.logic.ItemActionId.SHOW_UNCOMMITTED_CHANGES) "showChanges" else "openFile",
+                buildJsonObject { put("path", JsonPrimitive(resolved.path)); put("line", JsonPrimitive(resolved.line)) },
+            )
         }
     }
 
@@ -380,55 +667,101 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
 
     override fun why(escalationId: String) = host.act("showContext", args("escalation_id" to escalationId))
 
-    /** Ask for an optional first message and start a new session. */
+    // ------------------------------------------------------------------ menus
+
+    /** Start a new session at once; the composer gets the keyboard focus when it is attached. */
     fun newSession() {
-        val prompt = Messages.showInputDialog(project, "First message for Claude (optional):", "calu: New Session", null) ?: return
-        host.act("start", buildJsonObject { put("kind", JsonPrimitive("new")); if (prompt.isNotBlank()) put("prompt", JsonPrimitive(prompt)) })
+        focusComposerOnAttach = true
+        host.act("start", args("kind" to "new"))
     }
 
-    /** Show the session menu: running sessions, new, resume, fork, rename, detach. */
-    private fun sessionMenu() {
-        val menu = JPopupMenu()
-        val s = state
-        for (e in s.sessions.list) {
-            val marks = listOfNotNull(e.state, if (e.openEscalations > 0) "${e.openEscalations} waiting" else null, if (e.stale) "stale" else null, if (e.id == s.sessions.attachedId) "attached" else null)
-            menu.add("${sessionTitle(e)}  (${marks.joinToString(", ")})").apply {
-                toolTipText = "${e.directory} · ${e.id.take(8)}"
-                addActionListener { host.act("attach", args("session" to e.id)) }
-            }
-        }
-        if (s.sessions.list.isEmpty()) menu.add(s.sessions.error ?: if (s.sessions.loaded) "No session is running" else "Loading the sessions…").isEnabled = false
-        menu.addSeparator()
-        menu.add("New session…").addActionListener { newSession() }
-        menu.add("Resume a stored conversation…").addActionListener { resumeMenu() }
-        val conversation = s.session.claudeSessionId
-        val attached = s.sessions.list.find { it.id == s.sessions.attachedId }
-        menu.add("Fork conversation").apply {
-            isEnabled = isAttached(s) && conversation != null
-            addActionListener {
-                host.act("start", buildJsonObject {
-                    put("kind", JsonPrimitive("fork")); put("claude_session_id", JsonPrimitive(conversation.orEmpty()))
-                    put("name", JsonPrimitive(derivedSessionName("fork", attached?.let { sessionTitle(it) }.orEmpty())))
-                })
-            }
-        }
-        menu.add("Rename session…").apply {
-            isEnabled = attached != null
-            addActionListener {
-                val name = Messages.showInputDialog(project, "Name of the session (empty removes it):", "calu: Rename Session", null, attached?.name.orEmpty(), object : com.intellij.openapi.ui.InputValidatorEx {
-                    override fun getErrorText(inputString: String): String? = validateSessionName(inputString)
-                    override fun checkInput(inputString: String): Boolean = validateSessionName(inputString) == null
-                    override fun canClose(inputString: String): Boolean = checkInput(inputString)
-                }) ?: return@addActionListener
-                host.act("rename", buildJsonObject { put("session_id", JsonPrimitive(attached!!.id)); put("name", JsonPrimitive(name)) })
-            }
-        }
-        menu.add("Detach").apply { isEnabled = isAttached(s); addActionListener { host.act("detach") } }
-        menu.addSeparator()
-        menu.add("Refresh").addActionListener { host.act("refreshSessions") }
-        menu.add("Restart bridge").addActionListener { host.act("restartBridge") }
-        menu.show(sessionButton, 0, sessionButton.height)
+    /** Ask for the attached session's name and store it. */
+    private fun rename() {
+        val attached = state.sessions.list.find { it.id == state.sessions.attachedId } ?: return
+        val name = Messages.showInputDialog(project, "Name of the session (empty removes it):", "calu: Rename Session", null, attached.name, object : com.intellij.openapi.ui.InputValidatorEx {
+            override fun getErrorText(inputString: String): String? = validateSessionName(inputString)
+            override fun checkInput(inputString: String): Boolean = validateSessionName(inputString) == null
+            override fun canClose(inputString: String): Boolean = checkInput(inputString)
+        }) ?: return
+        host.act("rename", buildJsonObject { put("session_id", JsonPrimitive(attached.id)); put("name", JsonPrimitive(name)) })
     }
+
+    /**
+     * Show the session menu (`sessionMenu`): the running sessions under their headings, then the
+     * actions. The popup filters by typing, so that a session is found among many.
+     */
+    private fun sessionMenu() {
+        val group = DefaultActionGroup()
+        var actionsStarted = false
+        for (entry in sessionMenu(state)) {
+            when (entry) {
+                is SessionMenuEntry.Heading -> group.add(Separator.create(entry.label))
+                is SessionMenuEntry.Note -> group.add(menuAction(entry.label, enabled = false) {})
+                is SessionMenuEntry.Session -> {
+                    val marks = listOfNotNull(
+                        entry.state, if (entry.openEscalations > 0) "${entry.openEscalations} waiting" else null, if (entry.stale) "stale" else null,
+                    ).joinToString(", ")
+                    val icon = when {
+                        entry.attached -> AllIcons.Actions.Checked
+                        entry.openEscalations > 0 -> AllIcons.General.Warning
+                        else -> AllIcons.Empty
+                    }
+                    // Sessions of one directory share their title until they are named: the id tells them apart.
+                    group.add(menuAction("${neutraliseBidi(entry.title)}   $marks · ${entry.directory} · ${entry.id.take(6)}", icon = icon, description = entry.directoryFull) {
+                        if (!entry.attached) host.act("attach", args("session" to entry.id))
+                    })
+                }
+                is SessionMenuEntry.Action -> {
+                    if (!actionsStarted) { group.add(Separator.create()); actionsStarted = true }
+                    val label = when (entry.id) {
+                        "new" -> "New Session"
+                        "resume" -> "Resume a Stored Conversation…"
+                        "fork" -> "Fork Conversation"
+                        "rename" -> "Rename Session…"
+                        else -> entry.label
+                    }
+                    group.add(menuAction(label, enabled = entry.enabled) {
+                        when (entry.id) {
+                            "new" -> newSession()
+                            "resume" -> resumeMenu()
+                            "fork" -> host.act("forkConversation")
+                            "rename" -> rename()
+                            "refresh" -> host.act("refreshSessions")
+                            "detach" -> host.act("detach")
+                        }
+                    })
+                }
+            }
+        }
+        group.add(menuAction("Restart Bridge") { host.act("restartBridge") })
+        JBPopupFactory.getInstance()
+            .createActionGroupPopup(null, group, SimpleDataContext.getProjectContext(project), JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, true)
+            .showUnderneathOf(sessionLink)
+    }
+
+    /**
+     * Create an action for a popup.
+     *
+     * @param text The entry's text.
+     * @param enabled False for an entry that is shown but cannot be chosen.
+     * @param icon The entry's icon; `null` for none.
+     * @param description The entry's description (shown in the status bar); `null` for none.
+     * @param run What choosing the entry does, on the EDT.
+     * @return The action.
+     */
+    private fun menuAction(text: String, enabled: Boolean = true, icon: javax.swing.Icon? = null, description: String? = null, run: () -> Unit): AnAction =
+        object : DumbAwareAction(text, description, icon) {
+            init {
+                templatePresentation.setText(text, false)
+            }
+
+            override fun actionPerformed(e: AnActionEvent) = run()
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = enabled
+            }
+
+            override fun getActionUpdateThread() = com.intellij.openapi.actionSystem.ActionUpdateThread.BGT
+        }
 
     /** Load the stored conversations (`ide.sessions`) and offer them in a popup; choosing one resumes it. */
     private fun resumeMenu() {
@@ -443,29 +776,83 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
                 }
                 JBPopupFactory.getInstance().createPopupChooserBuilder(stored)
                     .setTitle("Resume a Stored Conversation")
-                    .setRenderer(textRenderer<SessionPick.Entry> { "${it.label}  —  ${it.description}" })
+                    .setRenderer(textRenderer<SessionPick.Entry> { "${neutraliseBidi(it.label)}  —  ${neutraliseBidi(it.description)}" })
+                    .setNamerForFiltering { it.label + " " + it.description }
                     .setItemChosenCallback { pick ->
+                        focusComposerOnAttach = true
                         host.act("start", buildJsonObject { put("kind", JsonPrimitive("resume")); put("claude_session_id", JsonPrimitive((pick.choice as SessionChoice.Stored).claudeSessionId)) })
                     }
-                    .createPopup().showUnderneathOf(sessionButton)
+                    .createPopup().showUnderneathOf(sessionLink)
             }
         }
     }
 
-    /** Show the honesty menu: the mode switch and the open marks. */
+    /**
+     * Show a popup of choices below a link.
+     *
+     * @param anchor The link.
+     * @param title The popup's title.
+     * @param items The choices.
+     * @param text The line of a choice.
+     * @param chosen Called with the chosen item.
+     */
+    private fun <T> choose(anchor: JComponent, title: String, items: List<T>, text: (T) -> String, chosen: (T) -> Unit) {
+        JBPopupFactory.getInstance().createPopupChooserBuilder(items)
+            .setTitle(title)
+            .setRenderer(textRenderer<T> { text(it) })
+            .setItemChosenCallback { chosen(it) }
+            .createPopup().showUnderneathOf(anchor)
+    }
+
+    /** Offer the models; "Other…" asks for a model name. */
+    private fun modelMenu() {
+        choose(model, "Model of the Session", CLAUDE_MODELS + "Other…", { if (it == "default") "default (Claude Code's own)" else it }) { m ->
+            val name = if (m == "Other…") Messages.showInputDialog(project, "Model name or alias:", "calu: Model", null, state.session.model.orEmpty(), null)?.trim() else m
+            if (!name.isNullOrEmpty()) host.act("setModel", args("model" to name))
+        }
+    }
+
+    /** Offer the efforts. */
+    private fun effortMenu() {
+        choose(effort, "Effort (Sessions Started from Now On)", CLAUDE_EFFORTS, { it }) { host.act("setEffort", args("effort" to it)) }
+    }
+
+    /** Offer the supervision levels with their descriptions. */
+    private fun levelMenu() {
+        choose(level, "Supervision Level: What Waits for You", LEVELS, { "${it.name}  —  ${it.description}" }) { host.act("setLevel", args("level" to it.id)) }
+    }
+
+    /** Show the usage: context, cost and limits; a click on the line asks the session again. */
+    private fun usageMenu() {
+        val menu = JBPopupMenu()
+        val meter = usageMeter(state.usage)
+        menu.add(meter.title.substringBefore(" Click")).isEnabled = false
+        usageCostLine(state.usage.costUsd, state.usage.numTurns).takeIf { it.isNotEmpty() }?.let { menu.add(it).isEnabled = false }
+        for (limit in state.usage.rateLimits) menu.add(rateLimitLine(limit)).isEnabled = false
+        menu.addSeparator()
+        menu.add("Ask Again").addActionListener { host.act("refreshUsage") }
+        menu.show(usage, 0, -menu.preferredSize.height)
+    }
+
+    /** Show the honesty menu: the mode switch, the open marks (a click clears one), review and trust. */
     private fun honestyMenu() {
-        val menu = JPopupMenu()
+        val menu = JBPopupMenu()
         val h = state.honesty
         for (mode in listOf("off", "track", "enforce")) {
-            menu.add((if ((h?.mode ?: "off") == mode) "● " else "   ") + "Mode: $mode").addActionListener { host.act("setHonesty", args("mode" to mode)) }
+            menu.add((if ((h?.mode ?: "off") == mode) "● " else "    ") + "Mode: $mode").addActionListener { host.act("setHonesty", args("mode" to mode)) }
         }
         if (h != null && h.marks.isNotEmpty()) {
             menu.addSeparator()
-            for (m in h.marks.take(15)) menu.add("${m.path}${if (m.symbol.isNotEmpty()) " (${m.symbol})" else ""}: ${m.reason.take(80)}").isEnabled = false
+            for (m in h.marks.take(15)) {
+                menu.add("Clear mark: ${neutraliseBidi(m.path)}${if (m.symbol.isNotEmpty()) " (${neutraliseBidi(m.symbol)})" else ""}").apply {
+                    toolTipText = neutraliseBidi(m.reason)
+                    addActionListener { host.act("honestyClear", buildJsonObject { put("mark_id", JsonPrimitive(m.id)) }) }
+                }
+            }
         }
         menu.addSeparator()
-        menu.add("Review now").addActionListener { host.launch { host.call("honesty.review", session = true) } }
-        menu.add("Trust HEAD").addActionListener { host.launch { host.call("honesty.trust", buildJsonObject { put("rev", JsonPrimitive("HEAD")) }, session = true) } }
+        menu.add("Review Now").addActionListener { host.act("honestyReview") }
+        menu.add("Trust HEAD").addActionListener { host.act("honestyTrust") }
         menu.show(honesty, 0, honesty.height)
     }
 

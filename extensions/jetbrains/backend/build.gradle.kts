@@ -3,7 +3,6 @@ dependencies {
         bundledModule("intellij.platform.kernel.backend")
         bundledModule("intellij.platform.rpc.backend")
         bundledModule("intellij.platform.backend")
-        bundledPlugin("org.jetbrains.plugins.terminal")
     }
     compileOnly(libs.kotlin.serialization.core.jvm)
     compileOnly(libs.kotlin.serialization.json.jvm)

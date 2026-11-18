@@ -198,3 +198,13 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
         }
     }
 }
+
+/**
+ * Open the dialog with all of calu's settings.
+ *
+ * @param project The project.
+ * @param host State and requests.
+ */
+fun showCaluSettings(project: Project, host: ChatHost) {
+    CaluSettingsDialog(project, host).show()
+}

@@ -133,7 +133,7 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *     interrupt {}                 setModel {model}             setEffort {effort}
      *     setLevel {level}             rename {session_id, name}    restartBridge {}
      *     unlock {}                    openDiff {tool_use_id}       openFile {path, line?}
-     *     editChecker {name}           showContext {escalation_id?} openTerminal {}
+     *     editChecker {name}           showContext {escalation_id?} 
      *     setHonesty {mode}
      *
      * @param projectId The project.
@@ -190,4 +190,14 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      * @param settings The new settings.
      */
     suspend fun setSettings(projectId: ProjectId, settings: PluginSettingsDto)
+
+    /**
+     * Return the command that starts the calu server from a terminal of the IDE (for the SSH
+     * mode through `ssh -t`, for WSL through `wsl.exe`). The frontend opens the terminal tab,
+     * because the terminal's tabs belong to the IDE's window.
+     *
+     * @param projectId The project.
+     * @return The command line; "" if the project is not open in the backend.
+     */
+    suspend fun serverTerminalCommand(projectId: ProjectId): String
 }
