@@ -625,6 +625,87 @@ class HonestyConfig(ConfigModel):
     review's result is there when the step is tried again."""
 
 
+class TracesConfig(ConfigModel):
+    """Session traces: the conversation written to a Markdown file inside the project (D232).
+
+    With `enabled` on, calu appends every step of a session to a file below `directory`, so
+    that the conversation can be committed and reviewed with the code it produced. The file
+    only grows: nothing is folded or summarised, and it holds no images. Every block is
+    redacted before it reaches the disk. calu never commits the files.
+    """
+
+    enabled: bool = False
+    """Write a trace file for every session of the project. The file is
+    `<directory>/<date>/<user>/session_NNN.md`: the UTC date the session started, the OS user
+    Claude Code runs as, and the next free three-digit number in that directory. Switching it
+    on while a session runs starts a file from that point; switching it off ends the file."""
+    content: Literal["narrated", "plain"] = "narrated"
+    """What the file holds of Claude's own words. `narrated`: Claude's text and thinking retold
+    in indirect speech by the narrator, as the checkers read them; with `context.narrate` off
+    there is no narrator, and the file holds what `plain` holds. `plain`: Claude's text as
+    written; its thinking is left out."""
+    directory: str = ".agent/traces"
+    """Where the trace files go, relative to the project directory. An absolute path, and a
+    path with a `..` component, are refused. While `enabled` is on, a tool call of Claude that
+    would write into this directory waits for a person, the files are left out of the write
+    sets and of the code honesty state, and the checkers' code tools do not read them."""
+    redact: bool = True
+    """Let the redaction agent replace secrets and personal data (names of private persons,
+    e-mail addresses, phone numbers, postal addresses, account and card numbers) by typed
+    placeholders such as `[redacted: e-mail address]` before a block is written. The values
+    calu knows to be secret and the common shapes of keys and tokens are replaced in every
+    case, also with this setting off; the file's header says which of the two applied. A
+    block the agent could not redact is written as a line that says it was withheld."""
+    redactor_model: str = ""
+    """Pydantic AI model string of the redaction agent; blank uses the default model (see
+    `command_checker.model`). The agent reads every block of the trace, so a small, fast
+    model is a reasonable choice."""
+    redactor_timeout_s: float = Field(default=60.0, gt=0)
+    """Seconds the redaction agent may take for one block. A block that takes longer is
+    withheld."""
+    max_input_chars: int = Field(default=20_000, ge=200)
+    """How many characters of one value of a tool call's input the file holds; a longer value
+    is cut, and the file says how much was left out."""
+    max_result_chars: int = Field(default=4_000, ge=200)
+    """How many characters of a tool call's result the file holds; a longer result is cut,
+    and the file says how much was left out."""
+    queue_blocks: int = Field(default=500, ge=1)
+    """How many blocks may wait to be redacted and written. A step never waits for the trace:
+    when the redaction agent is so far behind that this many blocks wait, further blocks are
+    left out, and the file says how many."""
+
+    @field_validator("directory")
+    @classmethod
+    def _inside_the_project(cls, directory: str) -> str:
+        """Accept only a relative path that stays inside the project directory.
+
+        Args:
+            directory: The configured path.
+
+        Returns:
+            The path with forward slashes, without a trailing slash and without `.`
+            components.
+
+        Raises:
+            ValueError: If the path is empty, absolute, starts with `~`, holds a `..`
+                component or a NUL character, or names the project directory itself.
+        """
+        text = directory.strip().replace("\\", "/")
+        parts = [part for part in text.split("/") if part not in ("", ".")]
+        if (
+            not parts
+            or text.startswith(("/", "~"))
+            or ".." in parts
+            or "\0" in text
+            or (len(parts[0]) == 2 and parts[0][1] == ":")
+        ):
+            raise ValueError(
+                f"traces.directory is a path inside the project directory, and {directory!r} "
+                'is not one: it must be relative, not empty, and without a ".." component'
+            )
+        return "/".join(parts)
+
+
 class ClockConfig(ConfigModel):
     """How closely calu watches its own clock (PLAN.md D32, `calu.clock`).
 
@@ -708,6 +789,9 @@ class Config(ConfigModel):
     """Measuring what a command wrote, and reviewing it afterwards (PLAN.md D31)."""
     web: WebConfig = Field(default_factory=WebConfig)
     """Settings of the web interface."""
+    traces: TracesConfig = Field(default_factory=TracesConfig)
+    """Session traces: the conversation as a redacted Markdown file inside the project, for
+    version control and review (PLAN.md D232); off by default."""
 
     @field_validator("hidden_env")
     @classmethod
@@ -761,7 +845,8 @@ class Config(ConfigModel):
         """Return a copy in which every model role uses `model`.
 
         The roles are the command, edit, changeset and subagent result checkers, the honesty
-        reviewer, the narrator and the summarizer (e.g. for a test run with one model).
+        reviewer, the narrator, the summarizer and the redaction agent of the session traces
+        (e.g. for a test run with one model).
 
         Args:
             model: A Pydantic AI model string, e.g. "mistral:mistral-small-2603",
@@ -780,6 +865,7 @@ class Config(ConfigModel):
                 "context": self.context.model_copy(
                     update={"narrator_model": model, "summarizer_model": model}
                 ),
+                "traces": self.traces.model_copy(update={"redactor_model": model}),
             }
         )
 
