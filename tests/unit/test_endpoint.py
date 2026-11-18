@@ -10,6 +10,7 @@ import pytest
 from calu import cli
 from calu.cli import CliError, _pick_session
 from calu.herd import STALE_AFTER_S, SessionRow
+from calu.protocol.client import RequestFailed
 
 
 def row(
@@ -113,15 +114,23 @@ def test_two_sessions_of_one_directory_have_to_be_named(
     assert "no session on this host whose id starts with" in str(unknown.value)
 
 
-def test_an_address_without_a_token_is_refused_before_connecting() -> None:
-    """The remote path keeps both arguments; one of them alone is a mistake worth naming."""
+def test_a_token_needs_an_address_and_an_address_is_tried_without_a_token() -> None:
+    """A token alone is a mistake worth naming; an address alone is tried without a token,
+    which a session started with `--insecure` accepts from this machine (D227)."""
     parser = cli.build_parser()
     store = None  # not reached
 
     only_address = parser.parse_args(["attach", "ws://127.0.0.1:8765"])
-    with pytest.raises(CliError) as no_token:
-        cli._endpoint_of(only_address, store, "calu attach")  # type: ignore[arg-type]
-    assert "--token=<token>" in str(no_token.value)
+    endpoint = cli._endpoint_of(only_address, store, "calu attach")  # type: ignore[arg-type]
+    assert (endpoint.address, endpoint.token, endpoint.token_id) == (
+        "ws://127.0.0.1:8765",
+        "",
+        None,
+    )
+    refused = cli._attach_failure(
+        endpoint, RequestFailed({"code": -32001, "message": "invalid client token"})
+    )
+    assert "--token=<token>" in refused and "--insecure" in refused
 
     only_token = parser.parse_args(["attach", "--token", "x"])
     with pytest.raises(CliError) as no_address:

@@ -82,8 +82,9 @@ async def served(
     turns: Sequence[Sequence[dict[str, Any]]] = (),
     config: Config | None = None,
     store: MemorySessionStore | None = None,
+    insecure: bool = False,
 ) -> AsyncGenerator[Served]:
-    """Run a session with a protocol server on a free local port."""
+    """Run a session with a protocol server on a free local port (`insecure` as `--insecure`)."""
     store = store or MemorySessionStore()
     bus = Bus()
     script = FakeScript(turns=[list(t) for t in turns])
@@ -98,7 +99,7 @@ async def served(
     )
     token = new_token()
     async with anyio.create_task_group() as tg:
-        server = SessionServer(session, bus, token_hash(token), tg)
+        server = SessionServer(session, bus, token_hash(token), tg, insecure=insecure)
         tg.start_soon(server.listen, "127.0.0.1", 0)
         with anyio.fail_after(10):
             await server.ready.wait()

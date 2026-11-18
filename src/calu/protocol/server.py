@@ -47,6 +47,7 @@ While the database gives no answer (an error of any kind, or no answer within
 printed token still attaches unless it was seen revoked, and a minted token cannot attach.
 """
 
+import ipaddress
 import json
 import logging
 import secrets
@@ -237,6 +238,23 @@ def _remove_socket(socket_path: Path) -> None:
     socket_path.unlink(missing_ok=True)
 
 
+def _loopback(remote: Any) -> bool:
+    """Tell whether a TCP peer address is a loopback address of this machine.
+
+    Args:
+        remote: The peer's address as the socket reports it, `(host, port, ...)`, or None.
+
+    Returns:
+        True for 127.0.0.0/8 and ::1 (also as an IPv4-mapped IPv6 address); False otherwise.
+    """
+    try:
+        address = ipaddress.ip_address(str(remote[0]))
+    except TypeError, IndexError, ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return bool(address.is_loopback or (mapped is not None and mapped.is_loopback))
+
+
 def encode_event(event: Event) -> str:
     """Return the JSON-RPC notification text for `event`.
 
@@ -299,6 +317,7 @@ class SessionServer:
         task_group: TaskGroup,
         revalidate_s: float = REVALIDATE_S,
         check_s: float = TOKEN_CHECK_S,
+        insecure: bool = False,
     ) -> None:
         """Create the server; `listen` starts it.
 
@@ -311,6 +330,10 @@ class SessionServer:
                 session's own task to it, so it must outlive every Claude session.
             revalidate_s: Seconds between two checks of the tokens of the open connections.
             check_s: Seconds a request waits for the database's answer about its token.
+            insecure: Let every connection on a Unix socket and every TCP connection from a
+                loopback address in without a token (`--insecure`, PLAN.md D227). Any
+                process on this machine that can reach the port, and any process of the
+                socket's owner, then acts as a client.
 
         Side effects: registers `on_event` with the bus, so the server learns of the end and
         the start of a session at the moment the session reports it.
@@ -321,6 +344,7 @@ class SessionServer:
         self.task_group = task_group
         self.revalidate_s = revalidate_s
         self.check_s = check_s
+        self.insecure = insecure
         self.shutdown = anyio.Event()
         self.ready = anyio.Event()
         """Set by `listen` once the socket is bound and `address` holds the URL."""
@@ -371,7 +395,7 @@ class SessionServer:
         if socket_path is not None:
             await self._listen_unix(socket_path)
             return
-        async with await serve(self._handle, host, port, max_size=MAX_FRAME_BYTES) as server:
+        async with await serve(self._handle_tcp, host, port, max_size=MAX_FRAME_BYTES) as server:
             bound = server.sockets[0].getsockname()
             self.address = f"ws://{bound[0]}:{bound[1]}"
             self.ready.set()
@@ -835,7 +859,9 @@ class SessionServer:
         """
         await anyio.to_thread.run_sync(_prepare_socket, socket_path)
         try:
-            async with await unix_serve(self._handle, str(socket_path), max_size=MAX_FRAME_BYTES):
+            async with await unix_serve(
+                self._handle_unix, str(socket_path), max_size=MAX_FRAME_BYTES
+            ):
                 await anyio.to_thread.run_sync(socket_path.chmod, 0o600)
                 self.address = f"unix:{socket_path}"
                 self.ready.set()
@@ -886,16 +912,32 @@ class SessionServer:
             connection: The accepted connection.
         """
         peer = connection.transport.get_extra_info("socket")
-        trusted = peer is not None and localsocket.peer_uid(peer) == 0
+        trusted = self.insecure or (peer is not None and localsocket.peer_uid(peer) == 0)
         await self._handle(connection, trusted)
+
+    async def _handle_tcp(self, connection: ServerConnection) -> None:
+        """Serve one TCP connection; with `insecure`, a loopback peer needs no token.
+
+        Args:
+            connection: The accepted connection.
+        """
+        await self._handle(connection, self.insecure and _loopback(connection.remote_address))
+
+    async def _handle_unix(self, connection: ServerConnection) -> None:
+        """Serve one connection of the `--socket` socket; with `insecure`, without a token.
+
+        Args:
+            connection: The accepted connection.
+        """
+        await self._handle(connection, self.insecure)
 
     async def _handle(self, connection: ServerConnection, trusted: bool = False) -> None:
         """Serve one WebSocket connection until it closes. Never raises.
 
         Args:
             connection: The accepted connection.
-            trusted: Whether the connection came over the root-owned socket from root, so
-                that it needs no client token.
+            trusted: Whether the connection needs no client token: root on the root-owned
+                socket (D215), or a local peer of an `insecure` server (D227).
         """
         client = Client(self, connection, trusted)
         self._clients.add(client)
@@ -921,9 +963,10 @@ class Client:
         Args:
             server: The server this client belongs to.
             connection: The WebSocket connection.
-            trusted: Whether the peer is root on the session's root-owned socket: such a
-                client is authenticated by `initialize` whatever token it sends, and has no
-                token that could be revoked (PLAN.md D215).
+            trusted: Whether the peer needs no token (root on the session's root-owned
+                socket, D215, or a local peer of an `insecure` server, D227): such a client is
+                authenticated by `initialize` whatever token it sends, and has no token that
+                could be revoked.
         """
         self.trusted = trusted
         self.server = server
@@ -1223,9 +1266,14 @@ class Client:
                     params.escalation_id,
                     params.decision,
                     params.note,
-                    # A root client has no token of its own, so the decision is recorded under
-                    # the session's token (`SessionServer.recorded`); the name tells them apart.
-                    client=f"root:{self.name}" if self.trusted else self.name,
+                    # A trusted client has no token of its own, so the decision is recorded
+                    # under the session's token (`SessionServer.recorded`); the name tells them
+                    # apart: "root:" on the root socket, "local:" on an `--insecure` session.
+                    client=(
+                        f"{'local' if self.server.insecure else 'root'}:{self.name}"
+                        if self.trusted
+                        else self.name
+                    ),
                     answer=params.answer,
                     token_sha256=self.server.recorded(self.token_sha256),
                 )
@@ -1301,7 +1349,7 @@ class Client:
         if self.trusted:
             self.authenticated = self._initialized = True
             self.name = params.client
-            log.info("root client %r connected on the local socket", self.name)
+            log.info("client %r connected without a token (local, trusted)", self.name)
             return self.server.session.initialize_result().model_copy(
                 update={"last_seq": self.server.bus.last_seq}
             )

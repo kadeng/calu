@@ -102,3 +102,22 @@ def test_an_unexpected_error_of_calu_run_is_one_line_on_stderr(
     err = capsys.readouterr().err.splitlines()
     assert err == [f"calu: RuntimeError: first line second line; details in {path}"]
     assert "Traceback (most recent call last)" in path.read_text()
+
+
+def test_serve_passes_secure_on_to_every_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clean_root: None
+) -> None:
+    """D226: `calu serve --secure` makes every client of its sessions show a token."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    seen = []
+
+    async def fake_serve(url, options, user=None) -> int:
+        """Stands in for `calu.serve.serve` and records its options."""
+        seen.append(options)
+        return 0
+
+    monkeypatch.setattr(cli, "_session_login", lambda store: bytearray(b"postgresql://s@db"))
+    monkeypatch.setattr(cli, "serve_sessions", fake_serve)
+    assert cli.main(["serve", "--secure"], store_factory=lambda: None) == 0  # type: ignore[arg-type]
+    assert cli.main(["serve"], store_factory=lambda: None) == 0  # type: ignore[arg-type]
+    assert [options.secure for options in seen] == [True, False]

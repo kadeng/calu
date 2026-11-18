@@ -485,6 +485,18 @@ escalation resolved from the database alone.
    --sudo` must do the same with the process running as root (`ps -o user= -C calu`). On a
    database without a password for `calu_admin`, the address must carry `?token=`. Run on
    2026-11-13 only as a test of the gate against the database; **not in a browser**.
+33. Status-only terminal and the log file (D225): `calu run -p "say hi" --batch` must print
+   the project, the session id, the client lines and states such as `[turn ended: success]`,
+   but not "say hi" nor Claude's answer; `calu attach` must show both. A failure (e.g. a
+   stopped database during the run) must be one line on stderr that names
+   `~/.local/state/calu/log/run.log`, and that file must hold the traceback. Ctrl-C must print
+   `calu: interrupted`. Run only by the tests.
+34. Local clients (D226, D227): with a session from `calu run --sudo`, `calu attach --sudo` in
+   the project must attach without asking calu's password (only sudo's); with `--secure` on
+   the run it must fall back to the database and a token. With `calu run --insecure` (no
+   sudo), `calu attach` in the project must attach without a password, and `calu attach
+   ws://127.0.0.1:<port>` without `--token`; without `--insecure` the latter must say it
+   wants a token. **Never run outside the tests.**
 28. A conversation started with `claude` itself (D209): in a project directory run `claude`,
    send a message, quit. `calu list-sessions` must list it with "outside calu" and that
    message; `calu run --resume <id>` must continue it and warn at the start that none of

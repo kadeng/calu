@@ -1,18 +1,28 @@
 # Handoff
 
-State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-31)
-and `PLAN.md` (decisions D1-D226, open questions §11, phases §12). Everything below is on
+State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-32)
+and `PLAN.md` (decisions D1-D227, open questions §11, phases §12). Everything below is on
 `main` and pushed.
 
 ## Pick up here
 
-**`main` is green**: 2031 tests with `uv run pytest -q -m 'not live'` (unit, database and
+**`main` is green**: 2042 tests with `uv run pytest -q -m 'not live'` (unit, database and
 the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The suite takes
 6-9 minutes; use `set -o pipefail` when piping it through `tail`, or a failure is hidden
 (that once let a red commit through, 2026-11-13).
 
 ### What exists now, by area (newest decisions first)
 
+- **Terminal output, log file and local trust** (requirements 30-32; D225-D227, 2026-11-18).
+  `calu run` and `calu serve` print the session's status only, never the conversation
+  (`run.STATUS_EVENTS`); tracebacks go to `$XDG_STATE_HOME/calu/log/<command>.log`
+  (`src/calu/logfile.py`), stderr gets one line per error; `calu run --thinking` is gone.
+  Root clients find a session through the root-owned sockets without the database or a
+  password (`cli._root_socket_endpoint`, `cli._hold_password_free`); `calu web --sudo`
+  relays through them. `--secure` binds no root socket; `--insecure` lets every Unix-socket
+  and loopback-TCP client in without a token. The owner ruled that a session running
+  Claude Code as calu's own uid keeps asking for a token without `--insecure` (the kernel
+  cannot tell the client from Claude Code's commands). Manual checklist items 33 and 34.
 - **calu as root, Claude Code as an unprivileged user** (requirement 26; D206, D207,
   D211-D216, D223). `--user NAME|UID[:GID]` (required as root) and `--sudo` (re-runs calu
   through sudo with `--user <you>`) on `calu run`, `serve`, `start`, `attach`, `web` and

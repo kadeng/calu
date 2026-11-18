@@ -229,6 +229,14 @@ class RunOptions:
     run_as: RunAs | None = None
     """The user Claude Code runs as, when that is not the user calu runs as (D206); None
     starts it as calu's own user."""
+    insecure: bool = False
+    """Every client on a Unix socket or on a loopback TCP address needs no token (`--insecure`,
+    D227). A session that does not run as root then also listens on a socket of its own user
+    (`calu.localsocket.user_root`), where `calu attach` finds it without the database. Not
+    together with `secure`."""
+    secure: bool = False
+    """Every client shows a token (`--secure`, D226). Without it, a session that runs as root
+    also listens on a root-owned Unix socket, where a root client needs no token (D215)."""
 
 
 def honesty_lines(info: HonestyInfo) -> list[str]:
@@ -1106,7 +1114,9 @@ async def _run(
                     # After the start, so that the session row and its id exist when the first
                     # client asks; the events of the start are in the bus and are replayed.
                     token = new_token()
-                    server = SessionServer(session, bus, token_hash(token), tg)
+                    server = SessionServer(
+                        session, bus, token_hash(token), tg, insecure=options.insecure
+                    )
                     tg.start_soon(_listen, server, options, token, store, on_serving, on_ready)
                 sent = bool(options.prompt)
                 if options.prompt:
@@ -1236,7 +1246,9 @@ async def _fork_point(db: Db, options: RunOptions, console: Console) -> Fork | N
 
 
 async def _serve_root_clients(server: SessionServer, listener: socket.socket, path: Path) -> None:
-    """Serve the root-owned socket; a failure costs that socket, not the session.
+    """Serve a local socket (root's, or an `--insecure` session's); never raises.
+
+    A failure costs that socket, not the session.
 
     Args:
         server: The protocol server.
@@ -1246,7 +1258,7 @@ async def _serve_root_clients(server: SessionServer, listener: socket.socket, pa
     try:
         await server.listen_local(listener, path)
     except OSError as exc:
-        say(f"calu: the socket for root clients stopped ({exc}); they use the token", True)
+        say(f"calu: the local socket stopped ({exc}); its clients use the address", True)
 
 
 def default_socket_path() -> Path:
@@ -1319,7 +1331,26 @@ async def _listen(
                     await store.add_client_token(token_hash(token), server.address)
                 except Exception:
                     log.exception("recording the address and the client token failed")
-            if os.geteuid() == 0 and store.session_id is not None:
+            if options.secure:
+                say("[clients] --secure: every client shows a client token")
+            if options.insecure:
+                say(
+                    "[clients] --insecure: clients on this machine (a Unix socket or a "
+                    "loopback address) need no token; every process here that can reach "
+                    "them can act as a client"
+                )
+            if options.insecure and os.geteuid() != 0 and store.session_id is not None:
+                path = localsocket.path_of(str(store.session_id), localsocket.user_root())
+                try:
+                    listener = await anyio.to_thread.run_sync(
+                        functools.partial(localsocket.bind, path, owner=os.geteuid())
+                    )
+                except OSError as exc:
+                    say(f"calu: no local socket ({exc}); clients use the address", True)
+                else:
+                    tg.start_soon(_serve_root_clients, server, listener, path)
+                    say(f"[clients] local clients, without a token: unix:{path}")
+            if not options.secure and os.geteuid() == 0 and store.session_id is not None:
                 # A root session also accepts root clients on a socket only root can reach,
                 # without a token (D215). Created with root's file access, which this
                 # process may have given up for its own work.

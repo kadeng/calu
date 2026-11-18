@@ -21,6 +21,8 @@ import os
 import socket
 import stat
 import struct
+import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path("/run/calu/sessions")
@@ -32,6 +34,23 @@ PRIVATE = stat.S_IRWXG | stat.S_IRWXO
 
 class NotTrusted(OSError):
     """A socket that is not root's alone; the message says what is wrong with it."""
+
+
+def user_root(environ: Mapping[str, str] | None = None) -> Path:
+    """Return where a session that does not run as root puts its `--insecure` socket (D227).
+
+    Args:
+        environ: The environment to read `XDG_RUNTIME_DIR` from; None uses `os.environ`.
+
+    Returns:
+        `$XDG_RUNTIME_DIR/calu/sessions`, or `<temporary directory>/calu-<uid>/sessions`
+        without the variable. Its two directories get mode 0700 when `bind` creates them.
+    """
+    env = os.environ if environ is None else environ
+    base = env.get("XDG_RUNTIME_DIR")
+    if base:
+        return Path(base) / "calu" / "sessions"
+    return Path(tempfile.gettempdir()) / f"calu-{os.geteuid()}" / "sessions"
 
 
 def path_of(session_id: str, root: Path = ROOT) -> Path:
@@ -156,6 +175,29 @@ def problems(path: Path, owner: int = 0) -> list[str]:
             found.append(f"{place} is open to its group or to others")
     found += _directory_problems(path.parent.parent, owner)
     return found
+
+
+def listed(root: Path = ROOT, owner: int = 0) -> list[Path]:
+    """Return the sessions' sockets that are root's alone. Needs root's file access.
+
+    This is how a root client finds the running sessions without asking the database
+    (PLAN.md D226): every session that runs as root and was not started with `--secure`
+    listens on `<root>/<session id>.sock`.
+
+    Args:
+        root: The directory of the sockets.
+        owner: The uid that must own them (root; a test passes its own).
+
+    Returns:
+        The sockets in `root` for which `problems` finds nothing, sorted by name; empty if the
+        directory is missing or cannot be read. A socket left by a process that died is
+        listed too: connecting to it fails.
+    """
+    try:
+        names = sorted(root.glob("*.sock"))
+    except OSError:
+        return []
+    return [path for path in names if not problems(path, owner)]
 
 
 def connected(path: Path, owner: int = 0) -> socket.socket:

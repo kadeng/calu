@@ -123,7 +123,7 @@ from calu.honesty import GitError, content_ids, resolve_commit
 from calu.launch import LAUNCH_ENV, LaunchError, RunAs, claude_path, launcher_path
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
-from calu.protocol.client import RequestFailed
+from calu.protocol.client import RequestFailed, probe
 from calu.protocol.messages import MAX_FRAME_BYTES
 from calu.protocol.schema import protocol_schema
 from calu.protocol.server import check_socket_path
@@ -149,6 +149,33 @@ from calu.store.projects import register_directory
 from calu.tui import start as tui_start
 
 _log = logging.getLogger("calu.cli")
+
+SECURE_HELP = (
+    "every client shows a client token, also a local one: without it, a session that runs as "
+    "root lets root clients (`calu attach --sudo`, `calu web --sudo`) in through a root-owned "
+    "Unix socket without a token or a password"
+)
+"""Help text of `--secure` on `calu run` and `calu serve` (D226)."""
+
+INSECURE_HELP = (
+    "clients on this machine need no token or password: every connection on a Unix socket "
+    "and every TCP connection from a loopback address. Any local process that can reach the "
+    "session, Claude Code's own commands included, can then act as a client"
+)
+"""Help text of `--insecure` on `calu run` and `calu serve` (D227)."""
+
+
+def _check_security_flags(args: argparse.Namespace) -> None:
+    """Refuse `--secure` together with `--insecure`.
+
+    Args:
+        args: Parsed arguments (`secure`, `insecure`).
+
+    Raises:
+        CliError: If both are given.
+    """
+    if args.secure and args.insecure:
+        raise CliError("--secure and --insecure contradict each other; give one of them")
 
 
 class CliError(Exception):
@@ -1586,7 +1613,8 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     runs in this process without a further password.
 
     Args:
-        args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`).
+        args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`, `secure`,
+            `insecure`).
         store: The credential store.
 
     Raises:
@@ -1596,6 +1624,7 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
         CredentialError: On a wrong password.
         psycopg.Error: On database errors at the start.
     """
+    _check_security_flags(args)
     if args.max_sessions < 1:
         raise CliError("--max-sessions takes a number of 1 or more")
     if args.idle_timeout is not None and not (
@@ -1609,6 +1638,8 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
             max_sessions=args.max_sessions,
             run_as=run_as,
             idle_timeout_s=args.idle_timeout * 60 if args.idle_timeout is not None else None,
+            secure=args.secure,
+            insecure=args.insecure,
         )
         code = asyncio.run(serve_sessions(url, options, user=run_as.user if run_as else None))
     finally:
@@ -1738,7 +1769,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`directory`, `project`, `prompt`, `resume`, `fork`,
-            `fork_before_turn`, `model`, `effort`, `batch`).
+            `fork_before_turn`, `model`, `effort`, `batch`, `secure`, `insecure`).
         store: The credential store.
 
     Raises:
@@ -1755,6 +1786,7 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
     ):
         raise CliError("--background-timeout needs --batch and a number of seconds above 0")
     _check_conversation_choice(args)
+    _check_security_flags(args)
     socket_path = _socket_path(args.socket)
     # Last: `--sudo` replaces this process by sudo, which asks for a password, so every
     # mistake that can be found without it is reported first.
@@ -1772,6 +1804,8 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         interactive=not args.batch,
         background_timeout_s=args.background_timeout,
         run_as=run_as,
+        secure=args.secure,
+        insecure=args.insecure,
     )
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print(
@@ -1981,6 +2015,110 @@ def _local_endpoint(session_id: str) -> Endpoint | None:
     return Endpoint(f"unix:{path}", "", None, session_id)
 
 
+def _root_socket_endpoint(hint: str | None) -> Endpoint | None:
+    """Find the session a client means through the local sockets, without a token.
+
+        root      ──► /run/calu/sessions/*.sock: root's own sockets (D215, D226)
+        not root  ──► $XDG_RUNTIME_DIR/calu/sessions/*.sock: those of `--insecure`
+                      sessions of this user (D227)
+
+    No database and no password: each socket that is its owner's alone
+    (`calu.localsocket.listed`) is asked who it is (`calu.protocol.client.probe` without a
+    token; a session that wants one refuses and is skipped), and the session is picked as
+    `_pick_session` picks one: by `hint`, else by the nearest project directory that holds
+    the current directory.
+
+    Side effects: one short connection to each listed socket; each session logs it. A socket
+    that does not answer (its process died) is skipped.
+
+    Args:
+        hint: `--session`, a session id or its beginning, or None for "this directory".
+
+    Returns:
+        The endpoint without a token, or None if no socket answers or none matches; the
+        caller then asks the database.
+
+    Raises:
+        CliError: If several sessions match and `hint` does not single one out.
+    """
+    if os.geteuid() == 0:
+        paths = asuser.as_root(localsocket.listed)
+    else:
+        paths = localsocket.listed(localsocket.user_root(), os.geteuid())
+    if not paths:
+        return None
+
+    async def ask_all() -> list[tuple[Path, str, str]]:
+        """Ask each socket for its session id and directory.
+
+        Returns:
+            (socket, session id, directory) of each socket that answered.
+        """
+        found: list[tuple[Path, str, str]] = []
+        for path in paths:
+            try:
+                answer = await probe(f"unix:{path}", "", "calu (finding sessions)")
+            except OSError, RequestFailed, ConnectionError, TimeoutError:
+                continue
+            session_id = str(answer.get("calu_session_id") or path.stem)
+            found.append((path, session_id, str(answer.get("workspace") or "")))
+        return found
+
+    found = asyncio.run(ask_all())
+    if hint:
+        chosen = [entry for entry in found if entry[1].startswith(hint)]
+    else:
+        here = Path.cwd().resolve()
+        inside = [entry for entry in found if entry[2] and _inside(here, entry[2])]
+        deepest = max((len(Path(entry[2]).parts) for entry in inside), default=0)
+        chosen = [entry for entry in inside if len(Path(entry[2]).parts) == deepest]
+    if not chosen:
+        return None
+    if len(chosen) > 1:
+        lines = "\n".join(f"    {entry[1]}  {entry[2]}" for entry in chosen)
+        raise CliError(f"{len(chosen)} sessions match; name one with --session <id>:\n{lines}")
+    path, session_id, _directory = chosen[0]
+    return Endpoint(f"unix:{path}", "", None, session_id)
+
+
+def _hold_password_free(store: CredentialStore) -> None:
+    """Keep a database login for a root client that found its session through a socket.
+
+    A client that runs as root for a user (`_hold`) cannot read root's credential store after
+    it switched to the user's file identity, so it keeps a login in memory (`_held`). Found
+    through a root-owned socket it needed none to attach (D226); it takes one here only if
+    root's store has an entry that needs no password (`admin`, else `operator`), and asks
+    for nothing. Without one, the client attaches anyway and its database features
+    (`/running`, `/switch`, `/new`, `/fork`, saving settings) say that they are not available.
+
+    Side effects: may set `_held` and `_admin_place`; reads root's credential store.
+
+    Args:
+        store: Root's credential store.
+    """
+    if not _hold or _held:
+        return
+    for name in ("admin", "operator"):
+        try:
+            if name not in store or store.needs_password(name):
+                continue
+            url = store.load(name)
+        except (CredentialError, OSError) as exc:
+            _log.info("the %r credential could not be read: %s", name, exc)
+            continue
+        try:
+            target = Target.parse(url)
+        except ValueError as exc:
+            _log.info("the %r credential holds no usable login: %s", name, exc)
+            continue
+        finally:
+            wipe(url)
+        _held[:] = [target]
+        with contextlib.suppress(ValueError):
+            _admin_place[:] = [admin_login(target, "")]
+        return
+
+
 def _find_endpoint(
     store: CredentialStore, hint: str | None, label: str, may_ask: bool = True
 ) -> Endpoint:
@@ -1991,8 +2129,10 @@ def _find_endpoint(
     database which session runs in this directory on this host and mints its own token. The
     token is minted rather than read because only the hash of a token is stored, so a token
     printed once cannot be recovered; `calu attach` revokes the one it minted when it ends.
+    A root client first tries the root-owned sockets (`_root_socket_endpoint`), which need
+    neither the database nor a token (D226).
 
-    Side effects: inserts a `client_tokens` row.
+    Side effects: inserts a `client_tokens` row, unless a root-owned socket was found.
 
     Args:
         store: The credential store; the `operator` credential is enough, and with
@@ -2010,6 +2150,11 @@ def _find_endpoint(
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
+    # A root client first looks at the root-owned sockets: no database, no password (D226).
+    local = _root_socket_endpoint(hint)
+    if local is not None:
+        _hold_password_free(store)
+        return local
 
     async def work(db: Db) -> Endpoint:
         """Pick the session and mint a token.
@@ -2218,7 +2363,24 @@ def _attach(
     """
     if run_as is not None:
         _become_client_of(run_as)
-    database = _held[0] if _held else (_admin_place[0] if _admin_place else None)
+    if _held and _held[0].user == ADMIN_ROLE:
+        database: Target | None = _held[0]
+    elif _admin_place:
+        # The admin password is asked when a change needs it, and not kept (D213).
+        database = _admin_place[0]
+    elif run_as is not None:
+        # Root's store cannot be read after the switch below, and the user's store is the
+        # wrong one: the client's database features say they are not available (D226).
+        database = None
+        print(
+            "[client] attached through root's socket without a database login: /running, "
+            "/switch, /new, /fork and saving settings need one; `sudo calu credential set "
+            "operator --no-password` provides it",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        database = None
     try:
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
@@ -2243,12 +2405,31 @@ def _attach(
         else:
             code = asyncio.run(attach(endpoint.address, endpoint.token, after_seq, thinking))
     except (OSError, RequestFailed) as exc:
-        raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
+        raise CliError(_attach_failure(endpoint, exc)) from exc
     finally:
         if endpoint.token_id is not None:
             _revoke(store, endpoint.token_id)
     if code:
         raise CliError("the client ended with an error")
+
+
+def _attach_failure(endpoint: Endpoint, exc: Exception) -> str:
+    """Say why a client could not attach.
+
+    Args:
+        endpoint: Where it tried to connect.
+        exc: What the attempt raised.
+
+    Returns:
+        The message; for a refusal without a token, also how to give one.
+    """
+    message = f"cannot attach to {endpoint.address}: {exc}"
+    if isinstance(exc, RequestFailed) and not endpoint.token:
+        message += (
+            "; this session wants a client token (`--token=<token>`), unless it was started "
+            "with --insecure"
+        )
+    return message
 
 
 def _endpoint_of(
@@ -2271,19 +2452,15 @@ def _endpoint_of(
         The endpoint; `token_id` is set only when a token was minted here.
 
     Raises:
-        CliError: If an address was given without a token, if a token was given without an
-            address, or if no single session of this directory is running.
+        CliError: If a token was given without an address, or if no single session of this
+            directory is running. An address without a token is tried without one (D227).
     """
-    if args.address and not args.token:
-        raise CliError(
-            f"{args.address} needs the token of that session: `--token=<token>`. Without an "
-            "address, the session running in this directory is found in the database and no "
-            "token is needed"
-        )
     if args.token and not args.address:
         raise CliError("--token names the session's address too, e.g. ws://127.0.0.1:8765")
     if args.address:
-        return Endpoint(args.address, args.token)
+        # Without `--token` the client tries without one: a session started with
+        # `--insecure` lets a local client in (D227); any other refuses, and says so.
+        return Endpoint(args.address, args.token or "")
     return _find_endpoint(store, args.session, label, may_ask)
 
 
@@ -2391,7 +2568,7 @@ def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
     try:
         code = asyncio.run(serve_acp(endpoint.address, endpoint.token))
     except (OSError, RequestFailed) as exc:
-        raise CliError(f"cannot attach to {endpoint.address}: {exc}") from exc
+        raise CliError(_attach_failure(endpoint, exc)) from exc
     finally:
         if endpoint.token_id is not None:
             _revoke(store, endpoint.token_id, may_ask=False)
@@ -4128,6 +4305,8 @@ def build_parser() -> argparse.ArgumentParser:
         "with Claude Code as you. Needs an installation only root can change",
     )
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--secure", action="store_true", help=SECURE_HELP)
+    p.add_argument("--insecure", action="store_true", help=INSECURE_HELP)
     p.set_defaults(handler=cmd_run, log_name="run")
 
     p = sub.add_parser(
@@ -4162,6 +4341,8 @@ def build_parser() -> argparse.ArgumentParser:
         "with Claude Code as you. Needs an installation only root can change",
     )
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--secure", action="store_true", help=SECURE_HELP)
+    p.add_argument("--insecure", action="store_true", help=INSECURE_HELP)
     p.set_defaults(handler=cmd_serve, log_name="serve")
 
     p = sub.add_parser("start", help="ask the running `calu serve` for a session and attach to it")

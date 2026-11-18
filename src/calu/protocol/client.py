@@ -335,3 +335,53 @@ async def connect(
             # should see the error it caused (a refused token, its own exception), not a group.
             error = single_error(group)
             raise error from None
+
+
+async def probe(address: str, token: str, client: str, timeout_s: float = 3.0) -> dict[str, Any]:
+    """Ask a session who it is, without subscribing to its events.
+
+    Side effects: opens a connection, sends `initialize` and closes the connection again. The
+    session logs the client's connection.
+
+    Args:
+        address: `ws://host:port` or `unix:<path>`.
+        token: The client token; "" for a session's root-owned socket, where a root peer needs
+            none (PLAN.md D215).
+        client: Name of this client, for the session's log.
+        timeout_s: How long the whole exchange may take.
+
+    Returns:
+        The `initialize` result: among others `workspace` and `calu_session_id`.
+
+    Raises:
+        OSError: If the address cannot be reached.
+        RequestFailed: If the session refuses the token.
+        ConnectionError: If the session closes the connection before it answers.
+        TimeoutError: If the session does not answer within `timeout_s`.
+    """
+
+    async def ignore(_method: str, _params: dict[str, Any]) -> None:
+        """Drop events; none are subscribed to.
+
+        Args:
+            _method: The event's method.
+            _params: Its parameters.
+        """
+
+    answer: dict[str, Any] = {}
+    with anyio.fail_after(timeout_s):
+        async with _open(address) as connection:
+            protocol = ProtocolClient(connection, ignore)
+            try:
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(protocol._read)
+                    try:
+                        answer = await protocol.request(
+                            "initialize", {"client": client, "client_version": "", "token": token}
+                        )
+                    finally:
+                        tg.cancel_scope.cancel()
+            except BaseExceptionGroup as group:
+                error = single_error(group)
+                raise error from None
+    return answer

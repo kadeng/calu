@@ -45,6 +45,7 @@ import base64
 import hashlib
 import ipaddress
 import logging
+import os
 import re
 import secrets
 import socket
@@ -67,7 +68,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from calu import __version__, admin, herd, session_requests
+from calu import __version__, admin, asuser, herd, localsocket, session_requests
 from calu.db import Db
 from calu.protocol.client import RequestFailed, connect
 from calu.web import git
@@ -1441,6 +1442,14 @@ async def _live(websocket: WebSocket, state: _State, session_id: str) -> None:
             }
         )
         return
+    local = await anyio.to_thread.run_sync(_root_socket, session_id)
+    if local is not None:
+        # calu web as root: the session's root-owned socket needs no token (D215, D226).
+        try:
+            await _relay(websocket, row, "", address=local)
+        except (OSError, ConnectionError, RequestFailed) as exc:
+            await websocket.send_json({"type": "closed", "message": _unreachable_message(row, exc)})
+        return
     for last_attempt in (False, True):
         token = state.live_tokens.get(session_id)
         if token is None:
@@ -1495,7 +1504,28 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
     )
 
 
-async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None:
+def _root_socket(session_id: str) -> str | None:
+    """Return the address of a session's root-owned socket, if this process may use it.
+
+    Args:
+        session_id: The id of the session's row.
+
+    Returns:
+        `unix:<path>` if this process is root and the socket exists and is root's alone
+        (`calu.localsocket.problems`); else None. A session started with `--secure` has no
+        such socket (D226).
+    """
+    if os.geteuid() != 0:
+        return None
+    path = localsocket.path_of(session_id)
+    if asuser.as_root(localsocket.problems, path):
+        return None
+    return f"unix:{path}"
+
+
+async def _relay(
+    websocket: WebSocket, row: herd.SessionRow, token: str, address: str | None = None
+) -> None:
     """Forward events and commands between one browser and one session, until one side ends.
 
         browser closes its connection      ->  returns
@@ -1506,7 +1536,8 @@ async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None
     Args:
         websocket: The browser's connection.
         row: The session to attach to.
-        token: The client token minted for this connection.
+        token: The client token minted for this connection; "" on a root-owned socket.
+        address: Where to connect instead of `row.address`, or None.
 
     Raises:
         OSError: If the session's address cannot be reached.
@@ -1534,7 +1565,7 @@ async def _relay(websocket: WebSocket, row: herd.SessionRow, token: str) -> None
         with suppress(RuntimeError, WebSocketDisconnect):
             await websocket.send_json(message)
 
-    async with connect(row.address, token, "calu web", on_event) as session:
+    async with connect(address or row.address, token, "calu web", on_event) as session:
         snapshot = await session.request("state.get")
         await websocket.send_json({"type": "snapshot", "snapshot": snapshot})
         sent_snapshot = True

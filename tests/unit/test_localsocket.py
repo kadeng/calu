@@ -135,3 +135,120 @@ def test_an_existing_outer_directory_others_may_write_to_is_refused(short: Path)
     # Somebody else's outer directory: the real check asks for root.
     with pytest.raises(localsocket.NotTrusted, match=f"{outer} belongs to uid {ME}"):
         localsocket.bind(path)
+
+
+def test_only_sockets_that_are_the_owners_alone_are_listed(short: Path):
+    root = short / "calu" / "s"
+    good = localsocket.bind(localsocket.path_of("good", root), owner=ME)
+    open_one = localsocket.bind(localsocket.path_of("open", root), owner=ME)
+    try:
+        localsocket.path_of("open", root).chmod(0o660)
+        (root / "plain.sock").write_text("")
+        assert localsocket.listed(root, ME) == [localsocket.path_of("good", root)]
+        assert localsocket.listed(short / "missing", ME) == []
+    finally:
+        good.close()
+        open_one.close()
+
+
+@pytest.mark.anyio
+async def test_a_root_client_finds_its_session_through_the_sockets_alone(
+    tmp_path: Path, short: Path, monkeypatch
+):
+    """D226: `calu attach --sudo` in the project needs neither the database nor a password."""
+    from calu import cli
+
+    workspace = tmp_path / "work"
+    (workspace / "sub").mkdir(parents=True)
+    root = short / "run" / "sessions"
+    monkeypatch.setattr(localsocket, "ROOT", root)
+    path = localsocket.path_of("11111111-2222-4333-8444-555555555555", root)
+    really_connected, really_listed = localsocket.connected, localsocket.listed
+    monkeypatch.setattr(localsocket, "connected", lambda found: really_connected(found, ME))
+    monkeypatch.setattr(localsocket, "listed", lambda: really_listed(root, ME))
+    monkeypatch.setattr(localsocket, "peer_uid", lambda connection: 0)
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    async with served(workspace) as run, anyio.create_task_group() as tg:
+        tg.start_soon(run.server.listen_local, localsocket.bind(path, owner=ME), path)
+        monkeypatch.chdir(workspace / "sub")
+        found = await anyio.to_thread.run_sync(cli._root_socket_endpoint, None)
+        assert found is not None
+        assert (found.address, found.token, found.token_id) == (f"unix:{path}", "", None)
+        assert await anyio.to_thread.run_sync(cli._root_socket_endpoint, "nope") is None
+        monkeypatch.chdir(tmp_path)
+        assert await anyio.to_thread.run_sync(cli._root_socket_endpoint, None) is None
+        tg.cancel_scope.cancel()
+
+
+def test_a_root_client_found_by_socket_keeps_only_a_login_without_password(
+    tmp_path: Path, monkeypatch
+):
+    """D226: nothing is asked; a password-free entry of root's store is kept, a protected one
+    is not touched."""
+    from calu import cli
+    from calu.credentials import CredentialStore, KdfParams
+    from calu.setup import ADMIN_ROLE
+
+    store = CredentialStore(
+        tmp_path / "store.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
+    )
+    store.save("admin", "postgresql://calu_owner:x@db.example:5432/calu", "secret")
+    monkeypatch.setattr(cli, "_hold", [True])
+    monkeypatch.setattr(cli, "_held", [])
+    monkeypatch.setattr(cli, "_admin_place", [])
+    cli._hold_password_free(store)
+    assert cli._held == [] and cli._admin_place == []
+
+    store.save("operator", "postgresql://calu_operator:y@db.example:5432/calu", None)
+    cli._hold_password_free(store)
+    assert [target.user for target in cli._held] == ["calu_operator"]
+    assert [target.user for target in cli._admin_place] == [ADMIN_ROLE]
+
+
+def test_loopback_addresses_are_told_from_others():
+    from calu.protocol.server import _loopback
+
+    assert _loopback(("127.0.0.1", 5000)) and _loopback(("127.3.4.5", 1))
+    assert _loopback(("::1", 5000, 0, 0)) and _loopback(("::ffff:127.0.0.1", 5000, 0, 0))
+    assert not _loopback(("192.168.1.2", 5000)) and not _loopback(("::ffff:10.0.0.1", 1, 0, 0))
+    assert not _loopback(None) and not _loopback(("not an address", 1))
+
+
+@pytest.mark.anyio
+async def test_an_insecure_session_lets_local_clients_in_without_a_token(
+    tmp_path: Path, short: Path, monkeypatch
+):
+    """D227: with `--insecure`, a loopback TCP client and a client on the session's own socket
+    need no token; without it, both are refused."""
+    from calu import cli
+
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    async with served(workspace) as run:
+        with pytest.raises(RequestFailed):
+            async with connect(run.server.address, "", "test", Events()):
+                pass
+    (short / "runtime").mkdir()  # $XDG_RUNTIME_DIR exists; calu adds the two below it
+    root = short / "runtime" / "calu" / "sessions"
+    monkeypatch.setattr(localsocket, "user_root", lambda: root)
+    path = localsocket.path_of("11111111-2222-4333-8444-555555555555", root)
+    async with served(workspace, insecure=True) as run, anyio.create_task_group() as tg:
+        async with connect(run.server.address, "", "tcp-client", Events()) as client:
+            assert (await client.request("state.get"))["workspace"] == str(workspace)
+        tg.start_soon(run.server.listen_local, localsocket.bind(path, owner=ME), path)
+        # An ordinary user's `calu attach` finds the session through its socket alone.
+        monkeypatch.chdir(workspace)
+        found = await anyio.to_thread.run_sync(cli._root_socket_endpoint, None)
+        assert found is not None and (found.address, found.token) == (f"unix:{path}", "")
+        async with connect(found.address, "", "unix-client", Events()) as client:
+            assert (await client.request("state.get"))["workspace"] == str(workspace)
+        tg.cancel_scope.cancel()
+
+
+def test_secure_and_insecure_together_are_refused(monkeypatch):
+    from calu import cli
+
+    for command in (["run", "."], ["serve"]):
+        args = cli.build_parser().parse_args([*command, "--secure", "--insecure"])
+        with pytest.raises(cli.CliError, match="contradict"):
+            cli._check_security_flags(args)

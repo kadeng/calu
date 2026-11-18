@@ -1244,11 +1244,28 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   `/fork`, and switching between sessions with `/running` and `/switch <beginning of an id>`
   all use the login it holds in memory. Nothing Claude Code starts can read or steer a
   client that runs as root. Its editor and git program still run as you.
-- **Root clients need no token.** A session that runs as root also listens on a Unix socket
-  that only root can reach, `/run/calu/sessions/<session id>.sock` (mode 0600, in a directory
-  with mode 0700). `calu attach --sudo` uses it: it checks that the socket and its directory
-  are root's alone, and the session checks with the kernel that the peer is root. The TCP
-  port with its tokens stays for every other client.
+- **Root clients need no token and no password.** A session that runs as root also listens
+  on a Unix socket that only root can reach, `/run/calu/sessions/<session id>.sock` (mode
+  0600, in a directory with mode 0700). `calu attach --sudo` and `calu web --sudo` use it:
+  the client checks that the socket and its directory are root's alone, and the session
+  checks with the kernel that the peer is root. `calu attach --sudo` in the project
+  directory finds its session through these sockets, without the database, and asks no
+  password. `/running`, `/switch`, `/new`, `/fork` and saving settings still need a
+  database login: one that root's store holds without a password (`sudo calu credential set
+  operator --no-password`), and the admin password when a setting is saved. The TCP port
+  with its tokens stays for every other client.
+- **Your own `calu attach`, without `--sudo`, needs a token** also on a session that runs
+  Claude Code as you: every program Claude Code starts runs as you too, and the kernel
+  cannot tell your client from it.
+- **`--secure`** on `calu run` or `calu serve` binds no root socket: every client, root's
+  included, shows a token.
+- **`--insecure`** on `calu run` or `calu serve` is the opposite: every client on a Unix
+  socket of the session, and every TCP client from a loopback address, needs no token. A
+  session that does not run as root then also listens on
+  `$XDG_RUNTIME_DIR/calu/sessions/<session id>.sock`, where `calu attach` finds it without
+  the database, and `calu attach ws://127.0.0.1:<port>` works without `--token`. Any
+  process on the machine that can reach the session, Claude Code's own commands included,
+  can then act as a client and decide its escalations.
 - **Claude Code's login for that user.** Claude Code runs as that user and keeps its login
   in that user's home: your own `~/.claude` for a name, `/var/lib/calu/claude/<uid>` for a
   bare uid. `calu login` runs Claude Code's own login there (it prints or opens an address

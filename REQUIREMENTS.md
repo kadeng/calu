@@ -144,6 +144,8 @@ broken down or extended. Derived requirements and design decisions belong in
     On the case where Claude Code runs as the same OS user as calu, the owner chose: trust
     only other uids, so a same-user session keeps requiring a token on its socket too; and
     `--secure` requires a token on every socket, root's included (2026-11-18).
+32. "Now let's also allow to pass --insecure, which allows to bypass token/password for all
+    unix socket connections as well as localhost TCP connections." (stated 2026-11-18)
 
 ## Soft goals and priorities
 
