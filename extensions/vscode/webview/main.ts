@@ -556,7 +556,10 @@ function buildTabs(): HTMLElement[] {
 function renderTabs(): void {
   if (ui.tab !== MAIN && !view.agents.some((a) => a.agent_id === ui.tab)) ui.tab = MAIN;
   const focused = document.activeElement instanceof HTMLElement && tabsSlot.contains(document.activeElement);
-  const sig = JSON.stringify(tabList(view, ui.tab, seen));
+  // The visible tab is part of the signature: `tabList` marks it only by leaving out its
+  // "new output" dot, so two tabs without new output gave the same list and the strip kept
+  // the old tab highlighted.
+  const sig = JSON.stringify([ui.tab, tabList(view, ui.tab, seen)]);
   if (setSection(tabsSlot, sig, buildTabs)) {
     const active = tabsSlot.querySelector<HTMLElement>('[aria-selected="true"]');
     const strip = tabsSlot.querySelector<HTMLElement>('.tabs');

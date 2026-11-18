@@ -17,7 +17,7 @@ from claude_agent_sdk import (
     TaskStartedMessage,
 )
 
-from calu.claude.sdk_runner import SdkRunner, tool_result_text
+from calu.claude.sdk_runner import SdkRunner, command_output, tool_result_text
 from calu.config import ClaudeConfig
 from calu.protocol.messages import AgentInfo, AgentsUpdate, TurnResult
 
@@ -427,6 +427,12 @@ def test_a_slash_command_that_claude_code_runs_itself_is_reported_as_the_users_i
     assert [type(event) for event in events] == [UserInput, AssistantText]
     assert isinstance(events[0], UserInput)
     assert (events[0].text, events[0].source) == ("/cost", "user")
+    # One line stays as it is; aligned plain lines keep their line breaks in a code fence;
+    # Markdown (the table of /context) stays Markdown.
+    assert isinstance(events[1], AssistantText) and events[1].text == "Estimated cost: $0.00"
+    assert command_output("Cost:  $0.01\nTime:  2s\n") == "```\nCost:  $0.01\nTime:  2s\n```"
+    table = "## Context Usage\n\n| Category | Tokens |\n|---|---|\n| Messages | 8 |"
+    assert command_output(table) == table
     assert [type(event) for event in sdk._translate(_result(0))] == [TurnResult]
     assert sdk._human_texts == []
 

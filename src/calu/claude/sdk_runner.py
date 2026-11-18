@@ -76,6 +76,7 @@ from calu.context.foreign import (
 )
 from calu.files import skill_file
 from calu.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
+from calu.markdown import fence
 from calu.paths import INSIDE_SESSION_ENV
 from calu.preflight import settings_file_sandbox_blockers
 from calu.protocol.messages import (
@@ -120,6 +121,8 @@ SLASH_COMMAND = re.compile(r"/[\w:.-]+(\s|$)")
 """The form of a slash command at the start of a message: "/compact", "/compact keep the plan"."""
 LOCAL_COMMAND_STDOUT = re.compile(r"<local-command-stdout>(.*)</local-command-stdout>", re.DOTALL)
 """A user-role text that holds what a slash command of Claude Code printed."""
+MARKDOWN_LINE = re.compile(r"^\s*(#{1,6} |\||[-*] |```)", re.MULTILINE)
+"""A line that only Markdown output has: a heading, a table row, a list item or a fence."""
 COMPACTING_NOTICE = (
     "Claude Code is compacting the conversation: Claude continues with a summary of the "
     "turns so far."
@@ -142,6 +145,27 @@ Claude Code has received the images already in any case (`send`)."""
 REVIEW_HOOK_TIMEOUT_S = 24 * 3600
 """Timeout of the two hooks that review a subagent's result: they may wait for a human, because
 an escalated result is decided inside the hook."""
+
+
+def command_output(text: str) -> str:
+    r"""Return what a slash command of Claude Code printed, as Markdown that keeps its lines.
+
+    `/cost` prints aligned lines of plain text, which Markdown would join into one paragraph;
+    `/context` prints Markdown (headings and a table).
+
+    Args:
+        text: The command's output.
+
+    Returns:
+        `text` unchanged if it has one line or a line that starts like Markdown (a heading, a
+        table row, a list item, a fence); else `text` in a code fence it cannot close.
+
+    Example:
+        `command_output("Cost:  $0.01\nTime:  2s")` is "```\nCost:  $0.01\nTime:  2s\n```".
+    """
+    if "\n" not in text.strip() or MARKDOWN_LINE.search(text):
+        return text
+    return fence(text.strip("\n"))
 
 
 def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
@@ -1262,15 +1286,17 @@ class SdkRunner:
         match msg:
             case AssistantMessage():
                 agent = msg.parent_tool_use_id
-                if agent is None and msg.model == SYNTHETIC_MODEL:
-                    events += self._local_command()  # the output of `/cost`, `/context`, ...
+                command = (
+                    self._local_command() if agent is None and msg.model == SYNTHETIC_MODEL else []
+                )
+                events += command  # the input of `/cost`, `/context`, ... before its output
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         message_id = getattr(msg, "message_id", None)
                         events.append(
                             AssistantText(
                                 agent_id=agent,
-                                text=block.text,
+                                text=command_output(block.text) if command else block.text,
                                 message_id=message_id,
                                 uuid=str(getattr(msg, "uuid", "") or ""),
                             )
