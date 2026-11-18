@@ -325,11 +325,13 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
     ever answers PASS or ESCALATE (`HonestyAnswer.decision`), so counting it would turn every
     ALLOW into PASS. It can still escalate the step.
 
-    The reason is composed of the reasons of the checkers that produced the winning decision,
-    and every non-empty comment is kept; both name the checker they came from when more than one
-    checker ran, so a denial can be attributed. The summary of the step is taken from the first
-    checker that wrote one, because all of them describe the same step and the route's own
-    checker comes first.
+    The reason is composed of the reasons of the checkers that produced the winning decision --
+    without the honesty checker's when it does not escalate: its text lists its statuses per
+    file, which are a result of their own (PLAN.md D224 part 4) and stay in its own
+    `checker_runs` row -- and every non-empty comment is kept; both name the checker they came
+    from when more than one checker ran, so a denial can be attributed. The summary of the step
+    is taken from the first checker that wrote one, because all of them describe the same step
+    and the route's own checker comes first.
 
     Args:
         verdicts: One (checker name, decision) pair per checker that ran, the route's own
@@ -372,7 +374,11 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
     reasons = [
         (name, decision.reason.strip())
         for name, decision in verdicts
-        if decision.reason.strip() and decision.decision is winner
+        if decision.reason.strip()
+        and decision.decision is winner
+        # The honesty checker's statuses per file are its own result (`CheckOutcome.honesty`,
+        # the `honesty` field of `check.result`), not a reason for approving the step.
+        and not (name == HONESTY_CHECKER and decision.decision.approves)
     ]
     comments = [
         (name, decision.comment.strip()) for name, decision in verdicts if decision.comment.strip()

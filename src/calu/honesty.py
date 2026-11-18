@@ -1779,7 +1779,13 @@ class HonestyState:
                     already += 1
                     continue
                 seen[key] = (ids.sha256, mark_ids)
-                skipped.append((key, "the index holds another content for it than the file has"))
+                skipped.append(
+                    (
+                        key,
+                        "the index holds an earlier content for it that nobody verified; "
+                        "`git add` of the file settles that",
+                    )
+                )
                 continue
             seen[key] = (ids.sha256, mark_ids)
             before = self._baseline_text(top, tree, key) if top is not None else None

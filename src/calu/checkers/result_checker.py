@@ -246,15 +246,22 @@ class ResultChecker:
 def _require_note(output: ResultReview) -> ResultReview:
     """Output validator: ANNOTATE and ESCALATE need a non-empty note.
 
+    An ESCALATE without a note takes the summary as its note: a small model often writes
+    what the user has to decide into the summary, and asking it again fails the check as often
+    as it helps. The person who decides then reads that text. An ANNOTATE without a note is
+    asked for again, because its note is the whole point of it.
+
     Args:
         output: The model's review.
 
     Returns:
-        The unchanged review.
+        The review; for an ESCALATE without a note, a copy whose note is the summary.
 
     Raises:
-        ModelRetry: If the note is missing.
+        ModelRetry: If an ANNOTATE has no note, or an ESCALATE has neither note nor summary.
     """
-    if output.verdict is not ResultVerdict.ACCEPT and not output.note.strip():
-        raise ModelRetry("ANNOTATE and ESCALATE need a triage note.")
-    return output
+    if output.verdict is ResultVerdict.ACCEPT or output.note.strip():
+        return output
+    if output.verdict is ResultVerdict.ESCALATE and output.summary.strip():
+        return output.model_copy(update={"note": output.summary.strip()})
+    raise ModelRetry("ANNOTATE and ESCALATE need a triage note.")

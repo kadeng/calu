@@ -18,6 +18,19 @@ uv run pytest -m 'browser and db'   # the browser tests
 uv run pytest -m live               # the live tests (needs keys)
 ```
 
+The shipped checker instructions are measured against the shipped evaluation cases by
+`tests/unit/test_instruction_evals_live.py` (marker `live`; about 110 model calls, two minutes
+with Haiku): the honesty checker on 53 labelled edits, the honesty reviewer on 14 batches of
+files, and the four short checkers on their rules and their test triggers. Run it after a
+change to a file of `src/calu/defaults/checkers/`, with the model the checkers will use:
+
+```bash
+CALU_TEST_CHECKER_MODEL=anthropic:claude-haiku-5-5 uv run pytest -s -m live tests/unit/test_instruction_evals_live.py
+```
+
+`-s` prints the reports (confusion table, precision and recall per class, every miss). The
+numbers of 2026-11-18 are in `docs/notes/honesty-evals-2026-11-18.md`.
+
 `scripts/wsl-test.sh` runs `ruff format --check`, `ruff check`, `pyright` and `pytest` in that
 order, with the virtual environment outside the checkout
 (`UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`), which matters on a Windows host where the

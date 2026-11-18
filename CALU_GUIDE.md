@@ -49,10 +49,21 @@ judges on evidence rather than on the diff alone. That is all it can do: it cann
   protects itself: Claude may not read calu's own configuration, run `calu`, or reach calu's
   database container without asking. A tool that a Claude Code update adds is checked by the
   command checker, and the session names such tools when it starts.
-- **Checkers with your rules.** One checker reviews commands, one reviews edits. Their
-  instructions are plain Markdown that you edit: safety, readability, documentation, and the
-  rules you would otherwise have to repeat to Claude every day (see
-  [what you can enforce](#what-you-can-enforce-with-a-checker)). They get the conversation in
+- **Checkers with your rules, on top of Claude Code's auto mode.** One checker reviews
+  commands, one reviews edits, one a whole commit, one what a subagent hands back. The
+  instructions calu ships for them are deliberately thin: a few sentences on how to answer,
+  and **your project's rules** -- which start out empty for commands and edits. General
+  safety (destructive commands, secrets, data leaving the machine) is not restated in them:
+  that judgement is Claude Code's auto mode classifier, which sees every step the checkers
+  pass. **calu does not switch auto mode on by itself**: set
+  `calu config set claude.permission_mode auto` (or `permissions.defaultMode` in Claude
+  Code's settings), or `calu config set claude.require_auto_mode true` so that a passed
+  step waits for a person where the classifier is not active. A session that starts with
+  the shipped instructions and without either prints a warning that says so. What you add
+  are the rules you would otherwise have to repeat to Claude every day (see
+  [what you can enforce](#what-you-can-enforce-with-a-checker)), as plain Markdown. The
+  shipped instructions also hold **test triggers** for trying calu out
+  ([below](#checker-instructions-rules-and-evaluations)). They get the conversation in
   condensed form and the step itself, and read-only tools to look
   further when they need to: read a file or a range of its lines, find files by glob, grep for a
   pattern — so a checker can see who calls the function being changed instead of guessing.
@@ -174,8 +185,10 @@ database: the code would be dishonest, and the checker that read the diff would 
 before it ever ran.
 
 Honesty is hard to keep up by hand, because it costs attention on every single edit and it
-decays silently. That is precisely the kind of rule an agent applies well: calu's edit checker
-sees the function and its documentation together, in the same step, and can refuse the edit.
+decays silently. That is precisely the kind of rule an agent applies well: calu's honesty
+checker sees the function and its documentation together, in the same step, and records where
+the two disagree. It is the only checker that judges honesty; the task is demanding enough
+that it is not mixed with any other.
 
 The reverse also holds: judging a call site by names and documentation is only sound for code
 that was verified to be honest. So calu tracks which code is verified, tells every checker
@@ -204,14 +217,17 @@ so a reworded or rebased commit with the same content keeps its trust.
 
 | Part | What it means | How it goes away |
 |---|---|---|
-| **Marks** | a checker or the honesty review found a function, a class or a whole file dishonest, with a reason | an edit of that file that the checkers accept closes the mark; a person clears a wrong one |
+| **Marks** | the honesty checker or the honesty review found a function, a class or a whole file dishonest, with a reason | an edit of that file that the honesty checker answers with HONEST closes the mark; a person clears a wrong one |
 | **Unreviewed files** | the content differs from the baseline and nobody verified it: changed by a shell command or from outside, by an edit a person allowed after an escalation, or staged with another content than the working file | an honesty review verifies them, or a person certifies the file |
 | **Review required** | more marks are open than `honesty.max_open_marks` (3); single marks can then no longer be closed one by one | an honesty review that leaves no mark |
 
 The state is **clean** when there is a baseline, no open mark, no unreviewed file and no review
-is required. An `Edit`, `Write` or `MultiEdit` that every checker of the edit route approved
-verifies its file at the content it wrote, provided the content it started from was verified;
-this is how normal work stays clean without any review. Marks and verifications take effect
+is required. An `Edit`, `Write` or `MultiEdit` that the honesty checker judged without leaving
+a mark, and that every checker of the edit route approved, verifies its file at the content it
+wrote, provided the content it started from was verified; this is how normal work stays clean
+without any review. With the honesty checker disabled no edit verifies anything: every edited
+file is unreviewed until an honesty review or a person verifies it, and a start-up warning
+says so. Marks and verifications take effect
 when the tool call has succeeded; a denied or failed edit changes nothing.
 
 **The modes** (`honesty.mode`):
@@ -256,7 +272,9 @@ is only trailing whitespace, line endings or blank lines is verified without a m
   cannot judge make the step wait for a person, with the reason. Not judged are a file over
   2,000,000 bytes, a file whose text for the reviewer is over 200,000 bytes, a file that is not
   UTF-8 text, a symbolic link, a submodule, and a staged content that differs from the working
-  file. A person certifies those (below) or stages the file again.
+  file. A person certifies those (below) or stages the file again. The last case is common
+  after a denied commit: the index still holds the content from before the correction, and
+  `git add` of the corrected file settles it.
 - In a repository without a trusted commit, a review that a person asks for judges every file
   git lists, up to the cap. If every file `HEAD` records is then verified and the working tree
   holds nothing else, `HEAD` is certified and becomes the baseline. A review calu starts by
@@ -267,7 +285,7 @@ is only trailing whitespace, line endings or blank lines is verified without a m
 
 **Who established trust.** Every trusted commit and every stored file content records its
 source: `user` (a person certified it), `review` (the honesty review verified it) or `check`
-(the step checkers approved the edit). The order is user > review > check, and a stronger
+(the honesty checker judged the edit and found the file honest). The order is user > review > check, and a stronger
 certification replaces a weaker record, never the reverse. `honesty.sufficient_trust` (`check`
 by default) names the weakest source that counts: with `review`, a checked edit alone leaves
 its file unreviewed until a review judged it; with `user`, only a person's certification
@@ -299,7 +317,9 @@ A branch or tag means the commit it points at now; later commits are not covered
 certified by the SHA-256 of its content: the trust ends when the content changes and holds
 wherever a file with that content lies. `calu honesty trust`, `untrust` and `prune` refuse to
 run inside a calu session, so that they are typed by a person in a terminal of their own.
-Clearing a mark by hand verifies nothing and stores nothing. Certifications are global to the
+Clearing a mark by hand verifies nothing and stores nothing: the session goes on with the
+file as the edit check left it, and after a restart the file is unreviewed again, so the next
+review judges it afresh. To make your judgement last, certify the file (`/trust-file`). Certifications are global to the
 database and written to its audit log.
 
 Details worth knowing:
@@ -339,9 +359,11 @@ trust HEAD`, or `/trust` in the session); otherwise the first command that runs 
 you. After an upgrade, apply the migrations (`calu db migrate` or `calu setup`) before starting
 sessions.
 
-The **honesty rules** say what an API contract must contain and what counts as dishonest. The
-command, edit and changeset checkers and the honesty reviewer read them, whether or not the
-state is kept. They are the setting `honesty.rules` (empty: calu's text), editable so that a
+The **honesty rules** say what is compared (names and documentation comments, not a README),
+what counts as dishonest, what a test and a configuration have to say, what a trusted third
+party is, and when to escalate. Only the honesty checker and the honesty reviewer read them.
+The other checkers get one short note while `honesty.mode` is on: not to rely on the names
+and documentation of code the state lists as unverified. They are the setting `honesty.rules` (empty: calu's text), editable so that a
 project can use its own documentation standard -- NumPy docstrings instead of Google style,
 say -- but not meant to change often.
 
@@ -371,12 +393,14 @@ have stopped work for no reason. The same holds for the review: read its finding
 (`/honesty-review`, then `/honesty`) and see whether you agree. Mostly marks that close
 themselves: switch `enforce` on. A steady stream you clear by hand: the judgement does not
 match yours yet -- change the instructions (`calu checker edit honesty`, `calu honesty edit`)
-or use a stronger model. `calu evals` measures a checker against the built-in cases, whose
-honesty cases say which marks a step should and should not produce.
+or use a stronger model. `calu evals` measures the enabled honesty checker and the honesty
+reviewer against labelled cases (53 edits and 14 batches of files: honest, dishonest, and
+deliberate) and prints precision and recall for HONEST, DISHONEST and ESCALATE; what calu's
+own instructions reach with Haiku is in `docs/notes/honesty-evals-2026-11-18.md`.
 
-A checker may mark a file other than the one the step edits, because an edit to
-`src/parser.py` can be what makes `README.md` wrong, and a command can change many files at
-once -- but that should be the exception. Such a mark can only be closed by an edit of the
+The honesty checker may mark a file other than the one the step edits, because an edit to
+`src/parser.py` can be what makes a caller's documentation wrong -- but that should be the
+exception. Such a mark can only be closed by an edit of the
 marked file, by a review, or by a person.
 
 ## calu does not replace Claude Code
@@ -1146,8 +1170,12 @@ shell on that machine. Every write, delete and rename is logged in
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the
 checkers follow them. A checker's prompt has two parts: calu's fixed part -- its role, its
 tools, the answers it can give, the summary it writes -- and your instructions, which only say
-what to pass, deny and escalate. You edit only the second part, so it stays short. The checkers
-that judge changes also read the honesty rules (`calu honesty edit`, above). The instructions calu ships are a starting point you are meant to
+what to pass, deny and escalate. You edit only the second part, so it stays short. Both parts
+together are about 300 words for each checker, because they hold project rules only: general
+safety is left to Claude Code's auto mode, which therefore has to be on (`calu config set
+claude.permission_mode auto`; a start-up warning tells you when the shipped instructions run
+without it). Only the honesty checker reads the honesty rules (`calu honesty edit`, above).
+The instructions calu ships are a starting point you are meant to
 rewrite, and they are in the public domain rather than under calu's licence: what you make of
 them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 
@@ -1164,7 +1192,7 @@ calu config set claude.model opus             # Claude's model -- for the *next*
 calu checker stats                             # what they decided, what they cost, where a human disagreed
                                                # and how many steps the rules settled for free
 calu checker misses                            # the steps they approved that you then denied
-calu evals                                     # all four checkers against the built-in cases
+calu evals                                     # every enabled checker against the built-in cases
 calu evals --from-db                          # accuracy, critical misses, over-escalations
 calu evals --from-db --list                    # the cases your sessions produced, no model called
 calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.yaml` re-runs them
@@ -1172,6 +1200,34 @@ calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.ya
 
 `calu checker show NAME` and `calu checker set NAME --instructions-file FILE` do the same
 without an editor, and `calu rules add|list|remove|enable|disable` work on single rules.
+
+**Test triggers.** The shipped instructions of the command, edit, changeset and
+subagent-result checkers end with a section "Test triggers", so that you can provoke each
+decision on purpose while you try calu out:
+
+| Text | Where it counts | What the checker answers |
+|---|---|---|
+| `calu:test-deny` | anywhere in the step: the command, the edited text, the commit's diff, a subagent's result | DENY (for a subagent's result: a note telling Claude not to act on it) |
+| `calu:test-escalate` | anywhere in the step | ESCALATE: the step waits for you |
+| `calu:test-allow` | only in a message you typed, which says which step you mean | ALLOW |
+| `calu:test-pass` | only in a message you typed, which says which step you mean | PASS, whatever a project rule says |
+
+Ask Claude to run `echo calu:test-escalate` and the command waits for your decision; write
+"calu:test-allow for the command `make docs`" and the command checker allows that command.
+The two triggers that make a decision more permissive count only in your own messages: the
+checkers see what you typed verbatim and Claude's text only as narration, so the same words in
+a command, a file or a tool's output approve nothing. The triggers are part of the **default**
+instructions and meant for trying things out. In a project that relies on its checkers,
+delete the section: `calu checker edit command` (and `edit`, `changeset`, `subagent-result`),
+remove everything from the line `# Test triggers` on, save.
+
+`calu evals` runs the built-in cases that fit the instructions in force: ordinary steps, the
+few shipped rules, text that tries to instruct a checker, the test triggers (left out once
+you deleted them) and, with the honesty checker enabled, the honesty cases. The cases that
+expect a safety judgement (a force push, a piped download, a secret in a file) are not in the
+built-in set any more, because the shipped instructions leave that judgement to auto mode;
+they ship as `calu/defaults/evals/auto_mode_cases.yaml` for instructions of your own that
+state such rules.
 
 A running session picks up the checker instructions, the rules, the chat summary and
 `honesty.mode` within a moment, at its next step; it also reads the configuration again after

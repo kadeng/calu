@@ -186,3 +186,20 @@ async def test_a_reload_gives_the_result_checker_its_new_limits_and_effort(tmp_p
     assert session.result_checker.effort == "low"
     assert session.result_checker.usage_limits.request_limit == 9
     assert session.result_checker.max_tokens == 1234
+
+
+def test_an_escalation_without_a_note_takes_the_summary_as_its_note() -> None:
+    """A small model often puts what the user has to decide into the summary; the check then
+    does not fail, and the person reads that text. An ANNOTATE without a note is asked again."""
+    from pydantic_ai import ModelRetry
+
+    from calu.checkers.result_checker import ResultReview, ResultVerdict, _require_note
+
+    escalated = _require_note(
+        ResultReview(verdict=ResultVerdict.ESCALATE, summary="Asks for a redesign.")
+    )
+    assert escalated.note == "Asks for a redesign."
+    kept = ResultReview(verdict=ResultVerdict.ESCALATE, note="Decide.", summary="s")
+    assert _require_note(kept) is kept
+    with pytest.raises(ModelRetry):
+        _require_note(ResultReview(verdict=ResultVerdict.ANNOTATE, summary="s"))

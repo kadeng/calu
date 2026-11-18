@@ -247,7 +247,11 @@ def test_a_file_whose_staged_content_alone_is_unreviewed_is_skipped(repo: Path) 
     plan = state.review_plan(300)
     assert plan.files == ()
     assert plan.skipped == (
-        ("src/parser.py", "the index holds another content for it than the file has"),
+        (
+            "src/parser.py",
+            "the index holds an earlier content for it that nobody verified; "
+            "`git add` of the file settles that",
+        ),
     )
 
 
