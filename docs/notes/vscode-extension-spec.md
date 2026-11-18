@@ -331,3 +331,24 @@ showing the mode and state; its menu switches off / track / enforce through
 - Consequence for the bridge: no code path of `calu ide` may require euid 0 or read
   `/etc/calu`; a request that cannot be served without them fails with a message that says
   what the person has to do on the server side.
+- **`ide.unlock` (section 8)**: in `unlocked`, a store entry has its name (`operator`, `admin`,
+  `calu_admin`) and the login of the role `calu_admin` with a typed password is called
+  `calu_admin role`. The password is tried as the role's password only while no login that
+  changes settings is available. An unlock that opens nothing is -32010 only while a login
+  is still missing; with reading and changing both available it returns the state.
+  `ide.status` has `unlocked` (the held names) next to `locked`. Every -32010 carries
+  `data.unlocked`, also from a request that brought its own `password`.
+
+## 10. The one password, made precise (the owner, 2026-11-18)
+
+One password at the start of the extension, and again after each restart of the IDE, is fine;
+more often is not. The client may keep the password in memory. So:
+
+- The extension host keeps the password it asked for in memory (a variable, never a file, a
+  setting, the webview state or a log) until the IDE window closes. When the bridge process is
+  restarted within that time (a crash, "Restart bridge", an update of calu), the extension
+  sends `ide.unlock` again by itself and asks nothing.
+- The bridge keeps the opened logins in memory, as section 8 says.
+- "Remember on this machine" (VSCode's secret storage) is therefore not needed and is not
+  part of the first version; section 8's last point is withdrawn. If it was already built, it
+  stays off by default and is not offered by a notification.
