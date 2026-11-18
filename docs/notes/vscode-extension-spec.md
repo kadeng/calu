@@ -291,3 +291,25 @@ calu's own features one click away: a header row of three quiet buttons - **Chec
 the instructions picker), **Context** (the checker context document), **Honesty** (a chip
 showing the mode and state; its menu switches off / track / enforce through
 `ide.settings.set honesty.mode`, shows open marks and "Review now", "Trust HEAD").
+
+## 8. Passwords: at most one, once (the owner, 2026-11-18)
+
+"By default, the extensions should require only one password on startup, maximum."
+
+- After `sudo calu setup --no-password`, or with password-free store entries, nothing is asked.
+- Otherwise the first request that needs a protected credential makes the extension ask ONE
+  password, once per bridge process. It is sent with `ide.unlock {password}`: the bridge tries
+  it on every protected entry it may need (`admin`, `operator`) and as the password of the role
+  `calu_admin`, keeps the logins that opened in memory until it exits, and answers
+  `{unlocked: [names], reading: bool, changing: bool}`. Later requests use the held logins and
+  carry no password. The `password` parameter per request stays for other clients.
+- Only if that one password does not cover changing settings (an `operator` entry with one
+  password and a different admin password) is a second one asked, at the moment a setting is
+  first changed, and then also kept by the bridge.
+- A wrong password is said so and asked again; Escape stops asking until the user starts an
+  action that needs it. Background requests (the session list, the status) never open a
+  prompt.
+- "Remember on this machine" (off by default, offered after the first successful unlock):
+  the password is kept in VSCode's secret storage (the OS keychain) and sent with
+  `ide.unlock` at start, so that nothing is asked at all. "calu: Forget stored password"
+  removes it.

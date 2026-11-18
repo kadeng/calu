@@ -182,6 +182,8 @@ broken down or extended. Derived requirements and design decisions belong in
     accessible while others are still easy to find in a settings dialogue etc. -
     stay-in-the-loop is a good first draft, but UX-wise it's certainly not perfect yet."
     (stated 2026-11-18)
+    "By default, the extensions should require only one password on startup, maximum. Do not
+    repeatedly ask in passwords, they must also be convenient to use." (stated 2026-11-18)
 35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
     powerful because it should support both local and remote mode and an operation where the
     remote server, the db and calu are being accessed over SSH only and changes are
