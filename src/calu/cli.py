@@ -4585,6 +4585,42 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
     _admin_command(store, work)
 
 
+def cmd_lightcycles(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Serve MetaTron for the browser, an easter egg (`calu.lightcycles`).
+
+    Needs no database, no credential and no configuration. The server and the game are
+    imported here and not at the top of this module, so no other command pays for them.
+
+    Side effects: binds a port on 127.0.0.1, prints the address, opens the default browser
+    unless `--no-browser` is given, and serves until Ctrl-C.
+
+    Args:
+        args: Parsed arguments (`port`, `no_browser`, `players`, `bots`, `speed`, `seed`).
+        store: The credential store (unused).
+
+    Raises:
+        CliError: If an option is out of range, or the players and computer players
+            together are more than ten.
+        OSError: If the asked port cannot be bound.
+    """
+    from calu.lightcycles.server import serve
+
+    limits = {"players": (0, 10), "bots": (0, 10), "speed": (1, 9), "seed": (0, 2**32 - 1)}
+    options: dict[str, int] = {}
+    for name, (low, high) in limits.items():
+        value = getattr(args, name)
+        if value is None:
+            continue
+        if not low <= value <= high:
+            raise CliError(f"--{name} takes a number from {low} to {high}, not {value}")
+        options[name] = value
+    if options.get("players", 1 if "bots" in options else 0) + options.get("bots", 0) > 10:
+        raise CliError("MetaTron has ten players: --players and --bots together at most 10")
+    if args.port is not None and not 1 <= args.port <= 65535:
+        raise CliError(f"--port takes a number from 1 to 65535, not {args.port}")
+    serve(port=args.port, browser=not args.no_browser, options=options)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser of `calu`.
 
@@ -5189,6 +5225,24 @@ def build_parser() -> argparse.ArgumentParser:
         "(for the narrow 'operator' credential; refused for 'session'; prints what it costs)",
     )
     p.set_defaults(handler=cmd_credential)
+
+    # An easter egg, hidden from `calu --help`: the list of commands is fixed before it is
+    # added, and it gets no `help`, so argparse prints no row for it.
+    sub.metavar = "{" + ",".join(sub.choices) + "}"
+    p = sub.add_parser(
+        "lightcycles",
+        description="MetaTron for the browser \N{EM DASH} after MetaTron by Kai Londenberg. "
+        "Serves the game on 127.0.0.1 and opens it in the browser; Ctrl-C stops it. "
+        "Without --players and --bots the game starts with the original's preset: "
+        "two people. Alone: --players 1 --bots 3.",
+    )
+    p.add_argument("--port", type=int, help="the port (default: 8817, or a free one)")
+    p.add_argument("--no-browser", action="store_true", help="only print the address")
+    p.add_argument("--players", type=int, help="people, 0 to 10 (players 1, 2, ...)")
+    p.add_argument("--bots", type=int, help="computer players (KI) after the people")
+    p.add_argument("--speed", type=int, help="pixels per frame, 1 to 9 (default: 2)")
+    p.add_argument("--seed", type=int, help="seed of the game's random numbers")
+    p.set_defaults(handler=cmd_lightcycles)
     return parser
 
 
