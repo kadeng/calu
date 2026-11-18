@@ -561,7 +561,9 @@ class EscalationDesk:
                     esc.answered = True
                     esc.resolved_by = row.resolved_by or ""
                     esc.answer = HumanAnswer(
-                        allow=False, message=ANSWER_TEMPLATE.format(answer=row.note)
+                        allow=False,
+                        message=ANSWER_TEMPLATE.format(answer=row.note),
+                        answer=row.note or "",
                     )
                     esc.outcome = "answered"
                     esc.done.set()
@@ -677,7 +679,9 @@ class EscalationDesk:
             raise EscalationError(f"escalation {escalation_id!r} is being decided right now")
         allow = answer is None and decision == "allow"
         if answer is not None:
-            human = HumanAnswer(allow=False, message=ANSWER_TEMPLATE.format(answer=answer))
+            human = HumanAnswer(
+                allow=False, message=ANSWER_TEMPLATE.format(answer=answer), answer=answer
+            )
             outcome: Outcome = "answered"
         else:
             message = "The user denied this step."

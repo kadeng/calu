@@ -817,6 +817,13 @@ async def test_a_question_of_the_agent_is_answered_by_the_human(tmp_path: Path):
         # The row says what happened: answered, not allowed and not denied.
         row = store.escalations[int(request.escalation_id)]
         assert row.state == "answered" and row.note == "Spaces"
+        # The answer is the user's own word and Claude acts on it next, so the checkers'
+        # context holds it as user input (a real edit checker escalated the edit that
+        # followed an answer: "the context shows the question, but not the user's answer").
+        assert session.context.turns[-1].user_inputs == [
+            "set up the project",
+            "[The user's answer to a question Claude asked in this turn]\nSpaces",
+        ]
         await session.stop()
         tg.cancel_scope.cancel()
 

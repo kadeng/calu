@@ -95,12 +95,15 @@ class HumanAnswer:
     """The answer to an ASK verdict.
 
     `message` is shown to Claude when `allow` is False. `note` is the user's own text (may be
-    empty); it is passed on to Claude for allowed steps too.
+    empty); it is passed on to Claude for allowed steps too. `answer` is the user's own answer
+    to a question of the agent (empty for a decision about a step); `message` then holds it
+    with calu's framing for Claude.
     """
 
     allow: bool
     message: str = ""
     note: str = ""
+    answer: str = ""
     cancelled: bool = False
     """True if no human decided (interrupt, stop); callers must not present it as a decision."""
 

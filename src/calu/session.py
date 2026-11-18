@@ -366,6 +366,9 @@ DECISION_NOTE_TEMPLATE = (
 )
 """How the note a human wrote with a decision about an escalation is recorded as user input
 in the checkers' context. `decision` is "allowed" or "denied"."""
+QUESTION_ANSWER_TEMPLATE = "[The user's answer to a question Claude asked in this turn]\n{answer}"
+"""How a human's answer to a question of the agent is recorded as user input in the checkers'
+context."""
 RELAY_TEMPLATE = (
     "[Message from the user for your subagent {name}]\n"
     "Relay the following text verbatim to that subagent with the SendMessage tool "
@@ -2935,6 +2938,11 @@ class Session:
                 DECISION_NOTE_TEMPLATE.format(
                     decision=asked.outcome, tool=safe_name(step.tool_name), note=note
                 )
+            )
+        if asked.outcome == "answered" and asked.answer.answer.strip():
+            # The same holds for the answer to a question: Claude acts on it next.
+            self.context.user_input(
+                QUESTION_ANSWER_TEMPLATE.format(answer=asked.answer.answer.strip())
             )
         if asked.answer.allow and step.tool_use_id:
             self._run_state.call(step.tool_use_id).running = True
