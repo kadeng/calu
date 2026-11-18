@@ -152,6 +152,16 @@ broken down or extended. Derived requirements and design decisions belong in
     "When I use --no-password, security is weak. This should be allowed." and "not having a
     password when the password is actually empty is ok." (stated 2026-11-18, after a client
     without `--sudo` asked for an admin password nobody knew)
+34. "write a VSCode extension similar to the one of stay-in-the-loop, just for calu this time.
+    It should support all relevant settings. The checker instructions should be readily
+    accessible, as should it be possible to easily look at the checker context. Subagents
+    need to be fully supported. Ease of use and modern UX principles both in the main UI and
+    in the settings dialog must be honored. The extension must be able to install uv and
+    calu. Do not install claude, but check for it's presence. It must have a simple way of
+    setting all agents to the same agent, with easily selectable presets for Anthropic and
+    Bedrock Haiku 5.5 and Sonnet 5.5 as well as the other default models we use." (stated
+    2026-11-18) Also: "calu web must also support attaching without a password." (stated
+    2026-11-18)
 
 ## Soft goals and priorities
 
