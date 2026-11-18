@@ -313,3 +313,21 @@ showing the mode and state; its menu switches off / track / enforce through
   the password is kept in VSCode's secret storage (the OS keychain) and sent with
   `ide.unlock` at start, so that nothing is asked at all. "calu: Forget stored password"
   removes it.
+
+## 9. A `calu serve` backend, and no sudo in the client (the owner, 2026-11-18)
+
+- The plugins may assume a running `calu serve`: sessions are created only by asking it
+  (`ide.start`), never by starting `calu run`. Attaching to a session that `calu run` started
+  still works where the bridge finds it, but no feature depends on it.
+- Nothing on the client side runs as root or calls sudo: the extension and `calu ide` run as
+  the user. They reach a root server's sessions as that user: through the user-side socket of
+  an `--insecure` session, or through the database with a minted token (the shared login after
+  `calu setup --no-password`, or the one password of section 8). They change settings through
+  the database as `calu_admin`, not through root's files.
+- Starting the server is the one step that may need sudo, and a person does it: the extension
+  shows the command (tmux or screen, section 6) and can open a terminal with it, where sudo
+  asks its password. The same holds for the root installation of calu. Neither is run by the
+  extension itself.
+- Consequence for the bridge: no code path of `calu ide` may require euid 0 or read
+  `/etc/calu`; a request that cannot be served without them fails with a message that says
+  what the person has to do on the server side.
