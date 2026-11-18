@@ -242,6 +242,11 @@ broken down or extended. Derived requirements and design decisions belong in
     instructions, though. These instructions themselves need to be tested (with Haiku or
     Sonnet as agents doing the checking). The narrator instructions seem to work well, leave
     them as-is." (stated 2026-11-18)
+39. "Create screenshots of the test runs from within cua when everything is close to finished
+    and add a few to a docs/assets folder and embed them into the readme. Also improve the
+    readme a bit, I think some sections can be shortened while the new features can be
+    described more prominently. The ALLOW/ESCALATE/DENY response is a detail that doesn't need
+    to take the center stage in the readme." (stated 2026-11-19)
 
 ## Soft goals and priorities
 
