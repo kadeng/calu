@@ -182,6 +182,10 @@ class SessionStore(Protocol):
     async def start(self, identity: SessionIdentity) -> str:
         """Create the host and session rows; the session starts in state "starting".
 
+        A store whose process already told it where it listens (`set_address`) records that
+        address in the new row as well: a session that a client stopped and started again
+        is a new row of the same process.
+
         Args:
             identity: Where the session runs.
 
@@ -677,6 +681,9 @@ class DatabaseSessionStore:
         # The key that proves to the database which session this connection is (migration
         # 0025). It exists in this process's memory only; the database holds its SHA-256.
         self._session_key = secrets.token_urlsafe(32)
+        self._address = ""
+        """Where this process listens for clients, as `set_address` was last told; "" if it
+        was never told. `start` writes it into every later session row of this store."""
         # A connection setting does not survive its connection, so a replacement connection
         # is bound to the session again before `Db` uses it.
         db.on_connect(self._bind)
@@ -708,7 +715,8 @@ class DatabaseSessionStore:
         """Create the host and session rows (see `SessionStore.start`).
 
         Side effects: registers the SHA-256 of this store's session key with the new row and
-        binds the connection to the row (`_bind`).
+        binds the connection to the row (`_bind`); writes the address of an earlier
+        `set_address` into the new row.
 
         Args:
             identity: Where the session runs.
@@ -762,6 +770,14 @@ class DatabaseSessionStore:
             # others.
             self.session_id = str(row[0])
             await self._bind(conn)
+            if self._address:
+                # A later run of the same process (a client stopped and started the session)
+                # listens where the first one did; without the address in its new row,
+                # `calu attach` and the lists of sessions would not find it.
+                await conn.execute(
+                    b"UPDATE sessions SET address = %s WHERE id = %s",
+                    (self._address, self.session_id),
+                )
         return self.session_id
 
     async def heartbeat(self) -> None:
@@ -849,6 +865,7 @@ class DatabaseSessionStore:
         await self._db.execute(
             "UPDATE sessions SET address = %s WHERE id = %s", (address, self._require_session())
         )
+        self._address = address
 
     async def add_agent(self, agent_id: str, parent_agent_id: str | None = None) -> None:
         """Record a subagent and its parent (see `SessionStore.add_agent`).

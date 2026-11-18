@@ -446,6 +446,22 @@ async def test_the_stored_context_of_an_escalation_comes_back_with_its_checker_r
         await conn.close()
 
 
+async def test_a_later_run_of_the_same_process_keeps_its_address(db_url: str) -> None:
+    """A client stops and starts a session: the new row must name where the process listens,
+    or `calu attach` and `/switch` cannot find the session any more."""
+    store, conn = await session_store(db_url)
+    try:
+        first = await store.start(IDENTITY)
+        await store.set_address("ws://127.0.0.1:8765")
+        await store.end("stopped")
+        second = await store.start(IDENTITY)
+        assert second != first
+        cur = await conn.execute("SELECT address FROM sessions WHERE id = %s", (second,))
+        assert await cur.fetchone() == ("ws://127.0.0.1:8765",)
+    finally:
+        await conn.close()
+
+
 async def test_the_address_and_the_agent_tree_are_recorded(db_url: str) -> None:
     store, conn = await session_store(db_url)
     try:
