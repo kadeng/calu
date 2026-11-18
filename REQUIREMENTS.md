@@ -210,6 +210,9 @@ broken down or extended. Derived requirements and design decisions belong in
     said "Both" to starting the PyCharm plugin and the session traces now, in parallel)
     "We only need to support the latest stable PyCharm version and maybe additionally the
     latest EAP if possible. Test it in Pycharm as well." (stated 2026-11-18)
+    On testing the SSH mode against a server: "if you can test a server that would be great.
+    In general, the server needs no Desktop and runs Linux with SSH listening, with
+    passwordless public key auth for simplicity." (stated 2026-11-18)
 36. "calu should have a setting that automatically logs the narrated or the plain session log
     as markdown (just without any folding summarization happening, only steps being appended)
     logged to a file inside the project so they can be version controlled along with the

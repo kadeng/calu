@@ -25,6 +25,7 @@ programs and look at the result.
 | terminal | a private tmux server on the host (`tmux -L calutest`), screenshots of panes as text | the full-screen client, the line client |
 | browser | headless Chromium (the browser layer's Playwright), screenshots | the web interface |
 | root box | a container of its own with a root user, an unprivileged user and sudo | `calu serve`/`run`/`attach`/`web` as root with `--user`, through sudo, with and without passwords |
+| server | a headless Linux container with `sshd` (public-key login without a passphrase, a key pair made for the tests, never the owner's keys; bound to 127.0.0.1), calu, PostgreSQL and `calu serve` with the scripted runner; no desktop | the PyCharm plugin's SSH mode: `ssh host calu ide --cwd DIR`, file sync through the bridge, reconnects; also `calu attach` and the VSCode extension over SSH if time allows. The owner: "the server needs no Desktop and runs Linux with SSH listening, with passwordless public key auth for simplicity." To be built from the root box's image once that agent is done (memory is short for another container now). |
 
 No test touches the owner's database (`calu-db-postgres-1`), his `~/.config/calu`, `/etc/calu`
 or `/var/lib/calu`. A database for manual tests is a container of its own, not the test
