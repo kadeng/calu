@@ -9,6 +9,9 @@
  *                      ──ide.link───────► ui.link        │     (snapshot first, then each event)
  *     actions (attach, start, send, decide, ...) ──ui.*──┘
  *
+ * Further actions (rewind and fork from a message, side questions, honesty, comments) and the
+ * dispatch of an action by its name (`act`) are extension functions in `ChatActions.kt`.
+ *
  *     bridge "running" ──► ide.status, ide.sessions, then
  *                            attach again to the session shown before (events after lastSeq), else
  *                            attach to the session of the project directory if one runs
@@ -109,7 +112,7 @@ sealed interface ChatUpdate {
  * @param log Receives messages for the plugin's log (never a password).
  */
 class ChatController(
-    private val supervisor: BridgeSupervisor,
+    internal val supervisor: BridgeSupervisor,
     private val scope: CoroutineScope,
     private val serverSettings: () -> ServerSettings = { ServerSettings() },
     private val log: (String) -> Unit = {},
@@ -121,6 +124,9 @@ class ChatController(
     private var noServer = false
     private var lastHints: List<SetupHint>? = null
     private var started = false
+
+    /** Source of the ids of side questions (`ui.sideAsk`); see `sideAsk` in `ChatActions.kt`. */
+    internal val sideIds = java.util.concurrent.atomic.AtomicInteger(1)
 
     /** The diffs of the attached session's edits (for "open diff"). */
     val diffs: DiffStore = DiffStore()
@@ -394,12 +400,36 @@ class ChatController(
         forkBeforeTurn: Int? = null,
         prompt: String? = null,
         name: String? = null,
-    ): Boolean {
-        val title = when (kind) {
+    ): Boolean = startSessionAs(
+        when (kind) {
             "resume" -> if (forkBeforeTurn != null) "Rewinding the conversation" else "Resuming the conversation"
             "fork" -> "Forking the conversation"
             else -> "Starting a session"
-        }
+        },
+        kind, claudeSessionId, forkBeforeTurn, prompt, name,
+    )
+
+    /**
+     * `startSession` with the words that say what is being done (a resume before a turn is a
+     * rewind or a fork, depending on what the user chose).
+     *
+     * @param title What is being done, e.g. "Forking the conversation": shown while the request
+     *   waits (`ViewState.starting.title`) and in a failure message.
+     * @param kind "new", "resume" or "fork".
+     * @param claudeSessionId The conversation to resume or fork; `null` for "new".
+     * @param forkBeforeTurn Cut the conversation before this turn; `null` for all of it.
+     * @param prompt First message of the session; `null` for none.
+     * @param name Name of the session; `null` or "" for none.
+     * @return True if the session runs and is attached.
+     */
+    suspend fun startSessionAs(
+        title: String,
+        kind: String,
+        claudeSessionId: String? = null,
+        forkBeforeTurn: Int? = null,
+        prompt: String? = null,
+        name: String? = null,
+    ): Boolean {
         dispatch("ui.starting", buildJsonObject { put("title", JsonPrimitive(title)); put("slow", JsonPrimitive(false)) })
         val slow = scope.launch {
             delay(SLOW_START_MS)
@@ -622,7 +652,7 @@ class ChatController(
      * @param body The requests.
      * @return True if `body` returned, false if it threw (the failure is then in the chat).
      */
-    private suspend fun run(what: String, body: suspend () -> Unit): Boolean = try {
+    internal suspend fun run(what: String, body: suspend () -> Unit): Boolean = try {
         body()
         true
     } catch (error: CancellationException) {
