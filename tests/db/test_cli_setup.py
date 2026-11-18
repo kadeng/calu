@@ -247,6 +247,37 @@ async def test_a_setup_without_passwords_never_publishes_a_typed_password_and_is
     assert not await is_admin_password(owner, published), "the published login was revoked"
     kept = Target.parse(store.load("calu_admin"))
     assert await is_admin_password(owner, getattr(kept.auth, "password", ""))
+    assert "`calu setup --set-passwords` puts typed ones back" in said.out
+
+    # The way back to typed passwords (found missing in the root box): both entries are
+    # encrypted again, the role takes the new admin password, the generated login is dropped
+    # from the store, and the session login is the same one as before.
+    session_before = bytes(store.load("session"))
+    code = await anyio.to_thread.run_sync(
+        lambda: setup("--set-passwords", typed="new-admin\nnew-admin\nnew-sess\nnew-sess\n")
+    )
+    said = capsys.readouterr()
+    assert code == 0, said
+    assert store.needs_password("admin") and store.needs_password("session")
+    assert bytes(store.load("session", "new-sess")) == session_before
+    assert Target.parse(store.load("admin", "new-admin")).user == owner.user
+    assert "calu_admin" not in store
+    assert await is_admin_password(owner, "new-admin")
+    assert not await is_admin_password(owner, getattr(kept.auth, "password", ""))
+    assert "admin_password" not in json.loads(place_file.read_text())
+    # With passwords in place the option changes them: the old ones are asked first.
+    code = await anyio.to_thread.run_sync(
+        lambda: setup(
+            "--set-passwords", typed="new-admin\nthird\nthird\nnew-sess\nfourth\nfourth\n"
+        )
+    )
+    assert code == 0, capsys.readouterr()
+    assert bytes(store.load("session", "fourth")) == session_before
+    assert await is_admin_password(owner, "third")
+    assert not await is_admin_password(owner, "new-admin")
+    # Together with --no-password it is refused before anything is asked.
+    assert await anyio.to_thread.run_sync(lambda: setup("--set-passwords", "--no-password")) == 1
+    assert "contradict each other" in capsys.readouterr().err
 
 
 async def test_a_blank_admin_password_is_accepted_and_setup_says_what_it_costs(

@@ -1062,8 +1062,9 @@ def _check_setup_options(args: argparse.Namespace, variant: str | None) -> None:
     Raises:
         CliError: If an option of `_SETUP_OPTIONS` was given for a stored database or for a
             variant it does not apply to, or a session option (`--session-auth`,
-            `--session-aws-profile`) for a variant other than rds-iam, or
-            `--session-aws-profile` together with `--session-auth password`.
+            `--session-aws-profile`) for a variant other than rds-iam,
+            `--session-aws-profile` together with `--session-auth password`, or
+            `--set-passwords` together with `--no-password`.
     """
     for attribute, option, variants in _SETUP_OPTIONS:
         if getattr(args, attribute) is None:
@@ -1079,6 +1080,8 @@ def _check_setup_options(args: argparse.Namespace, variant: str | None) -> None:
                 f"{option} does not apply to the database {variant}; it is for "
                 f"{' and '.join(variants)}"
             )
+    if args.set_passwords and args.no_password:
+        raise CliError("--set-passwords and --no-password contradict each other; give one")
     if variant not in (None, "rds-iam") and (args.session_auth or args.session_aws_profile):
         raise CliError("--session-auth and --session-aws-profile are for the database rds-iam")
     if args.session_auth == "password" and args.session_aws_profile:
@@ -1185,9 +1188,14 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     role; `--checker-model auto` picks one from the credentials this machine has
     (`calu.model_choice`).
 
+    `--set-passwords` encrypts the stored `admin` and `session` logins with passwords typed
+    now (the old ones are asked first where the entries have any) and gives the role
+    `calu_admin` the new admin password: the way back from `--no-password`, and the way to
+    change a password. The logins themselves stay as they are, so running sessions go on.
+
     Args:
         args: Parsed arguments (`checker_model`, `database` and the options of its variants,
-            `renew_session`, `session_auth`, `no_password`).
+            `renew_session`, `session_auth`, `no_password`, `set_passwords`).
         store: The credential store.
 
     Raises:
@@ -1214,6 +1222,18 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
         if args.no_password and store.needs_password("admin"):
             store.save("admin", owner.dump(), None)
             print("the 'admin' credential is now stored without a password")
+        if args.set_passwords:
+            # The way back from --no-password, and the way to change the password: the
+            # stored owner login is encrypted with a password typed now, which further
+            # down also becomes the password of the role `calu_admin` (`_typed`).
+            chosen = _new_admin_password(False, "the stored owner login on this machine")
+            assert chosen is not None
+            try:
+                store.save("admin", owner.dump(), chosen)
+                _remember_admin_password(chosen)
+            finally:
+                wipe(chosen)
+            print("the 'admin' credential is now protected by the new admin password")
         block = owner.docker
         if (
             block is not None
@@ -1292,7 +1312,9 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
                 await enable_admin_login(conn, admin_password[0])
                 report += (
                     "\nlogin of calu_admin: a new generated password, kept in the store "
-                    "only; the one a setup with --no-password had published stops working"
+                    "only; the one a setup with --no-password had published stops working. "
+                    "The stored logins still have no password: `calu setup --set-passwords` "
+                    "puts typed ones back"
                 )
             elif "admin" in _typed:
                 # A blank admin password is accepted for the stored entry (the owner's
@@ -1341,6 +1363,19 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             finally:
                 wipe(kept)
             print("the 'session' credential is now stored without a password")
+        if args.set_passwords:
+            # The same login, encrypted with a new password: running sessions keep it.
+            kept = load_credential(store, "session", "Session password: ")
+            try:
+                print("Choose the session password (needed to start sessions with `calu run`).")
+                fresh = read_password("New session password: ", confirm=True)
+                try:
+                    store.save("session", kept, fresh)
+                finally:
+                    wipe(fresh)
+            finally:
+                wipe(kept)
+            print("the 'session' credential is now protected by the new session password")
         report, _ = asyncio.run(run())
         print(report)
         print(
@@ -4641,6 +4676,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(Claude Code's commands included), so that no client asks for a password. Weak "
         "security by choice; `calu setup` without the option takes it back. An existing "
         "setup is converted",
+    )
+    p.add_argument(
+        "--set-passwords",
+        action="store_true",
+        help="choose a new admin and a new session password for the logins that are stored "
+        "(their old passwords are asked first, if they have any): the way back from "
+        "--no-password, and the way to change a password. The role that changes settings "
+        "gets the new admin password",
     )
     p.add_argument(
         "--checker-model",
