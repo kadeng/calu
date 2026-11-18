@@ -479,3 +479,36 @@ def test_clearing_the_conversation_is_said_to_the_clients(tmp_path: Path) -> Non
     assert isinstance(command, UserInput) and command.text == "/clear"
     assert isinstance(notice, Log) and notice.level == "warning"
     assert "no longer knows" in notice.message
+
+
+def test_the_users_interrupt_ends_the_turn_as_interrupted_not_as_an_error(tmp_path: Path) -> None:
+    """Measured with a real Claude Code (CLI 2.1.327): an interrupted turn ends as
+    "error_during_execution" with the error flag, after the user-role text "[Request
+    interrupted by user]". The client showed "turn ended: error during execution" in red and
+    the text as a "system message (not from you)"."""
+    from claude_agent_sdk import UserMessage
+
+    def ended() -> ResultMessage:
+        return ResultMessage(
+            subtype="error_during_execution",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=True,
+            num_turns=2,
+            session_id="claude-5",
+            total_cost_usd=0.003,
+            result=None,
+        )
+
+    sdk = runner(tmp_path)
+    sdk._interrupting = True  # what `interrupt` sets before it asks the SDK
+    assert sdk._translate(UserMessage(content="[Request interrupted by user]")) == []
+    (result,) = sdk._translate(ended())
+    assert isinstance(result, TurnResult)
+    assert (result.subtype, result.is_error) == ("interrupted", False)
+    # The next turn that ends this way was not interrupted by the user: it is an error.
+    (text,) = sdk._translate(UserMessage(content="[Request interrupted by user]"))
+    assert type(text).__name__ == "UserInput"
+    (error,) = sdk._translate(ended())
+    assert isinstance(error, TurnResult)
+    assert (error.subtype, error.is_error) == ("error_during_execution", True)

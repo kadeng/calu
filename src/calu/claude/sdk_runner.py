@@ -26,6 +26,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -35,6 +36,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    ClaudeSDKError,
     HookMatcher,
     ResultMessage,
     StreamEvent,
@@ -121,6 +123,12 @@ SLASH_COMMAND = re.compile(r"/[\w:.-]+(\s|$)")
 """The form of a slash command at the start of a message: "/compact", "/compact keep the plan"."""
 LOCAL_COMMAND_STDOUT = re.compile(r"<local-command-stdout>(.*)</local-command-stdout>", re.DOTALL)
 """A user-role text that holds what a slash command of Claude Code printed."""
+LATER_TURNS_REFUSED = "user entry not attributable to the declared turn"
+"""Part of Claude Code's refusal of a fork point whose guard names one turn while later turns
+would be discarded with it ("Resume rejected by --resume-drops-turn: ... range contains a user
+entry not attributable to the declared turn")."""
+INTERRUPTED_TEXT = re.compile(r"\[Request interrupted by user( for tool use)?\]")
+"""The user-role text Claude Code adds to the conversation when a turn was interrupted."""
 MARKDOWN_LINE = re.compile(r"^\s*(#{1,6} |\||[-*] |```)", re.MULTILINE)
 """A line that only Markdown output has: a heading, a table row, a list item or a fence."""
 COMPACTING_NOTICE = (
@@ -145,6 +153,18 @@ Claude Code has received the images already in any case (`send`)."""
 REVIEW_HOOK_TIMEOUT_S = 24 * 3600
 """Timeout of the two hooks that review a subagent's result: they may wait for a human, because
 an escalated result is decided inside the hook."""
+
+
+def fork_turn(fork: Fork | None) -> str:
+    """Name the turn a fork discards first, for a log line.
+
+    Args:
+        fork: The fork, or None.
+
+    Returns:
+        The turn number, or "?" if it is not known.
+    """
+    return "?" if fork is None or fork.before_turn is None else str(fork.before_turn)
 
 
 def command_output(text: str) -> str:
@@ -300,6 +320,14 @@ class SdkRunner:
         with their replays in order. At most `MAX_PENDING_HUMAN_TEXTS` entries, of which at most
         `MAX_PENDING_HUMAN_IMAGE_TEXTS` keep images (`send`).
         """
+        self._interrupting = False
+        """True from `interrupt` until the next turn ends.
+
+        Claude Code ends an interrupted turn as "error_during_execution" with the error flag
+        set (measured with CLI 2.1.327) and adds the user-role text `INTERRUPTED_TEXT`. The
+        user's own interrupt is no error: the turn's result says "interrupted" instead, as
+        the fake runner's does, and the text is left out.
+        """
         self._compactions = 0
         """Compactions that started (PreCompact hook) and whose own agent has not stopped yet.
 
@@ -352,22 +380,71 @@ class SdkRunner:
                 configuration; nothing was started.
             claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails, including a
                 fork point the CLI refuses ("Resume rejected by --resume-drops-turn:").
+
+        A fork that discards more than one turn is started a second time without
+        `Fork.drops_turn` (`_without_guard`).
         """
         self._sink = sink
         blockers = self._sandbox_blockers()
         if blockers:
             raise StartRefused(" ".join(blockers))
-        options = self._options(gate, resume_id, fork, session_id)
         with anyio.CancelScope() as scope:
             self._cancel = scope
             if self._stop_requested:
                 scope.cancel()
-            async with ClaudeSDKClient(options=options) as client:
-                self._client = client
-                self._ready.set()
-                async for msg in client.receive_messages():
-                    await self._forward(msg, sink)
+            try:
+                await self._converse(self._options(gate, resume_id, fork, session_id), sink)
+            except ClaudeSDKError as exc:
+                unguarded = None if self._ready.is_set() else self._without_guard(fork, exc)
+                if unguarded is None:
+                    raise
+                log.info("fork before turn %s: started again without the guard", fork_turn(fork))
+                await self._converse(self._options(gate, resume_id, unguarded, session_id), sink)
         self._client = None
+
+    async def _converse(self, options: ClaudeAgentOptions, sink: EventSink) -> None:
+        """Start Claude Code with `options` and forward its messages until the stream ends.
+
+        Side effects: sets `_client` and, once connected, `_ready`.
+
+        Args:
+            options: The SDK options of this start.
+            sink: Receives the translated events.
+
+        Raises:
+            claude_agent_sdk.ClaudeSDKError: If the CLI cannot be started or fails.
+        """
+        async with ClaudeSDKClient(options=options) as client:
+            self._client = client
+            self._ready.set()
+            async for msg in client.receive_messages():
+                await self._forward(msg, sink)
+
+    @staticmethod
+    def _without_guard(fork: Fork | None, error: Exception) -> Fork | None:
+        """Return the fork to try again with after Claude Code refused a guarded fork point.
+
+        `Fork.drops_turn` makes Claude Code check that everything after `Fork.resume_at`
+        belongs to that one turn. The check can only hold for a fork before the newest turn:
+        a fork further back discards later turns too, and Claude Code refuses it (measured
+        with CLI 2.1.327; the same fork without the check works and knows exactly the turns
+        up to `resume_at`). The runner does not know how many turns follow, so it asks with
+        the check first.
+
+        Args:
+            fork: The fork that was refused, or None.
+            error: What the start raised.
+
+        Returns:
+            `fork` without `drops_turn` if the refusal is the one about later turns
+            (`LATER_TURNS_REFUSED`); None for every other error, a fork without a point and
+            no fork, which the caller raises again.
+        """
+        if fork is None or fork.resume_at is None or fork.drops_turn is None:
+            return None
+        if LATER_TURNS_REFUSED not in str(error):
+            return None
+        return replace(fork, drops_turn=None)
 
     def _sandbox_blockers(self) -> list[str]:
         """Return why calu cannot be sure of the sandbox right now; reads the settings files.
@@ -541,9 +618,11 @@ class SdkRunner:
     async def interrupt(self) -> None:
         """Interrupt Claude's current turn; does nothing if not connected.
 
-        Pending `can_use_tool` calls are cancelled by the SDK.
+        Pending `can_use_tool` calls are cancelled by the SDK. The turn that ends next is
+        reported as "interrupted" (`_translate`).
         """
         if self._client is not None:
+            self._interrupting = True
             await self._client.interrupt()
 
     async def stop(self) -> None:
@@ -1336,7 +1415,9 @@ class SdkRunner:
                 origin = getattr(msg, "origin", None)
                 if isinstance(msg.content, str):
                     stdout = LOCAL_COMMAND_STDOUT.fullmatch(msg.content.strip())
-                    if agent is None and stdout is not None:
+                    if self._interrupt_text(msg.content):
+                        pass
+                    elif agent is None and stdout is not None:
                         # What a command of Claude Code printed ("Compacted"): a line of the
                         # program, neither the user's words nor a message to narrate.
                         events += self._local_command()
@@ -1369,6 +1450,8 @@ class SdkRunner:
                                 )
                             )
                             events += self._agent_result(block.tool_use_id, msg)
+                        elif isinstance(block, TextBlock) and self._interrupt_text(block.text):
+                            pass
                         elif (
                             isinstance(block, TextBlock)
                             and agent is None
@@ -1409,11 +1492,13 @@ class SdkRunner:
                 self._compactions = 0
                 if msg.num_turns == 0:
                     events += self._local_command()  # a command without any output
+                interrupted = self._interrupting and msg.subtype == "error_during_execution"
+                self._interrupting = False
                 events.append(
                     TurnResult(
                         session_id=msg.session_id,
-                        is_error=msg.is_error,
-                        subtype=msg.subtype,
+                        is_error=msg.is_error and not interrupted,
+                        subtype="interrupted" if interrupted else msg.subtype,
                         result=msg.result or "",
                         cost_usd=msg.total_cost_usd,
                         num_turns=msg.num_turns,
@@ -1451,6 +1536,18 @@ class SdkRunner:
             case _:
                 pass
         return events
+
+    def _interrupt_text(self, text: str) -> bool:
+        """Tell whether a user-role text is Claude Code's own line about the user's interrupt.
+
+        Args:
+            text: The text as Claude Code reports it.
+
+        Returns:
+            True if an interrupt was requested (`interrupt`) and the text is `INTERRUPTED_TEXT`;
+            such a text is no message of anybody and gives no event.
+        """
+        return self._interrupting and INTERRUPTED_TEXT.fullmatch(text.strip()) is not None
 
     def _local_command(self) -> list[Event]:
         """Return the user's input for a slash command that Claude Code ran by itself.

@@ -499,3 +499,60 @@ async def test_the_agent_that_summarises_a_compaction_is_no_subagent(tmp_path: P
     # Without a compaction the same stop is an unknown agent like any other.
     await stop(summary, None, None)
     assert reviewed == ["w", "the summary"]
+
+
+@pytest.mark.anyio
+async def test_a_fork_that_discards_several_turns_is_started_without_the_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Seen with a real Claude Code (CLI 2.1.327): "fork from here" three turns back failed with
+    "Resume rejected by --resume-drops-turn: ... range contains a user entry not attributable
+    to the declared turn". The guard names one turn, so it can hold only for a fork before
+    the newest turn; the same fork without it works. Any other refusal is still an error."""
+    from claude_agent_sdk._errors import ResultError
+
+    import calu.claude.sdk_runner as sdk_runner
+    from calu.claude.runner import Fork
+
+    later_turns = (
+        "Claude Code returned an error result: Resume rejected by --resume-drops-turn: "
+        "resuming at e3 would discard entries not attributable to turn p4: range contains a "
+        "user entry not attributable to the declared turn; entry 6 [type=user, uuid=p5]"
+    )
+    starts: list[tuple[str | None, str | None]] = []
+
+    class Client:
+        """Stands in for `ClaudeSDKClient`: refuses a guarded start with `refusal`."""
+
+        refusal = later_turns
+
+        def __init__(self, options: Any) -> None:
+            self.options = options
+
+        async def __aenter__(self) -> Client:
+            starts.append((self.options.resume_session_at, self.options.resume_drops_turn))
+            if self.options.resume_drops_turn is not None:
+                raise ResultError(self.refusal)
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+        async def receive_messages(self):
+            return
+            yield  # an empty stream: the conversation ends at once
+
+    async def sink(event: object) -> None:
+        """Take an event and do nothing with it."""
+
+    monkeypatch.setattr(sdk_runner, "ClaudeSDKClient", Client)
+    fork = Fork(resume_at="e3", drops_turn="p4", before_turn=4)
+    await SdkRunner(tmp_path, ClaudeConfig()).run(AllowAll(), sink, "claude-1", fork)
+    assert starts == [("e3", "p4"), ("e3", None)]
+
+    # A pair that does not match is refused with another text: no second start.
+    starts.clear()
+    Client.refusal = "Resume rejected by --resume-drops-turn: the turn does not start there"
+    with pytest.raises(ResultError):
+        await SdkRunner(tmp_path, ClaudeConfig()).run(AllowAll(), sink, "claude-1", fork)
+    assert starts == [("e3", "p4")]

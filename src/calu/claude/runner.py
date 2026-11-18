@@ -120,7 +120,9 @@ class Fork:
     With a fork point (`calu run --resume ID --fork-before-turn N`), `resume_at` is the
     transcript uuid of the last entry of the turn that is kept, `drops_turn` the uuid of the
     prompt that starts the first discarded turn, and `before_turn` is N. Claude Code validates
-    the pair of uuids and refuses a mismatch, so both are required together.
+    the pair of uuids and refuses a mismatch. That check holds only where the discarded turn
+    is the newest one; a fork further back is made with `resume_at` alone (the SDK runner
+    drops `drops_turn` when Claude Code refuses the pair for that reason).
     """
 
     resume_at: str | None = None
