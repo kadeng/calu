@@ -392,3 +392,84 @@ async def test_a_side_question_goes_out_as_the_control_request_of_the_cli(tmp_pa
     Client._query.answer = Exception("Side question cancelled")
     with pytest.raises(SideQuestionFailed, match="Side question cancelled"):
         await runner.side_question("And now?")
+
+
+def _result(num_turns: int) -> ResultMessage:
+    """Build the result message of a turn with this many model calls."""
+    return ResultMessage(
+        subtype="success",
+        duration_ms=1,
+        duration_api_ms=0,
+        is_error=False,
+        num_turns=num_turns,
+        session_id="claude-5",
+        total_cost_usd=0.0,
+        result="",
+    )
+
+
+def test_a_slash_command_that_claude_code_runs_itself_is_reported_as_the_users_input(
+    tmp_path: Path,
+) -> None:
+    """Measured with a real Claude Code (CLI 2.1.327): `/cost`, `/context`, `/compact` and
+    `/clear` are not replayed as user messages; only their effect arrives. The client never
+    saw the message taken in, and it stayed "pending for the next turn" for ever."""
+    from claude_agent_sdk import AssistantMessage, TextBlock, UserMessage
+
+    from calu.protocol.messages import AssistantText, Log, UserInput
+
+    sdk = runner(tmp_path)
+    # /cost: a text Claude Code wrote itself, then the end of a turn without a model call.
+    sdk._human_texts.append(("/cost", []))
+    events = sdk._translate(
+        AssistantMessage(content=[TextBlock(text="Estimated cost: $0.00")], model="<synthetic>")
+    )
+    assert [type(event) for event in events] == [UserInput, AssistantText]
+    assert isinstance(events[0], UserInput)
+    assert (events[0].text, events[0].source) == ("/cost", "user")
+    assert [type(event) for event in sdk._translate(_result(0))] == [TurnResult]
+    assert sdk._human_texts == []
+
+    # /compact: the status line comes first; what the command printed is a line of the
+    # program, not a message of anybody.
+    sdk._human_texts.append(("/compact keep the plan", []))
+    events = sdk._translate(SystemMessage(subtype="status", data={"status": "compacting"}))
+    assert [type(event) for event in events] == [UserInput, Log]
+    assert isinstance(events[0], UserInput) and events[0].text == "/compact keep the plan"
+    (printed,) = sdk._translate(
+        UserMessage(content="<local-command-stdout>Compacted </local-command-stdout>")
+    )
+    assert isinstance(printed, Log) and printed.message == "Claude Code: Compacted"
+
+    # /clear prints nothing: the end of the turn reports it.
+    sdk._human_texts.append(("/clear", []))
+    events = sdk._translate(_result(0))
+    assert [type(event) for event in events] == [UserInput, TurnResult]
+
+    # A synthetic text without a pending command (an error text) adds no input, and a
+    # pending prompt that is no command waits for its replay.
+    sdk._human_texts.append(("Fix /etc/hosts please", []))
+    events = sdk._translate(
+        AssistantMessage(content=[TextBlock(text="API Error")], model="<synthetic>")
+    )
+    assert [type(event) for event in events] == [AssistantText]
+    assert [type(event) for event in sdk._translate(_result(0))] == [TurnResult]
+    assert sdk._human_texts == [("Fix /etc/hosts please", [])]
+    # The end of a turn with model calls reports no command either.
+    sdk._human_texts.append(("/review", []))
+    assert [type(event) for event in sdk._translate(_result(2))] == [TurnResult]
+
+
+def test_clearing_the_conversation_is_said_to_the_clients(tmp_path: Path) -> None:
+    """After `/clear` Claude knows nothing of the transcript the clients still show."""
+    from calu.protocol.messages import Log, UserInput
+
+    class ConversationResetMessage:
+        """Stands in for the SDK's message of that name (newer SDKs only)."""
+
+    sdk = runner(tmp_path)
+    sdk._human_texts.append(("/clear", []))
+    command, notice = sdk._translate(ConversationResetMessage())
+    assert isinstance(command, UserInput) and command.text == "/clear"
+    assert isinstance(notice, Log) and notice.level == "warning"
+    assert "no longer knows" in notice.message

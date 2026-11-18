@@ -24,6 +24,7 @@ spike-results.md`.
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -112,6 +113,23 @@ minutes and not hours."""
 MAX_RESULT_CHARS = 4_000
 SUBAGENT_RESULT_CHARS = 60_000
 """Upper bound for a subagent result passed to the result checker."""
+SYNTHETIC_MODEL = "<synthetic>"
+"""`AssistantMessage.model` of a text Claude Code wrote itself: the output of a slash command
+it ran without the model, or an error text."""
+SLASH_COMMAND = re.compile(r"/[\w:.-]+(\s|$)")
+"""The form of a slash command at the start of a message: "/compact", "/compact keep the plan"."""
+LOCAL_COMMAND_STDOUT = re.compile(r"<local-command-stdout>(.*)</local-command-stdout>", re.DOTALL)
+"""A user-role text that holds what a slash command of Claude Code printed."""
+COMPACTING_NOTICE = (
+    "Claude Code is compacting the conversation: Claude continues with a summary of the "
+    "turns so far."
+)
+"""Shown when a compaction starts (`/compact`, or by itself when the context is full)."""
+CONVERSATION_CLEARED_NOTICE = (
+    "Claude Code cleared the conversation (/clear): Claude no longer knows the turns above. "
+    "calu's record of them and the checkers' context are kept."
+)
+"""Shown after `/clear`: the clients' transcripts still show what Claude has forgotten."""
 MAX_PENDING_HUMAN_TEXTS = 256
 """How many texts sent for a human the runner remembers until Claude Code replays them. A text
 that is never replayed (the session was interrupted first) would otherwise stay for ever; the
@@ -257,6 +275,13 @@ class SdkRunner:
         Each entry keeps the images sent with that text, so that two sends of the same text pair
         with their replays in order. At most `MAX_PENDING_HUMAN_TEXTS` entries, of which at most
         `MAX_PENDING_HUMAN_IMAGE_TEXTS` keep images (`send`).
+        """
+        self._compactions = 0
+        """Compactions that started (PreCompact hook) and whose own agent has not stopped yet.
+
+        Claude Code writes the summary of a compaction with an agent of its own and calls the
+        SubagentStop hook for it. That agent is no subagent of the conversation: its stop is
+        counted here and not reviewed (`subagent_stop`).
         """
         self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
@@ -833,6 +858,13 @@ class SdkRunner:
                 # Not started by the Agent tool -- a Workflow script's `agent()` starts its
                 # subagents directly. Their steps pass the gate like any other (verified), and
                 # their results are reviewed too; the task comes from their transcript (D157).
+                if self._compactions and not input_data.get("agent_type"):
+                    # The agent that writes the summary of a compaction (measured with CLI
+                    # 2.1.327: PreCompact, then this hook with an agent id of its own and an
+                    # empty agent type). It is part of Claude Code's own bookkeeping; a
+                    # review would show a subagent nobody started.
+                    self._compactions -= 1
+                    return {}
                 kind = str(input_data.get("agent_type") or "subagent")
                 result = SubagentResult(
                     agent_id=agent_id,
@@ -867,6 +899,22 @@ class SdkRunner:
             )
             note = await gate.review_subagent_result(result)
             await self._send_note(note)
+            return {}
+
+        async def pre_compact(
+            input_data: Any, tool_use_id: str | None, context: Any
+        ) -> dict[str, Any]:
+            """PreCompact hook: note that a compaction starts (`/compact` or an automatic one).
+
+            Args:
+                input_data: Hook input (`trigger`: "manual" or "auto").
+                tool_use_id: Unused (None for this event).
+                context: SDK hook context (unused).
+
+            Returns:
+                An empty hook output (the compaction goes on).
+            """
+            self._compactions += 1
             return {}
 
         async def can_use_tool(
@@ -952,6 +1000,13 @@ class SdkRunner:
                         matcher=None,
                         hooks=[subagent_stop],  # type: ignore[list-item]
                         timeout=REVIEW_HOOK_TIMEOUT_S,
+                    )
+                ],
+                "PreCompact": [
+                    HookMatcher(
+                        matcher=None,
+                        hooks=[pre_compact],  # type: ignore[list-item]
+                        timeout=HOOK_TIMEOUT_S,
                     )
                 ],
             },
@@ -1207,6 +1262,8 @@ class SdkRunner:
         match msg:
             case AssistantMessage():
                 agent = msg.parent_tool_use_id
+                if agent is None and msg.model == SYNTHETIC_MODEL:
+                    events += self._local_command()  # the output of `/cost`, `/context`, ...
                 for block in msg.content:
                     if isinstance(block, TextBlock) and block.text.strip():
                         message_id = getattr(msg, "message_id", None)
@@ -1252,7 +1309,16 @@ class SdkRunner:
                 agent = msg.parent_tool_use_id
                 origin = getattr(msg, "origin", None)
                 if isinstance(msg.content, str):
-                    if agent is None and not self._skill_text(msg.content, events):
+                    stdout = LOCAL_COMMAND_STDOUT.fullmatch(msg.content.strip())
+                    if agent is None and stdout is not None:
+                        # What a command of Claude Code printed ("Compacted"): a line of the
+                        # program, neither the user's words nor a message to narrate.
+                        events += self._local_command()
+                        if stdout.group(1).strip():
+                            events.append(
+                                Log(level="info", message=f"Claude Code: {stdout.group(1).strip()}")
+                            )
+                    elif agent is None and not self._skill_text(msg.content, events):
                         source, images = self._user_source(msg.content, origin)
                         events.append(
                             UserInput(
@@ -1314,6 +1380,9 @@ class SdkRunner:
                 events += self._stream_delta(msg.event, msg.parent_tool_use_id)
             case ResultMessage():
                 self.session_id = msg.session_id
+                self._compactions = 0
+                if msg.num_turns == 0:
+                    events += self._local_command()  # a command without any output
                 events.append(
                     TurnResult(
                         session_id=msg.session_id,
@@ -1340,13 +1409,44 @@ class SdkRunner:
             case SystemMessage() if msg.subtype == "background_tasks_changed":
                 tasks = msg.data.get("tasks")
                 self.background_tasks = len(tasks) if isinstance(tasks, list) else 0
+            case SystemMessage() if (
+                msg.subtype == "status" and msg.data.get("status") == "compacting"
+            ):
+                events += self._local_command()
+                events.append(Log(level="info", message=COMPACTING_NOTICE))
             case SystemMessage() if msg.subtype == "init":
                 self.session_id = msg.data.get("session_id", self.session_id)
                 events += self._unknown_tools_warning(msg.data.get("tools"))
                 events += self._mode_events(msg.data.get("permissionMode"))
+            case _ if type(msg).__name__ == "ConversationResetMessage":
+                # `/clear` (the class exists only in newer SDKs, hence the name).
+                events += self._local_command()
+                events.append(Log(level="warning", message=CONVERSATION_CLEARED_NOTICE))
             case _:
                 pass
         return events
+
+    def _local_command(self) -> list[Event]:
+        """Return the user's input for a slash command that Claude Code ran by itself.
+
+        Claude Code replays a prompt it gives to the model, and `_user_source` recognises the
+        replay. A command it runs itself (`/cost`, `/context`, `/compact`, `/clear`) is not
+        replayed (measured with CLI 2.1.327): only the command's effect arrives. Without an
+        input event the clients never learn that the message was taken in, and it stays in
+        the session's queue. The callers are the places where such an effect arrives.
+
+        Side effect: removes the returned text from the pending human texts.
+
+        Returns:
+            One `UserInput` (source "user") for the oldest text that was sent for a human, is
+            not yet replayed and has the form of a slash command (`SLASH_COMMAND`); [] if
+            there is none.
+        """
+        for i, (text, _images) in enumerate(self._human_texts):
+            if SLASH_COMMAND.match(text):
+                del self._human_texts[i]
+                return [UserInput(text=text, source="user")]
+        return []
 
     def _unknown_tools_warning(self, tools: Any) -> list[Event]:
         """Name, once per runner, the tools of this Claude Code that calu has no route for (D154).

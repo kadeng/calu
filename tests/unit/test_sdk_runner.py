@@ -467,3 +467,35 @@ async def test_images_of_unreplayed_texts_are_bounded(tmp_path: Path):
     for i in range(sdk_runner.MAX_PENDING_HUMAN_TEXTS + 5):
         await runner.send(f"plain {i}", "later")
     assert len(runner._human_texts) == sdk_runner.MAX_PENDING_HUMAN_TEXTS
+
+
+@pytest.mark.anyio
+async def test_the_agent_that_summarises_a_compaction_is_no_subagent(tmp_path: Path):
+    """Seen with a real Claude Code (CLI 2.1.327): `/compact` writes its summary with an agent
+    of its own (PreCompact, then SubagentStop with an empty agent type). The result checker
+    reviewed that summary and the client showed a subagent nobody had started. One such stop
+    per compaction is not reviewed; any other unknown agent still is."""
+    reviewed: list[str] = []
+
+    class Recording(AllowAll):
+        async def review_subagent_result(self, result):
+            reviewed.append(result.result)
+            return ""
+
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    hooks = runner._options(Recording(), None).hooks  # type: ignore[arg-type]
+    assert hooks is not None
+    stop: Any = hooks["SubagentStop"][0].hooks[0]
+    compact: Any = hooks["PreCompact"][0].hooks[0]
+    summary = {"agent_id": "c1", "agent_type": "", "last_assistant_message": "the summary"}
+    assert await compact({"trigger": "manual"}, None, None) == {}
+    await stop(
+        {"agent_id": "w1", "agent_type": "workflow-subagent", "last_assistant_message": "w"},
+        None,
+        None,
+    )
+    await stop(summary, None, None)
+    assert reviewed == ["w"]
+    # Without a compaction the same stop is an unknown agent like any other.
+    await stop(summary, None, None)
+    assert reviewed == ["w", "the summary"]
