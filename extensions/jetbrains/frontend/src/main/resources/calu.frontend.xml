@@ -8,6 +8,7 @@
         <toolWindow id="calu" anchor="right" secondary="false"
                     factoryClass="io.github.kadeng.calu.frontend.CaluToolWindowFactory"
                     icon="io.github.kadeng.calu.frontend.CaluIcons.ToolWindow"/>
+        <postStartupActivity implementation="io.github.kadeng.calu.frontend.CaluStartup"/>
         <notificationGroup id="calu" displayType="STICKY_BALLOON"/>
         <statusBarWidgetFactory id="calu.decisions" implementation="io.github.kadeng.calu.frontend.CaluStatusBarWidgetFactory"/>
         <projectConfigurable parentId="tools" id="calu" displayName="calu"

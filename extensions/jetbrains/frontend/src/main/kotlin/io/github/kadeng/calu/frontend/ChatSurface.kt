@@ -98,6 +98,8 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     private var state: ViewState = host.state.value
     private var updating = false
     private var handledFocus = 0
+    private var requestedModel: String? = null
+    private val drawn = HashMap<String, List<Any?>>()
     private val drafts = HashMap<String?, String>()
     private var draftSession: String? = null
 
@@ -157,7 +159,14 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
                 submit(e.modifiersEx and (InputEvent.CTRL_DOWN_MASK or InputEvent.META_DOWN_MASK) != 0)
             }
         })
-        model.addActionListener { if (!updating) host.act("setModel", args("model" to (model.editor.item?.toString() ?: "default"))) }
+        model.addActionListener {
+            // An editable combo box reports "edited" and "changed" for one choice: act once, and only on a change.
+            val chosen = model.editor.item?.toString()?.trim().orEmpty().ifEmpty { "default" }
+            if (!updating && chosen != (state.session.model ?: "default") && chosen != requestedModel) {
+                requestedModel = chosen
+                host.act("setModel", args("model" to chosen))
+            }
+        }
         effort.addActionListener { if (!updating) host.act("setEffort", args("effort" to effort.selectedItem.toString())) }
         level.addActionListener {
             val i = level.selectedIndex
@@ -269,6 +278,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         if (wanted != transcripts.keys.toList()) {
             val selected = selectedTab()
             transcripts.keys.retainAll(wanted.toSet())
+            drawn.keys.retainAll(wanted.toSet())
             tabs.removeAll()
             for (key in wanted) {
                 val view = transcripts.getOrPut(key) { TranscriptView(::handle) { EscalationCard(this) { isAttached(state) } } }
@@ -285,7 +295,14 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             val waiting = state.escalations.values.count { it.agentKey == key && it.status == "open" }
             val title = if (key == MAIN) "Main" else (agent?.description?.takeIf { it.isNotEmpty() } ?: key.take(8)).take(24) + (agent?.status?.takeIf { it != "running" }?.let { " ($it)" } ?: "")
             tabs.setTitleAt(i, title + if (waiting > 0) " ●" else "")
-            transcripts[key]!!.update(rowsOf(state, key))
+            // The reducer copies on write: a tab whose parts are the same objects has the same rows.
+            val parts = listOf(state.items[key], state.tools, state.escalations, isAttached(state))
+            val before = drawn[key]
+            val same = before != null && before.size == parts.size && before.indices.all { before[it] === parts[it] || (it == 3 && before[it] == parts[it]) }
+            if (!same) {
+                drawn[key] = parts
+                transcripts[key]!!.update(rowsOf(state, key))
+            }
         }
         val focus = state.focus
         if (focus != null && focus.seq > handledFocus) {
@@ -317,7 +334,8 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         queue.text = "Waiting to be read: " + s.queue.joinToString(" | ") { (if (it.delivery == "inject") "(into turn) " else "") + it.text.lineSequence().first().take(60) }
         model.isEnabled = attached
         level.isEnabled = attached
-        model.editor.item = s.session.model ?: "default"
+        if (requestedModel == (s.session.model ?: "default")) requestedModel = null
+        if (!model.editor.editorComponent.hasFocus()) model.editor.item = s.session.model ?: "default"
         effort.selectedItem = s.session.effort?.takeIf { it in EFFORT_CHOICES } ?: "default"
         val lv = levelOf(s.autoEscalate)
         level.selectedIndex = LEVELS.indexOfFirst { it.id == lv }.takeIf { it >= 0 } ?: LEVELS.size
@@ -425,7 +443,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
                 }
                 JBPopupFactory.getInstance().createPopupChooserBuilder(stored)
                     .setTitle("Resume a Stored Conversation")
-                    .setRenderer(com.intellij.ui.SimpleListCellRenderer.create("") { "${it.label}  —  ${it.description}" })
+                    .setRenderer(textRenderer<SessionPick.Entry> { "${it.label}  —  ${it.description}" })
                     .setItemChosenCallback { pick ->
                         host.act("start", buildJsonObject { put("kind", JsonPrimitive("resume")); put("claude_session_id", JsonPrimitive((pick.choice as SessionChoice.Stored).claudeSessionId)) })
                     }

@@ -332,6 +332,7 @@ Kotlin and JDK only, no IntelliJ import):
 | path rules and mapping, case collisions, Windows names | `PathMapper.kt` | built, tested |
 | diff3 text merge, binary check, `mergeContents` | `Merge.kt` | built, tested |
 | `FileStore`, `BaseContents`, `SyncRunner` (applies a plan to two stores) | `FileStore.kt` | built, tested with in-memory stores |
+| the held set from the chat's view state (files an edit tool touched in the running turn) | `Held.kt` | built, tested |
 
 Not built:
 
@@ -339,8 +340,8 @@ Not built:
   the report of IDE writes to the session);
 - the plugin's `FileStore` over the bridge (paged manifest, chunked read and write) and over
   the local project (VFS, documents, undo);
-- deriving the held set from session events, the status bar entry, the conflict marks, the
-  merge dialog, the confirmation of the first plan;
+- the status bar entry, the conflict marks, the merge dialog, the confirmation of the first
+  plan; the VFS listener and applying remote changes through the open document;
 - the dirty-overlay comparison and the commit check of section 7, the persisted base content
   cache (only an in-memory one exists), persisting `SyncState` and the queue;
 - `Manifest.skipped` and `missing`, file modes in the state, and the `origin` of a change are

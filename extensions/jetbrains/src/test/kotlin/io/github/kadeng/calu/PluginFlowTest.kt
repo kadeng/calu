@@ -9,7 +9,6 @@ import com.intellij.testFramework.HeavyPlatformTestCase
 import com.intellij.testFramework.PlatformTestUtil
 import io.github.kadeng.calu.backend.CHECKER_ORIGIN
 import io.github.kadeng.calu.backend.CaluProjectService
-import io.github.kadeng.calu.backend.CaluSettings
 import io.github.kadeng.calu.backend.EditorActions
 import io.github.kadeng.calu.backend.chooseLauncher
 import io.github.kadeng.calu.chat.DiffData
@@ -69,7 +68,7 @@ class PluginFlowTest : HeavyPlatformTestCase() {
         super.setUp()
         assertTrue("the scripted bridge is missing: $fakeBridge", File(fakeBridge).isFile)
         File(project.basePath!!).mkdirs()
-        CaluSettings.of(project).update(PluginSettingsDto(mode = "local", caluCommand = "python3 '$fakeBridge'"))
+        CaluProjectService.of(project).applySettings(PluginSettingsDto(mode = "local", caluCommand = "python3 '$fakeBridge'"))
     }
 
     fun `test a scripted conversation is rendered and its escalation is decided from the card`() {

@@ -89,8 +89,16 @@ against PyCharm 2026.1 (`gradle.properties`), `since-build` 261. The first build
 PyCharm (about 1 GB) into `~/.gradle`. The tests start `python3` (the scripted bridge
 `shared/src/test/resources/fake_bridge.py`) and `sh`.
 
-Why not `since-build` 253: the RPC compiler plugin is built per platform line (2.1.20-0.1 for
-2025.3, 2.3.20-RC2-0.1 for 2026.1); one binary for both lines is not verified.
+Plugin Verifier results of this version (2026-11-18): compatible with PyCharm 2026.1
+(PY-261.22158.340), 2026.2 (PY-262.8665.309) and 2026.3 (PY-263.7307.206). The remaining
+findings are deprecated calls (`TerminalToolWindowManager.createShellWidget`, default methods of
+`ToolWindowFactory` and `StatusBarWidget`) and the experimental RPC and `ProjectId` API that
+split mode needs.
+
+Why not `since-build` 253: against PyCharm 2025.3 (PY-253.28294.336) the verifier finds no
+binary problem, but there the backend's RPC registration (`RemoteApiProvider`) is still an
+internal API, and the RPC compiler plugin is built per platform line (2.1.20-0.1 for 2025.3,
+2.3.20-RC2-0.1 for 2026.1). One binary for both lines is not verified to work at run time.
 
 Installing the zip by hand: Settings | Plugins | gear | Install Plugin from Disk. In remote
 development the plugin must be installed on the host and in the client.

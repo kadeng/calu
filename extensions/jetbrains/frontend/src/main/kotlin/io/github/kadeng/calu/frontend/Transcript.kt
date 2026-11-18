@@ -136,7 +136,8 @@ class RowView(private val handle: (RowAction) -> Unit, private val card: (RowMod
      */
     fun update(next: RowModel) {
         val old = model
-        if (old == next) return
+        // An escalation card also depends on whether a session is attached; it checks for itself.
+        if (old == next && next.kind != ItemKind.ESCALATION) return
         model = next
         if (old != null && old.kind == next.kind) {
             if (next.kind == ItemKind.ASSISTANT && body != null) {

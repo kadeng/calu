@@ -12,7 +12,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
-import com.intellij.ui.SimpleListCellRenderer
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -58,7 +57,7 @@ fun chooseChecker(project: Project, host: ChatHost) {
             }
             JBPopupFactory.getInstance().createPopupChooserBuilder(checkers)
                 .setTitle("Edit Checker Instructions")
-                .setRenderer(SimpleListCellRenderer.create("") { "${it.str("name")}  —  route ${it.str("route")}, ${it.str("model")?.ifEmpty { "default model" }}${if (it.bool("enabled")) "" else ", disabled"}" })
+                .setRenderer(textRenderer<JsonObject> { "${it.str("name")}  —  route ${it.str("route")}, ${it.str("model")?.ifEmpty { "default model" }}${if (it.bool("enabled")) "" else ", disabled"}" })
                 .setItemChosenCallback { c -> host.act("editChecker", buildJsonObject { put("name", JsonPrimitive(c.str("name").orEmpty())) }) }
                 .createPopup().showCenteredInCurrentWindow(project)
         }
@@ -80,7 +79,7 @@ class ModelsDialog(private val project: Project, private val host: ChatHost) : D
     init {
         title = "calu: Use One Model for Everything"
         setOKButtonText("Use for All Roles")
-        presets.cellRenderer = SimpleListCellRenderer.create("") { "${it.str("label")}  —  ${it.str("note").orEmpty()}" }
+        presets.cellRenderer = textRenderer<JsonObject> { "${it.str("label")}  —  ${it.str("note").orEmpty()}" }
         init()
         val modality = ModalityState.any().asContextElement()
         host.launch {
