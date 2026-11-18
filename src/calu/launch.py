@@ -156,9 +156,15 @@ class LaunchSpec(BaseModel):
 def environment(spec: LaunchSpec, given: Mapping[str, str]) -> dict[str, str]:
     """Build Claude Code's environment from an empty one.
 
-        result = {name: value in `given` | name matches one of spec.keep, name != CALU_LAUNCH}
+        result = {name: value in `given` | name matches one of spec.keep, name != CALU_LAUNCH,
+                                           value != ""}
                  + HOME = spec.home
                  + USER, LOGNAME = spec.user        (only if the uid has a name)
+
+    A variable with an empty value is left out. calu hides a variable from Claude Code by
+    emptying it, because the Agent SDK can replace a variable of calu's environment but not
+    remove it; here the environment is built anew, so a hidden `ANTHROPIC_API_KEY` or
+    `ANTHROPIC_BASE_URL` of root's env file is absent instead of present and empty.
 
     Args:
         spec: The launch record.
@@ -172,7 +178,9 @@ def environment(spec: LaunchSpec, given: Mapping[str, str]) -> dict[str, str]:
     result = {
         name: value
         for name, value in given.items()
-        if name != LAUNCH_ENV and any(fnmatch.fnmatchcase(name, pattern) for pattern in spec.keep)
+        if value
+        and name != LAUNCH_ENV
+        and any(fnmatch.fnmatchcase(name, pattern) for pattern in spec.keep)
     }
     result["HOME"] = spec.home
     # Claude Code's configuration directory is `<home>/.claude` for this user; a value from

@@ -51,6 +51,8 @@ def test_the_environment_is_built_from_an_empty_one():
         "AWS_PROFILE": "calu-db",
         "PGPASSWORD": "secret",
         "MISTRAL_API_KEY": "",
+        # Hidden by calu, which empties what it cannot remove: absent for Claude Code.
+        "ANTHROPIC_BASE_URL": "",
         LAUNCH_ENV: "{}",
     }
     assert environment(own(user="ada"), given) == {

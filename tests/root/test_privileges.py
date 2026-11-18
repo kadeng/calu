@@ -69,6 +69,7 @@ def test_the_launcher_starts_the_program_as_the_user_with_an_environment_built_f
         "PATH": os.environ["PATH"],
         "LANG": "C.UTF-8",
         "ANTHROPIC_MODEL": "kept",
+        "ANTHROPIC_API_KEY": "",  # hidden by calu: emptied, so left out here
         "MISTRAL_API_KEY": "dropped",
         "SUDO_UID": "0",
         "XDG_CONFIG_HOME": "/etc",
