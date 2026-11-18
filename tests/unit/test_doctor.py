@@ -286,6 +286,16 @@ def test_a_password_free_credential_where_no_sandbox_can_run_is_a_finding(
     (finding,) = doctor.self_approval_findings(store)
     assert not finding.ok and "socat missing" in finding.detail
     monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(doctor, "namespace_findings", list)
+    assert doctor.self_approval_findings(store) == []
+    # Both programs installed, and the kernel refuses the namespaces (a plain container):
+    # the sandbox cannot run there either, which the root box showed.
+    refused = [doctor.Finding("sandbox start", False, "bubblewrap cannot create a sandbox")]
+    monkeypatch.setattr(doctor, "namespace_findings", lambda: refused)
+    (finding,) = doctor.self_approval_findings(store)
+    assert "cannot create a sandbox" in finding.detail
+    # A store only root can read is out of reach of Claude Code's user.
+    monkeypatch.setattr(doctor.asuser, "only_root_writes", lambda path: True)
     assert doctor.self_approval_findings(store) == []
 
 

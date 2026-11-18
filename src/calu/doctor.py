@@ -273,20 +273,30 @@ def self_approval_findings(store: CredentialStore) -> list[Finding]:
         store: The credential store; only names and kinds of protection are read.
 
     Returns:
-        One failed finding for that combination, or [].
+        One failed finding for that combination, or []: also when the store is one that only
+        root can read (`calu.asuser.only_root_writes`), which Claude Code's user cannot. "Cannot
+        run" covers a missing program and a bubblewrap that the kernel refuses
+        (`namespace_findings`).
     """
     unprotected = sorted(name for name in store.names() if not store.needs_password(name))
+    if not unprotected or asuser.only_root_writes(store.path):
+        # A store only root reads is out of reach of what Claude Code runs as its user.
+        return []
     missing = [tool for tool in ("bwrap", "socat") if shutil.which(tool) is None]
-    if not unprotected or not missing:
+    if missing:
+        why = f"{' and '.join(missing)} missing"
+    elif namespace_findings():
+        why = "bubblewrap is installed but cannot create a sandbox"
+    else:
         return []
     return [
         Finding(
             "self-approval",
             False,
-            f"{', '.join(unprotected)} has no password and the sandbox cannot run here "
-            f"({' and '.join(missing)} missing)",
-            "Any program Claude runs could read it and resolve its own escalations. Install "
-            "bubblewrap and socat, or put a password back (`calu credential set operator`).",
+            f"{', '.join(unprotected)} has no password and the sandbox cannot run here ({why})",
+            "Any program Claude runs could read it and resolve its own escalations. Make "
+            "the sandbox work (bubblewrap and socat, and the right to create user "
+            "namespaces), or put a password back (`calu credential set operator`).",
         )
     ]
 
