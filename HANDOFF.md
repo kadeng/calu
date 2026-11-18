@@ -42,6 +42,17 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
   it is under `~/.cache/calu-jdk/` (no Java was installed). The first run of the VSCode
   extension is reported in the session only; its screenshots are in
   `docs/notes/screenshots/run1-*.png`.
+- **Later still (2026-11-18, about 21:45):** the second pass over the VSCode extension is
+  done and committed (all seven defects of the first run fixed, the untried cases exercised;
+  266 unit tests; `extensions/vscode/calu.vsix` packaged from that state): **the extension
+  is ready for the owner's manual test** in his VSCode against WSL. The session traces are
+  merged into `main` (`cd22550`; unit layer 1918 passed, database layer 241 passed after the
+  merge) and have never run with a real model. Open after the second pass, small: the
+  bridge's own reconnect with a replay gap, recorded steps of subagents shown in Main,
+  `/clear` against a real Claude Code, the "Latest" pill under a tall card's footer. The
+  PyCharm agent was still running; its Kotlin port of the chat reducer is behind
+  `extensions/vscode/src/shared/viewState.ts` (history, `user.input.to`, bidi), which the
+  next round has to bring over.
 - Before committing anything found in the tree: `uv run ruff check . && uv run pyright`, the
   affected Python tests, and in `extensions/vscode`: `npm run check-types && npm run
   test:unit && npm run build` (Node 24: `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`).
@@ -79,9 +90,10 @@ Next steps for the extension, in order:
 3. Integration tests (`@vscode/test-cli`, as stay-in-the-loop has them) and the user
    documentation (`CALU_GUIDE.md`, `README.md`, `docs/TESTING.md`, the manual checklist).
 4. Ask the owner to try it in his VSCode against WSL.
-   Planned and not started, to be scheduled by the owner: **session traces in the project**
-   (requirement 36, D232): a setting that appends each step of a session as redacted
-   Markdown to `.agent/traces/<date>/<user>/session_NNN.md`, for version control and review.
+   **Session traces in the project** (requirement 36, D232) are built and merged: a
+   setting that appends each step of a session as redacted Markdown to
+   `.agent/traces/<date>/<user>/session_NNN.md`. Not yet run with a real model (manual
+   checklist item 36): how well a real model redacts is unknown.
 5. Then the PyCharm plugin: the three spikes named in the research notes first; and the small
    fix in `calu acp` (`session/new` must answer a fresh id) as an interim step.
 
