@@ -50,6 +50,9 @@ answered with "Echo: <message>".
                  Arabic and Hebrew paragraphs (which must read right to left); the command
                  escalates, so the approval card shows it too.
     tall         a command of 90 lines that escalates: an approval card taller than a view.
+    swarm        ten subagents at the same time, each with eight commands of 3 s; the third
+                 escalates after about 6 s and the seventh after about 15 s while the others
+                 keep working. turn 2: three background subagents that outlive the turn.
     nousage      as `levels`, but the session reports no context usage.
 
 A message that begins with "/" is answered with a line that names the command: Claude Code's
@@ -594,6 +597,105 @@ def tall(_workspace: Path) -> FakeScript:
     )
 
 
+SWARM_JOBS = (
+    "Review the parser",
+    "Run the unit tests",
+    "Publish the package",
+    "Check the documentation links",
+    "Profile the start-up",
+    "Update the changelog",
+    "Migrate the database schema",
+    "Audit the dependencies",
+    "Rebuild the search index",
+    "Translate the error messages into German, French and Spanish, keeping the placeholders",
+)
+"""What the ten subagents of the scenario `swarm` are asked to do (the last one is long, for
+the layout of a list of subagents)."""
+
+SWARM_ESCALATES = {2: 2, 6: 5}
+"""Scenario `swarm`: the index of each subagent that escalates, with the number of ordinary
+commands it runs first (3 s each), so the two escalations open about nine seconds apart."""
+
+
+def swarm(workspace: Path) -> FakeScript:
+    """Build the scenario `swarm`: ten subagents at the same time, two of which escalate.
+
+    Each subagent streams a line, runs eight commands of 3 s and reports. The third subagent
+    escalates after about 6 s and the seventh after about 15 s, while the other eight keep
+    working; the turn ends when every subagent has finished, so both escalations have to be
+    decided. Turn 2 starts three background subagents that outlive it.
+
+    Args:
+        workspace: The project directory of the session.
+
+    Returns:
+        The script.
+    """
+
+    def worker(index: int, job: str) -> dict[str, Any]:
+        """Build one subagent of the first turn.
+
+        Args:
+            index: Its position among the ten, counted from 0.
+            job: Its description.
+
+        Returns:
+            The Agent action's specification.
+        """
+        actions: list[dict[str, Any]] = [{"text": f"Starting: {job}.", "stream": True}]
+        for step in range(1, 9):
+            if SWARM_ESCALATES.get(index) == step - 1:
+                actions.append(bash(f"deploy --job {index + 1}  # calu:escalate", "deployed"))
+            actions.append(
+                bash(f"work --job {index + 1} --step {step}", f"step {step} ok", duration=3)
+            )
+        actions.append({"text": f"Finished: {job}."})
+        return {
+            "description": job,
+            "prompt": f"{job}, in {workspace}.",
+            "subagent_type": "Explore" if index % 3 == 0 else "general-purpose",
+            "actions": actions,
+            "result": f"{job}: done.",
+        }
+
+    def background(index: int) -> dict[str, Any]:
+        """Build one background subagent of the second turn.
+
+        Args:
+            index: Its number, counted from 1.
+
+        Returns:
+            The Agent action's specification.
+        """
+        polls = [
+            step
+            for n in range(1, 5)
+            for step in ({"sleep": 10}, bash(f"poll --watcher {index} --round {n}", "pending"))
+        ]
+        return {
+            "description": f"Watcher {index}",
+            "prompt": f"Watch service {index} until it is healthy.",
+            "subagent_type": "general-purpose",
+            "background": True,
+            "detach": True,
+            "actions": [*polls, {"text": f"Service {index} is healthy."}],
+            "result": f"Service {index} is healthy.",
+        }
+
+    first: list[dict[str, Any]] = [
+        {"text": "Ten jobs at the same time, one subagent each.", "stream": True},
+        {"parallel": [[{"agent": worker(i, job)}] for i, job in enumerate(SWARM_JOBS)]},
+        {"text": "All ten subagents have reported."},
+    ]
+    second: list[dict[str, Any]] = [
+        {"text": "Three watchers in the background.", "stream": True},
+        *({"agent": background(n)} for n in (1, 2, 3)),
+        {"text": "The watchers run; I report when they are done."},
+    ]
+    third: list[dict[str, Any]] = [{"text": "The watchers have finished.", "stream": True}]
+    return FakeScript(turns=[first, second, third])
+
+
 SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "tour": tour,
     "subagents": subagents,
@@ -605,6 +707,7 @@ SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "escalations": escalations,
     "bidi": bidi,
     "tall": tall,
+    "swarm": swarm,
     "nousage": levels,
 }
 """The scenarios by the name a first message `scenario: <name>` chooses."""

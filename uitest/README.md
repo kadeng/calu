@@ -130,6 +130,7 @@ The first message of a session chooses the scenario: `scenario: <name>`; any oth
 | `escalations` | three escalating commands at the same time |
 | `bidi` | text, a file name and commands with bidirectional control characters (shown as placeholders such as `⟦RLO⟧`), next to ordinary Arabic and Hebrew paragraphs; one command escalates |
 | `tall` | an escalating command of 90 lines: an approval card taller than the view |
+| `swarm` | ten subagents at the same time (eight commands of 3 s each); the third escalates after about 6 s, the seventh after about 15 s, the others keep working; turn 2 starts three background subagents |
 | `nousage` | as `levels`, without context usage |
 
 What the scripted runner does not play: an answer to a message for a subagent (the message
