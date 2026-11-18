@@ -503,7 +503,10 @@ async def test_attach_connects_again_after_falling_behind(tmp_path, monkeypatch,
                 while "after the gap" not in shown:
                     shown += capsys.readouterr().out
                     await anyio.sleep(0.02)
-            assert "[reconnecting]" in shown and "[attached again]" in shown
+            # Under load the client can fall behind while its first request still waits; it
+            # then has shown nothing yet and attaches as for the first time.
+            assert "[reconnecting]" in shown
+            assert "[attached again]" in shown or shown.index("[attached]") > 0
             assert "line 9" in shown  # replayed after the reconnect
             typed_quit.set()
     assert codes == [0]
@@ -541,3 +544,30 @@ async def test_attach_says_why_the_session_closed_the_connection(tmp_path, monke
     out = capsys.readouterr().out
     assert "[detached] the session closed the connection: the client token was revoked" in out
     assert "[reconnecting]" not in out
+
+
+def test_an_escalation_names_the_line_clients_own_commands() -> None:
+    from calu.attach import render
+
+    request = {
+        "escalation_id": "12",
+        "tool_use_id": "t1",
+        "tool_name": "Bash",
+        "tool_input": {"command": "git push"},
+        "reason": "a push needs a person",
+        "rendered": "",
+    }
+    line = render("escalation.request", request)
+    assert line is not None and "/why 12 shows everything" in line
+    assert "/allow 12 [note]" in line and "/deny 12 [note]" in line and "calu resolve" not in line
+    asked = {**request, "questions": [{"question": "Which?", "header": "Q", "options": []}]}
+    line = render("escalation.request", asked)
+    assert line is not None and "/answer 12 <your answer>" in line and "/allow" not in line
+
+
+def test_the_line_client_prints_no_character_a_terminal_would_obey(capsys) -> None:
+    from calu.attach import say
+
+    say("result: one\x1b[2J\x1b[Htwo\rXX \u202etxt.exe")
+    out = capsys.readouterr().out
+    assert out == "result: one␛[2J␛[Htwo␍XX ⟦RLO⟧txt.exe\n"

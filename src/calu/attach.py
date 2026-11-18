@@ -48,6 +48,7 @@ from typing import Any
 import anyio
 from anyio.abc import TaskGroup
 
+from calu.controls import visible
 from calu.protocol.client import (
     ProtocolClient,
     RequestFailed,
@@ -55,7 +56,7 @@ from calu.protocol.client import (
     first_set,
     single_error,
 )
-from calu.protocol.messages import EVENTS, Event, HonestyInfo
+from calu.protocol.messages import EVENTS, EscalationRequest, Event, HonestyInfo
 from calu.run import format_event, honesty_lines, one_line, read_lines
 
 log = logging.getLogger(__name__)
@@ -78,6 +79,21 @@ this line is a command nobody finds. `tests/unit/test_attach.py` reads the comma
 turned out to be absent from it."""
 
 
+def say(text: str, flush: bool = True) -> None:
+    """Print one piece of the line client's output, safe for a terminal.
+
+    Text of the session (Claude's words, commands, tool results, file content) may hold
+    characters a terminal obeys instead of showing them; each is replaced by a visible sign
+    (`calu.controls.visible`), so that no output can clear the screen, overwrite a line or
+    draw a command in another order than it would run.
+
+    Args:
+        text: What to print, followed by a line break.
+        flush: Whether to flush stdout afterwards.
+    """
+    print(visible(text), flush=flush)
+
+
 def render(method: str, params: dict[str, Any]) -> str | None:
     """Render one received event as a terminal line.
 
@@ -86,14 +102,30 @@ def render(method: str, params: dict[str, Any]) -> str | None:
         params: Its params.
 
     Returns:
-        The line, or None for events the terminal does not show. An event that cannot be
+        The line, or None for events the terminal does not show. An escalation is followed
+        by the commands of this client that show and decide it. An event that cannot be
         turned back into its model (an older or newer session) is shown as its raw params.
     """
     model = EVENT_TYPES.get(method)
     if model is None:
         return f"[{method}] {params}"
     try:
-        return format_event(model.model_validate(params))
+        event = model.model_validate(params)
+        if isinstance(event, EscalationRequest):
+            # `format_event` names `calu resolve`, the command of another terminal. Here the
+            # step is decided with the line client's own commands.
+            number = event.escalation_id
+            how = (
+                f"/answer {number} <your answer>"
+                if event.questions
+                else f"/allow {number} [note]  ·  /deny {number} [note]"
+            )
+            return (
+                f"\n*** escalation {number}: {event.tool_name}\n"
+                f"    {event.reason}\n"
+                f"    /why {number} shows everything  ·  {how}\n"
+            )
+        return format_event(event)
     except Exception:
         log.debug("could not render %s", method, exc_info=True)
         return f"[{method}] {params}"
@@ -116,7 +148,7 @@ class Printer:
             return
         line = render(method, params)
         if line is not None:
-            print(line, flush=True)
+            say(line, flush=True)
 
 
 def describe_state(snapshot: dict[str, Any]) -> str:
@@ -192,17 +224,17 @@ class Console:
         try:
             await work()
         except RequestFailed as exc:
-            print(f"[error] {exc}", flush=True)
+            say(f"[error] {exc}", flush=True)
         except ConnectionError as exc:  # before OSError, of which it is a subclass
-            print(f"[error] {exc}", flush=True)
+            say(f"[error] {exc}", flush=True)
             if getattr(self.client, "fell_behind", False):
                 # `attach` is connecting again (the session closed the connection because this
                 # client fell behind); the line was not sent and can be typed once more.
-                print("[error] not sent: connecting again, type it once more", flush=True)
+                say("[error] not sent: connecting again, type it once more", flush=True)
             else:
                 self.quit.set()
         except OSError as exc:  # /comment could not read the file
-            print(f"[error] {exc}", flush=True)
+            say(f"[error] {exc}", flush=True)
 
     async def _review(self) -> None:
         """Ask the session for an honesty review and print its answer (`/honesty-review`).
@@ -214,9 +246,9 @@ class Console:
         done = await self.client.request("honesty.review")
         problem = done.get("problem")
         if done.get("ran"):
-            print("[honesty] the review ran" + (f": {problem}" if problem else ""), flush=True)
+            say("[honesty] the review ran" + (f": {problem}" if problem else ""), flush=True)
         else:
-            print(f"[honesty] no review ran: {problem}", flush=True)
+            say(f"[honesty] no review ran: {problem}", flush=True)
 
     async def _line(self, text: str) -> None:
         """Handle one typed line (see `line`).
@@ -238,25 +270,25 @@ class Console:
             case "/quit" | "/exit":
                 self.quit.set()
             case "/help":
-                print(HELP, flush=True)
+                say(HELP, flush=True)
             case "/stop":
                 await self.client.request("session.stop")
             case "/start":
                 result = await self.client.request(
                     "session.start", {"resume_id": rest} if rest else {}
                 )
-                print(f"[started] {result}", flush=True)
+                say(f"[started] {result}", flush=True)
             case "/interrupt":
                 await self.client.request("interrupt")
             case "/inject":
                 if not rest:
-                    print("[error] /inject needs a text", flush=True)
+                    say("[error] /inject needs a text", flush=True)
                     return
                 await self.client.request("chat.send", {"text": rest, "delivery": "inject"})
             case "/to":
                 target, _, message = rest.partition(" ")
                 if not target or not message.strip():
-                    print("[error] /to needs a subagent id and a text", flush=True)
+                    say("[error] /to needs a subagent id and a text", flush=True)
                     return
                 await self.client.request(
                     "chat.send",
@@ -272,14 +304,14 @@ class Console:
                 # A person certifies a commit; a branch means the commit it points at now.
                 done = await self.client.request("honesty.trust", {"rev": rest or "HEAD"})
                 state = "certified" if done.get("recorded") else "was already certified"
-                print(f"[honesty] commit {str(done.get('commit_id'))[:12]} {state}", flush=True)
+                say(f"[honesty] commit {str(done.get('commit_id'))[:12]} {state}", flush=True)
             case "/trust-file":
                 if not rest:
-                    print("[error] /trust-file needs a path", flush=True)
+                    say("[error] /trust-file needs a path", flush=True)
                     return
                 done = await self.client.request("honesty.trust", {"path": rest})
                 state = "certified" if done.get("recorded") else "was already certified"
-                print(
+                say(
                     f"[honesty] the content of {done.get('path')} "
                     f"({str(done.get('content_sha256'))[:12]}) {state}",
                     flush=True,
@@ -290,69 +322,67 @@ class Console:
                 if self.background is None:
                     await self._review()
                 else:
-                    print("[honesty] review requested", flush=True)
+                    say("[honesty] review requested", flush=True)
                     self.background.start_soon(self._reported, self._review)
             case "/honesty":
                 snapshot = await self.client.request("state.get")
-                print(describe_honesty(snapshot.get("honesty") or {}), flush=True)
+                say(describe_honesty(snapshot.get("honesty") or {}), flush=True)
             case "/clear-mark":
                 # The marks are in the session's memory: clearing one is a request to the
                 # session, a person's override of a checker.
                 if not rest.strip().isdigit():
-                    print("[error] /clear-mark needs a mark id", flush=True)
+                    say("[error] /clear-mark needs a mark id", flush=True)
                 else:
                     await self.client.request("honesty.clear", {"mark_id": int(rest.strip())})
             case "/why":
                 if not rest:
-                    print("[error] /why needs an escalation id", flush=True)
+                    say("[error] /why needs an escalation id", flush=True)
                     return
                 found = await self.client.request("escalation.context", {"escalation_id": rest})
-                print(f"--- escalation {found['escalation_id']} ({found['state']})", flush=True)
-                print(found.get("reason", ""), flush=True)
+                say(f"--- escalation {found['escalation_id']} ({found['state']})", flush=True)
+                say(found.get("reason", ""), flush=True)
                 for run in found.get("checker_runs", []):
-                    print(
+                    say(
                         f"  [{run['checker_name']} v{run['checker_version']}, {run['model']}]"
                         f" {run['decision']}: {one_line(run.get('reason', ''))}",
                         flush=True,
                     )
-                print(found.get("rendered", ""), flush=True)
+                say(found.get("rendered", ""), flush=True)
                 for path, content in (found.get("files") or {}).items():
-                    print(f"--- {path} before the change\n{content}", flush=True)
-                print(
-                    f"--- the conversation the checker saw\n{found.get('recent', '')}", flush=True
-                )
+                    say(f"--- {path} before the change\n{content}", flush=True)
+                say(f"--- the conversation the checker saw\n{found.get('recent', '')}", flush=True)
             case "/checkers":
                 result = await self.client.request("checkers.get")
                 for checker in result.get("checkers", []):
-                    print(
+                    say(
                         f"{checker['name']}  route {checker['route']}  {checker['model']}"
                         f"  v{checker['version']}  "
                         f"{len(checker.get('instructions', ''))} chars of instructions",
                         flush=True,
                     )
             case "/state":
-                print(describe_state(await self.client.request("state.get")), flush=True)
+                say(describe_state(await self.client.request("state.get")), flush=True)
             case "/context":
                 context = await self.client.request("context.get")
-                print(context.get("chat_summary", ""), flush=True)
-                print(context.get("recent", ""), flush=True)
+                say(context.get("chat_summary", ""), flush=True)
+                say(context.get("recent", ""), flush=True)
             case "/history":
                 history = await self.client.request(
                     "session.history", {"claude_session_id": rest} if rest else {}
                 )
                 for turn in history.get("turns", []):
                     for text in turn.get("user_inputs", []):
-                        print(f"> {one_line(text)}", flush=True)
+                        say(f"> {one_line(text)}", flush=True)
                     for step in turn.get("steps", []):
                         decision = step.get("decision") or "?"
-                        print(
+                        say(
                             f"  [{step.get('tool_name')}, {decision}] {step.get('summary')}",
                             flush=True,
                         )
                     answer = turn.get("answer_narration") or turn.get("answer") or ""
                     if answer:
-                        print(one_line(answer), flush=True)
-                print(
+                        say(one_line(answer), flush=True)
+                say(
                     f"[history] {len(history.get('turns', []))} turn(s), "
                     f"{len(history.get('steps', []))} step(s) of "
                     f"{history.get('claude_session_id') or 'this session'}",
@@ -361,7 +391,7 @@ class Console:
             case "/sessions":
                 result = await self.client.request("session.list", {})
                 for session in result.get("sessions", []):
-                    print(
+                    say(
                         f"{session['claude_session_id'] or '(no id)'}  {session['state']}  "
                         f"{session['started_at']}  {session['first_input']}",
                         flush=True,
@@ -370,7 +400,7 @@ class Console:
                 await self.client.request("shutdown")
                 self.quit.set()
             case _:
-                print(f"[error] unknown command {command}. {HELP}", flush=True)
+                say(f"[error] unknown command {command}. {HELP}", flush=True)
 
     async def _comment(self, rest: str) -> None:
         """Send a comment on a range of lines of a project file.
@@ -388,16 +418,16 @@ class Console:
         """
         parts = rest.split(maxsplit=3)
         if len(parts) < 4:
-            print("[error] /comment needs a path, a first and last line and a text", flush=True)
+            say("[error] /comment needs a path, a first and last line and a text", flush=True)
             return
         path, first, last, text = parts
         if self.workspace is None:
-            print("[error] the session did not say where its project is", flush=True)
+            say("[error] the session did not say where its project is", flush=True)
             return
         try:
             start, end = int(first), int(last)
         except ValueError:
-            print(f"[error] not line numbers: {first!r} {last!r}", flush=True)
+            say(f"[error] not line numbers: {first!r} {last!r}", flush=True)
             return
         content = (self.workspace / path).read_text(encoding="utf-8")
         result = await self.client.request(
@@ -412,7 +442,7 @@ class Console:
             },
         )
         excerpt = (result.get("comment") or {}).get("after", {}).get("text", "")
-        print(f"[comment] on {path}:{start}-{end}: {one_line(excerpt)}", flush=True)
+        say(f"[comment] on {path}:{start}-{end}: {one_line(excerpt)}", flush=True)
 
     async def _answer(self, rest: str) -> None:
         """Answer a question of the agent from an `/answer` line (PLAN.md D35).
@@ -428,7 +458,7 @@ class Console:
         """
         escalation_id, _, answer = rest.partition(" ")
         if not escalation_id or not answer.strip():
-            print("[error] /answer needs an escalation id and an answer", flush=True)
+            say("[error] /answer needs an escalation id and an answer", flush=True)
             return
         await self.client.request(
             "escalation.decide",
@@ -447,7 +477,7 @@ class Console:
         """
         escalation_id, _, note = rest.partition(" ")
         if not escalation_id:
-            print(f"[error] /{decision} needs an escalation id", flush=True)
+            say(f"[error] /{decision} needs an escalation id", flush=True)
             return
         await self.client.request(
             "escalation.decide",
@@ -483,6 +513,9 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
 
     Raises:
         OSError: If the address cannot be reached.
+        ConnectionError: If the session closes the connection before it answered the first
+            request of a connection, for another reason than this client falling behind, or
+            after `MAX_RECONNECTS` reconnects.
         RequestFailed: If the token is refused.
     """
     printer = Printer(show_thinking)
@@ -505,11 +538,22 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                 async with connect(
                     address, token, "calu attach", printer, after_seq=after_seq
                 ) as client:
-                    snapshot = await client.request("state.get")
+                    try:
+                        snapshot = await client.request("state.get")
+                    except ConnectionError:
+                        # The session replays what this client missed before it answers; a
+                        # client that falls behind during the replay is closed while this
+                        # request waits. That counts like falling behind afterwards.
+                        if not (client.fell_behind and reconnects < MAX_RECONNECTS):
+                            raise
+                        reconnects += 1
+                        after_seq = max(after_seq, client.last_seq)
+                        say(FELL_BEHIND, flush=True)
+                        continue
                     if console is None or not client.complete:
                         print_snapshot(snapshot)
                     if console is None:
-                        print(f"[attached] {HELP}", flush=True)
+                        say(f"[attached] {HELP}", flush=True)
                         directory = snapshot.get("workspace")
                         console = Console(
                             client, Path(directory) if isinstance(directory, str) else None
@@ -519,7 +563,7 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                         tg.start_soon(input_lines, console)
                     else:
                         console.client = client
-                        print("[attached again] continuing after the last event shown", flush=True)
+                        say("[attached again] continuing after the last event shown", flush=True)
                     await first_set(quit_event, client.closed)
                     if client.last_seq > after_seq:
                         reconnects = 0
@@ -528,13 +572,9 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                         break
                     if client.fell_behind and reconnects < MAX_RECONNECTS:
                         reconnects += 1
-                        print(
-                            "[reconnecting] the session closed the connection because this client "
-                            "fell behind",
-                            flush=True,
-                        )
+                        say(FELL_BEHIND, flush=True)
                         continue
-                    print(
+                    say(
                         f"[detached] the session closed the connection: {client.describe_close()}",
                         flush=True,
                     )
@@ -548,6 +588,9 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
     return 0
 
 
+FELL_BEHIND = "[reconnecting] the session closed the connection because this client fell behind"
+"""What the line client prints before it connects again after falling behind."""
+
 MAX_RECONNECTS = 3
 """How often `attach` connects again after falling behind without having received an event in
 between; after that it detaches instead of looping against a session it cannot keep up with."""
@@ -559,9 +602,9 @@ def print_snapshot(snapshot: dict[str, Any]) -> None:
     Args:
         snapshot: The snapshot as the session returned it.
     """
-    print(describe_state(snapshot), flush=True)
+    say(describe_state(snapshot), flush=True)
     for escalation in snapshot.get("escalations") or ():
-        print(
+        say(
             f"*** escalation {escalation['escalation_id']} waits: {escalation['reason']}",
             flush=True,
         )
