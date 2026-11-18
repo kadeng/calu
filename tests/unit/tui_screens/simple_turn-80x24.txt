@@ -21,4 +21,4 @@
   ── turn 1 · $0.84 so far · 15s ────────────────────────────────────────────
  to main
  >
- alt+←/→ agent   f3 side question   f2 panel   ^p palette   f1 help
+ enter send   f3 side question   f2 panel   ^p palette   f1 help

@@ -211,6 +211,7 @@ def run_tui(
     options = options_from(settings.config_path(), settings.history_path(), os.environ)
     options.after_seq = after_seq
     options.show_thinking = options.show_thinking and show_thinking
+    options.read_name = True
     from calu.tui.adminaccess import StoreAdmin
 
     app = CaluApp(

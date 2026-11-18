@@ -1,9 +1,9 @@
  calu  myproject   ● ESCALATED 0:42   2 need you   opus / high   Checkers decide   ctx 21%   attached
   main 1!   explore bg *   tests 1! *   all                                                            alt+←/→ switches
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (2)
-                                                                                    ▏ >1 main Bash                0:42
+                                                                                    ▏ >#e1 main Bash              0:42
   ┊ thinking                                                                        ▏    The command `git push --for…
-  ┊ The helper is `check_step` in gate.py. It has two callers.                      ▏  2 tests Question           0:05
+  ┊ The helper is `check_step` in gate.py. It has two callers.                      ▏  #e2 tests Question         0:05
   ┊ I rename it, update both, then run the unit tests.                              ▏    Which test runner should th…
                                                                                     ▏
   I will rename check_step to judge_step and update the callers.                    ▏ AGENTS (3)  alt+←/→
@@ -24,7 +24,7 @@
 ▌ you · waiting (after the running tool calls)  also bump the version               ▏  cost     no turn has ended yet
 ▌ you · waiting (next turn)  then write the changelog entry                         ▏  context  21% of 1000k tokens
  ╭────────────────────────────────────────────────────────────────────────────────╮ ▏           ━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
- │ DECISION 1 of 2  ·  main  ·  Bash                                 waiting 0:42 │ ▏  quota    no limit reported
+ │ DECISION 1 of 2  ·  main  ·  Bash  ·  #e1                         waiting 0:42 │ ▏  quota    no limit reported
  │   git push --force origin main                                                 │ ▏
  │   Stopped: The command `git push --force origin main` matches the deny rule    │ ▏
  │   `git push --force` (force push).                                             │ ▏

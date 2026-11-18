@@ -219,15 +219,24 @@ COMMANDS: tuple[Command, ...] = (
         "running",
         "The sessions that run, of every directory",
         "",
-        "/running",
-        about="Reads the database; `/switch <id>` attaches this client to one of them.",
+        "/running [text]",
+        about="Reads the database; with a text only the sessions whose id, name or directory "
+        "contains it. `/switch` attaches this client to one of them.",
     ),
     Command(
         "switch",
         "Attach this client to another running session",
         "",
-        "/switch <the beginning of a session id>",
+        "/switch <the beginning of a session id or of its name>",
         about="The session you leave keeps running.",
+    ),
+    Command(
+        "rename",
+        "Name this session, for the lists of sessions",
+        "",
+        "/rename [name]",
+        about="Stored with this machine's admin credential; without a name the name is "
+        "removed. `/running`, `calu sessions` and the web interface show it.",
     ),
     Command(
         "new",

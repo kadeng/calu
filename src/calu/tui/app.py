@@ -38,6 +38,7 @@ import subprocess
 import time
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -124,6 +125,10 @@ REPEAT_QUIET_S = 0.5
 """After a held key was recognised, that letter is ignored until it has been quiet for this
 long."""
 
+STORED_SESSIONS = 200
+"""How many stored sessions of the project `/sessions` asks for; the picker filters them as
+the user types."""
+
 RESIZE_S = 0.1
 """The transcript is laid out again this long after the last of a burst of resizes."""
 
@@ -180,6 +185,10 @@ class TuiOptions:
     """Whether the stored history of the session is shown above the replayed events."""
     problems: list[str] = field(default_factory=list)
     """What was wrong with the settings file; shown once after the start."""
+    read_name: bool = False
+    """Whether the client reads the attached session's name from the database when it has
+    attached, if that needs no password (`CaluApp._read_name`). `calu attach` sets it; tests
+    and the demo leave it off, so that they open no database connection."""
 
 
 @dataclass
@@ -428,6 +437,20 @@ class CaluApp(App[None]):
         if self.link.error is not None:
             self.exit()
 
+    async def _read_name(self) -> None:
+        """Show the name the attached session has in the database, where that asks nothing.
+
+        Called once, when the session has said which one it is (`_changed`). Without the
+        admin credential, with one that needs a password, or when the database cannot be
+        read, the status line shows no name; `/running` and `/rename` read it later.
+        """
+        if self.admin.problem() is not None or self.admin.needs_password():
+            return
+        try:
+            self._take_name(await self.admin.sessions(None))
+        except AdminFailed:
+            return
+
     @property
     def transcript(self) -> Transcript:
         """The transcript widget.
@@ -530,10 +553,16 @@ class CaluApp(App[None]):
         Called for every event, so it only merges; the drawing happens at most every
         `FLUSH_S` seconds, and a burst of events (a replay) is drawn once.
 
+        Side effect: the first change after the session said which one it is starts
+        `_read_name`, if `TuiOptions.read_name` asks for it.
+
         Args:
             change: What the event altered.
         """
         self._pending.merge(change)
+        if self.options.read_name and self.model.calu_session_id:
+            self.options.read_name = False  # once per client
+            self._spawn(self._read_name())
         if self._draw_pending_scheduled:
             return
         self._draw_pending_scheduled = True
@@ -916,8 +945,14 @@ class CaluApp(App[None]):
                 (5, "↓ newer"),
                 (7, "esc ends"),
             ]
-        if self.model.connection.status in {"detached", "reconnecting"}:
+        if self.model.connection.status == "reconnecting":
             return [(9, "not attached: sending is off, the text is kept")]
+        if self.model.connection.status == "detached":
+            return [
+                (9, "not attached: nothing can be sent, the text is kept"),
+                (8, "/new starts a session here"),
+                (7, "/running lists the sessions that run"),
+            ]
         if self.mode == "note":
             return [
                 (9, "note for Claude with the decision"),
@@ -1132,14 +1167,25 @@ class CaluApp(App[None]):
                 (8, "n,n", "note"),
             ]
         stopped = self.model.state in {"stopped", "failed"}
-        if self.model.working():
+        detached = self.model.connection.status == "detached"
+        if detached:
+            # Nothing can be sent: the keys that would send are not offered, and the two
+            # commands that lead to a session are (they read the database, not the session).
+            parts = [part for part in parts if part[1] in {"↑↓", "tab", "esc", "j k", "y", "n"}]
+            parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
+        elif self.model.working():
             parts += [(5, "esc esc", "interrupt"), (3, "tab", "send mode")]
         elif not stopped and self.mode != "search" and self.ask is None:
             parts += [(5, "enter", "send"), (1, "^j", "newline")]
-        parts += [(7, "alt+←/→", "agent"), (4, "pgup/pgdn", "scroll"), (6, "f3", "side question")]
+        if len(self.model.tabs()) > 1:
+            parts.append((7, "alt+←/→", "agent"))
+        parts.append((4, "pgup/pgdn", "scroll"))
+        if not detached:
+            parts.append((6, "f3", "side question"))
         parts.append((3, "f4", "git"))
         parts.append((6 if self.size.width < WIDE else 1, "f2", "panel"))
-        parts += [(8, "^p", "palette"), (8, "f1", "help"), (2, "^d", "detach")]
+        parts += [(8, "^p", "palette"), (8, "f1", "help")]
+        parts.append((9, "^d", "leave") if detached else (2, "^d", "detach"))
 
         def length() -> int:
             """Measure the footer with the current parts.
@@ -2470,9 +2516,48 @@ class CaluApp(App[None]):
             arguments) and the remaining text.
         """
         word, _, tail = rest.partition(" ")
-        if word in self.model.decisions:
-            return self.model.decisions[word], tail.strip()
+        if word.removeprefix("#") in self.model.decisions:
+            return self.model.decisions[word.removeprefix("#")], tail.strip()
         return self.current_decision(), rest.strip()
+
+    def _names_decision(self, rest: str) -> bool:
+        """Tell whether a command's arguments begin with the id of an open item.
+
+        Args:
+            rest: The arguments.
+
+        Returns:
+            True if the first word, with or without a leading `#`, is such an id.
+        """
+        return rest.split(" ", 1)[0].removeprefix("#") in self.model.decisions
+
+    def _wrong_id(self, rest: str, command: str) -> bool:
+        """Refuse a decision command whose first word looks like an id but names no open item.
+
+        The card and the side panel show each open item with its id (`#12`). A number that is
+        no such id is most likely a slip or a position in the list; taking it as the note
+        would decide the step the card shows, which may be another one.
+
+        Side effect: shows the open ids if the command is refused.
+
+        Args:
+            rest: The command's arguments.
+            command: The slash word, for the message.
+
+        Returns:
+            True if the command was refused.
+        """
+        word = rest.split(" ", 1)[0]
+        looks_like_id = word.startswith("#") or word.isdigit()
+        if not looks_like_id or self._names_decision(rest) or not self.model.decisions:
+            return False
+        open_ids = ", ".join(f"#{key}" for key in self.model.decisions)
+        self.flash(
+            f"no open decision {word}; open: {open_ids} · a note that begins with a number "
+            f"goes after the id: {command} #<id> <note>",
+            error=True,
+        )
+        return True
 
     def _cmd_allow(self, rest: str) -> None:
         """Allow an open step at once (`/allow [id] [note]`).
@@ -2483,8 +2568,10 @@ class CaluApp(App[None]):
         Args:
             rest: An optional escalation id and note.
         """
+        if self._wrong_id(rest, "/allow"):
+            return
         decision, note = self._find_decision(rest)
-        named = rest.split(" ", 1)[0] in self.model.decisions
+        named = self._names_decision(rest)
         if decision is None:
             self.flash("nothing waits for a decision")
         elif decision.is_question:
@@ -2503,8 +2590,10 @@ class CaluApp(App[None]):
         Args:
             rest: An optional escalation id and note.
         """
+        if self._wrong_id(rest, "/deny"):
+            return
         decision, note = self._find_decision(rest)
-        named = rest.split(" ", 1)[0] in self.model.decisions
+        named = self._names_decision(rest)
         if decision is None:
             self.flash("nothing waits for a decision")
         elif not named and self._settling(decision):
@@ -2545,6 +2634,8 @@ class CaluApp(App[None]):
         """
         if isinstance(self.screen, DetailScreen):
             self.screen.dismiss()
+            return
+        if self._wrong_id(rest, "/why"):
             return
         decision, _ = self._find_decision(rest)
         if decision is None:
@@ -2791,8 +2882,71 @@ class CaluApp(App[None]):
         other = resume != self.model.claude_session_id
         self._spawn(self._restart(resume, self.next_model, self.next_effort, reload=other))
 
+    def _with_admin[T](
+        self,
+        why: str,
+        work: Callable[[str | None], Coroutine[Any, Any, T]],
+        then: Callable[[T], None],
+        failed: str,
+    ) -> None:
+        """Run one piece of work with this machine's admin credential.
+
+        A credential with a password is asked for it first, and again after a wrong one.
+        The caller has checked `self.admin.problem()`.
+
+        Args:
+            why: The sentence the password prompt shows, e.g. "It reads the list of sessions."
+            work: `async (password) -> T`; it raises `PasswordNeeded` or `AdminFailed`.
+            then: Called with what `work` returned; not called when it failed (the reason is
+                shown) or when the user gave no password.
+            failed: The beginning of the message for a failure, e.g. "the sessions could not
+                be read".
+        """
+
+        def ask(problem: str = "") -> None:
+            """Ask for the password if one is needed, then do the work.
+
+            Args:
+                problem: What was wrong with the password given before, or "".
+            """
+
+            async def run(password: str | None) -> None:
+                """Do the work and hand its result on, or say why not.
+
+                Args:
+                    password: The credential's password, or None if none is needed.
+                """
+                try:
+                    result = await work(password)
+                except PasswordNeeded as error:
+                    ask(str(error))
+                    return
+                except AdminFailed as error:
+                    self.flash(f"{failed}: {error}", error=True)
+                    return
+                then(result)
+
+            def answered(password: str | None) -> None:
+                """Go on with the password; without one nothing is done.
+
+                Args:
+                    password: What the user typed, or None.
+                """
+                if password is not None:
+                    self._spawn(run(password))
+
+            if self.admin.needs_password():
+                self.push_screen(PasswordScreen(why, self.palette, problem), answered)
+            else:
+                self._spawn(run(None))
+
+        ask()
+
     def _with_sessions(self, then: Callable[[list[herd.SessionRow]], None]) -> None:
         """Read the running sessions from the database, asking for a password if needed.
+
+        Side effect: remembers the name of the attached session (`SessionModel.set_name`),
+        which the status line shows.
 
         Args:
             then: Called with the sessions; not called when they cannot be read (the reason
@@ -2803,57 +2957,44 @@ class CaluApp(App[None]):
             self.flash(f"not read here; use: calu sessions · {problem}", error=True)
             return
 
-        def ask(problem: str = "") -> None:
-            """Ask for the password if one is needed, then read.
+        def read(rows: list[herd.SessionRow]) -> None:
+            """Take the attached session's name from the rows and hand them on.
 
             Args:
-                problem: What was wrong with the password given before, or "".
+                rows: The running sessions.
             """
+            self._take_name(rows)
+            then(rows)
 
-            async def read(password: str | None) -> None:
-                """Read the sessions and hand them on, or say why not.
+        self._with_admin(
+            "It reads the list of sessions.",
+            self.admin.sessions,
+            read,
+            "the sessions could not be read",
+        )
 
-                Args:
-                    password: The credential's password, or None if none is needed.
-                """
-                try:
-                    rows = await self.admin.sessions(password)
-                except PasswordNeeded as error:
-                    ask(str(error))
-                    return
-                except AdminFailed as error:
-                    self.flash(f"the sessions could not be read: {error}", error=True)
-                    return
-                then(rows)
-
-            def answered(password: str | None) -> None:
-                """Go on with the password; without one nothing is read.
-
-                Args:
-                    password: What the user typed, or None.
-                """
-                if password is not None:
-                    self._spawn(read(password))
-
-            if self.admin.needs_password():
-                self.push_screen(
-                    PasswordScreen("It reads the list of sessions.", self.palette, problem),
-                    answered,
-                )
-            else:
-                self._spawn(read(None))
-
-        ask()
-
-    def _cmd_running(self, rest: str) -> None:
-        """Show the sessions that run (`/running`).
-
-        A session `/switch` can attach to starts with `▸`; any other is followed by the
-        reason it cannot (`switch_refusal`).
+    def _take_name(self, rows: Sequence[herd.SessionRow]) -> None:
+        """Show the name the attached session has in the database.
 
         Args:
-            rest: Ignored.
+            rows: The running sessions as the database lists them.
         """
+        for row in rows:
+            if row.id == self.model.calu_session_id:
+                self._changed(self.model.set_name(row.name))
+
+    def _cmd_running(self, rest: str) -> None:
+        """Show the sessions that run (`/running [text]`).
+
+        One line per session (`session_row_text`): those with open decisions first, then the
+        newest. A session `/switch` can attach to starts with `▸`; any other is followed by
+        the reason it cannot (`switch_refusal`), and the attached one by "(shown here)".
+
+        Args:
+            rest: If not empty, only the sessions whose id, name, directory or host contains
+                this text are listed (upper and lower case count as equal).
+        """
+        wanted = rest.strip().lower()
 
         def show(rows: list[herd.SessionRow]) -> None:
             """Open the page.
@@ -2861,25 +3002,86 @@ class CaluApp(App[None]):
             Args:
                 rows: The running sessions.
             """
+            listed = [
+                row
+                for row in rows
+                if wanted in f"{row.id} {row.name} {row.directory} {row.hostname}".lower()
+            ]
+            listed.sort(key=lambda row: row.open_escalations == 0)
             body: list[Text] = []
-            for row in rows:
+            width = max(40, self.size.width - 4)
+            for row in listed:
                 refusal = switch_refusal(row, self.model.calu_session_id)
-                line = Text("  " + row.line() if refusal else "▸ " + row.line())
-                if refusal:
-                    line.append(f"  (no /switch: {refusal})", self.palette.muted)
+                why = f"  (no /switch: {refusal})" if refusal else ""
+                if row.id == self.model.calu_session_id:
+                    why = "  (shown here)"
+                line = Text(
+                    ("  " if refusal else "▸ ") + session_row_text(row, width - 2 - len(why))
+                )
+                if row.open_escalations:
+                    line.stylize(f"bold {self.palette.orange}")
+                line.append(why, self.palette.muted)
                 body.append(line)
             if not body:
-                body = [Text("no session is running", self.palette.muted)]
+                none = f"no running session contains {rest.strip()}" if wanted else None
+                body = [Text(none or "no session is running", self.palette.muted)]
             body.append(Text(""))
-            body.append(
-                Text(
-                    "/switch <beginning of an id> attaches to a session marked ▸",
-                    self.palette.muted,
-                )
-            )
-            self._page("Sessions", body)
+            count = f"{len(listed)} of {len(rows)} running sessions" if wanted else ""
+            for hint in (
+                count,
+                "/switch <beginning of an id or of a name> attaches to a session marked ▸",
+                "/running <text> lists only the sessions with that text · /rename <name> "
+                "names the session this client shows",
+            ):
+                if hint:
+                    body.append(Text(hint, self.palette.muted))
+            self._page("Sessions that run", body)
 
         self._with_sessions(show)
+
+    def _cmd_rename(self, rest: str) -> None:
+        """Give the attached session a name, or take its name away (`/rename [name]`).
+
+        The name is stored in the database with this machine's admin credential
+        (`sessions.name`); `/running`, `calu sessions` and the other front ends show it. The
+        session itself does not read it.
+
+        Args:
+            rest: The name, at most `herd.MAX_NAME_CHARS` characters; empty removes the name.
+        """
+        name = " ".join(rest.split())
+        session_id = self.model.calu_session_id
+        if not session_id:
+            self.flash("not renamed: this client does not know the session's id yet", error=True)
+            return
+        if len(name) > herd.MAX_NAME_CHARS:
+            self.flash(
+                f"a session's name has at most {herd.MAX_NAME_CHARS} characters, not {len(name)}",
+                error=True,
+            )
+            return
+        problem = self.admin.problem()
+        if problem is not None:
+            self.flash(f"not renamed here · {problem}", error=True)
+            return
+
+        def renamed(stored: str) -> None:
+            """Show the stored name.
+
+            Args:
+                stored: The name as the database holds it now.
+            """
+            self._changed(self.model.set_name(stored))
+            self.flash(
+                f'this session is now called "{stored}"' if stored else "the name is removed"
+            )
+
+        self._with_admin(
+            "It stores the session's name.",
+            partial(self.admin.rename_session, session_id, name),
+            renamed,
+            "the name was not stored",
+        )
 
     def _cmd_switch(self, rest: str) -> None:
         """Attach this client to another running session (`/switch <id>`).
@@ -2894,11 +3096,13 @@ class CaluApp(App[None]):
             none can                                     ──► say why, per session
 
         Args:
-            rest: The beginning of the session's id.
+            rest: The beginning of the session's id or of its name (`/rename`).
         """
         wanted = rest.strip()
         if not wanted:
-            self.flash("usage: /switch <beginning of a session id> · /running lists them")
+            self.flash(
+                "usage: /switch <beginning of a session id or of its name> · /running lists them"
+            )
             return
 
         def switch(rows: list[herd.SessionRow]) -> None:
@@ -2907,7 +3111,11 @@ class CaluApp(App[None]):
             Args:
                 rows: The running sessions.
             """
-            found = [row for row in rows if row.id.startswith(wanted)]
+            found = [
+                row
+                for row in rows
+                if row.id.startswith(wanted) or row.name.lower().startswith(wanted.lower())
+            ]
             if not found:
                 self.flash(
                     f"0 running sessions start with {wanted}; /running lists them", error=True
@@ -3946,7 +4154,7 @@ class CaluApp(App[None]):
 
         async def load() -> None:
             """Ask for the list and open the picker."""
-            outcome = await self.actions.read("session.list", {"limit": 50})
+            outcome = await self.actions.read("session.list", {"limit": STORED_SESSIONS})
             if not outcome.ok:
                 self.flash(outcome.message, error=True)
                 return
@@ -3957,6 +4165,8 @@ class CaluApp(App[None]):
                 if not claude_id:
                     continue
                 current = " (shown now)" if claude_id == self.model.claude_session_id else ""
+                if not current and not str(entry.get("first_input") or "").strip():
+                    continue  # nothing was said in it: there is nothing to continue
                 title = render.cut(
                     " ".join(str(entry.get("first_input") or "no input yet").split()), 70
                 )
@@ -4001,7 +4211,7 @@ class CaluApp(App[None]):
                     Text.assemble(
                         (f"{str(step.get('decision') or '').upper():<9} ", self.palette.muted),
                         (
-                            f"{render.tool_label(str(step.get('tool_name')))::<6} ",
+                            f"{render.tool_label(str(step.get('tool_name'))):<6} ",
                             f"bold {self.palette.fg}",
                         ),
                         (
@@ -4255,11 +4465,12 @@ class CaluApp(App[None]):
         width = min(100, self.size.width - 6)
         body = [
             Text.assemble(
-                (f"{agent.label}", f"bold {palette.fg}"),
+                (f"{agent.description or agent.label}", f"bold {palette.fg}"),
                 (
                     f"  ·  {agent.subagent_type or 'subagent'}"
                     f"{' · background' if agent.background else ''}"
-                    f"  ·  {self.model.activity_of(agent)}  ·  {agent.steps} steps",
+                    f"  ·  {self.model.activity_of(agent)}  ·  {agent.steps} "
+                    f"step{'s' if agent.steps != 1 else ''}",
                     palette.muted,
                 ),
             ),
@@ -4488,6 +4699,36 @@ def switch_refusal(row: herd.SessionRow, current: str | None) -> str:
     if not row.address:
         return "it serves no clients"
     return ""
+
+
+def session_row_text(row: herd.SessionRow, width: int) -> str:
+    """Put a running session on one line of the `/running` page.
+
+    Args:
+        row: The session.
+        width: The columns the line may take, without the mark before it.
+
+    Returns:
+        The first 8 characters of the id (enough for `/switch`), the state with the number
+        of open decisions, the session's name in quotes if it has one, host and directory
+        (cut at its beginning with `…` if the line would be too long), how long the state has
+        lasted, and "SILENT" with the minutes for a session whose process stopped reporting.
+
+    Example:
+        `4031fde1  escalated · 2 open  "payment refactoring"  box:/work/shop  for 12 min`
+    """
+    state = row.state + (f" · {row.open_escalations} open" if row.open_escalations else "")
+    name = f'"{row.name}"  ' if row.name else ""
+    lasted = (datetime.now(UTC) - row.state_since).total_seconds()
+    tail = f"  for {herd.age_text(lasted)}"
+    if row.stale:
+        tail += f"  SILENT for {row.silent_for_s / 60:.0f} min"
+    head = f"{row.id[:8]}  {state:<10}  {name}"
+    place = f"{row.hostname}:{row.directory}"
+    room = max(12, width - 2 - len(head) - len(tail))
+    if len(place) > room:
+        place = "…" + place[-(room - 1) :]
+    return f"{head}{place}{tail}"
 
 
 def client_os_user() -> str:

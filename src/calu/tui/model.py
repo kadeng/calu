@@ -740,6 +740,45 @@ class Change:
         )
 
 
+DENIED_PREFIX = "The user denied this step."
+"""How the session begins the text Claude receives for a denied step
+(`calu.escalations.EscalationDesk.decide`); the user's note follows after `NOTE_PREFIX`."""
+
+NOTE_PREFIX = "Note from the user:"
+"""What the session puts before the user's note in the text for a denied step."""
+
+ANSWER_PREFIX = "The user answered your question:"
+"""How the session begins the text Claude receives for an answered question
+(`calu.escalations.ANSWER_TEMPLATE`); the answer follows, then a line for Claude."""
+
+
+def own_words(note: str) -> str:
+    """Take the user's own words out of the text Claude received with a decision.
+
+    `escalation.resolved` carries, for a denied step and for an answered question, the whole
+    text the session gave Claude. Under a step the client shows what the user wrote, not the
+    sentences the session put around it.
+
+    Args:
+        note: The note of `escalation.resolved`.
+
+    Returns:
+        The note without the session's sentences: "" for a denial without a note, the note
+        of a denial, the answer to a question; any other text unchanged.
+
+    Example:
+        `own_words("The user denied this step. Note from the user: not yet")` is "not yet".
+    """
+    text = note.strip()
+    if text.startswith(ANSWER_PREFIX):
+        answer, _, _ = text[len(ANSWER_PREFIX) :].partition("\nThe AskUserQuestion call")
+        return answer.strip()
+    if text.startswith(DENIED_PREFIX):
+        rest = text[len(DENIED_PREFIX) :].strip()
+        return rest[len(NOTE_PREFIX) :].strip() if rest.startswith(NOTE_PREFIX) else rest
+    return text
+
+
 def _short(text: str, limit: int) -> str:
     """Put a text on one line and cut it.
 
@@ -882,6 +921,8 @@ class SessionModel:
         gives for it (`escalation.request.opened_at`)."""
         self.wall: Callable[[], datetime] = lambda: datetime.now(UTC)
         """The wall clock that `opened_at` of a request is compared with."""
+        self.session_name = ""
+        """The name a person gave the session (`set_name`); it survives a rebuild."""
         self.reset()
 
     def reset(self) -> None:
@@ -994,6 +1035,50 @@ class SessionModel:
             return found
         return [decision for decision in found if (decision.agent_id or MAIN) == agent]
 
+    def holding(self) -> list[Decision]:
+        """Return the open escalations that keep calu from approving other steps.
+
+        While an escalation is open, calu approves no other tool call of the session that
+        needs a check (`calu.escalations.EscalationDesk.hold`); a question of the agent holds
+        nothing.
+
+        Returns:
+            The open items that are not questions, oldest first.
+        """
+        return [decision for decision in self.decisions.values() if not decision.is_question]
+
+    def held(self, step: StepBlock) -> bool:
+        """Tell whether a step waits in calu because another step waits for the user.
+
+        The session reports the hold only as a log line, so the client derives it: a tool
+        call that has neither a check nor a result, while an escalation of another step is
+        open, is one calu holds back. An Agent call whose subagent runs was let through, and
+        a question is not held.
+
+        Args:
+            step: The step.
+
+        Returns:
+            True if the step is held.
+        """
+        if step.checks or step.result is not None or step.waiting or step.stored:
+            return False
+        if step.tool == "AskUserQuestion":
+            return False
+        if step.tool in AGENT_TOOLS and (step.tool_use_id or "") in self.agents:
+            return False
+        return bool(self.holding())
+
+    def held_steps(self) -> list[StepBlock]:
+        """Return the steps calu holds back while a decision is open (`held`).
+
+        Returns:
+            The held steps in the order of the transcript; empty without an open escalation.
+        """
+        if not self.holding():
+            return []
+        return [step for step in self._steps.values() if step.result is None and self.held(step)]
+
     def tabs(self) -> list[str]:
         """Return the tab keys in display order.
 
@@ -1045,8 +1130,11 @@ class SessionModel:
 
         Returns:
             For the main agent outside a turn the session state (idle, stopped, failed,
-            starting). For a finished subagent its status. Otherwise the derived activity with
-            the tool name, or "running, no activity seen since attach".
+            starting). For a finished subagent its status. "held by a decision" for an
+            agent whose tool call calu holds back while another step waits for the user
+            (`held`), and "running N subagents" for one whose last call started subagents that
+            still run in the foreground. Otherwise the derived activity with the tool name,
+            or "running, no activity seen since attach".
         """
         if self.open_decisions(agent.key):
             return "waits for you"
@@ -1056,6 +1144,19 @@ class SessionModel:
             return agent.status
         if not agent.activity:
             return "running" if agent.key == MAIN else "running, no activity seen since attach"
+        if agent.activity in {"checking", "tool call"} and agent.last_tool in AGENT_TOOLS:
+            started = [
+                other
+                for other in self.agents.values()
+                if other.key != MAIN and other.key != agent.key and other.running
+                if not other.background
+            ]
+            if started:
+                return f"running {len(started)} subagent{'s' if len(started) != 1 else ''}"
+        if agent.activity == "checking" and any(
+            (step.agent_id or MAIN) == agent.key for step in self.held_steps()
+        ):
+            return "held by a decision"
         if agent.activity in {"checking", "tool call"} and agent.last_tool:
             return f"{agent.activity} {agent.last_tool}"
         return agent.activity
@@ -1089,6 +1190,23 @@ class SessionModel:
         """
         block = JoinBlock(id=len(self.blocks), turn=self.turn, time=time, text=text)
         return self._add(block, Change())
+
+    def set_name(self, name: str) -> Change:
+        """Record the name a person gave the session (`sessions.name` in the database).
+
+        The session does not report its name; the client reads it from the database where
+        it can and sets it after `/rename`.
+
+        Args:
+            name: The name; "" for none.
+
+        Returns:
+            What changed: the status line.
+        """
+        self.session_name = name
+        change = Change()
+        change.status = True
+        return change
 
     def set_connection(
         self, status: str, attempt: int = 0, limit: int = 0, reason: str = ""
@@ -1802,7 +1920,10 @@ class SessionModel:
         activity = "tool call" if decision in {"PASS", "ALLOW"} else "running"
         if event.tool_use_id is None or decision == "ESCALATE":
             activity = self._agent(event.agent_id).activity or "running"
-        self._touch(event.agent_id, activity, change, tool=event.tool_name)
+        # The review of a subagent's result names the Agent call as its tool and the subagent
+        # as its agent: the subagent did not use that tool, so its last tool stays.
+        own_result = event.agent_id is not None and event.tool_use_id == event.agent_id
+        self._touch(event.agent_id, activity, change, tool=None if own_result else event.tool_name)
 
     def _open(self, request: m.EscalationRequest, time: float | None, change: Change) -> Decision:
         """Add an open escalation or question and mark its step as waiting.
@@ -1854,6 +1975,7 @@ class SessionModel:
         self.decisions[request.escalation_id] = decision
         change.decisions = True
         change.status = True
+        change.blocks_updated.update(held.id for held in self.held_steps())
         self._touch(request.agent_id, "waits for you", change)
         return decision
 
@@ -1871,9 +1993,11 @@ class SessionModel:
         Returns:
             The removed decision, or None if it was not open.
         """
-        decision = self.decisions.pop(escalation_id, None)
-        if decision is None:
+        if escalation_id not in self.decisions:
             return None
+        # The lines of the steps calu held back for this decision change with it.
+        change.blocks_updated.update(held.id for held in self.held_steps())
+        decision = self.decisions.pop(escalation_id)
         step = self.step(decision.tool_use_id)
         if step is None:
             step = next(
@@ -1911,7 +2035,7 @@ class SessionModel:
         if known.is_question and event.decision != "cancelled":
             outcome = "answered"
         note = known.answer_text() if outcome == "answered" and known.own else event.note
-        self._close(event.escalation_id, outcome, note, change)
+        self._close(event.escalation_id, outcome, own_words(note or ""), change)
         if outcome == "cancelled" and self.own_interrupt:
             change.notices.append(Notice("cancelled by your interrupt"))
         elif not known.own:

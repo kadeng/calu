@@ -1,7 +1,7 @@
  calu  myproject   ● ESCALATED 0:00   1 needs you   opus / high   Checkers decide   ctx 21%   attached
   main 1!                                                                                              alt+←/→ switches
 ▌ you  Add tests for the gate.                                                      ▏ NEEDS YOU (1)
-                                                                                    ▏ >1 main Question            0:00
+                                                                                    ▏ >#e1 main Question          0:00
   Before I start I need three decisions.                                            ▏    Which test runner should th…
                                                                                     ▏
   QUESTION  Ask    Which test runner should the new tests use?        waiting 0:00  ▏ AGENTS (1)  alt+←/→
@@ -23,7 +23,7 @@
                                                                                     ▏
                                                                                     ▏
  ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
- │ QUESTION 1 of 1  ·  main  ·  AskUserQuestion                      waiting 0:00 │ ▏
+ │ QUESTION 1 of 1  ·  main  ·  AskUserQuestion  ·  #e1              waiting 0:00 │ ▏
  │    Runner   Checks   Fixtures    0 of 3 answered                               │ ▏
  │   Which test runner should the new tests use?                                  │ ▏
  │    1 ( ) pytest  what the existing unit tests use                              │ ▏
@@ -33,4 +33,4 @@
    1 pytest    2 unittest    own answer    send    decline                          ▏
  to main · next turn · tab changes
  >
- 1-9 choose   o,o own answer   enter send   alt+←/→ agent   f3 side question   ^p palette   f1 help
+ 1-9 choose   o,o own answer   enter send   esc esc interrupt   f3 side question   ^p palette   f1 help

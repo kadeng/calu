@@ -120,7 +120,9 @@ def detail_lines(
         lines += render.wrap(Text("A deny rule matched this step.", palette.muted), view.width - 2)
     lines += _heading("the step as the checker saw it", view)
     rendered = (context or {}).get("rendered") or decision.rendered
-    shown = render.markdown_lines(str(rendered), view.width - 2, palette, view.dark)
+    shown = render.markdown_lines(
+        render.keep_line_breaks(str(rendered)), view.width - 2, palette, view.dark
+    )
     for index, line in enumerate(shown):
         following = shown[index + 1].plain if index + 1 < len(shown) else ""
         before_code = following != following.rstrip()  # a code line is padded to the width

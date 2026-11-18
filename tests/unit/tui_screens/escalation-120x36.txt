@@ -1,7 +1,7 @@
  calu  myproject   ● ESCALATED 0:00   1 needs you   opus / high   Checkers decide   ctx 21%   attached
   main 1!                                                                                              alt+←/→ switches
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (1)
-                                                                                    ▏ >1 main Bash                0:00
+                                                                                    ▏ >#e1 main Bash              0:00
   ┊ thinking                                                                        ▏    The command `git push --for…
   ┊ The helper is `check_step` in gate.py. It has two callers.                      ▏
   ┊ I rename it, update both, then run the unit tests.                              ▏ AGENTS (1)  alt+←/→
@@ -24,7 +24,7 @@
 ▌ you · waiting (after the running tool calls)  also bump the version               ▏
 ▌ you · waiting (next turn)  then write the changelog entry                         ▏
  ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
- │ DECISION 1 of 1  ·  main  ·  Bash                                 waiting 0:00 │ ▏
+ │ DECISION 1 of 1  ·  main  ·  Bash  ·  #e1                         waiting 0:00 │ ▏
  │   git push --force origin main                                                 │ ▏
  │   Stopped: The command `git push --force origin main` matches the deny rule    │ ▏
  │   `git push --force` (force push).                                             │ ▏
@@ -33,4 +33,4 @@
    Allow    Deny    Deny with a note    Show everything                             ▏
  to main · next turn · tab changes
  >
- a,a allow   d,d deny   w,w detail   n,n note   alt+←/→ agent   f3 side question   ^p palette   f1 help
+ a,a allow   d,d deny   w,w detail   n,n note   esc esc interrupt   f3 side question   ^p palette   f1 help

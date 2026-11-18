@@ -214,8 +214,8 @@ def test_the_panel_lists_what_needs_the_user_the_agents_and_the_queue() -> None:
     lines, targets = render.panel_lines(model, view(34), Capabilities(), selected="e1")
     text = plain(lines)
     assert text[0] == "NEEDS YOU (2)"
-    assert text[1].startswith(">1 main Bash") and text[1].endswith("0:42")
-    assert text[3].startswith(" 2 tests Question") and text[3].endswith("0:05")
+    assert text[1].startswith(">#e1 main Bash") and text[1].endswith("0:42")
+    assert text[3].startswith(" #e2 tests Question") and text[3].endswith("0:05")
     assert "AGENTS (3)  alt+←/→" in text
     assert ">main         waits for you" in text
     assert " explore      tool call Grep bg" in text

@@ -28,6 +28,7 @@ from typing import Any, Protocol
 import anyio
 
 from calu.attach import MAX_RECONNECTS
+from calu.controls import visible_in
 from calu.protocol.client import OnEvent, RequestFailed, connect, first_set
 from calu.protocol.messages import CLOSE_TOKEN_REVOKED
 from calu.tui.capabilities import Capabilities, capabilities
@@ -45,6 +46,11 @@ connection is still put down to that stay for this many seconds."""
 
 CLIENT_NAME = "calu attach (full screen)"
 """How this client names itself in `initialize`, for the session's log."""
+
+NO_REASON = "no reason given"
+"""What `describe_close` of a connection returns when the session named no reason
+(`calu.protocol.client.ProtocolClient.describe_close`): its process ended or the network
+dropped. The client says that instead."""
 
 
 class Connection(Protocol):
@@ -227,12 +233,14 @@ class Link:
         A replayed event gets no time. A change of the session state that involves a start
         marks the snapshot as stale, because model and effort are not part of any event. While
         a connection replays, and until the stored history is loaded, the events are held back
-        (`_release`), so that they are applied below what precedes them.
+        (`_release`), so that they are applied below what precedes them. Every text of the
+        event is made safe for a terminal first (`calu.controls.visible_in`).
 
         Args:
             method: The notification method.
             params: Its params.
         """
+        params = visible_in(params)
         if self._held is not None:
             self._held.append((method, params))
             return
@@ -262,7 +270,7 @@ class Link:
                 result = await connection.request("session.history", {"limit": HISTORY_STEPS})
             except RequestFailed:
                 return None
-        return result if isinstance(result, dict) else None
+        return visible_in(result) if isinstance(result, dict) else None
 
     async def _release(self, connection: Connection, first: bool, reload: bool = False) -> None:
         """Apply the events a connection replayed, below what the session has stored.
@@ -329,7 +337,7 @@ class Link:
             RequestFailed: If the session refused the request.
             ConnectionError: If the connection closed before the answer arrived.
         """
-        snapshot = await connection.request("state.get")
+        snapshot = visible_in(await connection.request("state.get"))
         change = Change()
         if isinstance(snapshot, dict):
             self.capabilities = capabilities(snapshot)
@@ -405,6 +413,8 @@ class Link:
                 reconnects += 1
                 self.notify(self.model.set_connection("reconnecting", reconnects, MAX_RECONNECTS))
                 continue
+            if reason == NO_REASON:
+                reason = "the session ended or the connection broke"
             self.closed_reason = reason
             change = self.model.set_connection("detached", reason=reason)
             change.notices.append(Notice(f"the session closed the connection: {reason}", "error"))

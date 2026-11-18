@@ -21,6 +21,7 @@ error handling. `drop` closes the connections with a close code.
 
 from collections.abc import AsyncGenerator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import replace
 from typing import Any
 
 import anyio
@@ -177,6 +178,8 @@ class FakeAdmin:
         """Every `(checker, instructions)` stored, oldest first."""
         self.modes: list[tuple[str, str | None]] = []
         self.requests: list[SessionRequest] = []
+        self.renamed: list[tuple[str, str]] = []
+        """Every `(session id, name)` stored (`rename_session`), oldest first."""
         self.running: list[herd.SessionRow] = []
         """What `sessions` answers."""
         """The sessions that were asked for (`request_session`)."""
@@ -219,6 +222,25 @@ class FakeAdmin:
             raise PasswordNeeded("wrong password for the 'admin' credential")
         if self.fail:
             raise AdminFailed(self.fail)
+
+    async def rename_session(self, session_id: str, name: str, password: str | None) -> str:
+        """Record a session's new name in `renamed` and in the matching row of `running`.
+
+        Args:
+            session_id: Id of the session.
+            name: The name; "" removes it.
+            password: The password the client passed.
+
+        Returns:
+            The name without surrounding white space.
+        """
+        self._check(password)
+        stored = name.strip()
+        self.renamed.append((session_id, stored))
+        self.running = [
+            replace(row, name=stored) if row.id == session_id else row for row in self.running
+        ]
+        return stored
 
     async def save_instructions(
         self, name: str, text: str, password: str | None, base_version: int | None = None

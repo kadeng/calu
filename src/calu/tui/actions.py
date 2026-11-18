@@ -14,12 +14,18 @@ from typing import Any
 
 from calu.acp.modes import settings_for
 from calu.config import AutoEscalate
+from calu.controls import visible, visible_in
 from calu.protocol.client import RequestFailed
 from calu.tui.connection import Link
 from calu.tui.model import MAIN, Diff, SessionModel
 
 METHOD_NOT_FOUND = -32601
 """The JSON-RPC code of a request the session does not know."""
+
+VERBATIM = frozenset({"checkers.get"})
+"""Requests whose result is not changed by `calu.controls.visible_in`: the checkers'
+instructions are edited and stored again by this client, so they must come back as they are.
+An administrator writes them; nothing a session does can change them."""
 
 NOT_ATTACHED = "not sent: this client is not attached to the session"
 """The message of a request made while no connection is open."""
@@ -58,17 +64,20 @@ class Actions:
 
         Returns:
             `ok` with the result as `data`, or not `ok` with the session's error message, the
-            reason the connection closed, or `NOT_ATTACHED`.
+            reason the connection closed, or `NOT_ATTACHED`. Every text of the result and of
+            the message is made safe for a terminal (`calu.controls.visible_in`), except the
+            results of `VERBATIM`.
         """
         connection = self.link.connection
         if connection is None:
             return Outcome(False, NOT_ATTACHED)
         try:
-            return Outcome(True, data=await connection.request(method, params or {}))
+            data = await connection.request(method, params or {})
+            return Outcome(True, data=data if method in VERBATIM else visible_in(data))
         except RequestFailed as error:
             if error.code == METHOD_NOT_FOUND:
                 return Outcome(False, f"this session does not support it ({method})")
-            return Outcome(False, str(error.error.get("message") or error))
+            return Outcome(False, visible(str(error.error.get("message") or error)))
         except ConnectionError as error:
             return Outcome(False, f"not sent: {error}")
 

@@ -39,6 +39,10 @@ from calu.session_requests import SessionRequest
 CREDENTIAL = "admin"
 """The credential both changes need: only the database owner may write these tables."""
 
+STORED_ADMIN = "calu_admin"
+"""The store entry in which `calu setup --no-password` keeps the login of the role
+`calu_admin` without a password (`calu.cli.ADMIN_ENTRY`, D228)."""
+
 NO_CREDENTIAL = (
     "this machine has no 'admin' credential (calu credential set admin stores one; it is the "
     "connection string of the database owner)"
@@ -109,6 +113,26 @@ class AdminAccess(Protocol):
         Raises:
             PasswordNeeded: If the password is missing or wrong.
             AdminFailed: If the database cannot be reached.
+        """
+        ...
+
+    async def rename_session(self, session_id: str, name: str, password: str | None) -> str:
+        """Give a session a name, or take its name away (`calu.herd.rename_session`).
+
+        Side effect: writes `sessions.name`.
+
+        Args:
+            session_id: Id of the `sessions` row.
+            name: The name; "" removes it.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The stored name.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the name is too long, no session has that id, or the database
+                cannot be reached or refuses (among them a schema older than migration 0036).
         """
         ...
 
@@ -236,6 +260,36 @@ class StoreAdmin:
         self.store = store or CredentialStore()
         self.database = database
         self.unavailable = unavailable
+        self._looked_in_store = False
+
+    def _complete(self) -> None:
+        """Take the password of a `calu_admin` login from the store, if it lies there open.
+
+        `calu setup --no-password` stores the login of `calu_admin` protected by the file's
+        mode alone (`STORED_ADMIN`). A client that was handed that login without its password
+        (`database`) would ask the user for a password nobody chose. If the store holds the
+        entry without a password and it names the same database and role, `database` becomes
+        that complete login; nothing is asked afterwards. Looked up once; an unreadable
+        store or another database leaves `database` as it is.
+        """
+        if self._looked_in_store or self.database is None or _has_secret(self.database):
+            return
+        self._looked_in_store = True
+        try:
+            if STORED_ADMIN not in self.store or self.store.needs_password(STORED_ADMIN):
+                return
+            url = self.store.load(STORED_ADMIN, None)
+        except CredentialError, OSError:
+            return
+        try:
+            stored = Target.parse(url)
+        except ValueError:
+            return
+        finally:
+            wipe(url)
+        same = stored.place == self.database.place and stored.user == self.database.user
+        if same and _has_secret(stored):
+            self.database = stored
 
     def problem(self) -> str | None:
         """Say why nothing can be changed from this machine.
@@ -261,6 +315,7 @@ class StoreAdmin:
             True if it is; False without a password, without the credential or when the
             store cannot be read.
         """
+        self._complete()
         if self.database is not None:
             return not _has_secret(self.database)
         try:
@@ -335,6 +390,7 @@ class StoreAdmin:
             AdminFailed: If there is no credential, the database cannot be reached or it
                 refuses the change.
         """
+        self._complete()
         if self.database is not None:
             return await self._as_admin(self.database, password, work)
         missing = self.problem()
@@ -383,6 +439,44 @@ class StoreAdmin:
             AdminFailed: If the database cannot be reached.
         """
         return await self._with_db(password, herd.sessions)
+
+    async def rename_session(self, session_id: str, name: str, password: str | None) -> str:
+        """Give a session a name, or take its name away (`calu.herd.rename_session`).
+
+        Side effect: writes `sessions.name`.
+
+        Args:
+            session_id: Id of the `sessions` row.
+            name: The name; "" removes it.
+            password: The credential's password, or None if it has none.
+
+        Returns:
+            The stored name.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the name is too long, no session has that id, or the database
+                cannot be reached or refuses (among them a schema older than migration 0036).
+        """
+
+        async def work(db: Db) -> str:
+            """Store the name.
+
+            Args:
+                db: The owner's connection.
+
+            Returns:
+                The stored name.
+
+            Raises:
+                AdminFailed: If the name is refused or the session is unknown.
+            """
+            try:
+                return await herd.rename_session(db, session_id, name)
+            except (ValueError, LookupError) as error:
+                raise AdminFailed(str(error)) from error
+
+        return await self._with_db(password, work)
 
     async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
         """Ask the `calu serve` of this machine for a session and wait until it runs (D208).

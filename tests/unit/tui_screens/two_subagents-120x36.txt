@@ -3,7 +3,7 @@
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (0)
                                                                                     ▏
   ┊ thinking                                                                        ▏ AGENTS (3)  alt+←/→
-  ┊ The helper is `check_step` in gate.py. It has two callers.                      ▏ >main         tool call Agent
+  ┊ The helper is `check_step` in gate.py. It has two callers.                      ▏ >main         running 1 subagent
   ┊ I rename it, update both, then run the unit tests.                              ▏  explore      tool call Grep bg
                                                                                     ▏  tests        running
   I will rename check_step to judge_step and update the callers.                    ▏

@@ -21,4 +21,4 @@
  ╰────────────────────────────────────────────────────────────────────────────╯
  to main
  >
- enter start the session   alt+←/→ agent   ^p palette   f1 help
+ enter start the session   f3 side question   f2 panel   ^p palette   f1 help

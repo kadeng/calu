@@ -12,7 +12,7 @@
 ▌ you · waiting (after the running tool calls)  also bump the version
 ▌ you · waiting (next turn)  then write the changelog entry
  ╭────────────────────────────────────────────────────────────────────────────╮
- │ DECISION 1 of 2  ·  main  ·  Bash                             waiting 0:42 │
+ │ DECISION 1 of 2  ·  main  ·  Bash  ·  #e1                     waiting 0:42 │
  │   git push --force origin main                                             │
  │   Stopped: The command `git push --force origin main` matches the deny     │
  │   rule `git push --force` (force push).                                    │

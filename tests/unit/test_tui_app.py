@@ -801,7 +801,7 @@ async def test_the_palette_lists_the_commands() -> None:
 async def test_a_history_that_was_replayed_is_drawn_once_and_can_be_answered() -> None:
     async with running("showcase", live_events=False) as run:
         assert "2 need you" in run.line("status")
-        assert "waiting since before this client attached" in run.line("card")
+        assert "since before attach" in run.line("card"), "the short form: the id took the room"
         assert any("waits for you" in row for row in run.transcript)
         await run.press("d", "d")
         assert run.session.sent("escalation.decide")[0]["escalation_id"] == "e1"

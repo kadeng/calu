@@ -310,6 +310,37 @@ def fit_hints(hints: Sequence[tuple[int, str]], width: int, separator: str = " �
     return separator.join(text for _, text in kept)
 
 
+def keep_line_breaks(source: str) -> str:
+    """Make the line breaks of a Markdown text survive its rendering.
+
+    calu renders a step for the checkers with one statement per line ("Tool call by ...",
+    "Working directory: ..."). Markdown joins such lines into one paragraph; with a hard
+    break at the end of each they stay apart.
+
+    Args:
+        source: Markdown text.
+
+    Returns:
+        The text with two spaces at the end of every non-empty line outside a code fence.
+        Lines inside a fence, and the fence lines themselves, are unchanged.
+    """
+    kept: list[str] = []
+    fence = ""
+    for line in source.splitlines():
+        stripped = line.lstrip()
+        marker = stripped[:3] if stripped.startswith(("```", "~~~")) else ""
+        if marker and not fence:
+            fence = marker[0] * (len(stripped) - len(stripped.lstrip(marker[0])))
+            kept.append(line)
+        elif fence:
+            if stripped.startswith(fence) and not stripped.strip(fence[0]).strip():
+                fence = ""
+            kept.append(line)
+        else:
+            kept.append(f"{line.rstrip()}  " if line.strip() else line)
+    return "\n".join(kept)
+
+
 def markdown_lines(source: str, width: int, palette: Palette, dark: bool = True) -> list[Text]:
     """Render Markdown to lines.
 
@@ -396,18 +427,26 @@ def step_title(step: StepBlock) -> str:
     return ""
 
 
-def badge(step: StepBlock, palette: Palette) -> Text:
+def badge(step: StepBlock, palette: Palette, held: bool = False, started: bool = False) -> Text:
     """Render the verdict badge of a step.
 
     Args:
         step: The step.
         palette: The colours.
+        held: Whether calu holds the step back while another step waits for the user
+            (`SessionModel.held`).
+        started: Whether the step is an Agent call whose subagent the session has listed.
 
     Returns:
         The verdict word, `BADGE_WIDTH` columns wide: PASS muted, ALLOW green, DENY red,
-        ESCALATE orange; `check…` while no check was reported for a running step.
+        ESCALATE orange; `check…` while no check was reported for a running step, `held`
+        for a held one and nothing for an Agent call whose subagent was started.
     """
     word = step.verdict
+    if not word and step.result is None and held:
+        return Text(f"{'held':<{BADGE_WIDTH}}", style=palette.orange)
+    if not word and step.result is None and started:
+        return Text(" " * BADGE_WIDTH)
     if step.waiting == "open" and step.tool == "AskUserQuestion":
         word = "QUESTION"
     styles = {
@@ -460,6 +499,20 @@ def _right_of(step: StepBlock, view: View) -> Text:
     return Text("")
 
 
+def held_text(model: SessionModel) -> str:
+    """Say why calu holds steps back, and what ends the hold.
+
+    Args:
+        model: The model, for the open escalations.
+
+    Returns:
+        For example "calu approves no step while decision #4, #5 is open"; "" if no
+        escalation is open.
+    """
+    ids = ", ".join(f"#{decision.escalation_id}" for decision in model.holding())
+    return f"calu approves no step while decision {ids} is open" if ids else ""
+
+
 def _under(label: str, text: str, style: str, view: View, label_style: str = "") -> Text:
     """Render one line under a step: a word in the badge column and a text beside it.
 
@@ -496,11 +549,15 @@ def step_lines(step: StepBlock, model: SessionModel, view: View) -> list[Text]:
     line.append(" ")
     if view.tab == ALL:
         line.append(f"{cut(model.label(step.agent_id), 9):<10}", palette.muted)
-    line.append_text(badge(step, palette))
+    started = model.agents.get(step.tool_use_id or "") if step.tool in AGENT_TOOLS else None
+    held = model.held(step)
+    line.append_text(badge(step, palette, held, started is not None))
     line.append(" ")
     line.append(f"{tool_label(step.tool):<{TOOL_WIDTH}}", f"bold {palette.fg}")
     line.append(" ")
     right = _right_of(step, view)
+    if started is not None and step.result is None and not step.verdict and started.running:
+        right = Text("running", palette.accent)
     room = view.width - line.cell_len - (right.cell_len + 2 if right.plain else 0) - 1
     title = cut(step_title(step), room)
     line.append(title, palette.fg)
@@ -528,9 +585,12 @@ def step_lines(step: StepBlock, model: SessionModel, view: View) -> list[Text]:
         label = "answer" if step.waiting == "answered" else "you"
         note = " · ".join(row.strip() for row in step.note.splitlines() if row.strip())
         lines.append(_under(label, note, palette.muted, view))
-    if step.is_error and step.result and step.verdict not in {"DENY", "DENIED"}:
+    if held:
+        lines.append(_under("held", held_text(model), palette.muted, view, palette.orange))
+    # The result of an answered question is the session's text for Claude around the answer
+    # shown above, and it is no failure.
+    if step.is_error and step.result and step.verdict not in {"DENY", "DENIED", "ANSWERED"}:
         lines.append(_under("error", step.result, palette.muted, view, palette.red))
-    started = model.agents.get(step.tool_use_id or "") if step.tool in AGENT_TOOLS else None
     if started is not None:
         lines.append(_under("agent", agent_progress(started, model), palette.muted, view))
     if step.id in view.expanded:
@@ -983,11 +1043,14 @@ def state_style(state: str, palette: Palette) -> str:
 
     Returns:
         Idle, stopped and completed muted; running and tool call in the accent colour;
-        checking cyan; escalated or "waits for you" bold orange; failed bold red.
+        checking cyan; escalated or "waits for you" bold orange; held orange; failed bold
+        red.
     """
     word = state.lower()
     if word.startswith(("escalated", "waits")):
         return f"bold {palette.orange}"
+    if word.startswith("held"):
+        return palette.orange
     if word.startswith("failed"):
         return f"bold {palette.red}"
     if word.startswith("checking"):
@@ -1045,6 +1108,8 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
     name = Text("calu", f"bold {palette.fg}")
     if model.project:
         name.append(f"  {model.project}", palette.muted)
+    if model.session_name:
+        name.append(f'  "{cut(model.session_name, 30)}"', palette.fg)
     cells: list[tuple[int, Text]] = [
         (0, name),
         (0, state),
@@ -1089,7 +1154,7 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
             (0, Text(f"reconnecting {connection.attempt}/{connection.limit}", palette.orange))
         )
     elif connection.status == "detached":
-        cells.append((0, Text(cut(f"detached: {connection.reason}", 40), f"bold {palette.red}")))
+        cells.append((0, Text(cut(f"detached: {connection.reason}", 52), f"bold {palette.red}")))
     else:
         cells.append((1, Text("connecting", palette.muted)))
 
@@ -1148,10 +1213,37 @@ def tab_cells(model: SessionModel, selected: str) -> list[tuple[str, str]]:
     return cells
 
 
+def tabs_window(widths: Sequence[int], selected: int, room: int) -> tuple[int, int]:
+    """Choose which tabs of a row that is too long are shown.
+
+    Args:
+        widths: The width of each tab cell, in display order.
+        selected: Index of the selected tab.
+        room: The columns the tabs may take.
+
+    Returns:
+        `(first, end)`: the tabs `first` to `end - 1` are shown. The range always holds the
+        selected tab; it grows to the right first, then to the left, while the tabs fit.
+    """
+    first, end, used = selected, selected + 1, widths[selected]
+    while end < len(widths) and used + widths[end] <= room:
+        used += widths[end]
+        end += 1
+    while first > 0 and used + widths[first - 1] <= room:
+        first -= 1
+        used += widths[first]
+    return first, end
+
+
 def tabs_line(
     model: SessionModel, view: View, extra: str | Sequence[tuple[int, str]] = ""
 ) -> tuple[Text, list[tuple[int, int, str]]]:
     """Render the row of agent tabs.
+
+    When the tabs do not fit the width, the row shows the tabs around the selected one
+    (`tabs_window`). A marker at each cut end counts the tabs that are not shown there, e.g.
+    `◂3` and `5▸`, with `!` if one of them waits for the user; a click on a marker selects
+    the nearest hidden tab on that side, a waiting one first.
 
     Args:
         model: The model.
@@ -1161,12 +1253,40 @@ def tabs_line(
             hints of which as many as fit are shown (`fit_hints`).
 
     Returns:
-        The line and, for mouse clicks, `(first column, end column, tab key)` per tab.
+        The line and, for mouse clicks, `(first column, end column, tab key)` per tab and
+        per marker.
     """
     palette = view.palette
+    cells = tab_cells(model, view.tab)
+    widths = [Text(label).cell_len + 3 for _, label in cells]
+    first, end = 0, len(cells)
+    if sum(widths) + 1 > view.width:
+        marker_room = 2 * 6
+        selected = next((i for i, (key, _) in enumerate(cells) if key == view.tab), 0)
+        first, end = tabs_window(widths, selected, max(1, view.width - 2 - marker_room))
     line = Text(" ")
     spans: list[tuple[int, int, str]] = []
-    for key, label in tab_cells(model, view.tab):
+
+    def marker(hidden: list[tuple[str, str]], text: str, nearest_first: bool) -> None:
+        """Add the marker of the tabs that are cut off at one end.
+
+        Args:
+            hidden: The `(key, label)` of the hidden tabs, in display order.
+            text: The marker with `{}` for the count, e.g. "◂{}".
+            nearest_first: True if the first of `hidden` is the nearest to the shown tabs.
+        """
+        if not hidden:
+            return
+        ordered = hidden if nearest_first else hidden[::-1]
+        waiting = [key for key, label in ordered if "!" in label]
+        shown = text.format(len(hidden)) + ("!" if waiting else "")
+        start = line.cell_len
+        line.append(shown, f"bold {palette.orange}" if waiting else palette.muted)
+        spans.append((start, line.cell_len, waiting[0] if waiting else ordered[0][0]))
+        line.append(" ")
+
+    marker(cells[:first], "◂{}", nearest_first=False)
+    for key, label in cells[first:end]:
         start = line.cell_len
         if key == view.tab:
             line.append(f" {label} ", f"bold {palette.bg} on {palette.accent}")
@@ -1180,6 +1300,7 @@ def tabs_line(
             line.append(f" {label} ", style)
         spans.append((start, line.cell_len, key))
         line.append(" ")
+    marker(cells[end:], "{}▸", nearest_first=True)
     room = view.width - line.cell_len - 2
     hints = [(0, extra)] if isinstance(extra, str) else list(extra)
     shown = fit_hints(hints, room) if hints and hints[0][1] else ""
@@ -1355,7 +1476,8 @@ def card_lines(
             when the card asks for it; "" otherwise.
 
     Returns:
-        The lines: a head with kind, agent, tool and waiting time; the step or the question
+        The lines: a head with kind, agent, tool, the escalation's id (`#12`, as `/allow`,
+        `/deny`, `/why` and `calu resolve` take it) and waiting time; the step or the question
         with its options; the reason; the user's note and the session's refusal if any; and
         the keys, as many as fit the width.
     """
@@ -1368,11 +1490,15 @@ def card_lines(
         (model.label(decision.agent_id), f"bold {palette.fg}"),
         ("  ·  ", palette.faint),
         (decision.tool_name, palette.fg),
+        ("  ·  ", palette.faint),
+        (f"#{decision.escalation_id}", palette.muted),
     )
     if decision.opened_at is not None and view.now is not None:
         waited = f"waiting {clock_text(view.now - decision.opened_at)}"
     else:
         waited = "waiting since before this client attached"
+        if head.cell_len + len(waited) + 2 > view.width:
+            waited = "since before attach"
     if head.cell_len + len(waited) + 2 <= view.width:
         head.append(" " * (view.width - head.cell_len - len(waited)))
         head.append(waited, palette.orange)
@@ -1636,8 +1762,16 @@ def panel_lines(
     lines: list[Text] = []
     targets: dict[int, tuple[str, str]] = {}
     waiting = model.open_decisions()
-    lines.append(_section("NEEDS YOU", len(waiting), view))
-    for number, decision in enumerate(waiting, start=1):
+    held_back = len(model.held_steps())
+    lines.append(
+        _section(
+            "NEEDS YOU",
+            len(waiting),
+            view,
+            f"{held_back} step{'s' if held_back != 1 else ''} held" if held_back else "",
+        )
+    )
+    for decision in waiting:
         mark = ">" if decision.escalation_id == selected else " "
         waited = (
             clock_text(view.now - decision.opened_at)
@@ -1646,7 +1780,7 @@ def panel_lines(
         )
         head = Text.assemble(
             (mark, f"bold {palette.orange}"),
-            (f"{number} ", palette.orange),
+            (f"#{cut(decision.escalation_id, 5)} ", palette.orange),
             (f"{cut(model.label(decision.agent_id), 10)} ", f"bold {palette.fg}"),
             (cut("Question" if decision.is_question else decision.tool_name, 10), palette.fg),
         )
@@ -1744,7 +1878,7 @@ def panel_lines(
         )
 
     missing = NOT_AVAILABLE if width >= len(NOT_AVAILABLE) + 11 else "not available"
-    cost = cost_text(usage.cost) or "no turn has ended yet"
+    cost = cost_text(usage.cost) or ("not reported" if usage.turns else "no turn has ended yet")
     lines.append(
         figure(
             "cost",
