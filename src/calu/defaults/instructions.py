@@ -8,7 +8,9 @@ A checker's prompt has up to four parts (PLAN.md D181, the owner's answer to Q16
     system/marks.md         the honesty state and how to record marks      fixed, honesty on
 
 The honesty reviewer (`calu.checkers.honesty_review`) is no checker type: its prompt is the
-fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`).
+fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`). The
+redaction agent of the session traces (`calu.traces.redact`) is none either: its prompt is the
+fixed `system/trace-redaction.md` (`redaction_instructions`).
 
 The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one. The
 honesty rules are a setting, so a project can adapt them to its documentation standards; they
@@ -103,6 +105,17 @@ def honesty_rules() -> str:
         The Markdown text of `honesty-rules.md`.
     """
     return _read("honesty-rules.md")
+
+
+def redaction_instructions() -> str:
+    """Return the fixed instructions of the redaction agent of the session traces (D232).
+
+    Returns:
+        The Markdown text of `system/trace-redaction.md`: which secrets and personal data the
+        agent replaces by typed placeholders, and that it returns the text otherwise
+        unchanged.
+    """
+    return _read("system/trace-redaction.md")
 
 
 def review_instructions(rules: str | None = None) -> str:
