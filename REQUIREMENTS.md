@@ -255,6 +255,11 @@ broken down or extended. Derived requirements and design decisions belong in
     Finds anything going on that's not scheduled, it shuts it down. ... It'll run
     independently and watchdog the MCP as well." (stated 2026-11-19; the wording is his and
     was not checked against a transcript)
+    He agreed to open with the Flynn / Program exchange and to place Alan Bradley's description
+    where the README explains the checkers ("agreed, do it like that"), and: "Finish the
+    readme with the quote 'Dr. Walter Gibbs: Computers and programs will start thinking, and
+    the people will stop.'" (stated 2026-11-19; source he named: IMDb's quotes page of the
+    film, which could not be fetched from here)
 
 ## Soft goals and priorities
 
