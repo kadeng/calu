@@ -1,0 +1,36 @@
+ calu  demo   ◒ running   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main                                                                                                 alt+←/→ switches
+▌ you  scenario: stop                                                               ▏ NEEDS YOU (0)
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+  🔎 resume a stored conversation…
+
+
+  2026-11-18 21:49  no input yet
+  running · 9b0a8961-05f2-4c14-a6bb-6ccdf55dda60 (shown now)
+  2026-11-18 21:34  scenario: echo typing cleanup, part 38
+  stopped · 7975a115-d12f-4f28-862a-35960c826350
+  2026-11-18 21:34  scenario: echo rename greeter module, part 36
+  stopped · 6604e061-3841-4d10-83bc-57fd06112ec1
+  2026-11-18 21:34  scenario: echo release notes, part 39                                                             ▇▇
+  stopped · 8dd46cf7-638f-4531-a388-b84cf9055da5
+  2026-11-18 21:34  scenario: echo payment refactoring, part 40
+  stopped · b3fe4097-a266-4a05-ae5b-f5c06566050b
+  2026-11-18 21:34  scenario: echo CI cache, part 37
+  stopped · c95baa4d-14db-49d1-ac97-891882b56cad
+  2026-11-18 21:34  scenario: echo payment refactoring, part 32
+  stopped · 3d7bb535-a0ea-4bdb-9243-2ea00a6ccdf2
+  2026-11-18 21:34  scenario: echo upgrade to Python 3.14, part 34
+  stopped · 397fccc3-4bbf-4a17-8290-b6e453d81a1d
+  2026-11-18 21:34  scenario: echo docs: install guide, part 35
+  stopped · 6c003e10-aa69-4db6-a513-15ecf1122297
+  2026-11-18 21:34  scenario: echo release notes, part 31
+  stopped · 0068789a-f189-4408-8576-b3967e64218a
+  2026-11-18 21:34  scenario: echo flaky login test, part 33
+  stopped · e837637d-cc8f-4cf4-9b8e-9a1c215248a7
+  2026-11-18 21:34  scenario: echo rename greeter module, part 28
+▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+                                                                                    ▏
+ to main · next turn · tab changes
+ >
+ esc esc interrupt   tab send mode   pgup/pgdn scroll   f3 side question   f4 git   ^p palette   f1 help   ^d detach

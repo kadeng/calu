@@ -1,0 +1,36 @@
+ calu  zeta   idle   opus / default   Checkers decide   ctx 95%   5h 99%   attached
+  main
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏ NEEDS YOU (0)
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏ AGENTS (1)
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏ >main         idle
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏   no subagents
+                                                                                    ▏
+  Turn 39 is done.                                                                  ▏ QUEUE (0)
+                                                                                    ▏
+   PART = 39                                                                        ▏ HONESTY (0)  track
+                                                                                    ▏  baseline 14ac8ff5 · by user
+  The marker of this turn is needle-039.                                            ▏
+                                                                                    ▏ SESSION
+  ── turn 39 ────────────────────────────────────────────────────────────────────   ▏  cost     not reported
+                                                                                    ▏  context  95% of 200k tokens
+▌ you  next part 40                                                                 ▏           ━━━━━━━━━━━━━━━━━━━╌
+                                                                                    ▏  5h       99% used
+  ┊ thinking · 1 line · alt+t shows                                                 ▏           ━━━━━━━━━━━━━━━━━━━━
+                                                                                   ▆▏
+  Turn 40 of 60. step40-1 step40-2 step40-3 step40-4 step40-5 step40-6 step40-7    ▆▏
+  step40-8 step40-9 step40-10 step40-11 step40-12 step40-13 step40-14 step40-15     ▏
+  step40-16 step40-17 step40-18 step40-19 step40-20 step40-21 step40-22 step40-23   ▏
+  step40-24 step40-25 step40-26 step40-27 step40-28 step40-29 step40-30 step40-31   ▏
+  step40-32 step40-33 step40-34 step40-35 step40-36 step40-37 step40-38 step40-39   ▏
+  step40-40 step40-41 step40-42 step40-43 step40-44 step40-45 step40-46 step40-47   ▏
+  step40-48 step40-49 step40-50 step40-51 step40-52 step40-53 step40-54 step40-55   ▏
+  step40-56 step40-57 step40-58 step40-59 step40-60                                 ▏
+                                                                                    ▏
+  PASS      Read   Fake summary of Tool call by the main agent: `Read`.             ▏
+  PASS      Edit   Fake summary of Tool call by the main agent: `Edit`.      +1 -1  ▏
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏
+                                                       ▼ scrolled up · End follows  ▏
+ search: match 10 of 10 · enter or ↑ older · ↓ newer · esc ends
+ > needle-03
+ enter ↑ older   ↓ newer   esc end search   pgup/pgdn scroll   f3 side question   f4 git   ^p palette   f1 help

@@ -812,8 +812,24 @@ press is typed as text: a reply that begins with "a" or "n" is a message, not a 
 long command is shown wrapped, and what the card cuts is counted; such a step is allowed from
 the detail screen.
 
+Each card and each line under NEEDS YOU carries the escalation's id (`#12`), the number
+`calu escalations` and `calu resolve` use. `/allow`, `/deny` and `/why` take it, with or
+without the `#`, to decide another step than the one the card shows (`]` and `[` change the
+card); a number that is no open id decides nothing. While a step waits, calu approves no
+other step of the session (see "A violation freezes the agent" above). The client shows what
+that holds back: such a step has the badge `held` and the line "calu approves no step while
+decision #12 is open", its agent is listed as "held by a decision", and the heading counts
+them ("NEEDS YOU (1)  7 steps held"). A question of the agent holds nothing.
+
+The client shows text as it is stored. A character a terminal would obey instead of showing
+it — an escape sequence, a carriage return, a bidirectional override — is replaced by a
+visible sign (`␛`, `␍`, `⟦RLO⟧`), so a command on a card cannot be drawn as another one.
+
 **Agents and messages.** `alt+←/→` switches between the main agent and its subagents, each
-with its own transcript. Tab changes where the next message goes: the next turn, into the
+with its own transcript; `ctrl+o` or `/agent <part of a name>` goes to one by name. With more
+tabs than fit, the row shows those around the selected one, and a marker at each cut end
+counts the rest (`◂3`, `7▸!`; the `!` says that one of them waits for you, and a click on the
+marker goes there). Tab changes where the next message goes: the next turn, into the
 running turn, or a running background subagent (typing on its tab sends to it). `/btw
 <question>` or `f3` asks Claude a side question: it is answered from the conversation as it
 stands, beside the running work, and becomes no part of it.
@@ -833,6 +849,20 @@ stands, beside the running work, and becomes no part of it.
   repository; without one, `f4` opens nothing and offers the install again.
 - `/sessions`, `/history`, `/search`, `/export`: stored sessions, the stored steps of this
   one, search in the transcript, the transcript as Markdown.
+- `/running [text]`: the sessions that run, of every directory, one line each and those with
+  open decisions first; with a text only those whose id, name or directory contains it.
+  `/switch <beginning of an id or of a name>` attaches this client to one of them, and the
+  session you leave keeps running. `/rename <name>` names the session this client shows
+  (`/rename` alone removes the name); the status line, `/running`, `calu sessions` and the
+  web interface show it.
+- `/new [first message]`, `/fork [first message]`, `/rewind <turn> [first message]`: ask the
+  running `calu serve` for a new session in this directory, for a copy of this conversation,
+  or for a branch of it that starts before a turn (the undo: the turn numbers are those of
+  the lines that end each turn, and files that later turns changed are not changed back).
+  The client switches to the new session; this one stays as it is. These five commands and
+  saving a checker's instructions use the `admin` credential of this machine.
+- A client whose session has ended stays open with the transcript; its input line says so
+  and names `/new` and `/running`, which do not need the session.
 - Usage: the side panel shows cost, context fill and a usage limit once Claude Code reports
   one.
 

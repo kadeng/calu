@@ -1,0 +1,36 @@
+ calu  beta   ◑ ESCALATED   1 needs you   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main 1!
+▌ you  scenario: control                                                            ▏ NEEDS YOU (1)
+                                                                                    ▏ >#118 main Bash             0:06
+  Coloured: ␛[31mred␛[0m. Title: ␛]0;owned␇. Overwritten: harmless␍DANGER. Erased:  ▏    Escalated by the rule-based…
+  abc␈␈␈xyz. Override: ⟦RLO⟧txt.exe⟦PDF⟧. End of the text.                          ▏
+                                                                                    ▏ AGENTS (1)
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏ >main         waits for you
+  ESCALATE  Bash   Fake summary of Tool call by the main agent: `Ba…  waiting 0:06  ▏   no subagents
+    reason  Escalated by the rule-based fake checker (calu:escalate).               ▏
+                                                                                    ▏ QUEUE (0)
+                                                                                    ▏
+                                                                                    ▏ HONESTY (0)  track
+                                                                                    ▏  no trusted commit · /trust ce…
+                                                                                    ▏  every file counts as unreview…
+                                                                                    ▏
+                                                                                    ▏ SESSION
+                                                                                    ▏  cost     no turn has ended yet
+                                                                                    ▏  context  21% of 200k tokens
+                                                                                    ▏           ━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏  5h       37% used
+                                                                                    ▏           ━━━━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+ ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
+ │ DECISION 1 of 1  ·  main  ·  Bash  ·  #118                        waiting 0:06 │ ▏
+ │   echo safe ␛[2K␍rm -rf build  # calu:escalate ⟦RLO⟧gnp.sh                     │ ▏
+ │   Stopped: Escalated by the rule-based fake checker (calu:escalate).           │ ▏
+ │   a,a allow · d,d deny · w,w detail · n,n note                                 │ ▏
+ ╰────────────────────────────────────────────────────────────────────────────────╯ ▏
+   Allow    Deny    Deny with a note    Show everything                             ▏
+ to main · next turn · tab changes
+ >
+ a,a allow   d,d deny   w,w detail   n,n note   esc esc interrupt   pgup/pgdn scroll   ^p palette   f1 help

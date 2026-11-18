@@ -1,0 +1,36 @@
+ calu  delta   ◒ ESCALATED   1 needs you   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main 1!
+▌ you  scenario: levels                                                             ▏ NEEDS YOU (1)
+                                                                                    ▏ >#109 main Bash             0:11
+  Done.                                                                             ▏    Escalated by the rule-based…
+                                                                                    ▏
+  ── turn 1 ─────────────────────────────────────────────────────────────────────   ▏ AGENTS (1)
+                                                                                    ▏ >main         waits for you
+▌ you  second                                                                       ▏   no subagents
+                                                                                    ▏
+  Done.                                                                             ▏ QUEUE (0)
+                                                                                    ▏
+  ── turn 2 ─────────────────────────────────────────────────────────────────────   ▏ HONESTY (0)  track
+                                                                                   ▄▏  baseline efa8e4e0 · by user
+  ·· above: stored history · inputs, steps and answers, without thinking and diffs  ▏  1 unreviewed file
+                                                                                    ▏
+▌ you  take the other road                                                          ▏ SESSION
+                                                                                    ▏  cost     no turn has ended yet
+  ┊ thinking                                                                        ▏  context  21% of 200k tokens
+  ┊ The user wants another greeting. The function is in greeter.py.                 ▏           ━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏  5h       37% used
+  I will rework the greeting and run the tests.                                     ▏           ━━━━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏
+  Plan                                                                              ▏
+                                                                                    ▏
+                                                       ▼ scrolled up · End follows  ▏
+ ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
+ │ DECISION 1 of 1  ·  main  ·  Bash  ·  #109                        waiting 0:11 │ ▏
+ │   git push origin main  # calu:escalate                                        │ ▏
+ │   Stopped: Escalated by the rule-based fake checker (calu:escalate).           │ ▏
+ │   a,a allow · d,d deny · w,w detail · n,n note                                 │ ▏
+ ╰────────────────────────────────────────────────────────────────────────────────╯ ▏
+   Allow    Deny    Deny with a note    Show everything                             ▏
+ to main · next turn · tab changes
+ >
+ a,a allow   d,d deny   w,w detail   n,n note   esc esc interrupt   pgup/pgdn scroll   ^p palette   f1 help

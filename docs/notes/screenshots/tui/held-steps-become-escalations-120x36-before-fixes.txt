@@ -1,0 +1,36 @@
+ calu  alpha   ◑ ESCALATED 1:09   7 need you   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main   Review the pars… 1! *   Run the unit te… 1! *   Deploy to stagi… *   Publish the pac… 1! *   Profile the sta… …
+                                                                                   ▁▏ NEEDS YOU (7)
+  Ten jobs at the same time, one subagent each.                                     ▏ >1 Choose th… Question      1:05
+                                                                                    ▏    Which colour scheme should …
+  check…    Agent  Review the parser                                                ▏  2 Audit the… Bash          0:01
+    agent   Review the pars…: waits for you, 1 step, last Bash                      ▏    The check of this step ende…
+  check…    Agent  Run the unit tests                                               ▏  3 Run the u… Bash          0:01
+    agent   Run the unit te…: waits for you, 1 step, last Bash                      ▏    The check of this step ende…
+  check…    Agent  Deploy to staging                                                ▏  4 Publish t… Bash          0:01
+    agent   Deploy to stagi…: checking Bash, 2 steps, last Bash                     ▏    The check of this step ende…
+  check…    Agent  Publish the package                                              ▏  5 Review th… Bash          0:01
+    agent   Publish the pac…: waits for you, 2 steps, last Bash                     ▏    The check of this step ende…
+  check…    Agent  Profile the start-up                                             ▏  6 Migrate t… Bash          0:01
+    agent   Profile the sta…: checking Bash, 1 step, last Bash                      ▏    Escalated by the rule-based…
+  check…    Agent  Update the changelog                                             ▏  7 Translate… Bash          0:01
+    agent   Update the chan…: checking Bash, 1 step, last Bash                      ▏    The check of this step ende…
+  check…    Agent  Choose the colour scheme                                         ▏
+    agent   Choose the colo…: waits for you, 1 step, last AskUserQuestion           ▏ AGENTS (11)  alt+←/→
+  check…    Agent  Audit the dependencies                                           ▏ >main         checking Agent
+    agent   Audit the depen…: waits for you, 1 step, last Bash                      ▏  Review the … waits for you
+  check…    Agent  Migrate the database schema                                      ▏  Run the uni… waits for you
+    agent   Migrate the dat…: waits for you, 1 step, last Bash                      ▏  Deploy to s… checking Bash
+  check…    Agent  Translate the error messages into German, French and Spanish, …  ▏  Publish the… waits for you
+    agent   Translate the e…: waits for you, 1 step, last Bash                      ▏  Profile the… checking Bash
+ ╭────────────────────────────────────────────────────────────────────────────────╮ ▏  Update the … checking Bash
+ │ QUESTION 1 of 7  ·  Choose the colo…  ·  AskUserQuestion          waiting 1:05 │ ▏  Choose the … waits for you
+ │   Which colour scheme should the report use?                                   │ ▏  Audit the d… waits for you
+ │    1 ( ) Light  Dark text on a white page.                                     │ ▏  Migrate the… waits for you
+ │    2 ( ) Dark  Light text on a dark page.                                      │ ▏  Translate t… waits for you
+ │   1-9 choose · o,o own answer · enter send · alt+d decline · w,w detail        │ ▏
+ ╰────────────────────────────────────────────────────────────────────────────────╯ ▏ QUEUE (0)
+   1 Light    2 Dark    own answer    send    decline                               ▏
+ to main · next turn · tab changes
+ >
+ 1-9 choose   o,o own answer   enter send   alt+←/→ agent   f3 side question   ^p palette   f1 help

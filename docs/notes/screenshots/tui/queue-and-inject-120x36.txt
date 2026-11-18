@@ -1,0 +1,36 @@
+ calu  gamma   ◒ tool call 0:01   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main
+▌ you  scenario: queue                                                              ▏ NEEDS YOU (0)
+                                                                                    ▏
+  Five steps of three seconds each.                                                 ▏ AGENTS (1)  alt+←/→
+                                                                                    ▏ >main         tool call Bash
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏   no subagents
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.       3.0s  ▏
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.    running  ▏ QUEUE (3)
+                                                                                    ▏  queued → main first queued
+                                                                                    ▏  queued → main second queued
+                                                                                    ▏  next   → main into the running…
+                                                                                    ▏  a sent message cannot be with…
+                                                                                    ▏
+                                                                                    ▏ SESSION
+                                                                                    ▏  cost     no turn has ended yet
+                                                                                    ▏  context  21% of 200k tokens
+                                                                                    ▏           ━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏  5h       37% used
+                                                                                    ▏           ━━━━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+▌ you · waiting (next turn)  first queued                                           ▏
+▌ you · waiting (next turn)  second queued                                          ▏
+▌ +1 more waiting · f2 lists them                                                   ▏
+ to main · into the running turn · read after the running tool calls · tab changes
+ >
+ esc esc interrupt   tab send mode   pgup/pgdn scroll   f3 side question   f4 git   ^p palette   f1 help   ^d detach

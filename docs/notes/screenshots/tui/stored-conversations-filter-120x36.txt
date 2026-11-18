@@ -1,0 +1,36 @@
+ calu  demo   ◐ running   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main                                                                                                 alt+←/→ switches
+▌ you  scenario: stop                                                               ▏ NEEDS YOU (0)
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+  🔎 login
+
+
+  2026-11-18 21:34  scenario: echo flaky login test, part 33
+  stopped · e837637d-cc8f-4cf4-9b8e-9a1c215248a7
+  2026-11-18 21:33  scenario: echo flaky login test, part 25
+  stopped · 80f97e9b-4687-462d-8119-a93e8a2a140c
+  2026-11-18 21:33  scenario: echo flaky login test, part 17
+  stopped · 459bf76f-86ff-4fa2-90cf-142b245c3bed
+  2026-11-18 21:33  scenario: echo flaky login test, part 9
+  stopped · 6ea01113-37de-4fb7-a12a-e614935e5688
+  2026-11-18 21:33  scenario: echo flaky login test, part 1
+  stopped · ddf7a613-97a2-4351-be92-3290a7b59dc4
+▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+                                                                                    ▏
+ to main · next turn · tab changes
+ >
+ esc esc interrupt   tab send mode   pgup/pgdn scroll   f3 side question   f4 git   ^p palette   f1 help   ^d detach

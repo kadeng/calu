@@ -1,0 +1,36 @@
+
+  Step waiting for your decision  ·  Deploy to stagi…  ·  Bash                                           waiting 0:30
+
+  ── why it was stopped ─────────────────────────────────────────────────────────────────────────────────────────────
+  Escalated by the rule-based fake checker (calu:escalate).
+
+  ── the step as the checker saw it ─────────────────────────────────────────────────────────────────────────────────
+  Tool call by the subagent fake-tool-4: Bash
+  Working directory: /work/alpha
+  Command:
+   ./deploy.sh job-3  # calu:escalate
+
+  ── checker runs (1) ───────────────────────────────────────────────────────────────────────────────────────────────
+  command v3  rule-based-checker  ESCALATE  178 in / 26 out tokens, 16 ms
+    Escalated by the rule-based fake checker (calu:escalate).
+
+  ── the conversation as the checker saw it ─────────────────────────────────────────────────────────────────────────
+  Turn 1
+
+  User:
+
+   scenario: many-subagents
+
+  Steps:
+
+   • Narration (subagent fake-tool-4): Narrated: Starting: Deploy to staging.
+   • [Bash, ESCALATE] (subagent fake-tool-4) Fake summary of Tool call by the subagent fake-tool-4: Bash.
+
+  ── chat summary (the older turns, folded) ─────────────────────────────────────────────────────────────────────────
+  Chat summary
+
+  No turns have been folded into this summary yet.
+
+
+
+ a,a allow · d,d deny · n note first · w or esc back · ↑↓ pgup pgdn scroll · typing returns to the input

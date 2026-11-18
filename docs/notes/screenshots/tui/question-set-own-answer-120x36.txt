@@ -1,0 +1,36 @@
+ calu  delta   ◑ ESCALATED 0:14   1 needs you   opus / low   Checkers decide   ctx 21%   5h 44%   attached
+  main 1!
+  link](data:text/html,x), a web link (https://example.org/docs) and a file,        ▏ NEEDS YOU (1)
+  greeter.py:3.                                                                     ▏ >#114 main Question         0:14
+                                                                                    ▏    Which checks should run bef…
+  Scripts and directions: Grüße, 你好, こんにちは, مرحبا بالعالم, שלום עולם,        ▏
+  👩‍💻🚀✅, á (combining), and a right-to-left override: ⟦RLO⟧evil⟦PDF⟧.              ▏ AGENTS (1)
+                                                                                    ▏ >main         waits for you
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏   no subagents
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏
+  PASS      Bash   Fake summary of Tool call by the main agent: `Bash`.             ▏ QUEUE (0)
+    error   ERROR: file not found: tests/missing                                    ▏
+  PASS      Edit   Fake summary of Tool call by the main agent: `Edit`.             ▏ HONESTY (0)  track
+    error   String to replace not found in file.                                    ▏  baseline efa8e4e0 · by user
+                                                                                    ▏
+  That was the unusual content.                                                     ▏ SESSION
+                                                                                    ▏  cost     not reported
+  ── turn 6 ─────────────────────────────────────────────────────────────────────   ▏  context  21% of 200k tokens
+                                                                                    ▏           ━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+▌ you  more                                                                         ▏  5h       44% used
+                                                                                    ▏           ━━━━━━━━━╌╌╌╌╌╌╌╌╌╌╌
+  QUESTION  Ask    AskUserQuestion                                    waiting 0:14  ▏
+ ╭────────────────────────────────────────────────────────────────────────────────╮ ▏
+ │ QUESTION 1 of 1  ·  main  ·  AskUserQuestion  ·  #114             waiting 0:14 │ ▏
+ │    Checks ✓   Greeting ✓    2 of 2 answered                                    │ ▏
+ │   Which greeting should the function use from now on?                          │ ▏
+ │    1 ( ) Good day  Formal, works at any time of the day.                       │ ▏
+ │    2 ( ) Hello  The greeting the project started with.                         │ ▏
+ │    3 ( ) Hi  Short and informal.                                               │ ▏
+ │    o your answer: Moin                                                         │ ▏
+ │   enter sends: Checks: ruff, pytest · Greeting: Moin · 1-9 change              │ ▏
+ ╰────────────────────────────────────────────────────────────────────────────────╯ ▏
+   1 Good day    2 Hello    3 Hi    own answer    send    decline                   ▏
+ to main · next turn · tab changes
+ >
+ 1-9 choose   o,o own answer   enter send   esc esc interrupt   pgup/pgdn scroll   ^p palette   f1 help

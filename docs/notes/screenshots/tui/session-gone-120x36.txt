@@ -1,0 +1,36 @@
+ calu  demo   idle   opus / default   Checkers decide   ctx 32%   detached: the session ended or the connection broke
+  main   Review the gree… ✓ *   Run the tests ✓ *   Publish the pac… ✓ *   Check the links failed *  2▸
+▌ you  scenario: subagents                                                          ▏ NEEDS YOU (0)
+                                                                                    ▏
+  I will hand the review to a subagent.                                             ▏ AGENTS (6)  alt+←/→
+                                                                                    ▏ >main         idle
+  PASS      Agent  Fake review of a subagent result.                                ▏  Review the … completed
+    agent   Review the gree…: completed, 2 steps, last Grep                         ▏  Run the tes… completed
+                                                                                    ▏  Publish the… completed
+  Now the tests and the upload at the same time.                                    ▏  Check the l… failed
+                                                                                    ▏  Watch the d… completed bg
+  PASS      Agent  Fake review of a subagent result.                                ▏
+    agent   Run the tests: completed, 1 step, last Bash                             ▏ QUEUE (0)
+  PASS      Agent  Fake review of a subagent result.                                ▏
+    agent   Publish the pac…: completed, 2 steps, last Bash                         ▏ SESSION
+  PASS      Agent  Fake review of a subagent result.                                ▏  cost     not reported
+    error   The subagent stopped: the network is not reachable.                     ▏  context  32% of 200k tokens
+    agent   Check the links: failed, 1 step, last Bash                              ▏           ━━━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏  5h       44% used
+  The link check failed. I start a watcher in the background.                       ▏           ━━━━━━━━━╌╌╌╌╌╌╌╌╌╌╌
+                                                                                    ▏
+  PASS      Agent  Fake review of a subagent result.                                ▏
+    agent   Watch the deplo…: completed, 5 steps, last Bash, background             ▏
+                                                                                    ▏
+  The watcher runs in the background; I will report when it is done.                ▏
+                                                                                    ▏
+  ── turn 1 · 1 background task still runs ──────────────────────────────────────   ▏
+                                                                                    ▏
+  The background watcher finished: the deployment is healthy.                       ▏
+                                                                                    ▏
+  ── turn 2 ─────────────────────────────────────────────────────────────────────   ▏
+                                                           ▌
+                                                           ▌ the session closed the connection: the session ended or
+ not attached: nothing can be sent, the text is kept · /new▌ the connection broke
+ >                                                         ▌
+ /new session here   /running other sessions   alt+←/→ agent   pgup/pgdn scroll   ^p palette   f1 help   ^d leave

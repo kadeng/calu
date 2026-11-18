@@ -38,29 +38,29 @@ end that lacks a function by design says so in its own section.)
 
 | # | Case | V | P | T | W |
 |---|---|---|---|---|---|
-| C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | - | - | - | fixed 706b3b8 |
-| C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | - | - | - | fixed 706b3b8 |
-| C3 | A question of the agent: one choice, several choices, free text | - | - | - | fixed 706b3b8 |
-| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | - | - | fixed 706b3b8 |
-| C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | - | - | - | fixed 706b3b8 |
-| C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | - | - | - | fixed 706b3b8 |
-| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | - | - | fixed 706b3b8 |
-| C8 | Stop during text, during a command, with a decision open | - | - | - | fixed 706b3b8 |
-| C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | - | - | - | ok |
-| C10 | Supervision level to "everything waits" and back; changed from elsewhere | - | - | - | fixed 706b3b8 |
-| C11 | **A long session** (500+ items, 50+ turns): speed, scrolling, jump to latest, memory | - | - | - | fixed 706b3b8 |
-| C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | - | - | - | fixed 706b3b8 |
-| C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | - | - | - | ok (fork); undo: by design a fork |
-| C14 | Context usage and limits; before the first turn; when unknown | - | - | - | fixed 706b3b8 |
-| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - | - | - | ok |
-| C16 | Losing the session, the server, the database mid-turn; coming back | - | - | - | fixed 706b3b8 |
-| C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | - | - | - | fixed 706b3b8 |
-| C18 | Text meant to mislead: control characters, raw HTML, links with scripts | - | - | - | fixed 706b3b8 |
-| C19 | Checker instructions: read, change, save, a conflict with another editor | - | - | - | fixed 706b3b8 |
-| C20 | The checker context, and the context of one escalation | - | - | - | ok |
-| C21 | Honesty mode: switch, marks, review, trust | - | - | - | ok |
-| C22 | Settings: every kind of value, a refused value, one model for all roles, reset | - | - | - | fixed 706b3b8 |
-| C23 | First start: nothing installed, no server, no session, a locked credential (one password, once) | - | - | - | ok (no server, no session); rest n/a here |
+| C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C3 | A question of the agent: one choice, several choices, free text | - | - | fixed b1f47c4 fc2d361 | fixed 706b3b8 |
+| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | - | - | fixed b1f47c4; open (gate) | fixed 706b3b8 |
+| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C8 | Stop during text, during a command, with a decision open | - | - | ok | fixed 706b3b8 |
+| C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | - | - | ok | ok |
+| C10 | Supervision level to "everything waits" and back; changed from elsewhere | - | - | ok | fixed 706b3b8 |
+| C11 | **A long session** (500+ items, 50+ turns): speed, scrolling, jump to latest, memory | - | - | ok | fixed 706b3b8 |
+| C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | - | - | fixed b1f47c4 026bc78 | fixed 706b3b8 |
+| C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | - | - | fixed 602b9be | ok (fork); undo: by design a fork |
+| C14 | Context usage and limits; before the first turn; when unknown | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - | - | n/a here | ok |
+| C16 | Losing the session, the server, the database mid-turn; coming back | - | - | fixed b1f47c4 | fixed 706b3b8 |
+| C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | - | - | fixed 602b9be | fixed 706b3b8 |
+| C18 | Text meant to mislead: control characters, raw HTML, links with scripts | - | - | fixed 900355e b1f47c4 | fixed 706b3b8 |
+| C19 | Checker instructions: read, change, save, a conflict with another editor | - | - | fixed b1f47c4 602b9be | fixed 706b3b8 |
+| C20 | The checker context, and the context of one escalation | - | - | ok | ok |
+| C21 | Honesty mode: switch, marks, review, trust | - | - | ok | ok |
+| C22 | Settings: every kind of value, a refused value, one model for all roles, reset | - | - | n/a here | fixed 706b3b8 |
+| C23 | First start: nothing installed, no server, no session, a locked credential (one password, once) | - | - | ok; open (cli) | ok (no server, no session); rest n/a here |
 
 ## Sections (each owner extends its own)
 
@@ -73,6 +73,150 @@ round, which also runs C5, C6, C11 and C12 at scale.
 Not run in an IDE yet.
 
 ### C. Full-screen client and line client (`calu attach`)
+
+Run 2026-11-18 by an agent in a private tmux server (`tmux -L calutest`) on the host: the
+client in one pane, driven with `tmux send-keys` (keys, bracketed paste, SGR mouse sequences)
+and read with `tmux capture-pane`, at 120x36, 80x24, 60x20 and 200x50. No Claude Code and no
+model: `uitest/tui_server.py` (the scripted server of `fake_server.py` plus the scenarios
+`many-subagents`, `long`, `control` and `echo`) ran against a PostgreSQL of its own (container
+`calu-manual-tui`, port 55481), with calu's directories under a scratch directory
+(`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `CALU_PLACE_FILE=/nonexistent`) and
+seven demo projects (small git repositories). The setup was `calu setup --database server
+--no-password`: it asks for the owner's password and twice for the session password (blank
+here). Captures: `docs/notes/screenshots/tui/` (host name and paths replaced).
+
+    start it again:  tmux -L calutest new -d -s srv 'uv run python uitest/tui_server.py --insecure --max-sessions 20 </dev/null'
+                     calu start -p 'scenario: many-subagents'      (in a registered project directory)
+
+**The cases of the table above, in the full-screen client**
+
+| # | Steps | Expected | Result |
+|---|---|---|---|
+| C1 | `calu start -p hello` (scenario `tour`), 120x36 | streamed Markdown (list, code, table), thinking dimmed, one line per step with verdict, a reason under DENY and ESCALATE, `+1 -1` on the edit | ok. Fixed: the cost line said "no turn has ended yet" after a turn without a reported cost |
+| C2 | `w w`, `q`; `a a`; turn 2: `n n`, a note, `alt+d` | the detail shows reason, the step as the checker saw it, the checker runs, the conversation; the step line shows the user's note | fixed: the detail joined "Tool call …", "Working directory …" and "Command:" into one paragraph; under a denied step stood the session's sentence ("The user denied this step. Note from the user: …") instead of the note |
+| C3 | question with one choice (`2`, Enter); two questions (`1` `3` Enter, `o o` text Enter, Enter); `alt+d` | the card counts the answered questions; the step shows the answer | fixed: an answered question had a red `error` line with the session's text for Claude; a declined one was shown as ANSWERED; the footer said "enter send" while Enter went to the next question |
+| C4 | scenario `subagents`: `alt+→`, `/task`, the `all` tab; the background watcher outlives the turn | each subagent has its tab with head and task line; `/task` shows task and result; the follow-up turn starts by itself | fixed: a running Agent call had the badge `check…` and the main agent "checking Agent" (now no badge, `running`, "running N subagents"); the review of a subagent's result became its "last tool" ("last Agent"); "1 steps" |
+| C5 | scenario `many-subagents` (ten at once) at all four sizes; `ctrl+o`, `/agent migr`, click on a tab and on the marker | the selected tab is visible; one can see which agents wait | fixed: the row of tabs was cut at the right edge, so a selected or waiting tab further right was invisible. Now it shows the tabs around the selected one and counts the rest (`◂3`, `7▸!`); the side panel lists all eleven with their state |
+| C6 | the same: two subagents escalate at once, a third reaches an escalating command 4 s later, a fourth asks a question; decide them | see "Escalations in several subagents" below | fixed in the client: nothing said that the other eight subagents' commands waited for the open decisions (badge `check…`). Now: badge `held`, a line naming the decisions, "held by a decision" per agent, "N steps held" in the heading. Open in the gate: see below |
+| C7 | three open (`]`, `[`, `d d` on the second, `/allow #id`); a second client decides | each decided on its own; "decided elsewhere: denied" here | fixed: the card and the list numbered the items 1, 2, 3 while `/allow [id]` takes the escalation id, and `/allow 2` allowed the step on the card with the note "2". Ids are shown (`#94`), a number that is no open id decides nothing |
+| C8 | scenario `stop`: `esc esc` during streamed text (from a second client), during a command, with a decision open | the turn ends as interrupted; the text keeps what was streamed; the open step is CANCELLED | ok |
+| C9 | scenario `queue`: two messages, Tab, a third into the running turn | QUEUE lists three; the injected one appears between two steps; the others start their turns | ok |
+| C10 | `/level Confirm edits`, a turn, `/level Checkers decide` | the edit waits with its diff on the card, reason "Auto-escalation for edits is on" | ok. A change from another client: only the unit test (`auto_escalate.changed`) |
+| C11 | scenario `long` (60 turns, 840 items): attach, PageUp x30, End, `/search needle-03` | see "Long sessions" below | ok |
+| C12 | 15 running sessions in seven directories, 40 stored conversations; `/running`, `/running alpha`, `/switch`, `/rename`, `/sessions` + typing | see "Many sessions" below | fixed: `/running` took two lines of UUIDs per session; no way to name a session; the client of `calu start` asked for an admin password nobody had chosen; a session stopped and started from a client had no address any more (026bc78) |
+| C13 | `/fork text`, `/rewind 3 text`, `/fork` in the branch | the new session shows the inherited turns as stored history, then its own | fixed: the client had no undo (`/rewind <turn>`, 602b9be); the line above the inherited turns promised steps that a fork does not get |
+| C14 | scenarios `tour`, `nousage`; `/usage` | context and five-hour limit in status line and panel; "not known yet" without | ok after the cost line (C1) |
+| C15 | - | - | n/a here: the terminal clients send no images (nothing in `calu.tui` or `calu.attach` attaches one) |
+| C16 | stop the server mid-session; `docker pause` the database for 12 s mid-turn | the client says that the session is gone and what to do; the turn goes on after the database is back | fixed: "detached: no reason given", the footer still offered "enter send", nothing named `/new` or `/running`. The paused database only made the step take longer; nothing told the user why |
+| C17 | 60x20, 80x24, 120x36, 200x50; `/theme calu-light`; scenario `edge` (3,000-character line, 300-line code block, 60,000-character result) | nothing cut without a sign, the keys in the footer are the ones that matter | fixed: the footer dropped "esc esc interrupt" and "enter send" before "f3 side question" on a narrow screen, and offered `alt+←/→` with a single agent. At 200 columns the side panel stays 36 wide (see suggestions) |
+| C18 | scenario `control` (escape sequences, carriage return, backspace, bidirectional override in text, command and result), `edge`, `bidi` | every such character is visible, none is obeyed | fixed: a right-to-left override reached the terminal as it was (seen in the capture of `edge`). Both clients now replace what a terminal would obey (`calu.controls`): `␛[2K␍rm -rf build ⟦RLO⟧gnp.sh` |
+| C19 | `/checkers`, `e`, type, `ctrl+s`; again while `calu checker set` stores another version | "saved: command is now version 2"; the second save is refused | fixed: the refusal said "press r, then edit again" (in the editor `r` is a letter); it now names the keys in order |
+| C20 | `/context`; `w w` on a card | the folded summary, the recent turns as narrated; the same for one escalation | ok |
+| C21 | `/honesty track`, `/honesty`, `t` `y`, `r`, `m` | the mode is stored (asks only when it weakens), the baseline is the trusted commit, the review runs | ok |
+| C22 | `/model sonnet`, `/effort high`, `/restart opus low`, `/level`, `/theme`, `/bell` | each applies and says when | ok. n/a here: there is no settings form in the terminal (the web interface and the editors have it) |
+| C23 | `calu attach` without a session; two sessions in one directory; `/new` without a server | a sentence that says what to do | ok for `/new` ("no `calu serve` answered for … start it in a terminal with `calu serve`"). Open (cli): see below. A credential with a password was not typed by hand; `tests/unit/test_tui_admin.py` covers the prompt |
+
+**Terminal-specific cases**
+
+| Case | Result |
+|---|---|
+| every slash command of `commands.py` once | ok: `/allow /deny /answer /why /agent /inject /to /btw /comment /interrupt /model /effort /restart /level /usage /state /context /checkers /honesty /trust /trust-file /honesty-review /sessions /history /log /clear-mark /start /running /switch /rename /new /fork /rewind /stop /shutdown /thinking /diff /git /search /copy /export /task /hold /bell /theme /help /quit`. Fixed on the way: `/history` padded the tool column with colons (`Read::`); the shutdown question told a served session to run `calu run` |
+| screens: card, detail, checkers and its editor, honesty, diff, sessions, running, history, help with filter, palette, search, export, copy, task, state, usage, log, password | ok; each has a line of keys at the bottom and Escape or `q` leaves it |
+| keys of the key line against keys that work | fixed: "enter send" stood next to "enter show its tab" in the side panel; "enter send" during a set of questions; `alt+←/→` with one agent |
+| mouse: tab, marker of hidden tabs, Allow twice | ok (SGR sequences sent into the pane) |
+| resize while text streams (200x50 → 60x20 → 80x24) | ok: laid out again within a second, the stream goes on |
+| `NO_COLOR=1` | ok: Textual draws shades of grey, no hue; what waits is still bold |
+| `TERM=dumb`, a pipe | ok: the line client |
+| paste of three lines with CJK, emoji and a combining mark; paste of 2,000 characters; `alt+e` | ok: the lines keep their columns; the long paste is `[pasted 1 line #1]` until `alt+e` |
+| detach mid-turn and attach again; two clients on one session | ok: the stream is replayed and goes on; an interrupt or a decision of one client shows in the other |
+| `/switch`, `/running`, `/new`, `/fork`, `/rewind` against the scripted server | ok after the fixes of C12 and C13 |
+| line client: every command of `/help` through a pipe, with wrong arguments | fixed (900355e, fc2d361): control characters; an escalation named `calu resolve` instead of `/why`, `/allow`, `/deny`; errors ended in "(code -32000)"; a missing file was "[Errno 2] …"; a client that fell behind during its first request ended with a traceback instead of connecting again |
+
+**Many subagents (C5).** With ten subagents the side panel is the overview: every agent with
+one state word (running, waits for you, held by a decision, completed, failed), and NEEDS YOU
+with one line per open decision. The row of tabs holds four to eight of the eleven tabs,
+depending on the width; the markers say how many are cut off on each side and whether one of
+them waits. `ctrl+o` or `/agent <part of a name>` goes to any of them; a click on a marker
+goes to the nearest hidden tab that waits. In the main agent's tab each Agent call has a line
+with its subagent's state.
+
+**Escalations in several subagents (C6).** What calu does, read from `calu.escalations` and
+`calu.gate` and seen in the run: while an escalation is open or being opened, every other
+tool call of the session that needs a check waits in the gate (`EscalationDesk.hold`), for at
+most 300 s (`HOLD_BUDGET_S`), after which it becomes an escalation itself (source "held"). A
+question of the agent holds nothing and is not held. That is what README and CALU_GUIDE
+("A violation freezes the agent") say. So an
+escalation in one subagent does not stop the other subagents' text and thinking, and it does
+stop their next command or edit: after about 30 s all ten subagents were waiting. A second
+escalation appears next to the first in three ways: two checks that ran at the same moment
+(both cards, decided in either order), a question, or a held step after the first decision.
+
+Open, in the gate (not changed here): when the last holding decision is made, all held steps
+are checked at the same time. If one of them escalates, `StepGate.last_look` turns the
+approvals of the others into escalations at once (reason "The check of this step ended with
+PASS. Before the step could start, an escalation that is being opened came up …") instead of
+holding them again. In one run that put seven cards in front of the user for `make` steps the
+checker had passed (capture `held-steps-become-escalations-120x36-before-fixes.txt`); in
+another run of the same scenario the same steps were held again, as the documents describe.
+Which of the two happens depends on the order in which the checks finish.
+
+**Long sessions (C11).** 60 turns, 840 blocks. Measured on this machine (16 cores, other work
+running): `calu --version` 3.5 s under load and 2.0 s without, nearly all of it imports
+(`pydantic_ai` 1.1 s, `claude_agent_sdk` 0.6 s), so every command pays it; attach to first
+paint 2.0 s, to the last line of the long session 2.25 s (0.3 s more than for a session of one
+turn); resident memory 166 MB attached to a one-turn session, 187 to 190 MB with the long one;
+thirty PageUp in 0.4 s; `/search` finds ten matches at once; while scrolled up new output
+does not move the view and End follows again.
+
+**Many sessions (C12).** `/running` lists one line per session, those with open decisions
+first, and filters by a text (`/running alpha`); `/switch` takes the beginning of an id or of
+a name; `/rename` names the attached session, and the status line, `/running` and `calu
+sessions` show the name. `/sessions` (stored conversations of the directory) is a list that
+filters while typing; it now leaves out conversations in which nothing was said and asks for
+200 instead of 50.
+
+**Undo and fork (C13).** `/fork [message]` copies the whole conversation; `/rewind <turn>
+[message]` branches off before a turn. Both need `calu serve` and switch the client. The new
+session shows the inherited turns as stored history (inputs and answers, no steps), a line
+that says so, then its own turns; a fork of a branch works the same. Files that later turns
+changed are not changed back.
+
+**Open, ranked**
+
+1. Gate: held steps turn into escalations when one of them escalates (above). Needs the
+   owner's decision: hold them again instead, or document the behaviour.
+2. `calu` start-up time: 2 to 3.5 s of imports before any command does anything (`calu.cli`
+   imports the checkers, Pydantic AI and the Agent SDK for `calu attach` and `calu --version`
+   too). Needs lazy imports in `calu.cli`.
+3. `calu attach` without a session prints "calu: CliError: no running session …" and names
+   `calu run`, not `calu start`; with two sessions in the directory it lists two ids without
+   state, name or age. In `calu.cli`.
+4. A conversation that was stopped during its first turn has no input in the database (the
+   input is stored with the finished turn), so `/sessions` and `calu list-sessions` cannot
+   offer it.
+5. `/history` lists steps only: no turns, no inputs, and a failed call looks like a passed one.
+6. `/search` looks at the lines as shown: a command is found only through the checker's
+   summary, not by its own text, unless the step is expanded.
+7. `end` of a session row revokes its client tokens; whether a client that stays connected
+   over `/stop` and `/start` can reconnect with its token in a setup with tokens was not run
+   (this run used `--insecure`).
+
+**Suggestions (taste, not changed)**
+
+- Widen the side panel on a wide terminal (it is 36 columns at 200; `panel_width` in
+  `tui.toml` exists, the default could follow the width).
+- A key that clears the whole input: `ctrl+u` removes one displayed line of a long text, and
+  Escape with text in the input starts the interrupt.
+- `/state` could say that a session is a fork or a branch, and of which conversation.
+- `/sessions` could show a session's name next to its first input.
+- `/export` writes into the project directory; the state directory would keep the working
+  tree clean.
+- After a refused `/to <agent> <text>` the text stays in the input without the command.
+- The line client prints every state change (`[checking]`, `[running]`, `[tool_call]`): three
+  lines per step that say little.
+- The status word for an open question is ESCALATED; "QUESTION" would match the card.
+- The notice that the session closed the connection covers the right half of the line that
+  says what to do, for a few seconds.
 
 ### D. Web interface (`calu web`)
 

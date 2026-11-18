@@ -1,0 +1,50 @@
+ calu  alpha   ◐ ESCALATED 0:28   3 need you   opus / default   Checkers decide   ctx 21%   5h 37%   attached
+  main   Review the pars… *   Run the unit te… *   Deploy to stagi… 1! *   Publish the pac… 1! *   Profile the sta… *   Update the chan… *   Choose the colo… 1! *   Audit the depen… *  3▸
+▌ you  scenario: many-subagents                                                                                                                                     ▏ NEEDS YOU (3)  1 step held
+                                                                                                                                                                    ▏ >#115 Deploy t… Bash        0:28
+  Ten jobs at the same time, one subagent each.                                                                                                                     ▏    Escalated by the rule-based…
+                                                                                                                                                                    ▏  #116 Publish … Bash        0:28
+            Agent  Review the parser                                                                                                                       running  ▏    Escalated by the rule-based…
+    agent   Review the pars…: running                                                                                                                               ▏  #117 Choose t… Question    0:22
+            Agent  Run the unit tests                                                                                                                      running  ▏    Which colour scheme should …
+    agent   Run the unit te…: running                                                                                                                               ▏
+            Agent  Deploy to staging                                                                                                                       running  ▏ AGENTS (11)  alt+←/→
+    agent   Deploy to stagi…: waits for you, 1 step, last Bash                                                                                                      ▏ >main         running 10 subage…
+            Agent  Publish the package                                                                                                                     running  ▏  Review the … running
+    agent   Publish the pac…: waits for you, 1 step, last Bash                                                                                                      ▏  Run the uni… running
+            Agent  Profile the start-up                                                                                                                    running  ▏  Deploy to s… waits for you
+    agent   Profile the sta…: running                                                                                                                               ▏  Publish the… waits for you
+            Agent  Update the changelog                                                                                                                    running  ▏  Profile the… running
+    agent   Update the chan…: running                                                                                                                               ▏  Update the … running
+            Agent  Choose the colour scheme                                                                                                                running  ▏  Choose the … waits for you
+    agent   Choose the colo…: waits for you, 1 step, last AskUserQuestion                                                                                           ▏  Audit the d… running
+            Agent  Audit the dependencies                                                                                                                  running  ▏  Migrate the… held by a decision
+    agent   Audit the depen…: running                                                                                                                               ▏  Translate t… running
+            Agent  Migrate the database schema                                                                                                             running  ▏
+    agent   Migrate the dat…: held by a decision, 1 step, last Bash                                                                                                 ▏ QUEUE (0)
+            Agent  Translate the error messages into German, French and Spanish, keeping the placeholders                                                  running  ▏
+    agent   Translate the e…: running                                                                                                                               ▏ HONESTY (0)  track
+                                                                                                                                                                    ▏  no trusted commit · /trust ce…
+                                                                                                                                                                    ▏  every file counts as unreview…
+                                                                                                                                                                    ▏
+                                                                                                                                                                    ▏ SESSION
+                                                                                                                                                                    ▏  cost     no turn has ended yet
+                                                                                                                                                                    ▏  context  21% of 200k tokens
+                                                                                                                                                                    ▏           ━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                                                                                                    ▏  5h       37% used
+                                                                                                                                                                    ▏           ━━━━━━━╌╌╌╌╌╌╌╌╌╌╌╌╌
+                                                                                                                                                                    ▏
+                                                                                                                                                                    ▏
+                                                                                                                                                                    ▏
+                                                                                                                                                                    ▏
+                                                                                                                                                                    ▏
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮ ▏
+ │ DECISION 1 of 3  ·  Deploy to stagi…  ·  Bash  ·  #115                                                                                            waiting 0:28 │ ▏
+ │   ./deploy.sh job-3  # calu:escalate                                                                                                                           │ ▏
+ │   Stopped: Escalated by the rule-based fake checker (calu:escalate).                                                                                           │ ▏
+ │   a,a allow · d,d deny · w,w detail · n,n note · ] next · the second press confirms, any other key types                                                       │ ▏
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ▏
+   Allow    Deny    Deny with a note    Show everything                                                                                                             ▏
+ to main · next turn · tab changes
+ >
+ a,a allow   d,d deny   w,w detail   n,n note   esc esc interrupt   tab send mode   alt+←/→ agent   pgup/pgdn scroll   f3 side question   f4 git   f2 panel   ^p palette   f1 help   ^d detach

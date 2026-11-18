@@ -1,0 +1,24 @@
+ calu  alpha   ◓ ESCALATED 0:25   3 need you   opus / default   Checkers decide
+  main   Review the pars… *   Run the unit te… *  9▸!        alt+←/→ · f2 panel
+            Agent  Profile the start-up                                running
+    agent   Profile the sta…: running
+            Agent  Update the changelog                                running
+    agent   Update the chan…: running
+            Agent  Choose the colour scheme                            running
+    agent   Choose the colo…: waits for you, 1 step, last AskUserQuestion
+            Agent  Audit the dependencies                              running
+    agent   Audit the depen…: running
+            Agent  Migrate the database schema                         running
+    agent   Migrate the dat…: held by a decision, 1 step, last Bash
+            Agent  Translate the error messages into German, French …  running
+    agent   Translate the e…: running
+ ╭────────────────────────────────────────────────────────────────────────────╮
+ │ DECISION 1 of 3  ·  Deploy to stagi…  ·  Bash  ·  #115        waiting 0:25 │
+ │   ./deploy.sh job-3  # calu:escalate                                       │
+ │   Stopped: Escalated by the rule-based fake checker (calu:escalate).       │
+ │   a,a allow · d,d deny · w,w detail · n,n note · ] next                    │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+   Allow    Deny    Deny with a note    Show everything
+ to main · next turn · tab changes
+ >
+ a,a allow   d,d deny   w,w detail   n,n note   ^p palette   f1 help
