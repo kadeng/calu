@@ -1601,6 +1601,17 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   `calu checker`, `calu rules`, `calu honesty` and `calu web` ask for the admin password and
   log in as that role; the full-screen client does the same when you save a checker's
   instructions or change `honesty.mode`. The password is typed each time and stored nowhere.
+  Before one of these commands changes anything it says on stderr where the change goes:
+  `changing settings in db.example:5432/calu as calu_admin`. The database is chosen in this
+  order: the login in `/var/lib/calu/database.json` (`sudo calu setup --no-password`), a
+  `calu_admin` entry of your store that needs no password, then your `admin` or `operator`
+  entry. If your store holds both `admin` and `operator` and they name different databases
+  (your own setup and a shared one), the command changes nothing, prints both and asks you
+  to repeat it with `--database admin` or `--database operator`:
+
+  ```bash
+  calu config set claude.model claude-sonnet-4-5 --database operator
+  ```
   The role changes settings and reads everything; it cannot change the schema or create
   logins. After an upgrade, run `sudo calu setup` once so that the role gets its password.
 - **Checking the arrangement before a session.** `calu doctor --sudo [DIR]` (as root: `calu

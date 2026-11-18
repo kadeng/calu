@@ -38,29 +38,29 @@ end that lacks a function by design says so in its own section.)
 
 | # | Case | V | P | T | W |
 |---|---|---|---|---|---|
-| C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C3 | A question of the agent: one choice, several choices, free text | - | - | fixed b1f47c4 fc2d361 | fixed 706b3b8 |
-| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | - | - | fixed b1f47c4; open (gate) | fixed 706b3b8 |
-| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C8 | Stop during text, during a command, with a decision open | - | - | ok | fixed 706b3b8 |
-| C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | - | - | ok | ok |
-| C10 | Supervision level to "everything waits" and back; changed from elsewhere | - | - | ok | fixed 706b3b8 |
-| C11 | **A long session** (500+ items, 50+ turns): speed, scrolling, jump to latest, memory | - | - | ok | fixed 706b3b8 |
-| C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | - | - | fixed b1f47c4 026bc78 | fixed 706b3b8 |
-| C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | - | - | fixed 602b9be | ok (fork); undo: by design a fork |
-| C14 | Context usage and limits; before the first turn; when unknown | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - | - | n/a here | ok |
-| C16 | Losing the session, the server, the database mid-turn; coming back | - | - | fixed b1f47c4 | fixed 706b3b8 |
-| C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | - | - | fixed 602b9be | fixed 706b3b8 |
-| C18 | Text meant to mislead: control characters, raw HTML, links with scripts | - | - | fixed 900355e b1f47c4 | fixed 706b3b8 |
-| C19 | Checker instructions: read, change, save, a conflict with another editor | - | - | fixed b1f47c4 602b9be | fixed 706b3b8 |
-| C20 | The checker context, and the context of one escalation | - | - | ok | ok |
-| C21 | Honesty mode: switch, marks, review, trust | - | - | ok | ok |
-| C22 | Settings: every kind of value, a refused value, one model for all roles, reset | - | - | n/a here | fixed 706b3b8 |
-| C23 | First start: nothing installed, no server, no session, a locked credential (one password, once) | - | - | ok; open (cli) | ok (no server, no session); rest n/a here |
+| C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | - | fixed 30554a1 | fixed b1f47c4 | fixed 706b3b8 |
+| C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | - | fixed 30554a1 5dfb6b6 | fixed b1f47c4 | fixed 706b3b8 |
+| C3 | A question of the agent: one choice, several choices, free text | - | ok | fixed b1f47c4 fc2d361 | fixed 706b3b8 |
+| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | ok (background subagent: not run) | fixed b1f47c4 | fixed 706b3b8 |
+| C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | - | fixed 30554a1 c91feae | fixed b1f47c4 | fixed 706b3b8 |
+| C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | - | fixed 30554a1 c91feae | fixed b1f47c4; open (gate) | fixed 706b3b8 |
+| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | ok (decided in another client: not run) | fixed b1f47c4 | fixed 706b3b8 |
+| C8 | Stop during text, during a command, with a decision open | - | ok (during a command; the other two not run) | ok | fixed 706b3b8 |
+| C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | - | ok | ok | ok |
+| C10 | Supervision level to "everything waits" and back; changed from elsewhere | - | ok (changed from elsewhere: not run) | ok | fixed 706b3b8 |
+| C11 | **A long session** (500+ items, 50+ turns): speed, scrolling, jump to latest, memory | - | fixed 30554a1 | ok | fixed 706b3b8 |
+| C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | - | ok (10 running: the server's limit) | fixed b1f47c4 026bc78 | fixed 706b3b8 |
+| C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | - | ok; open (fork of a rewind) | fixed 602b9be | ok (fork); undo: by design a fork |
+| C14 | Context usage and limits; before the first turn; when unknown | - | ok | fixed b1f47c4 | fixed 706b3b8 |
+| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - | fixed c91feae (paste); limits by unit test | n/a here | ok |
+| C16 | Losing the session, the server, the database mid-turn; coming back | - | fixed 5dfb6b6; database loss not run | fixed b1f47c4 | fixed 706b3b8 |
+| C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | - | ok; open (long code line) | fixed 602b9be | fixed 706b3b8 |
+| C18 | Text meant to mislead: control characters, raw HTML, links with scripts | - | ok | fixed 900355e b1f47c4 | fixed 706b3b8 |
+| C19 | Checker instructions: read, change, save, a conflict with another editor | - | ok | fixed b1f47c4 602b9be | fixed 706b3b8 |
+| C20 | The checker context, and the context of one escalation | - | ok | ok | ok |
+| C21 | Honesty mode: switch, marks, review, trust | - | ok (mode switch); marks, review, trust not run | ok | ok |
+| C22 | Settings: every kind of value, a refused value, one model for all roles, reset | - | fixed c91feae | n/a here | fixed 706b3b8 |
+| C23 | First start: nothing installed, no server, no session, a locked credential (one password, once) | - | ok (no server, no session, locked credential); install not run | ok; open (cli) | ok (no server, no session); rest n/a here |
 
 ## Sections (each owner extends its own)
 
@@ -70,7 +70,59 @@ First and second run: see the reports summarised in `HANDOFF.md`; screenshots in
 round, which also runs C5, C6, C11 and C12 at scale.
 
 ### B. PyCharm plugin
-Not run in an IDE yet.
+
+Run 2026-11-18/19 by an agent in PyCharm 2026.3 (build 263.7307.206, Islands Dark, 1280x800)
+in the desktop container, driven by screenshot, click and keyboard, against
+`uitest/fake_server.py` in local mode (the plugin starts `calu ide` in `~/work/demo`). One short
+pass ran against a real Claude Code on Haiku (one prompt and `/cost`: an edit with its diff,
+thinking, cost and context usage arrived as with the scripted server). Screenshots of every
+state: `~/.cache/calu-uitest/share/pycharm1/` (not in the repository). How to repeat it:
+`uitest/README.md`, "Running the PyCharm plugin in the desktop". Fixes are in commit 30554a1
+unless another is named.
+
+What the first start showed (the plugin had never run in a window): it loaded and attached at
+once, and the flow new session → transcript → Allow worked. Wrong were: "New Session" asked
+for a first message in a dialog; a tool row showed the checker's summary instead of the
+command; chips, cards and rows looked like a form (plain buttons, flow layouts that cut long
+lines, an empty tab bar); a finished escalation and a user message were hard to tell apart;
+Markdown tables were shown as pipes; the terminal used a deprecated API.
+
+What the plugin does not have: a side-question panel; clickable file references in Claude's
+text; the "setup" page of the settings (`calu doctor` findings); enlarging an image of the
+transcript; file synchronisation for the SSH mode (decisions and wire shapes only).
+
+| # | Case | Status |
+|---|---|---|
+| C1 | `tour`: streamed Markdown (table, code), thinking, Read, Edit, commands, verdict chips, the checker's remark under a denied step | fixed: rows name the command, chips are badges, tables are tables; a click on the edit row opens the diff at the changed line, on the file name the file at that line |
+| C2 | denied command; escalation: Allow, Deny with a note, Why? | fixed: the card has a stripe, the step in a code box, the note field, buttons below; a decided card is one line with ALLOWED / DENIED and the note. An escalated edit showed only its file name: it now shows what is replaced and by what, with "Show Diff" (5dfb6b6). Why? opens "Escalation N.md" in an editor tab |
+| C3 | one choice (radio buttons), several choices (check boxes), two questions in one card, free text | ok |
+| C4 | the two subagents of `tour`: their tabs, task row, result | ok. A message to a subagent is refused with the reason in the composer ("runs in the foreground", "has finished"). The background subagent of `subagents` was not run |
+| C5 | `swarm`: ten subagents | fixed: the IDE's tab bar would scroll ten tabs out of sight; now chips that wrap, each with its state (running, finished, failed), "⚠" and bold for a decision that waits, "held" for a step calu holds back; beyond six tabs finished ones fold into "N finished" |
+| C6 | `swarm`: an escalation in the third subagent, the others keep working, then a second and a third | fixed: the header counts what waits; one line says "N decisions wait in other tabs" with "Show next" and "M steps held until you decide"; held tool rows carry a HELD chip. As measured in section D: after the first escalation every other subagent stops at its next checked step, so nine chips read "held" within seconds |
+| C7 | three open at once, decided in the order third, fifth, seventh; ten cards after the 300 s hold | ok: each card decides its own step; with ten open the strip stays one line (c91feae). A decision made in another client was not run here (the reducer's tests cover the event) |
+| C8 | Stop during a command (`queue`) | ok: "turn interrupted", the command row gets FAILED, the queued message is kept. During text and with a decision open: not run |
+| C9 | `queue`: two queued, one into the running turn | ok: "Queue" and "Send Now" replace "Send" while Claude works; waiting messages are listed above the composer; the injected one appears in the turn |
+| C10 | level to "Confirm edits": the next edit waits although the edit checker passed | ok. Changed from another client: not run |
+| C11 | `many`: 522 rows in one turn | fixed: one row is built per event instead of all rows per event. 4,000 renders: mean 0.65 ms, longest 31.5 ms; the IDE process 2.0 GB resident with the session open. The view follows the end, stops following when the user scrolls, "Jump to latest" returns. An expanded result of 60,000 characters shows the first 20,000 and says so |
+| C12 | ten running sessions (the server's limit of `--max-sessions`; twelve were refused) | ok: the menu lists them with state, directory and the first characters of the id (unnamed sessions of one directory share their title), a waiting one has a warning icon; typing filters; Rename gives a name |
+| C13 | fork from the second message; rewind to before the last message; the first message | ok: "fork of …" / "rewind of …" start, show the inherited turns under "Earlier in this conversation", the rewound message's text is back in the composer; rewind and fork are disabled on the first message. **open**: a fork (`/fork`) of the rewound session showed only the first inherited turn, not the turn made after the rewind; not investigated (the scripted runner starts its script again) |
+| C14 | context chip: "ctx –" before the first turn, percent and tokens after it; the click lists limits and cost | ok. `nousage` not run |
+| C15 | an image pasted from the clipboard | fixed (c91feae): the IDE's paste action never reached the key listener; the composer's paste now attaches the image, a thumbnail with a remove button appears. The limits (5 MiB, four, the types) are covered by `ImagesTest`, not by hand |
+| C16 | `pkill -f "calu ide"` mid-turn; the server stopped mid-turn | ok: "calu ide exited with code 143" with Restart bridge and Show log; after the restart the session is attached again with its transcript. Server stopped: "Reconnecting…", then "connection is lost", the list of sessions empties, a new session request waits with "Start calu server". fixed (5dfb6b6): the terminal's shell had no `~/.local/bin` on PATH, so the command `calu serve` failed; the command now names calu's file. Database loss: not run |
+| C17 | tool window 280 px and 520 px wide; Islands Dark and Islands Light; a line of 3,000 characters, a code block of 300 lines | ok. **open**: a line of a code block that is wider than the view is cut at the edge (no wrap, no scroll bar) |
+| C18 | `bidi`, raw HTML and a `javascript:` link (`edge`) | ok: control characters are shown as `⟦RLO⟧` in text, file names, commands and cards; HTML is shown as text; only http, https and mailto links open |
+| C19 | command checker: open, change, Ctrl+S (version 7 → 8); `calu checker set` from a shell, then a second save | ok: the second save is refused and a diff "Stored (version 9)" against "Yours" opens |
+| C20 | title action "Checker Context"; "Why?" on a card | ok: read-only Markdown documents in editor tabs. Without a session the action says so in the chat |
+| C21 | honesty chip and its menu | ok for the chip and the menu; a mode change, marks, review and trust were not run (the scripted checkers produce none) |
+| C22 | calu settings dialog: a switch, a choice, a list, the search, "Use one model for everything" with a preset | fixed (c91feae): the first round had a table with an input box; now sections, a control per kind, MODIFIED markers with Reset, search, scope, the Models and Checkers pages. A refused value and Reset: not run by hand |
+| C23 | no session attached; no server; a store with an admin password | ok: the cards name what is missing and offer the button. One password: the card "Unlock" opens one dialog; a blank and a wrong password are sent and refused by calu with a new prompt; the right one is kept in memory and used again after the bridge was killed and restarted (no second prompt). Installing uv and calu: not run (both are installed in the desktop) |
+| B1 | tool window: right stripe, icon, title actions | ok. The stripe icon sits under "More tool windows" until the window was opened once (the IDE's rule for plugins) |
+| B2 | notifications while the tool window is hidden; the status bar widget | fixed (c91feae): a notification stayed after its step was decided in the tool window. "calu: N waiting" in the status bar opens the tool window. Allow / Deny on the notification: shown, not clicked |
+| B3 | "Add Comment for Claude" (Ctrl+Alt+K) on a selection | ok in a normal editor: the comment arrives as "[User comment on `greeter.py`, line 3]" with the excerpt. In a diff: built, not run |
+| B4 | slash commands | ok: "/" lists calu's and Claude Code's commands, typing filters, Tab completes, `/model` offers its values, `/fork` forks; `/cost` ran against the real Claude Code |
+| B5 | "Open terminal with this command" | ok: a terminal tab "calu server" runs the tmux command (Reworked Terminal API) |
+| B6 | remote development (split mode) | **n/a here**: `./gradlew runIdeSplitMode -PlocalIde=/opt/pycharm` ran in the desktop (`uitest/pycharm-split.sh`). Both halves started and loaded the plugin without an error in their logs: the backend with `calu.shared` and `calu.backend` (`calu.frontend` excluded), the client with `calu.shared` and `calu.frontend`. The client then shows the "JetBrains Team Tools User Agreement", which only the owner can accept, so the tool window in the client, the RPC round trip, the password dialog and editors opened by the backend were not seen |
+| B7 | SSH mode and file synchronisation | not part of this round (a headless SSH server container comes next) |
 
 ### C. Full-screen client and line client (`calu attach`)
 
@@ -369,6 +421,14 @@ usability: it does not say to start `calu web` again). Older schema: E1.11.
 settings calu generates were read from the stand-in (deny-read list with `/etc/calu`, the
 user's `~/.config/calu` and `/var/lib/calu/state/<uid>/calu`; `failIfUnavailable`); whether
 it starts could not be run here. RDS: n/a here.
+
+**E6. Which database a settings command changes**: fixed (ITEM2). `calu config`, `calu
+checker` and `calu rules` in an account whose store held an `admin` entry of its own setup
+and an `operator` entry of the shared database changed the account's own database and did
+not say which. Now: the place file's login, then a password-free `calu_admin` entry, then
+the one stored entry; with both `admin` and `operator` naming different databases the
+command changes nothing and asks for `--database admin|operator`; every change is preceded
+by "changing settings in <host:port/dbname> as <role>" on stderr.
 
 **What Claude Code was started as, and who owns what**
 

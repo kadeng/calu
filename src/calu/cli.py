@@ -313,42 +313,159 @@ def _remember_admin_password(password: bytes | bytearray) -> None:
     _typed["admin"] = bytes(password).decode()
 
 
-def _admin_secret(store: CredentialStore) -> bytearray:
+_READ_ONLY_ACTIONS: dict[str, frozenset[str]] = {
+    "config": frozenset({"list", "get"}),
+    "checker": frozenset({"list", "show", "stats", "misses"}),
+    "rules": frozenset({"list"}),
+    "project": frozenset({"list"}),
+    "honesty": frozenset({"show", "trusted"}),
+}
+"""Per command that works with `_admin_secret`: its actions that only read. Every other action
+of these commands, and every other command, counts as a change and is announced on stderr
+(`_announce_change`)."""
+
+
+def _only_reads(args: argparse.Namespace | None) -> bool:
+    """Tell whether a settings command only reads the database.
+
+    Args:
+        args: The parsed arguments (`command`, `action`, `edit`), or None for a caller that
+            has none.
+
+    Returns:
+        True for the actions in `_READ_ONLY_ACTIONS` and for `calu summary` without
+        `--edit`; False for everything else, also where it is not known.
+    """
+    if args is None:
+        return False
+    command = getattr(args, "command", "")
+    if command == "summary":
+        return not getattr(args, "edit", False)
+    return getattr(args, "action", None) in _READ_ONLY_ACTIONS.get(command, frozenset())
+
+
+def _announce_change(login: Target) -> None:
+    """Say on stderr which database a settings command is about to change, and as which role.
+
+    A person can hold logins of several databases (an `admin` entry of an own setup, an
+    `operator` entry of a shared one, the place file of root's database). The line is what
+    tells them which one a change went to.
+
+    Args:
+        login: The login the command uses.
+    """
+    print(f"changing settings in {login.place} as {login.user}", file=sys.stderr)
+
+
+def _admin_secret(store: CredentialStore, args: argparse.Namespace | None = None) -> bytearray:
     """Return a login that may change settings, asking for what it needs (PLAN.md D213).
 
+    Without `--database` (`args.database` is None):
+
+        the place file holds a login        ──► that login (`sudo calu setup --no-password`,
+                                                D228)
         `calu_admin` stored here
-        without a password        ──► that entry (`calu setup --no-password`, D228)
-        `admin` stored here       ──► that entry (the owner login), with its password
-        only `operator` stored    ──► the login of `calu_admin` at the operator's database,
-                                      with the admin password typed now; nothing is stored
+        without a password                  ──► that entry (`calu setup --no-password`)
+        only `admin` stored                 ──► that entry (the owner login), with its password
+        only `operator` stored              ──► the login of `calu_admin` at the operator's
+                                                database, with the admin password typed now;
+                                                nothing is stored
+        `admin` and `operator` stored,
+          the same database (`Target.place`)──► the `admin` entry
+          different databases               ──► CliError that names both databases and asks
+                                                for `--database admin` or `--database operator`
+
+    With `--database admin` or `--database operator` the named entry is used as in the rows
+    "only ... stored", whatever else is stored.
+
+    Side effects: asks for the passwords of the entries it reads (both entries where both
+    are stored and none was chosen); prints the line of `_announce_change` to stderr unless
+    the command only reads (`_only_reads`).
 
     Args:
         store: The credential store.
+        args: The command's parsed arguments (`database`, and what `_only_reads` reads), or
+            None: no choice, and the command counts as a change.
 
     Returns:
         The login as the credential store would hold it; the caller wipes it.
 
     Raises:
-        CliError: If neither credential is stored.
+        CliError: If no usable credential is stored, the entry `--database` names is not
+            stored, or `admin` and `operator` name different databases and none was chosen.
         CredentialError: On a wrong password of a stored entry.
-        TargetError: If the operator entry holds no database login this version can read.
+        TargetError: If an entry that had to be read holds no database login this version
+            can read.
     """
+    login = _admin_login_for(store, getattr(args, "database", None))
+    if not _only_reads(args):
+        _announce_change(login)
+    return bytearray(login.dump())
+
+
+def _admin_login_for(store: CredentialStore, database: str | None) -> Target:
+    """Choose the login `_admin_secret` returns (the table there).
+
+    Args:
+        store: The credential store.
+        database: "admin", "operator" or None, as `--database` gave it.
+
+    Returns:
+        The login.
+
+    Raises:
+        CliError: As `_admin_secret`.
+        CredentialError: On a wrong password of a stored entry.
+        TargetError: If an entry holds no database login this version can read.
+    """
+
+    def through_operator() -> Target:
+        """Build the login of `calu_admin` at the operator's database.
+
+        Returns:
+            The login, with the admin password that was typed now.
+        """
+        place = load_target(store, "operator", "Operator password: ")
+        password = read_password("Admin password: ")
+        try:
+            return admin_login(place, password.decode())
+        finally:
+            wipe(password)
+
+    if database is not None:
+        if database not in store:
+            raise CliError(
+                f"--database {database}: no credential {database!r} in {store.path} "
+                f"(`calu credential list` shows what is stored)"
+            )
+        if database == "operator":
+            return through_operator()
+        return load_target(store, "admin", "Admin password: ")
     shared = _shared_admin()
     if shared is not None:
         # `sudo calu setup --no-password` (D228): the login of the place file, before any
         # entry of this user's own store, as the fleet commands choose (`_herd_value`).
-        return bytearray(shared.dump())
+        return shared
     if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
         # A generated password that only the store holds: nobody knows one to type.
-        return store.load(ADMIN_ENTRY)
-    if "admin" in store or "operator" not in store:
-        return load_credential(store, "admin", "Admin password: ")
-    place = load_target(store, "operator", "Operator password: ")
-    password = read_password("Admin password: ")
-    try:
-        return bytearray(admin_login(place, password.decode()).dump())
-    finally:
-        wipe(password)
+        return load_target(store, ADMIN_ENTRY, "")
+    if "operator" not in store:
+        return load_target(store, "admin", "Admin password: ")
+    if "admin" not in store:
+        return through_operator()
+    # Both are stored. Which database is meant is known only if both name the same one; the
+    # entries are encrypted, so both are read before anything is changed.
+    owner = load_target(store, "admin", "Admin password: ")
+    operator = load_target(store, "operator", "Operator password: ")
+    if owner.place != operator.place:
+        raise CliError(
+            "two databases are stored here and the command does not say which one to work "
+            f"on: the credential `admin` names {owner.place}, the credential `operator` "
+            f"names {operator.place}. Repeat the command with `--database admin` or "
+            "`--database operator` (with `operator`, the admin password of that database "
+            "is asked)"
+        )
+    return owner
 
 
 def _root_store_hint(store: CredentialStore) -> str:
@@ -2151,19 +2268,25 @@ def _herd_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) 
     )
 
 
-def _admin_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) -> None:
-    """Run a herd command with the `admin` credential and print its report.
+def _admin_command(
+    store: CredentialStore,
+    work: Callable[[Db], Awaitable[str]],
+    args: argparse.Namespace | None = None,
+) -> None:
+    """Run a herd command with a login that may change settings and print its report.
 
     Args:
         store: The credential store.
         work: Called with the connection; its return value is printed.
+        args: The command's parsed arguments, for `_admin_secret` (which database, and
+            whether the command only reads).
 
     Raises:
         CliError: If there is no `admin` credential.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
-    url = _admin_secret(store)
+    url = _admin_secret(store, args)
     try:
         print(asyncio.run(_with_admin(url.decode(), work)))
     finally:
@@ -3030,7 +3153,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     typed_password = (
         ADMIN_ENTRY not in store or store.needs_password(ADMIN_ENTRY)
     ) and _shared_admin() is None
-    url = _admin_secret(store)
+    url = _admin_secret(store, args)
     if run_as is not None:
         # As root for a user (`calu web --sudo`): the login was read from root's store and
         # stays in this process's memory; from here on the process touches files as the user.
@@ -3359,10 +3482,10 @@ def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
             found = await admin.chat_summary(db, args.session)
             return found or "no chat summary yet: none of this session's turns are folded"
 
-        _admin_command(store, show)
+        _admin_command(store, show, args)
         return
 
-    url = _admin_secret(store)
+    url = _admin_secret(store, args)
     try:
         admin_url = url.decode()
 
@@ -3778,7 +3901,7 @@ def cmd_project(args: argparse.Namespace, store: CredentialStore) -> None:
             )
         return "\n".join(report)
 
-    _admin_command(store, work)
+    _admin_command(store, work, args)
 
 
 def _value_at(values: dict[str, Any], key: str) -> str:
@@ -3980,7 +4103,7 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
         await admin.unset_setting(db, args.key, args.project)
         return f"unset {args.key} in {scope}"
 
-    _admin_command(store, work)
+    _admin_command(store, work, args)
 
 
 def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -4079,7 +4202,7 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         )
         return row.line()
 
-    _admin_command(store, work)
+    _admin_command(store, work, args)
 
 
 def _edit_checker(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -4100,7 +4223,7 @@ def _edit_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         admin.AdminError: If the edited instructions are refused (e.g. empty).
         psycopg.Error: On database errors.
     """
-    url = _admin_secret(store)
+    url = _admin_secret(store, args)
     try:
         admin_url = url.decode()
 
@@ -4163,7 +4286,7 @@ def _edit_rule_list(args: argparse.Namespace, store: CredentialStore) -> None:
     if not args.target:
         raise CliError(f"rules edit needs a list name ({', '.join(admin.RULE_LISTS)})")
     scope = args.project or "global"
-    url = _admin_secret(store)
+    url = _admin_secret(store, args)
     try:
         admin_url = url.decode()
 
@@ -4446,7 +4569,7 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.action in ("trust", "trusted", "untrust", "prune"):
         _honesty_trust(args, store)
         return
-    url = _admin_secret(store)
+    url = _admin_secret(store, args)
     try:
         admin_url = url.decode()
 
@@ -4582,7 +4705,7 @@ def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
             raise CliError(f"no rule {rule_id}")
         return f"{args.action}d rule {rule_id}"
 
-    _admin_command(store, work)
+    _admin_command(store, work, args)
 
 
 def cmd_lightcycles(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -4619,6 +4742,21 @@ def cmd_lightcycles(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.port is not None and not 1 <= args.port <= 65535:
         raise CliError(f"--port takes a number from 1 to 65535, not {args.port}")
     serve(port=args.port, browser=not args.no_browser, options=options)
+
+
+def _database_option(parser: argparse.ArgumentParser) -> None:
+    """Add `--database admin|operator` to a command that changes settings.
+
+    Args:
+        parser: The command's parser.
+    """
+    parser.add_argument(
+        "--database",
+        choices=["admin", "operator"],
+        help="which stored credential names the database to work on, for a store that "
+        "holds both `admin` and `operator` and they name different databases (with "
+        "`operator`, the admin password of that database is asked)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4984,6 +5122,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--user", metavar="NAME|UID[:GID]", help="as root: the user to work for")
     p.add_argument("--from-sudo", action="store_true", help=argparse.SUPPRESS)
+    _database_option(p)
     p.set_defaults(handler=cmd_web)
 
     p = sub.add_parser("protocol", help="JSON Schema of the client protocol")
@@ -5038,6 +5177,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("summary", help="show or correct the chat summary the checkers read")
     p.add_argument("session", help="id of the session (`calu sessions`)")
     p.add_argument("--edit", action="store_true", help="edit it in $EDITOR and store it")
+    _database_option(p)
     p.set_defaults(handler=cmd_summary)
 
     p = sub.add_parser("escalation", help="show one escalation with everything needed to decide it")
@@ -5104,6 +5244,7 @@ def build_parser() -> argparse.ArgumentParser:
             "nothing, 'proxy' the project's allowed_domains, 'full' every domain)"
         ),
     )
+    _database_option(project)
     project.set_defaults(handler=cmd_project)
 
     config = sub.add_parser("config", help="configuration values in the database")
@@ -5132,6 +5273,7 @@ def build_parser() -> argparse.ArgumentParser:
         "`calu config add claude.sandbox.deny_read ~/.ssh`; set replaces the whole list."
     )
     config.add_argument("--project", help="the project's scope instead of the global one")
+    _database_option(config)
     config.set_defaults(handler=cmd_config)
 
     checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
@@ -5152,6 +5294,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="for `stats` and `misses`: only the last N days (default: all of them)",
     )
+    _database_option(checker)
     checker.set_defaults(handler=cmd_checker)
 
     honesty = sub.add_parser(
@@ -5189,6 +5332,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="for prune: remove the records of the sources check and review that are older "
         "than this many days; user records are never removed",
     )
+    _database_option(honesty)
     honesty.set_defaults(handler=cmd_honesty)
 
     rules = sub.add_parser(
@@ -5213,6 +5357,7 @@ def build_parser() -> argparse.ArgumentParser:
     rules.add_argument("--comment", help="why the rule exists")
     rules.add_argument("--project", help="the project's rules instead of the global ones")
     rules.add_argument("--position", type=int, help="position in the list (default: append)")
+    _database_option(rules)
     rules.set_defaults(handler=cmd_rules)
 
     p = sub.add_parser("credential", help="manage the encrypted credential store")

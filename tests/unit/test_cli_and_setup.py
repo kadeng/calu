@@ -8,6 +8,7 @@ import pytest
 from calu import cli
 from calu.credentials import CredentialStore
 from calu.db import migrations
+from calu.db.target import PasswordAuth, Target
 from calu.setup import RULE_LISTS, default_rules, parse_rule_file, recommended_rules
 
 
@@ -542,3 +543,126 @@ def test_a_password_the_database_refuses_is_said_once(capsys: pytest.CaptureFixt
     )
     other = cli.LoginRefused("FATAL:  database gone", "3D000")
     assert cli._error_text(other) == "LoginRefused: FATAL:  database gone"
+
+
+# ------------------------------------------------------------------ which database is changed
+
+
+OWN = b"postgresql://calu_owner:own@127.0.0.1:5433/calu"
+SHARED = b"postgresql://calu_operator:op@db.example:5432/calu"
+
+
+@pytest.fixture
+def connections(monkeypatch: pytest.MonkeyPatch) -> list[Target]:
+    """Record the logins the settings commands would connect with, instead of connecting."""
+    opened: list[Target] = []
+
+    async def record(url: str, work: object) -> str:
+        opened.append(Target.parse(url))
+        return "done"
+
+    monkeypatch.setattr(cli, "_with_admin", record)
+    monkeypatch.setattr(cli, "_shared_admin", lambda: None)
+    return opened
+
+
+CHANGES = (
+    ["config", "set", "claude.model", "haiku"],
+    ["checker", "set", "command", "--disable"],
+    ["rules", "add", "command_allow", "^ls$"],
+)
+
+
+def test_two_stored_databases_are_not_guessed_between(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    capsys: pytest.CaptureFixture[str],
+    connections: list[Target],
+) -> None:
+    """Root box, E: `calu config` changed the user's own database, not the session's."""
+    store.save("admin", bytearray(OWN), None)
+    store.save("operator", bytearray(SHARED), None)
+    for argv in CHANGES:
+        assert run_cli(monkeypatch, store, argv, "") == 1
+        said = capsys.readouterr().err
+        assert "`admin` names 127.0.0.1:5433/calu" in said
+        assert "`operator` names db.example:5432/calu" in said
+        assert "--database admin" in said and "--database operator" in said
+        assert "changing settings" not in said
+    assert connections == []
+
+    for argv in CHANGES:
+        assert run_cli(monkeypatch, store, [*argv, "--database", "admin"], "") == 0
+        assert (
+            capsys.readouterr().err.strip()
+            == "changing settings in 127.0.0.1:5433/calu as calu_owner"
+        )
+        assert connections.pop().place == "127.0.0.1:5433/calu"
+        # The operator's database is changed as `calu_admin`, with the password typed now.
+        assert run_cli(monkeypatch, store, [*argv, "--database", "operator"], "typed\n") == 0
+        assert (
+            capsys.readouterr().err.strip()
+            == "changing settings in db.example:5432/calu as calu_admin"
+        )
+        used = connections.pop()
+        assert (used.place, used.user) == ("db.example:5432/calu", "calu_admin")
+        assert isinstance(used.auth, PasswordAuth) and used.auth.password == "typed"
+
+
+def test_two_entries_of_one_database_need_no_choice(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    capsys: pytest.CaptureFixture[str],
+    connections: list[Target],
+) -> None:
+    store.save("admin", bytearray(OWN), None)
+    store.save("operator", bytearray(b"postgresql://calu_operator:op@127.0.0.1:5433/calu"), None)
+    assert run_cli(monkeypatch, store, CHANGES[0], "") == 0
+    assert (
+        capsys.readouterr().err.strip() == "changing settings in 127.0.0.1:5433/calu as calu_owner"
+    )
+    assert connections.pop().user == "calu_owner"
+    # A command that only reads says nothing on stderr.
+    assert run_cli(monkeypatch, store, ["config", "list"], "") == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_the_shared_login_and_the_password_free_entry_come_first(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    capsys: pytest.CaptureFixture[str],
+    connections: list[Target],
+) -> None:
+    """(a) the place file's login, (b) a `calu_admin` entry without a password, then the rest."""
+    store.save("admin", bytearray(OWN), None)
+    store.save("operator", bytearray(SHARED), None)
+    store.save(cli.ADMIN_ENTRY, bytearray(b"postgresql://calu_admin:gen@127.0.0.1:5440/calu"), None)
+    assert run_cli(monkeypatch, store, CHANGES[0], "") == 0
+    assert (
+        capsys.readouterr().err.strip() == "changing settings in 127.0.0.1:5440/calu as calu_admin"
+    )
+    assert connections.pop().place == "127.0.0.1:5440/calu"
+
+    place = Target.parse(b"postgresql://calu_admin:shared@127.0.0.1:5450/calu")
+    monkeypatch.setattr(cli, "_shared_admin", lambda: place)
+    assert run_cli(monkeypatch, store, CHANGES[1], "") == 0
+    assert (
+        capsys.readouterr().err.strip() == "changing settings in 127.0.0.1:5450/calu as calu_admin"
+    )
+    assert connections.pop().place == "127.0.0.1:5450/calu"
+    # A choice on the command line is followed, whatever else is stored.
+    assert run_cli(monkeypatch, store, [*CHANGES[1], "--database", "admin"], "") == 0
+    assert "127.0.0.1:5433/calu as calu_owner" in capsys.readouterr().err
+    assert connections.pop().place == "127.0.0.1:5433/calu"
+
+
+def test_a_database_choice_without_its_entry_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    store: CredentialStore,
+    capsys: pytest.CaptureFixture[str],
+    connections: list[Target],
+) -> None:
+    store.save("admin", bytearray(OWN), None)
+    assert run_cli(monkeypatch, store, [*CHANGES[0], "--database", "operator"], "") == 1
+    assert "no credential 'operator'" in capsys.readouterr().err
+    assert connections == []
