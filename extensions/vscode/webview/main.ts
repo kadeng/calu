@@ -746,9 +746,12 @@ function pruneItemCache(): void {
 }
 
 /**
- * After a focus request of the state (a new escalation): scroll its card into view and, unless
- * the user is typing, move the focus to the card's first button. Nothing is submitted: the
- * decision always needs a deliberate key press or click.
+ * After a focus request of the state (a new escalation): scroll its card into view and move
+ * the keyboard focus to the card itself, so that Tab reaches Allow and Deny next.
+ *
+ * The focus never goes to a button, and never leaves a text field: a key pressed for a message
+ * that the user was about to type (Space, Enter) must not decide a step that appeared in that
+ * moment.
  *
  * @returns Nothing.
  */
@@ -760,9 +763,10 @@ function focusOpenCard(): void {
   if (!card) return;
   reveal(list, card);
   const active = document.activeElement;
-  const typing = (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) && active.value.trim() !== '';
-  if (!document.hasFocus() || typing) return;
-  card.querySelector<HTMLElement>('.esc-actions button:not(:disabled), .option:not(:disabled)')?.focus({ preventScroll: true });
+  const inField = active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement || active instanceof HTMLSelectElement;
+  if (!document.hasFocus() || inField) return;
+  card.tabIndex = -1;
+  card.focus({ preventScroll: true });
 }
 
 /**
@@ -1891,6 +1895,8 @@ function onHostMessage(message: HostMessage): void {
   switch (message.type) {
     case 'reset': {
       const wasAttached = isAttached(view);
+      // The duration of the last turn belongs to the session shown before.
+      if (view.session.sessionId !== message.state.session.sessionId) activityLastMs = undefined;
       view = message.state;
       itemCache.clear();
       headCache = undefined;
