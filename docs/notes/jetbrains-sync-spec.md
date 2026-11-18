@@ -1,7 +1,8 @@
 # File synchronisation for the JetBrains plugin's SSH mode: specification
 
 Written 2026-11-18 for requirement 35 (mode C of `pycharm-plugin-research.md`). This file is
-the contract between the bridge `calu ide` (Python, **not built yet**) and the plugin
+the contract between the bridge `calu ide` (Python: `calu.ide.files`, `calu.ide.filestore`,
+`calu.ide.filesync`; built 2026-11-18, section 13 lists where it deviates) and the plugin
 (`extensions/jetbrains`, package `io.github.kadeng.calu.sync`). It extends section 2 of
 `vscode-extension-spec.md`; change it when the build deviates.
 
@@ -336,8 +337,7 @@ Kotlin and JDK only, no IntelliJ import):
 
 Not built:
 
-- everything in sections 2 to 5 on the Python side (`calu ide --cwd`, `ide.fs.*`, the watcher,
-  the report of IDE writes to the session);
+- (built since: sections 2 to 5 on the Python side, see section 13);
 - the plugin's `FileStore` over the bridge (paged manifest, chunked read and write) and over
   the local project (VFS, documents, undo);
 - the status bar entry, the conflict marks, the merge dialog, the confirmation of the first
@@ -346,3 +346,37 @@ Not built:
   cache (only an in-memory one exists), persisting `SyncState` and the queue;
 - `Manifest.skipped` and `missing`, file modes in the state, and the `origin` of a change are
   not modelled in the Kotlin types yet.
+
+## 13. Deviations of the Python side (2026-11-18)
+
+Built in `src/calu/ide/files.py` (rules without file access), `filestore.py` (file access) and
+`filesync.py` (requests, watcher, notifications); tests in `tests/unit/test_ide_files.py`,
+`test_ide_filestore.py`, `test_ide_fs_bridge.py` and `test_ide_user_edit.py`. Everything not
+listed here is as sections 2 to 9 say.
+
+| topic | the spec | what the bridge does, and why |
+|---|---|---|
+| links in directories (§9) | refused if the link leads out of the root | Every directory on the way is opened with `O_NOFOLLOW`, one `openat` per segment, so a link is never followed, also one that stays inside: -32033 `kind: "symlink"` for it, -32030 `reason: "outside"` for one that leads out. A check of the resolved path could be outrun by a directory that is replaced meanwhile; no manifest lists a path through a link anyway. |
+| path form (§8, -32030) | "resolved on the server" | A path is accepted or refused, never repaired. `reason: "invalid"`: not a string, empty, a control character (NUL included), a backslash, an empty or `.` segment (`a//b`, `./a`, `a/`), more than 4096 bytes, a segment above 255 bytes. `reason: "outside"`: absolute, a drive letter (`C:`), a `..` segment. |
+| names the protocol cannot carry | - | A file whose name has a control character, a backslash or bytes that are not UTF-8 is in `skipped` with the new reason `"unsupported-name"`. |
+| excluded (§9) | `.git`, `.agent/traces`, the XDG directories | `.git` at any depth and in any letter case; `.agent/traces` always; the trace directory the attached session reports (another `traces.directory`); calu's XDG directories where they lie inside the root; every name that starts with `.calu-upload-`. |
+| per-file limit (§4) | setting `ide.sync_max_file_mib` | No setting: the bridge often has no database login. The limit is 32 MiB; `ide.paths` reports it in the new field `limits: {file_bytes, request_bytes, page_entries, uploads}`. The plugin's smaller limit wins as before. |
+| line limit (§4) | 2 MiB, a longer line ends the connection | The bridge still reads lines up to 64 MiB, because `session.call` carries chat messages with images. It writes no file-related line above 2 MiB: a manifest page and a notification end early when their paths are long (fewer than 2000 entries or 500 changes), and `content_b64` is refused by its length before it is decoded. |
+| `ide.fs.manifest` | paging by cursor | The cursor is opaque. The bridge keeps the listings of the last 4 manifests with further pages. -32039 `reason`: `"git"`, `"not-git"` (dirty scope outside git), `"too-many-files"` (more than 200 000), `"unreadable"`, `"cursor-expired"`, `"head-moved"` (HEAD changed since the first page: ask again from the start). `missing` is filled on the first page only. `paths` holds at most 2000 entries; `paths: []` selects nothing. A named path that exists but is ignored by git is in neither list. Outside git a FIFO, socket or device is in `skipped` (`"not-regular"`); git does not list such files at all. A bridge started in a subdirectory of a repository lists that subtree. |
+| `ide.fs.read` | `length` default 1 MiB | A larger `length` is read as 1 MiB; the caller continues at `offset + size of the content` until `eof`. |
+| `mode` | "0o777 mask" | A value outside 0 to 0o777 is -32602, not masked. |
+| `base_sha256` | `str \| null` | The key must be present in `ide.fs.write` and `ide.fs.write.begin`; absent is -32602, so that a forgotten base never creates a file. For delete and rename it must be a hash. |
+| -32031 | hash mismatch | Also for `ide.fs.delete` of a file that is gone (`sha256: null`). |
+| -32032 | content above the limit | Also for a write, delete or rename whose target on the server is above the per-file limit (it cannot be compared). |
+| -32033 `kind` | directory, symbolic link, device, socket | `"directory"`, `"symlink"`, `"fifo"`, `"socket"`, `"device"`, and `"file"` for a path below a regular file (`a.txt/b`). |
+| chunked upload | begin / chunk / commit / abort | The temporary file and the target's missing directories are created with the first chunk, so `begin` changes nothing; abort, expiry and every failed commit remove both. Any failed commit ends the upload. -32036 `reason`: `"unknown-upload"`, `"offset"`, `"size"`, `"sha256"`, `"too-many-uploads"`. `ide.fs.write.abort` of an unknown id answers `{}`. The hold is checked at begin and at commit. |
+| `ide.fs.rename` | `to` must not exist | Done with `link` + `unlink`, so an existing target is never replaced; the hold applies to both paths; the source's empty directories are removed. |
+| the watcher (§5.3) | `watchfiles`, or polling `git status` | Polling; `watchfiles` is not a dependency of calu and is not added. Every 2 s (20 times the last scan's duration if that is more, at most 30 s) the bridge lists the files as a manifest does and compares size, mtime (ns) and inode; only files whose signature changed are read. A change of the mode alone is not noticed. A scan also starts at once after a `tool.result`, a `turn.result`, a state of idle, stopped or failed, and a change of the session connection. `"fs.watch"` is always announced. |
+| `origin: "agent"` (§5.1, §5.2) | the edit tools' events; the write sets | `edit.diff` arrives before the edit runs, so the bridge reads the file after the call's `tool.result` instead of trusting the event's text. A change is `"agent"` if an edit tool call of the attached session named the file, or if it was found while a `Bash` call of that session ran or in the scan after it. The second rule is a guess: the session protocol has no event that carries a measured write set. Everything else is `"other"`, also the writes of another bridge on the same directory. |
+| `before_sha256` | exact | The last hash this bridge computed for the path (manifest, read, scan, own write); null if it never read the file. |
+| hash cache (§3) | (path, size, mtime, inode) | In memory, for the life of the bridge process. A file whose mtime is less than 2 s older than the moment it was hashed is not cached: a second write within the same clock tick would keep the signature. Proposal, not built: keep the cache in `$XDG_STATE_HOME/calu` across bridge processes, so that the first manifest after a reconnect reads nothing either. |
+| subscription (§5) | replay by `after_seq` and `epoch` | A subscription without `after_seq` and `epoch` answers `complete: true`. `ide.fs.unsubscribe` stops the watcher, so a later subscription that names a sequence number answers `complete: false`. The subscription belongs to the editor's connection: it goes on while the bridge reconnects to the session, and after the session is lost (changes then have the origin `"other"`). |
+| holds (§6) | enforced for the attached session | From the same events as the plugin's set. Nothing is held after `turn.result`, in the states idle, stopped and failed, after `ide.link lost`, and after a reconnect that missed events (the state is read again, the turn's files are forgotten). `data.session_id` is "" for a session that was attached by address and has no id. |
+| report of IDE writes (§9) | to the sessions of the project directory | New request of the session protocol: `files.user_edit {paths}` → `{excluded}`. The bridge sends it to the **attached** session only, after the base matched and before the file is replaced (it waits at most 2 s for the answer), and once with no paths at the attach to learn `excluded`. The session leaves the paths out of the write set of every command whose window is open then or opens within 10 s, watches the files for the honesty state (unreviewed), and logs one line. A session of the directory that is not attached is not told. |
+| end of the connection | - | When stdin ends, requests that are still being answered are cancelled and their answers are not written. A client that wants the answers sends `ide.shutdown` last and reads until the process ends. Open uploads are removed in both cases. |
+

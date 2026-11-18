@@ -1091,6 +1091,56 @@ the session's page lists them.
 
 The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
 
+### The editor bridge, and a project copy kept in step over SSH
+
+calu's own editor extensions (VSCode, PyCharm) do not speak ACP. They start `calu ide`, which
+answers JSON-RPC requests on stdin and stdout: sessions, settings, checker instructions, and
+the chat of one attached session. Nobody types this command; the extension runs it in the
+project directory.
+
+An editor on another machine than the project (PyCharm in its SSH mode) starts the bridge
+through `ssh`, which begins in the home directory, so it names the project:
+
+```
+calu ide --cwd /home/you/project
+```
+
+A directory that does not exist ends the command with exit code 2 and one line on stderr.
+
+In that mode the editor works on a **copy** of the project and the bridge keeps the two in
+step, over the same SSH connection and nothing else: it lists the project's files with their
+SHA-256 hashes, reads and writes single files, and reports what changed on the server. These
+file requests exist for this case only; an editor that opens the server's files directly
+(VSCode Remote, a local project) never sends them. What they do and do not do:
+
+- **Only the project directory.** A path is relative to it. An absolute path, a path with
+  `..`, and a path through a symbolic link are refused; links are listed as skipped and never
+  followed. `.git`, the session traces (`.agent/traces`, and the trace directory of the
+  attached session if `traces.directory` names another one) and calu's own configuration
+  and state directories are neither listed nor read nor written.
+- **Which files.** In a git repository the tracked and the untracked files, without the
+  ignored ones; elsewhere every file except a short built-in list (`node_modules`, `.venv`,
+  `venv`, `__pycache__`, `.tox`, `.mypy_cache`, `.ruff_cache`, `.idea`).
+- **Limits.** 32 MiB per file (a larger one is listed as skipped), 1 MiB of content per
+  request (larger files travel in pieces), four uploads at a time, and an upload nobody
+  continues for two minutes is discarded.
+- **No silent overwrite.** A write, a delete and a rename name the hash the file is expected
+  to have; if the file has another content by then, the request is refused with the hash
+  that is there, and the editor merges or asks. A write replaces the file in one step.
+- **Not while the agent edits the file.** During a turn, an upload to a file Claude is
+  editing is refused until the turn ends, unless the editor's user asks for it explicitly.
+- **Your edits are yours.** What the editor uploads is your own edit, like typing in a
+  shell on the server: no checker judges it. calu does not count it as Claude's either: a
+  command that runs at that moment gets a write set without the file, and the code honesty
+  state shows the file as unreviewed, like any change made outside calu.
+- **Changes on the server** are found by looking at the files every two seconds (size and
+  modification time; only a changed file is read), and at once after each tool call of the
+  attached session.
+
+The bridge runs as you and adds no rights: it can read and write exactly what you can in a
+shell on that machine. Every write, delete and rename is logged in
+`$XDG_STATE_HOME/calu/log/ide.log`.
+
 ## Checker instructions, rules and evaluations
 
 Your rules live in the database. Write them as Markdown, put them in, and measure whether the

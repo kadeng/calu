@@ -55,6 +55,7 @@ async def test_initialize_says_who_the_bridge_is(tmp_path: Path, store: Credenti
             "bridge_version": __version__,
             "protocol_version": 1,
             "workspace": str(tmp_path.resolve()),
+            "capabilities": ["cwd", "ping", "paths", "fs", "fs.watch"],
         }
         with pytest.raises(Failed) as unknown:
             await editor.request("ide.nothing")

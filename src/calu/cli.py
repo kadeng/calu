@@ -2902,10 +2902,23 @@ def cmd_ide(args: argparse.Namespace, store: CredentialStore) -> None:
     needs a password is reported to the extension as an error, and the extension repeats the
     request with the password its user typed.
 
+    Side effect: with `--cwd DIR` the process changes to DIR first (an editor that starts
+    the bridge over SSH starts it in the home directory).
+
     Args:
-        args: Parsed arguments (none).
+        args: Parsed arguments: `cwd`, the directory to work in, or None for the current
+            one.
         store: The credential store.
+
+    Raises:
+        SystemExit: With the code 2 and one line on stderr if `--cwd` names no directory.
     """
+    if args.cwd:
+        try:
+            os.chdir(Path(args.cwd).expanduser())
+        except OSError as exc:
+            print(f"calu ide: --cwd {args.cwd}: {exc.strerror or exc}", file=sys.stderr)
+            raise SystemExit(2) from None
     asyncio.run(serve_ide(Path.cwd(), store))
 
 
@@ -4844,6 +4857,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "ide", help="serve an editor extension, e.g. VSCode's (JSON-RPC on stdin/stdout)"
+    )
+    p.add_argument(
+        "--cwd",
+        metavar="DIR",
+        help="work in DIR instead of the current directory (for an editor that starts "
+        "the bridge over SSH); a DIR that does not exist ends the command with exit code 2",
     )
     p.set_defaults(handler=cmd_ide, log_name="ide")
 

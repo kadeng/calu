@@ -9,10 +9,15 @@
           ide.sessions, ide.session.rename,               │
           ide.settings.*, ide.models.*, ide.checker.* ────┼─► the database (calu.ide.access,
                                                           │     calu.ide.database)
-          ide.status ─────────────────────────────────────┴─► calu.doctor, PATH
+          ide.status ─────────────────────────────────────┼─► calu.doctor, PATH
+                                                          │
+          ide.paths, ide.fs.* ────────────────────────────┴─► FileSync (calu.ide.filesync):
+                                                                the project's files, for an
+                                                                editor that works on a copy
 
 The method table, the error codes and the notifications are specified in
-`docs/notes/vscode-extension-spec.md` §2 and §6. One session is attached at a time: an attach
+`docs/notes/vscode-extension-spec.md` §2 and §6, those of the file requests in
+`docs/notes/jetbrains-sync-spec.md`. One session is attached at a time: an attach
 while one is attached detaches first. The bridge never asks on a terminal; a credential that
 needs a password is the error `NEEDS_PASSWORD`, and the request is repeated with `password`.
 
@@ -27,6 +32,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -43,6 +49,8 @@ from calu.db.connection import Db
 from calu.ide import database
 from calu.ide.access import INVALID_PARAMS, NEEDS_PASSWORD, NO_DATABASE, Access
 from calu.ide.database import NO_SESSION, SEVERAL_SESSIONS
+from calu.ide.files import CAPABILITIES
+from calu.ide.filesync import FileSync
 from calu.ide.link import Endpoint, SessionLink
 from calu.ide.presets import model_of, presets
 from calu.protocol.client import RequestFailed, first_set, probe
@@ -69,6 +77,9 @@ METHOD_NOT_FOUND = -32601
 
 KINDS = ("new", "resume", "fork")
 """The values of `ide.start {kind}`."""
+
+REPORT_WAIT_S = 2.0
+"""How long a file request waits for the session's answer to `files.user_edit`."""
 
 VERSION_TIMEOUT_S = 5.0
 """How long `uv --version` may take before uv is reported without a version."""
@@ -224,6 +235,7 @@ class Bridge:
         start_wait_s: float | None = None,
         hostname: str | None = None,
         user: str | None = None,
+        **file_options: Any,
     ) -> None:
         """Create the bridge; `Peer` calls `handle` and `after_response`.
 
@@ -238,6 +250,8 @@ class Bridge:
                 `calu.session_requests.START_WAIT_S`.
             hostname: The host `ide.start` asks a session for; None uses this host's name.
             user: The OS user `ide.start` asks a session for; None uses this process's.
+            **file_options: Further arguments of `calu.ide.filesync.FileSync` (`poll_s`,
+                `quiet_s`, `upload_idle_s`, `max_file_bytes`).
         """
         self.workspace = workspace.resolve()
         self.access = Access(store)
@@ -256,7 +270,14 @@ class Bridge:
         self._attaching = anyio.Lock()
         self._start_waits: list[anyio.CancelScope] = []
         """One scope per `ide.start` that waits for a server; `ide.start.cancel` cancels them."""
+        self._report_failed = False
+        self.files = FileSync(
+            self.workspace, self.notify, tasks, self._report_user_edit, **file_options
+        )
+        """The file requests (`ide.paths`, `ide.fs.*`) and the change notifications."""
         self._handlers: dict[str, Handler] = {
+            **self.files.handlers,
+            "ide.ping": self._ping,
             "ide.initialize": self._initialize,
             "ide.status": self._status,
             "ide.unlock": self._unlock,
@@ -304,13 +325,15 @@ class Bridge:
 
         After `ide.attach` and `ide.start`: the attached session's notifications start to
         flow, so that the editor has the snapshot before the first event. After
-        `ide.shutdown`: sets `shutdown`.
+        `ide.fs.subscribe`: the change notifications start to flow. After `ide.shutdown`:
+        sets `shutdown`.
 
         Args:
             method: The method whose response was just written.
         """
         if method in ("ide.attach", "ide.start") and self._link is not None:
             self._link.release()
+        await self.files.after_response(method)
         if method == "ide.shutdown":
             self.shutdown.set()
 
@@ -318,16 +341,92 @@ class Bridge:
         """Send a notification to the editor.
 
         Args:
-            method: "session.event", "ide.link" or "ide.log".
+            method: "session.event", "ide.link", "ide.log" or "ide.fs.changed".
             params: Its params.
         """
         if self.peer is not None:
             await self.peer.notify(method, params)
 
     async def close(self) -> None:
-        """Detach from the session, if one is attached. Side effect: revokes a minted token."""
+        """End the bridge's work: detach from the session and end the file requests.
+
+        Side effects: revokes a minted token; removes the temporary files of uploads that
+        were still open and stops the file watcher.
+        """
+        await self.files.close()
         async with self._attaching:
             await self._detach()
+
+    async def _from_session(self, method: str, params: dict[str, Any]) -> None:
+        """Take a notification of the session link: for the file requests, then the editor.
+
+        Side effects: the session's events tell `FileSync` which files the agent edits
+        (held files, and a look at the files after a tool call); after a reconnect that
+        missed events the session's state is read again.
+
+        Args:
+            method: "session.event" or "ide.link".
+            params: Its params.
+        """
+        if method == "session.event":
+            inner = params.get("params")
+            self.files.session_event(
+                str(params.get("method") or ""), inner if isinstance(inner, dict) else {}
+            )
+        elif method == "ide.link":
+            self.files.link_state(str(params.get("state") or ""))
+            if params.get("state") == "attached" and params.get("complete") is False:
+                self._tasks.start_soon(self._follow_again)
+        await self.notify(method, params)
+
+    async def _follow_again(self) -> None:
+        """Read the attached session's state after a reconnect that missed events.
+
+        Side effect: the held files start empty from the state the session reports. Never
+        raises: without an answer nothing is held.
+        """
+        link = self._link
+        if link is None:
+            return
+        try:
+            with anyio.fail_after(REPORT_WAIT_S * 5):
+                snapshot = await link.request("state.get")
+        except RequestFailed, ConnectionError, TimeoutError:
+            self.files.turn.detach()
+            return
+        state = snapshot.get("state") if isinstance(snapshot, dict) else None
+        self.files.turn.attach(link.session_id, state, [])
+
+    async def _report_user_edit(self, paths: list[str]) -> None:
+        """Tell the attached session that the user writes files through the editor.
+
+        The session then leaves the files out of the write set of a command that runs at
+        that moment and counts them as unreviewed (`files.user_edit`). Side effect: the
+        session's own directories (its answer) are excluded from the file requests. Never
+        raises: without an attached session nothing is sent, and a session that does not
+        answer within `REPORT_WAIT_S` or does not know the request is logged once.
+
+        Args:
+            paths: The files, relative to the workspace; empty only asks for the session's
+                directories.
+        """
+        link = self._link
+        if link is None or link.is_lost:
+            return
+        try:
+            with anyio.fail_after(REPORT_WAIT_S):
+                answer = await link.request("files.user_edit", {"paths": paths})
+        except (RequestFailed, ConnectionError, TimeoutError) as error:
+            if paths and not self._report_failed:
+                self._report_failed = True
+                log.warning(
+                    "the session was not told about the editor's file changes (%s); a "
+                    "command that runs at the same time may count them as its own",
+                    str(error) or type(error).__name__,
+                )
+            return
+        if isinstance(answer, dict):
+            self.files.exclude(answer.get("excluded"))
 
     # --------------------------------------------------------------------- plain answers
 
@@ -338,8 +437,9 @@ class Bridge:
             params: `client` and `client_version` of the editor extension; logged.
 
         Returns:
-            `bridge_version` (calu's version), `protocol_version` (of the session protocol)
-            and `workspace`.
+            `bridge_version` (calu's version), `protocol_version` (of the session protocol),
+            `workspace` and `capabilities` (`calu.ide.files.CAPABILITIES`: what this bridge
+            has beyond the first version of the protocol).
         """
         log.info(
             "calu ide %s for %s %s in %s",
@@ -352,7 +452,20 @@ class Bridge:
             "bridge_version": __version__,
             "protocol_version": PROTOCOL_VERSION,
             "workspace": str(self.workspace),
+            "capabilities": list(CAPABILITIES),
         }
+
+    async def _ping(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Answer `ide.ping`: the bridge is alive.
+
+        Args:
+            params: `nonce` (any JSON value; optional).
+
+        Returns:
+            `{nonce, time}`: the request's nonce (null without one) and the bridge's clock
+            in seconds since the epoch.
+        """
+        return {"nonce": params.get("nonce"), "time": time.time()}
 
     async def _shutdown(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.shutdown`; the bridge ends once the response is written.
@@ -811,7 +924,7 @@ class Bridge:
                 if it refuses the token.
         """
         await self._detach()
-        link = SessionLink(endpoint, self.notify, self.reconnect_wait_s)
+        link = SessionLink(endpoint, self._from_session, self.reconnect_wait_s)
         self._tasks.start_soon(link.run, after_seq)
         try:
             await link.started.wait()
@@ -830,6 +943,11 @@ class Bridge:
                 )
             raise RpcError(NO_SESSION, f"cannot attach to {endpoint.address}: {link.error}")
         self._link = link
+        self._report_failed = False
+        self.files.turn.attach(
+            link.session_id, link.first["snapshot"].get("state"), link.first["events"]
+        )
+        await self._report_user_edit([])
         return {"attached": True, "session_id": link.session_id, **link.first}
 
     async def _detach(self) -> None:
@@ -840,6 +958,8 @@ class Bridge:
         link, self._link = self._link, None
         if link is None:
             return
+        self.files.turn.detach()
+        self.files.exclude(None)
         link.stop()
         with anyio.CancelScope(shield=True):
             with anyio.move_on_after(DRAIN_S):
