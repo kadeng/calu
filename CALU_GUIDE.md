@@ -21,6 +21,7 @@ configuration, the web interface, the checkers and the ACP adapter.
 - [Editors that speak ACP](#editors-that-speak-acp)
 - [Checker instructions, rules and evaluations](#checker-instructions-rules-and-evaluations)
 - [Resuming and forking a conversation](#resuming-and-forking-a-conversation)
+- [Session traces: the conversation as a reviewable file](#session-traces-the-conversation-as-a-reviewable-file)
 - [Many sessions from one process: calu serve](#many-sessions-from-one-process-calu-serve)
 - [calu as root, Claude Code as another user](#calu-as-root-claude-code-as-another-user)
 - [The database](#the-database)
@@ -1141,6 +1142,102 @@ take a session id as printed, not a session title. The
 files are deliberately left as they are: Claude Code's file checkpointing only puts back what
 its own edit tools changed, so rewinding them would leave a tree that looks consistent and is
 not.
+
+## Session traces: the conversation as a reviewable file
+
+A chat session decides what the code becomes, so it is worth reviewing with the code. With
+session traces on, calu appends every step of a session to a Markdown file inside the project,
+so that the conversation can be committed and read in a code review next to the change it
+produced:
+
+```bash
+calu config set traces.enabled true                   # every project
+calu config set traces.enabled true --project shop    # one project
+```
+
+The setting is off by default. It applies to the next session, and also to a running one: the
+running session starts a file from that point, and its header says that the earlier steps are
+not in it. Switching it off ends the file.
+
+**Where the files are.** One file per session:
+
+    <project>/.agent/traces/<YYYY-MM-DD>/<user>/session_NNN.md
+
+    .agent/traces/2026-11-18/kai/session_001.md
+    .agent/traces/2026-11-18/kai/session_002.md      the second session of that day
+    .agent/traces/2026-11-19/kai/session_001.md
+
+The date is the day the session started (UTC), the user is the OS user Claude Code runs as,
+and NNN is the next free number in that directory. Two sessions that start at the same moment
+get two files. `traces.directory` names another directory inside the project. A resumed or
+forked conversation is a new calu session and gets a new file; its header names the file of
+the conversation it continues, if that file is in the trace directory.
+
+**What a file holds.** A header (calu's session id, Claude's session id, the project, the
+start time, the user, Claude's model, calu's version, the content form, how the file was
+redacted), then one block per step, in the order the steps happened. The file only grows:
+nothing is folded or summarised.
+
+| Block | Content |
+|---|---|
+| `## Turn N` ... `### End of turn N` | One turn of the conversation |
+| `### User` | The user's message. Images are not included; a line says how many were attached |
+| `### Claude, narrated` or `### Claude` | Claude's words (see `traces.content` below) |
+| `### Tool call N: <tool>` | The tool's input, every value in a code fence; long values are cut |
+| `### Check of tool call N (<tool>): <DECISION>` | The route, the checkers' reason, their summary of the step and their comment to Claude |
+| `### Escalation E: ... waits for a person`, `### Escalation E: allowed` | The reason; who decided, and the note. The context the checker had is not included |
+| `### Result of tool call N (<tool>)` | The result, cut to `traces.max_result_chars` characters |
+| `#### Subagent K: ...` | The same blocks for a subagent, one heading level below the tool call that started it ("starts subagent K") |
+
+`traces.content` chooses what the file holds of Claude's own words:
+
+| Value | Claude's text | Claude's thinking |
+|---|---|---|
+| `narrated` (default) | retold in indirect speech by the narrator, as the checkers read it | retold with the text |
+| `plain` | as Claude wrote it | left out |
+
+With `context.narrate` off there is no narrator, and the file holds the plain form.
+
+**What is redacted.** The files are meant to be shared, so every block passes two stages
+before it is written, and nothing is written before it passed them:
+
+1. calu replaces the values it knows to be secret (the values of the environment variables
+   it hides from Claude Code, of variables whose names say that they hold a key, a token, a
+   secret or a password, the session's client token, the password of the database login) and
+   the common shapes of credentials (AWS access key ids, `sk-...` keys, GitHub tokens, JSON
+   Web Tokens, private key blocks, passwords inside URLs and connection strings). This stage
+   always runs.
+2. The redaction agent, a model call per block, replaces secrets and personal data: names of
+   private persons, e-mail addresses, phone numbers, postal addresses, account and card
+   numbers, and the like. `traces.redact` switches this stage off; the header then says
+   that personal data was not removed. `traces.redactor_model` chooses its model (blank: the
+   default model, and `calu config models` sets it with the other roles).
+
+A removed value leaves a typed placeholder such as `[redacted: api key]` or
+`[redacted: e-mail address]`.
+
+**What "withheld" means.** If the redaction agent fails, answers unusably or takes longer
+than `traces.redactor_timeout_s`, the block is written as its heading and the line
+
+    [this step was withheld: redaction failed]
+
+The text of that step is not in the file, and the session goes on: a problem with the trace
+never stops Claude. The same holds for a block that was still being redacted when the session
+ended, and when the redaction agent is so far behind that `traces.queue_blocks` blocks wait,
+further blocks are left out and a line says how many. A step never waits for the trace.
+
+**What calu does with the files, and what it does not.** calu writes them and nothing else:
+it never stages or commits them, and versioning them is your step (commit the directory, or
+add it to `.gitignore` if you only want the files locally). While tracing is on, a tool call
+of Claude that would write into the trace directory waits for a person, the files are left
+out of the write sets and of the code honesty state, and the checkers' code tools do not
+read them.
+
+**Read a trace before you publish it.** The first stage only knows the secrets calu knows and
+the shapes it lists, and the second stage is a model: it can miss a name or a key, and it
+can replace something harmless. Redaction lowers the risk of publishing a secret or personal
+data; it is not a guarantee. A reviewer should read the trace files of a change as carefully
+as the change itself before the repository leaves the team.
 
 ## Many sessions from one process: calu serve
 
