@@ -131,6 +131,7 @@ class OsBridgeProcess(private val process: Process) : BridgeProcess {
  * @throws LaunchException (not `missing`) if the program cannot be started.
  */
 fun startProcess(argv: List<String>, cwd: String?, what: String): BridgeProcess {
+    if (cwd != null && !File(cwd).isDirectory) throw LaunchException(false, "Cannot start $what: the directory $cwd does not exist.")
     try {
         val builder = ProcessBuilder(argv)
         if (cwd != null) builder.directory(File(cwd))

@@ -3,5 +3,12 @@
         <module name="intellij.platform.backend"/>
         <module name="intellij.platform.kernel.backend"/>
         <module name="calu.shared"/>
+        <plugin id="org.jetbrains.plugins.terminal"/>
     </dependencies>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <platform.rpc.backend.remoteApiProvider implementation="io.github.kadeng.calu.backend.BackendRpcApiProvider"/>
+        <editorNotificationProvider implementation="io.github.kadeng.calu.backend.CheckerBannerProvider"/>
+        <fileDocumentManagerListener implementation="io.github.kadeng.calu.backend.CheckerSaveListener"/>
+    </extensions>
 </idea-plugin>

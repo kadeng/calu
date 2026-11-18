@@ -182,7 +182,7 @@ class SessionPickTest {
         assertEquals("openLink", hint.action)
         assertTrue(
             hint.message.startsWith(
-                "Claude Code (`claude`) was not found on this machine (not on PATH). The extension does not install",
+                "Claude Code (`claude`) was not found on this machine (not on PATH). The plugin does not install",
             ),
         )
     }

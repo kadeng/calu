@@ -67,7 +67,9 @@ class ChatControllerTest {
         assertEquals("run the tests", items.filterIsInstance<UserItem>().single().text)
         assertEquals("I will run a command.", items.filterIsInstance<AssistantItem>().single().text)
         assertFalse(items.filterIsInstance<AssistantItem>().single().streaming == true)
-        val tool = c.state.tools[items.filterIsInstance<ToolItem>().single().toolUseId]!!
+        assertEquals("x = 2\n", c.diffs.get("t-0")!!.after)
+        assertEquals("a.py", c.state.tools["t-0"]!!.diffPath)
+        val tool = c.state.tools[items.filterIsInstance<ToolItem>().last().toolUseId]!!
         assertEquals("ESCALATE", tool.check!!.decision)
         val card = c.state.escalations[items.filterIsInstance<EscalationItem>().single().escalationKey]!!
         assertEquals("runs project code", card.reason)

@@ -3,4 +3,14 @@
         <module name="intellij.platform.frontend"/>
         <module name="calu.shared"/>
     </dependencies>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="calu" anchor="right" secondary="false"
+                    factoryClass="io.github.kadeng.calu.frontend.CaluToolWindowFactory"
+                    icon="io.github.kadeng.calu.frontend.CaluIcons.ToolWindow"/>
+        <notificationGroup id="calu" displayType="STICKY_BALLOON"/>
+        <statusBarWidgetFactory id="calu.decisions" implementation="io.github.kadeng.calu.frontend.CaluStatusBarWidgetFactory"/>
+        <projectConfigurable parentId="tools" id="calu" displayName="calu"
+                             instance="io.github.kadeng.calu.frontend.CaluConfigurable"/>
+    </extensions>
 </idea-plugin>

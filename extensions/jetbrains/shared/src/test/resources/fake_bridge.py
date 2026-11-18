@@ -27,7 +27,9 @@ def main() -> None:
     parser.add_argument("--no-session", action="store_true")
     parser.add_argument("--exit-after", type=int, default=0)
     args = parser.parse_args()
-    state = {"seq": 0, "unlocked": [], "answered": 0, "events": [], "open": None}
+    state = {"seq": 0, "unlocked": [], "answered": 0, "events": [], "open": None,
+             "checker": {"name": "command-default", "route": "command", "model": "", "version": 3,
+                         "enabled": True, "instructions": "Deny what deletes files."}}
 
     def send(message: dict) -> None:
         sys.stdout.write(json.dumps(message) + "\n")
@@ -58,6 +60,12 @@ def main() -> None:
             event("assistant.delta", text="I will ", message_id="m-1")
             event("assistant.delta", text="run a command.", message_id="m-1")
             event("assistant.text", text="I will run a command.", message_id="m-1")
+            event("tool.use", tool_use_id="t-0", name="Edit", input={"file_path": args.cwd + "/a.py"})
+            event("edit.diff", tool_use_id="t-0", path="a.py", before="x = 1\n", after="x = 2\n",
+                  start_line=1, end_line=1)
+            event("check.result", tool_use_id="t-0", tool_name="Edit", route="edit", decision="ALLOW",
+                  step_summary="Changes x")
+            event("tool.result", tool_use_id="t-0", content="edited", is_error=False)
             event("tool.use", tool_use_id="t-1", name="Bash", input={"command": "make test"})
             event("check.result", tool_use_id="t-1", tool_name="Bash", route="command",
                   decision="ESCALATE", reason="runs project code", step_summary="Runs the tests")
@@ -113,6 +121,19 @@ def main() -> None:
             events = [e for e in state["events"] if e["params"]["seq"] > after]
             return {"attached": True, "session_id": "s-1", "initialize": {"workspace": args.cwd},
                     "snapshot": snapshot(), "events": events, "complete": True}
+        if method == "ide.settings.get":
+            listed = {k: v for k, v in state["checker"].items() if k != "instructions"}
+            return {"schema": {}, "rows": [], "checkers": [listed], "projects": []}
+        if method == "ide.checker.get":
+            return dict(state["checker"])
+        if method == "ide.checker.save":
+            if params.get("base_version") not in (None, state["checker"]["version"]):
+                raise RpcError(-32016, "the checker was changed elsewhere",
+                               {"version": state["checker"]["version"],
+                                "instructions": state["checker"]["instructions"]})
+            state["checker"]["version"] += 1
+            state["checker"]["instructions"] = params["instructions"]
+            return {"version": state["checker"]["version"]}
         if method == "ide.start":
             raise RpcError(-32013, "no calu server answered; start one with `calu serve`")
         if method == "session.call":

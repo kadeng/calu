@@ -69,7 +69,7 @@ class CaluCommandTest {
         val r = resolveCaluCommand(emptyList(), facts(emptyList(), isWsl = true))
         assertTrue(r is ResolveResult.NotFound)
         val message = (r as ResolveResult.NotFound).message
-        assertTrue(message.contains("Install calu"))
+        assertTrue(message.contains("uv tool install"))
         assertTrue(message.contains("\"calu command\" (Settings | Tools | calu)"))
     }
 

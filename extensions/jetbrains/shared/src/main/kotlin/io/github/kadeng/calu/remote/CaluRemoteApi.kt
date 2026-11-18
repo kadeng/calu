@@ -1,0 +1,193 @@
+/**
+ * What the frontend asks the backend, over the platform's RPC.
+ *
+ *     frontend (tool window, thin client in remote development)
+ *        │  CaluRemoteApi: updates(), act(), call(), passwordRequests(), settings
+ *        ▼
+ *     backend (next to the project: starts `calu ide`, owns the ChatController)
+ *
+ * In a local IDE both modules run in one process and each call is an in-process suspend call.
+ * Rules this plugin follows (README, "Rules"): only `suspend` methods; arguments and results
+ * are `@Serializable` types of this module made of strings, numbers and booleans, with JSON
+ * carried as text, so that no module ever asks another module's class for its serializer;
+ * calls are made from coroutines, never from the EDT; long-lived flows are collected inside
+ * `durable {}` by the frontend.
+ */
+@file:Suppress("UnstableApiUsage")
+
+package io.github.kadeng.calu.remote
+
+import com.intellij.platform.project.ProjectId
+import com.intellij.platform.rpc.RemoteApiProviderService
+import fleet.rpc.RemoteApi
+import fleet.rpc.Rpc
+import fleet.rpc.remoteApiDescriptor
+import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.Serializable
+
+/**
+ * One message of the chat's update stream.
+ *
+ * Exactly one of the two shapes is set: a snapshot (`stateJson`: the whole `ViewState` as JSON,
+ * always the first message of a stream) or an event (`method` and `paramsJson`, to apply with
+ * `applyEvent`).
+ *
+ * @property stateJson The whole view state, or `null` for an event.
+ * @property method The event's method, or `null` for a snapshot.
+ * @property paramsJson The event's params as a JSON object text, or `null` for a snapshot.
+ */
+@Serializable
+data class ChatUpdateDto(val stateJson: String? = null, val method: String? = null, val paramsJson: String? = null)
+
+/**
+ * The answer to `call`.
+ *
+ * @property ok True if the bridge answered with a result.
+ * @property resultJson The result as JSON text (`ok` true); "null" otherwise.
+ * @property code The JSON-RPC error code (`ok` false); 0 if the failure has none (bridge not running).
+ * @property message The error message (`ok` false); "" otherwise.
+ * @property dataJson The error's `data` as JSON text, or `null`.
+ */
+@Serializable
+data class CallResultDto(
+    val ok: Boolean,
+    val resultJson: String = "null",
+    val code: Int = 0,
+    val message: String = "",
+    val dataJson: String? = null,
+)
+
+/**
+ * A password the backend needs from the user.
+ *
+ * @property id Number of the request; the answer names it.
+ * @property kind "first" for the one password, "admin" for the admin password.
+ * @property text The prompt text (with the reason the previous entry was refused, if any).
+ */
+@Serializable
+data class PasswordRequestDto(val id: Int, val kind: String, val text: String)
+
+/**
+ * The editor-side settings of the plugin for one project (stored by the backend, because the
+ * backend starts the bridge).
+ *
+ * @property mode How calu is reached: "auto" (WSL for a Windows IDE on a WSL project, else
+ *   local), "local", "wsl" or "ssh".
+ * @property caluCommand The calu command line, arguments separated by spaces (quotes group);
+ *   "" to find `calu` on PATH and in ~/.local/bin.
+ * @property sshHost SSH destination of the SSH mode (an alias of ~/.ssh/config, or user@host).
+ * @property sshDirectory The project directory on the server (SSH mode).
+ * @property sshOptions Further `ssh` arguments, separated by spaces.
+ * @property syncMode "calu" (files are synchronised through the bridge) or "none" (the user
+ *   synchronises the copy himself, e.g. with the IDE's Deployment); used in SSH mode only.
+ * @property notifications Show a notification with Allow / Deny when a step waits and the tool
+ *   window is hidden.
+ * @property serverSudo Add `--sudo` to the server command that is shown.
+ * @property serverInsecure Add `--insecure` to the server command that is shown.
+ * @property serverExtraArgs Further arguments of `calu serve`, separated by spaces.
+ */
+@Serializable
+data class PluginSettingsDto(
+    val mode: String = "auto",
+    val caluCommand: String = "",
+    val sshHost: String = "",
+    val sshDirectory: String = "",
+    val sshOptions: String = "",
+    val syncMode: String = "calu",
+    val notifications: Boolean = true,
+    val serverSudo: Boolean = false,
+    val serverInsecure: Boolean = false,
+    val serverExtraArgs: String = "",
+)
+
+/** The backend's side of the plugin, as the frontend calls it. */
+@Rpc
+interface CaluRemoteApi : RemoteApi<Unit> {
+    companion object {
+        /**
+         * Resolve the API (the backend's implementation, in-process or over the network).
+         *
+         * @return The API.
+         */
+        suspend fun getInstance(): CaluRemoteApi = RemoteApiProviderService.resolve(remoteApiDescriptor<CaluRemoteApi>())
+    }
+
+    /**
+     * Subscribe to the chat of a project. Side effect: starts the bridge of the project if it
+     * was not started yet.
+     *
+     * @param projectId The project.
+     * @return A flow of a snapshot followed by every later event, in order; empty if the
+     *   project is not open in the backend.
+     */
+    suspend fun updates(projectId: ProjectId): Flow<ChatUpdateDto>
+
+    /**
+     * Run one action of the chat. The action reports its own failures in the chat (a notice).
+     *
+     * Actions and their arguments (`argsJson` is a JSON object):
+     *
+     *     attach {session?}            start {kind, claude_session_id?, fork_before_turn?, prompt?, name?}
+     *     cancelStart {}               detach {}                    refreshSessions {}
+     *     send {text, inject, tab}     decide {key, allow, note?, answer?}
+     *     interrupt {}                 setModel {model}             setEffort {effort}
+     *     setLevel {level}             rename {session_id, name}    restartBridge {}
+     *     unlock {}                    openDiff {tool_use_id}       openFile {path, line?}
+     *     editChecker {name}           showContext {escalation_id?} openTerminal {}
+     *     setHonesty {mode}
+     *
+     * @param projectId The project.
+     * @param action The action's name.
+     * @param argsJson Its arguments as JSON object text.
+     * @return True if the action did what it names; false if it failed or is unknown.
+     */
+    suspend fun act(projectId: ProjectId, action: String, argsJson: String): Boolean
+
+    /**
+     * Send one bridge request and return its answer, for features that keep no state in the
+     * backend (settings form, model presets, lists of checkers and stored conversations).
+     *
+     * @param projectId The project.
+     * @param method An `ide.*` method, or with `session` true a method of the session protocol.
+     * @param paramsJson The params as JSON object text.
+     * @param session True to send it to the attached session (`session.call`).
+     * @return The result or the error; never throws for a failed request.
+     */
+    suspend fun call(projectId: ProjectId, method: String, paramsJson: String, session: Boolean): CallResultDto
+
+    /**
+     * The password requests of a project's bridge.
+     *
+     * @param projectId The project.
+     * @return A flow that yields the open request (if any) at once and each later one; `null`
+     *   when none is open.
+     */
+    suspend fun passwordRequests(projectId: ProjectId): Flow<PasswordRequestDto?>
+
+    /**
+     * Answer a password request.
+     *
+     * @param projectId The project.
+     * @param id The request's number; an answer to another number is ignored.
+     * @param password The entered password (possibly empty), or `null` if the user cancelled.
+     *   It is passed to the bridge and kept in the backend's memory; never stored or logged.
+     */
+    suspend fun answerPassword(projectId: ProjectId, id: Int, password: String?)
+
+    /**
+     * Read the editor-side settings.
+     *
+     * @param projectId The project.
+     * @return The settings; the defaults if the project is not open in the backend.
+     */
+    suspend fun getSettings(projectId: ProjectId): PluginSettingsDto
+
+    /**
+     * Store the editor-side settings. Side effect: if what decides how calu is reached changed,
+     * the bridge is stopped and started with the new settings.
+     *
+     * @param projectId The project.
+     * @param settings The new settings.
+     */
+    suspend fun setSettings(projectId: ProjectId, settings: PluginSettingsDto)
+}

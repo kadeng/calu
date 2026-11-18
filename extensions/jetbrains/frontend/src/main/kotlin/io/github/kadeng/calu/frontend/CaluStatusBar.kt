@@ -1,0 +1,47 @@
+package io.github.kadeng.calu.frontend
+
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.wm.StatusBar
+import com.intellij.openapi.wm.StatusBarWidget
+import com.intellij.openapi.wm.StatusBarWidgetFactory
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.util.Consumer
+import io.github.kadeng.calu.state.openEscalationCount
+import java.awt.Component
+import java.awt.event.MouseEvent
+
+/** Id of the status bar widget. */
+const val STATUS_WIDGET_ID: String = "calu.decisions"
+
+/**
+ * Build the widget's text.
+ *
+ * @param open Number of steps that wait for a decision.
+ * @return "" for none (the widget then takes no room), else "calu: N waiting".
+ */
+fun statusText(open: Int): String = if (open <= 0) "" else "calu: $open waiting"
+
+/** Registers the status bar widget that counts the open decisions. */
+class CaluStatusBarWidgetFactory : StatusBarWidgetFactory {
+    override fun getId(): String = STATUS_WIDGET_ID
+    override fun getDisplayName(): String = "calu: Open Decisions"
+    override fun isAvailable(project: Project): Boolean = true
+    override fun createWidget(project: Project): StatusBarWidget = CaluStatusBarWidget(project)
+}
+
+/**
+ * Shows how many steps wait for the user's decision; a click opens the tool window.
+ * `CaluFrontendService` asks the status bar to update it when the count changes.
+ *
+ * @param project The project.
+ */
+class CaluStatusBarWidget(private val project: Project) : StatusBarWidget, StatusBarWidget.TextPresentation {
+    override fun ID(): String = STATUS_WIDGET_ID
+    override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
+    override fun install(statusBar: StatusBar) {}
+    override fun dispose() {}
+    override fun getText(): String = statusText(openEscalationCount(CaluFrontendService.of(project).state.value))
+    override fun getAlignment(): Float = Component.CENTER_ALIGNMENT
+    override fun getTooltipText(): String = "Steps of Claude that wait for your decision in calu. Click to open the chat."
+    override fun getClickConsumer(): Consumer<MouseEvent> = Consumer { ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID)?.activate(null) }
+}

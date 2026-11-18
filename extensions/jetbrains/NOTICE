@@ -1,0 +1,15 @@
+calu for JetBrains IDEs
+Part of calu (https://github.com/kadeng/calu), licensed under the GNU General Public License,
+version 2 only (see LICENSE at the repository root).
+
+The build layout of this directory (settings.gradle.kts, build.gradle.kts, the build files of
+the shared, frontend and backend modules, the module descriptor files, and the wiring of the RPC
+interface and its provider) is derived from the
+
+    IntelliJ Platform Modular Plugin Template
+    https://github.com/JetBrains/intellij-platform-modular-plugin-template
+    Copyright JetBrains s.r.o., licensed under the Apache License, Version 2.0
+    (http://www.apache.org/licenses/LICENSE-2.0)
+
+which JetBrains publishes as a starting point for plugins. The files were changed for calu
+(names, versions, targets, dependencies, test setup).
