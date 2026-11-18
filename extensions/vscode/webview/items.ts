@@ -44,7 +44,7 @@ import {
   type ToolView,
   type ViewState,
 } from '../src/shared/viewState';
-import { actionButton, actionLink, el, icon, iconButton, type IconName } from './dom';
+import { actionButton, actionLink, el, icon, iconButton, shown, type IconName } from './dom';
 import { markdown } from './markdown';
 
 /** What the user chose and wrote on an open escalation card (kept while the card is rebuilt). */
@@ -114,7 +114,9 @@ export function itemDeps(item: Item, ctx: Ctx): unknown[] {
     case 'escalation':
       return [item, own(ctx.view.escalations, item.escalationKey), ctx.attached];
     case 'user':
-      return [item, expanded, ctx.attached];
+      return [item, expanded, ctx.attached, ctx.view.turnBase];
+    case 'relay':
+      return [item, ctx.view.agents.find((a) => a.agent_id === item.to)];
     default:
       return [item, expanded];
   }
@@ -147,7 +149,7 @@ function build(item: Item, ctx: Ctx): HTMLElement {
     case 'user':
       return renderUser(item, ctx);
     case 'assistant': {
-      const box = el('div', `item assistant${item.streaming ? ' streaming' : ''}`);
+      const box = el('div', `item assistant${item.streaming ? ' streaming' : ''}${item.stored ? ' stored' : ''}`);
       box.append(markdown(item.text, 'md', (text) => lookupFile(ctx.fileIndex(), text)));
       return box;
     }
@@ -165,6 +167,10 @@ function build(item: Item, ctx: Ctx): HTMLElement {
       return el('div', `item notice ${item.level === 'error' || item.level === 'warning' ? item.level : 'info'}`, item.text, { role: 'note' });
     case 'launch':
       return el('div', 'item hidden');
+    case 'relay':
+      return renderRelay(item, ctx);
+    case 'divider':
+      return renderDivider(item);
   }
 }
 
@@ -188,8 +194,10 @@ function expandToggle(id: string, expanded: boolean, lines: number): HTMLElement
 
 /**
  * Build a user message. The user's own words are a bubble with the actions "Rewind" and "Fork"
- * (visible on hover and focus); a message of another session or of calu / Claude Code is
- * labelled as what it is and shown quieter, long ones cut to a preview.
+ * (visible on hover and focus; a click on an attached image shows it larger); a message of
+ * another session or of calu / Claude Code is labelled as what it is and shown quieter, long
+ * ones cut to a preview. A message the user sent to a subagent (in that subagent's tab) has no
+ * actions. A recorded message (`stored`) looks quieter.
  *
  * @param item The user item.
  * @param ctx The render context.
@@ -207,7 +215,7 @@ function renderUser(item: Extract<Item, { kind: 'user' }>, ctx: Ctx): HTMLElemen
     if (preview.truncated) box.append(expandToggle(id, expanded, preview.lines));
     return box;
   }
-  const box = el('div', 'item user');
+  const box = el('div', `item user${item.stored ? ' stored' : ''}${item.to ? ' to-agent' : ''}`);
   const bubble = el('div', 'bubble');
   if (item.images.length > 0) {
     const row = el('div', 'thumbs');
@@ -219,12 +227,19 @@ function renderUser(item: Extract<Item, { kind: 'user' }>, ctx: Ctx): HTMLElemen
       }
       const img = el('img', 'thumb', undefined, { alt: 'Attached image', loading: 'lazy' });
       img.src = src;
-      row.append(img);
+      const zoom = actionButton('', 'zoomImage', { class: 'thumb-button', title: 'Show the image larger', 'aria-label': 'Show the attached image larger' });
+      zoom.append(img);
+      row.append(zoom);
     }
     bubble.append(row);
   }
   if (item.text) bubble.append(el('div', 'text', item.text));
   box.append(bubble);
+  // A message for a subagent is relayed in a turn of the main agent: nothing to rewind to here.
+  if (item.to) {
+    box.append(el('div', 'user-note', 'Sent to this subagent; the main agent relays it.'));
+    return box;
+  }
   const actions = el('div', 'user-actions');
   const data: Record<string, string> = { 'data-turn': String(item.turn ?? 1), ...(item.uuid ? { 'data-uuid': item.uuid } : {}) };
   const rewind = iconButton('undo', 'Rewind to before this message', 'rewind', {
@@ -235,9 +250,45 @@ function renderUser(item: Extract<Item, { kind: 'user' }>, ctx: Ctx): HTMLElemen
     ...data,
     title: 'Fork from here: a new session continues from before this turn; this one keeps running',
   });
-  rewind.disabled = fork.disabled = !ctx.attached;
+  // The first message of the conversation has nothing before it to go back to.
+  const first = ctx.view.turnBase !== null && item.turn <= 1;
+  if (first) {
+    rewind.title = fork.title = 'This is the first message of the conversation: nothing is before it. Start a new session instead.';
+  }
+  rewind.disabled = fork.disabled = !ctx.attached || first;
   actions.append(rewind, fork);
   box.append(actions);
+  return box;
+}
+
+/**
+ * Build the line of Main that stands for a message the user sent to a background subagent: who
+ * it went to, as a link to that subagent's tab (which shows the text).
+ *
+ * @param item The relay item.
+ * @param ctx The render context.
+ * @returns The element.
+ */
+function renderRelay(item: Extract<Item, { kind: 'relay' }>, ctx: Ctx): HTMLElement {
+  const agent = ctx.view.agents.find((a) => a.agent_id === item.to);
+  const name = agent?.description || agent?.subagent_type || item.to.slice(-6);
+  const box = el('div', 'item relay', undefined, {
+    role: 'note',
+    title: 'You wrote to this background subagent. The main agent relays the message to it; the text is in the subagent\'s tab.',
+  });
+  box.append(icon('agent'), el('span', '', 'Sent to subagent'), actionLink(name, 'tab', { 'data-tab': item.to, title: "Open the subagent's tab, which shows the message" }));
+  return box;
+}
+
+/**
+ * Build the divider above or below the recorded turns of a conversation.
+ *
+ * @param item The divider item.
+ * @returns The element (`role="separator"`).
+ */
+function renderDivider(item: Extract<Item, { kind: 'divider' }>): HTMLElement {
+  const box = el('div', `item divider ${item.mark}`, undefined, { role: 'separator' });
+  box.append(el('span', 'divider-text', item.text));
   return box;
 }
 
@@ -288,7 +339,7 @@ function renderChecker(item: Extract<Item, { kind: 'checker' }>): HTMLElement {
  * @returns The element (`role="separator"`).
  */
 function renderTurn(item: Extract<Item, { kind: 'turn' }>): HTMLElement {
-  const parts = [turnLabel(item)];
+  const parts = [item.stored ? 'end of the turn' : turnLabel(item)];
   if (item.costUsd !== null) parts.push(`$${item.costUsd.toFixed(4)}`);
   if (item.backgroundTasks > 0) parts.push(`${item.backgroundTasks} background task${item.backgroundTasks === 1 ? '' : 's'} running`);
   const box = el('div', `item turn${item.isError ? ' error' : ''}`, undefined, { role: 'separator' });
@@ -316,22 +367,24 @@ function renderTool(tool: ToolView | undefined, ctx: Ctx): HTMLElement {
   const launch = isAgentLaunch(tool.name);
   const open = ctx.openTools.has(tool.toolUseId);
   const click = rowClick(tool);
-  const box = el('div', `item tool ${launch ? 'launch' : kind}${open ? ' open' : ''}`, undefined, {
+  const box = el('div', `item tool ${launch ? 'launch' : kind}${open ? ' open' : ''}${tool.stored ? ' stored' : ''}`, undefined, {
     'data-tool-id': tool.toolUseId,
     'data-testid': `tool-${tool.toolUseId}`,
   });
+  // A recorded step has nothing to open but its own details.
   const row = el('div', 'tool-row', undefined, {
     role: 'button',
     tabindex: '0',
-    'data-action': 'rowClick',
+    'data-action': tool.stored ? 'toggleTool' : 'rowClick',
     'data-id': tool.toolUseId,
-    title: click.title,
+    title: tool.stored ? 'From the record: show what it holds about this step' : click.title,
     ...(click.kind === 'expand' ? { 'aria-expanded': String(open) } : {}),
   });
   row.append(icon(launch ? 'agent' : TOOL_ICONS[kind], 'tool-icon'), el('span', 'tool-name', tool.name), toolHeadElement(tool));
   const decision = decisionKind(tool.check?.decision);
   if (showsErrorChip(tool)) row.append(el('span', 'chip decision deny', 'error'));
-  if (launch) row.append(agentChip(tool, ctx));
+  if (tool.stored?.subagent) row.append(el('span', 'chip', 'subagent', { title: 'A subagent made this call' }));
+  if (launch && !tool.stored) row.append(agentChip(tool, ctx));
   if (tool.check) {
     row.append(
       actionButton(tool.check.decision, 'toggleTool', {
@@ -340,14 +393,14 @@ function renderTool(tool: ToolView | undefined, ctx: Ctx): HTMLElement {
         title: `${checkerLabel(tool.check.route)}: ${tool.check.decision}${tool.check.reason ? ` — ${oneLine(tool.check.reason, 200)}` : ''}. Click for the reason.`,
       }),
     );
-  } else if (!tool.result) {
+  } else if (!tool.result && !tool.stored) {
     row.append(el('span', 'chip decision pending', '…', { title: 'Not checked yet' }));
   }
   // One control at the end of the row: the menu (which also shows the details) if the tool has
   // one, else a details toggle, else the mark of a row that expands on click.
-  if (menuFor(tool)) {
+  if (menuFor(tool) && !tool.stored) {
     row.append(iconButton('more', 'Actions for this step', 'toolMenu', { class: 'quiet', 'data-id': tool.toolUseId, 'aria-haspopup': 'menu' }));
-  } else if (click.kind !== 'expand') {
+  } else if (click.kind !== 'expand' && !tool.stored) {
     row.append(
       iconButton(open ? 'chevronDown' : 'chevronRight', open ? 'Hide details' : 'Show details', 'toggleTool', {
         class: 'quiet',
@@ -390,11 +443,16 @@ function agentChip(tool: ToolView, ctx: Ctx): HTMLElement {
 function toolHeadElement(tool: ToolView): HTMLElement {
   const head = toolHead(tool);
   const file = fileClick(tool);
+  // A recorded step without its input shows what the checker said the step does.
+  if (tool.stored && !tool.stored.hasInput) {
+    const summary = tool.check?.summary ?? '';
+    return el('span', 'tool-head summary', summary, { title: summary });
+  }
   if (head.isPath) {
     // The directory shrinks with an ellipsis; the file name always stays visible.
     const path = splitPath(head.text);
     const parts = [el('span', 'path-dir', path.dir), el('span', 'path-base', path.base)];
-    if (!file) {
+    if (!file || tool.stored) {
       const span = el('span', 'tool-head path', undefined, { title: head.text });
       span.append(...parts);
       return span;
@@ -406,7 +464,7 @@ function toolHeadElement(tool: ToolView): HTMLElement {
   }
   const span = el('span', 'tool-head', undefined, { title: head.text });
   for (const part of splitByFiles(head.text, tool.files)) {
-    if (part.file === undefined) span.append(part.text);
+    if (part.file === undefined) span.append(shown(part.text));
     else span.append(toolFileLink(tool, part.file, part.text));
   }
   return span;
@@ -457,13 +515,17 @@ function toolBody(tool: ToolView, ctx: Ctx): HTMLElement {
   (tool.files ?? []).forEach((f, i) => links.append(toolFileLink(tool, i, middleTruncate(f.path, 60))));
   if (links.childElementCount > 0) body.append(links);
   const command = typeof tool.input.command === 'string' ? tool.input.command : undefined;
-  body.append(el('div', 'label', command !== undefined ? 'Command' : 'Input'));
-  body.append(el('pre', 'tool-input', command ?? JSON.stringify(tool.input, null, 2)));
+  if (tool.stored && !tool.stored.hasInput) {
+    body.append(el('div', 'tool-note', 'From calu\'s record of an earlier session: it holds the tool, the decision and the summary of this step, not its input or result.'));
+  } else {
+    body.append(el('div', 'label', command !== undefined ? 'Command' : 'Input'));
+    body.append(el('pre', 'tool-input', command ?? JSON.stringify(tool.input, null, 2)));
+  }
   if (tool.result) {
     const id = `result:${tool.toolUseId}`;
     const expanded = ctx.expanded.has(id);
     const preview = previewLines(tool.result.content, RESULT_PREVIEW_LINES, 'head');
-    body.append(el('div', 'label', tool.result.isError ? 'Result (error)' : 'Result'));
+    body.append(el('div', 'label', tool.stored ? 'Result (its beginning, from the record)' : tool.result.isError ? 'Result (error)' : 'Result'));
     body.append(el('pre', `tool-result${tool.result.isError ? ' error' : ''}`, expanded ? tool.result.content : preview.text || '(empty)'));
     if (preview.truncated) body.append(expandToggle(id, expanded, preview.lines));
   }
@@ -483,8 +545,11 @@ const OUTCOMES: Record<EscalationView['status'], string> = {
 
 /**
  * Build an escalation card. Open: the tool, the reason, the rendered step, the literal input on
- * expand, the agent's questions (if any), a note field and the buttons. Closed: one line with
- * the outcome that expands to the details.
+ * expand, the agent's questions (if any), a note field and the buttons. The row of buttons is
+ * the card's last child and sticks to the lower edge of the transcript (`.esc-actions` in
+ * `chat.css`), so Allow and Deny stay reachable while a card taller than the view scrolls.
+ * While the session cannot be reached the card stays open, says "connection lost" and its
+ * buttons are disabled. Closed: one line with the outcome that expands to the details.
  *
  * @param esc The escalation view (`undefined` if the state no longer holds it).
  * @param ctx The render context.
@@ -495,7 +560,7 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
   const attrs = { 'data-testid': `escalation-${esc.key}`, 'data-esc': esc.key, 'data-status': esc.status };
   if (esc.status !== 'open') return renderClosedEscalation(esc, attrs);
   const asks = esc.questions.length > 0;
-  const card = el('section', `item esc open${esc.pending ? ' pending' : ''}`, undefined, {
+  const card = el('section', `item esc open${esc.pending ? ' pending' : ''}${ctx.attached ? '' : ' offline'}`, undefined, {
     ...attrs,
     role: 'group',
     'aria-label': asks ? 'Claude asks' : `Approval needed: ${esc.toolName}`,
@@ -503,6 +568,13 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
   const title = el('div', 'esc-title');
   title.append(icon(asks ? 'question' : 'pause'), el('span', '', asks ? 'Claude asks' : 'Approval needed'));
   if (!asks) title.append(el('span', 'chip', esc.toolName));
+  if (!ctx.attached) {
+    title.append(
+      el('span', 'chip offline', 'connection lost', {
+        title: 'The session cannot be reached, so nothing can be decided here now. The step still waits in the session; attach again to decide.',
+      }),
+    );
+  }
   card.append(title);
   if (esc.reason) card.append(el('div', 'esc-reason', esc.reason));
   const draft = draftOf(ctx, esc);
@@ -531,15 +603,16 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
     allow.disabled = deny.disabled = disabled;
     row.append(allow, deny);
   }
-  row.append(
-    actionButton('Why?', 'why', {
-      class: 'text-button',
-      'data-key': esc.key,
-      'data-testid': `escalation-why-${esc.key}`,
-      title: 'Open the context the checker had for this step',
-    }),
-  );
+  const why = actionButton('Why?', 'why', {
+    class: 'text-button',
+    'data-key': esc.key,
+    'data-testid': `escalation-why-${esc.key}`,
+    title: 'Open the context the checker had for this step',
+  });
+  why.disabled = !ctx.attached;
+  row.append(why);
   if (esc.pending) row.append(el('span', 'esc-pending', 'Sending…', { role: 'status' }));
+  else if (!ctx.attached) row.append(el('span', 'esc-pending', 'Not connected', { role: 'status' }));
   card.append(row);
   return card;
 }

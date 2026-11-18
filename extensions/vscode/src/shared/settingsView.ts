@@ -200,6 +200,39 @@ export function cardMatches(keywords: string, search: string): boolean {
   return all.every((word) => hay.includes(word));
 }
 
+/** What the dialog's status text says about the saves. */
+export interface SaveSummary {
+  /** "" while there is nothing to say. */
+  text: string;
+  /** "saving" (a spinner), "saved" (a check mark), "error" (an error mark) or "idle". */
+  kind: 'idle' | 'saving' | 'saved' | 'error';
+}
+
+/**
+ * Summarise the saves of the settings dialog. Each setting has its own state (its row shows an
+ * error or the stored value); this text is the summary and never says "not saved" for all of
+ * them when only some failed.
+ *
+ *     a save is on its way                   -> "Saving…"
+ *     all settled, some refused, some saved  -> "2 saved · 1 not saved"
+ *     all settled, some refused              -> "1 setting not saved"
+ *     all settled, saved a moment ago        -> "Saved"
+ *     otherwise                              -> ""
+ *
+ * @param pending Number of settings whose save has no answer yet.
+ * @param saved Number of settings saved in the last moment (the dialog forgets them after a
+ *   few seconds).
+ * @param failed Number of settings whose last save calu refused and that were not saved since.
+ * @returns The text and its kind.
+ */
+export function saveSummary(pending: number, saved: number, failed: number): SaveSummary {
+  if (pending > 0) return { text: 'Saving…', kind: 'saving' };
+  if (failed > 0 && saved > 0) return { text: `${saved} saved · ${failed} not saved`, kind: 'error' };
+  if (failed > 0) return { text: `${failed} setting${failed === 1 ? '' : 's'} not saved`, kind: 'error' };
+  if (saved > 0) return { text: 'Saved', kind: 'saved' };
+  return { text: '', kind: 'idle' };
+}
+
 /**
  * Split a description into paragraphs.
  *

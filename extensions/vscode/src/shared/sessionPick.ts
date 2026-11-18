@@ -134,6 +134,28 @@ export function buildSessionPicks(sessions: Partial<IdeSessionsResult>, attached
   return picks;
 }
 
+/** Most characters of a session's name (calu's limit). */
+export const MAX_SESSION_NAME = 80;
+
+/**
+ * Name a session that is cut from another one.
+ *
+ * @param how "fork" (a copy that continues beside the original) or "rewind" (the conversation
+ *   from before one of its turns).
+ * @param from The display name of the session it is cut from (its name, or its directory's
+ *   last segment).
+ * @returns "fork of <from>" or "rewind of <from>", cut to `MAX_SESSION_NAME` characters with
+ *   "…"; "" if `from` is empty.
+ *
+ * @example derivedSessionName("rewind", "parser work") === "rewind of parser work"
+ */
+export function derivedSessionName(how: 'fork' | 'rewind', from: string): string {
+  const base = from.trim();
+  if (!base) return '';
+  const name = `${how} of ${base}`;
+  return name.length <= MAX_SESSION_NAME ? name : `${name.slice(0, MAX_SESSION_NAME - 1)}…`;
+}
+
 /**
  * Check a session name entered by the user.
  *

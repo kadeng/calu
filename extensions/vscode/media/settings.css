@@ -1324,3 +1324,23 @@ mark.hit {
     border-style: dotted;
   }
 }
+
+/* Inline marks of calu's descriptions (`code` and **strong**), built as elements by `setRich`. */
+.row-desc code,
+.preset-note code,
+.group-desc code,
+.setup-message code,
+.setup-advice code,
+.sub-lead code {
+  padding: 0 3px;
+  border-radius: 3px;
+  color: var(--vscode-textPreformat-foreground, inherit);
+  background: var(--vscode-textCodeBlock-background, transparent);
+  overflow-wrap: anywhere;
+}
+
+.row-desc strong,
+.group-desc strong,
+.setup-advice strong {
+  color: var(--vscode-foreground);
+}

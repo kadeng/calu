@@ -27,7 +27,7 @@ import {
   setupSummary,
   type SetupRow,
 } from '../src/shared/settingsView';
-import { add, button, el, icon, modelPicker, wireRadios, type IconName } from './settingsDom';
+import { add, button, el, icon, modelPicker, rich, wireRadios, type IconName } from './settingsDom';
 import { presetChoices } from './settingsRows';
 
 /** Ids of the cards (also their navigation ids: the section element has the id `sec-<id>`). */
@@ -199,8 +199,8 @@ export function renderSetupCard(data: SettingsData, state: CardState, host: Card
     const level = LEVELS[row.level];
     const item = el('li', `setup-item level-${row.level}`, '', { testid: `setup-item-${row.name}` });
     const text = el('div', 'setup-text');
-    add(text, add(el('div', 'setup-line'), el('strong', '', row.title), el('span', 'sr-only', ` (${level.text}) `), el('span', 'setup-message', row.message)));
-    if (row.advice) text.appendChild(el('div', 'setup-advice', row.advice));
+    add(text, add(el('div', 'setup-line'), el('strong', '', row.title), el('span', 'sr-only', ` (${level.text}) `), rich('span', 'setup-message', row.message)));
+    if (row.advice) text.appendChild(rich('div', 'setup-advice', row.advice));
     const fixes = el('div', 'setup-fixes');
     row.fixes.forEach((fix, index) => {
       const testid = index === 0 ? `setup-fix-${row.name}` : `setup-fix-${row.name}-${fix.action}`;
@@ -326,7 +326,7 @@ function renderUseOne(parts: ReturnType<typeof modelParts>, state: CardState, ho
         el('span', 'preset-group-name', presetGroup.group),
         add(el('div', 'preset-head'), el('span', 'preset-label', preset.label), preset.id === currentId ? el('span', 'badge', 'Current') : null),
         el('code', 'preset-model', model || 'no model stored'),
-        el('div', 'preset-note', preset.note ?? '', { id: `preset-${preset.id}-note` }),
+        rich('div', 'preset-note', preset.note ?? '', { id: `preset-${preset.id}-note` }),
       );
       radios.push(radio);
       ids.push(preset.id);

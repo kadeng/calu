@@ -13,6 +13,9 @@
 
 :root {
   --calu-accent: var(--vscode-terminal-ansiCyan, var(--vscode-charts-blue, var(--vscode-textLink-foreground)));
+  /* The accent as a text colour: terminal cyan is too pale for small text on a light background,
+     the link colour is readable in every theme. */
+  --calu-accent-text: var(--vscode-textLink-foreground, var(--calu-accent));
   --calu-ok: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--vscode-foreground)));
   --calu-warn: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow, var(--vscode-foreground)));
   --calu-err: var(--vscode-errorForeground, var(--vscode-charts-red, var(--vscode-foreground)));
@@ -163,12 +166,12 @@ a.link:hover, .md a:hover {
 .chip.decision { border-color: currentColor; font-weight: 600; letter-spacing: 0.02em; }
 button.chip.decision { background: transparent; cursor: pointer; }
 button.chip.decision:hover { background: var(--calu-hover); }
-.chip.decision.pass { color: var(--calu-accent); }
+.chip.decision.pass { color: var(--calu-accent-text); }
 .chip.decision.allow { color: var(--calu-ok); }
 .chip.decision.deny { color: var(--calu-err); }
 .chip.decision.escalate { color: var(--calu-warn); }
 .chip.decision.pending { color: var(--calu-muted); }
-.chip.agent-status.running { color: var(--calu-accent); border-color: currentColor; }
+.chip.agent-status.running { color: var(--calu-accent-text); border-color: currentColor; }
 .chip.agent-status.completed { color: var(--calu-ok); border-color: currentColor; }
 .chip.agent-status.failed { color: var(--calu-err); border-color: currentColor; }
 
@@ -278,7 +281,7 @@ select.pill option {
   white-space: nowrap;
 }
 .quiet-button .icon { width: 14px; height: 14px; }
-.quiet-button.honesty.clean { color: var(--calu-accent); }
+.quiet-button.honesty.clean { color: var(--calu-accent-text); }
 .quiet-button.honesty.open { color: var(--calu-warn); }
 .quiet-button.honesty.review { color: var(--vscode-foreground); }
 .header-row.quick select.pill { flex: 1 1 11em; }
@@ -826,7 +829,7 @@ a.tool-head.file-link { color: var(--vscode-textLink-foreground); }
   opacity: 0.85;
 }
 .queued-label { font-size: 0.82em; color: var(--calu-muted); }
-.queued.inject .queued-label { color: var(--calu-accent); }
+.queued.inject .queued-label { color: var(--calu-accent-text); }
 .queued-text { overflow-wrap: anywhere; }
 
 /* Fixed columns (icon | label | elapsed) so that changing glyphs, verbs and digits do not move
@@ -845,7 +848,7 @@ a.tool-head.file-link { color: var(--vscode-textLink-foreground); }
 .activity-icon { text-align: center; overflow: hidden; }
 .activity-label { overflow: hidden; text-overflow: ellipsis; }
 .activity-elapsed { font-variant-numeric: tabular-nums; }
-.activity.busy { color: var(--calu-accent); }
+.activity.busy { color: var(--calu-accent-text); }
 .activity.waiting { color: var(--calu-warn); }
 
 /* The composer: one rounded surface with the text field on top and a footer row inside. */
@@ -1089,3 +1092,130 @@ a.tool-head.file-link { color: var(--vscode-textLink-foreground); }
 @media (hover: none) {
   .user-actions, .copy-button, .tool-row .icon-button[data-action='toolMenu'] { opacity: 1; }
 }
+
+/* ---- Recorded turns, relayed messages, connection state -------------------------------------- */
+
+/* Turns from calu's record (an earlier session of the conversation) are a little quieter. */
+.item.divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+  font-size: 0.82em;
+  color: var(--calu-muted);
+}
+.item.divider::before, .item.divider::after {
+  content: '';
+  flex: 1;
+  min-width: 12px;
+  border-top: 1px dashed var(--calu-strong-border);
+}
+.divider-text { min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.item.user.stored .bubble { border-style: dashed; }
+.item.assistant.stored, .item.tool.stored { opacity: 0.88; }
+.tool-head.summary { font-family: var(--vscode-font-family); color: var(--calu-muted); }
+.tool-note { margin: 4px 0; font-size: 0.92em; color: var(--calu-muted); }
+
+/* A message the user sent to a subagent: its text is in the subagent's tab, a line in Main. */
+.item.relay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  font-size: 0.9em;
+  color: var(--calu-muted);
+}
+.item.relay .icon { width: 13px; height: 13px; }
+.user-note { margin-top: 2px; font-size: 0.82em; color: var(--calu-muted); }
+
+/* An open card while the session cannot be reached: still open, nothing can be decided. */
+.item.esc.open.offline { border-style: dashed; }
+.esc-title .chip.offline { color: var(--calu-err); border-color: currentColor; font-family: var(--vscode-font-family); }
+
+/* The buttons of an open card stay at the lower edge of the transcript while a card that is
+   taller than the view scrolls. The negative margins let the row cover the card's padding. */
+.item.esc.open > .esc-actions {
+  position: sticky;
+  bottom: -12px;
+  z-index: 1;
+  margin: 8px -12px -10px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--calu-border);
+  border-radius: 0 0 var(--calu-radius) var(--calu-radius);
+  background: var(--vscode-editorWidget-background, var(--calu-surface));
+}
+
+/* ---- A waiting session request, one-line hints ---------------------------------------------- */
+
+.spinner {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin-right: 8px;
+  vertical-align: -0.1em;
+  border: 2px solid var(--calu-border);
+  border-top-color: var(--calu-accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.setup-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  padding: 1px 2px 1px 8px;
+  border-left: 2px solid var(--calu-muted);
+  font-size: 0.9em;
+  color: var(--calu-muted);
+}
+.setup-line.warning { border-left-color: var(--calu-warn); }
+.setup-line.error { border-left-color: var(--calu-err); }
+.setup-line > .icon { flex: none; width: 13px; height: 13px; }
+.setup-line-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-line a.link { flex: none; white-space: nowrap; }
+.setup-line .icon-button { flex: none; padding: 1px; }
+.quiet-button .chip.stored-mode { color: var(--calu-warn); border-color: currentColor; font-size: 0.78em; }
+
+/* ---- Attached images ------------------------------------------------------------------------- */
+
+.thumb-button { padding: 0; border: none; background: none; cursor: zoom-in; border-radius: 4px; }
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: var(--vscode-editor-background);
+  cursor: zoom-out;
+}
+.lightbox-image { max-width: 100%; max-height: 100%; object-fit: contain; border: 1px solid var(--calu-border); }
+.lightbox-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--calu-surface);
+  border: 1px solid var(--calu-strong-border);
+}
+
+/* ---- Text direction -------------------------------------------------------------------------- */
+
+/* Text from Claude, tools and checkers may be in a right-to-left script. Each block takes its
+   direction from its own first strong character and is isolated from its neighbours, so a
+   Hebrew or Arabic paragraph reads right to left without reordering the text around it.
+   (Bidirectional control characters are replaced by placeholders in the script.) */
+.bubble .text, .foreign .text, .md p, .md li, .md h1, .md h2, .md h3, .md h4, .md blockquote, .md td, .md th,
+.esc-reason, .check-reason, .check-summary, .check-comment, .question-text, .side-question, .queued-text, .setup-message {
+  unicode-bidi: plaintext;
+}
+/* Commands, paths and code are always read left to right. */
+pre, code, .tool-head, .tool-name, .esc-line-text, .entry-title, .entry-directory, .session-name, .tab-label, .mark-path {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+pre { unicode-bidi: isolate; text-align: left; }

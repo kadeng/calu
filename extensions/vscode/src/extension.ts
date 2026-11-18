@@ -36,10 +36,19 @@ import { flagsForLevel } from './shared/levels';
 import type { ChatSettings, WebviewMessage } from './shared/messages';
 import { rootInstallCommand } from './shared/serverCommand';
 import type { FixAction } from './shared/settingsModel';
-import { isAttached, isKnownFile, own, sideHistory, type ViewEvent } from './shared/viewState';
+import { isAttached, isKnownFile, own, sessionTitle, sideHistory, type ViewEvent } from './shared/viewState';
 
 /** Milliseconds between two refreshes of the session list while the chat view is visible. */
 const SESSIONS_REFRESH_MS = 10_000;
+
+/** Most steps asked from `session.history` for the recorded turns above the transcript. */
+const HISTORY_STEPS = 500;
+
+/** Least milliseconds between two `usage.get` requests that events of a running turn cause. */
+const USAGE_REFRESH_MS = 2000;
+
+/** Milliseconds a session gets to report a honesty mode that was just stored for it. */
+const MODE_ANNOUNCE_MS = 4000;
 
 /** What `activate` returns (used by integration tests). */
 export interface CaluApi {
@@ -75,6 +84,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   const installer = new Installer(output);
   const diffs = new DiffStore();
   let nextSideId = 1;
+  /** Time (ms) of the last `usage.get` request. */
+  let lastUsageAt = 0;
   let lastHints = '';
   let lastServerHelp = '';
   /** True once the install offer for a missing calu was shown in this activation. */
@@ -99,9 +110,17 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
    * @param event The event.
    * @returns Nothing.
    */
-  const dispatch = (event: ViewEvent): void => chat.dispatch(event);
+  const dispatch = (event: ViewEvent): void => {
+    chat.dispatch(event);
+    // A session request that waits is shown in the chat: make sure the chat can be seen.
+    if (event.method === 'ui.starting' && typeof event.params.title === 'string' && event.params.slow !== true) void chat.reveal();
+  };
 
-  const sessions: Sessions = new Sessions(bridge, dispatch, onAttached, updateHints, output);
+  const sessions: Sessions = new Sessions(bridge, dispatch, onAttached, updateHints, output, (id) => {
+    const entry = chat.state.sessions.list.find((s) => s.id === id);
+    if (entry) return sessionTitle(entry);
+    return id === chat.state.session.sessionId ? sessionTitle({ id, name: '', directory: chat.state.session.workspace ?? '' }) : undefined;
+  });
 
   /**
    * Show a message in the chat's main list.
@@ -134,19 +153,122 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
 
   /**
    * Take over the result of `ide.attach` / `ide.start`: remember the diffs of recorded edits,
-   * rebuild the chat view, reload the context document and ask for the usage.
+   * rebuild the chat view (or continue it, with `resumed`), reload the context document, ask
+   * for the usage, and load what the replayed events do not hold: the recorded earlier turns of
+   * the conversation and the stored honesty mode.
    *
    * @param result The result.
+   * @param resumed True if `result.events` are only those after the ones the chat view has.
    * @returns Nothing.
    */
-  function onAttached(result: IdeAttachResult): void {
+  function onAttached(result: IdeAttachResult, resumed: boolean): void {
     for (const event of result.events ?? []) {
       if (event?.method === 'edit.diff') diffs.record(event.params as unknown as EditDiff);
     }
-    dispatch({ method: 'ui.attached', params: result as unknown as Record<string, unknown> });
+    dispatch({ method: 'ui.attached', params: { ...(result as unknown as Record<string, unknown>), resumed } });
     contextDocs.refresh();
     void refreshUsage();
     void chat.reveal();
+    if (!resumed) {
+      void loadHistory(result.session_id);
+      void loadStoredHonesty(result.session_id);
+    }
+  }
+
+  /**
+   * Ask the attached session for its recorded conversation and put the turns that the replayed
+   * events do not cover above the transcript (`ui.history`): the earlier turns of a resumed,
+   * forked or rewound conversation, or of a session whose replay buffer moved on. Failures are
+   * logged only; the transcript then shows the session's own events.
+   *
+   * @param sessionId The session the attach was for; the answer is dropped if another one is
+   *   attached when it arrives.
+   * @returns A promise that resolves when the answer was applied (never rejects).
+   */
+  async function loadHistory(sessionId: string): Promise<void> {
+    try {
+      const history = await bridge.session('session.history', { limit: HISTORY_STEPS });
+      if (sessions.attachedId !== sessionId) return;
+      dispatch({ method: 'ui.history', params: { session_id: sessionId, history: history as unknown as Record<string, unknown> } });
+    } catch (error) {
+      output.appendLine(`[calu] the recorded conversation was not loaded: ${errorText(error)}`);
+    }
+  }
+
+  /**
+   * Find the scope that decides `honesty.mode` for the attached session and the value stored
+   * there, as calu's terminal client does: the project's own setting wins over the global one.
+   *
+   * @param interactive True if the user asked for a change (a needed password is then asked).
+   * @returns `project`: the session's project if its settings name `honesty.mode`, else `null`
+   *   (the global scope); `mode`: the stored value, or `null` if it is unknown.
+   * @throws (rejects) Error if the settings cannot be read.
+   */
+  async function storedHonesty(interactive: boolean): Promise<{ project: string | null; mode: string | null }> {
+    const mode = (rows: readonly { key: string; value: unknown }[]): string | null => {
+      const value = rows.find((r) => r.key === 'honesty.mode')?.value;
+      return typeof value === 'string' ? value : null;
+    };
+    const project = chat.state.session.project;
+    if (project) {
+      const own = await bridge.request('ide.settings.get', { project }, interactive);
+      if (own.rows.find((r) => r.key === 'honesty.mode')?.is_set) return { project, mode: mode(own.rows) };
+    }
+    return { project: null, mode: mode((await bridge.request('ide.settings.get', { project: null }, interactive)).rows) };
+  }
+
+  /**
+   * Read the stored honesty mode for the header chip (`ui.honestyStored`), which shows it next
+   * to the session's mode when they differ. No password prompt; failures are logged only.
+   *
+   * @param sessionId The session the attach was for; the answer is dropped if another one is
+   *   attached when it arrives.
+   * @returns A promise that resolves when the answer was applied (never rejects).
+   */
+  async function loadStoredHonesty(sessionId: string): Promise<void> {
+    try {
+      const stored = await storedHonesty(false);
+      if (sessions.attachedId === sessionId) dispatch({ method: 'ui.honestyStored', params: { mode: stored.mode } });
+    } catch (error) {
+      output.appendLine(`[calu] the stored honesty mode was not read: ${errorText(error)}`);
+    }
+  }
+
+  /**
+   * Store `honesty.mode` where the attached session reads it from, and say what happened: a
+   * running session reads the change by itself and reports it (`honesty.update`); if it has
+   * not done so after `MODE_ANNOUNCE_MS`, the chat says that the session still uses its mode
+   * (the header then shows both).
+   *
+   * @param mode "off", "track" or "enforce".
+   * @returns A promise that resolves when the mode was stored and the notice was shown.
+   * @throws (rejects) Error if the setting cannot be stored.
+   */
+  async function setHonestyMode(mode: string): Promise<void> {
+    const attached = isAttached(chat.state);
+    const scope = attached ? (await storedHonesty(true)).project : null;
+    await bridge.request('ide.settings.set', { key: 'honesty.mode', value: mode, project: scope });
+    dispatch({ method: 'ui.honestyStored', params: { mode } });
+    void settingsPanel.reload();
+    const where = scope ? `the settings of the project ${scope}` : "calu's global settings";
+    if (!attached) {
+      notice('info', `Honesty mode "${mode}" is stored in ${where}.`);
+      return;
+    }
+    const sessionId = sessions.attachedId;
+    const until = Date.now() + MODE_ANNOUNCE_MS;
+    while (Date.now() < until && sessions.attachedId === sessionId && chat.state.honesty?.mode !== mode) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (sessions.attachedId !== sessionId) return;
+    if (chat.state.honesty?.mode === mode) notice('info', `Honesty mode is now "${mode}" (stored in ${where}); the session uses it.`);
+    else {
+      notice(
+        'warning',
+        `Honesty mode "${mode}" is stored in ${where}, but this session still reports "${chat.state.honesty?.mode ?? 'off'}": ` +
+          'it has not read the change. Sessions started from now on use the stored mode.',
+      );
+    }
   }
 
   /**
@@ -186,17 +308,19 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
    */
   async function refreshUsage(): Promise<void> {
     if (!isAttached(chat.state)) return;
+    lastUsageAt = Date.now();
     try {
       const usage = await bridge.session('usage.get', {});
       dispatch({ method: 'ui.usage', params: usage as unknown as Record<string, unknown> });
     } catch (error) {
-      output.appendLine(`[calu] usage.get: ${errorText(error)}`);
+      output.appendLine(`[calu] the usage of the session was not read: ${errorText(error)}`);
     }
   }
 
   /**
-   * After the bridge started or was unlocked: check the setup, attach to the session of the
-   * workspace if one runs, and load the session list. If the bridge reports that it is locked
+   * After the bridge started or was unlocked: check the setup, attach again to the session
+   * that was attached before the bridge went away (asking only for the events the chat has not
+   * seen), else to the session of the workspace if one runs, and load the session list. If the bridge reports that it is locked
    * and the chat view is visible, the one password is asked for (once per bridge process).
    *
    * @param mayAsk False to skip the password prompt (after the user dismissed it).
@@ -210,7 +334,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       if (!(await bridge.unlock().catch(() => false))) return;
       await sessions.refreshStatus();
     }
-    await sessions.attach(null, true);
+    const before = sessions.lastAttachedId;
+    const afterSeq = before !== null && chat.state.session.sessionId === before ? chat.state.lastSeq : 0;
+    if (!(await sessions.reattach(afterSeq))) await sessions.attach(null, true);
     await sessions.refresh();
   }
 
@@ -244,7 +370,7 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       const found = (history.turns ?? []).find((t) => t.prompt_uuid === uuid);
       return found ? found.index : turn;
     } catch (error) {
-      output.appendLine(`[calu] session.history: ${errorText(error)}`);
+      output.appendLine(`[calu] the recorded turns of the conversation were not read: ${errorText(error)}`);
       return turn;
     }
   }
@@ -288,7 +414,7 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       );
       if (choice !== 'Rewind') return;
     }
-    const started = await sessions.forkBefore(conversation, number, rewind ? 'Rewinding the conversation' : 'Forking the conversation');
+    const started = await sessions.forkBefore(conversation, number, rewind);
     if (started && rewind && message?.kind === 'user') chat.send({ type: 'restoreInput', text: message.text });
   }
 
@@ -407,7 +533,7 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       try {
         return (await bridge.session('checkers.get', {})).checkers ?? [];
       } catch (error) {
-        output.appendLine(`[calu] checkers.get: ${errorText(error)}`);
+        output.appendLine(`[calu] the checkers of the session were not listed (calu's settings are asked instead): ${errorText(error)}`);
       }
     }
     return (await bridge.request('ide.settings.get', { project: null })).checkers ?? [];
@@ -608,10 +734,15 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       void refreshUsage();
       if (mode === 'all' && chatUnseen()) void announceTurnEnd();
     }
+    // Claude Code reports its limits while it works: the context meter is asked again then
+    // (not more often than every `USAGE_REFRESH_MS`), so that it moves during a long turn.
+    if (method === 'usage.update' && Date.now() - lastUsageAt >= USAGE_REFRESH_MS) void refreshUsage();
   }
 
   /**
-   * React to a lost connection to the session: offer to attach again.
+   * React to a lost connection to the session: offer to attach again. "Attach again" tries
+   * the same session first (with the events the chat has not seen) and shows the session list
+   * only if that session is gone.
    *
    * @param message The bridge's explanation.
    * @returns A promise that resolves after the user's choice was handled.
@@ -624,7 +755,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       `calu: the connection to the session was lost${message ? `: ${message}` : '.'}`,
       'Attach again',
     );
-    if (choice === 'Attach again') await sessions.pick();
+    if (choice !== 'Attach again') return;
+    const same = sessions.lastAttachedId !== null && chat.state.session.sessionId === sessions.lastAttachedId;
+    if (!(await sessions.reattach(same ? chat.state.lastSeq : 0))) await sessions.pick();
   }
 
   // ---------------------------------------------------------------- settings of the editor
@@ -859,12 +992,11 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       case 'forkConversation':
         await forkConversation();
         return;
+      case 'cancelStart':
+        await sessions.cancelStart();
+        return;
       case 'setHonestyMode':
-        await run('Changing the honesty mode', async () => {
-          await bridge.request('ide.settings.set', { key: 'honesty.mode', value: message.mode, project: null });
-          notice('info', `Honesty mode "${message.mode}" is stored in calu's settings.`);
-          void settingsPanel.reload();
-        });
+        await run('Changing the honesty mode', () => setHonestyMode(message.mode));
         return;
       case 'honestyReview':
         await run('The honesty review', async () => {

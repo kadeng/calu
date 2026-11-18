@@ -12,13 +12,33 @@
  * (`element.style.x = …`), which the policy allows.
  */
 
+import { neutraliseBidi } from '../src/shared/bidi';
+
+/** Attributes whose value is shown to the user as text (tooltips, names, placeholders). */
+const TEXT_ATTRIBUTES = new Set(['title', 'aria-label', 'placeholder', 'alt']);
+
+/**
+ * Prepare a text from calu for display: bidirectional control characters become visible
+ * placeholders (`neutraliseBidi`), so that a text cannot be drawn in another order than it is
+ * stored in. Every text node and tooltip of the chat goes through this function: `el()` applies
+ * it, `markdown()` applies it to its source, and code that sets `textContent` or appends a
+ * string itself calls it.
+ *
+ * @param text Any text.
+ * @returns The text to show.
+ */
+export function shown(text: string): string {
+  return neutraliseBidi(text);
+}
+
 /**
  * Create an element with optional class, text content and attributes.
  *
  * @param tag Tag name.
  * @param cls Class attribute ("" for none).
- * @param text Text content (inserted as text, never as HTML).
- * @param attrs Further attributes.
+ * @param text Text content (inserted as text, never as HTML; passed through `shown`).
+ * @param attrs Further attributes; `title`, `aria-label`, `placeholder` and `alt` are passed
+ *   through `shown`, every other value is set as given (ids and data for the handlers).
  * @returns The new element.
  */
 export function el<K extends keyof HTMLElementTagNameMap>(
@@ -29,8 +49,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 ): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = shown(text);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, TEXT_ATTRIBUTES.has(k) ? shown(v) : v);
   return node;
 }
 

@@ -60,6 +60,7 @@ import {
   applyEvent,
   formatAnswer,
   honestyChip,
+  honestyStoredNote,
   initialViewState,
   isAttached,
   messageTarget,
@@ -67,7 +68,7 @@ import {
   own,
   type ViewState,
 } from '../src/shared/viewState';
-import { actionButton, copyText, el, icon, iconButton, logo, reveal, sameChildren, setSection } from './dom';
+import { actionButton, actionLink, copyText, el, icon, iconButton, logo, reveal, sameChildren, setSection, shown } from './dom';
 import { draftOf, itemDeps, renderItem, renderSubagentHead, subagentHeadDeps, type Ctx } from './items';
 import { markdown } from './markdown';
 import { closePopup, closePopupIfOutside, openPopup, openPopupId, refreshPopup } from './popup';
@@ -90,6 +91,8 @@ interface UiState {
   focusSeq: number;
   /** True while the composer asks side questions. */
   side: boolean;
+  /** Ids of the one-line hints the user dismissed (`SetupCard.compact`). */
+  dismissed: string[];
 }
 
 /** Most drafts kept in `UiState.drafts`. */
@@ -114,6 +117,7 @@ function loadUi(): UiState {
     drafts,
     focusSeq: typeof ui.focusSeq === 'number' ? ui.focusSeq : 0,
     side: ui.side === true,
+    dismissed: Array.isArray(ui.dismissed) ? ui.dismissed.filter((d): d is string => typeof d === 'string').slice(0, 20) : [],
   };
 }
 
@@ -264,7 +268,7 @@ function buildSkeleton(): void {
  * @returns Nothing.
  */
 function announce(text: string): void {
-  announcer.textContent = text;
+  announcer.textContent = shown(text);
 }
 
 // ------------------------------------------------------------------ header
@@ -286,7 +290,11 @@ function buildSessionButton(): HTMLElement[] {
   });
   b.append(el('span', `dot ${label.dot}`), el('span', 'session-name', label.label));
   const elsewhere = view.sessions.list.filter((s) => s.id !== view.sessions.attachedId).reduce((n, s) => n + s.openEscalations, 0);
-  if (elsewhere > 0) b.append(el('span', 'badge', String(elsewhere), { title: `${elsewhere} step(s) wait for a decision in other sessions` }));
+  if (elsewhere > 0) {
+    const tip = `${elsewhere} step${elsewhere === 1 ? ' waits' : 's wait'} for your decision in other sessions (not in this one). Open the menu to see where.`;
+    b.title = shown(`${label.title}\n${tip}`);
+    b.append(el('span', 'badge', String(elsewhere), { title: tip, 'aria-label': tip }));
+  }
   b.append(icon('chevronDown'));
   return [b];
 }
@@ -385,14 +393,19 @@ function buildQuickRow(): HTMLElement[] {
   context.append(icon('book'), el('span', '', 'Context'));
   context.disabled = !attached;
   const chip = honestyChip(view.honesty);
+  const stored = honestyStoredNote(view.honesty, view.honestyStored);
+  const storedTip = stored
+    ? ` calu's settings store the mode "${view.honestyStored}", which this session does not use (yet): a session reads a changed mode by itself; sessions started from now on use it.`
+    : '';
   const honesty = actionButton('', 'honestyMenu', {
     class: `quiet-button honesty ${chip.kind}`,
     'data-testid': 'header-honesty',
     'aria-haspopup': 'menu',
     'aria-expanded': 'false',
-    title: `${chip.label || 'Code honesty is off'}. Click for the mode, the open marks and a review.`,
+    title: `${chip.label || 'Code honesty is off'}.${storedTip} Click for the mode, the open marks and a review.`,
   });
   honesty.append(icon('shield'), el('span', '', chip.kind === 'off' ? 'Honesty: off' : chip.label));
+  if (stored) honesty.append(el('span', 'chip stored-mode', stored));
   const level = levelOf(view.autoEscalate);
   const options: [string, string][] = LEVELS.map((l) => [l.id, l.name]);
   if (level === 'custom') options.unshift(['', levelLabel(view.autoEscalate)]);
@@ -420,7 +433,17 @@ function buildHonestyMenu(): HTMLElement {
   for (const m of HONESTY_MODES) {
     menu.append(actionButton(texts[m], 'honestyMode', { class: 'menu-item', role: 'menuitemradio', 'aria-checked': String(m === mode), 'data-id': m }));
   }
-  menu.append(el('div', 'menu-note', 'The mode is stored in calu\'s settings; a running session keeps the mode it started with.', { role: 'presentation' }));
+  const stored = honestyStoredNote(h, view.honestyStored);
+  menu.append(
+    el(
+      'div',
+      'menu-note',
+      stored
+        ? `calu's settings store "${view.honestyStored}"; this session still uses "${mode}". Sessions started from now on use the stored mode.`
+        : "The mode is stored in calu's settings; the running session reads the change and reports it here.",
+      { role: 'presentation' },
+    ),
+  );
   if (h && mode !== 'off') {
     const chip = honestyChip(h);
     menu.append(el('div', 'menu-separator', undefined, { role: 'separator' }), el('div', 'menu-heading', chip.label, { role: 'presentation' }));
@@ -480,7 +503,7 @@ function renderHeader(): void {
     const anchor = sessionSlot.querySelector('button');
     if (anchor) refreshPopup('sessions', buildSessionMenu(), { anchor });
   }
-  const quickSig = JSON.stringify([view.honesty, view.autoEscalate, isAttached(view)]);
+  const quickSig = JSON.stringify([view.honesty, view.honestyStored, view.autoEscalate, isAttached(view)]);
   if (setSection(quickSlot, quickSig, buildQuickRow)) {
     const anchor = quickSlot.querySelector('[data-testid="header-honesty"]');
     if (anchor) refreshPopup('honesty', buildHonestyMenu(), { anchor });
@@ -565,8 +588,11 @@ function switchTab(tab: string): void {
  * @returns The element, with `data-testid="hint-<id>"`.
  */
 function buildSetupCard(card: SetupCard): HTMLElement {
-  const box = el('section', `setup-card ${card.level}`, undefined, { 'data-testid': `hint-${card.id}` });
-  box.append(el('p', 'setup-message', card.message));
+  if (card.compact) return buildCompactCard(card);
+  const box = el('section', `setup-card ${card.level}${card.busy ? ' busy' : ''}`, undefined, { 'data-testid': `hint-${card.id}`, ...(card.busy ? { role: 'status' } : {}) });
+  const message = el('p', 'setup-message', card.message);
+  if (card.busy) message.prepend(el('span', 'spinner', undefined, { 'aria-hidden': 'true' }));
+  box.append(message);
   const help = view.serverHelp;
   if (card.serverHelp && help) {
     const code = el('div', 'code-block', undefined, { 'data-testid': 'server-help' });
@@ -601,15 +627,33 @@ function buildSetupCard(card: SetupCard): HTMLElement {
 }
 
 /**
+ * Build a hint as one line: the start of its message (the whole text is the tooltip), its
+ * action as a link, and "Dismiss". Used for hints that stay while a session is attached.
+ *
+ * @param card The card (`compact`).
+ * @returns The element, with `data-testid="hint-<id>"`.
+ */
+function buildCompactCard(card: SetupCard): HTMLElement {
+  const box = el('div', `setup-line ${card.level}`, undefined, { 'data-testid': `hint-${card.id}`, role: 'note' });
+  box.append(icon('warning'), el('span', 'setup-line-text', card.short ?? card.message, { title: card.message }));
+  if (card.primary) {
+    box.append(actionLink(card.primary.label, 'postJson', { 'data-message': JSON.stringify(card.primary.message), 'data-testid': `hint-action-${card.id}` }));
+  }
+  box.append(iconButton('close', 'Dismiss this notice', 'dismissHint', { class: 'quiet', 'data-id': card.id }));
+  return box;
+}
+
+/**
  * Update the setup area above the transcript. With an empty transcript it fills the view and
- * shows calu's mark; otherwise it is a compact block above the transcript.
+ * shows calu's mark; otherwise it is a compact block above the transcript. One-line hints
+ * (`SetupCard.compact`) never replace the transcript.
  *
  * @returns True if the transcript is empty and the setup area replaces it.
  */
 function renderSetup(): boolean {
-  const cards = setupCards(view);
+  const cards = setupCards(view, ui.dismissed);
   const empty = (own(view.items, MAIN) ?? []).length === 0 && view.agents.length === 0;
-  const full = empty && cards.length > 0;
+  const full = empty && cards.some((c) => !c.compact);
   setupSlot.className = `setup-slot${full ? ' full' : ''}`;
   setSection(setupSlot, JSON.stringify([cards, view.serverHelp, cards.some((c) => c.sessionList) ? view.sessions.list : 0, full]), () => [
     ...(full ? [logo()] : []),
@@ -922,7 +966,8 @@ function buildFooterControls(): HTMLElement[] {
   const effort = view.session.effort ?? 'default';
   const efforts: [string, string][] = CLAUDE_EFFORTS.map((e) => [e, e === 'default' ? 'effort: default' : e]);
   if (!(CLAUDE_EFFORTS as readonly string[]).includes(effort)) efforts.push([effort, effort]);
-  const meter = usageMeter(view.usage);
+  const phase = sessionPhase(view.session.state);
+  const meter = usageMeter(view.usage, attached && (phase === 'busy' || phase === 'waiting'));
   const usage = actionButton('', 'usage', {
     class: `meter ${meter.level}`,
     'data-testid': 'header-usage',
@@ -1009,8 +1054,9 @@ function renderComposer(): void {
       : target.to === null
         ? target.reason
         : `Message ${target.label}…`;
-  if (input.placeholder !== placeholder) {
-    input.placeholder = placeholder;
+  // The reason may name a subagent (text from Claude).
+  if (input.placeholder !== shown(placeholder)) {
+    input.placeholder = shown(placeholder);
     if (input.value === '') growInput();
   }
   composer.className = `composer${ui.side ? ' side-mode' : ''}${input.disabled ? ' disabled' : ''}`;
@@ -1026,7 +1072,7 @@ function renderComposer(): void {
   const waiting = view.side.filter((s) => s.answer === undefined && s.error === undefined).length;
   sideButton.classList.toggle('has-waiting', waiting > 0);
 
-  setSection(footerSlot, JSON.stringify([view.session.model, view.session.effort, view.usage, attached]), buildFooterControls);
+  setSection(footerSlot, JSON.stringify([view.session.model, view.session.effort, view.usage, attached, busy]), buildFooterControls);
   if (openPopupId() === 'usage') refreshPopup('usage', buildUsagePopover());
 
   setSection(thumbsSlot, attachments.map((a) => a.data.length).join(','), () =>
@@ -1050,7 +1096,7 @@ function renderComposer(): void {
           : busy
             ? 'Enter: for the next turn · Ctrl+Enter: into the running turn · Shift+Enter: new line'
             : 'Enter: send · Shift+Enter: new line · /: commands';
-  if (hintEl.textContent !== hint) hintEl.textContent = hint;
+  if (hintEl.textContent !== shown(hint)) hintEl.textContent = shown(hint);
   hintEl.className = `hint${noticeText ? ' notice' : ''}`;
 }
 
@@ -1755,7 +1801,57 @@ function onClick(event: MouseEvent): void {
     case 'completion':
       acceptCompletion(Number(data.index), true);
       return;
+    case 'dismissHint':
+      if (data.id && !ui.dismissed.includes(data.id)) ui.dismissed = [...ui.dismissed, data.id].slice(-20);
+      render();
+      return;
+    case 'zoomImage': {
+      const img = actionEl.querySelector('img');
+      if (img) openLightbox(img.src, actionEl);
+      return;
+    }
+    case 'closeLightbox':
+      closeLightbox();
+      return;
   }
+}
+
+// ------------------------------------------------------------------ image lightbox
+
+/** The open lightbox and the element that gets the focus back when it closes. */
+let lightbox: { box: HTMLElement; opener: HTMLElement } | undefined;
+
+/**
+ * Show an attached image large, over the whole view. A click anywhere or Escape closes it.
+ *
+ * @param src The image's `data:` URL (from a thumbnail of the transcript).
+ * @param opener The thumbnail's button; it gets the keyboard focus back on close.
+ * @returns Nothing. Side effect: appends the overlay to `#app` and moves the focus to its
+ *   close button.
+ */
+function openLightbox(src: string, opener: HTMLElement): void {
+  closeLightbox();
+  if (!src.startsWith('data:image/')) return;
+  const box = el('div', 'lightbox', undefined, { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Attached image', 'data-action': 'closeLightbox' });
+  const img = el('img', 'lightbox-image', undefined, { alt: 'Attached image, large' });
+  img.src = src;
+  const close = iconButton('close', 'Close (Escape)', 'closeLightbox', { class: 'lightbox-close' });
+  box.append(img, close);
+  document.getElementById('app')!.append(box);
+  lightbox = { box, opener };
+  close.focus();
+}
+
+/**
+ * Close the lightbox, if one is open, and give the focus back to the thumbnail.
+ *
+ * @returns Nothing.
+ */
+function closeLightbox(): void {
+  if (!lightbox) return;
+  lightbox.box.remove();
+  if (lightbox.opener.isConnected) lightbox.opener.focus();
+  lightbox = undefined;
 }
 
 /**
@@ -1768,6 +1864,11 @@ function onClick(event: MouseEvent): void {
  */
 function onDocumentKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
+  if (event.key === 'Escape' && lightbox) {
+    event.preventDefault();
+    closeLightbox();
+    return;
+  }
   if ((event.key === 'Enter' || event.key === ' ') && target.matches('[role="button"][data-action], [role="option"][data-action]')) {
     event.preventDefault();
     target.click();

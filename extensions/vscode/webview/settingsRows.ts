@@ -21,7 +21,7 @@
 import type { ModelPreset } from '../src/bridgeProtocol';
 import { formatControlValue, parseControlValue, type SettingsRowView } from '../src/shared/settingsModel';
 import { paragraphs, presetModel, sameJson } from '../src/shared/settingsView';
-import { add, button, el, modelPicker, setHighlighted, writeText, type PickerChoice } from './settingsDom';
+import { add, button, el, modelPicker, setHighlighted, setRich, writeText, type PickerChoice } from './settingsDom';
 
 /** What a row needs from the dialog. */
 export interface RowHost {
@@ -262,7 +262,7 @@ export function paintRow(handle: RowHandle, search: string): void {
   handle.desc.textContent = '';
   for (const paragraph of paragraphs(handle.view.description)) {
     const p = el('p');
-    setHighlighted(p, paragraph, search);
+    setRich(p, paragraph, search);
     handle.desc.appendChild(p);
   }
 }

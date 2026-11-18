@@ -9,6 +9,7 @@ import {
   formatAnswer,
   honestyChip,
   initialViewState,
+  isAttached,
   openEscalationCount,
   parseQuestions,
   sessionTitle,
@@ -74,12 +75,63 @@ describe('escalations', () => {
     expect(applyEvent(s, ev('ui.decisionPending', { escalation_key: 'unknown' }))).toBe(s);
   });
 
-  it('cancels open escalations when the bridge exits or the session stops', () => {
+  it('cancels open escalations when the session stops or is left', () => {
     const open = applyEvent(initialViewState(), request('e'));
-    expect(applyEvent(open, ev('bridge.status', { status: 'exited', message: 'gone' })).escalations.e.status).toBe('cancelled');
     expect(applyEvent(open, ev('session.state', { state: 'stopped' })).escalations.e.status).toBe('cancelled');
     expect(applyEvent(open, ev('session.state', { state: 'failed' })).escalations.e.status).toBe('cancelled');
+    expect(applyEvent(open, ev('ui.detached')).escalations.e.status).toBe('cancelled');
     expect(applyEvent(open, ev('session.state', { state: 'escalated' })).escalations.e.status).toBe('open');
+  });
+
+  it('keeps the cards open when the bridge or the connection is lost: that is no decision', () => {
+    let open = applyEvents(initialViewState(), [
+      ev('bridge.status', { status: 'running' }),
+      ev('ui.attached', { session_id: 's1', snapshot: { state: 'escalated', workspace: '/w', escalations: [request('e').params] }, events: [request('e')] }),
+    ]);
+    open = applyEvent(open, ev('ui.decisionPending', { escalation_key: 'e' }));
+    for (const loss of [ev('bridge.status', { status: 'exited', message: 'gone' }), ev('ui.link', { state: 'lost', message: 'gone' })]) {
+      const lost = applyEvent(open, loss);
+      // Still open, and a decision that was on its way no longer counts as sent.
+      expect(lost.escalations.e).toMatchObject({ status: 'open', pending: false });
+      expect(openEscalationCount(lost)).toBe(1);
+      expect(isAttached(lost)).toBe(false);
+      // The session it had stays known, so that the same one is attached again.
+      expect(lost.session.sessionId).toBe('s1');
+    }
+  });
+
+  it('continues the transcript when the same session is attached again without a gap', () => {
+    const first = applyEvents(initialViewState(), [
+      ev('bridge.status', { status: 'running' }),
+      ev('ui.attached', {
+        session_id: 's1',
+        snapshot: { state: 'escalated', workspace: '/w', last_seq: 3, escalations: [request('e').params] },
+        events: [ev('user.input', { text: 'go', seq: 1 }), ev('assistant.text', { text: 'on it', seq: 2 }), { ...request('e'), params: { ...request('e').params, seq: 3 } }],
+      }),
+      ev('ui.honestyStored', { mode: 'track' }),
+      ev('bridge.status', { status: 'exited' }),
+      ev('bridge.status', { status: 'running' }),
+    ]);
+    const kinds = (s: typeof first): string[] => s.items[MAIN].map((i) => i.kind);
+    expect(kinds(first)).toEqual(['user', 'assistant', 'escalation']);
+    // The decision was made elsewhere meanwhile; the replay after seq 3 says so.
+    const resumed = applyEvent(
+      first,
+      ev('ui.attached', {
+        session_id: 's1',
+        resumed: true,
+        snapshot: { state: 'running', workspace: '/w', last_seq: 5, escalations: [] },
+        events: [ev('escalation.resolved', { escalation_id: 'e', decision: 'allow', seq: 4 }), ev('assistant.text', { text: 'done', seq: 5 })],
+      }),
+    );
+    expect(kinds(resumed)).toEqual(['user', 'assistant', 'escalation', 'assistant']);
+    expect(resumed.escalations.e.status).toBe('allow');
+    expect(resumed.items[MAIN].slice(0, 3)).toEqual(first.items[MAIN]);
+    expect(resumed).toMatchObject({ lastSeq: 5, honestyStored: 'track', link: { status: 'attached' } });
+    // `resumed` for another session than the one shown is a full attach.
+    const other = applyEvent(first, ev('ui.attached', { session_id: 's2', resumed: true, snapshot: { state: 'idle', workspace: '/w' }, events: [] }));
+    expect(other.items[MAIN]).toEqual([]);
+    expect(other.honestyStored).toBeNull();
   });
 });
 

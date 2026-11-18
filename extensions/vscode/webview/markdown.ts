@@ -13,7 +13,7 @@
  */
 
 import MarkdownIt from 'markdown-it';
-import { actionButton, el, icon } from './dom';
+import { actionButton, el, icon, shown } from './dom';
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false });
 
@@ -60,7 +60,9 @@ export type FileResolver = (text: string) => { path: string; line?: number } | u
 export function markdown(text: string, cls: string, resolveFile?: FileResolver): HTMLElement {
   const div = el('div', cls);
   // Safe: markdown-it escapes raw HTML (`html: false`) and validates link targets.
-  div.innerHTML = renderMarkdownHtml(text);
+  // Bidirectional control characters are made visible before rendering (`shown`), so they
+  // cannot reorder a rendered command, path or link text.
+  div.innerHTML = renderMarkdownHtml(shown(text));
   for (const pre of [...div.querySelectorAll('pre')]) {
     const wrap = el('div', 'code-block');
     pre.replaceWith(wrap);

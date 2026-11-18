@@ -10,6 +10,9 @@
  *     forkBefore()  user message of the chat ──► ide.start {kind: "resume", fork_before_turn}
  *     forkConversation()                     ──► ide.start {kind: "fork"}
  *     newSession()  input boxes (first message, name; both optional) ──► ide.start {kind: "new"}
+ *     ide.start waits ──► `ui.starting {title, slow}`: the chat shows progress with "Cancel"
+ *                     (cancelStart() ──► ide.start.cancel) and, after `SLOW_START_MS`, that no
+ *                     server may be running, with "Start calu server"
  *     ide.start error -32013 (no server answered) ──► showServerHelp(): what to run, how to detach,
  *                     buttons "Open terminal with this command" / "Copy command"
  *     startServer() integrated terminal running the command of `shared/serverCommand.ts`
@@ -25,7 +28,7 @@ import { BridgeError, type IdeAttachResult, type IdeSessionsResult, type IdeStar
 import { findExecutable } from './caluCommand';
 import { findingOk } from './shared/hints';
 import { buildServerHelp, type ServerHelp } from './shared/serverCommand';
-import { buildSessionPicks, validateSessionName, type SessionChoice } from './shared/sessionPick';
+import { buildSessionPicks, derivedSessionName, validateSessionName, type SessionChoice } from './shared/sessionPick';
 import type { ViewEvent } from './shared/viewState';
 
 /** A QuickPick row that carries what choosing it does. */
@@ -39,10 +42,18 @@ const FORK_BUTTON: vscode.QuickInputButton = {
   tooltip: 'Fork: start a new session from a copy of this conversation',
 };
 
+/** Milliseconds a session request waits before the chat says that no server may be running. */
+export const SLOW_START_MS = 3000;
+
 /** Session commands of the extension (see the module comment). Create one per activation. */
 export class Sessions {
   /** Id of the attached session, or null. */
   attachedId: string | null = null;
+  /**
+   * Id of the session that was attached last and was not left on purpose: the one to attach
+   * to again after the bridge was restarted. Cleared by `detach()`.
+   */
+  lastAttachedId: string | null = null;
   /** The last answer of `ide.status`, or null if it was not asked yet or failed. */
   status: IdeStatusResult | null = null;
   /** True if the last `ide.start` failed because no server answered. */
@@ -52,7 +63,9 @@ export class Sessions {
   /**
    * @param bridge The bridge (started on demand).
    * @param dispatch Applies a view event (`ui.sessions`, `ui.serverHelp`, `ui.detached`,
-   *   `ui.notice`) to the chat view.
+   *   `ui.starting`, `ui.notice`) to the chat view.
+   * @param sessionName Returns the display name of a running session by its id (its name, else
+   *   its directory's last segment), or `undefined` if the session is not known.
    * @param onAttached Called with the result of every successful `ide.attach` / `ide.start`.
    * @param onChanged Called when `status`, `noServer` or `attachedId` changed (the caller
    *   recomputes the setup hints).
@@ -61,9 +74,10 @@ export class Sessions {
   constructor(
     private readonly bridge: Bridge,
     private readonly dispatch: (event: ViewEvent) => void,
-    private readonly onAttached: (result: IdeAttachResult) => void,
+    private readonly onAttached: (result: IdeAttachResult, resumed: boolean) => void,
     private readonly onChanged: () => void,
     private readonly output: vscode.OutputChannel,
+    private readonly sessionName: (sessionId: string) => string | undefined = () => undefined,
   ) {}
 
   /**
@@ -124,11 +138,27 @@ export class Sessions {
    *
    * @param claudeSessionId Claude Code's id of the conversation.
    * @param turn Number of the first turn the new session does not keep (at least 2).
-   * @param title Text of the progress notification.
+   * @param rewind True for "Rewind" (the session is named "rewind of <name>"), false for
+   *   "Fork from here" ("fork of <name>"); `<name>` is the attached session's.
    * @returns True if the session started and is attached; failures are shown to the user.
    */
-  forkBefore(claudeSessionId: string, turn: number, title: string): Promise<boolean> {
-    return this.start({ kind: 'resume', claude_session_id: claudeSessionId, fork_before_turn: turn }, title);
+  forkBefore(claudeSessionId: string, turn: number, rewind: boolean): Promise<boolean> {
+    return this.start(
+      { kind: 'resume', claude_session_id: claudeSessionId, fork_before_turn: turn, ...this.derivedName(rewind ? 'rewind' : 'fork') },
+      rewind ? 'Rewinding the conversation' : 'Forking the conversation',
+    );
+  }
+
+  /**
+   * Build the `name` parameter of a session that is cut from the attached one.
+   *
+   * @param how "fork" or "rewind".
+   * @returns `{name: "fork of <name>"}` (see `derivedSessionName`), or `{}` if no session is
+   *   attached or it is not known by name.
+   */
+  private derivedName(how: 'fork' | 'rewind'): { name?: string } {
+    const from = this.attachedId ? this.sessionName(this.attachedId) : undefined;
+    return from ? { name: derivedSessionName(how, from) } : {};
   }
 
   /**
@@ -138,7 +168,47 @@ export class Sessions {
    * @returns True if the session started and is attached; failures are shown to the user.
    */
   forkConversation(claudeSessionId: string): Promise<boolean> {
-    return this.start({ kind: 'fork', claude_session_id: claudeSessionId }, 'Forking the conversation');
+    return this.start({ kind: 'fork', claude_session_id: claudeSessionId, ...this.derivedName('fork') }, 'Forking the conversation');
+  }
+
+  /**
+   * Take back the session request that waits for the server (the chat's "Cancel"). The
+   * waiting `start()` then ends without a message.
+   *
+   * @returns A promise that resolves when the bridge answered (failures are logged only).
+   */
+  async cancelStart(): Promise<void> {
+    try {
+      await this.bridge.request('ide.start.cancel', {}, false);
+    } catch (error) {
+      this.output.appendLine(`[calu] the session request was not taken back: ${errorText(error)}`);
+    }
+  }
+
+  /**
+   * After the bridge started again: attach to the session that was attached before, asking
+   * only for the events this view has not seen. Nothing is asked of the user and no error is
+   * shown: the caller falls back to the session of the workspace.
+   *
+   * @param afterSeq Sequence number of the last event the chat view applied for that session.
+   * @returns True if that session is attached again; false if there was none or it is gone.
+   */
+  async reattach(afterSeq: number): Promise<boolean> {
+    const session = this.lastAttachedId;
+    if (!session) return false;
+    try {
+      await this.bridge.ensureStarted();
+      let result = await this.bridge.request('ide.attach', { session, after_seq: afterSeq }, false);
+      // A replay with a gap cannot continue the transcript: take the whole session again.
+      const resumed = afterSeq > 0 && result.complete === true;
+      if (afterSeq > 0 && !resumed) result = await this.bridge.request('ide.attach', { session, after_seq: 0 }, false);
+      this.attached(result, resumed);
+      return true;
+    } catch (error) {
+      this.output.appendLine(`[calu] the session ${session.slice(0, 8)} was not attached again: ${errorText(error)}`);
+      this.lastAttachedId = null;
+      return false;
+    }
   }
 
   /**
@@ -187,6 +257,7 @@ export class Sessions {
     } catch (error) {
       this.output.appendLine(`[calu] detach: ${errorText(error)}`);
     }
+    this.lastAttachedId = null;
     this.markDetached();
     void this.refresh();
   }
@@ -395,24 +466,36 @@ export class Sessions {
   }
 
   /**
-   * Ask the server for a session (`ide.start`) and attach to it, with a progress notification.
-   * On error -32013 (no server answered) the server help is shown.
+   * Ask the server for a session (`ide.start`) and attach to it. While the request waits, the
+   * chat view shows it (`ui.starting`: at once, and after `SLOW_START_MS` with the hint that no
+   * server may be running) and the status bar shows a progress entry. On error -32013 (no
+   * server answered) the server help is shown; a request the user took back (`cancelStart`)
+   * ends without a message.
    *
    * @param params The params of `ide.start`.
-   * @param title Text of the progress notification.
+   * @param title What is being done, e.g. "Starting a session" (shown while waiting).
    * @returns True if the session started and is attached.
    */
   private async start(params: IdeStartParams, title: string): Promise<boolean> {
+    this.dispatch({ method: 'ui.starting', params: { title, slow: false } });
+    const slow = setTimeout(() => this.dispatch({ method: 'ui.starting', params: { title, slow: true } }), SLOW_START_MS);
     try {
       await this.bridge.ensureStarted();
       const result = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `calu: ${title}…` },
+        { location: vscode.ProgressLocation.Window, title: `calu: ${title}…` },
         () => this.bridge.request('ide.start', params),
       );
       this.noServer = false;
+      clearTimeout(slow);
       this.attached(result);
       return true;
     } catch (error) {
+      clearTimeout(slow);
+      this.dispatch({ method: 'ui.starting', params: {} });
+      if (errorCode(error) === BridgeError.START_CANCELLED) {
+        this.output.appendLine('[calu] the request for a session was cancelled.');
+        return false;
+      }
       this.output.appendLine(`[calu] start failed: ${errorText(error)}`);
       if (errorCode(error) === BridgeError.NO_SERVER) {
         this.noServer = true;
@@ -429,12 +512,15 @@ export class Sessions {
    * Record a successful attach and report it.
    *
    * @param result The result of `ide.attach` / `ide.start`.
+   * @param resumed True if the result holds only the events after those the chat view has
+   *   (`reattach`), so the transcript is continued instead of rebuilt.
    * @returns Nothing.
    */
-  private attached(result: IdeAttachResult): void {
+  private attached(result: IdeAttachResult, resumed = false): void {
     this.attachedId = result.session_id;
+    this.lastAttachedId = result.session_id;
     this.noServer = false;
-    this.onAttached(result);
+    this.onAttached(result, resumed);
     this.onChanged();
     void this.refresh();
   }

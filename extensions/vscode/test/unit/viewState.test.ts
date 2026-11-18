@@ -2,9 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAIN,
+  MAX_IMAGE_DATA,
   MAX_ITEMS_PER_AGENT,
   applyEvent,
   applyEvents,
+  honestyStoredNote,
   initialViewState,
   isAttached,
   isKnownFile,
@@ -218,7 +220,8 @@ describe('assistant.delta streaming', () => {
 
 describe('user input', () => {
   it('keeps the source and the images', () => {
-    const big = 'A'.repeat(4_000_001);
+    // Larger than any image a session accepts: not kept.
+    const big = 'A'.repeat(MAX_IMAGE_DATA + 1);
     const s = applyEvents(initialViewState(), [
       ev('user.input', { text: 'Fix it.', images: [{ data: 'aGk=', media_type: 'image/png' }, { data: big, media_type: 'image/jpeg' }, { nope: 1 }] }),
       ev('user.input', { text: '<cross-session-message>push</cross-session-message>', source: 'cross_session' }),
@@ -328,6 +331,40 @@ describe('link and files', () => {
     expect(detached.link.status).toBe('detached');
     expect(detached.session.sessionId).toBeNull();
     expect(applyEvent(attached, ev('bridge.status', { status: 'exited', message: 'gone' })).link.status).toBe('detached');
+  });
+
+  it('shows a message for a subagent in its tab, and in Main only that it was sent', () => {
+    const s = applyEvents(initialViewState(), [
+      ev('agents.update', { agents: [{ agent_id: 'a1', description: 'sleeper', background: true, status: 'running' }] }),
+      ev('user.input', { text: 'start', uuid: 'u1' }),
+      ev('user.input', { text: 'psst', to: 'a1', uuid: 'u2' }),
+      // Not the user's words: `to` is ignored.
+      ev('user.input', { text: 'task finished', source: 'system', to: 'a1' }),
+    ]);
+    expect(s.items[MAIN].map((i) => i.kind)).toEqual(['user', 'relay', 'user']);
+    expect(s.items[MAIN][1]).toMatchObject({ kind: 'relay', to: 'a1' });
+    expect(s.items.a1).toEqual([expect.objectContaining({ kind: 'user', text: 'psst', to: 'a1', uuid: 'u2', source: 'user' })]);
+    expect(JSON.stringify(s.items[MAIN])).not.toContain('psst');
+    expect(new Set([...s.items[MAIN], ...s.items.a1].map((i) => i.id)).size).toBe(4);
+  });
+
+  it('tracks a waiting session request and the stored honesty mode', () => {
+    let s = applyEvent(initialViewState(), ev('bridge.status', { status: 'running' }));
+    s = applyEvent(s, ev('ui.starting', { title: 'Starting a session', slow: false }));
+    expect(s.starting).toEqual({ title: 'Starting a session', slow: false });
+    expect(applyEvent(s, ev('ui.starting', { title: 'Starting a session', slow: true })).starting?.slow).toBe(true);
+    expect(applyEvent(s, ev('ui.starting', {})).starting).toBeNull();
+    expect(applyEvent(s, ev('bridge.status', { status: 'exited' })).starting).toBeNull();
+    expect(applyEvent(s, ev('ui.attached', { session_id: 's1', snapshot: { state: 'idle', workspace: '/w' }, events: [] })).starting).toBeNull();
+
+    expect(honestyStoredNote(null, null)).toBe('');
+    expect(honestyStoredNote(null, 'off')).toBe('');
+    expect(honestyStoredNote(null, 'track')).toBe('stored: track');
+    s = applyEvents(s, [ev('ui.honestyStored', { mode: 'track' }), ev('honesty.update', { mode: 'off' })]);
+    expect(honestyStoredNote(s.honesty, s.honestyStored)).toBe('stored: track');
+    s = applyEvent(s, ev('honesty.update', { mode: 'track', clean: true }));
+    expect(honestyStoredNote(s.honesty, s.honestyStored)).toBe('');
+    expect(applyEvent(s, ev('ui.honestyStored', { mode: 7 })).honestyStored).toBeNull();
   });
 
   it('opens only files that a tool call listed', () => {

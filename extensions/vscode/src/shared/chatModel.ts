@@ -431,6 +431,42 @@ export interface SetupCard {
   serverHelp: boolean;
   /** True for the card that lists the running sessions to pick from. */
   sessionList: boolean;
+  /** True while the card stands for a request that runs (it shows a spinner). */
+  busy: boolean;
+  /**
+   * True for a card that is shown as one line with a "Dismiss" button: a hint that matters
+   * before the first session but not for the one that is attached and working.
+   */
+  compact: boolean;
+  /** For a compact card: the few words shown in the line (`message` is the tooltip). */
+  short?: string;
+}
+
+/** Id of the card of a session request that waits for the server (`ViewState.starting`). */
+export const STARTING_CARD = 'starting-session';
+
+/**
+ * Build the card of a session request that waits for the server.
+ *
+ *     at once        "<title>… Asking the calu server for a session."          [Cancel]
+ *     after ~3 s     "… No answer yet: maybe no calu server is running. ..."   [Start calu server] [Cancel]
+ *
+ * @param starting `ViewState.starting` (not `null`).
+ * @returns The card; "Cancel" posts `cancelStart`, "Start calu server" posts `startServer`
+ *   (the request keeps waiting, so a server started now still answers it).
+ */
+export function startingCard(starting: NonNullable<ViewState['starting']>): SetupCard {
+  const cancel: CardAction = { label: 'Cancel', message: { type: 'cancelStart' } };
+  const message = `${starting.title}… Asking the calu server for a session.`;
+  const base = { id: STARTING_CARD, serverHelp: false, sessionList: false, busy: true, compact: false };
+  if (!starting.slow) return { ...base, level: 'info', message, secondary: [cancel] };
+  return {
+    ...base,
+    level: 'warning',
+    message: `${message} No answer yet: maybe no calu server is running. You can start one now; this request keeps waiting for it.`,
+    primary: { label: 'Start calu server', message: { type: 'startServer' } },
+    secondary: [cancel],
+  };
 }
 
 /**
@@ -455,12 +491,15 @@ export function hintAction(hint: SetupHint): CardAction | undefined {
  *     bridge "running", not attached   -> the host's hints; "no-server" shows the server command
  *                                         (Open terminal / Copy command), "no-session" lists the
  *                                         running sessions (secondary: Resume a stored conversation…)
- *     attached                         -> the hints that still apply (e.g. "claude-missing")
+ *     attached                         -> the hints that still apply (e.g. "claude-missing"),
+ *                                         as one dismissible line each (`compact`)
+ *     a session request waits          -> `startingCard` first; the "no-session" card is left out
  *
  * @param state The view state.
+ * @param dismissed Ids of compact cards the user dismissed; they are left out.
  * @returns The cards; empty if nothing is missing.
  */
-export function setupCards(state: ViewState): SetupCard[] {
+export function setupCards(state: ViewState, dismissed: readonly string[] = []): SetupCard[] {
   const card = (id: string, level: SetupCard['level'], message: string, primary?: CardAction, secondary: CardAction[] = []): SetupCard => ({
     id,
     level,
@@ -469,6 +508,8 @@ export function setupCards(state: ViewState): SetupCard[] {
     secondary,
     serverHelp: false,
     sessionList: false,
+    busy: false,
+    compact: false,
   });
   const bridge = state.bridge;
   const fromHint = (hint: SetupHint): SetupCard => {
@@ -503,10 +544,21 @@ export function setupCards(state: ViewState): SetupCard[] {
     return [card('bridge', 'info', bridge.message || 'The calu bridge is not running.', { label: 'Start', message: { type: 'restartBridge' } })];
   }
   if (bridge.status === 'starting') return [card('starting', 'info', 'Starting calu…')];
-  const cards = state.hints.map(fromHint);
-  if (!isAttached(state) && state.link.status === 'lost') {
+  const attached = isAttached(state);
+  let cards = state.hints.map(fromHint);
+  if (attached) {
+    cards = state.hints
+      .filter((h) => !dismissed.includes(h.id))
+      .map((h) => {
+        const c = fromHint(h);
+        const primary = c.primary && h.actionShort ? { ...c.primary, label: h.actionShort } : c.primary;
+        return { ...c, ...(primary ? { primary } : {}), compact: true, ...(h.short ? { short: h.short } : {}) };
+      });
+  }
+  if (!attached && state.link.status === 'lost') {
     cards.unshift(card('link-lost', 'warning', `The connection to the session was lost${state.link.message ? `: ${state.link.message}` : '.'}`));
   }
+  if (state.starting) cards = [startingCard(state.starting), ...cards.filter((c) => c.id !== 'no-session')];
   return cards;
 }
 
@@ -541,16 +593,19 @@ export interface UsageMeter {
  * Summarise the context usage for the composer footer.
  *
  * @param usage `ViewState.usage`.
+ * @param working True while Claude works on a turn: the number was read at the last turn end
+ *   or at Claude Code's last usage report, and the tooltip says so.
  * @returns The meter (see `UsageMeter`).
  */
-export function usageMeter(usage: ViewState['usage']): UsageMeter {
+export function usageMeter(usage: ViewState['usage'], working = false): UsageMeter {
   const c = usage.context;
   if (!c) return { percent: null, label: 'ctx –', title: 'Context usage is not known yet. Click to ask.', level: 'unknown' };
   const percent = Math.max(0, Math.min(100, Math.round(c.percent)));
+  const asOf = working ? ' As of the last turn or usage report; it is read again when the turn ends.' : '';
   return {
     percent,
     label: `${percent}% · ${formatTokens(c.tokens)}`,
-    title: `Context: ${c.tokens.toLocaleString('en-US')} of ${c.maxTokens.toLocaleString('en-US')} tokens (${percent}%). Click for limits and cost.`,
+    title: `Context: ${c.tokens.toLocaleString('en-US')} of ${c.maxTokens.toLocaleString('en-US')} tokens (${percent}%).${asOf} Click for limits and cost.`,
     level: percent < 70 ? 'ok' : percent < 90 ? 'warn' : 'high',
   };
 }
@@ -654,7 +709,7 @@ export function checkImage(mediaType: string, bytes: number, attached: number, t
   if (attached >= MAX_IMAGES) return `At most ${MAX_IMAGES} images fit into one message.`;
   // base64 needs 4 characters per 3 bytes.
   if (Math.ceil(bytes / 3) * 4 > MAX_IMAGE_BASE64) {
-    return `The image is too large (at most ${(Math.floor(MAX_IMAGE_BASE64 / 4) * 3 / 1_000_000).toFixed(1)} MB).`;
+    return `The image is too large: ${(bytes / (1024 * 1024)).toFixed(1)} MB; a message takes images of at most ${Math.floor((MAX_IMAGE_BASE64 / 4) * 3 / (1024 * 1024))} MB. Nothing was attached.`;
   }
   return undefined;
 }

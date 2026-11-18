@@ -29,6 +29,34 @@ The extension starts `calu ide` and nothing else. Sessions run in `calu serve`, 
 in a terminal (**calu: Start calu Server**): with tmux or screen it keeps running after VSCode
 closes. Passwords (sudo, calu credentials for the server) are typed into that terminal.
 
+## What the chat shows
+
+- **Earlier turns** of a resumed, forked or rewound conversation stand above the session's own
+  output, under "Earlier in this conversation". They come from calu's record: your messages,
+  each step with its decision and the checker's summary, and Claude's answers; thinking and
+  diffs are not recorded. "Rewind" and "Fork from here" work on recorded messages too. The
+  first message of a conversation has nothing before it, so both are disabled there.
+- A session cut from another one is named "fork of <name>" or "rewind of <name>"; rename it
+  with `/rename`.
+- **A message to a background subagent** (written in its tab) is shown in that tab; Main only
+  notes "Sent to subagent <name>". The main agent relays the text.
+- **New session** shows at once that the calu server is asked, with **Cancel**; after three
+  seconds without an answer it says that no server may be running and offers **Start calu
+  server** while the request keeps waiting.
+- **If the bridge (`calu ide`) stops**, open approval cards stay open and say "connection lost"
+  (nothing was decided). **Restart bridge** attaches to the same session again and continues
+  the transcript; the session list appears only if that session is gone.
+- **Approval cards** keep Allow and Deny at the lower edge of the view while a long card
+  scrolls.
+- **Honesty mode**: the menu stores `honesty.mode` in calu's settings; the running session
+  reads the change and the chip follows. If the session does not report the stored mode, the
+  chip shows both ("stored: track").
+- **Images**: up to 4 per message, at most 5 MB each (what a session accepts); a larger one is
+  refused with a message and nothing is sent. A click on a thumbnail shows the image large.
+- **Text direction**: invisible characters that reorder text (right-to-left override and the
+  like) are shown as placeholders such as `⟦RLO⟧`, so a command or file name reads as it is
+  stored. Arabic and Hebrew text reads right to left as usual.
+
 ## Install
 
 1. Install the extension (`calu.vsix`, built with `npm run package`).

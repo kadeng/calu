@@ -23,7 +23,7 @@
 import type { SettingRow } from '../src/bridgeProtocol';
 import type { SettingsData, SettingsHostMessage, SettingsWebviewMessage } from '../src/shared/settingsMessages';
 import { buildSections, formatControlValue, matchesSearch, type SettingsRowView, type SettingsSection } from '../src/shared/settingsModel';
-import { PendingEdits, cardMatches, effectiveSearch, withRowState, type RowState } from '../src/shared/settingsView';
+import { PendingEdits, cardMatches, effectiveSearch, saveSummary, withRowState, type RowState } from '../src/shared/settingsView';
 import {
   renderCheckersCard,
   renderHonestyCard,
@@ -33,7 +33,7 @@ import {
   type CardId,
   type CardState,
 } from './settingsCards';
-import { add, button, el, icon, keepFocus } from './settingsDom';
+import { add, button, el, icon, keepFocus, rich } from './settingsDom';
 import { createRow, failRow, paintRow, setRowError, updateRow, type RowHandle, type RowHost } from './settingsRows';
 
 /** The part of the VSCode webview API used here. */
@@ -115,8 +115,12 @@ let busyText = '';
 let loading = true;
 /** Error of the last `load`; "" for none. */
 let loadError = '';
-/** Outcome of the last save, for the status text. */
-let saveState: 'idle' | 'saved' | 'error' = 'idle';
+/** Keys saved in the last moment (forgotten after `SAVED_SHOWN_MS`), for the status text. */
+const savedKeys = new Set<string>();
+/** Keys whose last save calu refused and that were not saved since; their rows show why. */
+const failedKeys = new Set<string>();
+/** Milliseconds the status text names the settings that were just saved. */
+const SAVED_SHOWN_MS = 2500;
 let savedTimer = 0;
 let persistTimer = 0;
 let reloadTimer = 0;
@@ -365,6 +369,8 @@ function switchScope(project: string | null): void {
   ui.project = project;
   pending.clear();
   attempted.clear();
+  savedKeys.clear();
+  failedKeys.clear();
   loading = true;
   loadError = '';
   post({ type: 'load', project });
@@ -412,7 +418,7 @@ function receive(message: SettingsHostMessage): void {
         setRowError(handle, '');
       }
       applyRowState(message.key, state);
-      if (pending.size === 0) markSaved();
+      markSaved(message.key);
       if (CARD_KEYS[message.key]) renderCards();
       if (isModelKey(message.key)) reloadSoon();
       renderStatus();
@@ -453,10 +459,10 @@ function isModelKey(key: string): boolean {
  * @returns Nothing.
  */
 function receiveError(key: string, message: string): void {
-  saveState = 'error';
-  window.clearTimeout(savedTimer);
   const card = CARD_KEYS[key];
   if (views.has(key)) {
+    failedKeys.add(key);
+    savedKeys.delete(key);
     const text = attempted.get(key);
     const back = pending.fail(key);
     if (back) applyRowState(key, back);
@@ -482,17 +488,20 @@ function receiveError(key: string, message: string): void {
 }
 
 /**
- * Show "Saved" in the status text for a moment.
+ * Record that a setting was saved: it counts as "saved" in the status text for a moment and no
+ * longer as "not saved".
  *
+ * @param key The setting.
  * @returns Nothing.
  */
-function markSaved(): void {
-  saveState = 'saved';
+function markSaved(key: string): void {
+  failedKeys.delete(key);
+  savedKeys.add(key);
   window.clearTimeout(savedTimer);
   savedTimer = window.setTimeout(() => {
-    saveState = 'idle';
+    savedKeys.clear();
     renderStatus();
-  }, 2500);
+  }, SAVED_SHOWN_MS);
 }
 
 // ------------------------------------------------------------------ rendering
@@ -581,7 +590,7 @@ function buildSection(section: SettingsSection): SectionHandle {
   const node = el('section', 'group', '', { id: `sec-s-${section.id}`, 'aria-labelledby': `sec-s-${section.id}-title`, testid: `settings-section-${section.id}` });
   const count = el('span', 'group-count');
   add(node, add(el('h2', 'group-title', '', { id: `sec-s-${section.id}-title` }), section.label, count));
-  if (section.description) node.appendChild(el('p', 'group-desc', section.description));
+  if (section.description) node.appendChild(rich('p', 'group-desc', section.description));
   for (const view of section.rows) {
     const existing = rows.get(view.key);
     const handle = existing ? updateRow(existing, view, rowHost) : createRow(view, rowHost);
@@ -882,13 +891,19 @@ function renderStatus(): void {
   }
   scopeSelect.value = ui.project ?? '';
 
-  const saving = pending.size > 0;
-  const text = saving ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Not saved' : '';
-  if (saveStatus.textContent !== text) {
-    saveStatus.textContent = '';
-    if (text) add(saveStatus, saving ? el('span', 'spinner') : icon(saveState === 'error' ? 'error' : 'check'), text);
+  // One state per setting (its row shows it); this text is the summary of all of them. A
+  // refused setting counts until it is saved or its row no longer shows the refusal (the
+  // user put the stored value back, or pressed Escape in the field).
+  for (const key of [...failedKeys]) {
+    if (!rows.get(key)?.el.classList.contains('invalid')) failedKeys.delete(key);
   }
-  saveStatus.className = `save-status${saving ? ' saving' : saveState === 'idle' ? '' : ` ${saveState}`}`;
+  const summary = saveSummary(pending.size, savedKeys.size, failedKeys.size);
+  if (saveStatus.textContent !== summary.text) {
+    saveStatus.textContent = '';
+    if (summary.text) add(saveStatus, summary.kind === 'saving' ? el('span', 'spinner') : icon(summary.kind === 'error' ? 'error' : 'check'), summary.text);
+  }
+  saveStatus.title = failedKeys.size > 0 ? `Not saved: ${[...failedKeys].join(', ')}. Each of these settings shows the reason.` : '';
+  saveStatus.className = `save-status${summary.kind === 'idle' ? '' : ` ${summary.kind}`}`;
 
   const working = busyText || (loading ? (data ? 'Loading' : "Loading calu's settings") : '');
   progress.classList.toggle('shown', working !== '');
@@ -957,4 +972,11 @@ window.addEventListener('message', (event: MessageEvent<SettingsHostMessage>) =>
 });
 renderAll();
 if (data && ui.scrollY > 0) window.requestAnimationFrame(() => window.scrollTo(0, ui.scrollY));
+// A row clears its own error line (Escape, the stored value typed again): bring the summary
+// up to date after such an input.
+for (const type of ['change', 'keyup', 'focusout']) {
+  document.addEventListener(type, () => {
+    if (failedKeys.size > 0) window.setTimeout(renderStatus, 0);
+  });
+}
 post({ type: 'load', project: ui.project });

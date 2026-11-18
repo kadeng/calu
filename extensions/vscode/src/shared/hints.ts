@@ -63,6 +63,8 @@ export function buildHints(input: HintInput): SetupHint[] {
       action: 'openLink',
       actionLabel: 'How to install Claude Code',
       href: CLAUDE_DOCS_URL,
+      short: 'Claude Code not found',
+      actionShort: 'Guide',
     });
   }
   if (input.locked) {

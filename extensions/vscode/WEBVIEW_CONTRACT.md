@@ -24,7 +24,8 @@ page is the overview.
   `tab-<agentId>`, `item-<itemId>`, `tool-<toolUseId>`, `escalation-<key>`,
   `escalation-allow-<key>`, `escalation-deny-<key>`, `escalation-answer-<key>`,
   `escalation-why-<key>`, `input-text`, `input-send`, `input-interrupt`, `side-toggle`,
-  `hint-<hintId>`, `hint-action-<hintId>`, `server-help`, `queue-<id>`, `header-model`,
+  `hint-<hintId>`, `hint-action-<hintId>` (also `hint-starting-session` for a waiting session
+  request), `server-help`, `queue-<id>`, `header-model`,
   `header-effort`, `header-level`, `header-honesty`, `header-usage` (model, effort and usage sit
   in the composer footer and keep these ids), `header-settings`, `input-hint`, `chat-list`,
   `activity`, `agent-head-<agentId>`; settings:
@@ -35,6 +36,15 @@ page is the overview.
   `parseSettingsMessage`) and silently drops invalid ones. Texts from Claude, checkers and tools
   are untrusted too: set them with `textContent` or through markdown-it, never `innerHTML` of
   raw text.
+- **Bidirectional control characters** (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F,
+  U+061C) in any text from calu are shown as placeholders such as `⟦RLO⟧`
+  (`neutraliseBidi` in `src/shared/bidi.ts`), so a command or file name is never drawn in
+  another order than it is stored in. It is applied in one place per webview: `el()` (text and
+  the attributes `title`, `aria-label`, `placeholder`, `alt`) and `markdown()` in the chat,
+  `el()`, `add()`, `setHighlighted()` and `setRich()` in the settings dialog. Code that sets
+  `textContent` or appends a string itself calls `shown()` (`webview/dom.ts`). Ordinary
+  right-to-left text is left to the browser: prose blocks have `unicode-bidi: plaintext`, code
+  and paths are isolated left-to-right (`media/chat.css`, "Text direction").
 - `acquireVsCodeApi()` once; `postMessage` for everything. `vscode.setState` may hold view-only
   state (active tab, scroll, draft); the host re-sends the real state after every `ready`.
 
@@ -64,15 +74,18 @@ Use `applyEvent` from `src/shared/viewState.ts` unchanged; never mutate the stat
 | `hints: SetupHint[]` | what is missing, most important first: `{id, level, message, action, actionLabel, href?}`. Render each as a line with a button that posts `{type: action}` (or `{type: "openLink", href}` for `openLink`). Ids: `calu-missing`, `claude-missing`, `locked` (calu's logins need the one password; action `unlock`), `database`, `no-server`, `no-session`. `setupCards(state)` in `chatModel.ts` turns bridge status and hints into the cards of the empty state |
 | `autoEscalate {commands, edits, subagents}` | supervision switches; `levelOf` / `levelLabel` / `LEVELS` in `levels.ts` |
 | `honesty: HonestyInfo` or `null` | code honesty state; `honestyChip(honesty)` gives the header chip (`off` = show nothing) |
+| `honestyStored` | `honesty.mode` as calu's settings store it (`null` = unknown). `honestyStoredNote(honesty, honestyStored)` gives "stored: track" while it differs from the session's mode; the chip then shows both |
+| `starting {title, slow}` or `null` | a session request (`ide.start`) that waits for the server. `setupCards` puts `startingCard` first: progress with "Cancel" (`cancelStart`), and with `slow` (after 3 s) the hint that no server may be running with "Start calu server" |
 | `usage {rateLimits, costUsd, numTurns, context}` | account limits (`type, status, utilization, resets_at`), cost, context window (`tokens, maxTokens, percent, model`; `null` until asked) |
 | `focus {tab, seq}` or `null` | switch to `tab` once per new `seq` (set by a new escalation) |
 | `queue: QueuedView[]` | messages sent but not taken in yet (`id, text, delivery, to`), shown above the input |
 | `agents: AgentInfo[]` | subagents: one tab each (`agent_id, description, subagent_type, background, status`) plus the tab Main |
 | `subagents[agentId]: SubagentView` | `task` (launch prompt) and `result {content, isError, final}` of a subagent, for the head of its tab |
 | `turnCount` | number of `turn.result` events since the transcript was cleared |
-| `items[agentKey]: Item[]` | the transcript per tab (`MAIN = "main"`). Kinds: `user` (`source` user/cross_session/system, `images`, `turn` = `turnCount + 1` when it arrived, `uuid` = Claude Code's id of the message or `null`), `assistant` and `thinking` (`streaming`), `tool` (→ `tools[toolUseId]`), `checker`, `escalation` (→ `escalations[key]`), `turn`, `launch` (first item of a subagent tab), `notice` |
-| `tools[toolUseId]: ToolView` | `name, input, check {route, decision, reason, summary, comment, checkerRoute}, result, diffPath, editRange, gitHead, files`. `menuFor`, `toolKind`, `fileLinkAction` in `itemMenu.ts` give the context menu. An `Agent`/`Task` tool item links to the tab `toolUseId` |
-| `escalations[key]: EscalationView` | `status` open/allow/deny/cancelled/answered, `pending`, `reason`, `rendered` (Markdown), `toolInput` (show literally with `literalToolInput`), `questions[]`, `answer`, `note`, `openedAt` |
+| `turnBase` | number of turns the conversation had before the first replayed one; `null` until `ui.history` was applied. While it is known, a user message with `turn` 1 is the first of the conversation: its Rewind and Fork buttons are disabled with a tooltip that says why |
+| `items[agentKey]: Item[]` | the transcript per tab (`MAIN = "main"`). Kinds: `user` (`source` user/cross_session/system, `images`, `turn` = `turnBase + turnCount + 1` when it arrived, `uuid` = Claude Code's id of the message or `null`, `to` = the subagent a message in a subagent's tab was sent to, `stored`), `assistant` and `thinking` (`streaming`), `tool` (→ `tools[toolUseId]`), `checker`, `escalation` (→ `escalations[key]`), `turn`, `launch` (first item of a subagent tab), `notice`, `relay` (in Main: "Sent to subagent <name>", a link to the tab `to`), `divider` (above and below the recorded turns) |
+| `tools[toolUseId]: ToolView` | `name, input, check {route, decision, reason, summary, comment, checkerRoute}, result, diffPath, editRange, gitHead, files, stored`. `menuFor`, `toolKind`, `fileLinkAction` in `itemMenu.ts` give the context menu. An `Agent`/`Task` tool item links to the tab `toolUseId` |
+| `escalations[key]: EscalationView` | `status` open/allow/deny/cancelled/answered, `pending`, `reason`, `rendered` (Markdown), `toolInput` (show literally with `literalToolInput`), `questions[]`, `answer`, `note`, `openedAt`. A card stays `open` when the bridge or the connection is lost (that is no decision); while `isAttached(state)` is false it shows "connection lost" and its buttons are disabled. `cancelled` is set by the session's end, a detach, or an attach whose snapshot no longer lists it |
 | `side: SideExchangeView[]` | side questions of this client (`id, question, answer?, error?`); no answer and no error = waiting |
 | `lastSeq`, `nextId` | bookkeeping |
 
@@ -83,12 +96,32 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 
 `ChatSettings`: `showThinking` (hide thinking items when false), `escalationSound`.
 
+### Recorded turns, messages for subagents, the same session again
+
+- **Recorded turns** (`ui.history`, `src/shared/history.ts`): after every attach the host asks
+  `session.history` and the reducer puts the turns that the replayed events do not cover above
+  the transcript, between two `divider` items ("Earlier in this conversation" / "From calu's
+  record: ..."): the user's messages, each step as a tool row with its decision and the
+  checker's summary (input and the start of the result only if the record holds them), Claude's
+  answer and the end of the turn. Everything from the record is marked `stored` and drawn
+  quieter; a recorded step opens nothing but its own details. This is what a forked, rewound or
+  resumed session shows of its earlier turns, and what a session shows whose replay buffer
+  moved on. The host posts the result as a `reset`.
+- **A message for a background subagent** arrives as `user.input {to: <agent id>, text: the
+  user's own text}`. The text is a `user` item of that subagent's tab (`to` set, no Rewind or
+  Fork); Main gets a `relay` item.
+- **The same session again**: after the bridge was restarted, the host attaches to the session
+  it had (`ide.attach {session, after_seq: lastSeq}`) and sends `ui.attached` with
+  `resumed: true`; the reducer then keeps the transcript and applies only the new events. With
+  a gap in the replay the host attaches with `after_seq: 0` (a full rebuild). Only if that
+  session is gone does it fall back to the session of the workspace or the list.
+
 ### Messages webview → host (`WebviewMessage` in `src/shared/messages.ts`)
 
 | message | fields | what the host does |
 |---|---|---|
 | `ready` | | sends `reset`, `settings`, a pending `bell` |
-| `send` | `text`, `delivery: queued/inject`, `to` ("main" or an agent id), `images: [{data (base64), mediaType}]` (≤ 4, raster types, main only) | `chat.send`; on failure a notice and `restoreInput {text}`. Enter = `queued`, Ctrl/Cmd+Enter = `inject` |
+| `send` | `text`, `delivery: queued/inject`, `to` ("main" or an agent id), `images: [{data (base64), mediaType}]` (≤ 4, raster types, at most 5 MiB each as a session accepts, main only; `checkImage` refuses a larger one in the composer and nothing is sent) | `chat.send`; on failure a notice and `restoreInput {text}`. Enter = `queued`, Ctrl/Cmd+Enter = `inject` |
 | `decide` | `escalationId` (= `EscalationView.key`), `decision: allow/deny`, `note?`, `answer?` | marks the card pending, `escalation.decide`; with `answer` (question cards) calu ignores the decision |
 | `why` | `escalationId` | opens the escalation's stored context as a read-only document |
 | `sideAsk` | `question` | `ui.sideAsk`, `side.ask` with the earlier answers as history, then `ui.sideAnswer` |
@@ -118,8 +151,9 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `unlock` | | asks the one calu password (`ide.unlock`), then checks the setup and attaches to the workspace's session |
 | `rewindBefore` | `turn` (`UserItem.turn`), `uuid?` (`UserItem.uuid`) | undo: asks for a confirmation (files are not reverted), then `ide.start {kind: "resume", claude_session_id, fork_before_turn}` → `reset`, then `restoreInput` with the message's text. The host takes the turn number from `session.history` (the turn whose `prompt_uuid` is `uuid`) and falls back to `turn`; turn 1 is refused with a message |
 | `forkBefore` | `turn`, `uuid?` | the same start without confirmation and without `restoreInput` |
-| `forkConversation` | | `ide.start {kind: "fork", claude_session_id}` of the attached conversation |
-| `setHonestyMode` | `mode` (`HONESTY_MODES`: off, track, enforce) | `ide.settings.set honesty.mode` (global scope); a notice confirms |
+| `forkConversation` | | `ide.start {kind: "fork", claude_session_id}` of the attached conversation. A session cut from another one is named "fork of <name>" / "rewind of <name>" (`derivedSessionName`) |
+| `cancelStart` | | `ide.start.cancel`: the waiting session request is withdrawn; `state.starting` becomes `null` |
+| `setHonestyMode` | `mode` (`HONESTY_MODES`: off, track, enforce) | `ide.settings.set honesty.mode` in the scope the session reads it from (the project's settings if they name it, else global, as `calu attach` does); `ui.honestyStored`; then waits up to 4 s for the session's `honesty.update` and says whether the session uses the mode |
 | `honestyReview` | | `honesty.review` (can take minutes; `honesty.update` reports progress) |
 | `honestyTrust` | | after a confirmation, `honesty.trust {rev: "HEAD"}` |
 | `honestyClear` | `markId` (`HonestyMarkInfo.id`) | `honesty.clear {mark_id}` |
@@ -134,9 +168,24 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 
 Events of the extension itself (all handled by `applyEvent`): `bridge.status`, `ui.link`,
 `ui.detached`, `ui.sessions`, `ui.serverHelp`, `ui.hints`, `ui.model`, `ui.usage`, `ui.notice`,
-`ui.clear`, `ui.decisionPending`, `ui.decisionFailed`, `ui.sideAsk`, `ui.sideAnswer`
-(`ViewEvent` in `viewState.ts` lists their params). `ui.attached` reaches the webview as a
-`reset`.
+`ui.clear`, `ui.decisionPending`, `ui.decisionFailed`, `ui.sideAsk`, `ui.sideAnswer`,
+`ui.honestyStored`, `ui.starting` (`ViewEvent` in `viewState.ts` lists their params).
+`ui.attached` and `ui.history` reach the webview as a `reset`.
+
+Usage: the host asks `usage.get` after an attach, after every `turn.result`, and on a
+`usage.update` of a running turn (at most every 2 s). While Claude works, the meter's tooltip
+says that the number is from the last turn or usage report (`usageMeter(usage, working)`).
+
+Hints while a session is attached (`claude-missing`, `database`) are one line each with a short
+text (`SetupHint.short`), the action as a link and "Dismiss" (`SetupCard.compact`; the ids the
+user dismissed are view-only state). Before the first session they are whole cards.
+
+Open approval cards: the row of buttons is `position: sticky` at the lower edge of the
+transcript, so Allow and Deny stay reachable while a card taller than the view scrolls. The
+keyboard focus never moves to a button by itself.
+
+Images: a click on a thumbnail of the transcript (`data-action="zoomImage"`) opens it large
+over the view (`.lightbox`); a click or Escape closes it and returns the focus.
 
 ### Passwords and the `locked` state
 
@@ -192,6 +241,13 @@ form model: `src/shared/settingsModel.ts`.
   select / number / text / model / markdown / list / json, `choices`, `modified`, `inherits`,
   `defaultText`, `nullable`); `formatControlValue` and `parseControlValue` convert between a
   control's text and the JSON value. Save per field on change; show `error.message` at the row.
+  The status text next to the scope is the summary of all rows (`saveSummary`): "Saving…",
+  "Saved", "1 setting not saved", or "1 saved · 1 not saved" when one field was refused while
+  another was stored.
+- Descriptions, setup messages and advice, and preset notes carry inline marks: `` `code` ``
+  and `**strong**`. `inlineParts` (`src/shared/inlineText.ts`) splits them and `setRich` /
+  `rich` (`webview/settingsDom.ts`) build `<code>` and `<strong>` elements; the text never
+  reaches an HTML parser.
 - `presets` = `ide.models.presets`: `presets[]` (`id, label, group, model, note`), `roles[]`
   (`key, label, model`), `claude {model, effort, use_bedrock}`, `default_model`. The dialog shows
   what it gets and holds no model names of its own.

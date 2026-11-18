@@ -104,8 +104,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   dispatch(event: ViewEvent): void {
     this.viewState = applyEvent(this.viewState, event);
-    // An attach replaces the whole transcript: send the result, not the (large) event.
-    if (event.method === 'ui.attached') this.post({ type: 'reset', state: this.viewState });
+    // An attach replaces the whole transcript, and the recorded turns are put above it: send
+    // the result, not the (large) event.
+    if (event.method === 'ui.attached' || event.method === 'ui.history') this.post({ type: 'reset', state: this.viewState });
     else this.post({ type: 'event', event });
     this.updateBadge();
     if (event.method === 'escalation.request' && this.chatSettings.escalationSound) this.ringBell();

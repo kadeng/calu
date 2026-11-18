@@ -24,8 +24,12 @@ export type ImageMediaType = (typeof IMAGE_MEDIA_TYPES)[number];
 
 /** Most images per chat message (limit of `chat.send`). */
 export const MAX_IMAGES = 4;
-/** Largest base64 text of one attached image the host accepts (about 7.5 MB of image data). */
-export const MAX_IMAGE_BASE64 = 10_000_000;
+/**
+ * Largest base64 text of one attached image: what calu's sessions accept (5 MiB of image data,
+ * `MAX_IMAGE_BYTES` in `calu.protocol.messages`; base64 needs 4 characters per 3 bytes). A
+ * larger image is refused in the composer, before anything is sent.
+ */
+export const MAX_IMAGE_BASE64 = Math.ceil((5 * 1024 * 1024) / 3) * 4;
 /** Longest chat message, side question, note or answer the host accepts, in characters. */
 export const MAX_TEXT = 200_000;
 
@@ -124,7 +128,9 @@ export type WebviewMessage =
   | { type: 'forkBefore'; turn: number; uuid?: string }
   /** Start a new session from a copy of the whole attached conversation. */
   | { type: 'forkConversation' }
-  /** Change calu's setting `honesty.mode` (sessions started from now on). */
+  /** Take back the session request that waits for the server (`state.starting`). */
+  | { type: 'cancelStart' }
+  /** Change calu's setting `honesty.mode`; a running session reads the change by itself. */
   | { type: 'setHonestyMode'; mode: HonestyMode }
   /** Run an honesty review of the attached session now (`honesty.review`). */
   | { type: 'honestyReview' }
@@ -204,6 +210,7 @@ const BARE_TYPES = [
   'forkConversation',
   'honestyReview',
   'honestyTrust',
+  'cancelStart',
 ] as const;
 
 /**

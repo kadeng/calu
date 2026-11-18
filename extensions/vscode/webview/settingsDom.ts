@@ -7,6 +7,8 @@
  *                      change ─► commit(value)                          change / Enter ─► commit(text)
  */
 
+import { neutraliseBidi } from '../src/shared/bidi';
+import { inlineParts } from '../src/shared/inlineText';
 import { highlightRanges } from '../src/shared/settingsView';
 
 /** Attributes for `el`: plain attributes; `testid` becomes `data-testid`. */
@@ -17,18 +19,19 @@ export type Attrs = Record<string, string | undefined>;
  *
  * @param tag Tag name.
  * @param cls Class attribute ("" for none).
- * @param text Text content (inserted as text, never as HTML); "" for none.
+ * @param text Text content (inserted as text, never as HTML, with bidirectional control
+ *   characters made visible by `neutraliseBidi`); "" for none.
  * @param attrs Attributes; entries with the value `undefined` are skipped; `testid` sets
- *   `data-testid`.
+ *   `data-testid`; `title` and `aria-label` are passed through `neutraliseBidi`.
  * @returns The new element.
  */
 export function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = '', attrs: Attrs = {}): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
-  if (text) node.textContent = text;
+  if (text) node.textContent = neutraliseBidi(text);
   for (const [name, value] of Object.entries(attrs)) {
     if (value === undefined) continue;
-    node.setAttribute(name === 'testid' ? 'data-testid' : name, value);
+    node.setAttribute(name === 'testid' ? 'data-testid' : name, name === 'title' || name === 'aria-label' ? neutraliseBidi(value) : value);
   }
   return node;
 }
@@ -43,7 +46,7 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text
 export function add<T extends Node>(parent: T, ...children: (Node | string | null | undefined | false)[]): T {
   for (const child of children) {
     if (child === null || child === undefined || child === false) continue;
-    parent.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+    parent.appendChild(typeof child === 'string' ? document.createTextNode(neutraliseBidi(child)) : child);
   }
   return parent;
 }
@@ -113,17 +116,63 @@ export function button(label: string, cls: string, onClick: () => void, attrs: A
  * Replace the content of an element with a text in which the search matches are marked.
  *
  * @param target The element; its children are removed.
- * @param text The text to show.
+ * @param text The text to show (bidirectional control characters are made visible).
  * @param search The search text ("" marks nothing); see `highlightRanges`.
  * @returns Nothing.
  */
 export function setHighlighted(target: HTMLElement, text: string, search: string): void {
+  target.textContent = '';
+  appendHighlighted(target, neutraliseBidi(text), search);
+}
+
+/**
+ * Replace the content of an element with a text of calu that may carry inline marks:
+ * `` `code` `` becomes a `<code>` element and `**strong**` a `<strong>` element
+ * (`inlineParts`). The nodes are built one by one; the text never reaches an HTML parser.
+ * Search matches are marked inside each part.
+ *
+ * @param target The element; its children are removed.
+ * @param text The text to show (untrusted).
+ * @param search The search text ("" marks nothing).
+ * @returns Nothing.
+ */
+export function setRich(target: HTMLElement, text: string, search = ''): void {
+  target.textContent = '';
+  for (const part of inlineParts(neutraliseBidi(text))) {
+    if (part.kind === 'text') appendHighlighted(target, part.text, search);
+    else appendHighlighted(target.appendChild(document.createElement(part.kind)), part.text, search);
+  }
+}
+
+/**
+ * Create an element whose content is a text with inline marks (see `setRich`).
+ *
+ * @param tag Tag name.
+ * @param cls Class attribute ("" for none).
+ * @param text The text.
+ * @param attrs Attributes, as for `el`.
+ * @returns The new element.
+ */
+export function rich<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text: string, attrs: Attrs = {}): HTMLElementTagNameMap[K] {
+  const node = el(tag, cls, '', attrs);
+  setRich(node, text);
+  return node;
+}
+
+/**
+ * Append a text to an element, with the search matches marked.
+ *
+ * @param target The element.
+ * @param text The text (already prepared for display).
+ * @param search The search text ("" marks nothing).
+ * @returns Nothing.
+ */
+function appendHighlighted(target: HTMLElement, text: string, search: string): void {
   const ranges = search ? highlightRanges(text, search) : [];
   if (ranges.length === 0) {
-    target.textContent = text;
+    target.appendChild(document.createTextNode(text));
     return;
   }
-  target.textContent = '';
   let at = 0;
   for (const [start, end] of ranges) {
     if (start > at) target.appendChild(document.createTextNode(text.slice(at, start)));

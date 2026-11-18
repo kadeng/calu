@@ -50,6 +50,8 @@ export const BridgeError = {
   CHECKER_CONFLICT: -32016,
   /** No usable database credential is stored, or the database cannot be reached. */
   NO_DATABASE: -32017,
+  /** `ide.start`: the editor took the request back with `ide.start.cancel`. */
+  START_CANCELLED: -32018,
 } as const;
 
 /** `data` of error -32010. */
@@ -301,6 +303,7 @@ export interface BridgeRequestParams {
   'ide.attach': { session: string | null; after_seq?: number };
   'ide.detach': Record<string, never>;
   'ide.start': IdeStartParams;
+  'ide.start.cancel': Record<string, never>;
   'ide.session.rename': { session_id: string; name: string } & WithPassword;
   'session.call': { method: string; params: object };
   'ide.settings.get': { project?: string | null } & WithPassword;
@@ -323,6 +326,8 @@ export interface BridgeRequestResults {
   'ide.attach': IdeAttachResult;
   'ide.detach': Record<string, never>;
   'ide.start': IdeAttachResult;
+  /** How many waiting `ide.start` requests were taken back (each fails with -32018). */
+  'ide.start.cancel': { cancelled: number };
   'ide.session.rename': { name: string };
   'session.call': unknown;
   'ide.settings.get': IdeSettingsResult;

@@ -36,7 +36,9 @@ import type {
   TurnResult,
   UserInput,
 } from '../protocol.generated';
+import { historyEntries, type HistoryEntry } from './history';
 import type { AutoEscalateFlags } from './levels';
+import { MAX_IMAGE_BASE64 } from './messages';
 import type { ServerHelp } from './serverCommand';
 
 /** Key of a message list: "main" for the main agent, otherwise the subagent's `agent_id`. */
@@ -57,8 +59,12 @@ export const MAX_AGENT_RESULT_TEXT = 40000;
 /** Most file links kept per tool call. */
 export const MAX_TOOL_FILES = 50;
 
-/** Largest base64 text of one image kept in the state; larger images are shown as omitted. */
-export const MAX_IMAGE_DATA = 4_000_000;
+/**
+ * Largest base64 text of one image kept in the state; larger images are shown as omitted. It
+ * is the largest image a session accepts (`MAX_IMAGE_BASE64`), so every image the user could
+ * attach is also shown.
+ */
+export const MAX_IMAGE_DATA = MAX_IMAGE_BASE64;
 
 /** Most side questions kept (the oldest are dropped). */
 export const MAX_SIDE_EXCHANGES = 20;
@@ -105,6 +111,13 @@ export interface ToolView {
   gitHead?: string | null;
   /** Files the call refers to (`tool.files`): `raw` as written in the input, `path` absolute. */
   files?: { raw: string; path: string }[];
+  /**
+   * Set for a step taken from calu's record (`ui.history`) instead of from events: it has no
+   * diff and no duration, `input` is `{}` if the record holds none, and `result` is only the
+   * beginning of what the tool returned. `subagent`: a subagent made the call (the row is
+   * shown in Main, because the record names no tab for it).
+   */
+  stored?: { subagent: boolean; hasInput: boolean };
 }
 
 /** A chat message waiting to be taken in by Claude (shown above the input). */
@@ -185,14 +198,23 @@ export type Item =
       source: 'user' | 'cross_session' | 'system';
       images: ImageView[];
       /**
-       * Number of the turn the message belongs to, counted from 1 over the turns this view saw
-       * (`turnCount + 1` when the message arrived). For `rewindBefore` / `forkBefore`; the host
-       * prefers the turn it finds for `uuid` in the recorded history, because a resumed
-       * conversation has earlier turns that this view did not see.
+       * Number of the turn the message belongs to: `turnBase + turnCount + 1` when the message
+       * arrived, which is the conversation's own number once the recorded history was read
+       * (`ViewState.turnBase`), and a count over the turns this view saw before that. For
+       * `rewindBefore` / `forkBefore`; the host prefers the turn it finds for `uuid` in the
+       * recorded history.
        */
       turn: number;
       /** Claude Code's id of the message (`user.input`.uuid); `null` if it gave none. */
       uuid: string | null;
+      /**
+       * Set in a subagent's tab for a message the user sent to that background subagent
+       * (`user.input`.to): the subagent's id. The main agent relays such a message, so the
+       * turn belongs to Main and the message has no rewind or fork action.
+       */
+      to?: string;
+      /** True for a message taken from calu's record (`ui.history`), see `ToolView.stored`. */
+      stored?: boolean;
     }
   | {
       id: number;
@@ -207,6 +229,8 @@ export type Item =
        * it, so later fragments and the final text of the same message continue this item.
        */
       cut?: boolean;
+      /** True for the recorded answer of an earlier turn (`ui.history`). */
+      stored?: boolean;
     }
   | {
       id: number;
@@ -240,6 +264,8 @@ export type Item =
       costUsd: number | null;
       /** Background tasks (subagents, shells) still running when the turn ended. */
       backgroundTasks: number;
+      /** True for the end of a recorded turn (`ui.history`): outcome and cost are not recorded. */
+      stored?: boolean;
     }
   | {
       id: number;
@@ -252,7 +278,20 @@ export type Item =
       /** The full launch prompt (Markdown); not cut. */
       prompt: string;
     }
-  | { id: number; kind: 'notice'; level: string; text: string };
+  | { id: number; kind: 'notice'; level: string; text: string }
+  | {
+      id: number;
+      kind: 'relay';
+      /** The background subagent the user's message was sent to (its tab holds the text). */
+      to: AgentKey;
+    }
+  | {
+      id: number;
+      kind: 'divider';
+      /** "history-start": the recorded turns follow; "history-end": the session's own events follow. */
+      mark: 'history-start' | 'history-end';
+      text: string;
+    };
 
 /**
  * What is known about one subagent beyond `AgentInfo`: the task it was given (from the input of
@@ -319,6 +358,13 @@ export interface SetupHint {
   actionLabel: string;
   /** For "openLink": the https address. */
   href?: string;
+  /**
+   * A few words for the one-line form of the hint (shown while a session is attached); the
+   * whole `message` is then the tooltip. Missing: the message itself is cut.
+   */
+  short?: string;
+  /** Button text of the one-line form; missing: `actionLabel`. */
+  actionShort?: string;
 }
 
 /** Cost, context window and account limits of the attached session. */
@@ -375,6 +421,17 @@ export interface ViewState {
   autoEscalate: AutoEscalateFlags;
   /** Code honesty state of the session; `null` before the first report. */
   honesty: HonestyInfo | null;
+  /**
+   * `honesty.mode` as calu's settings store it for the session's project ("off", "track",
+   * "enforce"); `null` if not known. A session reads a changed mode by itself and reports it
+   * with `honesty.update`; until then (or if it never does) the header shows both.
+   */
+  honestyStored: string | null;
+  /**
+   * A session request that waits for the calu server (`ide.start`); `null` otherwise. `slow`
+   * is set after a few seconds without an answer: no server may be running.
+   */
+  starting: { title: string; slow: boolean } | null;
   usage: UsageView;
   /**
    * Request to show a tab: set when an escalation arrives, so the view can switch to the tab
@@ -396,6 +453,13 @@ export interface ViewState {
   side: SideExchangeView[];
   /** Number of `turn.result` events applied since the transcript was last cleared. */
   turnCount: number;
+  /**
+   * Number of turns the conversation had before the first turn of the replayed events; `null`
+   * until the recorded history was read after an attach (`ui.history`). While it is known, a
+   * user message with `turn` 1 is the first message of the conversation: nothing is before
+   * it, so the view offers no rewind or fork there.
+   */
+  turnBase: number | null;
   /** Sequence number of the last session event applied (0 before the first). */
   lastSeq: number;
   /** Next free item id. */
@@ -409,8 +473,14 @@ export interface ViewState {
  * - `bridge.status` `{status: BridgeStatus, message?, version?}`: the bridge process changed
  *   state;
  * - `ui.link` `{state: "attached" | "reconnecting" | "lost", message}`: the bridge's `ide.link`;
- * - `ui.attached` `{session_id, initialize, snapshot, events, complete}`: the result of
- *   `ide.attach` / `ide.start`; replaces the transcript (see `applyAttach`);
+ * - `ui.attached` `{session_id, initialize, snapshot, events, complete, resumed?}`: the result
+ *   of `ide.attach` / `ide.start`; replaces the transcript, or with `resumed` continues it
+ *   (see `applyAttach`);
+ * - `ui.history` `{session_id, history}`: the result of `session.history` for the attached
+ *   session; the recorded turns that the replay does not cover are put above the transcript
+ *   (see `applyHistory`);
+ * - `ui.honestyStored` `{mode}`: `honesty.mode` as calu's settings store it (`null` = unknown);
+ * - `ui.starting` `{title, slow}` or `{}`: a session request waits for the server / is over;
  * - `ui.detached` `{}`: the session was detached; the transcript stays, nothing is open;
  * - `ui.sessions` `{running: RunningSession[], error?}`: the answer of `ide.sessions`;
  * - `ui.serverHelp` `{command, tool, detach, note}` or `{}`: set or clear `serverHelp`;
@@ -522,6 +592,8 @@ export function initialViewState(): ViewState {
     hints: [],
     autoEscalate: { commands: false, edits: false, subagents: false },
     honesty: null,
+    honestyStored: null,
+    starting: null,
     usage: { rateLimits: [], costUsd: null, numTurns: 0, context: null },
     focus: null,
     agents: [],
@@ -532,6 +604,7 @@ export function initialViewState(): ViewState {
     queue: [],
     side: [],
     turnCount: 0,
+    turnBase: null,
     lastSeq: 0,
     nextId: 1,
   };
@@ -731,6 +804,23 @@ export function honestyChip(honesty: HonestyInfo | null): { kind: 'off' | 'clean
     honesty.review_required ? 'review required' : '',
   ].filter(Boolean);
   return { kind: 'open', label: `Honesty: ${parts.join(', ') || 'not clean'}` };
+}
+
+/**
+ * Say that calu's settings store another honesty mode than the session uses.
+ *
+ * A session reads a changed `honesty.mode` by itself and reports it (`honesty.update`); the
+ * two differ in the moment between, and for a session that does not read the change (it uses
+ * another database, or its settings could not be reloaded).
+ *
+ * @param honesty The session's honesty state, or `null` (counts as mode "off").
+ * @param stored `ViewState.honestyStored`.
+ * @returns "" if the stored mode is unknown or equal to the session's; else e.g.
+ *   "stored: track".
+ */
+export function honestyStoredNote(honesty: HonestyInfo | null, stored: string | null): string {
+  if (!stored || stored === (honesty?.mode || 'off')) return '';
+  return `stored: ${stored}`;
 }
 
 /**
@@ -1057,7 +1147,24 @@ function recordAgentResult(state: ViewState, toolUseId: string, content: string,
 }
 
 /**
- * Close all open escalations with status "cancelled" (used when the bridge or session ends).
+ * Clear the `pending` flag of every open escalation (used when the bridge or the connection to
+ * the session is lost). The cards stay open: the steps still wait in the session, and a
+ * decision that was on its way is not known to have arrived. The view shows them as "connection
+ * lost" while `isAttached` is false; the next attach says what is open then.
+ *
+ * @param state The current state (not modified).
+ * @returns The new state; the same object if no open escalation was pending.
+ */
+function unpendEscalations(state: ViewState): ViewState {
+  let escalations = state.escalations;
+  for (const e of Object.values(state.escalations)) {
+    if (e.status === 'open' && e.pending) escalations = withEntry(escalations, e.key, { ...e, pending: false });
+  }
+  return escalations === state.escalations ? state : { ...state, escalations };
+}
+
+/**
+ * Close all open escalations with status "cancelled" (used when the session ends or is left).
  *
  * @param state The current state (not modified).
  * @returns The new state; the same object if no escalation was open.
@@ -1251,10 +1358,12 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
         },
       };
       if (status !== 'running') {
-        // Without the bridge nothing is attached; the transcript stays readable.
-        next = finishStreaming(cancelOpenEscalations(next));
+        // Without the bridge nothing is attached; the transcript stays readable, and the open
+        // cards stay as they were (the steps still wait in the session).
+        next = finishStreaming(unpendEscalations(next));
         next = {
           ...next,
+          starting: null,
           link: { status: 'detached' },
           session: { ...next.session, state: 'stopped' },
           sessions: { ...next.sessions, attachedId: null },
@@ -1268,15 +1377,22 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       if (!status) return state;
       const next: ViewState = { ...state, link: { status, ...(str(p.message) && p.message ? { message: p.message } : {}) } };
       if (status !== 'lost') return next;
-      // The session can no longer be reached: nothing can be decided or is streaming.
+      // The session can no longer be reached: nothing is streaming, and nothing can be decided
+      // until it is attached again (the cards stay open, see `unpendEscalations`).
       return {
-        ...finishStreaming(cancelOpenEscalations(next)),
+        ...finishStreaming(unpendEscalations(next)),
         sessions: { ...next.sessions, attachedId: null },
         queue: [],
       };
     }
     case 'ui.attached':
       return applyAttach(state, p);
+    case 'ui.history':
+      return applyHistory(state, p);
+    case 'ui.honestyStored':
+      return { ...state, honestyStored: str(p.mode) && p.mode ? p.mode : null };
+    case 'ui.starting':
+      return { ...state, starting: str(p.title) ? { title: p.title, slow: p.slow === true } : null };
     case 'ui.detached': {
       const next = finishStreaming(cancelOpenEscalations(state));
       return {
@@ -1402,15 +1518,20 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
     case 'user.input': {
       const e = p as unknown as UserInput;
       if (!str(e.text)) return state;
-      const source = e.source === 'cross_session' || e.source === 'system' ? e.source : 'user';
-      return appendItem(state, MAIN, {
-        kind: 'user',
+      const source: 'user' | 'cross_session' | 'system' = e.source === 'cross_session' || e.source === 'system' ? e.source : 'user';
+      const message = {
+        kind: 'user' as const,
         text: e.text,
         source,
         images: parseImages(e.images),
-        turn: (state.turnCount ?? 0) + 1,
+        turn: (state.turnBase ?? 0) + (state.turnCount ?? 0) + 1,
         uuid: str(e.uuid) && e.uuid ? e.uuid : null,
-      });
+      };
+      // A message for a background subagent: the user's words belong to that subagent's tab;
+      // Main only notes that something was sent (the main agent relays it).
+      const to = source === 'user' ? agentKeyOf(e.to) : MAIN;
+      if (to === MAIN) return appendItem(state, MAIN, message);
+      return appendItem(appendItem(state, to, { ...message, to }), MAIN, { kind: 'relay', to });
     }
     case 'tool.use': {
       const e = p as unknown as ToolUse;
@@ -1612,7 +1733,8 @@ export function checkerRouteOf(route: string): string {
  *
  * @param route The event's `route`.
  * @returns "Command checker", "Edit checker", "Changeset checker", "Subagent result checker",
- *   "Question" (a question of the agent), or "Rules" for "allow", "deny" and "escalate".
+ *   "Question" (a question of the agent), "Recorded decision" for "stored" (a step taken from
+ *   calu's record, which does not say who decided), or "Rules" for "allow", "deny" and "escalate".
  */
 export function checkerLabel(route: string): string {
   if (route === 'command') return 'Command checker';
@@ -1620,6 +1742,7 @@ export function checkerLabel(route: string): string {
   if (route === 'changeset') return 'Changeset checker';
   if (route === 'subagent') return 'Subagent result checker';
   if (route === 'question') return 'Question';
+  if (route === 'stored') return 'Recorded decision';
   return 'Rules';
 }
 
@@ -1655,7 +1778,10 @@ const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escala
 /**
  * Rebuild the state from the result of `ide.attach` / `ide.start` (reducer case `ui.attached`).
  *
- *     1. drop the transcript of the session shown before
+ *     1. drop the transcript of the session shown before -- unless `resumed` is true: the
+ *        host attached again to the session this state shows, asked only for the events after
+ *        `lastSeq` and got them without a gap (after a restart of the bridge); the transcript
+ *        then stays and the events continue it
  *     2. replay `events` (the recorded events of the session, oldest first)  -> transcript
  *     3. apply `snapshot` (authoritative for what is true now):
  *          session state, model, effort, agents, queue, auto-escalation, honesty, limits;
@@ -1669,8 +1795,9 @@ const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escala
  * the first open escalation if there is one.
  *
  * @param state The current state (not modified).
- * @param p The params of `ui.attached`: `session_id`, `initialize`, `snapshot`, `events`
- *   (untrusted; missing members are treated as empty).
+ * @param p The params of `ui.attached`: `session_id`, `initialize`, `snapshot`, `events`,
+ *   `resumed` (untrusted; missing members are treated as empty). `resumed` is honoured only if
+ *   `session_id` is the session the state shows.
  * @returns The rebuilt state; unchanged without a string `session_id`.
  */
 export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewState {
@@ -1680,8 +1807,8 @@ export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewS
   const snapshot = obj(p.snapshot) as Partial<SessionSnapshot> & Record<string, unknown>;
   const init = obj(p.initialize);
 
-  let next = clearTranscript(state);
-  next = { ...next, lastSeq: 0 };
+  const resumed = p.resumed === true && state.session.sessionId === p.session_id;
+  let next: ViewState = resumed ? unpendEscalations(state) : { ...clearTranscript(state), lastSeq: 0, turnBase: null };
   for (const raw of Array.isArray(p.events) ? p.events : []) {
     const e = obj(raw);
     if (typeof e.method !== 'string' || NOT_REPLAYED.has(e.method) || e.method.startsWith('ui.') || e.method === 'bridge.status') continue;
@@ -1727,11 +1854,134 @@ export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewS
     },
     sessions: { ...next.sessions, attachedId: p.session_id },
     serverHelp: null,
+    starting: null,
     honesty: parseHonesty(snapshot.honesty),
-    usage: { ...next.usage, rateLimits: parseRateLimits(snapshot.rate_limits), context: null },
+    honestyStored: resumed ? state.honestyStored : null,
+    usage: { ...next.usage, rateLimits: parseRateLimits(snapshot.rate_limits), context: resumed ? next.usage.context : null },
     focus: firstOpen ? { tab: firstOpen.agentKey, seq: (state.focus?.seq ?? 0) + 1 } : state.focus,
     lastSeq: Math.max(next.lastSeq, snapshotSeq),
   };
+}
+
+/** Text of the divider above the recorded turns. */
+export const HISTORY_START_TEXT = 'Earlier in this conversation';
+
+/** Text of the divider below the recorded turns. */
+export const HISTORY_END_TEXT = 'From calu\'s record: messages, steps and answers, without thinking and diffs';
+
+/**
+ * Put the recorded turns of the conversation above the transcript (reducer case `ui.history`).
+ *
+ * The events of an attach only reach back to the start of the session's process (or less, once
+ * the replay buffer moved on). A resumed, forked or rewound conversation has earlier turns; the
+ * host asks `session.history` after the attach and sends the result here.
+ *
+ *     Main before:  [events of this session ...]
+ *     Main after:   divider "Earlier in this conversation"
+ *                   user · tool · tool · assistant · turn      (per recorded turn, `stored`)
+ *                   divider "From calu's record ..."
+ *                   [events of this session ...]
+ *
+ * Which turns are added is decided by `historyEntries` (those the replayed events do not
+ * cover). A recorded user message keeps the conversation's turn number and the prompt's uuid,
+ * so "Rewind" and "Fork from here" work on it. A recorded step is a tool row with the decision
+ * and the checker's summary; its input and the start of its result are shown if the record
+ * holds them. Steps of subagents are rows of Main (the record names no tab).
+ *
+ * @param state The current state (not modified).
+ * @param p The params: `session_id` (the session the history was asked from) and `history`
+ *   (the result of `session.history`, untrusted).
+ * Side effect on the numbering: `turnBase` becomes the number of turns before the first
+ * replayed one, and the user messages of the replayed events are renumbered to the
+ * conversation's turn numbers.
+ *
+ * @returns The new state; unchanged if another session is shown now or if the history was
+ *   already applied (`turnBase` is set). If the record holds nothing the transcript lacks,
+ *   only the numbering changes.
+ */
+export function applyHistory(state: ViewState, p: Record<string, unknown>): ViewState {
+  if (typeof p.session_id !== 'string' || p.session_id !== state.session.sessionId) return state;
+  if (state.turnBase !== null) return state;
+  const main = own(state.items, MAIN) ?? [];
+  const users = main.filter((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user');
+  const relayed = Object.keys(state.items).flatMap((key) =>
+    key === MAIN ? [] : state.items[key].filter((i): i is Extract<Item, { kind: 'user' }> => i.kind === 'user'),
+  );
+  const history = historyEntries(p.history, {
+    uuids: new Set([...users, ...relayed].map((u) => u.uuid).filter((u): u is string => u !== null)),
+    inputs: new Set(users.filter((u) => u.source === 'user').map((u) => u.text.trim())),
+    toolUseIds: new Set(Object.keys(state.tools)),
+  });
+  // Number the replayed turns as the conversation does.
+  const base = Math.max(0, history.firstReplayedTurn - 1);
+  let numbered: ViewState = { ...state, turnBase: base };
+  if (base > 0) {
+    let items = state.items;
+    for (const key of Object.keys(state.items)) {
+      if (!state.items[key].some((i) => i.kind === 'user')) continue;
+      items = withEntry(items, key, state.items[key].map((i) => (i.kind === 'user' ? { ...i, turn: i.turn + base } : i)));
+    }
+    numbered = { ...numbered, items };
+  }
+  if (history.entries.length === 0) return numbered;
+  state = numbered;
+  const live = own(state.items, MAIN) ?? [];
+
+  let nextId = state.nextId;
+  let tools = state.tools;
+  const omitted = history.omittedTurns > 0 ? ` (${history.omittedTurns} older turn${history.omittedTurns === 1 ? ' is' : 's are'} not shown)` : '';
+  const items: Item[] = [{ id: nextId++, kind: 'divider', mark: 'history-start', text: `${HISTORY_START_TEXT}${omitted}` }];
+  for (const entry of history.entries) {
+    const id = nextId++;
+    items.push(historyItem(entry, id));
+    if (entry.kind !== 'step') continue;
+    const toolUseId = historyToolId(entry, id);
+    tools = withEntry(tools, toolUseId, {
+      toolUseId,
+      agentKey: MAIN,
+      name: entry.name,
+      input: boundInput(entry.input),
+      ...(entry.decision
+        ? { check: { route: 'stored', decision: entry.decision, reason: truncate(entry.reason), summary: truncate(entry.summary), comment: '', checkerRoute: '' } }
+        : {}),
+      ...(entry.result !== null ? { result: { content: truncate(entry.result), isError: false } } : {}),
+      stored: { subagent: entry.subagent, hasInput: entry.input !== null },
+    });
+  }
+  items.push({ id: nextId++, kind: 'divider', mark: 'history-end', text: HISTORY_END_TEXT });
+  return { ...state, nextId, tools, items: withEntry(state.items, MAIN, [...items, ...live]) };
+}
+
+/**
+ * Return the key in `ViewState.tools` of a recorded step.
+ *
+ * @param entry The step.
+ * @param id The id of its item.
+ * @returns The call's own id if the record holds it, else "history:<item id>" (unique in the
+ *   state, and never the id of a real call: those do not contain a colon after "history").
+ */
+function historyToolId(entry: Extract<HistoryEntry, { kind: 'step' }>, id: number): string {
+  return entry.toolUseId ?? `history:${id}`;
+}
+
+/**
+ * Build the transcript item of one recorded entry.
+ *
+ * @param entry The entry.
+ * @param id The item's id.
+ * @returns The item, marked `stored` (a tool item refers to the `ToolView` of `historyToolId`).
+ */
+function historyItem(entry: HistoryEntry, id: number): Item {
+  switch (entry.kind) {
+    case 'user':
+      return { id, kind: 'user', text: truncate(entry.text, MAX_AGENT_RESULT_TEXT), source: 'user', images: [], turn: entry.turn, uuid: entry.uuid, stored: true };
+    case 'step':
+      return { id, kind: 'tool', toolUseId: historyToolId(entry, id) };
+    case 'answer':
+      return { id, kind: 'assistant', text: truncate(entry.text, MAX_AGENT_RESULT_TEXT), stored: true };
+    case 'turnEnd':
+      return { id, kind: 'turn', subtype: 'success', isError: false, costUsd: null, backgroundTasks: 0, stored: true };
+  }
 }
 
 /**
