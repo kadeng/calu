@@ -82,6 +82,58 @@ $D open-vscode
 Use `uitest-code`, not plain `code`: the launcher passes the profile directories, so the
 extension lands in the profile that `open-vscode` uses.
 
+## Running the extension against a scripted session
+
+No Claude Code, no API key and no sign-in are needed: `uitest/fake_server.py` runs the real
+`calu.serve.Server` with a scripted runner and rule-based fake checkers, so "New session" in the
+extension plays a prepared conversation.
+
+```bash
+# host: build the extension and put it into the exchange directory
+(cd extensions/vscode && npm run check-types && npm run test:unit && npm run build && npm run package)
+cp extensions/vscode/calu.vsix ~/.cache/calu-uitest/share/
+
+# container: database, calu, demo project, fake server, extension, VSCode on ~/work/demo
+$D shell 'bash /workspace/calu/uitest/setup-demo.sh'
+$D screenshot ~/.cache/calu-uitest/share/shot.png
+```
+
+`setup-demo.sh` is idempotent; run it again after every change of the Python side (it copies
+the host's working tree, uncommitted changes included, and restarts the fake server). Its
+header lists the steps. `--no-vscode` leaves VSCode alone, `--stop-server` stops the fake
+server (for the "no server" state of the extension). After a new `.vsix`:
+`$D shell 'uitest-code --install-extension /share/calu.vsix --force'`, then "Developer: Reload
+Window". A new VSCode profile (first-start layout): `UITEST_VSCODE_DATA=$HOME/.vscode-fresh`
+before both `uitest-code` calls.
+
+| Item | Value |
+| --- | --- |
+| Database | PostgreSQL of the container (apt), database `calu`, owner role `calu_owner` with a test password |
+| Credentials | `~/.config/calu/credentials.json` of user `cua`: `admin` and `calu_admin` without a password (so `calu ide` asks none), `session` with a blank password |
+| calu | `uv tool install` from `~/work/calu` (a copy of `/workspace/calu` without `.git`, `.venv`, `.env`), command `~/.local/bin/calu` |
+| Demo project | `~/work/demo` (git repository; the scripted Edit changes `greeter.py`: `git -C ~/work/demo checkout greeter.py` resets it) |
+| Fake server | tmux session `calu-fake`, log `/tmp/calu-fake-server.log` |
+
+The first message of a session chooses the scenario: `scenario: <name>`; any other text plays
+`tour`. The fake checkers decide by the markers `# calu:allow`, `# calu:deny` and
+`# calu:escalate` in a scripted command.
+
+| Scenario | What it plays |
+| --- | --- |
+| `tour` | streamed Markdown, thinking, Read, a real Edit (diff view), commands that pass, are allowed, denied and escalated, two subagents, a question; turn 2 and 3 escalate and ask after 4 s (notifications) |
+| `subagents` | a foreground subagent, two at once (one escalates), one that fails, a background one that outlives the turn for a minute and starts the follow-up turn |
+| `stop` | a slow text, a command of a minute, an escalating command: one per turn, to interrupt |
+| `queue` | turns of 15 s to send queued and injected messages into, then an escalating command |
+| `levels` | Read, Edit and a command per turn, for the supervision level |
+| `edge` | a line of 3,000 characters, a result of 60,000, a code block of 300 lines, raw HTML, a `javascript:` link, failed calls, several scripts; turn 2 asks two questions (several choices, one choice) |
+| `many` | 320 edits and 200 commands in one turn (more edits than the extension keeps diffs for) |
+| `escalations` | three escalating commands at the same time |
+| `nousage` | as `levels`, without context usage |
+
+What the scripted runner does not play: the earlier turns of a resumed or forked conversation
+(it has no transcript; the request and its fork point are real), an answer to a message for a
+subagent, and Claude Code's own slash commands (a line names the command instead).
+
 ## What is installed, and where
 
 | Tool | Version (2026-11-18) | Location | Source |
