@@ -15,6 +15,12 @@ import io.github.kadeng.calu.json.objOrEmpty
 import io.github.kadeng.calu.json.str
 import kotlinx.serialization.json.JsonObject
 
+/**
+ * Session events after which the checker context may have changed: a view that shows the
+ * document of `formatCheckerContext` loads `context.get` again when one of them arrives.
+ */
+val CONTEXT_EVENTS: Set<String> = setOf("check.result", "turn.result", "user.input", "session.state")
+
 private val FENCE = Regex("^(`{3,}|~{3,})")
 private val HEADING = Regex("^#{1,5} ")
 private val TICKS = Regex("`+")
