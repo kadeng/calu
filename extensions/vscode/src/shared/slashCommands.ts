@@ -41,14 +41,25 @@ function command(name: string, source: SlashCommand['source'], description: stri
   return { name, description, source, values };
 }
 
-/** Commands of Claude Code that are always offered (sent as chat text). */
+/**
+ * Commands of Claude Code that are always offered (sent as chat text). Each one was run
+ * through calu against a real Claude Code (CLI 2.1.327), which runs them without the model:
+ *
+ *     /compact   replaces the conversation by a summary; the summary is shown
+ *     /clear     Claude forgets the conversation; the transcript stays and a notice says so
+ *     /usage     prints cost, durations and tokens by model (the same text as /cost)
+ *     /cost      prints cost, durations and tokens by model
+ *     /context   prints a table of what fills the context window
+ *
+ * `/help` is not in the list: a session without a terminal answers "/help isn't available in
+ * this environment."
+ */
 export const CLAUDE_COMMANDS: readonly SlashCommand[] = [
   command('compact', 'claude', "Summarize the conversation to free context (optional: what to keep)"),
-  command('clear', 'claude', 'Start over with an empty conversation'),
-  command('usage', 'claude', 'Show the usage of the account limits'),
+  command('clear', 'claude', 'Claude forgets the conversation; the transcript here stays'),
+  command('usage', 'claude', 'Show cost, durations and tokens of the session'),
   command('context', 'claude', 'Show what fills the context window'),
-  command('cost', 'claude', 'Show the cost of the session'),
-  command('help', 'claude', "Show Claude Code's help"),
+  command('cost', 'claude', 'Show cost, durations and tokens of the session'),
 ];
 
 /** Commands of the extension. */

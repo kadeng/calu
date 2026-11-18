@@ -11,7 +11,8 @@ describe('command table', () => {
     expect(CALU_COMMANDS.map((c) => c.name)).toEqual([
       'model', 'effort', 'level', 'honesty', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt',
     ]);
-    expect(CLAUDE_COMMANDS.map((c) => c.name)).toEqual(['compact', 'clear', 'usage', 'context', 'cost', 'help']);
+    // No /help: a session without a terminal answers that it is not available.
+    expect(CLAUDE_COMMANDS.map((c) => c.name)).toEqual(['compact', 'clear', 'usage', 'context', 'cost']);
     const names = table.map((c) => c.name);
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
     expect(new Set(names).size).toBe(names.length);
