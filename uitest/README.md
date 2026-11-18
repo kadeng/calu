@@ -144,6 +144,66 @@ VSCode window (the chat then offers "Restart bridge"); `DISPLAY=:1 xdotool mouse
 hovers; `DISPLAY=:1 xdotool key --clearmodifiers ctrl+v` pastes what `xclip -selection
 clipboard -t image/png -i file.png` put on the clipboard.
 
+## Running the extension against a real Claude Code
+
+`uitest/setup-real.sh` replaces the scripted server by `calu serve` with a real Claude Code and
+real checker models. It costs money on every step, so the owner decides when it runs and with
+which key.
+
+```bash
+# host: the key file, two lines NAME=value (ANTHROPIC_API_KEY, optionally ANTHROPIC_BASE_URL)
+install -m 600 /dev/null ~/.cache/calu-uitest/share/anthropic.env   # then fill it in an editor
+
+# container
+$D shell 'bash /workspace/calu/uitest/setup-real.sh'               # everything
+$D shell 'bash /workspace/calu/uitest/setup-real.sh --no-deploy'   # keep the installed calu
+$D shell 'bash /workspace/calu/uitest/setup-real.sh --stop-server'
+$D shell 'bash /workspace/calu/uitest/setup-real.sh --remove-key'  # delete the key files
+```
+
+| Item | Value |
+| --- | --- |
+| Claude Code | native installer (`https://claude.ai/install.sh`), `~/.local/bin/claude`; no login |
+| The key, for calu's agents | `~/.config/calu/.env` (mode 600): checkers, narrator, summarizer, trace redactor |
+| The key, for Claude Code | the `env` block of `~/.claude/settings.json` (mode 600) |
+| Models | every role `anthropic:claude-haiku-5-5` (`calu config models`), `claude.model = haiku` |
+| Sandbox | off: Docker without privileges cannot create user namespaces (`bwrap --unshare-user` fails), although bubblewrap and socat are installed |
+| Server | tmux session `calu-real`, log `/tmp/calu-real-server.log`; calu's own log `~/.local/state/calu/log/serve.log` |
+
+The script never prints a value of the key file, moves the file out of `/share` and deletes
+it there. Both places are needed: calu blanks every variable of its env file in the
+environment it hands to Claude Code, so Claude Code reads the key from its own settings.
+`--remove-key` deletes both copies; revoking the key is the owner's step.
+
+`setup-demo.sh` and `setup-real.sh` install calu from the host's working tree, uncommitted
+changes of every session in that checkout included. To test a commit instead, export it into
+the exchange directory and name it:
+
+```bash
+git archive HEAD -- . ':(exclude)extensions' | tar -x -C ~/.cache/calu-uitest/share/src
+$D shell 'CALU_UITEST_SOURCE=/share/src bash /share/src/uitest/setup-real.sh'
+```
+
+A long `desktop.py shell` line is cut off after 120 seconds; start the script detached
+(`setsid -f bash -c "... > /tmp/setup-real.log 2>&1"`) and read the log.
+
+### What a real session does that the scripted runner does not (CLI 2.1.327, Haiku)
+
+| Area | Real Claude Code | Scripted runner |
+| --- | --- | --- |
+| Tool calls | Several in one message: the `tool.use` of call 2 arrives before the `check.result` of call 1; `file_path` is absolute; Haiku often reads with `cat` in Bash instead of Read | one call after the other, relative paths |
+| Cost | `turn.result.cost_usd` is the total of the Claude Code process, and `num_turns` the model calls of that turn | no cost |
+| `/cost`, `/usage`, `/context` | run without the model: a text of the model `<synthetic>`, a turn with 0 model calls, no replay of the input | a line that names the command |
+| `/compact` | status "compacting", a summary as a user-role text, `<local-command-stdout>Compacted`, and a SubagentStop of the agent that wrote the summary | as above |
+| `/clear` | a new Claude session id, cost counted from 0, no output | as above |
+| `/help` | "/help isn't available in this environment." | as above |
+| Interrupt | the turn ends as `error_during_execution` with the error flag, after the user-role text "[Request interrupted by user]"; the SDK runner reports it as "interrupted" | "interrupted" |
+| Fork, rewind | Claude Code checks the fork point; a fork that discards more than the newest turn is started a second time without the check | the script starts again |
+| Background subagent | every pause of the subagent calls SubagentStop: the result checker reviews an interim result, its note starts a turn of the main agent ("still waiting") | one result at the end |
+| Message to a subagent | the main agent loads SendMessage through ToolSearch and relays; the subagent reads it at its next tool round | shown, not answered |
+| A foreground `sleep N` | refused by Claude Code's Bash tool ("Blocked: standalone sleep"); use `python3 -c 'import time; time.sleep(N)'` for a long command | runs |
+| Questions | AskUserQuestion with a header, options with descriptions | the scripted questions |
+
 ## What is installed, and where
 
 | Tool | Version (2026-11-18) | Location | Source |
@@ -183,7 +243,8 @@ together.
   (`calu-db-postgres-1`, `calu-dev-caludb-1`) are separate and must stay untouched.
 - No `--privileged`, no Docker socket, no host home directory, no `~/.config`, `~/.claude`,
   `~/.ssh`, and no API keys or tokens in the container. The only secret is the container's own
-  access token.
+  access token. The one exception is a run of `setup-real.sh`, which the owner decides: it
+  holds the API key the owner put into the exchange directory, until `--remove-key`.
 - The repository mount is read-only, but it is the whole checkout: files such as `.env` and
   `.venv/` in the repository are readable inside the container.
 - Ports bind to 127.0.0.1 only.

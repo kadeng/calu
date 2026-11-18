@@ -547,6 +547,15 @@ comes with API credits that the checkers can spend. `mistral:` models go to the 
 unless `MISTRAL_BASE_URL` says otherwise, and `bedrock:` takes its credentials from the usual
 AWS chain.
 
+**Claude Code itself on an API key.** Because calu blanks the variables of its env file for
+Claude Code, an `ANTHROPIC_API_KEY` that is only in `~/.config/calu/.env` pays for the checkers
+and never reaches Claude Code. A machine without a subscription login gives Claude Code its key
+the way Claude Code is set up without calu: in Claude Code's own settings, for example the
+`env` block of `~/.claude/settings.json` (`{"env": {"ANTHROPIC_API_KEY": "sk-ant-..."}}`, file
+mode 600), which Claude Code reads itself when it starts. The same key may stand in both files;
+the checkers and the main conversation then bill one account (measured with Claude Code
+2.1.327 in `calu serve`: `/cost` in the session and the checkers' calls both ran on that key).
+
 ### Checkers are read-only by design
 
 A checker agent gets exactly five tools, and every one of them only reads: `read_file`,

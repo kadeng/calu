@@ -555,7 +555,15 @@ escalation resolved from the database alone.
    prompt: its blocks must read `[this step was withheld: redaction failed]`, the session
    must go on, and the planted values must be nowhere in the file. Afterwards
    `calu config unset traces.redactor_model` and `calu config set traces.enabled false`.
-   Not run with a real model yet; the unit tests cover it with stand-in models
+   Run on 2026-11-18 with `anthropic:claude-haiku-5-5` as the redaction agent, in the
+   UI-test desktop (`uitest/setup-real.sh`), once with `traces.content` `narrated` and once
+   `plain`: a made-up `sk-ant-api03-` key, a name, an e-mail address and a phone number were
+   replaced in every block (user, tool input, check, tool result, Claude's words), no other
+   text changed, no block was withheld, and each block was in the file one to three seconds
+   after its event. With `test:missing` both blocks of the next prompt were withheld and the
+   session went on. Found there: every change of a `traces` setting starts a new file for
+   every running session, also for one that writes nothing afterwards (a file with a header
+   and no block). The unit tests cover the redaction with stand-in models
    (`tests/unit/test_traces.py`, `tests/unit/test_traces_session.py`).
 
 ## Measuring the checkers
