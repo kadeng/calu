@@ -1,143 +1,101 @@
 # Handoff
 
-State on 2026-11-13: after the honesty redesign and the full-screen terminal client were merged
-and tried for real, `calu list-sessions` and `calu run --fork` (D203), the single package
-(D204), `calu setup` with three database variants (D205), the launcher `calu-claude` (D207),
-`calu serve` with `calu start` (D208) and conversations started with `claude` itself (D209).
-Read this, then `AGENTS.md`, `REQUIREMENTS.md` and `PLAN.md` (decisions D1-D223, open
-questions §11, phases §12).
+State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-28)
+and `PLAN.md` (decisions D1-D223, open questions §11, phases §12). Everything below is on
+`main` and pushed; the last commit is `8bd75f6` (`calu login`).
 
 ## Pick up here
 
-**`main` is green and pushed** (`uv run pytest -q -m 'not live'`, ruff, pyright); check
-`gh run list --limit 3` for CI on the last pushes.
+**`main` is green**: 2031 tests with `uv run pytest -q -m 'not live'` (unit, database and
+the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The suite takes
+6-9 minutes; use `set -o pipefail` when piping it through `tail`, or a failure is hidden
+(that once let a red commit through, 2026-11-13).
 
-**Built on 2026-11-13 after the handoff of that morning** (the owner: "continue", then
-requirement 27):
+### What exists now, by area (newest decisions first)
 
-- **`calu-claude`, the launcher (D207)**: `src/calu/launch.py`, a console script of
-  the installation. `SdkRunner(run_as=RunAs(...))` names it as `cli_path` and passes the
-  record in `CALU_LAUNCH`; `RunOptions.run_as` and `ServeOptions.run_as` carry it. Measured
-  as root in a container (`spikes/spike_other_uid.sh launcher`). **Nothing sets `run_as`
-  yet**: no command line option exists, on purpose (see item 1 below).
-- **`calu serve` and `calu start` (D208)**: `src/calu/serve.py`, `src/calu/session_requests.py`,
-  migration 0032. A request is a database row written with the operator login; the server
-  claims it and runs the session as a task through `calu.run.run_from`. `calu.run` got
-  `say` (labelled lines), `RunOptions.stay` and `quiet`, and `on_ready`. Run against the
-  real Claude Code with `spikes/smoke_serve.py`: two sessions at once and a fork.
-  **Not tried by hand**: `calu serve` with a typed password next to `calu start` in a second
-  terminal (`docs/TESTING.md` item 27), and Ctrl-C while sessions are in the middle of a turn.
-  Added later that day: `calu serve --idle-timeout MINUTES`, and a test that runs `calu
-  serve` as a process (password on stdin, a refused request, SIGTERM).
-  Also built: "new session", "fork" and "continue" on the web interface's session page
-  (`web/app.py: request_session`), and `/new` and `/fork` in the full-screen client
-  (`tui/app.py: _request_session`, `TuiExit.switch_to`, the loop in `cli._attach`). The web
-  buttons were run against a server with fake runners; the client's commands only with the
-  scripted session. **Not tried**: either of them by a person against a real `calu serve`.
-  **Not built**: the same in the line client and through ACP; a "new session" on the fleet
-  page for a directory no session ran in yet.
-- **Conversations started with `claude` itself (D209)**: `src/calu/claude/transcripts.py`.
-  `calu list-sessions` lists them as "outside calu"; a resume or fork of one gives the
-  checkers one turn that reports what the transcript says the user wrote, as a report and
-  not as user input (a transcript is an unverified file). Checked against a real transcript;
-  **not run**: such a resume under calu with real checkers.
-
-**Review of 2026-11-17 (D222):** ten read-only reviewers, then fixes by area; what was
-changed and the one finding the owner ruled intended (the session login may claim any
-request) are in D222.
+- **calu as root, Claude Code as an unprivileged user** (requirement 26; D206, D207,
+  D211-D216, D223). `--user NAME|UID[:GID]` (required as root) and `--sudo` (re-runs calu
+  through sudo with `--user <you>`) on `calu run`, `serve`, `start`, `attach`, `web` and
+  `login`. Pieces: the launcher `calu-claude` (`src/calu/launch.py`), `src/calu/asuser.py`
+  (resolve, prepare, enter = per-thread file identity, child = ids and a clean environment
+  for programs started in the project, `as_root`, installation check, sudo command, system
+  directories `/etc/calu`, `/var/lib/calu`), the root-owned socket
+  `/run/calu/sessions/<id>.sock` with token-free root clients (`src/calu/localsocket.py`),
+  `calu_admin` with the typed admin password (migration 0033), the web login with the
+  admin password, `calu login` (Claude Code's own login for the session user).
+  Rules the owner set, do not reopen: calu never adds users, no dedicated system user; a
+  number is always a bare uid with home `/var/lib/calu/claude/<uid>`, a name uses that
+  user's home; the launcher is part of the installation, no script written at run time;
+  privileged files only in system directories or below `/root`; changing settings is not
+  privileged, the files are (D213).
+- **`calu serve` / `calu start`** (requirement 27; D208): one process authenticated once,
+  sessions requested through `session_requests` rows; `/new`, `/fork`, `/running`,
+  `/switch` in the full-screen client and buttons in the web interface; `--idle-timeout`;
+  a dead claim expires after 180 s (migration 0035). The owner ruled (2026-11-17) that the
+  shared session login may claim any host's and user's request, prompt included: intended.
+- **Conversations started with `claude` itself** (D209): listed by `calu list-sessions`,
+  resumable and forkable; a fork records its origin (D219, migration 0034).
+- **Honesty checker** (requirement 28; D217): answers HONEST/DISHONEST per file, never stops
+  a step, escalates only what looks deliberate. Skill `.claude/skills/honest-code/SKILL.md`
+  states the rule for agents (D210, with the owner's rulings: names and doc comments only,
+  README excluded; tests describe side effects and printed data; configuration that widens
+  side effects counts as code).
+- **Web live view** (D218, D220): Markdown, gap between turns, thumbnails of images Claude
+  reads, images attached to a chat message (also through ACP).
+- **Full-screen client**: fully mouse-enabled (D219); `f4` starts the git program only
+  (gitui by default), never a stand-in (owner's ruling 2026-11-16).
+- **ACP** (D221): driven end to end by the official client library (`spikes/acp_host.py`);
+  `session/list`, titled permission requests, images, WSL paths, stale-id refusal.
+- **Review of 2026-11-17** (D222): ten reviewers, fixes by eight agents; what changed is
+  listed there.
 
 ### What to do next, in this order
 
-1. **calu runs privileged, Claude Code as an unprivileged user (requirement 26; D206, D207,
-   D211, D212): built, and run as root in a container; the path through a real sudo was
-   never run.**
-   - What exists: the launcher `calu-claude` (`src/calu/launch.py`); `src/calu/asuser.py`
-     (`resolve` for `--user`, `prepare`, `enter`, `child`, the installation check, the sudo
-     command, the system directories); `--user`, `--sudo` on `calu run` and `calu serve`.
-     As root, `--user` is required. calu's own file access in the project uses the user's
-     file-system identity (per thread), and every program it starts there the user's ids.
-   - Rules the owner set, do not reopen: calu never adds users; no dedicated system user; a
-     number is always a bare uid with a home from calu (`/var/lib/calu/claude/<uid>`), a name
-     uses that user's home; the launcher is part of calu, no script written at run time;
-     calu's own files in system directories or below `/root`, never in the user's home.
-   - Run: `spikes/smoke_privileged.sh` (root in the development image, real Claude Code, uid
-     1000, snapshots on), `spikes/spike_fs_identity.py`, the root install with `uv tool
-     install` and the installation check in a container.
-   - **The owner has to try** (`docs/TESTING.md` item 30): `calu run --sudo` on a machine
-     with sudo. This machine's sudo asks a password, so a session cannot.
-   - **The owner's first real use (2026-11-13) and what it changed:** see D212, last part,
-     and D213. The owner's machine now has calu for root in `/usr/local/lib/calu`, a new
-     local database in `/var/lib/calu/db` with root's store in `/etc/calu`, an `operator`
-     entry in his own store, and the old database untouched in the Docker volume
-     `calu-db_data` (its credentials are the `admin` and `session` entries of his own
-     store). His ruling: the files are privileged, changing settings is not; that is D213
-     (`calu_admin`, typed admin password). He has to run `sudo calu setup` once after
-     reinstalling, so that the role gets its password.
-   - **Built, never run as root (D214):** the client through sudo, `calu attach --sudo` and
-     `calu start --sudo`: it holds its database login in memory (`cli._held`), so settings,
-     `/new`, `/fork`, `/running` and `/switch` need no second password. `docs/TESTING.md`
-     item 31 is what the owner has to try.
-   - **Built (D215):** a root session also listens on `/run/calu/sessions/<id>.sock`
-     (root, 0600); a root client that finds it root's alone connects without a token
-     (`src/calu/localsocket.py`, `asuser.as_root`). Run in a container; a root client
-     attaching over it to a real session was not run.
-   - **Built (D216), not tried in a browser:** the web interface signs a browser in with
-     the admin password (checked by the database as `calu_admin`), and `calu web --sudo`
-     runs it as root for the user. `docs/TESTING.md` item 32.
-   - **Built (D218):** the web live view renders Claude's text as Markdown
-     (`web/static/markdown.js`), leaves a gap after a turn, and shows image files Claude
-     reads as thumbnails (`web/app.py: session_file`). Tested in a headless browser.
-   - **Built (D219):** a fork records and shows what it is a fork of (migration 0034); the
-     per-turn fork control in the web interface is one labelled button; the escalation card
-     of the full-screen client has clickable buttons.
-   - **Built:** the full-screen client works with the mouse throughout (D219 part 3:
-     `Buttons` under the card, `KeyLine` for every line of key hints, the command list, the
-     checkers list).
-   - **Built (D220):** a chat message can carry images (`ChatImage` in the protocol,
-     `SdkRunner._write`); the web live view attaches, pastes and shows them. Checked with
-     the real Claude Code (`spikes/spike_chat_image.py`) and in a headless browser. The
-     checkers are told that there were images, not what they show.
-   - **Built (D217):** the honesty checker answers HONEST or DISHONEST per file
-     (`checkers/model.HonestyAnswer`, `system/honesty.md`); it never stops a step, and
-     escalates only what looks deliberate. Left as it was: the badge of its check still says
-     PASS, the other checkers still write marks, and `calu evals` scores it against cases
-     that expect a decision. Run once against a real model (Nemotron Lightning on
-     Fireworks, 2026-11-13): an edit that made a docstring wrong was answered DISHONEST
-     with the function and the reason, the edit that corrected the docstring HONEST.
-   - **Open:** the RDS variant together with `--user` (a token renewal reads the AWS profile
-     as root after the switch: give that one thread root's file identity back, which the
-     spike shows is possible); Claude Code's sandbox under the other uid (not switched on in
-     the run); a named user with a real home (not run); the `operator` credential of the
-     user next to a `session` credential in `/etc/calu` (D212, last sentence); `calu doctor`
-     says nothing about any of this yet; the single-file binary has no launcher.
-2. **`calu acp`: driven by a real ACP client and fixed where it failed (D221); not yet
-   tried again in PyCharm.** `spikes/acp_host.py` (the official `agent-client-protocol`
-   client) holds a whole conversation with the adapter against a real session. Fixed: the
-   permission request has a title, `session/list` exists (PyCharm asked for it every
-   minute), a prompt's images are sent, and a Windows name of a WSL directory is understood.
-   The owner's start script `/home/klondenberg/projects/calu/.run_acp.sh` still names the
-   address and token of a session that ended on 2026-11-13: it has to run `calu acp`
-   without them (that needs an `operator` credential without a password in his store), or
-   be given a current address and token. PyCharm's log:
-   `/mnt/c/Users/KaiLo/AppData/Local/JetBrains/PyCharm2026.3/log/idea.log` (grep `calu`).
-3. **RDS with IAM authentication has never run against a real instance** (D205; no AWS
-   account on this machine). `docs/TESTING.md` item 26 says what to check. Also not run:
-   rootless Docker, and an existing server beyond `tests/db/test_setup_variants.py`.
-4. **The full-screen client: what item 4 of the list below left untried**, and the owner
-   has not used it yet.
-5. **Publishing**: the install is `uv tool install git+https://github.com/kadeng/calu` until
-   the owner sets PyPI up (`release.yml` says how). The single-file binary was not rebuilt
-   since the extras were folded in (`scripts/build-binary.sh`).
-6. Smaller open work: the timing-sensitive browser tests (item 7 below); a checker's model
-   and limits in two stores; `cli.py` (now about 3,500 lines) should become a package; a
-   fork cannot be forked again before one of its inherited turns; a session a client starts
-   through the protocol prints no `[session]` line; a login role per person or machine, so
-   that a second machine does not need `calu setup --renew-session` (D205, last part).
-7. **Later, by the owner's order of priorities**: own plugins for VSCode and the JetBrains
-   IDEs and a git browser in the web interface (D200, D201), only after the terminal client,
-   the web interface and standalone use work well; a schema per database user and
-   user-specific settings are tentative (soft goal 7, D205 part 6); development channels are
-   not built (item 11 below).
+1. **Things only the owner can try** (each in `docs/TESTING.md`): `calu run --sudo` and
+   `calu serve --sudo` through a real sudo (item 30); `calu attach --sudo` with the
+   password-free settings, `/running`, `/switch` (31); the web password login in a browser
+   and `calu web --sudo` (32); `calu login --sudo` with a real sign-in; `calu acp` in
+   PyCharm. For ACP: his start script `/home/klondenberg/projects/calu/.run_acp.sh` still
+   names the address and token of a session that ended on 2026-11-13; it should run
+   `/usr/local/bin/calu acp` without them, with an `operator` credential stored without a
+   password. PyCharm's log: `/mnt/c/Users/KaiLo/AppData/Local/JetBrains/PyCharm2026.3/log/idea.log`.
+   After pulling, he reinstalls the root calu (`sudo env UV_TOOL_DIR=/usr/local/lib/calu
+   UV_TOOL_BIN_DIR=/usr/local/bin UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python "$(command
+   -v uv)" tool install --reinstall git+https://github.com/kadeng/calu`) and runs
+   `sudo calu setup` once (migrations 0033-0035, the `calu_admin` password).
+2. **Decisions waiting for the owner** (asked, no answer yet): should a `claude:` checker
+   under `--user` get the environment's Anthropic key (now it gets none and must use the
+   user's own login)? Cap parallel web login attempts? Should honesty judging move to the
+   honesty checker alone (the other checkers still write marks)? Should the check badge of
+   the honesty checker show HONEST/DISHONEST (needs a protocol and database change)?
+3. **Open from the review (D222, "Left open")**: browser tests for the styled password page
+   and pathological Markdown; Ctrl-C mid-turn under `calu serve`; no automated test for the
+   root-only paths (`_client_user`, `_become_client_of`, `_local_endpoint`, the sudo
+   re-execution, the launcher's exec).
+4. **Open in the privileged model**: RDS together with `--user` (a token renewal reads the
+   AWS profile after the switch: give that one thread root's file identity back); Claude
+   Code's sandbox under the other uid (never switched on in a run); a named user with a
+   real home (not run); `calu doctor` knows nothing of `--user`; the single-file binary has
+   no launcher.
+5. **RDS with IAM authentication has never run against a real instance** (D205;
+   `docs/TESTING.md` item 26). Also not run: rootless Docker.
+6. **Publishing**: install is `uv tool install git+https://github.com/kadeng/calu` until
+   PyPI is set up (`release.yml`); the single-file binary was not rebuilt.
+7. Smaller open work: `cli.py` (about 4,300 lines) should become a package; a checker's
+   model and limits live in two stores; a fork cannot be forked again before one of its
+   inherited turns; a login role per machine (D205, last part); timing-sensitive browser
+   tests.
+8. **Later, by the owner's priorities**: plugins for VSCode and JetBrains and a git browser
+   in the web interface (D200, D201); a schema per database user (soft goal 7).
+
+### The owner's machine (as of 2026-11-18)
+
+calu for root in `/usr/local/lib/calu` (links in `/usr/local/bin`); a local database in
+`/var/lib/calu/db` (container `calu-db-postgres-1`, port 5433) with root's credential store
+in `/etc/calu` (copied from his own once); an `operator` entry in his own store
+(`~/.config/calu`); his older database untouched in the Docker volume `calu-db_data`, whose
+credentials are the `admin` and `session` entries of his own store. gitui is in
+`~/.local/bin`. The test server for calu's own tests is `calu-dev-caludb-1` on port 55432.
 
 ### How the owner works with a session (learned on 2026-11-12 and 13)
 
