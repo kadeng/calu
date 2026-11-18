@@ -9,7 +9,7 @@
  *                     New session…         ──► newSession()
  *     forkBefore()  user message of the chat ──► ide.start {kind: "resume", fork_before_turn}
  *     forkConversation()                     ──► ide.start {kind: "fork"}
- *     newSession()  input boxes (first message, name; both optional) ──► ide.start {kind: "new"}
+ *     newSession()  nothing is asked ──► ide.start {kind: "new"}
  *     ide.start waits ──► `ui.starting {title, slow}`: the chat shows progress with "Cancel"
  *                     (cancelStart() ──► ide.start.cancel) and, after `SLOW_START_MS`, that no
  *                     server may be running, with "Start calu server"
@@ -106,29 +106,15 @@ export class Sessions {
   }
 
   /**
-   * Ask for an optional first message and name, then start a new session in the workspace.
+   * Start a new session in the workspace at once, without asking anything: the first message is
+   * typed into the chat's input like every other one, and a name is given with "Rename session"
+   * (the owner, 2026-11-18: "everyone should know how to find the chat input box").
    *
-   * @returns True if the session started and is attached; false if the user cancelled or the
-   *   start failed (the failure was shown).
+   * @returns True if the session started and is attached; false if the start failed (the
+   *   failure was shown).
    */
-  async newSession(): Promise<boolean> {
-    const prompt = await vscode.window.showInputBox({
-      title: 'calu: new session (1/2)',
-      prompt: 'First message for Claude (optional; leave empty to start without one)',
-      ignoreFocusOut: true,
-    });
-    if (prompt === undefined) return false;
-    const name = await vscode.window.showInputBox({
-      title: 'calu: new session (2/2)',
-      prompt: 'Name of the session (optional, at most 80 characters)',
-      ignoreFocusOut: true,
-      validateInput: validateSessionName,
-    });
-    if (name === undefined) return false;
-    return this.start(
-      { kind: 'new', ...(prompt.trim() ? { prompt: prompt.trim() } : {}), ...(name.trim() ? { name: name.trim() } : {}) },
-      'Starting a session',
-    );
+  newSession(): Promise<boolean> {
+    return this.start({ kind: 'new' }, 'Starting a session');
   }
 
   /**

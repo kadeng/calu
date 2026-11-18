@@ -61,7 +61,7 @@ export type WebviewMessage =
   | { type: 'sideAsk'; question: string }
   /** Open the session QuickPick (attach, new, resume, fork). */
   | { type: 'attach' }
-  /** Ask for an optional first message and name, then start a new session. */
+  /** Start a new session at once; nothing is asked. */
   | { type: 'newSession' }
   /** Attach to the running session `sessionId` (an entry of `state.sessions.list`). */
   | { type: 'switchSession'; sessionId: string }

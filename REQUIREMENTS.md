@@ -198,6 +198,8 @@ broken down or extended. Derived requirements and design decisions belong in
     the original Tron movie)" (stated 2026-11-18)
     "I would prefer to have the chat bar sit on the right side of the screen by default, by
     the way. Currently it's on the left." (stated 2026-11-18)
+    "Creating a new claude session should not ask for "A first message to claude", everyone
+    should know how to find the chat input box." (stated 2026-11-18)
 35. "after the VSCode extension, I want to have an even more powerful pycharm extension. More
     powerful because it should support both local and remote mode and an operation where the
     remote server, the db and calu are being accessed over SSH only and changes are

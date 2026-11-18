@@ -126,7 +126,7 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `why` | `escalationId` | opens the escalation's stored context as a read-only document |
 | `sideAsk` | `question` | `ui.sideAsk`, `side.ask` with the earlier answers as history, then `ui.sideAnswer` |
 | `attach` | | session QuickPick (attach, new, resume, fork) |
-| `newSession` | | asks first message and name, `ide.start` |
+| `newSession` | | `ide.start` at once; nothing is asked |
 | `switchSession` | `sessionId` (from `sessions.list`) | `ide.attach` → `reset` |
 | `renameSession` | `sessionId` | asks the name with an input box, `ide.session.rename`, refreshes the list |
 | `refreshSessions` | | `ide.sessions` → `ui.sessions` (may ask a password) |

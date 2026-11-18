@@ -121,7 +121,7 @@ export function buildSessionPicks(sessions: Partial<IdeSessionsResult>, attached
       separator: false,
       label: '$(add) New session…',
       description: '',
-      detail: 'Start a session in this workspace folder, with an optional first message',
+      detail: 'Start a session in this workspace folder',
       choice: { kind: 'new' },
       current: false,
     },
