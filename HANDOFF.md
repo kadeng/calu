@@ -1,69 +1,62 @@
 # Handoff
 
-State on 2026-11-18, end of a long session. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-36; 26-36 are from the last days) and `PLAN.md` (decisions D1-D232, open
+State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
+(requirements 1-38; 26-38 are from the last days) and `PLAN.md` (decisions D1-D233, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
 
-### State of the repository (updated 2026-11-18, late)
+### State of the repository (updated 2026-11-19, early morning)
 
-- **Pushed to `origin/main`: everything up to `d229495`** (CI green there): the root model,
-  `calu serve`, local trust, the place file, `calu setup --no-password`, `calu ide` with
-  session names (migration 0036) and `ide.unlock`, the review fixes (D230), blank passwords,
-  the faster test suite, and the VSCode extension as first built (host side, chat view,
-  settings dialog; 230 unit tests).
-- **Committed locally after that, not pushed** (`git log origin/main..HEAD`): requirement 36
-  and D232 (session traces, planned), spec section 12 (the chat on the right), and the
-  commits of the agent that runs the extension for the first time (fixes from the run, the
-  secondary side bar, extensions of the fake runner). The owner pushes on his word ("push").
-- **An agent was running when this was written**: the first real run of the extension in the
-  Cua desktop (container `calu-uitest`), against a scripted server (`uitest/fake_server.py`,
-  no Claude login, by the owner's choice). It commits locally in small commits and may have
-  left uncommitted files (`git status`); its last report, if it finished, is not recorded
-  anywhere but in that session. Its brief: walk through activation, a scripted conversation,
-  click-to-diff, checker instructions, sessions, rewind and fork, slash commands, settings,
-  notifications, the no-server state, a light theme; then the owner's list: subagents
-  (foreground, background, failing, two at once), slash commands, token usage, fork and undo,
-  stopping, queued and injected messages, supervision level to manual and back, edge cases.
-  Screenshots: `~/.cache/calu-uitest/share/run1/`.
-- **Three agents were started later the same evening** (the owner: "Both", and "continue
-  with the Pycharm plugin for real" once the VSCode extension is ready for his manual test):
-  (1) a second pass over the VSCode extension (the seven open defects of the first run:
-  empty transcript after fork or rewind, the relay text shown for a message to a subagent,
-  bidi control characters, bridge loss, tall approval cards, no progress without a server,
-  the honesty chip; plus the untried cases), in the main checkout and the desktop;
-  (2) **session traces** (D232) in a git worktree of its own (`git worktree list`; its
-  branch has to be merged; it may conflict in `src/calu/session.py`, `config.py`,
-  `HANDOFF.md`); (3) the **PyCharm plugin** in `extensions/jetbrains/` (skeleton with
-  `shared`/`frontend`/`backend` modules, three ways to start `calu ide`: local, on the
-  remote backend, over `ssh`; a native Swing transcript; `docs/notes/jetbrains-sync-spec.md`
-  for file sync through the bridge) and the fix of `calu acp`'s `session/new` id. A JDK for
-  it is under `~/.cache/calu-jdk/` (no Java was installed). The first run of the VSCode
-  extension is reported in the session only; its screenshots are in
-  `docs/notes/screenshots/run1-*.png`.
-- **Later still (2026-11-18, about 21:45):** the second pass over the VSCode extension is
-  done and committed (all seven defects of the first run fixed, the untried cases exercised;
-  266 unit tests; `extensions/vscode/calu.vsix` packaged from that state): **the extension
-  is ready for the owner's manual test** in his VSCode against WSL. The session traces are
-  merged into `main` (`cd22550`; unit layer 1918 passed, database layer 241 passed after the
-  merge) and have never run with a real model. Open after the second pass, small: the
-  bridge's own reconnect with a replay gap, recorded steps of subagents shown in Main,
-  `/clear` against a real Claude Code, the "Latest" pill under a tall card's footer. The
-  PyCharm agent was still running; its Kotlin port of the chat reducer is behind
-  `extensions/vscode/src/shared/viewState.ts` (history, `user.input.to`, bidi), which the
-  next round has to bring over.
-- Before committing anything found in the tree: `uv run ruff check . && uv run pyright`, the
-  affected Python tests, and in `extensions/vscode`: `npm run check-types && npm run
-  test:unit && npm run build` (Node 24: `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`).
-- **Tests are fast now** (`docs/TESTING.md`, "Running a part of the suite"): the unit layer is
-  `uv run pytest -n 8` (30 s); the database layer must not run with `-n` (about 100 s without
-  the `slow` ones); a full pre-push run is about 3.5 minutes. The owner still does not want
-  the full suite run unasked (memory note `calu-selective-tests`).
-- The owner's machine: he reinstalls the root calu from GitHub after a push and has run
-  `sudo calu setup --no-password`. He has to run it once more after `d229495` (migration
-  0036; D230 changed which password the settings role gets). He accepted PyCharm's agreement
-  in the test desktop (a 30-day trial runs there; he has a Pro subscription if tests need it).
+**Read `PLAN.md` D233 first**: it holds what the test campaign changed and the five
+decisions that wait for the owner. `docs/notes/test-plan.md` is the record of the cases;
+`.claude/skills/ui-testing-with-cua/SKILL.md` is how the IDE tests are run.
+
+- **Pushed to `origin/main`** (see `git log origin/main -1`): the VSCode extension after two
+  scripted runs and one run against a real Claude Code on Haiku (268 unit tests,
+  `extensions/vscode/calu.vsix` is built from that state: **ready for the owner's manual
+  test**); session traces (D232, correct with a real redaction model); the short checker
+  instructions with test triggers, D224, the measured honesty instructions; `calu ide` with
+  `ide.unlock`, session names (migration 0036) and file sync (`ide.fs.*`); the web
+  interface after its test round (23 fixes); the PyCharm plugin's first round (builds,
+  249 tests, never seen in a window at that point); the test plan, the Cua desktop files,
+  the faster test suite.
+- **Agents that were running when this was written**, each committing its own paths
+  locally (check `git status` and `git log origin/main..HEAD` for what they left):
+  (1) the PyCharm plugin's first real run in the desktop (`extensions/jetbrains/`,
+  screenshots in `~/.cache/calu-uitest/share/pycharm1/`; target 2026.3 only; parity with
+  the VSCode chat logic; remote development mode; no first-message prompt);
+  (2) the terminal clients (`src/calu/tui/`, `attach.py`; captures in
+  `docs/notes/screenshots/tui/`; test plan section C);
+  (3) the server and setup side in the root box (`uitest/rootbox/`, `tests/root/`,
+  `src/calu/cli.py`, `run.py`; test plan section E): every arrangement of user, root,
+  `--user`, `--sudo`, passwords, `--no-password`, `--secure`, `--insecure`, and what a
+  second user of the machine can reach.
+  Their final reports exist only in that session; the test plan sections are the record.
+- **Not started:** the headless SSH server container and the PyCharm plugin's SSH mode
+  against it (the bridge side of the sync is built; the plugin's I/O half is not); the
+  rendering of the honesty checker's per-file result in the four clients; VSCode
+  integration tests (`@vscode/test-cli`) as part of the regression suite; the corner cases
+  C5, C6, C11, C12 at scale in the VSCode extension (done for the web interface); user
+  documentation of the two plugins in `CALU_GUIDE.md`/`README.md`.
+- **The owner's API key** (budget-limited, Haiku only, he revokes it himself) is inside the
+  container `calu-uitest` in two files of user `cua`; `uitest/setup-real.sh --remove-key`
+  deletes them. Never print it or put any part of it on a command line.
+- Before committing anything found in the tree: `uv run ruff check . && uv run pyright`,
+  the affected Python tests, in `extensions/vscode`: `npm run check-types && npm run
+  test:unit && npm run build` (Node 24: `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`),
+  in `extensions/jetbrains`: `./gradlew check buildPlugin verifyPlugin` with the
+  `JAVA_HOME` its README names.
+- **Tests** (`docs/TESTING.md`, "Running a part of the suite"): unit layer `uv run pytest -n 8`
+  (30 s); the database layer never with `-n` and never while another run uses the test
+  server; before a push both layers, run on a clean copy of the committed state when agents
+  have uncommitted work in the tree (`git worktree add --detach <dir> HEAD`). The owner said
+  "Push whenever you have reached a milestone"; he does not want the full suite after every
+  step (memory note `calu-selective-tests`).
+- The owner's machine: he reinstalls the root calu from GitHub after a push and runs
+  `sudo calu setup --no-password` (needed again after the push that brought migration 0036
+  and D230). PyCharm's agreement in the desktop was accepted by him; he has a Pro
+  subscription, a trial runs there.
 
 ### The VSCode extension and the PyCharm plugin: what the owner wants
 
