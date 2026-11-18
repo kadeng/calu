@@ -45,6 +45,11 @@ answered with "Echo: <message>".
     many         one turn of 320 edits and 200 commands (more items than the views keep
                  diffs for).
     escalations  three commands at the same time, each of which escalates.
+    bidi         text, a file name and a command that contain bidirectional control
+                 characters (a client must show them, not obey them), next to ordinary
+                 Arabic and Hebrew paragraphs (which must read right to left); the command
+                 escalates, so the approval card shows it too.
+    tall         a command of 90 lines that escalates: an approval card taller than a view.
     nousage      as `levels`, but the session reports no context usage.
 
 A message that begins with "/" is answered with a line that names the command: Claude Code's
@@ -57,8 +62,9 @@ The fake checkers decide by markers in the step (`calu.testing`): the scripted c
 `# calu:allow`, `# calu:deny` or `# calu:escalate` as a shell comment.
 
 What the scripted runner does not play (`calu.claude.fake_runner`): a resumed or forked
-session shows no earlier turns (the runner has no transcript; the fork point it was started
-with is only recorded), a message to a subagent is not acted on (the session asks the main
+session starts its script from the beginning (the runner has no transcript; the turns the
+session inherits are real rows of the database, so `session.history` returns them and a
+client can show them), a message to a subagent is not acted on (the session asks the main
 agent to relay it, and the script has no answer to that), and a "next" message is taken in
 after the running action, not inside a tool call.
 """
@@ -532,6 +538,62 @@ def escalations(_workspace: Path) -> FakeScript:
     )
 
 
+BIDI_TEXT = (
+    "Text with bidirectional control characters; each must be visible as a placeholder:\n\n"
+    "- an override inside a file name: `report_\u202egpj.exe`\n"
+    "- an isolate around a word: before \u2067inside\u2069 after\n"
+    "- marks: left\u200e right\u200f arabic\u061c end\n\n"
+    "Ordinary right-to-left text must read as usual:\n\n"
+    "\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645\u060c "
+    "\u0647\u0630\u0627 \u0646\u0635 \u0639\u0631\u0628\u064a.\n\n"
+    "\u05e9\u05dc\u05d5\u05dd \u05e2\u05d5\u05dc\u05dd, "
+    "\u05d6\u05d4 \u05d8\u05e7\u05e1\u05d8 \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea.\n\n"
+    "Mixed: the file `greeter.py` \u05d4\u05d5\u05d0 \u05e7\u05d5\u05d1\u05e5 (is a file).\n"
+)
+"""Markdown of the scenario `bidi`: control characters to show, and ordinary Arabic and Hebrew."""
+
+
+def bidi(workspace: Path) -> FakeScript:
+    """Build the scenario `bidi` (see the module docstring).
+
+    Args:
+        workspace: The project directory of the session.
+
+    Returns:
+        The script: one turn with the text, a Read of a file whose name holds an override, a
+        command with an override that passes and one that escalates.
+    """
+    turn: list[dict[str, Any]] = [
+        {"text": BIDI_TEXT},
+        {
+            "tool": "Read",
+            "input": {"file_path": str(workspace / "photo_\u202egnp.sh")},
+            "fails": True,
+            "result": "File does not exist.",
+        },
+        bash("ls -l invoice_\u202efdp.exe", "-rwxr-xr-x 1 cua cua 0 invoice_\u202efdp.exe"),
+        bash("./run.sh \u202etxt.yolped  # calu:escalate", "done"),
+        {"text": "That was the text with control characters."},
+    ]
+    return FakeScript(turns=[turn])
+
+
+def tall(_workspace: Path) -> FakeScript:
+    """Build the scenario `tall`: one escalating command of 90 lines.
+
+    Args:
+        _workspace: The project directory of the session; unused.
+
+    Returns:
+        The script.
+    """
+    lines = "\n".join(f"echo step {n} of the migration" for n in range(1, 91))
+    command = f"bash -s <<'SCRIPT'  # calu:escalate\n{lines}\nSCRIPT"
+    return FakeScript(
+        turns=[[{"text": "A long script follows."}, bash(command, "ok"), {"text": "Done."}]]
+    )
+
+
 SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "tour": tour,
     "subagents": subagents,
@@ -541,6 +603,8 @@ SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "edge": edge,
     "many": many,
     "escalations": escalations,
+    "bidi": bidi,
+    "tall": tall,
     "nousage": levels,
 }
 """The scenarios by the name a first message `scenario: <name>` chooses."""

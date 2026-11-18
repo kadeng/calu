@@ -128,11 +128,20 @@ The first message of a session chooses the scenario: `scenario: <name>`; any oth
 | `edge` | a line of 3,000 characters, a result of 60,000, a code block of 300 lines, raw HTML, a `javascript:` link, failed calls, several scripts; turn 2 asks two questions (several choices, one choice) |
 | `many` | 320 edits and 200 commands in one turn (more edits than the extension keeps diffs for) |
 | `escalations` | three escalating commands at the same time |
+| `bidi` | text, a file name and commands with bidirectional control characters (shown as placeholders such as `⟦RLO⟧`), next to ordinary Arabic and Hebrew paragraphs; one command escalates |
+| `tall` | an escalating command of 90 lines: an approval card taller than the view |
 | `nousage` | as `levels`, without context usage |
 
-What the scripted runner does not play: the earlier turns of a resumed or forked conversation
-(it has no transcript; the request and its fork point are real), an answer to a message for a
-subagent, and Claude Code's own slash commands (a line names the command instead).
+What the scripted runner does not play: an answer to a message for a subagent (the message
+itself is shown in the subagent's tab), and Claude Code's own slash commands (a line names the
+command instead). A resumed, forked or rewound session starts its script from the beginning;
+its earlier turns are real rows of the database, and the extension shows them above the
+transcript ("Earlier in this conversation").
+
+Useful `desktop.py shell` lines for a run: `pkill -f "calu ide"` ends the bridge of every
+VSCode window (the chat then offers "Restart bridge"); `DISPLAY=:1 xdotool mousemove X Y`
+hovers; `DISPLAY=:1 xdotool key --clearmodifiers ctrl+v` pastes what `xclip -selection
+clipboard -t image/png -i file.png` put on the clipboard.
 
 ## What is installed, and where
 
