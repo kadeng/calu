@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/** The pure helpers of a chat surface (port of `chatModel.test.ts` and of parts of `secondRun.test.ts`). */
+/** The pure helpers of a chat surface in `ChatModel.kt`, `SessionMenu.kt` and `SetupCards.kt` (port of `chatModel.test.ts` and of parts of `secondRun.test.ts`). */
 class ChatModelTest {
     private fun stateOf(vararg events: ViewEvent): ViewState = applyEvents(initialViewState(), events.toList())
 
