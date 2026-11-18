@@ -8,7 +8,7 @@
 #   CREATE DATABASE calu OWNER calu_owner;
 # and a second database `calu_old` of the same owner, for the migration case of the test plan.
 set -u
-for cluster in main user; do
+for cluster in $(pg_lsclusters -h | awk '{print $2}'); do
     pg_ctlcluster 16 "$cluster" start
 done
 for port in 5432 5433; do
@@ -24,5 +24,12 @@ CREATE DATABASE calu_old OWNER calu_owner;
 SQL
     fi
 done
-trap 'pg_ctlcluster 16 main stop; pg_ctlcluster 16 user stop; exit 0' TERM INT
+# `docker stop`: end the clusters at once (clients may still be connected), then leave.
+stop_all() {
+    for cluster in $(pg_lsclusters -h | awk '{print $2}'); do
+        pg_ctlcluster 16 "$cluster" stop -m fast >/dev/null 2>&1
+    done
+    exit 0
+}
+trap stop_all TERM INT
 while :; do sleep 3600 & wait $!; done
