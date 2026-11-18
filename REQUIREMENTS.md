@@ -208,6 +208,8 @@ broken down or extended. Derived requirements and design decisions belong in
     Importantly, it needs to be working with the new Pycharm remote IDE mode and the older
     local IDE with SSH sync and remote execution via SSH mode." (stated 2026-11-18; he also
     said "Both" to starting the PyCharm plugin and the session traces now, in parallel)
+    "We only need to support the latest stable PyCharm version and maybe additionally the
+    latest EAP if possible. Test it in Pycharm as well." (stated 2026-11-18)
 36. "calu should have a setting that automatically logs the narrated or the plain session log
     as markdown (just without any folding summarization happening, only steps being appended)
     logged to a file inside the project so they can be version controlled along with the
