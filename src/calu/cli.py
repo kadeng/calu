@@ -65,6 +65,7 @@ import secrets
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1277,8 +1278,17 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
         finally:
             await conn.close()
 
+    # A session entry without a password is accepted by `calu run` only in a store that root
+    # alone can write (`_session_login`); elsewhere the session password stays.
+    bare_session = args.no_password and _only_root_writes(store.path)
+    if args.no_password and not bare_session:
+        print(
+            "the session password stays: without one, whatever can write "
+            f"{store.path} could point sessions at another database. As root "
+            "(`sudo calu setup --no-password`) it is not needed."
+        )
     if not renew:
-        if args.no_password and store.needs_password("session"):
+        if bare_session and store.needs_password("session"):
             # Before the database is touched, as below: a mistyped password changes nothing.
             kept = load_credential(store, "session", "Session password: ")
             try:
@@ -1297,7 +1307,7 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     # Asked before the database is touched: a mistyped password must not leave the role with
     # a new login that nothing holds.
     session_password: bytearray | None = None
-    if not args.no_password:
+    if not bare_session:
         print("Choose the session password (needed to start sessions with `calu run`).")
         session_password = read_password("New session password: ", confirm=True)
     try:
@@ -1677,6 +1687,33 @@ def _run_again_through_sudo(args: argparse.Namespace) -> None:
         raise CliError(f"cannot run sudo: {exc}") from exc
 
 
+def _only_root_writes(path: Path, owner: int = 0) -> bool:
+    """Tell whether a credential store can be read and changed by root alone.
+
+    Args:
+        path: The store file.
+        owner: The uid that stands for root (a test passes its own).
+
+    Returns:
+        True if this process runs as `owner`, the file belongs to `owner` and grants nothing
+        to its group or to others, and its directory belongs to `owner` and cannot be written
+        by its group or by others. False otherwise, also when the file does not exist.
+    """
+    if os.geteuid() != owner:
+        return False
+    try:
+        own, directory = path.lstat(), path.parent.stat()
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(own.st_mode)
+        and own.st_uid == owner
+        and not own.st_mode & 0o077
+        and directory.st_uid == owner
+        and not directory.st_mode & 0o022
+    )
+
+
 def _session_login(store: CredentialStore) -> bytearray:
     """Ask for the session password and return the decrypted `session` credential.
 
@@ -1692,13 +1729,20 @@ def _session_login(store: CredentialStore) -> bytearray:
         The credential; the caller wipes it.
 
     Raises:
-        CliError: If there is no `session` credential, or it is stored without a password.
+        CliError: If there is no `session` credential, or it is stored without a password in
+            a store that somebody other than root can write.
         CredentialError: On a wrong password.
     """
-    if "session" in store and not store.needs_password("session"):
+    if (
+        "session" in store
+        and not store.needs_password("session")
+        and not _only_root_writes(store.path)
+    ):
         # REQUIREMENTS 17 on the read path as well (D115 guards the write path): an entry
         # without a password is unauthenticated, so whatever can write the credential file
         # could point the session at another database without anybody being asked anything.
+        # A store that only root can write (`sudo calu setup --no-password`, D228) is the
+        # exception: nothing but root could have put the entry there.
         raise CliError(
             "the 'session' credential is stored without a password, and starting a session is "
             "password protected by design (REQUIREMENTS 17); store it again with "

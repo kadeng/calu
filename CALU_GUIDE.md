@@ -1264,7 +1264,9 @@ calu serve --user 1000:1000         # the same for a server and all its sessions
   is converted; its passwords are asked one last time. A client that does not run as root
   cannot change settings then: nobody knows the password it would have to type. Do not use
   `--no-password` in your own account unless you accept that every program running as you,
-  Claude Code's commands included, can read the logins.
+  Claude Code's commands included, can read the logins. There the session password stays in any
+  case: `calu run` accepts a session login without a password only from a store that root
+  alone can write.
 - **Which database a client changes settings in.** `sudo calu setup` writes
   `/var/lib/calu/database.json`: where root's database is, no secret. A client that found a
   root session through a socket reads it (after checking that only root can write it) and

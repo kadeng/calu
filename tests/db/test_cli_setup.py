@@ -7,6 +7,7 @@ and `--checker-model` reaching the rows it writes. It is the second command a ne
 """
 
 import io
+import os
 from typing import cast
 
 import anyio
@@ -74,13 +75,17 @@ async def test_calu_setup_fills_an_empty_database_and_stores_the_session_credent
 async def test_calu_setup_without_passwords_asks_nothing_and_stores_the_admin_login(
     db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """D228: `calu setup --no-password` asks no password; the logins are in the store,
-    protected by its file mode, and the stored `calu_admin` login works."""
+    """D228: `calu setup --no-password` in a store only root writes (here: the tests' own
+    uid stands for root) asks no password; the logins are in the store, protected by its
+    file mode, and the stored `calu_admin` login works. In any other store the session
+    password stays."""
     from calu.setup import ADMIN_ROLE
 
     store = CredentialStore(tmp_path / "credentials.json")
     store.save("admin", db_url, None)
     monkeypatch.setattr("sys.stdin", io.StringIO(""))  # a prompt would fail on this
+    really = cli._only_root_writes
+    monkeypatch.setattr(cli, "_only_root_writes", lambda path: really(path, os.getuid()))
 
     code = await anyio.to_thread.run_sync(
         lambda: cli.main(
@@ -103,6 +108,22 @@ async def test_calu_setup_without_passwords_asks_nothing_and_stores_the_admin_lo
         await conn.close()
     # What changes settings from the command line uses that login and asks nothing.
     assert Target.parse(cli._admin_secret(store)).user == ADMIN_ROLE
+    # `calu run` accepts the session entry without a password from such a store ...
+    assert Target.parse(cli._session_login(store)).user == "calu_session"
+    # ... and from no other: a store that somebody else could have written.
+    monkeypatch.setattr(cli, "_only_root_writes", really)
+    with pytest.raises(cli.CliError, match="stored without a password"):
+        cli._session_login(store)
+    # There, `--no-password` keeps asking for the session password.
+    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+    code = await anyio.to_thread.run_sync(
+        lambda: cli.main(
+            ["setup", "--renew-session", "--no-password"],
+            store_factory=lambda: cast(CredentialStore, store),
+        )
+    )
+    assert code == 0 and "the session password stays" in capsys.readouterr().out
+    assert store.needs_password("session") is True
 
 
 async def test_a_mismatched_session_password_leaves_the_database_alone(
