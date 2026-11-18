@@ -1,0 +1,21 @@
+#!/bin/bash
+# webcheck PORT 'web command' [terminal password] [browser password]
+port=$1; cmd=$2; tpw=${3-}; bpw=${4-}
+out=/tmp/web-$port-$$.out
+( (sleep 5; [ -n "$tpw" ] && echo "$tpw"; sleep 22) | script -qec "$cmd --port $port" /dev/null > $out 2>&1 &)
+sleep 12; tr -d "\r" < $out | cut -c1-250
+H="Host: calu.localhost:$port"; O="Origin: http://calu.localhost:$port"
+curl -s -o /tmp/f-$$.html -w "front, no login: %{http_code}\n" http://127.0.0.1:$port/ -H "$H"
+grep -o "<title>[^<]*\|<form[^>]*\|type=\"password\"" /tmp/f-$$.html | tr "\n" " "; echo
+tok=$(grep -o 'token=[A-Za-z0-9_-]*' $out | head -1)
+if [ -n "$tok" ]; then
+  curl -s -L -c /tmp/cj-$$ -o /tmp/f2-$$.html -w "front with token: %{http_code}\n" "http://127.0.0.1:$port/?$tok" -H "$H"
+fi
+if [ -n "$bpw" ]; then
+  curl -s -o /dev/null -w "login wrong: %{http_code} in %{time_total}s\n" -X POST http://127.0.0.1:$port/_login -H "$H" -H "$O" -d "password=nope"
+  curl -s -c /tmp/cj-$$ -o /dev/null -w "login right: %{http_code} -> %{redirect_url}\n" -X POST http://127.0.0.1:$port/_login -H "$H" -H "$O" -d "password=$bpw"
+  curl -s -b /tmp/cj-$$ -o /tmp/f2-$$.html -w "front after login: %{http_code}\n" http://127.0.0.1:$port/ -H "$H"
+fi
+[ -f /tmp/f2-$$.html ] && echo "sessions on the page: $(grep -o '/sessions/[0-9a-f-]*' /tmp/f2-$$.html | sort -u | wc -l)"
+ps -o user= -o args= -C calu 2>/dev/null | grep " web" | cut -c1-80
+rm -f /tmp/f-$$.html /tmp/f2-$$.html /tmp/cj-$$

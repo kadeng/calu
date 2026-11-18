@@ -1,0 +1,20 @@
+#!/bin/bash
+# A stand-in for Claude Code in the root box: it records who it was started as and speaks
+# nothing. One JSON document per start in /var/tmp/standin/<epoch>-<pid>.json:
+# uid, gid, groups, cwd, the arguments and the NAMES of its environment variables (plus HOME,
+# USER and PATH with their values, which are no secrets), and which of them are empty.
+# /var/tmp/standin/hang (any content) makes it read its input until that closes instead of
+# ending at once, for a session that should stay in its start.
+out="/var/tmp/standin/$(date +%s%N)-$$.json"
+{
+    printf '{"uid": %s, "euid": %s, "gid": %s, "groups": "%s", ' "$(id -ru)" "$(id -u)" "$(id -g)" "$(id -G)"
+    printf '"cwd": "%s", "home": "%s", "user": "%s", "path": "%s", ' "$PWD" "${HOME-}" "${USER-}" "${PATH-}"
+    printf '"args": "%s", ' "$(printf '%s ' "$@" | tr -d '"\\' | cut -c1-8000)"
+    printf '"env_names": "%s", ' "$(compgen -e | tr '\n' ' ')"
+    printf '"env_empty": "%s"}\n' "$(for n in $(compgen -e); do [ -z "${!n}" ] && printf '%s ' "$n"; done)"
+} >"$out" 2>/dev/null
+chmod 0644 "$out" 2>/dev/null
+if [ -e /var/tmp/standin/hang ]; then
+    cat >/dev/null
+fi
+exit 0

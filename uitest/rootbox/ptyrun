@@ -1,0 +1,11 @@
+#!/bin/bash
+# ptyrun 'command' [line ...]: run the command on a terminal of its own, type each line after
+# a pause (PAUSE seconds, default 4), and print what the terminal showed (last TAIL lines),
+# followed by how many password prompts appeared.
+cmd="$1"; shift
+out=$(mktemp)
+{ for line in "$@"; do sleep "${PAUSE:-4}"; printf '%s\n' "$line"; done; sleep "${PAUSE:-4}"; } \
+    | script -qec "$cmd" /dev/null >"$out" 2>&1
+tr -d '\r' <"$out" | grep -v '^\[warning\]' | tail -n "${TAIL:-6}" | cut -c1-"${CUT:-200}"
+echo "   => prompts: $(tr -d '\r' <"$out" | grep -o '[Pp]assword[^:]*:' | sort | uniq -c | tr '\n' ' ')"
+rm -f "$out"

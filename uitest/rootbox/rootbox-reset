@@ -1,0 +1,23 @@
+#!/bin/bash
+# Put one of the box's two databases back to "never set up", with its credential store.
+#
+#   rootbox-reset root   cluster on port 5432 and root's calu: /etc/calu, /var/lib/calu, /run/calu
+#   rootbox-reset ada    cluster on port 5433 and ada's own calu: ~ada/.config/calu, ~ada/.local/state/calu
+#
+# Stop the calu processes that use the database first. Run as root.
+set -euo pipefail
+case "${1:-}" in
+    root) port=5432; rm -rf /etc/calu /var/lib/calu /run/calu ;;
+    ada)  port=5433; rm -rf /home/ada/.config/calu /home/ada/.local/state/calu /tmp/calu-1000 ;;
+    *) echo "usage: rootbox-reset root|ada" >&2; exit 2 ;;
+esac
+su postgres -c "psql -q -p $port" <<'SQL'
+DROP DATABASE IF EXISTS calu WITH (FORCE);
+DROP DATABASE IF EXISTS calu_old WITH (FORCE);
+DROP ROLE IF EXISTS calu_session;
+DROP ROLE IF EXISTS calu_operator;
+DROP ROLE IF EXISTS calu_admin;
+CREATE DATABASE calu OWNER calu_owner;
+CREATE DATABASE calu_old OWNER calu_owner;
+SQL
+echo "reset: port $port"

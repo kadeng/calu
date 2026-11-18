@@ -277,3 +277,65 @@ recreated. These MCP tools have no shell tool; use `desktop.py shell` for comman
   `libs/cua-spacesd/README.md`, `libs/cua/python/README.md`),
   <https://cua.ai/docs/cua-sdk/guides/desktop>, <https://cua.ai/docs/cua-sdk/guides/own-harness>,
   <https://cua.ai/docs/cua-sdk/guides/spacesd>, <https://cua.ai/docs/cua-sdk/concepts/telemetry>.
+
+## The root box (`calu-rootbox`)
+
+A second container, without a desktop: a machine with root, sudo and three users, for running
+calu's privileged arrangements for real (calu as root with `--user`, through `--sudo`, with and
+without passwords; test plan section E). The host needs no sudo for it, and nothing of the host
+but the calu checkout (read-only) is mounted.
+
+```bash
+calu/uitest/rootbox/run.sh              # build if missing, start, install calu inside (root and ada)
+calu/uitest/rootbox/run.sh --rebuild    # after a change to the Dockerfile or the scripts beside it
+docker exec -it calu-rootbox bash                # a root shell
+docker exec -it -u ada calu-rootbox bash -l      # ada; also bob, carol
+docker exec calu-rootbox rootbox-install         # install calu again after a change to the checkout
+docker stop calu-rootbox                         # stop; `run.sh` starts it again
+docker rm -f calu-rootbox                        # delete it with everything set up inside
+```
+
+| Item | Value |
+| --- | --- |
+| Image | `calu-rootbox:latest`, built `FROM ubuntu:24.04` (sudo, uv, git, tmux, bubblewrap, socat, PostgreSQL 16) |
+| Ports, rights | no published port, not privileged, no Docker socket |
+| `root` | calu installed as the guide says for `--sudo`: `/usr/local/lib/calu`, links in `/usr/local/bin` |
+| `ada` | uid 1000, sudo without a password; a second calu in her home (`~/.local/bin`, first on her `PATH`), which `--sudo` must refuse |
+| `bob` | uid 1001, sudo asks his password: `bob-sudo` |
+| `carol` | uid 1002, no sudo: another user of the machine, who must reach nothing |
+| Databases | two PostgreSQL clusters on 127.0.0.1, the "existing server" variant: port 5432 for root's calu, port 5433 for a user's own. Owner login `calu_owner`, password `owner-pw`, databases `calu` and `calu_old` |
+
+```bash
+# as root, or as ada with sudo in front: passwords on standard input, in the order the guide gives
+printf 'owner-pw\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | \
+    calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner
+```
+
+What stands in for Claude Code and the checkers:
+
+- **`fakecalu ...`** is calu's own command line with the scripted runner and the fake checker
+  models of `fake_server.py` (`rootbox/fakecalu.py`). Everything else is calu's code: the
+  options, the credential store, the session password, `calu.asuser`, the sockets, the log
+  file. `fakecalu serve --user ada` as root, or `sudo fakecalu serve --user "$USER" --from-sudo`
+  as ada or bob (the command line `calu serve --sudo` builds), runs sessions that play the
+  scenarios above. `fakecalu-user` is the same with the interpreter of the caller's own
+  installation, for a server that runs as ada alone.
+- **`claude`** on `PATH` is a stand-in that records who started it (uid, gid, groups, home,
+  working directory, arguments, the names of its environment variables) in
+  `/var/tmp/standin/*.json` and says nothing. A session uses it after `calu config set
+  claude.cli_path /usr/local/bin/claude`; it then fails at its start after 60 s, which is
+  the case "an error in a session". Without that setting a session starts the Claude Code
+  that the Agent SDK bundles, which runs and answers "Not logged in".
+- **Helpers:** `ptyrun 'command' [line ...]` runs a command on a terminal of its own, types
+  the lines and counts the password prompts; `webcheck PORT 'calu web' [terminal password]
+  [browser password]` starts the web interface and fetches the front page with and without
+  a login; `idedrive [password]` sends `calu ide` a few requests; `rootbox-reset root|ada`
+  puts a database and its credential store back to "never set up".
+
+What the box cannot do: Docker is not available inside, so the `docker` variant of `calu
+setup` cannot run; bubblewrap cannot create user namespaces in an unprivileged container, so
+Claude Code's sandbox cannot start (`calu doctor` reports it as "sandbox start"); there is no
+`/run/user/<uid>`, so `--insecure` sockets of a user are below `/tmp/calu-<uid>`.
+
+The root-only tests (`tests/root/`, `docs/TESTING.md`) run in the box:
+`docker exec calu-rootbox rootbox-tests`.

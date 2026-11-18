@@ -1,0 +1,30 @@
+#!/bin/bash
+# Run calu's root-only tests (tests/root, marker `root`) inside the box, as root.
+#
+#   rootbox-tests [pytest arguments]
+#
+# The tests get a PostgreSQL cluster of their own on port 5434 (created on the first run):
+# calu's roles belong to a whole server, and a test's setup must not replace the logins of
+# a database that is set up by hand on 5432 or 5433. The virtual environment is /opt/calu-venv,
+# because the checkout at /src/calu is mounted read-only.
+set -euo pipefail
+if ! pg_lsclusters -h | grep -q '^16 *test '; then
+    pg_createcluster 16 test -p 5434 >/dev/null
+fi
+pg_ctlcluster 16 test start >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do
+    pg_isready -q -h 127.0.0.1 -p 5434 && break
+    sleep 0.5
+done
+if ! su postgres -c "psql -p 5434 -Atc \"SELECT 1 FROM pg_roles WHERE rolname = 'calu_owner'\"" | grep -q 1; then
+    su postgres -c "psql -q -p 5434" <<'SQL'
+CREATE ROLE calu_owner LOGIN CREATEROLE CREATEDB PASSWORD 'calu-dev';
+CREATE DATABASE calu OWNER calu_owner;
+SQL
+fi
+export CALU_ROOT_TESTS=1
+export CALU_TEST_DSN="postgresql://calu_owner:calu-dev@127.0.0.1:5434/calu"
+export UV_PROJECT_ENVIRONMENT=/opt/calu-venv
+export UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python
+cd /src/calu
+exec uv run --frozen pytest -p no:cacheprovider -m root tests/root "$@"

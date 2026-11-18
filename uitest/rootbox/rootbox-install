@@ -1,0 +1,31 @@
+#!/bin/bash
+# Install calu from the read-only checkout at /src/calu, twice, as the guide says:
+#   for root:  /usr/local/lib/calu, commands linked into /usr/local/bin (only root can change it)
+#   for ada:   in her home (~/.local/bin/calu): the installation `--sudo` must refuse
+# Run as root inside the box; run again after a change to the checkout.
+set -euo pipefail
+rm -rf /opt/calu-src && mkdir -p /opt/calu-src
+# A copy without the virtual environment and the editors' build trees: the build must not
+# write into the read-only mount.
+cd /src/calu
+cp -r pyproject.toml uv.lock README.md LICENSE LICENSE.md src /opt/calu-src/
+find /opt/calu-src -name __pycache__ -prune -exec rm -rf {} +
+chmod -R go-w /opt/calu-src
+UV_TOOL_DIR=/usr/local/lib/calu UV_TOOL_BIN_DIR=/usr/local/bin \
+    UV_PYTHON_INSTALL_DIR=/usr/local/lib/calu/python \
+    uv tool install --quiet --force --reinstall-package calu /opt/calu-src
+if [ "${1:-}" != "--root-only" ]; then
+    su - ada -c "uv tool install --force --reinstall-package calu /opt/calu-src" 2>&1 | tail -n 2
+fi
+/usr/local/bin/calu --version
+# `fakecalu`: calu's own command line with a scripted runner (uitest/rootbox/fakecalu.py).
+# A copy that only root can change, because the box runs it through sudo.
+install -d -m 0755 /usr/local/lib/calu-fake/rootbox
+install -m 0644 /src/calu/uitest/fake_server.py /usr/local/lib/calu-fake/fake_server.py
+install -m 0644 /src/calu/uitest/rootbox/fakecalu.py /usr/local/lib/calu-fake/rootbox/fakecalu.py
+printf '#!/bin/sh\nexec /usr/local/lib/calu/calu/bin/python /usr/local/lib/calu-fake/rootbox/fakecalu.py "$@"\n' \
+    >/usr/local/bin/fakecalu
+# `fakecalu-user`: the same with the interpreter of the caller's own installation (ada's).
+printf '#!/bin/sh\nexec "$HOME/.local/share/uv/tools/calu/bin/python" /usr/local/lib/calu-fake/rootbox/fakecalu.py "$@"\n' \
+    >/usr/local/bin/fakecalu-user
+chmod 0755 /usr/local/bin/fakecalu /usr/local/bin/fakecalu-user
