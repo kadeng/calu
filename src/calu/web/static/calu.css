@@ -1012,3 +1012,4 @@ button:focus-visible, a:focus-visible, summary:focus-visible, #stream img:focus-
 a.skip { position: absolute; left: -200vw; font-size: .8rem; font-weight: 500; }
 a.skip:focus { position: static; margin-left: .6rem; }
 main { overflow-wrap: break-word; }
+#stream .thumb.set { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; }

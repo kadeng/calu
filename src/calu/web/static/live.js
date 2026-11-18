@@ -372,6 +372,15 @@
       follow.onclick = () => follow_(request.agent_id);
       head.append(" · ", follow);
     }
+    if (/^\d+$/.test(String(id))) {
+      // The escalation's own page: the recent conversation and each checker's verdict.
+      const why = document.createElement("a");
+      why.href = `/escalations/${id}`;
+      why.target = "_blank";
+      why.rel = "noopener";
+      why.textContent = "what the checker saw";
+      head.append(" · ", why);
+    }
     card.appendChild(head);
     const status = document.createElement("span");
     status.className = "muted status";
@@ -743,15 +752,18 @@
         // What the user attached, small; a click shows it large.
         // (A browser does not open a `data:` address in a new tab, so the click enlarges it
         // in place instead.)
-        for (const image of params.images || []) {
+        // One row holds all images of the message.
+        if ((params.images || []).length) {
           const holder = document.createElement("div");
-          holder.className = "line thumb";
-          const shown = picture(image, "");
-          shown.title = "click to enlarge";
-          shown.tabIndex = 0;
-          shown.onclick = () => shown.classList.toggle("large");
-          shown.onkeydown = (event) => { if (event.key === "Enter") shown.classList.toggle("large"); };
-          holder.appendChild(shown);
+          holder.className = "line thumb set";
+          for (const image of params.images) {
+            const shown = picture(image, "");
+            shown.title = "click to enlarge";
+            shown.tabIndex = 0;
+            shown.onclick = () => shown.classList.toggle("large");
+            shown.onkeydown = (event) => { if (event.key === "Enter") shown.classList.toggle("large"); };
+            holder.appendChild(shown);
+          }
           place(holder, null);
         }
         break;
