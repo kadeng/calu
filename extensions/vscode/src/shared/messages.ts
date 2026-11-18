@@ -94,16 +94,44 @@ export type WebviewMessage =
   | { type: 'refreshUsage' }
   /** Interrupt the running turn. */
   | { type: 'interrupt' }
-  /** Open a file by absolute path; the host accepts only paths it knows from tool file links. */
-  | { type: 'openFile'; path: string }
+  /**
+   * Open a file by absolute path; the host accepts only paths it knows from tool file links.
+   * `line` (1-based) puts the cursor there.
+   */
+  | { type: 'openFile'; path: string; line?: number }
   /** Open the diff editor for the edit of tool call `toolUseId`. */
   | { type: 'openDiff'; toolUseId: string }
-  /** Open file link `index` of a tool call (`ToolView.files`); the host looks the path up. */
-  | { type: 'openToolFile'; toolUseId: string; index: number }
+  /**
+   * Open file link `index` of a tool call (`ToolView.files`); the host looks the path up.
+   * `line` (1-based) puts the cursor there.
+   */
+  | { type: 'openToolFile'; toolUseId: string; index: number; line?: number }
   /** A link in rendered Markdown: https links open in the browser, relative ones as files. */
   | { type: 'openLink'; href: string }
   /** A context-menu action of a tool item (see `itemMenu.ts`). */
   | { type: 'itemAction'; toolUseId: string; action: ItemActionId }
+  /** Show the extension's log (the "calu" output channel). */
+  | { type: 'showLog' }
+  /** Ask the one calu password now (the "Unlock" button of the locked state). */
+  | { type: 'unlock' }
+  /**
+   * Undo: after a confirmation, start a new session that continues the conversation from before
+   * turn `turn` (`UserItem.turn`); `uuid` (`UserItem.uuid`) lets the host look the turn up in
+   * the recorded history. Files are not reverted. The message's text is put back into the input.
+   */
+  | { type: 'rewindBefore'; turn: number; uuid?: string }
+  /** Fork: like `rewindBefore` without the confirmation and without restoring the input. */
+  | { type: 'forkBefore'; turn: number; uuid?: string }
+  /** Start a new session from a copy of the whole attached conversation. */
+  | { type: 'forkConversation' }
+  /** Change calu's setting `honesty.mode` (sessions started from now on). */
+  | { type: 'setHonestyMode'; mode: HonestyMode }
+  /** Run an honesty review of the attached session now (`honesty.review`). */
+  | { type: 'honestyReview' }
+  /** Certify the workspace's git HEAD as honest (`honesty.trust {rev: "HEAD"}`). */
+  | { type: 'honestyTrust' }
+  /** Close one open honesty mark by hand (`honesty.clear`). */
+  | { type: 'honestyClear'; markId: number }
   /** Answer to `reportState` (tests): the webview's own copy of the state. */
   | { type: 'stateReport'; requestId: number; state: unknown };
 
@@ -141,6 +169,11 @@ export const CLAUDE_EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh', 'max
 /** An effort level. */
 export type ClaudeEffort = (typeof CLAUDE_EFFORTS)[number];
 
+/** Values of calu's setting `honesty.mode`. */
+export const HONESTY_MODES = ['off', 'track', 'enforce'] as const;
+/** A code honesty mode. */
+export type HonestyMode = (typeof HONESTY_MODES)[number];
+
 /** All context-menu actions the host accepts (see `itemMenu.ts`). */
 const ITEM_ACTIONS: readonly ItemActionId[] = [
   'openFile',
@@ -166,6 +199,11 @@ const BARE_TYPES = [
   'showContext',
   'refreshUsage',
   'interrupt',
+  'showLog',
+  'unlock',
+  'forkConversation',
+  'honestyReview',
+  'honestyTrust',
 ] as const;
 
 /**
@@ -205,6 +243,8 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
   const str = (v: unknown): v is string => typeof v === 'string' && v.length <= MAX_TEXT;
   const text = (v: unknown): v is string => str(v) && v.trim() !== '';
   const optional = (v: unknown): string | undefined => (text(v) ? v.trim() : undefined);
+  const positive = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1;
+  const line = (v: unknown): { line?: number } => (positive(v) ? { line: v } : {});
   if ((BARE_TYPES as readonly unknown[]).includes(m.type)) return { type: m.type as (typeof BARE_TYPES)[number] };
   switch (m.type) {
     case 'send': {
@@ -248,18 +288,28 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
     case 'setLevel':
       return LEVEL_IDS.includes(m.level as LevelId) ? { type: 'setLevel', level: m.level as LevelId } : undefined;
     case 'openFile':
-      return text(m.path) ? { type: 'openFile', path: m.path } : undefined;
+      return text(m.path) ? { type: 'openFile', path: m.path, ...line(m.line) } : undefined;
     case 'openDiff':
       return text(m.toolUseId) ? { type: 'openDiff', toolUseId: m.toolUseId } : undefined;
     case 'openToolFile':
       return text(m.toolUseId) && typeof m.index === 'number' && Number.isInteger(m.index) && m.index >= 0
-        ? { type: 'openToolFile', toolUseId: m.toolUseId, index: m.index }
+        ? { type: 'openToolFile', toolUseId: m.toolUseId, index: m.index, ...line(m.line) }
         : undefined;
     case 'itemAction':
       if (!text(m.toolUseId) || !str(m.action) || !ITEM_ACTIONS.includes(m.action as ItemActionId)) return undefined;
       return { type: 'itemAction', toolUseId: m.toolUseId, action: m.action as ItemActionId };
     case 'openLink':
       return text(m.href) ? { type: 'openLink', href: m.href } : undefined;
+    case 'rewindBefore':
+    case 'forkBefore': {
+      if (!positive(m.turn)) return undefined;
+      const uuid = optional(m.uuid);
+      return { type: m.type, turn: m.turn, ...(uuid !== undefined && uuid.length <= 100 ? { uuid } : {}) };
+    }
+    case 'setHonestyMode':
+      return HONESTY_MODES.includes(m.mode as HonestyMode) ? { type: 'setHonestyMode', mode: m.mode as HonestyMode } : undefined;
+    case 'honestyClear':
+      return typeof m.markId === 'number' && Number.isInteger(m.markId) ? { type: 'honestyClear', markId: m.markId } : undefined;
     case 'stateReport':
       return typeof m.requestId === 'number' ? { type: 'stateReport', requestId: m.requestId, state: m.state } : undefined;
     default:

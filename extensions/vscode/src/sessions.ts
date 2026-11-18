@@ -7,6 +7,8 @@
  *                     running session      ──► ide.attach {session}
  *                     stored conversation  ──► ide.start {kind: "resume" | "fork", claude_session_id}
  *                     New session…         ──► newSession()
+ *     forkBefore()  user message of the chat ──► ide.start {kind: "resume", fork_before_turn}
+ *     forkConversation()                     ──► ide.start {kind: "fork"}
  *     newSession()  input boxes (first message, name; both optional) ──► ide.start {kind: "new"}
  *     ide.start error -32013 (no server answered) ──► showServerHelp(): what to run, how to detach,
  *                     buttons "Open terminal with this command" / "Copy command"
@@ -113,6 +115,30 @@ export class Sessions {
       { kind: 'new', ...(prompt.trim() ? { prompt: prompt.trim() } : {}), ...(name.trim() ? { name: name.trim() } : {}) },
       'Starting a session',
     );
+  }
+
+  /**
+   * Start a new session that continues a conversation from before one of its turns (the chat's
+   * "Rewind to before this message" and "Fork from here"). The session it was cut from keeps
+   * running; files are not reverted.
+   *
+   * @param claudeSessionId Claude Code's id of the conversation.
+   * @param turn Number of the first turn the new session does not keep (at least 2).
+   * @param title Text of the progress notification.
+   * @returns True if the session started and is attached; failures are shown to the user.
+   */
+  forkBefore(claudeSessionId: string, turn: number, title: string): Promise<boolean> {
+    return this.start({ kind: 'resume', claude_session_id: claudeSessionId, fork_before_turn: turn }, title);
+  }
+
+  /**
+   * Start a new session from a copy of a whole conversation; the original stays as it is.
+   *
+   * @param claudeSessionId Claude Code's id of the conversation.
+   * @returns True if the session started and is attached; failures are shown to the user.
+   */
+  forkConversation(claudeSessionId: string): Promise<boolean> {
+    return this.start({ kind: 'fork', claude_session_id: claudeSessionId }, 'Forking the conversation');
   }
 
   /**

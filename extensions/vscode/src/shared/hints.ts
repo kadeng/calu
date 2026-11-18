@@ -4,6 +4,7 @@
  *
  *     calu not found            -> "calu-missing"   button: Install calu
  *     claude not found          -> "claude-missing" button: How to install (opens the docs)
+ *     password not given yet    -> "locked"         button: Unlock (asks the one password)
  *     database not reachable    -> "database"       button: Open settings (Setup card)
  *     no session attached and
  *       none running / no server -> "no-server"     button: Start calu server
@@ -24,6 +25,8 @@ export interface HintInput {
   attached: boolean;
   /** True if `ide.start` last failed because no server answered (error -32013). */
   noServer: boolean;
+  /** True if calu's logins need the one password and it was not given yet (default false). */
+  locked?: boolean;
 }
 
 /**
@@ -62,7 +65,16 @@ export function buildHints(input: HintInput): SetupHint[] {
       href: CLAUDE_DOCS_URL,
     });
   }
-  if (input.status && !input.status.database.reachable) {
+  if (input.locked) {
+    hints.push({
+      id: 'locked',
+      level: 'warning',
+      message: 'calu needs its password once to list and attach to sessions. It is kept in memory until this window closes.',
+      action: 'unlock',
+      actionLabel: 'Unlock',
+    });
+  }
+  if (input.status && !input.status.database.reachable && !input.locked) {
     hints.push({
       id: 'database',
       level: 'error',

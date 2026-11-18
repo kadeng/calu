@@ -8,8 +8,21 @@
  *     running --stop()--> stopped        exited/error/missing --ensureStarted()/restart()--> starting
  *
  *     request(method, params) ──► calu ide
- *         error -32010 {needs}  ──► askPassword(needs) ──► same request with `password` (not stored)
+ *         error -32010, interactive ──► one prompt (shared by concurrent requests)
+ *                                         ├─ password ──► ide.unlock ── ok ──► same request again
+ *                                         │                           └─ refused ──► prompt again
+ *                                         └─ Escape ──► the waiting requests fail, `locked` is true
+ *         error -32010, background  ──► passed to the caller, never a prompt
  *     session(method, params) = request("session.call", {method, params})
+ *
+ *     start: ide.initialize ok ──► stored password? ──► ide.unlock ── refused ──► forget it
+ *
+ * The decisions of the password flow are in `shared/unlock.ts`; this file only connects them to
+ * the input box, the password store (`PasswordDeps`) and the bridge. A password is passed from
+ * the prompt or the store to `ide.unlock` and is never logged, never put into an event and never
+ * kept in a field of this class. The store that `extension.ts` passes in is a variable of the
+ * extension host (spec section 10): the password lives until the window closes, so a restarted
+ * bridge is unlocked again without asking. The bridge holds the logins it opened until it exits.
  *
  * The bridge's stderr goes to the "calu" output channel. Its notifications (`session.event`,
  * `ide.link`, `ide.log`) are re-emitted on `onNotification`. The bridge is started in the
@@ -23,24 +36,40 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import {
   BridgeError,
-  neededCredential,
+  unlockedLogins,
   type BridgeMethod,
   type BridgeRequestParams,
   type BridgeRequestResults,
   type IdeInitializeResult,
+  type IdeUnlockResult,
   type SessionParamsOf,
   type SessionResultOf,
 } from './bridgeProtocol';
 import { buildIdeArgv, looksLikeWsl, resolveCaluCommand, type HostFacts, type ResolveResult } from './caluCommand';
 import { PROTOCOL_VERSION, type RequestMethod } from './protocol.generated';
 import { RpcClient, RpcRequestError, type RpcEvent } from './rpc';
+import {
+  PROMPT_TITLE,
+  initialUnlockState,
+  onDismiss,
+  onExplicitUnlock,
+  onNeedsPassword,
+  onRoundAborted,
+  onStatusLocked,
+  onStoredPassword,
+  onStoredResult,
+  onUnlockRefused,
+  onUnlockResult,
+  promptText,
+  type PasswordNeed,
+  type PromptKind,
+  type RoundStep,
+  type UnlockState,
+} from './shared/unlock';
 import type { BridgeStatus } from './shared/viewState';
 
 /** Milliseconds to wait for `ide.shutdown` and for the process to exit before it is killed. */
 const STOP_TIMEOUT_MS = 5000;
-
-/** How often a wrong password may be entered for one request. */
-const PASSWORD_ATTEMPTS = 3;
 
 /**
  * Check whether a path is an executable regular file.
@@ -96,30 +125,80 @@ export function resolveCaluCommandForHost(): ResolveResult {
 }
 
 /**
- * Asks the user for the password of a credential.
- *
- * @param credential Name of the credential, e.g. "admin".
- * @param wrong True if a password was just refused.
- * @returns The password, or `undefined` if the user cancelled. The caller does not keep it.
+ * What the password flow needs from its surroundings. `Bridge` takes any subset; the missing
+ * members come from `inputBoxPasswordDeps()`.
  */
-export type PasswordPrompt = (credential: string, wrong: boolean) => Thenable<string | undefined>;
+export interface PasswordDeps {
+  /**
+   * Ask the user for a password.
+   *
+   * @param kind "first" for the one password, "admin" for the admin password that changing
+   *   settings needs.
+   * @param problem Why the previous entry was not accepted (the bridge's message); `undefined`
+   *   for the first entry of a prompt round.
+   * @returns The password, or `undefined` if the user pressed Escape.
+   */
+  ask(kind: PromptKind, problem: string | undefined): Thenable<string | undefined>;
+  /**
+   * Read the password remembered on this machine (VSCode secret storage).
+   *
+   * @returns The password, or `undefined` if none is stored.
+   */
+  stored(): Thenable<string | undefined>;
+  /**
+   * Remember a password on this machine.
+   *
+   * @param password The password that `ide.unlock` just accepted.
+   * @returns Resolves once it is stored.
+   */
+  store(password: string): Thenable<void>;
+  /**
+   * Remove the remembered password.
+   *
+   * @returns Resolves once it is removed (also if none was stored).
+   */
+  forget(): Thenable<void>;
+  /**
+   * Offer "Remember on this machine" after the first successful interactive unlock of a bridge
+   * process. The implementation decides whether it shows anything (e.g. not after "Never ask").
+   *
+   * @returns True if the password is to be stored.
+   */
+  offerRemember(): Thenable<boolean>;
+}
 
 /**
- * Default `PasswordPrompt`: a masked input box.
+ * Default `PasswordDeps`: a masked input box, and nothing is remembered.
  *
- * @param credential Name of the credential.
- * @param wrong True if a password was just refused.
- * @returns The entered password, or `undefined` on Escape.
+ * @returns `ask` shows `showInputBox` (masked, stays open on focus loss) with the text of
+ *   `promptText`; `stored` resolves `undefined`; `store` and `forget` do nothing;
+ *   `offerRemember` resolves false.
  */
-export const inputBoxPassword: PasswordPrompt = (credential, wrong) =>
-  vscode.window.showInputBox({
-    title: 'calu: password needed',
-    prompt: wrong
-      ? `Wrong password. Password of calu's "${credential}" credential:`
-      : `Password of calu's "${credential}" credential (used for this request only, not stored):`,
-    password: true,
-    ignoreFocusOut: true,
-  });
+export function inputBoxPasswordDeps(): PasswordDeps {
+  return {
+    ask: (kind, problem) =>
+      vscode.window.showInputBox({
+        title: PROMPT_TITLE,
+        prompt: promptText(kind, problem),
+        password: true,
+        ignoreFocusOut: true,
+      }),
+    stored: () => Promise.resolve(undefined),
+    store: () => Promise.resolve(),
+    forget: () => Promise.resolve(),
+    offerRemember: () => Promise.resolve(false),
+  };
+}
+
+/**
+ * Check whether a thrown value is the bridge's error -32010 (a password is needed or wrong).
+ *
+ * @param error The caught value.
+ * @returns True for an RpcRequestError with code `BridgeError.NEEDS_PASSWORD`.
+ */
+function isNeedsPassword(error: unknown): error is RpcRequestError {
+  return error instanceof RpcRequestError && error.code === BridgeError.NEEDS_PASSWORD;
+}
 
 /** One running bridge process with its RPC connection. */
 interface Running {
@@ -128,6 +207,10 @@ interface Running {
   exited: Promise<void>;
   /** Set by `stop()` so that the exit is not reported as a crash. */
   stopping: boolean;
+  /** Password state of this process (`shared/unlock.ts`); a new process starts with a new one. */
+  unlock: UnlockState;
+  /** The open prompt round; resolves true if it ended with a successful `ide.unlock`. */
+  round: Promise<boolean> | undefined;
 }
 
 /** Owner of the bridge process. Create one per extension activation; dispose on deactivate. */
@@ -137,6 +220,10 @@ export class Bridge implements vscode.Disposable {
   private running: Running | undefined;
   private starting: Promise<IdeInitializeResult> | undefined;
   private currentStatus: BridgeStatus = 'stopped';
+  private readonly lockedEmitter = new vscode.EventEmitter<boolean>();
+  private readonly passwords: PasswordDeps;
+  /** The value of `locked` that `onLockedChange` reported last. */
+  private reportedLocked = false;
   /** Result of the last successful `ide.initialize`; undefined while not running. */
   initializeResult: IdeInitializeResult | undefined;
 
@@ -144,17 +231,32 @@ export class Bridge implements vscode.Disposable {
   readonly onNotification = this.notificationEmitter.event;
   /** Fires when `status` changes. */
   readonly onStatus = this.statusEmitter.event;
+  /** Fires with the new value when `locked` changes. The payload never contains a password. */
+  readonly onLockedChange: vscode.Event<boolean> = this.lockedEmitter.event;
 
   /**
    * @param output Channel that receives the bridge's stderr and lifecycle messages.
    * @param clientVersion Version string sent in `ide.initialize`.
-   * @param askPassword Asks for a credential's password when the bridge reports error -32010.
+   * @param passwords The password prompt and the secret storage; members that are left out
+   *   come from `inputBoxPasswordDeps()` (input box, nothing remembered).
    */
   constructor(
     private readonly output: vscode.OutputChannel,
     private readonly clientVersion: string,
-    private readonly askPassword: PasswordPrompt = inputBoxPassword,
-  ) {}
+    passwords: Partial<PasswordDeps> = {},
+  ) {
+    this.passwords = { ...inputBoxPasswordDeps(), ...passwords };
+  }
+
+  /**
+   * True if a protected credential exists and the bridge holds no login for it: after Escape in
+   * the password prompt, after a refused stored password, after error -32010 without a held
+   * login, or as last reported through `noteStatusLocked`. False after a successful unlock and
+   * while no bridge process runs.
+   */
+  get locked(): boolean {
+    return this.running?.unlock.locked ?? false;
+  }
 
   /** Current process status. */
   get status(): BridgeStatus {
@@ -204,9 +306,11 @@ export class Bridge implements vscode.Disposable {
   }
 
   /**
-   * Send a request to the running bridge. If the bridge answers that a credential needs its
-   * password (error -32010), the user is asked and the request is repeated with `password`,
-   * at most `PASSWORD_ATTEMPTS` times; the password is not kept.
+   * Send a request to the running bridge. If the bridge answers that a password is needed
+   * (error -32010) and the request is interactive, the user is asked once (one prompt for all
+   * concurrent requests), the password goes to the bridge with `ide.unlock`, and the request is
+   * sent again without a password. The rules are those of `onNeedsPassword` in
+   * `shared/unlock.ts`. `ide.unlock` itself is sent as it is.
    *
    * @param method A bridge request method.
    * @param params Its params (without `password`).
@@ -214,31 +318,73 @@ export class Bridge implements vscode.Disposable {
    *   password prompt is shown and error -32010 is passed to the caller.
    * @returns The response's `result`.
    * @throws (rejects) Error if the bridge is not running; RpcRequestError for an error answer
-   *   (also -32010 if the user cancelled the password prompt or ran out of attempts);
-   *   RpcClosedError if the bridge exits before answering.
+   *   (also -32010 if the user pressed Escape, ran out of attempts, or the request started
+   *   before an Escape); RpcClosedError if the bridge exits before answering.
    */
   async request<M extends BridgeMethod>(
     method: M,
     params: BridgeRequestParams[M],
     interactive = true,
   ): Promise<BridgeRequestResults[M]> {
-    let password: string | undefined;
-    for (let attempt = 0; ; attempt++) {
-      const running = this.running;
-      if (!running || running.rpc.closed) throw new Error('The calu bridge is not running.');
+    const startedAtDismissals = this.running?.unlock.dismissals ?? 0;
+    for (let retries = 0; ; retries++) {
+      const running = this.requireRunning();
+      const sentAtUnlocks = running.unlock.unlocks;
       try {
-        const sent = password === undefined ? params : { ...params, password };
-        return await running.rpc.request<BridgeRequestResults[M]>(method, sent);
+        return await running.rpc.request<BridgeRequestResults[M]>(method, params);
       } catch (error) {
-        const credential =
-          error instanceof RpcRequestError && error.code === BridgeError.NEEDS_PASSWORD
-            ? neededCredential(error.data)
-            : undefined;
-        if (!interactive || !credential || attempt >= PASSWORD_ATTEMPTS) throw error;
-        password = await this.askPassword(credential, password !== undefined);
-        if (password === undefined) throw error;
+        if (!isNeedsPassword(error) || method === 'ide.unlock') throw error;
+        const unlockedReported = unlockedLogins(error.data);
+        const need = { interactive, unlockedReported, startedAtDismissals, sentAtUnlocks, retries };
+        if (!(await this.unlockFor(running, need))) throw error;
       }
     }
+  }
+
+  /**
+   * Open the password prompt now (the chat's "Unlock" button, the command "calu: Unlock"),
+   * also after an earlier Escape. Starts the bridge if it does not run. Joins a prompt that is
+   * already open. Asks the admin password if a login is held that may not change settings, and
+   * nothing if a login that may change settings is held.
+   *
+   * @returns True if the bridge holds a login afterwards, false after Escape or after too many
+   *   wrong passwords.
+   * @throws (rejects) Like `ensureStarted` if the bridge cannot be started.
+   */
+  async unlock(): Promise<boolean> {
+    await this.ensureStarted();
+    const running = this.requireRunning();
+    const decision = onExplicitUnlock(running.unlock);
+    this.setUnlock(running, decision.state);
+    let opened = false;
+    if (decision.action === 'join') opened = await (running.round ?? Promise.resolve(false));
+    if (decision.action === 'prompt-first') opened = await this.startRound(running, 'first');
+    if (decision.action === 'prompt-admin') opened = await this.startRound(running, 'admin');
+    return opened || running.unlock.unlocked.length > 0;
+  }
+
+  /**
+   * Remove the password remembered on this machine ("calu: Forget stored password"). The
+   * logins the running bridge holds are kept until it exits.
+   *
+   * @returns Resolves once `PasswordDeps.forget` finished.
+   * @throws (rejects) What `PasswordDeps.forget` rejects with.
+   */
+  async forgetPassword(): Promise<void> {
+    await this.passwords.forget();
+  }
+
+  /**
+   * Take over the bridge's own report of `locked` (`ide.status.locked`), so that `locked` is
+   * right before any prompt was shown. Fires `onLockedChange` if the value changes. Does
+   * nothing while no bridge process runs.
+   *
+   * @param locked The reported value; pass false if the member is missing.
+   * @returns Nothing.
+   */
+  noteStatusLocked(locked: boolean): void {
+    const running = this.running;
+    if (running) this.setUnlock(running, onStatusLocked(running.unlock, locked));
   }
 
   /**
@@ -298,6 +444,7 @@ export class Bridge implements vscode.Disposable {
     }
     this.notificationEmitter.dispose();
     this.statusEmitter.dispose();
+    this.lockedEmitter.dispose();
   }
 
   /**
@@ -321,8 +468,9 @@ export class Bridge implements vscode.Disposable {
       return this.fail('error', `Cannot start calu: ${errorText(error)}`);
     }
     this.running = running;
+    let result: IdeInitializeResult;
     try {
-      const result = await running.rpc.request<IdeInitializeResult>('ide.initialize', {
+      result = await running.rpc.request<IdeInitializeResult>('ide.initialize', {
         client: 'vscode',
         client_version: this.clientVersion,
       });
@@ -333,12 +481,209 @@ export class Bridge implements vscode.Disposable {
         );
       }
       this.initializeResult = result;
-      this.setStatus('running', undefined, result.bridge_version);
-      return result;
     } catch (error) {
       running.stopping = true;
       killProcessTree(running.proc, 'SIGKILL');
       return this.fail('error', `calu ide did not initialize: ${errorText(error)}`);
+    }
+    await this.unlockWithStored(running);
+    if (this.running !== running) return this.fail('error', 'calu ide exited while it started.');
+    this.setStatus('running', undefined, result.bridge_version);
+    return result;
+  }
+
+  /**
+   * Return the running bridge process.
+   *
+   * @returns The record of the process.
+   * @throws Error if no bridge process runs or its connection is closed.
+   */
+  private requireRunning(): Running {
+    const running = this.running;
+    if (!running || running.rpc.closed) throw new Error('The calu bridge is not running.');
+    return running;
+  }
+
+  /**
+   * Replace the password state of a bridge process and fire `onLockedChange` if `locked`
+   * changed. The state of a process that is no longer the current one is stored but not
+   * reported.
+   *
+   * @param running The process the state belongs to.
+   * @param state The new state.
+   * @returns Nothing.
+   */
+  private setUnlock(running: Running, state: UnlockState): void {
+    running.unlock = state;
+    this.reportLocked();
+  }
+
+  /**
+   * Fire `onLockedChange` if `locked` differs from the value reported last.
+   *
+   * @returns Nothing.
+   */
+  private reportLocked(): void {
+    const locked = this.locked;
+    if (locked === this.reportedLocked) return;
+    this.reportedLocked = locked;
+    this.lockedEmitter.fire(locked);
+  }
+
+  /**
+   * Handle error -32010 of one request: fail, retry, wait for the open prompt, or open one
+   * (`onNeedsPassword`).
+   *
+   * @param running The process that answered.
+   * @param need The request's facts.
+   * @returns True if the request is to be sent again, false if its caller gets the error.
+   *   Never rejects.
+   */
+  private async unlockFor(running: Running, need: PasswordNeed): Promise<boolean> {
+    const decision = onNeedsPassword(running.unlock, need);
+    this.setUnlock(running, decision.state);
+    switch (decision.action) {
+      case 'fail':
+        return false;
+      case 'retry':
+        return true;
+      case 'join':
+        return running.round ?? false;
+      case 'prompt-first':
+        return this.startRound(running, 'first');
+      case 'prompt-admin':
+        return this.startRound(running, 'admin');
+    }
+  }
+
+  /**
+   * Start a prompt round and register it as the open one, so that other requests can wait for
+   * it. Precondition: `running.unlock.promptOpen === kind` and no round is registered.
+   *
+   * @param running The process to unlock.
+   * @param kind Which password is asked.
+   * @returns The round's promise: true after a successful `ide.unlock`, false after Escape,
+   *   too many wrong passwords or any failure. Never rejects. Postcondition when it resolves:
+   *   no prompt is open in the state and no round is registered.
+   */
+  private startRound(running: Running, kind: PromptKind): Promise<boolean> {
+    const round = this.runRound(running, kind)
+      .catch((error: unknown) => {
+        this.output.appendLine(`[calu] unlocking failed: ${errorText(error)}`);
+        return false;
+      })
+      .then((opened) => {
+        running.round = undefined;
+        if (running.unlock.promptOpen) this.setUnlock(running, onRoundAborted(running.unlock));
+        return opened;
+      });
+    running.round = round;
+    return round;
+  }
+
+  /**
+   * Ask for a password and send it with `ide.unlock` until it is accepted, the user presses
+   * Escape, or `MAX_ATTEMPTS_PER_ROUND` entries were refused. After the first accepted
+   * password of a process, "Remember on this machine" is offered without waiting for the answer.
+   *
+   * @param running The process to unlock.
+   * @param kind Which password is asked.
+   * @returns True if the round ended with an accepted password.
+   * @throws (rejects) What `PasswordDeps.ask` rejects with, and errors of `ide.unlock` other
+   *   than -32010 (the bridge exited, the store cannot be read). `startRound` handles both.
+   */
+  private async runRound(running: Running, kind: PromptKind): Promise<boolean> {
+    let problem: string | undefined;
+    for (let attempt = 1; ; attempt++) {
+      const password = await this.passwords.ask(kind, problem);
+      if (password === undefined) {
+        this.setUnlock(running, onDismiss(running.unlock));
+        return false;
+      }
+      const step = await this.tryPassword(running, kind, password, attempt);
+      this.setUnlock(running, step.state);
+      if (step.offerRemember) this.offerRemember(password);
+      if (step.outcome !== 'ask-again') return step.outcome === 'done';
+      problem = step.problem;
+    }
+  }
+
+  /**
+   * Send one entered password with `ide.unlock` and let `shared/unlock.ts` judge the answer.
+   *
+   * @param running The process to unlock.
+   * @param kind The kind of the open prompt.
+   * @param password The entered password; not logged and not kept.
+   * @param attempt Number of entries in this round so far, this one included.
+   * @returns The step for an accepted or a refused (-32010) password.
+   * @throws (rejects) Every other error of the request.
+   */
+  private async tryPassword(running: Running, kind: PromptKind, password: string, attempt: number): Promise<RoundStep> {
+    try {
+      const result = await running.rpc.request<IdeUnlockResult>('ide.unlock', { password });
+      return onUnlockResult(running.unlock, kind, unlockFacts(result), attempt);
+    } catch (error) {
+      if (!isNeedsPassword(error)) throw error;
+      return onUnlockRefused(running.unlock, errorText(error), attempt);
+    }
+  }
+
+  /**
+   * Offer "Remember on this machine" and store the password if the user accepts. Runs in the
+   * background: the caller does not wait. Failures are logged without the password.
+   *
+   * @param password The password that `ide.unlock` just accepted. It lives in this call until
+   *   the offer is answered, and nowhere else.
+   * @returns Nothing.
+   */
+  private offerRemember(password: string): void {
+    const offer = async (): Promise<void> => {
+      if (await this.passwords.offerRemember()) await this.passwords.store(password);
+    };
+    offer().catch((error: unknown) => {
+      this.output.appendLine(`[calu] the password could not be remembered: ${errorText(error)}`);
+    });
+  }
+
+  /**
+   * Send the password remembered on this machine with `ide.unlock`, right after
+   * `ide.initialize`. A refused password (error -32010) is removed from the secret storage;
+   * the user is then asked by the next interactive request that needs a password. Other
+   * failures (database unreachable, secret storage unavailable) are logged and change nothing.
+   *
+   * @param running The new process.
+   * @returns Resolves when done. Never rejects.
+   */
+  private async unlockWithStored(running: Running): Promise<void> {
+    try {
+      const password = await this.passwords.stored();
+      if (password === undefined || onStoredPassword(password) === 'skip') return;
+      const step = await this.tryStored(running, password);
+      this.setUnlock(running, step.state);
+      if (!step.forget) return;
+      this.output.appendLine('[calu] the remembered password was refused; it is removed.');
+      await this.passwords.forget();
+    } catch (error) {
+      this.output.appendLine(`[calu] the remembered password was not used: ${errorText(error)}`);
+    }
+  }
+
+  /**
+   * Send the remembered password with `ide.unlock` and let `onStoredResult` judge the answer.
+   *
+   * @param running The new process.
+   * @param password The remembered password; not logged and not kept.
+   * @returns Whether to forget the password, and the new state. Errors other than -32010 are
+   *   logged (message only) and answer `forget: false`. Never rejects.
+   */
+  private async tryStored(running: Running, password: string): Promise<{ forget: boolean; state: UnlockState }> {
+    try {
+      const result = await running.rpc.request<IdeUnlockResult>('ide.unlock', { password });
+      return onStoredResult(running.unlock, { ok: true, result: unlockFacts(result) });
+    } catch (error) {
+      const refused = isNeedsPassword(error);
+      if (!refused) this.output.appendLine(`[calu] unlocking with the remembered password failed: ${errorText(error)}`);
+      return onStoredResult(running.unlock, { ok: false, refused });
     }
   }
 
@@ -376,6 +721,8 @@ export class Bridge implements vscode.Disposable {
       proc,
       rpc,
       stopping: false,
+      unlock: initialUnlockState(),
+      round: undefined,
       exited: new Promise<void>((resolve) => {
         let done = false;
         const onExit = (description: string) => {
@@ -386,6 +733,7 @@ export class Bridge implements vscode.Disposable {
           if (this.running === running) {
             this.running = undefined;
             this.initializeResult = undefined;
+            this.reportLocked();
             if (!running.stopping) this.setStatus('exited', `calu ide ${description}.`);
           }
           resolve();
@@ -424,6 +772,17 @@ export class Bridge implements vscode.Disposable {
     this.currentStatus = status;
     this.statusEmitter.fire({ status, message, version });
   }
+}
+
+/**
+ * Reduce an `ide.unlock` result to the two facts the decisions use, tolerating missing members.
+ *
+ * @param result The result as received (any JSON value).
+ * @returns The login names in `result.unlocked` (`[]` if missing) and `changing === true`.
+ */
+function unlockFacts(result: unknown): { unlocked: string[]; changing: boolean } {
+  const changing = typeof result === 'object' && result !== null && (result as IdeUnlockResult).changing === true;
+  return { unlocked: unlockedLogins(result), changing };
 }
 
 /**

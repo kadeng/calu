@@ -201,3 +201,40 @@ describe('tool.files', () => {
     expect(parseWebviewMessage({ type: 'openToolFile', toolUseId: 'b1', index: '0' })).toBeUndefined();
   });
 });
+
+import { fileClick, firstChangedLine, rowClick } from '../../src/shared/itemMenu';
+import type { ToolView as RowTool } from '../../src/shared/viewState';
+
+describe('rowClick', () => {
+  const tool = (over: Partial<RowTool>): RowTool => ({ toolUseId: 't1', agentKey: 'main', name: 'Bash', input: {}, ...over });
+
+  it('opens the diff of an edit that has one, else the file', () => {
+    const edit = tool({ name: 'Edit', input: { file_path: 'a.py' }, diffPath: 'a.py', editRange: { start: 42, end: 44 } });
+    expect(rowClick(edit)).toEqual({ kind: 'openDiff', title: 'Open diff' });
+    expect(fileClick(edit)).toEqual({ action: 'openFileAtEdit', line: 42, title: 'Open file at line 42' });
+    expect(rowClick(tool({ name: 'Write', input: { file_path: 'a.py' } }))).toEqual({
+      kind: 'openFile', action: 'openFileAtEdit', line: 1, title: 'Open file at line 1 (no diff was recorded)',
+    });
+  });
+
+  it('opens a read file at the first line read', () => {
+    expect(rowClick(tool({ name: 'Read', input: { file_path: 'a.py', offset: 30 } }))).toEqual({
+      kind: 'openFile', action: 'openFile', line: 30, title: 'Open file at line 30',
+    });
+  });
+
+  it('opens the tab of a subagent launch and expands everything else', () => {
+    expect(rowClick(tool({ name: 'Agent', toolUseId: 'A9' }))).toEqual({ kind: 'openTab', tab: 'A9', title: "Open the subagent's tab" });
+    expect(rowClick(tool({ name: 'Bash', input: { command: 'ls' } }))).toEqual({ kind: 'expand', title: 'Show the command and its output' });
+    expect(rowClick(tool({ name: 'Grep', input: { pattern: 'x' } }))).toEqual({ kind: 'expand', title: 'Show details' });
+    expect(rowClick(tool({ name: 'Edit', input: {} })).kind).toBe('expand');
+    expect(fileClick(tool({ name: 'Bash' }))).toBeUndefined();
+  });
+
+  it('finds the first changed line', () => {
+    expect(firstChangedLine('a\nb\nc', 'a\nB\nc')).toBe(2);
+    expect(firstChangedLine('a\nb', 'a\nb\nc')).toBe(3);
+    expect(firstChangedLine('a', 'a')).toBe(1);
+    expect(firstChangedLine('', 'x')).toBe(1);
+  });
+});

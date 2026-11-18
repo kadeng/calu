@@ -33,6 +33,7 @@ describe('package.json', () => {
       'calu.chat.showThinking',
       'calu.command',
       'calu.install.source',
+      'calu.notifications',
       'calu.server.extraArgs',
       'calu.server.insecure',
       'calu.server.sudo',
@@ -66,7 +67,8 @@ describe('parseWebviewMessage', () => {
   it('accepts the messages without fields', () => {
     for (const type of [
       'ready', 'attach', 'newSession', 'refreshSessions', 'detach', 'startServer', 'copyServerCommand', 'install',
-      'restartBridge', 'openSettings', 'showContext', 'refreshUsage', 'interrupt',
+      'restartBridge', 'openSettings', 'showContext', 'refreshUsage', 'interrupt', 'showLog', 'unlock',
+      'forkConversation', 'honestyReview', 'honestyTrust',
     ]) {
       expect(parseWebviewMessage({ type, extra: 'dropped' })).toEqual({ type });
     }
@@ -100,6 +102,13 @@ describe('parseWebviewMessage', () => {
     expect(parseWebviewMessage({ type: 'setEffort', effort: 'xhigh' })).toEqual({ type: 'setEffort', effort: 'xhigh' });
     expect(parseWebviewMessage({ type: 'setLevel', level: 'writes' })).toEqual({ type: 'setLevel', level: 'writes' });
     expect(parseWebviewMessage({ type: 'openFile', path: '/w/a.py' })).toEqual({ type: 'openFile', path: '/w/a.py' });
+    expect(parseWebviewMessage({ type: 'openFile', path: '/w/a.py', line: 12 })).toEqual({ type: 'openFile', path: '/w/a.py', line: 12 });
+    expect(parseWebviewMessage({ type: 'openFile', path: '/w/a.py', line: 0 })).toEqual({ type: 'openFile', path: '/w/a.py' });
+    expect(parseWebviewMessage({ type: 'openToolFile', toolUseId: 't', index: 1, line: 3 })).toEqual({ type: 'openToolFile', toolUseId: 't', index: 1, line: 3 });
+    expect(parseWebviewMessage({ type: 'rewindBefore', turn: 3, uuid: 'u-1' })).toEqual({ type: 'rewindBefore', turn: 3, uuid: 'u-1' });
+    expect(parseWebviewMessage({ type: 'forkBefore', turn: 2 })).toEqual({ type: 'forkBefore', turn: 2 });
+    expect(parseWebviewMessage({ type: 'setHonestyMode', mode: 'enforce' })).toEqual({ type: 'setHonestyMode', mode: 'enforce' });
+    expect(parseWebviewMessage({ type: 'honestyClear', markId: 4 })).toEqual({ type: 'honestyClear', markId: 4 });
     expect(parseWebviewMessage({ type: 'openDiff', toolUseId: 't' })).toEqual({ type: 'openDiff', toolUseId: 't' });
     expect(parseWebviewMessage({ type: 'openToolFile', toolUseId: 't', index: 0 })).toEqual({ type: 'openToolFile', toolUseId: 't', index: 0 });
     expect(parseWebviewMessage({ type: 'openLink', href: 'https://example.org' })).toEqual({ type: 'openLink', href: 'https://example.org' });
@@ -137,6 +146,10 @@ describe('parseWebviewMessage', () => {
       { type: 'openToolFile', toolUseId: 't', index: 1.5 },
       { type: 'itemAction', toolUseId: 't', action: 'deleteFile' },
       { type: 'stateReport', requestId: 'x' },
+      { type: 'rewindBefore', turn: 0 },
+      { type: 'forkBefore', turn: '2' },
+      { type: 'setHonestyMode', mode: 'strict' },
+      { type: 'honestyClear', markId: '4' },
     ]) {
       expect(parseWebviewMessage(bad), JSON.stringify(bad)?.slice(0, 80)).toBeUndefined();
     }

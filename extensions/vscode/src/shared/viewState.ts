@@ -184,6 +184,15 @@ export type Item =
        */
       source: 'user' | 'cross_session' | 'system';
       images: ImageView[];
+      /**
+       * Number of the turn the message belongs to, counted from 1 over the turns this view saw
+       * (`turnCount + 1` when the message arrived). For `rewindBefore` / `forkBefore`; the host
+       * prefers the turn it finds for `uuid` in the recorded history, because a resumed
+       * conversation has earlier turns that this view did not see.
+       */
+      turn: number;
+      /** Claude Code's id of the message (`user.input`.uuid); `null` if it gave none. */
+      uuid: string | null;
     }
   | {
       id: number;
@@ -289,16 +298,16 @@ export interface SideExchangeView {
  * Something the user should do before the chat can work, with the button that does it.
  *
  * `action` names a webview message type without fields ("install", "startServer",
- * "newSession", "attach", "openSettings", "restartBridge"), or is "openLink" with `href`, or ""
+ * "newSession", "attach", "openSettings", "restartBridge", "unlock"), or is "openLink" with `href`, or ""
  * for a hint without a button.
  */
 export interface SetupHint {
-  /** Stable id, e.g. "calu-missing", "claude-missing", "no-server", "no-session", "database". */
+  /** Stable id: "calu-missing", "claude-missing", "locked", "database", "no-server", "no-session". */
   id: string;
   level: 'info' | 'warning' | 'error';
   /** One or two sentences that say what is missing and what to do. */
   message: string;
-  action: '' | 'install' | 'startServer' | 'newSession' | 'attach' | 'openSettings' | 'restartBridge' | 'openLink';
+  action: '' | 'install' | 'startServer' | 'newSession' | 'attach' | 'openSettings' | 'restartBridge' | 'unlock' | 'openLink';
   /** Button text; "" if `action` is "". */
   actionLabel: string;
   /** For "openLink": the https address. */
@@ -378,6 +387,8 @@ export interface ViewState {
   escalations: IdMap<EscalationView>;
   /** Side questions of this client, oldest first. */
   side: SideExchangeView[];
+  /** Number of `turn.result` events applied since the transcript was last cleared. */
+  turnCount: number;
   /** Sequence number of the last session event applied (0 before the first). */
   lastSeq: number;
   /** Next free item id. */
@@ -513,6 +524,7 @@ export function initialViewState(): ViewState {
     escalations: Object.create(null) as IdMap<EscalationView>,
     queue: [],
     side: [],
+    turnCount: 0,
     lastSeq: 0,
     nextId: 1,
   };
@@ -1109,6 +1121,7 @@ function clearTranscript(state: ViewState): ViewState {
     queue: [],
     side: [],
     focus: null,
+    turnCount: 0,
   };
 }
 
@@ -1364,7 +1377,14 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       const e = p as unknown as UserInput;
       if (!str(e.text)) return state;
       const source = e.source === 'cross_session' || e.source === 'system' ? e.source : 'user';
-      return appendItem(state, MAIN, { kind: 'user', text: e.text, source, images: parseImages(e.images) });
+      return appendItem(state, MAIN, {
+        kind: 'user',
+        text: e.text,
+        source,
+        images: parseImages(e.images),
+        turn: (state.turnCount ?? 0) + 1,
+        uuid: str(e.uuid) && e.uuid ? e.uuid : null,
+      });
     }
     case 'tool.use': {
       const e = p as unknown as ToolUse;
@@ -1491,6 +1511,7 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       });
       return {
         ...next,
+        turnCount: (next.turnCount ?? 0) + 1,
         session: {
           ...next.session,
           backgroundTasks,

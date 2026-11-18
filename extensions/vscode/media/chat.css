@@ -1,11 +1,1084 @@
-/* PLACEHOLDER stylesheet of the chat view; the real one replaces it (see WEBVIEW_CONTRACT.md).
-   Rules: VSCode CSS variables only, no fixed colours. */
+/* Chat view of calu. Designed in a dark theme first; every colour comes from a VSCode theme
+   variable, so light and high-contrast themes work too. No fixed colours, no inline styles.
+
+   Layout (a column that fills the view, usable from 280 px width):
+
+     header      session button | settings
+                 Checkers | Context | Honesty | level
+     tabs        Main + subagents (only while there are subagents)
+     setup       cards of the empty / error state
+     transcript  the visible tab's items (the only part that scrolls)
+     dock        waiting-elsewhere strip | side questions | queue | activity | composer | hint
+*/
+
+:root {
+  --calu-accent: var(--vscode-terminal-ansiCyan, var(--vscode-charts-blue, var(--vscode-textLink-foreground)));
+  --calu-ok: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--vscode-foreground)));
+  --calu-warn: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow, var(--vscode-foreground)));
+  --calu-err: var(--vscode-errorForeground, var(--vscode-charts-red, var(--vscode-foreground)));
+  --calu-muted: var(--vscode-descriptionForeground, var(--vscode-foreground));
+  --calu-border: var(--vscode-widget-border, var(--vscode-panel-border, var(--vscode-contrastBorder, transparent)));
+  --calu-strong-border: var(--vscode-contrastBorder, var(--vscode-input-border, var(--calu-border)));
+  --calu-surface: var(--vscode-input-background, var(--vscode-editor-background));
+  --calu-hover: var(--vscode-list-hoverBackground, transparent);
+  --calu-mono: var(--vscode-editor-font-family, monospace);
+  --calu-radius: 6px;
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
 body {
   color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
-  padding: 0 12px;
+  line-height: 1.45;
+  overflow: hidden;
 }
-.placeholder {
-  color: var(--vscode-descriptionForeground);
+
+*, *::before, *::after { box-sizing: border-box; }
+
+[hidden], .hidden { display: none !important; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+}
+
+/* ---- Shared controls ------------------------------------------------------------------------ */
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+button, select, input, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  padding: 3px 10px;
+}
+button:disabled { cursor: default; opacity: 0.45; }
+
+button.primary {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border-color: var(--vscode-button-border, transparent);
+}
+button.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
+button.secondary {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border-color: var(--vscode-button-border, var(--calu-border));
+}
+button.secondary:hover:not(:disabled) { background: var(--vscode-button-secondaryHoverBackground, var(--calu-hover)); }
+
+.text-button {
+  padding: 1px 4px;
+  color: var(--vscode-textLink-foreground);
+}
+.text-button:hover:not(:disabled) { text-decoration: underline; }
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  flex: none;
+}
+.icon-button.quiet, .quiet-button { color: var(--calu-muted); }
+.icon-button.quiet:hover:not(:disabled), .quiet-button:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, var(--calu-hover));
+}
+.icon-button.round {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+.tool-row:focus-visible, .menu-item:focus-visible, .tab:focus-visible { outline-offset: -1px; }
+
+a.link, .md a {
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  text-decoration: none;
+}
+a.link:hover, .md a:hover {
+  color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+  text-decoration: underline;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--calu-border);
+  border-radius: 999px;
+  font-size: 0.82em;
+  line-height: 1.5;
+  color: var(--calu-muted);
+  white-space: nowrap;
+}
+.chip.decision { border-color: currentColor; font-weight: 600; letter-spacing: 0.02em; }
+button.chip.decision { background: transparent; cursor: pointer; }
+button.chip.decision:hover { background: var(--calu-hover); }
+.chip.decision.pass { color: var(--calu-accent); }
+.chip.decision.allow { color: var(--calu-ok); }
+.chip.decision.deny { color: var(--calu-err); }
+.chip.decision.escalate { color: var(--calu-warn); }
+.chip.decision.pending { color: var(--calu-muted); }
+.chip.agent-status.running { color: var(--calu-accent); border-color: currentColor; }
+.chip.agent-status.completed { color: var(--calu-ok); border-color: currentColor; }
+.chip.agent-status.failed { color: var(--calu-err); border-color: currentColor; }
+
+.badge {
+  flex: none;
+  min-width: 1.5em;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 0.8em;
+  text-align: center;
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vscode-disabledForeground, var(--calu-muted));
+}
+.dot.idle { background: var(--calu-ok); }
+.dot.busy, .dot.starting { background: var(--calu-accent); }
+.dot.waiting, .dot.reconnecting { background: var(--calu-warn); }
+.dot.failed, .dot.lost { background: var(--calu-err); }
+
+.label {
+  margin-top: 6px;
+  font-size: 0.82em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--calu-muted);
+}
+.label.error { color: var(--calu-err); }
+
+pre {
+  margin: 2px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background, var(--calu-surface));
+  font-family: var(--calu-mono);
+  font-size: var(--vscode-editor-font-size, 0.95em);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 24em;
+  overflow-y: auto;
+}
+
+select.pill {
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 2px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--calu-muted);
+  background: transparent;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+select.pill:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--calu-hover); }
+select.pill option {
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-editor-background));
+}
+
+/* ---- Header --------------------------------------------------------------------------------- */
+
+.header {
+  flex: none;
+  padding: 6px 8px 4px;
+  border-bottom: 1px solid var(--calu-border);
+}
+.header-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.session-slot { flex: 1; min-width: 0; }
+.session-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 6px;
+  font-weight: 600;
+}
+.session-button:hover { background: var(--calu-hover); }
+.session-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.header-row.quick {
+  flex-wrap: wrap;
+  gap: 0 2px;
+  margin-top: 2px;
+  font-size: 0.92em;
+}
+.quiet-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px;
+  white-space: nowrap;
+}
+.quiet-button .icon { width: 14px; height: 14px; }
+.quiet-button.honesty.clean { color: var(--calu-accent); }
+.quiet-button.honesty.open { color: var(--calu-warn); }
+.quiet-button.honesty.review { color: var(--vscode-foreground); }
+.header-row.quick select.pill { flex: 1 1 11em; }
+
+.banner {
+  margin-top: 4px;
+  padding: 3px 8px;
+  border-left: 3px solid var(--calu-warn);
+  background: var(--vscode-inputValidation-warningBackground, transparent);
+  font-size: 0.92em;
+}
+
+/* ---- Tabs ----------------------------------------------------------------------------------- */
+
+.tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--calu-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 16em;
+  padding: 5px 8px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--calu-muted);
+}
+.tab:hover { color: var(--vscode-foreground); background: var(--calu-hover); }
+.tab.active {
+  color: var(--vscode-foreground);
+  border-bottom-color: var(--vscode-panelTitle-activeBorder, var(--vscode-focusBorder));
+}
+.tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab .chip { font-size: 0.78em; padding: 0 5px; }
+.status-mark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--calu-muted);
+}
+.status-mark.running { background: var(--calu-accent); animation: pulse 1.6s ease-in-out infinite; }
+.status-mark.completed { background: var(--calu-ok); }
+.status-mark.failed { background: var(--calu-err); }
+.status-mark.stopped { background: transparent; border: 1px solid var(--calu-muted); }
+.attention {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vscode-notificationsInfoIcon-foreground, var(--calu-accent));
+}
+
+@keyframes pulse {
+  50% { opacity: 0.35; }
+}
+
+/* ---- Empty and error states ----------------------------------------------------------------- */
+
+.setup-slot {
+  flex: none;
+  max-height: 60%;
+  overflow-y: auto;
+  padding: 0 10px;
+}
+.setup-slot:empty { display: none; }
+.setup-slot.full {
+  flex: 1;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 24px;
+}
+.logo {
+  flex: none;
+  align-self: center;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 12px;
+  color: var(--calu-accent);
+  opacity: 0.85;
+}
+.logo-ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  /* Four segments: the circumference of r = 18 is about 113. */
+  stroke-dasharray: 22 6.3;
+}
+.logo-check {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.setup-card {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--calu-border);
+  border-left: 3px solid var(--vscode-notificationsInfoIcon-foreground, var(--calu-accent));
+  border-radius: var(--calu-radius);
+  background: var(--vscode-editorWidget-background, var(--calu-surface));
+}
+.setup-card.warning { border-left-color: var(--calu-warn); }
+.setup-card.error { border-left-color: var(--calu-err); }
+.setup-message { margin: 0 0 6px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.setup-note { margin: 4px 0; font-size: 0.92em; color: var(--calu-muted); }
+.setup-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.setup-sessions { margin-top: 6px; }
+
+.code-block { position: relative; }
+.code-block pre { padding-right: 30px; }
+.copy-button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  padding: 3px;
+  color: var(--calu-muted);
+  background: var(--vscode-textCodeBlock-background, var(--calu-surface));
+  border-color: var(--calu-border);
+  opacity: 0;
+}
+.code-block:hover .copy-button, .copy-button:focus-visible, .setup-card .copy-button { opacity: 1; }
+.copy-button:hover { color: var(--vscode-foreground); }
+.copy-button.copied { color: var(--calu-ok); opacity: 1; }
+.copy-button .icon { width: 14px; height: 14px; }
+
+/* ---- Transcript ----------------------------------------------------------------------------- */
+
+.transcript {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.list {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px 12px;
+  /* The scroll position is managed by the script; the browser must not move it as well. */
+  overflow-anchor: none;
+}
+.list:focus { outline: none; }
+.jump {
+  position: absolute;
+  right: 14px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px 3px 6px;
+  border-radius: 999px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--calu-surface));
+  border-color: var(--calu-strong-border);
+  box-shadow: 0 2px 6px var(--vscode-widget-shadow, transparent);
+}
+.empty {
+  margin-top: 18%;
+  padding: 0 16px;
+  text-align: center;
+  color: var(--calu-muted);
+}
+.empty .logo { display: block; opacity: 0.6; }
+
+.item { margin: 10px 0; min-width: 0; }
+.item.hidden { display: none; }
+
+.who {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.86em;
+  color: var(--calu-muted);
+}
+.who .icon { width: 13px; height: 13px; }
+
+/* The user's own message: a bubble on the right, with Rewind / Fork on hover and focus. */
+.item.user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 16px;
+}
+.bubble {
+  max-width: 92%;
+  padding: 6px 10px;
+  border: 1px solid var(--calu-strong-border);
+  border-radius: 12px 12px 3px 12px;
+  background: var(--calu-surface);
+}
+.bubble .text, .foreign .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.user-actions {
+  display: flex;
+  gap: 2px;
+  height: 22px;
+  opacity: 0;
+}
+.item.user:hover .user-actions, .user-actions:focus-within { opacity: 1; }
+.user-actions .icon-button { color: var(--calu-muted); }
+.user-actions .icon-button:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--calu-hover); }
+.thumbs, .thumbs-slot { display: flex; flex-wrap: wrap; gap: 6px; }
+.thumb {
+  display: block;
+  max-width: 120px;
+  max-height: 90px;
+  border-radius: 4px;
+  border: 1px solid var(--calu-border);
+  object-fit: cover;
+}
+.thumb-missing { color: var(--calu-muted); font-style: italic; }
+
+/* Text that is not the user's: another session, or calu / Claude Code. */
+.item.foreign {
+  padding: 4px 10px;
+  border-left: 2px dashed var(--calu-warn);
+  font-size: 0.95em;
+}
+.item.foreign.system { border-left-color: var(--calu-muted); color: var(--calu-muted); }
+
+.item.assistant.streaming .md > :last-child::after,
+.item.thinking.streaming .md > :last-child::after {
+  content: '▍';
+  opacity: 0.6;
+}
+
+.md { overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 6px 0; padding-left: 1.4em; }
+.md h1, .md h2, .md h3, .md h4 { margin: 12px 0 4px; font-size: 1.05em; line-height: 1.3; }
+.md code {
+  font-family: var(--calu-mono);
+  font-size: 0.95em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--vscode-textCodeBlock-background, var(--calu-surface));
+}
+.md pre code { padding: 0; background: transparent; }
+.md blockquote {
+  margin: 6px 0;
+  padding: 0 10px;
+  border-left: 3px solid var(--vscode-textBlockQuote-border, var(--calu-border));
+  color: var(--calu-muted);
+}
+.md table { display: block; overflow-x: auto; border-collapse: collapse; }
+.md th, .md td { padding: 2px 8px; border: 1px solid var(--calu-border); }
+.md hr { border: none; border-top: 1px solid var(--calu-border); }
+
+.item.thinking {
+  padding-left: 10px;
+  border-left: 2px solid var(--calu-border);
+  color: var(--calu-muted);
+  font-size: 0.93em;
+}
+
+.item.checker {
+  padding: 4px 10px;
+  border-left: 2px solid var(--calu-accent);
+}
+.item.checker.deny { border-left-color: var(--calu-err); }
+.item.checker.escalate { border-left-color: var(--calu-warn); }
+
+.item.turn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+  font-size: 0.82em;
+  color: var(--calu-muted);
+}
+.item.turn::before, .item.turn::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--calu-border);
+}
+.item.turn.error { color: var(--calu-err); }
+
+.item.notice {
+  padding: 3px 10px;
+  border-left: 2px solid var(--calu-muted);
+  font-size: 0.93em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--calu-muted);
+}
+.item.notice.warning { border-left-color: var(--calu-warn); color: var(--calu-warn); }
+.item.notice.error { border-left-color: var(--calu-err); color: var(--calu-err); }
+
+/* ---- Tool rows ------------------------------------------------------------------------------ */
+
+.item.tool { margin: 3px 0; }
+.item.tool + .item:not(.tool), .item:not(.tool) + .item.tool { margin-top: 10px; }
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tool-row:hover { background: var(--calu-hover); }
+.tool-row .chip { flex: 0 1 auto; min-width: 2.2em; overflow: hidden; text-overflow: ellipsis; }
+.tool-row .tool-head { min-width: 3ch; }
+.item.tool.open > .tool-row { background: var(--vscode-list-inactiveSelectionBackground, var(--calu-hover)); }
+.tool-icon { color: var(--calu-muted); width: 14px; height: 14px; }
+.tool.edit .tool-icon { color: var(--vscode-gitDecoration-modifiedResourceForeground, var(--calu-warn)); }
+.tool.command .tool-icon { color: var(--calu-accent); }
+.tool.launch .tool-icon { color: var(--vscode-charts-purple, var(--calu-accent)); }
+.tool-name { flex: none; font-weight: 600; font-size: 0.93em; }
+.tool-head {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--calu-mono);
+  font-size: 0.93em;
+  color: var(--calu-muted);
+}
+/* A path: the directory is cut with an ellipsis, the file name always stays visible. */
+.tool-head.path { display: flex; }
+.path-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+.path-base, .tool-head.path .line-range { flex: none; }
+a.tool-head.file-link { color: var(--vscode-textLink-foreground); }
+.tool-head .file-link { text-decoration: underline dotted; }
+.line-range { color: var(--calu-muted); }
+.row-chevron { color: var(--calu-muted); width: 12px; height: 12px; }
+.tool-row .icon-button { padding: 1px; }
+.tool-row .icon-button .icon { width: 14px; height: 14px; }
+.tool-row .icon-button[data-action='toolMenu'] { opacity: 0; }
+.tool-row:hover .icon-button[data-action='toolMenu'],
+.tool-row:focus-within .icon-button[data-action='toolMenu'] { opacity: 1; }
+
+.tool-body {
+  margin: 2px 0 8px 12px;
+  padding: 4px 0 4px 10px;
+  border-left: 1px solid var(--calu-border);
+  font-size: 0.95em;
+}
+.check-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.check-who { color: var(--calu-muted); }
+.check-reason, .check-summary, .check-comment { margin: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.check-summary { color: var(--calu-muted); }
+.check.deny .check-reason { color: var(--calu-err); }
+.check.escalate .check-reason { color: var(--calu-warn); }
+.tool-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 4px 0;
+  font-family: var(--calu-mono);
+  font-size: 0.93em;
+  overflow-wrap: anywhere;
+}
+.tool-result.error { color: var(--calu-err); }
+
+/* ---- Escalations and questions -------------------------------------------------------------- */
+
+.item.esc.open {
+  padding: 10px 12px;
+  border: 1px solid var(--calu-warn);
+  border-radius: var(--calu-radius);
+  background: var(--vscode-editorWidget-background, var(--calu-surface));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+}
+.item.esc.open.pending { opacity: 0.8; }
+.esc-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--calu-warn);
+}
+.esc-title .chip { color: var(--vscode-foreground); font-weight: 400; font-family: var(--calu-mono); }
+.esc-reason { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.esc-step {
+  margin: 6px 0;
+  max-height: 22em;
+  overflow-y: auto;
+}
+.esc-literal { margin: 6px 0; }
+.esc-literal > summary, .item.esc.closed > summary { cursor: pointer; color: var(--calu-muted); }
+.esc-note, .question-other {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+  padding: 4px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--calu-border));
+  border-radius: 4px;
+}
+.esc-note::placeholder, .question-other::placeholder, .input::placeholder { color: var(--vscode-input-placeholderForeground, var(--calu-muted)); }
+.esc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.esc-actions .primary, .esc-actions .secondary { min-width: 5.5em; padding: 4px 14px; }
+.esc-pending { color: var(--calu-muted); font-style: italic; }
+
+.question {
+  margin: 8px 0;
+  padding: 0;
+  border: none;
+  min-width: 0;
+}
+.question-header { padding: 0; font-size: 0.82em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--calu-muted); }
+.question-text { font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
+.options { display: flex; flex-direction: column; gap: 4px; }
+.option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 5px 10px;
+  text-align: left;
+  border: 1px solid var(--vscode-input-border, var(--calu-strong-border));
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+}
+.option:hover:not(:disabled) { background: var(--calu-hover); }
+.option[aria-checked='true'] {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-activeSelectionBackground, var(--calu-hover));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+.option-description { font-size: 0.9em; opacity: 0.8; }
+
+.item.esc.closed { margin: 4px 0; padding: 2px 6px; font-size: 0.95em; }
+.esc-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.esc-line-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--calu-mono);
+  font-size: 0.93em;
+  color: var(--calu-muted);
+}
+.esc-outcome { margin: 4px 0; font-style: italic; }
+
+/* ---- Subagent tab head ---------------------------------------------------------------------- */
+
+.agent-head {
+  padding: 8px 12px;
+  border: 1px solid var(--calu-border);
+  border-radius: var(--calu-radius);
+  background: var(--vscode-editorWidget-background, var(--calu-surface));
+}
+.agent-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.agent-name { font-weight: 600; overflow-wrap: anywhere; }
+
+/* ---- Dock ----------------------------------------------------------------------------------- */
+
+.dock {
+  flex: none;
+  padding: 4px 8px 6px;
+  min-width: 0;
+}
+.strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-bottom: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--calu-warn);
+  border-radius: var(--calu-radius);
+  color: var(--calu-warn);
+  font-size: 0.92em;
+}
+.chip-button {
+  padding: 0 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--vscode-foreground);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chip-button:hover { background: var(--calu-hover); }
+
+.side {
+  margin-bottom: 4px;
+  border: 1px dashed var(--vscode-charts-purple, var(--calu-accent));
+  border-radius: var(--calu-radius);
+  font-size: 0.95em;
+}
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  color: var(--vscode-charts-purple, var(--calu-accent));
+  font-size: 0.9em;
+}
+.side-head > span { flex: 1; min-width: 0; }
+.side-body { max-height: 30vh; overflow-y: auto; padding: 0 8px 6px; }
+.side-empty, .side-answer.waiting { color: var(--calu-muted); font-style: italic; }
+.side-question { margin-top: 6px; font-weight: 600; overflow-wrap: anywhere; }
+.side-answer.error { color: var(--calu-err); }
+
+.queue-slot { max-height: 22vh; overflow-y: auto; }
+.queued {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 4px;
+  padding: 3px 8px;
+  border: 1px dashed var(--calu-border);
+  border-radius: var(--calu-radius);
+  opacity: 0.85;
+}
+.queued-label { font-size: 0.82em; color: var(--calu-muted); }
+.queued.inject .queued-label { color: var(--calu-accent); }
+.queued-text { overflow-wrap: anywhere; }
+
+/* Fixed columns (icon | label | elapsed) so that changing glyphs, verbs and digits do not move
+   the other parts; 18ch = LABEL_COLUMN_CH in src/shared/activity.ts. */
+.activity {
+  display: grid;
+  grid-template-columns: 1.6em 18ch auto;
+  align-items: baseline;
+  padding: 1px 4px 3px;
+  font-family: var(--calu-mono);
+  font-size: 0.9em;
+  color: var(--calu-muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.activity-icon { text-align: center; overflow: hidden; }
+.activity-label { overflow: hidden; text-overflow: ellipsis; }
+.activity-elapsed { font-variant-numeric: tabular-nums; }
+.activity.busy { color: var(--calu-accent); }
+.activity.waiting { color: var(--calu-warn); }
+
+/* The composer: one rounded surface with the text field on top and a footer row inside. */
+.composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--vscode-input-border, var(--calu-strong-border));
+  border-radius: 10px;
+  background: var(--vscode-input-background);
+}
+.composer:focus-within { border-color: var(--vscode-focusBorder); }
+.composer.side-mode { border-style: dashed; border-color: var(--vscode-charts-purple, var(--calu-accent)); }
+.composer.dragging { border-color: var(--vscode-focusBorder); background: var(--vscode-list-dropBackground, var(--vscode-input-background)); }
+.composer.disabled { opacity: 0.75; }
+.thumbs-slot { padding: 6px 8px 0; }
+.thumbs-slot:empty { display: none; }
+.thumb-box { position: relative; }
+.thumb-box .thumb { max-width: 72px; max-height: 56px; }
+.thumb-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  padding: 1px;
+  border-radius: 50%;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--calu-surface));
+  border-color: var(--calu-strong-border);
+}
+.thumb-remove .icon { width: 11px; height: 11px; }
+.input {
+  display: block;
+  width: 100%;
+  min-height: 2.4em;
+  padding: 8px 10px 4px;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--vscode-input-foreground);
+  background: transparent;
+  line-height: 1.4;
+}
+.input:focus-visible { outline: none; }
+.composer-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 2px 5px 5px 6px;
+}
+/* Model, effort and the context meter; in a narrow view the buttons wrap to a second row. */
+.footer-slot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 0.9em;
+}
+.footer-slot select.pill { flex: 0 1 auto; max-width: 9em; }
+.composer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
+}
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 1px 5px;
+  color: var(--calu-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.meter:hover:not(:disabled) { color: var(--vscode-foreground); background: var(--calu-hover); }
+.meter-bar {
+  display: inline-block;
+  width: 22px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--vscode-scrollbarSlider-background, var(--calu-border));
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  overflow: hidden;
+}
+.meter-bar.wide { display: block; width: 100%; height: 6px; margin: 4px 0 6px; }
+.meter-fill { display: block; height: 100%; background: var(--calu-accent); }
+.meter.warn .meter-fill, .meter-bar.warn .meter-fill { background: var(--calu-warn); }
+.meter.high .meter-fill, .meter-bar.high .meter-fill { background: var(--calu-err); }
+.meter.high { color: var(--calu-err); }
+#app .composer-footer .icon-button.on { color: var(--vscode-charts-purple, var(--calu-accent)); }
+.icon-button.has-waiting { color: var(--calu-accent); }
+
+.hint {
+  min-height: 1.5em;
+  padding: 2px 6px 0;
+  font-size: 0.82em;
+  color: var(--calu-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hint.notice { color: var(--calu-warn); white-space: normal; }
+.question .hint { padding: 2px 0; }
+
+.completions {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: calc(100% + 4px);
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 4px;
+  z-index: 20;
+  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorSuggestWidget-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--calu-strong-border));
+  border-radius: var(--calu-radius);
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+}
+.completion {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.completion:hover { background: var(--calu-hover); }
+.completion.active {
+  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground, var(--vscode-foreground)));
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
+  outline: 1px solid var(--vscode-contrastActiveBorder, transparent);
+}
+.completion-label { flex: none; font-family: var(--calu-mono); }
+.completion-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+.completion .chip { color: inherit; opacity: 0.7; }
+
+/* ---- Popups: session dropdown, context menu, honesty menu, usage ---------------------------- */
+
+.popup {
+  position: fixed;
+  z-index: 100;
+  min-width: 12em;
+  max-width: min(26em, calc(100vw - 8px));
+  max-height: calc(100vh - 8px);
+  overflow-y: auto;
+  padding: 4px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-menu-border, var(--calu-strong-border));
+  border-radius: var(--calu-radius);
+  box-shadow: 0 2px 10px var(--vscode-widget-shadow, transparent);
+}
+.menu-heading {
+  padding: 4px 8px 2px;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+.menu-note { padding: 3px 8px; font-size: 0.9em; opacity: 0.75; overflow-wrap: anywhere; }
+.menu-separator { margin: 4px 0; border-top: 1px solid var(--vscode-menu-separatorBackground, var(--calu-border)); }
+.menu-item {
+  display: block;
+  width: 100%;
+  padding: 3px 8px;
+  text-align: left;
+  border-radius: 3px;
+  color: inherit;
+}
+.menu-item:hover:not(:disabled), .menu-item:focus-visible {
+  color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground, inherit));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, var(--calu-hover)));
+}
+.menu-item[role='menuitemradio'][aria-checked='true']:not(.session-entry)::before { content: '✓ '; }
+.menu-item[role='menuitemradio'][aria-checked='false']:not(.session-entry) { padding-left: calc(8px + 1.1em); }
+.session-entry { display: flex; flex-direction: column; gap: 0; }
+.entry-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.entry-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.entry-directory {
+  padding-left: 14px;
+  font-size: 0.88em;
+  opacity: 0.7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.setup-sessions .session-entry { border: 1px solid var(--calu-border); margin-top: 4px; }
+.menu-info {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 2px 8px 6px;
+  font-size: 0.92em;
+}
+.menu-info dt { opacity: 0.7; }
+.menu-info dd {
+  margin: 0;
+  font-family: var(--calu-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 6em;
+  overflow-y: auto;
+}
+.mark { display: flex; align-items: flex-start; gap: 6px; padding: 3px 8px; }
+.mark-text { flex: 1; min-width: 0; }
+.mark-path { font-family: var(--calu-mono); font-size: 0.92em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mark-reason { font-size: 0.9em; opacity: 0.8; overflow-wrap: anywhere; }
+.usage-line { padding: 1px 8px; overflow-wrap: anywhere; }
+
+/* ---- Motion --------------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Touch and keyboard users have no hover: keep the row actions visible. */
+@media (hover: none) {
+  .user-actions, .copy-button, .tool-row .icon-button[data-action='toolMenu'] { opacity: 1; }
 }

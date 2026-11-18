@@ -234,3 +234,77 @@ export function workspaceRelative(path: string, folder: string): string {
   if (!p || p.split('/').includes('..')) throw new Error(`The file is outside the workspace: ${path}`);
   return p;
 }
+
+// ------------------------------------------------------------------ what a click on a row does
+
+/**
+ * What a click (or Enter) on a tool row does (spec section 11). `title` is the row's tooltip.
+ *
+ * - "openDiff": the native diff editor of this edit (`openDiff {toolUseId}`);
+ * - "openFile": the file at `line`, through `itemAction {action}`;
+ * - "openTab": the tab of the subagent that this call launched;
+ * - "expand": show or hide the row's details in place.
+ */
+export type RowClick =
+  | { kind: 'openDiff'; title: string }
+  | { kind: 'openFile'; action: ItemActionId; line: number; title: string }
+  | { kind: 'openTab'; tab: string; title: string }
+  | { kind: 'expand'; title: string };
+
+/**
+ * Decide what a click on the row of a tool call does.
+ *
+ *     edit with a recorded diff   -> openDiff      "Open diff"
+ *     edit without a diff         -> openFile      "Open file at line N (no diff was recorded)"
+ *     Read                        -> openFile      "Open file at line N"
+ *     Agent / Task                -> openTab       "Open the subagent's tab"
+ *     Bash and every other tool   -> expand        "Show the command and its output" / "Show details"
+ *
+ * @param tool The tool view.
+ * @returns The action with its tooltip. The host may still find that it no longer holds the
+ *   diff of an old edit; it then opens the file instead and says so.
+ */
+export function rowClick(tool: ToolView): RowClick {
+  if (tool.name === 'Agent' || tool.name === 'Task') {
+    return { kind: 'openTab', tab: tool.toolUseId, title: "Open the subagent's tab" };
+  }
+  const kind = toolKind(tool);
+  const file = fileClick(tool);
+  if (kind === 'edit' && tool.diffPath !== undefined) return { kind: 'openDiff', title: 'Open diff' };
+  if (kind === 'edit' && file) {
+    return { kind: 'openFile', action: file.action, line: file.line, title: `${file.title} (no diff was recorded)` };
+  }
+  if (kind === 'read' && file) return { kind: 'openFile', ...file };
+  return { kind: 'expand', title: kind === 'command' ? 'Show the command and its output' : 'Show details' };
+}
+
+/**
+ * Decide what a click on the file name inside a tool row does.
+ *
+ * @param tool The tool view.
+ * @returns The context-menu action that opens the file, the 1-based line the cursor is put on
+ *   (the edit's first changed line, or the first line read; 1 if unknown) and the tooltip, e.g.
+ *   "Open file at line 42"; `undefined` for tools without one file (see `fileLinkAction`).
+ */
+export function fileClick(tool: ToolView): { action: ItemActionId; line: number; title: string } | undefined {
+  const action = fileLinkAction(tool);
+  if (!action) return undefined;
+  const line = action === 'openFile' ? readLine(tool) : (tool.editRange?.start ?? 1);
+  return { action, line, title: `Open file at line ${line}` };
+}
+
+/**
+ * Find the first line in which two texts differ (for revealing a diff at its first change).
+ *
+ * @param before The text before the edit.
+ * @param after The text after the edit.
+ * @returns The 1-based number of the first line that differs or exists in only one text; 1 if
+ *   the texts are equal.
+ */
+export function firstChangedLine(before: string, after: string): number {
+  const a = before.split('\n');
+  const b = after.split('\n');
+  const shared = Math.min(a.length, b.length);
+  for (let i = 0; i < shared; i++) if (a[i] !== b[i]) return i + 1;
+  return a.length === b.length ? 1 : shared + 1;
+}

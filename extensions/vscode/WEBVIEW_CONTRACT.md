@@ -25,7 +25,9 @@ page is the overview.
   `escalation-allow-<key>`, `escalation-deny-<key>`, `escalation-answer-<key>`,
   `escalation-why-<key>`, `input-text`, `input-send`, `input-interrupt`, `side-toggle`,
   `hint-<hintId>`, `hint-action-<hintId>`, `server-help`, `queue-<id>`, `header-model`,
-  `header-effort`, `header-level`, `header-honesty`, `header-usage`; settings:
+  `header-effort`, `header-level`, `header-honesty`, `header-usage` (model, effort and usage sit
+  in the composer footer and keep these ids), `header-settings`, `input-hint`, `chat-list`,
+  `activity`, `agent-head-<agentId>`; settings:
   `settings-search`, `settings-nav-<sectionId>`, `setting-<key>`, `setting-reset-<key>`,
   `setting-error-<key>`, `scope-select`, `models-card`, `preset-<id>`, `role-<key>`,
   `checkers-card`, `checker-edit-<name>`, `setup-card`, `setup-item-<name>`, `setup-fix-<name>`.
@@ -55,7 +57,7 @@ Use `applyEvent` from `src/shared/viewState.ts` unchanged; never mutate the stat
 | `session {state, sessionId, claudeSessionId, workspace, project, model, effort, backgroundTasks}` | the attached session; `state` is the protocol's (`starting`, `idle`, `running`, `checking`, `tool_call`, `escalated`, `stopped`, `failed`); `sessionPhase()` in `activity.ts` maps it to busy/waiting/... |
 | `sessions {list: SessionEntry[], attachedId, loaded, error?}` | running sessions of the machine for the dropdown (`id, name, directory, state, openEscalations, here, stale`), workspace ones first; refreshed by the host on attach/detach, every 10 s while the view is visible, and on `refreshSessions`. `sessionTitle(entry)` gives the text |
 | `serverHelp {command, tool: tmux/screen/plain, detach, note}` or `null` | how to start `calu serve`; set while nothing is attached. Show it in the empty state with the buttons `startServer` and `copyServerCommand` |
-| `hints: SetupHint[]` | what is missing, most important first: `{id, level, message, action, actionLabel, href?}`. Render each as a line with a button that posts `{type: action}` (or `{type: "openLink", href}` for `openLink`). Ids: `calu-missing`, `claude-missing`, `database`, `no-server`, `no-session` |
+| `hints: SetupHint[]` | what is missing, most important first: `{id, level, message, action, actionLabel, href?}`. Render each as a line with a button that posts `{type: action}` (or `{type: "openLink", href}` for `openLink`). Ids: `calu-missing`, `claude-missing`, `locked` (calu's logins need the one password; action `unlock`), `database`, `no-server`, `no-session`. `setupCards(state)` in `chatModel.ts` turns bridge status and hints into the cards of the empty state |
 | `autoEscalate {commands, edits, subagents}` | supervision switches; `levelOf` / `levelLabel` / `LEVELS` in `levels.ts` |
 | `honesty: HonestyInfo` or `null` | code honesty state; `honestyChip(honesty)` gives the header chip (`off` = show nothing) |
 | `usage {rateLimits, costUsd, numTurns, context}` | account limits (`type, status, utilization, resets_at`), cost, context window (`tokens, maxTokens, percent, model`; `null` until asked) |
@@ -63,7 +65,8 @@ Use `applyEvent` from `src/shared/viewState.ts` unchanged; never mutate the stat
 | `queue: QueuedView[]` | messages sent but not taken in yet (`id, text, delivery, to`), shown above the input |
 | `agents: AgentInfo[]` | subagents: one tab each (`agent_id, description, subagent_type, background, status`) plus the tab Main |
 | `subagents[agentId]: SubagentView` | `task` (launch prompt) and `result {content, isError, final}` of a subagent, for the head of its tab |
-| `items[agentKey]: Item[]` | the transcript per tab (`MAIN = "main"`). Kinds: `user` (`source` user/cross_session/system, `images`), `assistant` and `thinking` (`streaming`), `tool` (→ `tools[toolUseId]`), `checker`, `escalation` (→ `escalations[key]`), `turn`, `launch` (first item of a subagent tab), `notice` |
+| `turnCount` | number of `turn.result` events since the transcript was cleared |
+| `items[agentKey]: Item[]` | the transcript per tab (`MAIN = "main"`). Kinds: `user` (`source` user/cross_session/system, `images`, `turn` = `turnCount + 1` when it arrived, `uuid` = Claude Code's id of the message or `null`), `assistant` and `thinking` (`streaming`), `tool` (→ `tools[toolUseId]`), `checker`, `escalation` (→ `escalations[key]`), `turn`, `launch` (first item of a subagent tab), `notice` |
 | `tools[toolUseId]: ToolView` | `name, input, check {route, decision, reason, summary, comment, checkerRoute}, result, diffPath, editRange, gitHead, files`. `menuFor`, `toolKind`, `fileLinkAction` in `itemMenu.ts` give the context menu. An `Agent`/`Task` tool item links to the tab `toolUseId` |
 | `escalations[key]: EscalationView` | `status` open/allow/deny/cancelled/answered, `pending`, `reason`, `rendered` (Markdown), `toolInput` (show literally with `literalToolInput`), `questions[]`, `answer`, `note`, `openedAt` |
 | `side: SideExchangeView[]` | side questions of this client (`id, question, answer?, error?`); no answer and no error = waiting |
@@ -103,10 +106,19 @@ or why nobody can. `formatAnswer(questions, choices)` builds the answer text of 
 | `setLevel` | `level` (`LEVEL_IDS`) | `auto_escalate.set`; `auto_escalate.changed` follows |
 | `refreshUsage` | | `usage.get` → `ui.usage` (the host also asks after each turn) |
 | `interrupt` | | `interrupt` |
-| `openFile` | `path` | opens it only if a tool call listed it in `files` |
-| `openToolFile` | `toolUseId`, `index` | opens `tools[id].files[index]` |
-| `openDiff` | `toolUseId` | native diff editor for the edit |
-| `openLink` | `href` | http(s): browser; relative: file in the workspace; else ignored |
+| `openFile` | `path`, `line?` (1-based) | opens it only if a tool call listed it in `files`; the cursor goes to `line` |
+| `openToolFile` | `toolUseId`, `index`, `line?` | opens `tools[id].files[index]`, cursor at `line` |
+| `openDiff` | `toolUseId` | native diff editor for the edit, revealed at its first changed line; if the diff is no longer held (the newest 300 are), the file is opened at the edited line and the status bar says so |
+| `openLink` | `href` | http(s): browser; relative: file in the workspace (a trailing `:<line>` puts the cursor there); else ignored |
+| `showLog` | | shows the "calu" output channel |
+| `unlock` | | asks the one calu password (`ide.unlock`), then checks the setup and attaches to the workspace's session |
+| `rewindBefore` | `turn` (`UserItem.turn`), `uuid?` (`UserItem.uuid`) | undo: asks for a confirmation (files are not reverted), then `ide.start {kind: "resume", claude_session_id, fork_before_turn}` → `reset`, then `restoreInput` with the message's text. The host takes the turn number from `session.history` (the turn whose `prompt_uuid` is `uuid`) and falls back to `turn`; turn 1 is refused with a message |
+| `forkBefore` | `turn`, `uuid?` | the same start without confirmation and without `restoreInput` |
+| `forkConversation` | | `ide.start {kind: "fork", claude_session_id}` of the attached conversation |
+| `setHonestyMode` | `mode` (`HONESTY_MODES`: off, track, enforce) | `ide.settings.set honesty.mode` (global scope); a notice confirms |
+| `honestyReview` | | `honesty.review` (can take minutes; `honesty.update` reports progress) |
+| `honestyTrust` | | after a confirmation, `honesty.trust {rev: "HEAD"}` |
+| `honestyClear` | `markId` (`HonestyMarkInfo.id`) | `honesty.clear {mark_id}` |
 | `itemAction` | `toolUseId`, `action` (`ItemActionId`) | context-menu action (`itemMenu.ts`) |
 | `stateReport` | `requestId`, `state` | answer to `reportState` (tests) |
 
@@ -121,6 +133,33 @@ Events of the extension itself (all handled by `applyEvent`): `bridge.status`, `
 `ui.clear`, `ui.decisionPending`, `ui.decisionFailed`, `ui.sideAsk`, `ui.sideAnswer`
 (`ViewEvent` in `viewState.ts` lists their params). `ui.attached` reaches the webview as a
 `reset`.
+
+### Passwords and the `locked` state
+
+The host asks at most one password per window (spec sections 8 and 10): at the first request
+that the bridge refuses with -32010, or right after start if `ide.status.locked` and the chat is
+visible. It sends it with `ide.unlock`, keeps it in a variable of the extension host until the
+window closes, and unlocks a restarted bridge with it without asking. Requests carry no
+password. If the user dismisses the prompt, the hint `locked` (button "Unlock" → `unlock`) is
+shown; the command "calu: Unlock" does the same. The password never reaches the webview, the
+state, a setting or the log. The decisions are in `src/shared/unlock.ts`.
+
+### Notifications
+
+Host side (`calu.notifications`: `all`, `decisions` (default), `off`): while the chat view is
+hidden or the window is not focused, an escalation shows "calu: approval needed: <tool>" with
+Allow / Deny / Open, a question "calu: Claude asks: <question>" with Open, and (with `all`) a
+finished turn "calu: turn finished." with Open. The view's badge counts open escalations.
+
+### What the chat webview is built from
+
+`webview/main.ts` (state, header, tabs, setup cards, composer, event handlers), `items.ts`
+(transcript items), `popup.ts` (the one floating panel), `markdown.ts`, `dom.ts`. Decisions
+without DOM are in `src/shared/chatModel.ts` (session dropdown, tabs, setup cards, usage meter,
+link and image checks), `src/shared/slashCommands.ts` (the command table, completion and what a
+submitted command posts) and `rowClick` / `fileClick` in `src/shared/itemMenu.ts` (what a click
+on a tool row opens, spec section 11). The composer keeps one draft per session id in
+`vscode.setState`.
 
 ## Settings dialog (`webview/settings.ts`)
 

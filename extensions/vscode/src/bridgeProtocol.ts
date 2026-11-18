@@ -6,7 +6,12 @@
  *     extension --request--> calu ide            ide.* and session.call {method, params}
  *     extension <--notification-- calu ide       session.event {method, params}, ide.link, ide.log
  *
- * No `vscode` import and no code besides constants and two small type guards.
+ * Passwords (section 8): the extension sends one password with `ide.unlock`, once per bridge
+ * process; the bridge holds the logins it opened, and later requests carry no password.
+ *
+ *     request --> error -32010 {needs, unlocked} --> ide.unlock {password} --> same request again
+ *
+ * No `vscode` import and no code besides constants and three small type guards.
  */
 
 import type {
@@ -25,7 +30,11 @@ import type {
 export const BridgeError = {
   /** A value was refused by calu's validation; the message says why. */
   INVALID_PARAMS: -32602,
-  /** A credential needs a password: `data.needs` names it; repeat the request with `password`. */
+  /**
+   * A credential needs a password: `data.needs` names it, `data.unlocked` lists the logins the
+   * bridge holds. Send `ide.unlock`, then repeat the request. Also the answer of `ide.unlock`
+   * to a wrong password.
+   */
   NEEDS_PASSWORD: -32010,
   /** `ide.attach`: no session matches. */
   NO_SESSION: -32011,
@@ -47,6 +56,8 @@ export const BridgeError = {
 export interface NeedsPasswordData {
   /** Name of the credential whose password is needed, e.g. "admin". */
   needs: string;
+  /** Names of the logins this bridge process already holds; missing means none. */
+  unlocked?: string[];
 }
 
 /** `data` of error -32016. */
@@ -96,6 +107,20 @@ export interface IdeStatusResult {
     /** Number of sessions running on this host. */
     sessions_running: number;
   };
+  /** True if a protected credential exists and the bridge holds no login; missing means false. */
+  locked?: boolean;
+  /** Names of the logins the bridge holds; missing means none. */
+  unlocked?: string[];
+}
+
+/** Result of `ide.unlock`. */
+export interface IdeUnlockResult {
+  /** Names of all logins the bridge holds after this request. */
+  unlocked: string[];
+  /** True if a reading request now finds a login without a password. */
+  reading: boolean;
+  /** True if a request that changes settings now finds a login without a password. */
+  changing: boolean;
 }
 
 /** A running session of this host (`ide.sessions`.running). */
@@ -257,9 +282,12 @@ export interface IdeCheckerResult {
   instructions: string;
 }
 
-/** A parameter that requests changing stored data accept (see `BridgeError.NEEDS_PASSWORD`). */
+/**
+ * A parameter that requests using stored data accept. Other clients send it; the extension
+ * does not: it sends `ide.unlock` once instead (see `BridgeError.NEEDS_PASSWORD`).
+ */
 interface WithPassword {
-  /** Password of the credential named by error -32010; never stored by the extension. */
+  /** Password of the credential named by error -32010. */
   password?: string;
 }
 
@@ -267,6 +295,8 @@ interface WithPassword {
 export interface BridgeRequestParams {
   'ide.initialize': { client: string; client_version: string };
   'ide.status': Record<string, never>;
+  /** The one password; a wrong one is answered with error -32010. */
+  'ide.unlock': { password: string };
   'ide.sessions': { all?: boolean } & WithPassword;
   'ide.attach': { session: string | null; after_seq?: number };
   'ide.detach': Record<string, never>;
@@ -288,6 +318,7 @@ export interface BridgeRequestParams {
 export interface BridgeRequestResults {
   'ide.initialize': IdeInitializeResult;
   'ide.status': IdeStatusResult;
+  'ide.unlock': IdeUnlockResult;
   'ide.sessions': IdeSessionsResult;
   'ide.attach': IdeAttachResult;
   'ide.detach': Record<string, never>;
@@ -348,6 +379,21 @@ export function neededCredential(data: unknown): string | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const needs = (data as Record<string, unknown>).needs;
   return typeof needs === 'string' && needs ? needs : undefined;
+}
+
+/**
+ * Read the names of the held logins from the `data` of error -32010, from an `ide.unlock`
+ * result or from an `ide.status` result.
+ *
+ * @param data Any JSON value; an object with a member `unlocked` is expected.
+ * @returns The strings in `data.unlocked`; `[]` if the member is missing or not an array.
+ *   Members that are not non-empty strings are left out.
+ */
+export function unlockedLogins(data: unknown): string[] {
+  if (typeof data !== 'object' || data === null) return [];
+  const unlocked = (data as Record<string, unknown>).unlocked;
+  if (!Array.isArray(unlocked)) return [];
+  return unlocked.filter((name): name is string => typeof name === 'string' && name !== '');
 }
 
 /**

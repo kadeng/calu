@@ -6,12 +6,14 @@
  *
  *     calu-diff:/<path>?id=<tool_use_id>&side=before|after&path=<path>
  *
- * `openDiff(id)` shows both documents in VSCode's diff editor (`vscode.diff`). The URI path ends
- * with the file name, so VSCode picks the language mode from the extension.
+ * `open(id)` shows both documents in VSCode's diff editor (`vscode.diff`), revealed at the first
+ * changed line. The URI path ends with the file name, so VSCode picks the language mode from
+ * the extension.
  */
 
 import * as vscode from 'vscode';
 import type { EditDiff } from './protocol.generated';
+import { firstChangedLine } from './shared/itemMenu';
 
 /** URI scheme of the virtual before/after documents. */
 export const DIFF_SCHEME = 'calu-diff';
@@ -105,7 +107,8 @@ export class DiffStore implements vscode.TextDocumentContentProvider {
   }
 
   /**
-   * Open the diff editor for an edit.
+   * Open the diff editor for an edit, with the cursor on the first changed line (the event's
+   * `start_line`, else the first line in which before and after differ).
    *
    * @param toolUseId The tool_use_id of the edit.
    * @returns A promise that resolves when the editor is open.
@@ -115,12 +118,14 @@ export class DiffStore implements vscode.TextDocumentContentProvider {
     const diff = this.diffs.get(toolUseId);
     if (!diff) throw new Error(`No diff is available for tool call ${toolUseId}.`);
     const name = diff.path.split(/[\\/]/).pop() ?? diff.path;
+    const start = typeof diff.start_line === 'number' && diff.start_line >= 1 ? diff.start_line : undefined;
+    const line = start ?? firstChangedLine(diff.before, diff.after);
     await vscode.commands.executeCommand(
       'vscode.diff',
       this.uriFor(diff, 'before'),
       this.uriFor(diff, 'after'),
       `${name} (Claude's edit)`,
-      { preview: true },
+      { preview: true, selection: new vscode.Range(line - 1, 0, line - 1, 0) },
     );
   }
 }

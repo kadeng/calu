@@ -2,7 +2,8 @@
  * Entry point of the calu extension: creates the parts and wires them together.
  *
  *     activate
- *       ├─ Bridge (calu ide)  ──status──► chat view (`bridge.status`), then: ide.status, attach
+ *       ├─ Bridge (calu ide)  ──status──► chat view (`bridge.status`), then: ide.status, the one
+ *       │        │                        password if locked (kept in memory, sections 8 and 10), attach
  *       │        └─notifications─► session.event ──► DiffStore, chat view, context document
  *       │                          ide.link      ──► chat view (`ui.link`); "lost" offers to attach
  *       │                          ide.log       ──► output channel "calu"
@@ -57,7 +58,20 @@ export interface CaluApi {
 export function activate(context: vscode.ExtensionContext): CaluApi {
   const output = vscode.window.createOutputChannel('calu');
   const version = String((context.extension.packageJSON as { version?: unknown }).version ?? '0');
-  const bridge = new Bridge(output, version);
+  // The one password (spec sections 8 and 10): kept in this variable until the window closes,
+  // so that a restarted bridge is unlocked again without asking. Never logged or sent anywhere
+  // but to `ide.unlock`.
+  let heldPassword: string | undefined;
+  const bridge = new Bridge(output, version, {
+    stored: async () => heldPassword,
+    store: async (password) => {
+      heldPassword = password;
+    },
+    forget: async () => {
+      heldPassword = undefined;
+    },
+    offerRemember: async () => true,
+  });
   const installer = new Installer(output);
   const diffs = new DiffStore();
   let nextSideId = 1;
@@ -65,6 +79,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   let lastServerHelp = '';
   /** True once the install offer for a missing calu was shown in this activation. */
   let installOffered = false;
+  /** True once the password prompt was opened by itself for the running bridge process. */
+  let askedAtStart = false;
 
   // ---------------------------------------------------------------- chat view and sessions
 
@@ -146,6 +162,7 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       status: sessions.status,
       attached,
       noServer: sessions.noServer,
+      locked: bridge.locked && !attached,
     });
     const hintsText = JSON.stringify(hints);
     if (hintsText !== lastHints) {
@@ -175,6 +192,198 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
     } catch (error) {
       output.appendLine(`[calu] usage.get: ${errorText(error)}`);
     }
+  }
+
+  /**
+   * After the bridge started or was unlocked: check the setup, attach to the session of the
+   * workspace if one runs, and load the session list. If the bridge reports that it is locked
+   * and the chat view is visible, the one password is asked for (once per bridge process).
+   *
+   * @param mayAsk False to skip the password prompt (after the user dismissed it).
+   * @returns A promise that resolves when all of it was tried (never rejects).
+   */
+  async function connectWorkspace(mayAsk: boolean): Promise<void> {
+    const status = await sessions.refreshStatus();
+    bridge.noteStatusLocked(status?.locked === true);
+    if (status?.locked && mayAsk && chat.isVisible && !askedAtStart) {
+      askedAtStart = true;
+      if (!(await bridge.unlock().catch(() => false))) return;
+      await sessions.refreshStatus();
+    }
+    await sessions.attach(null, true);
+    await sessions.refresh();
+  }
+
+  /**
+   * Ask the one password now (the chat's "Unlock" button and "calu: Unlock"), then connect.
+   *
+   * @returns A promise that resolves when the prompt was answered and the result applied.
+   */
+  async function unlock(): Promise<void> {
+    try {
+      if (await bridge.unlock()) await connectWorkspace(false);
+    } catch (error) {
+      void vscode.window.showErrorMessage(`calu: ${errorText(error)}`);
+    }
+  }
+
+  // ---------------------------------------------------------------- undo, fork, honesty
+
+  /**
+   * Find the conversation's number of the turn a user message of the chat belongs to.
+   *
+   * @param turn The turn as the view counted it (`UserItem.turn`).
+   * @param uuid Claude Code's id of the message, if known.
+   * @returns The `index` of the recorded turn whose prompt has `uuid` (`session.history`); if
+   *   none is found or the history cannot be read, `turn`.
+   */
+  async function conversationTurn(turn: number, uuid: string | undefined): Promise<number> {
+    if (!uuid) return turn;
+    try {
+      const history = await bridge.session('session.history', { limit: 1000 });
+      const found = (history.turns ?? []).find((t) => t.prompt_uuid === uuid);
+      return found ? found.index : turn;
+    } catch (error) {
+      output.appendLine(`[calu] session.history: ${errorText(error)}`);
+      return turn;
+    }
+  }
+
+  /**
+   * Start a session that continues the attached conversation from before one of its turns.
+   *
+   * @param turn The turn as the view counted it.
+   * @param uuid Claude Code's id of the user message, if known.
+   * @param rewind True for "Rewind": asks for a confirmation first and puts the message's text
+   *   back into the input afterwards. False for "Fork from here".
+   * @returns A promise that resolves when the session started, failed or the user cancelled.
+   */
+  async function forkBefore(turn: number, uuid: string | undefined, rewind: boolean): Promise<void> {
+    const conversation = chat.state.session.claudeSessionId;
+    if (!isAttached(chat.state) || !conversation) {
+      void vscode.window.showInformationMessage('calu: attach to a session with a conversation first.');
+      return;
+    }
+    const message = (own(chat.state.items, 'main') ?? []).find(
+      (i) => i.kind === 'user' && (uuid ? i.uuid === uuid : i.turn === turn),
+    );
+    const number = await conversationTurn(turn, uuid);
+    if (number < 2) {
+      void vscode.window.showInformationMessage(
+        'calu: this is the first message of the conversation, so nothing would be kept. Start a new session instead.',
+      );
+      return;
+    }
+    if (rewind) {
+      const choice = await vscode.window.showWarningMessage(
+        'calu: rewind to before this message?',
+        {
+          modal: true,
+          detail:
+            'A new session starts that continues the conversation from before that turn. Files are not ' +
+            'reverted: what Claude changed since then stays on disk. The current session keeps running; ' +
+            'you can switch back to it in the session menu.',
+        },
+        'Rewind',
+      );
+      if (choice !== 'Rewind') return;
+    }
+    const started = await sessions.forkBefore(conversation, number, rewind ? 'Rewinding the conversation' : 'Forking the conversation');
+    if (started && rewind && message?.kind === 'user') chat.send({ type: 'restoreInput', text: message.text });
+  }
+
+  /**
+   * Start a new session from a copy of the attached conversation.
+   *
+   * @returns A promise that resolves when the session started or the failure was shown.
+   */
+  async function forkConversation(): Promise<void> {
+    const conversation = chat.state.session.claudeSessionId;
+    if (!conversation) {
+      void vscode.window.showInformationMessage('calu: attach to a session with a conversation first.');
+      return;
+    }
+    await sessions.forkConversation(conversation);
+  }
+
+  // ---------------------------------------------------------------- notifications
+
+  /**
+   * Read the `calu.notifications` setting.
+   *
+   * @returns "all", "decisions" (the default) or "off".
+   */
+  function notificationMode(): 'all' | 'decisions' | 'off' {
+    const mode = vscode.workspace.getConfiguration('calu').get<string>('notifications', 'decisions');
+    return mode === 'all' || mode === 'off' ? mode : 'decisions';
+  }
+
+  /**
+   * Tell whether the user cannot see the chat right now.
+   *
+   * @returns True if the chat view is hidden or the window does not have the focus.
+   */
+  function chatUnseen(): boolean {
+    return !chat.isVisible || !vscode.window.state.focused;
+  }
+
+  /**
+   * Send the user's decision on an open escalation and mark the card pending.
+   *
+   * @param key The escalation's state key (`EscalationView.key`).
+   * @param decision "allow" or "deny".
+   * @param note Optional note for Claude.
+   * @param answer Optional answer to the agent's questions.
+   * @returns A promise that resolves when the decision was sent or the failure was shown.
+   */
+  async function decide(key: string, decision: 'allow' | 'deny', note?: string, answer?: string): Promise<void> {
+    const escalation = own(chat.state.escalations, key);
+    if (!escalation || escalation.status !== 'open') return;
+    dispatch({
+      method: 'ui.decisionPending',
+      params: { escalation_key: escalation.key, ...(answer !== undefined ? { answer } : {}) },
+    });
+    const sent = await run('Sending the decision', () =>
+      bridge.session('escalation.decide', {
+        escalation_id: escalation.escalationId,
+        decision,
+        note: note ?? null,
+        answer: answer ?? null,
+      }),
+    );
+    if (!sent) dispatch({ method: 'ui.decisionFailed', params: { escalation_key: escalation.key } });
+  }
+
+  /**
+   * Show a VSCode notification for an escalation or a question that arrived while the chat
+   * cannot be seen: "approval needed" with Allow / Deny / Open, or "Claude asks" with Open.
+   *
+   * @param params The params of `escalation.request` (already applied to the state).
+   * @returns A promise that resolves after the user's choice was handled.
+   */
+  async function announceEscalation(params: Record<string, unknown>): Promise<void> {
+    const id = typeof params.escalation_id === 'string' ? params.escalation_id : '';
+    const card = Object.values(chat.state.escalations).filter((e) => e.escalationId === id && e.status === 'open').pop();
+    if (!card) return;
+    if (card.questions.length > 0) {
+      const question = card.questions[0].question.replace(/\s+/g, ' ').slice(0, 200);
+      const choice = await vscode.window.showInformationMessage(`calu: Claude asks: ${question}`, 'Open');
+      if (choice === 'Open') await chat.reveal();
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(`calu: approval needed: ${card.toolName}`, 'Allow', 'Deny', 'Open');
+    if (choice === 'Open') await chat.reveal();
+    else if (choice === 'Allow' || choice === 'Deny') await decide(card.key, choice === 'Allow' ? 'allow' : 'deny');
+  }
+
+  /**
+   * Show "turn finished" with the button Open.
+   *
+   * @returns A promise that resolves after the user's choice was handled.
+   */
+  async function announceTurnEnd(): Promise<void> {
+    const choice = await vscode.window.showInformationMessage('calu: turn finished.', 'Open');
+    if (choice === 'Open') await chat.reveal();
   }
 
   // ---------------------------------------------------------------- documents and panels
@@ -362,13 +571,11 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       }
       if (status === 'running') {
         // Fresh bridge: check the setup, attach to the session of the workspace if one runs.
-        void (async () => {
-          await sessions.refreshStatus();
-          await sessions.attach(null, true);
-          await sessions.refresh();
-        })();
+        askedAtStart = false;
+        void connectWorkspace(true);
       }
     }),
+    bridge.onLockedChange(() => updateHints()),
     bridge.onNotification((notification) => {
       if (notification.method === 'session.event') {
         const method = notification.params.method;
@@ -395,20 +602,12 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
     if (method === 'edit.diff') diffs.record(params as unknown as EditDiff);
     dispatch({ method, params });
     contextDocs.onEvent(method);
-    if (method === 'escalation.request' && !chat.isVisible) void announceEscalation(params);
-    if (method === 'turn.result') void refreshUsage();
-  }
-
-  /**
-   * Tell the user about an escalation while the chat view is not visible.
-   *
-   * @param params The params of `escalation.request`.
-   * @returns A promise that resolves after the user's choice was handled.
-   */
-  async function announceEscalation(params: Record<string, unknown>): Promise<void> {
-    const tool = typeof params.tool_name === 'string' ? params.tool_name : 'a step';
-    const choice = await vscode.window.showWarningMessage(`calu: ${tool} waits for your decision.`, 'Show');
-    if (choice === 'Show') await chat.reveal();
+    const mode = notificationMode();
+    if (method === 'escalation.request' && mode !== 'off' && chatUnseen()) void announceEscalation(params);
+    if (method === 'turn.result') {
+      void refreshUsage();
+      if (mode === 'all' && chatUnseen()) void announceTurnEnd();
+    }
   }
 
   /**
@@ -458,17 +657,39 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
    * Open a file in an editor.
    *
    * @param path Absolute path on the workspace machine.
+   * @param line 1-based line to put the cursor on (clamped to the file); default: unchanged.
    * @returns A promise that resolves when the editor shows the file.
    * @throws (rejects) Error if the file cannot be opened.
    */
-  async function openFile(path: string): Promise<void> {
+  async function openFile(path: string, line?: number): Promise<void> {
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
-    await vscode.window.showTextDocument(doc, { preview: false });
+    const at = line !== undefined ? new vscode.Position(Math.min(line, doc.lineCount) - 1, 0) : undefined;
+    await vscode.window.showTextDocument(doc, { preview: false, ...(at ? { selection: new vscode.Range(at, at) } : {}) });
+  }
+
+  /**
+   * Open the diff editor of an edit. If the diff is no longer held (the store keeps the newest
+   * ones), the file is opened at the edited line instead and a notice says so.
+   *
+   * @param toolUseId The edit's tool call.
+   * @returns A promise that resolves when an editor is shown.
+   * @throws (rejects) Error if neither the diff nor the file can be opened.
+   */
+  async function openDiffOrFile(toolUseId: string): Promise<void> {
+    if (diffs.get(toolUseId)) {
+      await diffs.open(toolUseId);
+      return;
+    }
+    const folder = bridgeWorkspaceFolder();
+    if (!folder) throw new Error('No workspace folder is open.');
+    await runItemAction(own(chat.state.tools, toolUseId), 'openFileAtEdit', folder, diffs);
+    void vscode.window.setStatusBarMessage('calu: the diff of this edit is no longer held; the file was opened instead.', 5000);
   }
 
   /**
    * Open a link from rendered Markdown: http(s) links in the browser, relative links as files
-   * of the workspace folder; other schemes and paths outside the folder are ignored.
+   * of the workspace folder (a trailing ":<line>" puts the cursor there); other schemes and
+   * paths outside the folder are ignored.
    *
    * @param href The link target (untrusted).
    * @returns A promise that resolves when the link was handled (never rejects).
@@ -482,8 +703,10 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('#')) return;
       const folder = bridgeWorkspaceFolder();
       if (!folder) return;
-      const rel = normaliseRelativePath(decodeURIComponent(href.split(/[?#]/)[0]));
-      await openFile(vscode.Uri.joinPath(folder.uri, ...rel.split('/')).fsPath);
+      const target = decodeURIComponent(href.split(/[?#]/)[0]);
+      const lined = /^(.*?):(\d+)(?::\d+)?$/.exec(target);
+      const rel = normaliseRelativePath(lined ? lined[1] : target);
+      await openFile(vscode.Uri.joinPath(folder.uri, ...rel.split('/')).fsPath, lined ? Math.max(1, Number(lined[2])) : undefined);
     } catch (error) {
       output.appendLine(`[calu] link not opened (${href}): ${errorText(error)}`);
     }
@@ -517,24 +740,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
         }
         return;
       }
-      case 'decide': {
-        const escalation = own(chat.state.escalations, message.escalationId);
-        if (!escalation || escalation.status !== 'open') return;
-        dispatch({
-          method: 'ui.decisionPending',
-          params: { escalation_key: escalation.key, ...(message.answer !== undefined ? { answer: message.answer } : {}) },
-        });
-        const sent = await run('Sending the decision', () =>
-          bridge.session('escalation.decide', {
-            escalation_id: escalation.escalationId,
-            decision: message.decision,
-            note: message.note ?? null,
-            answer: message.answer ?? null,
-          }),
-        );
-        if (!sent) dispatch({ method: 'ui.decisionFailed', params: { escalation_key: escalation.key } });
+      case 'decide':
+        await decide(message.escalationId, message.decision, message.note, message.answer);
         return;
-      }
       case 'why': {
         const escalation = own(chat.state.escalations, message.escalationId);
         if (escalation) await run('Opening the escalation context', () => contextDocs.showEscalation(escalation.escalationId));
@@ -625,18 +833,56 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
         return;
       case 'openFile':
         // Only paths that calu named as file links of a tool call are opened.
-        if (isKnownFile(chat.state, message.path)) await run('Opening the file', () => openFile(message.path));
+        if (isKnownFile(chat.state, message.path)) await run('Opening the file', () => openFile(message.path, message.line));
         return;
       case 'openToolFile': {
         const file = own(chat.state.tools, message.toolUseId)?.files?.[message.index];
-        if (file) await run('Opening the file', () => openFile(file.path));
+        if (file) await run('Opening the file', () => openFile(file.path, message.line));
         return;
       }
       case 'openDiff':
-        await run('Opening the diff', () => diffs.open(message.toolUseId));
+        await run('Opening the diff', () => openDiffOrFile(message.toolUseId));
         return;
       case 'openLink':
         await openLink(message.href);
+        return;
+      case 'showLog':
+        output.show(true);
+        return;
+      case 'unlock':
+        await unlock();
+        return;
+      case 'rewindBefore':
+      case 'forkBefore':
+        await forkBefore(message.turn, message.uuid, message.type === 'rewindBefore');
+        return;
+      case 'forkConversation':
+        await forkConversation();
+        return;
+      case 'setHonestyMode':
+        await run('Changing the honesty mode', async () => {
+          await bridge.request('ide.settings.set', { key: 'honesty.mode', value: message.mode, project: null });
+          notice('info', `Honesty mode "${message.mode}" is stored in calu's settings.`);
+          void settingsPanel.reload();
+        });
+        return;
+      case 'honestyReview':
+        await run('The honesty review', async () => {
+          const result = await bridge.session('honesty.review', {});
+          if (!result.ran) notice('warning', `No honesty review ran${result.problem ? `: ${result.problem}` : '.'}`);
+        });
+        return;
+      case 'honestyTrust': {
+        const choice = await vscode.window.showWarningMessage(
+          'calu: trust the current git HEAD?',
+          { modal: true, detail: 'The commit that HEAD names now is recorded as honest; it becomes the baseline of the honesty state.' },
+          'Trust HEAD',
+        );
+        if (choice === 'Trust HEAD') await run('Trusting HEAD', () => bridge.session('honesty.trust', { rev: 'HEAD' }));
+        return;
+      }
+      case 'honestyClear':
+        await run('Clearing the mark', () => bridge.session('honesty.clear', { mark_id: message.markId }));
         return;
       case 'itemAction': {
         const folder = bridgeWorkspaceFolder();
@@ -689,6 +935,8 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       return sessions.rename(sessions.attachedId, entry?.name ?? '');
     }),
     command('calu.detach', () => sessions.detach()),
+    command('calu.forkConversation', () => forkConversation()),
+    command('calu.unlock', () => unlock()),
     command('calu.interrupt', () => bridge.session('interrupt', {})),
     command('calu.addComment', () => addCommentCommand(bridge, inputBoxProvider)),
     command('calu.editCheckerInstructions', () => editChecker()),
