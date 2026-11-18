@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-18, end of a long session. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-35; 26-35 are from the last days) and `PLAN.md` (decisions D1-D231, open
+(requirements 1-36; 26-36 are from the last days) and `PLAN.md` (decisions D1-D232, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -55,6 +55,9 @@ Next steps for the extension, in order:
 3. Integration tests (`@vscode/test-cli`, as stay-in-the-loop has them) and the user
    documentation (`CALU_GUIDE.md`, `README.md`, `docs/TESTING.md`, the manual checklist).
 4. Ask the owner to try it in his VSCode against WSL.
+   Planned and not started, to be scheduled by the owner: **session traces in the project**
+   (requirement 36, D232): a setting that appends each step of a session as redacted
+   Markdown to `.agent/traces/<date>/<user>/session_NNN.md`, for version control and review.
 5. Then the PyCharm plugin: the three spikes named in the research notes first; and the small
    fix in `calu acp` (`session/new` must answer a fresh id) as an interim step.
 

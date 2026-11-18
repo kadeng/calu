@@ -201,6 +201,15 @@ broken down or extended. Derived requirements and design decisions belong in
     remote server, the db and calu are being accessed over SSH only and changes are
     synchronized back and forth (via rsync, scp, sftp or pycharm internal methods)." (stated
     2026-11-18)
+36. "calu should have a setting that automatically logs the narrated or the plain session log
+    as markdown (just without any folding summarization happening, only steps being appended)
+    logged to a file inside the project so they can be version controlled along with the
+    rest. The idea is that chat sessions are a form of source code, and this is how this can
+    happen. Chats should be written to a structured dir tree, for example something like
+    .agent/traces/<date>/<user>/session_[NNN].md or such. These files are intended for code
+    review and therefore should be run through an additional redaction agent which (by
+    default) censors potential secrets and personally identifiable information (PII) in the
+    chat logs. Also, images are not included of course." (stated 2026-11-18, "for the plan")
 
 ## Soft goals and priorities
 
