@@ -1296,7 +1296,8 @@ class DatabaseSessionStore:
                 for a replay to a person (`load_history`).
 
         Returns:
-            The turns, oldest first.
+            The turns, oldest first, each with its transcript uuids where they were recorded:
+            a client finds the turn of a message by `prompt_uuid` (to fork before it).
 
         Raises:
             psycopg.Error: On database errors.
@@ -1305,7 +1306,7 @@ class DatabaseSessionStore:
         cur = await conn.execute(
             b"SELECT DISTINCT ON (t.number)"
             b" t.number, t.user_inputs, t.steps, t.answer, t.narrated_answer, t.narrated,"
-            b" t.started_at, t.ended_at"
+            b" t.started_at, t.ended_at, t.prompt_uuid, t.last_entry_uuid"
             b" FROM turns t JOIN sessions s ON s.id = t.session_id"
             b" WHERE t.session_id = ANY(%s)" + condition + b" ORDER BY t.number, s.started_at DESC",
             (sessions,) if above is None else (sessions, above),

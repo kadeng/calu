@@ -344,11 +344,18 @@ async def test_the_history_of_a_session_comes_back_from_the_database(db_url: str
                 user_inputs=["have a look"],
                 steps=[StepRecord(tool_name="Bash", decision="pass", summary="Lists.")],
                 answer="done",
+                prompt_uuid="prompt-1",
+                last_entry_uuid="entry-1",
             )
         )
         await store.save_summary("# Chat summary\n\nEarlier work.\n", 1)
 
         history = await store.load_history()
+        # A client finds the turn of a user message by its uuid, to fork before it.
+        assert (history.turns[0].prompt_uuid, history.turns[0].last_entry_uuid) == (
+            "prompt-1",
+            "entry-1",
+        )
         assert history.calu_session_id == store.session_id
         assert history.claude_session_id == "claude-h"
         assert history.chat_summary == "# Chat summary\n\nEarlier work.\n"
