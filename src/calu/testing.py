@@ -10,6 +10,7 @@ every decision without a model:
     step text contains "calu:comment"   -> a remark to Claude next to the decision
 """
 
+import re
 from collections.abc import Mapping, Sequence
 
 from pydantic_ai import ModelResponse, TextPart, ToolCallPart, UserPromptPart
@@ -331,12 +332,55 @@ def fake_narrator() -> Model:
     return FunctionModel(_fake_narration, model_name="fake-narrator")
 
 
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+"""An e-mail address, as the stand-in redaction agent recognises one."""
+
+
+def excerpt_of(prompt: str) -> str:
+    """Return the text the redaction agent was given, without its heading and its fence.
+
+    Args:
+        prompt: The prompt of `calu.traces.redact.Redactor.redact`.
+
+    Returns:
+        The lines between the first and the last line of the prompt that are a code fence.
+    """
+    lines = prompt.split("\n")
+    opening = next(i for i, line in enumerate(lines) if line.startswith("```"))
+    return "\n".join(lines[opening + 1 : -1])
+
+
+def _fake_redaction(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Stand-in for the redaction agent: replaces e-mail addresses, keeps everything else.
+
+    Args:
+        messages: The request messages (the last one holds the prompt).
+        info: Agent information (provides the output tool name).
+
+    Returns:
+        A response that calls the output tool with the excerpt in which every e-mail address
+        is replaced by "[redacted: e-mail address]".
+    """
+    text = _EMAIL.sub("[redacted: e-mail address]", excerpt_of(_last_prompt(messages)))
+    return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"text": text})])
+
+
+def fake_redactor() -> Model:
+    """Create the stand-in redaction agent of the session traces (see `_fake_redaction`).
+
+    Returns:
+        A `FunctionModel` named "fake-redactor".
+    """
+    return FunctionModel(_fake_redaction, model_name="fake-redactor")
+
+
 def fake_models() -> dict[str, str | Model]:
     """Create checker, summarizer and narrator models for `Session(checker_models=...)`.
 
     Returns:
         New models under the keys "command", "edit", "changeset", "subagent", "summarizer",
-        "narrator" and "honesty-review" (a reviewer that finds every file honest).
+        "narrator", "honesty-review" (a reviewer that finds every file honest) and
+        "trace-redactor" (replaces e-mail addresses).
     """
     return {
         "command": rule_based_checker(),
@@ -346,4 +390,5 @@ def fake_models() -> dict[str, str | Model]:
         "summarizer": fake_summarizer(),
         "narrator": fake_narrator(),
         "honesty-review": fake_reviewer(),
+        "trace-redactor": fake_redactor(),
     }

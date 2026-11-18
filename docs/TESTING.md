@@ -544,6 +544,19 @@ escalation resolved from the database alone.
    message; `calu run --resume <id>` must continue it and warn at the start that none of
    its steps was checked. Run on 2026-11-13: the listing and the reading of a real
    transcript; not run: the resume under calu with real checkers.
+36. Session traces with a real redaction model (D232): `calu config set traces.enabled true`,
+   then a session whose prompt plants a fake key and a made-up person, for example
+   "Write `notes.txt` with the line: contact Jane Roe, jane.roe@example.org, key
+   AKIAIOSFODNN7EXAMPLE". Expected in `.agent/traces/<date>/<user>/session_NNN.md`: the key
+   as `[redacted: aws access key]` and the name and the address as `[redacted: name]` and
+   `[redacted: e-mail address]`, in the user's block, in the tool call's input and in the
+   narration; every other word, the code fences and the order of the blocks intact; no
+   block withheld. Then `calu config set traces.redactor_model test:missing` and one more
+   prompt: its blocks must read `[this step was withheld: redaction failed]`, the session
+   must go on, and the planted values must be nowhere in the file. Afterwards
+   `calu config unset traces.redactor_model` and `calu config set traces.enabled false`.
+   Not run with a real model yet; the unit tests cover it with stand-in models
+   (`tests/unit/test_traces.py`, `tests/unit/test_traces_session.py`).
 
 ## Measuring the checkers
 

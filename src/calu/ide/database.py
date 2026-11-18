@@ -53,6 +53,7 @@ ROLE_LABELS = {
     "subagent_checker.model": "Subagent result checker",
     "context.narrator_model": "Narrator",
     "context.summarizer_model": "Chat summarizer",
+    "traces.redactor_model": "Trace redaction agent",
     HONESTY_KEY: "Honesty reviewer",
 }
 """Every configuration key that names a model, with the label an editor shows for it."""

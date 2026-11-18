@@ -1057,8 +1057,10 @@ MODEL_KEYS = (
     "subagent_checker.model",
     "context.narrator_model",
     "context.summarizer_model",
+    "traces.redactor_model",
 )
-"""Every configuration key that names a model a session calls (`Config.with_model`)."""
+"""The configuration keys that name a model a session calls (`Config.with_model`), except
+`honesty.reviewer_model`."""
 
 EFFORT_KEYS = (
     "command_checker.effort",

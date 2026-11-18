@@ -86,9 +86,10 @@ def configured_models(config: Config) -> dict[str, str]:
 
     Returns:
         Role name ("command checker", "edit checker", "changeset checker", "subagent result
-        checker", "narrator", "summarizer", "honesty reviewer") -> Pydantic AI model string.
-        Roles that are switched off are left out; the honesty reviewer is one while
-        `honesty.mode` is "off".
+        checker", "narrator", "summarizer", "honesty reviewer", "trace redaction agent") ->
+        Pydantic AI model string. Roles that are switched off are left out: the honesty
+        reviewer while `honesty.mode` is "off", the trace redaction agent unless
+        `traces.enabled` and `traces.redact` are both on.
     """
     models = {
         "command checker": config.command_checker.model,
@@ -102,6 +103,10 @@ def configured_models(config: Config) -> dict[str, str]:
         models["narrator"] = config.context.narrator_model
     if config.honesty.mode != "off":
         models["honesty reviewer"] = config.honesty.reviewer_model.strip() or default_model(
+            config.claude.use_bedrock
+        )
+    if config.traces.enabled and config.traces.redact:
+        models["trace redaction agent"] = config.traces.redactor_model.strip() or default_model(
             config.claude.use_bedrock
         )
     return models

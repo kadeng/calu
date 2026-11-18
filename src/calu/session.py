@@ -9,6 +9,8 @@
                             ├─ WriteSets           (what a command wrote, its review and the
                             │                       undo, `calu.write_sets`)
                             ├─ ContextBuilder                  (turn records, chat summary)
+                            ├─ TraceWriter         (every emitted event as a redacted Markdown
+                            │                       block in the project, `calu.traces`, D232)
                             └─ Recorder ──► SessionStore  (PostgreSQL: history, escalations,
                                             comments; a failed write is reported and counted,
                                             `calu.recorder`)
@@ -117,6 +119,7 @@ import socket
 from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -163,11 +166,23 @@ from calu.claude.transcripts import unwitnessed_turn
 from calu.clock import ClockJump
 from calu.comments import Comment, format_comment, map_selection
 from calu.comments.mapping import excerpt, split_lines
-from calu.config import EMPTY_CHAT_SUMMARY, AutoEscalate, CheckerConfig, Effort, default_model
+from calu.config import (
+    EMPTY_CHAT_SUMMARY,
+    PROVIDER_KEYS,
+    PROVIDER_KEYS_BY_PREFIX,
+    AutoEscalate,
+    CheckerConfig,
+    Effort,
+    default_model,
+)
 from calu.context import ContextBuilder, StepRecord, TurnRecord
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
-from calu.defaults.instructions import compose_instructions, review_instructions
+from calu.defaults.instructions import (
+    compose_instructions,
+    redaction_instructions,
+    review_instructions,
+)
 from calu.escalations import ANSWER_TEMPLATE as ANSWER_TEMPLATE
 from calu.escalations import ASK_PENDING_S as ASK_PENDING_S
 from calu.escalations import DB_UNREACHABLE as DB_UNREACHABLE
@@ -221,6 +236,7 @@ from calu.protocol.messages import (
     CommentAddParams,
     EditDiff,
     EscalationContextResult,
+    EscalationResolved,
     Event,
     HonestyInfo,
     HonestyMarkInfo,
@@ -253,6 +269,14 @@ from calu.steps import result_summary
 from calu.steps import workspace_relative_input as workspace_relative_input
 from calu.store import CheckerRun, ProjectSettings, SessionIdentity, SessionStore, StepDecision
 from calu.tokens import token_hash
+from calu.traces import (
+    Header,
+    Redactor,
+    Secrets,
+    TraceRenderer,
+    TraceWriter,
+    session_directory,
+)
 from calu.write_sets import WRITE_SET_NOT_REVERTED as WRITE_SET_NOT_REVERTED
 from calu.write_sets import WRITE_SET_NOTE as WRITE_SET_NOTE
 from calu.write_sets import WRITE_SET_PROMPT as WRITE_SET_PROMPT
@@ -274,6 +298,10 @@ GIT_HEAD_TTL_S = 2.0
 BACKGROUND_TIMEOUT_S = 120
 """How long `stop` waits for the background work of the last turn (narration, storing the turn,
 folding the chat summary) before it gives up on it."""
+TRACE_END_TIMEOUT_S = 60
+"""How long `stop` waits for the session trace to be written to its end; longer than the
+writer's own limit for that (`calu.traces.writer.FLUSH_TIMEOUT_S`)."""
+
 MAX_PENDING_OUTPUTS = 50
 """Thinking/text blocks kept per agent until its next tool call (older ones are dropped)."""
 
@@ -414,6 +442,7 @@ class Session:
         startup_warnings: Sequence[str] = (),
         snapshot_root: Path | None = None,
         transcript_inputs: Callable[[str], list[str]] | None = None,
+        secret_env: Collection[str] = (),
     ) -> None:
         """Set up the checkers, the context builder and the rules from `settings`.
 
@@ -429,8 +458,8 @@ class Session:
             emit: Receives every event for the clients, in order.
             project: Name of the project row the session belongs to, or None.
             checker_models: Replacements for the configured models, by key "command", "edit",
-                "subagent", "narrator", "summarizer" and "honesty-review" (tests pass fake
-                models here).
+                "subagent", "narrator", "summarizer", "honesty-review" and "trace-redactor"
+                (tests pass fake models here).
             startup_warnings: Warnings about missing prerequisites, emitted as `log` warnings
                 at every `start`, before the runner starts.
             snapshot_root: Where the optional write-set snapshots live (PLAN.md D31); None
@@ -440,6 +469,9 @@ class Session:
                 thread). Used when a conversation is resumed or forked that the store knows
                 nothing about, because it was started without calu (PLAN.md D209); None
                 starts such a session without that context.
+            secret_env: Names of environment variables whose values are secret (the ones calu
+                hides from Claude Code, `calu.config.load_secrets`). A session trace never
+                holds their values (`calu.traces.redact`).
         """
         self.transcript_inputs = transcript_inputs
         self.workspace = workspace
@@ -586,6 +618,17 @@ class Session:
         self._quiet.set()
         self._queue_ids = itertools.count(1)
         self._login_hint_sent = False
+        self.traces: TraceWriter | None = None
+        """The writer of this run's trace file while `traces.enabled` is on (`calu.traces`,
+        PLAN.md D232); None otherwise."""
+        self._secret_env = set(secret_env)
+        self._trace_closed = anyio.Event()
+        """Set while no trace of a run waits to be written to its end; `stop` waits for it."""
+        self._trace_closed.set()
+        self._trace_secrets = Secrets()
+        """The values a trace never holds: collected from the environment when a trace
+        starts, plus what `add_trace_secret` named."""
+        self._guard_traces()
 
     @property
     def session_id(self) -> str | None:
@@ -1899,12 +1942,15 @@ class Session:
         Takes effect from the next tool call on: the checkers rebuild their agents when their
         instructions change, and the rules object is replaced as a whole. The settings of the
         running Claude session itself (model, effort, permission mode) are not changed, because
-        Claude Code reads them when the session starts; they apply to the next `start`.
+        Claude Code reads them when the session starts; they apply to the next `start`. A
+        changed `traces` section ends the running trace file and, if tracing is on, starts a
+        new one (`_follow_traces`).
 
         Args:
             settings: The newly loaded settings.
         """
         claude = self.config.claude
+        traced = self._trace_settings()
         self.settings = settings
         self.config = settings.config.model_copy(update={"claude": claude})
         self.rules = settings.rules
@@ -1933,6 +1979,7 @@ class Session:
                     self.narrator.model = resolve_model(self.config.context.narrator_model)
         else:
             self.narrator = None
+        self._follow_traces(traced)
 
     # ------------------------------------------------------------------ client requests
 
@@ -2272,6 +2319,9 @@ class Session:
         for warning in self.startup_warnings:
             await self.emit(Log(level="warning", message=warning))
         runner = self.runner = self.runner_factory()
+        # After the runner is set and without an await in between: the end of an earlier run
+        # closes the trace only while its own runner is the current one (`_run`).
+        self._start_traces(tg, resume_id, fork is not None, chosen)
         tg.start_soon(self._run, runner, resume_id, fork, chosen)
 
         ready = anyio.Event()
@@ -2358,6 +2408,8 @@ class Session:
                 await self._wait_quiet()  # the last turn is recorded before the session ends
                 final: State = "failed" if self._run_state.run_error else "stopped"
                 await self._set_state_safely(final)
+                if self.runner is runner:
+                    await self._end_traces(f"The session ended ({final}).")
                 await self.recorder.attempt(
                     "recording the end of the session", self.store.end(final)
                 )
@@ -2368,8 +2420,9 @@ class Session:
 
         Open escalations are cancelled (their tool calls are denied). Claude's text that was
         not narrated yet is dropped. Waits for the background work of the last turn (narration,
-        storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds. Does nothing if no
-        session runs and nothing is pending.
+        storing the turn, folding), at most `BACKGROUND_TIMEOUT_S` seconds, and for the
+        session trace to be written to its end, at most `TRACE_END_TIMEOUT_S` seconds. Does
+        nothing if no session runs and nothing is pending.
         """
         self._run_state.claude_outputs.clear()
         if not self._run_state.run_done.is_set():
@@ -2378,6 +2431,9 @@ class Session:
             await self.runner.stop()
             await self._run_state.run_done.wait()
         await self._wait_quiet()
+        with anyio.move_on_after(TRACE_END_TIMEOUT_S):
+            # The run's last act is to write what its trace still holds (`_run`).
+            await self._trace_closed.wait()
         if self.state not in ("stopped", "failed"):
             await self._set_state_safely("stopped")
 
@@ -3348,13 +3404,17 @@ class Session:
         if self.narrator is None or not outputs:
             return ""
         narrator = self.narrator
+        narration = ""
         try:
             async with self._checking_scope():
                 with anyio.fail_after(NARRATOR_DEADLINE_S):
-                    return await narrator.narrate(outputs)
+                    narration = await narrator.narrate(outputs)
         except Exception:
             log.exception("narrating Claude's output failed")
-            return ""
+        if self.traces is not None:
+            # The trace of a narrated session holds what the checkers read (D232).
+            self.traces.narration(outputs, narration)
+        return narration
 
     def _record_cross_session(self, text: str, source: str = "cross_session") -> None:
         """Record a message that is not the user's as a turn entry, not as user input.
@@ -3633,13 +3693,225 @@ class Session:
     async def emit(self, event: Event) -> None:
         """Send `event` to the clients.
 
+        Side effect: while a session trace is written, the event is queued for it first
+        (`calu.traces.TraceWriter.feed`, which neither waits nor raises).
+
         Args:
             event: The event.
 
         Raises:
             Exception: Whatever the client sink raises (e.g. a closed connection).
         """
+        resolved_by = ""
+        if isinstance(event, EscalationResolved):
+            resolved_by = self.desk.resolved_by.pop(event.escalation_id, "")
+        if self.traces is not None:
+            self.traces.feed(event, resolved_by)
         await self._sink(event)
+
+    # ------------------------------------------------------------------ session traces
+
+    def add_trace_secret(self, value: str, kind: str) -> None:
+        """Name a value that a session trace must never hold (PLAN.md D232).
+
+        Args:
+            value: The secret, e.g. the client token of this session.
+            kind: The type its placeholder names, e.g. "client token".
+        """
+        self._trace_secrets.add(value, kind)
+
+    def _guard_traces(self) -> None:
+        """Tell the rules, the honesty state and the write sets where the traces are.
+
+        While `traces.enabled` is on, the trace directory is calu's own output inside the
+        project: a tool call that would write there waits for a person, the checkers' code
+        tools do not read it, and its files are left out of the write sets and of the
+        honesty state. With tracing off, the directory is an ordinary directory.
+        """
+        cfg = self.config.traces
+        directory = cfg.directory if cfg.enabled else None
+        self.rules.trace_directory = None if directory is None else self.workspace / directory
+        self.honesty.excluded = () if directory is None else (directory,)
+        self.write_sets.excluded = () if directory is None else (directory,)
+
+    def _trace_settings(self) -> tuple[object, ...]:
+        """Return what decides which trace file is written and how.
+
+        Returns:
+            A tuple that is equal for two moments exactly if a trace started at either would
+            be written the same way: the `traces` section (empty while tracing is off) and
+            whether a narrator exists.
+        """
+        cfg = self.config.traces
+        return (cfg.model_dump_json() if cfg.enabled else "", self.narrator is not None)
+
+    def _start_traces(
+        self,
+        tg: TaskGroup,
+        resume_id: str | None = None,
+        forked: bool = False,
+        claude_session: str | None = None,
+        note: str = "",
+        after: TraceWriter | None = None,
+    ) -> None:
+        """Start the trace file of this run if `traces.enabled` is on; never raises.
+
+        Side effects: sets `self.traces` and starts the writer's task in `tg`, which creates
+        the file `<traces.directory>/<UTC date>/<user>/session_NNN.md` with this process's
+        file access (as root, that of the session's user, D206). A failure is logged, and
+        the session runs without a trace.
+
+        Args:
+            tg: The task group of the run.
+            resume_id: The Claude session this run resumes or forks, or None; the header then
+                names that conversation's trace file if one is found.
+            forked: True if `resume_id` is forked, not resumed.
+            claude_session: The Claude session id of this run if it is known already.
+            note: A sentence for the header, e.g. that the trace starts in mid-session.
+            after: The writer this one follows in the same run, or None; the new file is
+                created after that writer's file, so that it gets the higher number, and its
+                header names that file.
+        """
+        left, self.traces = self.traces, None
+        if left is not None:
+            # A run that ended while this one started did not get to close its trace.
+            tg.start_soon(left.close, "The session ended.")
+        cfg = self.config.traces
+        if not cfg.enabled:
+            return
+        try:
+            names = {
+                *PROVIDER_KEYS,
+                *(name for names in PROVIDER_KEYS_BY_PREFIX.values() for name in names),
+                *self._secret_env,
+                *self.config.hidden_env,
+            }
+            self._trace_secrets.update(Secrets.from_environment(names))
+            narrated = cfg.content == "narrated" and self.narrator is not None
+            redactor: Redactor | None = None
+            redactor_name: str | None = None
+            if cfg.redact:
+                model = self._models.get("trace-redactor") or (
+                    cfg.redactor_model.strip() or default_model(self.config.claude.use_bedrock)
+                )
+                redactor_name = model_name(model)
+                redactor = Redactor(
+                    redaction_instructions(),
+                    resolve_model(model),
+                    timeout_s=cfg.redactor_timeout_s,
+                )
+            started = datetime.now(UTC)
+            user = _os_user()
+            if resume_id is not None and not forked:
+                claude_session = resume_id
+            header = Header(
+                calu_session=self.store.session_id,
+                claude_session=claude_session,
+                project=self.project or self.workspace.name,
+                started=started,
+                user=user,
+                claude_model=self.config.claude.model or "",
+                calu_version=__version__,
+                content="narrated" if narrated else "plain",
+                content_note=(
+                    "`traces.content` is `narrated`, but `context.narrate` is off, so there "
+                    "is no narrator"
+                    if cfg.content == "narrated" and not narrated
+                    else ""
+                ),
+                redactor=redactor_name,
+                note=note,
+            )
+            writer = TraceWriter(
+                self.workspace,
+                session_directory(self.workspace, cfg.directory, started, user),
+                header,
+                TraceRenderer(narrated, cfg.max_input_chars, cfg.max_result_chars, claude_session),
+                self._trace_secrets,
+                redactor=redactor,
+                narrate=self._trace_narrate,
+                report=self._trace_report,
+                continues=None
+                if resume_id is None
+                else (resume_id, "forked" if forked else "resumed"),
+                queue_blocks=cfg.queue_blocks,
+                after=after,
+            )
+            writer.start(tg)
+            self.traces = writer
+            self._trace_closed = anyio.Event()
+        except Exception:
+            log.exception("starting the session trace failed; the session runs without one")
+
+    async def _trace_narrate(self, outputs: list[ClaudeOutput]) -> str:
+        """Narrate text for the trace that the session did not narrate for a checker.
+
+        Args:
+            outputs: Claude's thinking and text of one block of the trace.
+
+        Returns:
+            The narration, or "" without a narrator.
+
+        Raises:
+            Exception: Whatever the narrator raises, and `TimeoutError` after
+                `NARRATOR_DEADLINE_S`; the trace writer catches both.
+        """
+        narrator = self.narrator
+        if narrator is None:
+            return ""
+        with anyio.fail_after(NARRATOR_DEADLINE_S):
+            return await narrator.narrate(outputs)
+
+    async def _trace_report(self, level: Literal["info", "warning"], message: str) -> None:
+        """Pass a message of the trace writer to the clients' log; never raises.
+
+        Args:
+            level: "info" for the file's path, "warning" for a problem.
+            message: The sentence.
+        """
+        await self._emit_safely(Log(level=level, message=message))
+
+    async def _end_traces(self, note: str) -> None:
+        """Write what the trace still holds and end it; never raises.
+
+        Args:
+            note: The last line of the file.
+        """
+        writer, self.traces = self.traces, None
+        try:
+            if writer is not None:
+                await writer.close(note)
+        except Exception:
+            log.exception("ending the session trace failed")
+        finally:
+            self._trace_closed.set()
+
+    def _follow_traces(self, before: tuple[object, ...]) -> None:
+        """Bring the trace in line with a reloaded configuration.
+
+            traces settings        running trace        afterwards
+            unchanged              any                  unchanged
+            changed, enabled off   written              ended (in the background)
+            changed, enabled on    none or written      the old one ended, a new file started
+                                                        whose header says where it starts
+
+        Args:
+            before: `_trace_settings` of the configuration that was replaced.
+        """
+        self._guard_traces()
+        if self._trace_settings() == before:
+            return
+        old, self.traces = self.traces, None
+        tg = self._run_state.tg
+        note = (
+            "this trace starts in the middle of a session, because the `traces` settings "
+            "were switched on or changed while it ran"
+        )
+        if old is not None:
+            self._spawn(old.close, "The trace ends here: the `traces` settings changed.")
+            self._trace_closed.set()
+        if tg is not None and not self._run_state.run_done.is_set():
+            self._start_traces(tg, claude_session=self.session_id, note=note, after=old)
 
     def _derived_state(self) -> State:
         """Return the state that the running work implies (see the module docstring).
