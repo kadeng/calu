@@ -6,6 +6,9 @@ Each user message starts the next scripted turn; when the script is exhausted, t
     {"text": "..."}                                   Claude writes text
     {"thinking": "..."}                               Claude's thinking (assistant.thinking)
     {"text": "...", "stream": true}                   ... preceded by word-wise assistant.delta
+    {"text": "...", "stream": true, "delay": 0.05}    ... with a pause after each word; an
+                                                      interrupt ends the text after the words
+                                                      streamed so far
     {"tool": "Bash", "input": {...}, "result": "..."} a tool call; it passes the ToolGate first
                                                       (PASS runs it: there is no auto mode here)
     {"tool": "Bash", "writes": {"a.txt": "text"}}     ... and the call really writes those files
@@ -19,7 +22,11 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       (no shell; its exit code is ignored)
     {"tool": "Edit", "input": {...}, "fails": true}   ... the approved call fails: it writes
                                                       nothing and reports an error result
-    {"sleep": 0.5}                                    pause (lets tests inject messages)
+    {"tool": "Bash", "input": {...}, "duration": 2}   ... the approved call takes that many
+                                                      seconds; an interrupt during them ends it
+                                                      with an error result and writes nothing
+    {"sleep": 0.5}                                    pause (lets tests inject messages); an
+                                                      interrupt ends it early
     {"rate_limit": {"type": "five_hour", "utilization": 0.4}}
                                                       Claude Code reports a usage limit
                                                       (`usage.update`)
@@ -29,6 +36,20 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       by itself, as if they had finished
     {"agent": {"description": "...", "background": false, "actions": [...]}}
                                                       a subagent runs the nested actions
+    {"agent": {..., "fails": true}}                   ... and ends with the status "failed" and
+                                                      an error result
+    {"agent": {..., "background": true, "detach": true}}
+                                                      ... as Claude Code runs a background
+                                                      subagent: the Agent call returns at once
+                                                      with a launch acknowledgement, the nested
+                                                      actions run beside the turn, a turn that
+                                                      ends before them reports them as running
+                                                      background tasks, and when the last one
+                                                      finishes after its turn the next scripted
+                                                      turn starts by itself
+    {"parallel": [[...], [...]]}                      the action lists run at the same time (as
+                                                      several tool calls or subagents of one
+                                                      assistant message do)
 
 Example script (JSON): {"turns": [[{"text": "Hi"}, {"tool": "Bash", "input": {"command": "ls"},
 "result": "a.py"}]]}
@@ -39,12 +60,14 @@ Messages sent with priority "next" during a turn are taken in after the current 
 
 import itertools
 import logging
+import uuid
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import anyio
 import anyio.lowlevel
+from anyio.abc import TaskGroup
 from pydantic import BaseModel, Field
 
 from calu.checkers.model import Step
@@ -77,6 +100,16 @@ from calu.protocol.messages import (
 )
 
 log = logging.getLogger(__name__)
+
+INTERRUPTED_TOOL_RESULT = "[Request interrupted by user for tool use]"
+"""The error result of a tool call that an interrupt ended, as Claude Code words it."""
+
+LAUNCH_ACKNOWLEDGEMENT = "Async agent launched successfully. Its result arrives when it finishes."
+"""The result of the Agent call that starts a detached background subagent."""
+
+FOLLOW_UP = "background tasks finished"
+"""The text the follow-up turn of finished background tasks is started with. No `UserInput`
+is reported for it: nobody typed it."""
 
 FOLLOW_UP_DELAY_S = 0.2
 """Pause before the scripted follow-up turn of `{"background_tasks": N}`, standing in for the
@@ -123,12 +156,14 @@ class FakeRunner:
         self._ready = anyio.Event()
         # Each queued message travels with its own images, so two sends of the same text keep
         # their images apart and nothing stays behind once the message is reported.
-        self._send, self._receive = anyio.create_memory_object_stream[tuple[str, list[ChatImage]]](
-            100
-        )
+        # A text of None is the runner's own signal that a detached subagent finished.
+        self._send, self._receive = anyio.create_memory_object_stream[
+            tuple[str | None, list[ChatImage]]
+        ](100)
         self._next_queue: list[tuple[str, list[ChatImage]]] = []
         self._cancel: anyio.CancelScope | None = None
         self._interrupted = False
+        self._interrupt_seen = anyio.Event()
         self.agents: dict[str, AgentInfo] = {}
         self.sink_failures = 0
         """How often the sink raised on an event; each time is logged (`run`)."""
@@ -148,6 +183,12 @@ class FakeRunner:
         self.model_changes = 0
         """How often `set_model` was called."""
         self._rate_limits: dict[str, RateLimit] = {}
+        self.transcript_uuids = False
+        """If True, every user message and every text of the main agent carries a transcript
+        uuid, as with the real runner, so that the session records fork points (D36)."""
+        self._tasks: TaskGroup | None = None
+        self._detached = 0
+        """How many detached background subagents are running."""
 
     async def run(
         self,
@@ -195,18 +236,29 @@ class FakeRunner:
                 log.exception("the event sink raised on a %s event", event.method)
 
         sink = guarded
-        with anyio.CancelScope() as scope:
-            self._cancel = scope
+        async with anyio.create_task_group() as tasks:
+            self._cancel = tasks.cancel_scope
+            self._tasks = tasks
             self._ready.set()
             async for text, images in self._receive:
-                await sink(UserInput(text=text, source=user_message_source(text), images=images))
-                await self._turn(text, gate, sink)
+                if text is not None:
+                    await sink(
+                        UserInput(
+                            text=text,
+                            source=user_message_source(text),
+                            images=images,
+                            uuid=self._uuid(),
+                        )
+                    )
+                elif self._detached:
+                    continue  # another detached subagent still runs: its end starts the turn
+                await self._turn(text if text is not None else FOLLOW_UP, gate, sink)
                 while self._follow_up:
                     # Like Claude Code (D158): the turn has ended and the session is idle; when
                     # the background tasks "finish", the next turn starts without a message.
                     self._follow_up = False
                     await anyio.sleep(FOLLOW_UP_DELAY_S)
-                    await self._turn("background tasks finished", gate, sink)
+                    await self._turn(FOLLOW_UP, gate, sink)
 
     async def wait_ready(self) -> None:
         """Return once `run` has started."""
@@ -231,6 +283,7 @@ class FakeRunner:
     async def interrupt(self) -> None:
         """Skip the remaining actions of the current turn; its result becomes "interrupted"."""
         self._interrupted = True
+        self._interrupt_seen.set()
 
     async def stop(self) -> None:
         """Cancel `run`; does nothing if `run` has not started."""
@@ -293,11 +346,13 @@ class FakeRunner:
         if actions is None:
             actions = [{"text": f"Echo: {text}"}]
         self._in_turn, self._interrupted = True, False
+        self._interrupt_seen = anyio.Event()
         try:
             await self._actions(actions, None, gate, sink)
         finally:
             self._in_turn = False
-        background = sum(int(a.get("background_tasks", 0)) for a in actions)
+        scripted = sum(int(a.get("background_tasks", 0)) for a in actions)
+        background = scripted + self._detached
         await sink(
             TurnResult(
                 session_id=self.session_id,
@@ -309,7 +364,26 @@ class FakeRunner:
         )
         # Claude Code continues by itself once its background tasks finished (D158); `run`
         # starts that turn after a pause, so that the session is idle in between.
-        self._follow_up = bool(background) and not self._interrupted
+        self._follow_up = bool(scripted) and not self._interrupted
+
+    def _uuid(self) -> str:
+        """Make the transcript uuid of one message.
+
+        Returns:
+            A new uuid with `transcript_uuids`, else "".
+        """
+        return str(uuid.uuid4()) if self.transcript_uuids else ""
+
+    async def _pause(self, seconds: float) -> None:
+        """Wait, but no longer than until the turn is interrupted.
+
+        Args:
+            seconds: The longest wait.
+        """
+        if self._interrupted:
+            return
+        with anyio.move_on_after(seconds):
+            await self._interrupt_seen.wait()
 
     async def _actions(
         self, actions: list[dict[str, Any]], agent: str | None, gate: ToolGate, sink: EventSink
@@ -356,15 +430,32 @@ class FakeRunner:
             await sink(AssistantThinking(agent_id=agent, text=str(action["thinking"])))
         elif "text" in action:
             message_id = f"fake-msg-{next(self._ids)}"
+            text = str(action["text"])
             if action.get("stream"):
-                for word in str(action["text"]).split(" "):
+                delay = float(action.get("delay", 0))
+                said: list[str] = []
+                for word in text.split(" "):
+                    if delay and self._interrupted:
+                        text = " ".join(said)  # what an interrupted answer keeps
+                        break
+                    said.append(word)
                     await sink(
                         AssistantDelta(agent_id=agent, message_id=message_id, text=word + " ")
                     )
-                    await anyio.lowlevel.checkpoint()
-            await sink(AssistantText(agent_id=agent, text=action["text"], message_id=message_id))
+                    if delay:
+                        await self._pause(delay)
+                    else:
+                        await anyio.lowlevel.checkpoint()
+            await sink(
+                AssistantText(
+                    agent_id=agent,
+                    text=text,
+                    message_id=message_id,
+                    uuid=self._uuid() if agent is None else "",
+                )
+            )
         elif "sleep" in action:
-            await anyio.sleep(float(action["sleep"]))
+            await self._pause(float(action["sleep"]))
         elif "rate_limit" in action:
             limit = RateLimit.model_validate(action["rate_limit"])
             self._rate_limits[limit.type] = limit
@@ -373,6 +464,10 @@ class FakeRunner:
             pass  # reported with the turn's result (`_turn`)
         elif "tool" in action:
             await self._tool(action, agent, gate, sink)
+        elif "parallel" in action:
+            async with anyio.create_task_group() as branches:
+                for branch in action["parallel"]:
+                    branches.start_soon(self._actions, list(branch), agent, gate, sink)
         elif "agent" in action:
             spec = action["agent"]
             tool_use_id = f"fake-tool-{next(self._ids)}"
@@ -394,20 +489,56 @@ class FakeRunner:
             )
             self.agents[tool_use_id] = info
             await sink(AgentsUpdate(agents=list(self.agents.values())))
-            await self._actions(list(spec.get("actions", [])), tool_use_id, gate, sink)
-            info.status = "completed"
-            await sink(AgentsUpdate(agents=list(self.agents.values())))
             result_text = str(spec.get("result", "Subagent finished."))
-            note = await gate.review_subagent_result(
-                SubagentResult(
-                    agent_id=tool_use_id,
-                    description=tool_input["description"],
-                    prompt=tool_input["prompt"],
-                    result=result_text,
-                    background=tool_input["run_in_background"],
+            failed = bool(spec.get("fails"))
+
+            async def work() -> str:
+                """Run the subagent to its end: its actions, its status and the review.
+
+                Returns:
+                    The note of the result's review for the main agent; "" if there is none.
+                """
+                await self._actions(list(spec.get("actions", [])), tool_use_id, gate, sink)
+                info.status = "failed" if failed else "completed"
+                await sink(AgentsUpdate(agents=list(self.agents.values())))
+                return await gate.review_subagent_result(
+                    SubagentResult(
+                        agent_id=tool_use_id,
+                        description=tool_input["description"],
+                        prompt=tool_input["prompt"],
+                        result=result_text,
+                        background=tool_input["run_in_background"],
+                    )
+                )
+
+            if spec.get("detach") and self._tasks is not None:
+
+                async def beside() -> None:
+                    """Run the subagent beside the turns; its end may start the next turn."""
+                    try:
+                        note = await work()
+                        if note:
+                            await sink(UserInput(text=note, source=NOT_FROM_USER))
+                    finally:
+                        self._detached -= 1
+                    if not self._in_turn and not self._detached:
+                        await anyio.sleep(FOLLOW_UP_DELAY_S)
+                        await self._send.send((None, []))
+
+                self._detached += 1
+                self._tasks.start_soon(beside)
+                await sink(
+                    ToolResult(
+                        agent_id=agent, tool_use_id=tool_use_id, content=LAUNCH_ACKNOWLEDGEMENT
+                    )
+                )
+                return
+            note = await work()
+            await sink(
+                ToolResult(
+                    agent_id=agent, tool_use_id=tool_use_id, is_error=failed, content=result_text
                 )
             )
-            await sink(ToolResult(agent_id=agent, tool_use_id=tool_use_id, content=result_text))
             if note:
                 # Stands for the injected priority-"next" note: calu's text, not the user's.
                 await sink(UserInput(text=note, source=NOT_FROM_USER))
@@ -456,6 +587,8 @@ class FakeRunner:
         note = ""
         if allowed and action.get("fails"):
             content, is_error = str(action.get("result", "The tool call failed.")), True
+        elif allowed and action.get("duration") and await self._cut_short(action["duration"]):
+            content, is_error = INTERRUPTED_TOOL_RESULT, True
         elif allowed:
             _write_files(self.workspace, action.get("writes") or {})
             if action.get("run"):
@@ -473,6 +606,18 @@ class FakeRunner:
         if note:
             # Stands for the injected priority-"next" note: calu's text, not the user's.
             await sink(UserInput(text=note, source=NOT_FROM_USER))
+
+    async def _cut_short(self, seconds: float) -> bool:
+        """Let a tool call take its scripted time.
+
+        Args:
+            seconds: How long the call runs.
+
+        Returns:
+            True if an interrupt ended the call before its time was over.
+        """
+        await self._pause(float(seconds))
+        return self._interrupted
 
 
 def _write_files(workspace: Path, writes: dict[str, str]) -> None:
