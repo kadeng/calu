@@ -1,15 +1,62 @@
 # Handoff
 
-State on 2026-11-18. Read this, then `AGENTS.md`, `REQUIREMENTS.md` (requirements 1-35)
-and `PLAN.md` (decisions D1-D230, open questions §11, phases §12). Everything below is on
-`main` and pushed.
+State on 2026-11-18, end of a long session. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
+(requirements 1-35; 26-35 are from the last days) and `PLAN.md` (decisions D1-D231, open
+questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
 
-**`main` is green**: 2042 tests with `uv run pytest -q -m 'not live'` (unit, database and
-the browser layer), ruff, pyright. Check `gh run list --limit 3` for CI. The suite takes
-6-9 minutes; use `set -o pipefail` when piping it through `tail`, or a failure is hidden
-(that once let a red commit through, 2026-11-13).
+### State of the repository
+
+- Pushed to `origin/main`: everything up to `e617c58` (the root model, `calu serve`, local
+  trust, the place file, `calu setup --no-password`, `calu web` without a password).
+- **Committed locally, not pushed** (`git log origin/main..HEAD`): the specification of the
+  VSCode extension, requirement 35, the PyCharm research notes, `calu ide` with session names
+  and migration 0036, the fixes of the review (D230), blank passwords, and the extension's
+  host side. The owner pushes on his word ("push"); do not run the full suite first unless he
+  asks (memory note `calu-selective-tests`).
+- **In the working tree, uncommitted, when the session ended** (check `git status`): whatever
+  the last agents wrote: `extensions/vscode/webview/*`, `media/*`, host additions in
+  `extensions/vscode/src/`, `src/calu/ide/` (`ide.unlock`), `uitest/` (the Cua desktop).
+  Before committing any of it: `uv run ruff check . && uv run pyright`, the ide tests
+  (`tests/unit/test_ide_bridge.py`, `tests/db/test_ide_bridge_db.py`), and in
+  `extensions/vscode`: `npm run check-types && npm run test:unit && npm run build` (Node 24:
+  `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`).
+- The last full suite run was 2042 tests on `7771257`; nothing after that was run in full.
+  A timing analysis of the suite (slowest tests, subsets by marker, xdist, a template
+  database) was running in a worktree when the session ended; its report is not recorded
+  anywhere yet.
+- The owner's machine: he reinstalls the root calu from GitHub after each push and has run
+  `sudo calu setup --no-password`. After the next push he must run `sudo calu setup
+  --no-password` once more (migration 0036; and D230 changed which password the role gets).
+
+### The VSCode extension and the PyCharm plugin: what the owner wants
+
+**D231 lists every requirement with its state**; the contract is
+`docs/notes/vscode-extension-spec.md` (sections 1-8), his words are requirements 34 and 35.
+In short: parity with Claude Code's chat first (images, rewind, fork, several sessions,
+slash commands, model and effort, context usage, questions, escalations, notifications),
+dark theme first, then calu's features one click away (checker context, checker
+instructions, honesty mode, all settings in a searchable dialog, one model for all roles with
+presets), subagents in full, a session dropdown and session names, installing uv and calu,
+checking for `claude`, working in VSCode's remote modes, instructions for a persistent
+`calu serve` in tmux or screen, at most one password once, and never refusing a blank
+password. Then a PyCharm plugin with local, remote and SSH-only modes
+(`docs/notes/pycharm-plugin-research.md`).
+
+Next steps for the extension, in order:
+1. Collect and check what the agents left (above), make the three npm commands and the ide
+   tests pass, commit.
+2. Run it for the first time: build a `.vsix` (`npm run package`), install it in the VSCode of
+   the Cua desktop (`uitest/README.md`), start a session with fake checkers
+   (`spikes/smoke_session.py DIR --stay`, or `calu serve` in the container) and walk through
+   the chat, a subagent, an escalation, the settings dialog, the checker editor. Nothing of
+   the extension has ever run inside VSCode: expect defects in the wiring.
+3. Integration tests (`@vscode/test-cli`, as stay-in-the-loop has them) and the user
+   documentation (`CALU_GUIDE.md`, `README.md`, `docs/TESTING.md`, the manual checklist).
+4. Ask the owner to try it in his VSCode against WSL.
+5. Then the PyCharm plugin: the three spikes named in the research notes first; and the small
+   fix in `calu acp` (`session/new` must answer a fresh id) as an interim step.
 
 ### What exists now, by area (newest decisions first)
 
