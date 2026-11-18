@@ -196,9 +196,10 @@ All of them work on the same sessions: start a session in one, follow or answer 
   checker instructions, checker context and honesty one click away; a click on an edit opens
   its diff, a click on a file name opens the file at the line; a settings dialog with one
   model for every role. Runs where the workspace is: WSL, SSH, a dev container.
-- **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), in progress: the same
-  chat as a native tool window, for JetBrains' remote development and for a local IDE that
-  reaches the server over SSH and syncs files through calu.
+- **PyCharm plugin** ([extensions/jetbrains](extensions/jetbrains)), for PyCharm 2026.3: the
+  same chat as a native tool window. It runs in a local IDE; JetBrains' remote development
+  and the mode for a local IDE that reaches the server over SSH and syncs files through calu
+  are built and not yet verified.
 - **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
   settings.
 - **Terminal** (`calu attach`): a full-screen client, and a line client for pipes.
@@ -211,6 +212,8 @@ All of them work on the same sessions: start a session in one, follow or answer 
 ![Ten subagents in the web live view, one waiting for a decision](docs/assets/web-live-subagents.png)
 
 ![The settings dialog of the VSCode extension](docs/assets/vscode-settings.png)
+
+![The PyCharm plugin: a command waits for a decision in the tool window](docs/assets/pycharm-approval.png)
 
 ## Where to go next
 
