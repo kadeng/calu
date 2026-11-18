@@ -6,29 +6,38 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### State of the repository
+### State of the repository (updated 2026-11-18, late)
 
-- Pushed to `origin/main`: everything up to `e617c58` (the root model, `calu serve`, local
-  trust, the place file, `calu setup --no-password`, `calu web` without a password).
-- **Committed locally, not pushed** (`git log origin/main..HEAD`): the specification of the
-  VSCode extension, requirement 35, the PyCharm research notes, `calu ide` with session names
-  and migration 0036, the fixes of the review (D230), blank passwords, and the extension's
-  host side. The owner pushes on his word ("push"); do not run the full suite first unless he
-  asks (memory note `calu-selective-tests`).
-- **In the working tree, uncommitted, when the session ended** (check `git status`): whatever
-  the last agents wrote: `extensions/vscode/webview/*`, `media/*`, host additions in
-  `extensions/vscode/src/`, `src/calu/ide/` (`ide.unlock`), `uitest/` (the Cua desktop).
-  Before committing any of it: `uv run ruff check . && uv run pyright`, the ide tests
-  (`tests/unit/test_ide_bridge.py`, `tests/db/test_ide_bridge_db.py`), and in
-  `extensions/vscode`: `npm run check-types && npm run test:unit && npm run build` (Node 24:
-  `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`).
-- The last full suite run was 2042 tests on `7771257`; nothing after that was run in full.
-  A timing analysis of the suite (slowest tests, subsets by marker, xdist, a template
-  database) was running in a worktree when the session ended; its report is not recorded
-  anywhere yet.
-- The owner's machine: he reinstalls the root calu from GitHub after each push and has run
-  `sudo calu setup --no-password`. After the next push he must run `sudo calu setup
-  --no-password` once more (migration 0036; and D230 changed which password the role gets).
+- **Pushed to `origin/main`: everything up to `d229495`** (CI green there): the root model,
+  `calu serve`, local trust, the place file, `calu setup --no-password`, `calu ide` with
+  session names (migration 0036) and `ide.unlock`, the review fixes (D230), blank passwords,
+  the faster test suite, and the VSCode extension as first built (host side, chat view,
+  settings dialog; 230 unit tests).
+- **Committed locally after that, not pushed** (`git log origin/main..HEAD`): requirement 36
+  and D232 (session traces, planned), spec section 12 (the chat on the right), and the
+  commits of the agent that runs the extension for the first time (fixes from the run, the
+  secondary side bar, extensions of the fake runner). The owner pushes on his word ("push").
+- **An agent was running when this was written**: the first real run of the extension in the
+  Cua desktop (container `calu-uitest`), against a scripted server (`uitest/fake_server.py`,
+  no Claude login, by the owner's choice). It commits locally in small commits and may have
+  left uncommitted files (`git status`); its last report, if it finished, is not recorded
+  anywhere but in that session. Its brief: walk through activation, a scripted conversation,
+  click-to-diff, checker instructions, sessions, rewind and fork, slash commands, settings,
+  notifications, the no-server state, a light theme; then the owner's list: subagents
+  (foreground, background, failing, two at once), slash commands, token usage, fork and undo,
+  stopping, queued and injected messages, supervision level to manual and back, edge cases.
+  Screenshots: `~/.cache/calu-uitest/share/run1/`.
+- Before committing anything found in the tree: `uv run ruff check . && uv run pyright`, the
+  affected Python tests, and in `extensions/vscode`: `npm run check-types && npm run
+  test:unit && npm run build` (Node 24: `export PATH=$HOME/.nvm/versions/node/v24.22.2/bin:$PATH`).
+- **Tests are fast now** (`docs/TESTING.md`, "Running a part of the suite"): the unit layer is
+  `uv run pytest -n 8` (30 s); the database layer must not run with `-n` (about 100 s without
+  the `slow` ones); a full pre-push run is about 3.5 minutes. The owner still does not want
+  the full suite run unasked (memory note `calu-selective-tests`).
+- The owner's machine: he reinstalls the root calu from GitHub after a push and has run
+  `sudo calu setup --no-password`. He has to run it once more after `d229495` (migration
+  0036; D230 changed which password the settings role gets). He accepted PyCharm's agreement
+  in the test desktop (a 30-day trial runs there; he has a Pro subscription if tests need it).
 
 ### The VSCode extension and the PyCharm plugin: what the owner wants
 
@@ -45,9 +54,9 @@ password. Then a PyCharm plugin with local, remote and SSH-only modes
 (`docs/notes/pycharm-plugin-research.md`).
 
 Next steps for the extension, in order:
-1. Collect and check what the agents left (above), make the three npm commands and the ide
-   tests pass, commit.
-2. Run it for the first time: build a `.vsix` (`npm run package`), install it in the VSCode of
+1. Collect what the run agent left and reported (above); commit; relay its list of open
+   defects and UX observations to the owner and fix what he picks.
+2. (In work by that agent.) Run it for the first time: build a `.vsix` (`npm run package`), install it in the VSCode of
    the Cua desktop (`uitest/README.md`), start a session with fake checkers
    (`spikes/smoke_session.py DIR --stay`, or `calu serve` in the container) and walk through
    the chat, a subagent, an escalation, the settings dialog, the checker editor. Nothing of
