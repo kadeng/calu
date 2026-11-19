@@ -24,6 +24,7 @@ from calu.protocol.messages import (
     EscalationRequest,
     EscalationResolved,
     Log,
+    StepHeld,
     ToolResult,
     TurnResult,
     UserInput,
@@ -746,6 +747,12 @@ async def test_an_approval_waits_if_an_escalation_opens_while_it_is_recorded(tmp
         await anyio.sleep(0.1)
         assert not results, "the step was answered while an escalation was being opened"
         assert not session._run_state.peek("t2").running
+        # Its check was reported before the hold, so a client needs the session's word that
+        # the approved step waits (the full-screen client showed ALLOW).
+        assert [e.tool_use_id for e in rec.of(CheckResult)] == ["t2"]
+        (began,) = rec.of(StepHeld)
+        assert (began.tool_use_id, began.agent_id, began.held) == ("t2", "agent-b", True)
+        assert "being opened" in began.reason
         tg.start_soon(session.ask, blocker)
         request = (await rec.wait_for(EscalationRequest))[0]
         await anyio.sleep(0.1)
@@ -753,6 +760,7 @@ async def test_an_approval_waits_if_an_escalation_opens_while_it_is_recorded(tmp
         await session.decide_escalation(request.escalation_id, "deny", None)
         await wait_until(lambda: results)
         assert results[0].verdict is Verdict.PASS
+        assert [(e.tool_use_id, e.held) for e in rec.of(StepHeld)] == [("t2", True), ("t2", False)]
         assert session._run_state.peek("t2").running
         await session.stop()
         tg.cancel_scope.cancel()

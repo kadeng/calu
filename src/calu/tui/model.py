@@ -66,6 +66,7 @@ HANDLED: frozenset[str] = frozenset(
         "check.result",
         "escalation.request",
         "escalation.resolved",
+        "step.held",
         "edit.diff",
         "auto_escalate.changed",
         "honesty.update",
@@ -968,6 +969,8 @@ class SessionModel:
         follows is not reported as a change made elsewhere."""
         self.saw_thinking = False
         self._steps: dict[str, StepBlock] = {}
+        self._held: set[str] = set()
+        """The `tool_use_id` of every step the session named as held (`step.held`)."""
         self._by_agent: dict[str, list[int]] = {MAIN: []}
         self._pending_diffs: dict[str, list[Diff]] = {}
         self._streams: dict[tuple[str, str, bool], Block] = {}
@@ -1056,10 +1059,12 @@ class SessionModel:
     def held(self, step: StepBlock) -> bool:
         """Tell whether a step waits in calu because another step waits for the user.
 
-        The session reports the hold only as a log line, so the client derives it: a tool
-        call that has neither a check nor a result, while an escalation of another step is
-        open, is one calu holds back. An Agent call whose subagent runs was let through, and
-        a question is not held.
+        A session sends `step.held` when a hold begins and ends; a step it named as held and
+        that has no result is held, also after its check (an approval that met an open
+        escalation while it was recorded). For a session without that event the client
+        derives it: a tool call that has neither a check nor a result, while an escalation
+        of another step is open, is one calu holds back. An Agent call whose subagent runs
+        was let through, and a question is not held.
 
         Args:
             step: The step.
@@ -1067,7 +1072,11 @@ class SessionModel:
         Returns:
             True if the step is held.
         """
-        if step.checks or step.result is not None or step.waiting or step.stored:
+        if step.result is not None or step.waiting or step.stored:
+            return False
+        if step.tool_use_id is not None and step.tool_use_id in self._held:
+            return True
+        if step.checks:
             return False
         if step.tool == "AskUserQuestion":
             return False
@@ -1079,9 +1088,10 @@ class SessionModel:
         """Return the steps calu holds back while a decision is open (`held`).
 
         Returns:
-            The held steps in the order of the transcript; empty without an open escalation.
+            The held steps in the order of the transcript; empty without an open escalation
+            and without a step the session named as held.
         """
-        if not self.holding():
+        if not self.holding() and not self._held:
             return []
         return [step for step in self._steps.values() if step.result is None and self.held(step)]
 
@@ -1159,7 +1169,7 @@ class SessionModel:
             ]
             if started:
                 return f"running {len(started)} subagent{'s' if len(started) != 1 else ''}"
-        if agent.activity == "checking" and any(
+        if agent.activity in {"checking", "tool call"} and any(
             (step.agent_id or MAIN) == agent.key for step in self.held_steps()
         ):
             return "held by a decision"
@@ -1441,6 +1451,16 @@ class SessionModel:
                     self._open(event, time, change)
                     if time is not None:
                         change.bell = True
+            case m.StepHeld():
+                if event.tool_use_id is not None:
+                    if event.held:
+                        self._held.add(event.tool_use_id)
+                    else:
+                        self._held.discard(event.tool_use_id)
+                    step = self.step(event.tool_use_id)
+                    if step is not None:
+                        change.blocks_updated.add(step.id)
+                    change.agents = True
             case m.EscalationResolved():
                 self._resolved(event, change)
             case m.ChatQueue():
@@ -1879,6 +1899,7 @@ class SessionModel:
             time: Client clock, if the event arrived live.
             change: The change to mark.
         """
+        self._held.discard(event.tool_use_id)
         step = self.step(event.tool_use_id)
         if step is not None:
             step.result = event.content

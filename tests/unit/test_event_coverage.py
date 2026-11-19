@@ -23,6 +23,7 @@ SILENT_IN_THE_TERMINAL = {
     "EditDiff",  # the diff of an edit
     "ChatQueue",  # the queue of waiting messages
     "AgentsUpdate",  # the subagent list
+    "StepHeld",  # a held step; the `log` line before it says the same in words
 }
 """Events a line-based terminal deliberately does not print (`calu.run.format_event`)."""
 
@@ -31,6 +32,7 @@ NOT_CARRIED_BY_ACP = {
     "chat.queue",  # ACP has no shape for a queue of waiting messages
     "agents.update",  # ACP has no subagents; the web interface shows them (PLAN.md §6.1)
     "usage.update",  # ACP has no shape for the usage limits of the agent's account
+    "step.held",  # ACP has no state of a tool call that waits for another one's decision
 }
 """Events the ACP adapter deliberately drops, because the protocol has nowhere to put them."""
 

@@ -504,10 +504,11 @@ def badge(step: StepBlock, palette: Palette, held: bool = False, started: bool =
     Returns:
         The verdict word, `BADGE_WIDTH` columns wide: PASS muted, ALLOW green, DENY red,
         ESCALATE orange; `check…` while no check was reported for a running step, `held`
-        for a held one and nothing for an Agent call whose subagent was started.
+        for a held one (also one whose approval is recorded and that waits before it runs)
+        and nothing for an Agent call whose subagent was started.
     """
     word = step.verdict
-    if not word and step.result is None and held:
+    if step.result is None and held:
         return Text(f"{'held':<{BADGE_WIDTH}}", style=palette.orange)
     if not word and step.result is None and started:
         return Text(" " * BADGE_WIDTH)

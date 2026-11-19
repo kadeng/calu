@@ -106,6 +106,32 @@ def test_the_hold_ends_with_the_decision_and_the_held_lines_are_drawn_again() ->
     assert model.activity_of(model.agents["a2"]) == "checking Bash"
 
 
+def test_a_step_held_after_its_approval_was_recorded_shows_held_until_the_session_says_so() -> None:
+    """The client derived the hold from a missing check, so a step whose approval was
+    recorded while another escalation came up showed ALLOW while calu held it back."""
+    model, _ = swarm()
+    feed(model, deploy("7", "a1"))
+    feed(model, [tool_use("t2", "a2", "make test")])
+    check = {
+        "tool_use_id": "t2",
+        "agent_id": "a2",
+        "tool_name": "Bash",
+        "route": "command",
+        "decision": "ALLOW",
+    }
+    feed(model, [scenarios.Item("check.result", check, 0.1)])
+    step = model.step("t2")
+    assert step is not None and not model.held(step), "without the session's word: not held"
+    held = {"tool_use_id": "t2", "agent_id": "a2", "tool_name": "Bash", "reason": "escalation 7"}
+    change = model.apply("step.held", {**held, "held": True}, 1.0)
+    assert step.id in change.blocks_updated and model.held(step)
+    assert plain(render.step_lines(step, model, view(100)))[0].startswith("  held      Bash")
+    assert model.activity_of(model.agents["a2"]) == "held by a decision"
+    model.apply("step.held", {**held, "held": False, "reason": ""}, 2.0)
+    assert not model.held(step)
+    assert plain(render.step_lines(step, model, view(100)))[0].startswith("  ALLOW     Bash")
+
+
 def test_a_question_holds_nothing_and_an_agent_call_with_its_subagent_is_not_held() -> None:
     model, _ = swarm(2)
     feed(model, scenarios.question("9", "q1", scenarios.RUNNER_QUESTIONS, agent="a1"))

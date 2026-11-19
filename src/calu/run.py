@@ -364,7 +364,8 @@ def format_event(event: Event) -> str | None:
         The text, or None for events the terminal deliberately does not show: the token
         deltas (`assistant.delta`, whose completed block follows), the files and the diff of a
         step (`tool.files`, `edit.diff`), the message queue (`chat.queue`) and the subagent
-        list (`agents.update`) -- a graphical client shows those better.
+        list (`agents.update`) -- a graphical client shows those better -- and the start and
+        end of a hold (`step.held`), which the `log` line before it says in words.
         `tests/unit/test_event_coverage.py` keeps the list honest: a new event is either
         shown here or named there.
     """

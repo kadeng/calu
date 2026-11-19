@@ -34,7 +34,7 @@ import anyio
 from calu.checkers import Step
 from calu.checkers.render import render_step
 from calu.claude.runner import HumanAnswer
-from calu.protocol.messages import EscalationRequest, EscalationResolved, Event, Log
+from calu.protocol.messages import EscalationRequest, EscalationResolved, Event, Log, StepHeld
 from calu.store import SessionStore
 
 log = logging.getLogger(__name__)
@@ -250,9 +250,10 @@ class EscalationDesk:
         cancellation (an interrupt cancels the hook). It cannot deadlock with the reviews after
         a step: they do not come through here.
 
-        Side effects: emits a `log` event saying that the call waits and for what; moves the
-        deadline of `budget` by the time waited, so that the hold does not use up the time for
-        checking.
+        Side effects: emits a `log` event saying that the call waits and for what, and a
+        `step.held` event when the wait begins and another when it ends (also when it is
+        cancelled); moves the deadline of `budget` by the time waited, so that the hold does
+        not use up the time for checking.
 
         Args:
             step: The tool call that reached the gate.
@@ -281,6 +282,15 @@ class EscalationDesk:
                 ),
             )
         )
+        await self._emit(
+            StepHeld(
+                tool_use_id=step.tool_use_id,
+                agent_id=step.agent_id,
+                tool_name=step.tool_name,
+                held=True,
+                reason=holding,
+            )
+        )
         try:
             with anyio.move_on_after(limit):
                 while self.holding():
@@ -294,6 +304,15 @@ class EscalationDesk:
         finally:
             if budget is not None:
                 budget.deadline -= limit - (anyio.current_time() - started)
+            with anyio.CancelScope(shield=True):
+                await self._emit(
+                    StepHeld(
+                        tool_use_id=step.tool_use_id,
+                        agent_id=step.agent_id,
+                        tool_name=step.tool_name,
+                        held=False,
+                    )
+                )
         return self.holding()
 
     def holding(self) -> str:

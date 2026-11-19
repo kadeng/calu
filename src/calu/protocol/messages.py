@@ -991,6 +991,28 @@ class EscalationResolved(Event):
     note: str | None = None
 
 
+class StepHeld(Event):
+    """A tool call starts or stops waiting because a decision about another step is open.
+
+    While a human decides about one step, calu approves no other step of the session (the
+    hold, PLAN.md D235). A step is held either before its check or after its approval was
+    recorded, when an escalation came up meanwhile; in the second case its `check.result`
+    has already been sent, so a client cannot tell from the other events that the step
+    waits. Every hold sends one event with `held` true when it begins and one with `held`
+    false when it ends (the step then runs, or is escalated itself). A `log` line says the
+    same in words.
+    """
+
+    method: ClassVar[str] = "step.held"
+    tool_use_id: str | None
+    agent_id: str | None = None
+    tool_name: str
+    held: bool
+    """True when the wait begins, False when it ends."""
+    reason: str = ""
+    """What holds the step, e.g. "escalation 4" ("" in the event that ends the wait)."""
+
+
 class EditDiff(Event):
     """Before/after content of a file edit, for a diff view.
 
@@ -1058,6 +1080,7 @@ EVENTS: list[type[Event]] = [
     CheckResult,
     EscalationRequest,
     EscalationResolved,
+    StepHeld,
     EditDiff,
     AutoEscalateChanged,
     HonestyUpdate,
