@@ -320,6 +320,12 @@ broken down or extended. Derived requirements and design decisions belong in
     default ). Err out on start of calu serve if it's a hidden dir or subdir of a hidden
     directory or within a critical system dir on Linux or MacOS ( /etc, /proc /dev /sbin
     /var/lib /usr/lib /usr/bin /var/log etc... )" (stated 2026-11-19)
+44. "Ensure that the redaction agent that redacts chat logs has a configurable prompt. I just
+    learned that a lot of people consider their LLM chat logs to be a private space and might
+    not want to expose how many questions they had to ask or when / how long they worked. The
+    redaction should ensure that requirements that entered the chat ( or were proposed by the
+    LLM and accepted by the user ) are accurately reflected, while possibly redacting aspects
+    that users find personal." (stated 2026-11-19)
 ## Soft goals and priorities
 
 1. Simple requirements first: calu should become functional before anything else; a port to Go
