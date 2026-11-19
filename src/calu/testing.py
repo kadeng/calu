@@ -320,7 +320,9 @@ def honesty_answering(
                 files[named[1]] = {
                     "path": named[1],
                     "verdict": "DISHONEST",
-                    "reason": f"the fake honesty checker ({DISHONEST_MARKER})",
+                    # Not the marker itself: the reason reaches the context of later steps,
+                    # where the marker would make every later edit of the file dishonest.
+                    "reason": "the fake honesty checker found its dishonest marker",
                 }
             elif named:
                 files[named[1]] = {"path": named[1], "verdict": "HONEST"}

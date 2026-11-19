@@ -26,6 +26,22 @@ describe('resolveCaluCommand', () => {
     expect(r).toEqual({ ok: true, command: ['uv', 'run', 'calu'], source: 'setting' });
   });
 
+  it('takes a single string as one program and refuses other shapes instead of throwing', () => {
+    // A string is what a user writes by mistake (and the PyCharm plugin's shape): it used to
+    // throw inside the bridge's start and left the chat at "Starting calu…".
+    expect(resolveCaluCommand(input([], { configured: ' /home/me/pwstore/calu ' }))).toEqual({
+      ok: true,
+      command: ['/home/me/pwstore/calu'],
+      source: 'setting',
+    });
+    expect(resolveCaluCommand(input(['/usr/bin/calu'], { configured: '' }))).toMatchObject({ ok: true, source: 'path' });
+    expect(resolveCaluCommand(input(['/usr/bin/calu'], { configured: [1, 'calu'] }))).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('list of strings'),
+    });
+    expect(resolveCaluCommand(input(['/usr/bin/calu'], { configured: { cmd: 'calu' } }))).toMatchObject({ ok: false });
+  });
+
   it('ignores an empty setting and searches PATH in order', () => {
     expect(resolveCaluCommand(input(['/usr/bin/calu'], { configured: [''] }))).toEqual({ ok: true, command: ['/usr/bin/calu'], source: 'path' });
     expect(resolveCaluCommand(input(['/mnt/c/Users/me/bin/calu', '/usr/bin/calu']))).toEqual({

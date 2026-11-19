@@ -31,6 +31,7 @@ import type { ChatSendParams, EditDiff } from './protocol.generated';
 import { Sessions } from './sessions';
 import { SettingsPanel } from './settingsPanel';
 import { CLAUDE_DOCS_URL } from './shared/bootstrap';
+import { statusBarEntry } from './shared/chatModel';
 import { buildHints } from './shared/hints';
 import { flagsForLevel } from './shared/levels';
 import type { ChatSettings, WebviewMessage } from './shared/messages';
@@ -106,6 +107,25 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       if (visible) void sessions.refresh();
     },
   );
+
+  // The "calu" item of the status bar: always visible, also while the view is hidden or folded
+  // away behind the secondary side bar's "…" (a new profile shows the editor's own chat first).
+  const statusItem = vscode.window.createStatusBarItem('calu.status', vscode.StatusBarAlignment.Right, 100);
+  statusItem.name = 'calu';
+  statusItem.command = 'calu.openChat';
+  let statusShown = '';
+  chat.onStateChange = (state) => {
+    const entry = statusBarEntry(state);
+    const key = `${entry.text}\n${entry.tooltip}\n${entry.warning}`;
+    if (key === statusShown) return;
+    statusShown = key;
+    statusItem.text = entry.text;
+    statusItem.tooltip = entry.tooltip;
+    statusItem.backgroundColor = entry.warning ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+  };
+  chat.onStateChange(chat.state);
+  statusItem.show();
+  context.subscriptions.push(statusItem);
 
   /**
    * Apply a view event to the chat view.
@@ -1016,7 +1036,9 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       case 'honestyReview':
         await run('The honesty review', async () => {
           const result = await bridge.session('honesty.review', {});
+          // Say what happened: the chip alone changes quietly, or not at all.
           if (!result.ran) notice('warning', `No honesty review ran${result.problem ? `: ${result.problem}` : '.'}`);
+          else notice('info', `The honesty review ran${result.problem ? `; ${result.problem}` : ' and judged every file'}. The honesty chip shows the state now.`);
         });
         return;
       case 'honestyTrust': {
@@ -1025,7 +1047,13 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
           { modal: true, detail: 'The commit that HEAD names now is recorded as honest; it becomes the baseline of the honesty state.' },
           'Trust HEAD',
         );
-        if (choice === 'Trust HEAD') await run('Trusting HEAD', () => bridge.session('honesty.trust', { rev: 'HEAD' }));
+        if (choice === 'Trust HEAD') {
+          await run('Trusting HEAD', async () => {
+            const result = await bridge.session('honesty.trust', { rev: 'HEAD' });
+            const commit = result.commit_id ? `Commit ${result.commit_id.slice(0, 12)} (HEAD)` : 'HEAD';
+            notice('info', result.recorded ? `${commit} is trusted now; it is the baseline of the honesty state.` : `${commit} was trusted already.`);
+          });
+        }
         return;
       }
       case 'honestyClear':

@@ -420,7 +420,7 @@ function buildQuickRow(): HTMLElement[] {
     'data-testid': 'header-honesty',
     'aria-haspopup': 'menu',
     'aria-expanded': 'false',
-    title: `${chip.label || 'Code honesty is off'}.${storedTip} Click for the mode, the open marks and a review.`,
+    title: `${chip.label ? `${chip.label} (mode "${view.honesty?.mode ?? ''}")` : 'Code honesty is off'}.${storedTip} Click for the mode, the open marks and a review.`,
   });
   honesty.append(icon('shield'), el('span', '', chip.kind === 'off' ? 'Honesty: off' : chip.label));
   if (stored) honesty.append(el('span', 'chip stored-mode', stored));
@@ -506,7 +506,7 @@ function toggleHonestyMenu(): void {
  */
 function buildBanner(): HTMLElement[] {
   if (view.bridge.status !== 'running' || view.link.status !== 'reconnecting') return [];
-  return [el('div', 'banner warning', `Reconnecting to the session…${view.link.message ? ` ${view.link.message}` : ''}`, { role: 'status' })];
+  return [el('div', 'banner warning', `Reconnecting to the session…${view.link.message ? ` — ${view.link.message}` : ''}`, { role: 'status' })];
 }
 
 /**
@@ -552,6 +552,7 @@ function buildTabs(): HTMLElement[] {
       title: `${folded.length} finished subagent${folded.length === 1 ? '' : 's'}: click to open one`,
     });
     more.append(el('span', 'tab-label', `${folded.length} finished`), icon('chevronDown'));
+    if (folded.some((t) => t.attention)) more.append(el('span', 'attention', undefined, { title: 'New output', 'aria-label': 'new output' }));
     nav.append(more);
   }
   return [nav];

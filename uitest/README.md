@@ -132,6 +132,7 @@ The first message of a session chooses the scenario: `scenario: <name>`; any oth
 | `tall` | an escalating command of 90 lines: an approval card taller than the view |
 | `swarm` | ten subagents at the same time (eight commands of 3 s each); the third escalates after about 6 s, the seventh after about 15 s, the others keep working; turn 2 starts three background subagents |
 | `nousage` | as `levels`, without context usage |
+| `honesty` | an edit the fake honesty checker calls dishonest and a test run, then a correcting edit (needs `calu checker set honesty --enable` and `honesty.mode` track or enforce) |
 
 What the scripted runner does not play: an answer to a message for a subagent (the message
 itself is shown in the subagent's tab), and Claude Code's own slash commands (a line names the

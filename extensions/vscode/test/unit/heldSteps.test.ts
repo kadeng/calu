@@ -1,7 +1,7 @@
 // Steps calu holds back while a decision is open (`step.held`, PLAN D237 (6)), the tab bar's
 // folding of finished subagents, and the session dropdown's second line.
 import { describe, expect, it } from 'vitest';
-import { foldTabs, heldByAgent, heldTools, sessionMenu, tabList, type TabView } from '../../src/shared/chatModel';
+import { foldTabs, heldByAgent, heldTools, sessionMenu, statusBarEntry, tabList, type TabView } from '../../src/shared/chatModel';
 import { applyEvents, initialViewState, type ViewEvent, type ViewState } from '../../src/shared/viewState';
 
 /** Build a state from events. */
@@ -148,5 +148,18 @@ describe('session dropdown rows', () => {
       '~/demo · started 3 h ago · bbbbbbbb',
       '~/demo',
     ]);
+  });
+});
+
+describe('status bar item', () => {
+  it('says what needs the user, else the state of the attached session', () => {
+    expect(statusBarEntry(stateOf({ method: 'bridge.status', params: { status: 'missing' } })).text).toBe('$(shield) calu: not installed');
+    expect(statusBarEntry(stateOf({ method: 'bridge.status', params: { status: 'running' } }))).toMatchObject({ text: '$(shield) calu', warning: false });
+    const busy = stateOf(attached);
+    expect(statusBarEntry(busy).text).toBe('$(shield) calu: working');
+    const waiting = applyEvents(busy, [use('b1', null), escalate('b1', null)]);
+    expect(statusBarEntry(waiting)).toMatchObject({ text: '$(shield) calu: 1 waiting', warning: true });
+    const lost = applyEvents(busy, [{ method: 'ui.link', params: { state: 'lost', message: 'gone' } }]);
+    expect(statusBarEntry(lost).text).toBe('$(shield) calu: connection lost');
   });
 });

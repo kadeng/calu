@@ -30,8 +30,12 @@ export interface HostFacts {
 
 /** Inputs of `resolveCaluCommand`. */
 export interface ResolveInput extends HostFacts {
-  /** Value of the `calu.command` setting; empty or undefined means "not set". */
-  configured?: readonly string[];
+  /**
+   * Value of the `calu.command` setting as the user wrote it (untrusted): a list of strings;
+   * a single string is taken as the path of one program (the shape the PyCharm plugin's
+   * "calu command" has). Empty or undefined means "not set".
+   */
+  configured?: unknown;
 }
 
 /** Result of `resolveCaluCommand`. */
@@ -91,7 +95,17 @@ export function findExecutable(
  *   appended, or `{ok: false, message}` saying that calu was not found. Never throws.
  */
 export function resolveCaluCommand(input: ResolveInput): ResolveResult {
-  const configured = (input.configured ?? []).filter((part) => part !== '');
+  const raw = input.configured;
+  let configured: string[];
+  if (raw === undefined || raw === null) configured = [];
+  else if (typeof raw === 'string') configured = raw.trim() ? [raw.trim()] : [];
+  else if (Array.isArray(raw) && raw.every((part) => typeof part === 'string')) configured = raw.filter((part) => part !== '');
+  else {
+    return {
+      ok: false,
+      message: 'The setting `calu.command` must be a list of strings, e.g. ["/home/me/.local/bin/calu"] or ["uv", "run", "calu"].',
+    };
+  }
   if (configured.length > 0) {
     return { ok: true, command: [...configured], source: 'setting' };
   }

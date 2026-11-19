@@ -615,7 +615,8 @@ select.pill option {
   cursor: pointer;
 }
 .tool-row:hover { background: var(--calu-hover); }
-.tool-row .chip { flex: 0 1 auto; min-width: 2.2em; overflow: hidden; text-overflow: ellipsis; }
+/* Decision and status chips keep their width: a cut "PAS" or "err" says nothing. The head gives way. */
+.tool-row .chip { flex: none; }
 .tool-row .tool-head { min-width: 3ch; }
 .item.tool.open > .tool-row { background: var(--vscode-list-inactiveSelectionBackground, var(--calu-hover)); }
 .tool-icon { color: var(--calu-muted); width: 14px; height: 14px; }
@@ -633,17 +634,24 @@ select.pill option {
   font-size: 0.93em;
   color: var(--calu-muted);
 }
-/* A path: the directory is cut with an ellipsis, the file name always stays visible. */
+/* A path: the directory is cut with an ellipsis first, the file name only when nothing else is left. */
 .tool-head.path { display: flex; }
 .path-dir {
-  flex: 0 1 auto;
+  flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: 0.75;
 }
-.path-base, .tool-head.path .line-range { flex: none; }
+.path-base {
+  flex: 0 1 auto;
+  min-width: 3ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-head.path .line-range { flex: none; }
 /* The link is as wide as the path, not as the row: a click beside it is a click on the row
    (the diff of an edit). The margin keeps the chips at the right edge. */
 a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-textLink-foreground); }

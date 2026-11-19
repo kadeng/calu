@@ -486,7 +486,7 @@ function toolHeadElement(tool: ToolView): HTMLElement {
     return el('span', 'tool-head summary', summary, { title: summary });
   }
   if (head.isPath) {
-    // The directory shrinks with an ellipsis; the file name always stays visible.
+    // The directory shrinks first; the file name is cut only when nothing else is left.
     const path = splitPath(head.text);
     const parts = [el('span', 'path-dir', path.dir), el('span', 'path-base', path.base)];
     if (!file || tool.stored) {

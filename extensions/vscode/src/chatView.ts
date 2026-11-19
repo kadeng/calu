@@ -104,6 +104,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   dispatch(event: ViewEvent): void {
     this.viewState = applyEvent(this.viewState, event);
+    this.onStateChange?.(this.viewState);
     // An attach replaces the whole transcript, and the recorded turns are put above it: send
     // the result, not the (large) event.
     if (event.method === 'ui.attached' || event.method === 'ui.history') this.post({ type: 'reset', state: this.viewState });
@@ -111,6 +112,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.updateBadge();
     if (event.method === 'escalation.request' && this.chatSettings.escalationSound) this.ringBell();
   }
+
+  /**
+   * Called with the new state after every `dispatch` and `replaceState` (the status bar item
+   * follows it); `undefined` = nobody listens.
+   */
+  onStateChange: ((state: ViewState) => void) | undefined;
 
   /**
    * Ask the webview to play the escalation chime; if no webview is ready (hidden view being
@@ -147,6 +154,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   replaceState(state: ViewState): void {
     this.viewState = state;
+    this.onStateChange?.(state);
     this.post({ type: 'reset', state });
     this.updateBadge();
   }

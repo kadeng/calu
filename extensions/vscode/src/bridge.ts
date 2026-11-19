@@ -121,7 +121,7 @@ export function hostFacts(): HostFacts {
  */
 export function resolveCaluCommandForHost(): ResolveResult {
   const config = vscode.workspace.getConfiguration('calu');
-  return resolveCaluCommand({ configured: config.get<string[]>('command') ?? [], ...hostFacts() });
+  return resolveCaluCommand({ configured: config.get<unknown>('command'), ...hostFacts() });
 }
 
 /**
@@ -288,9 +288,13 @@ export class Bridge implements vscode.Disposable {
     if (this.running && this.initializeResult && this.currentStatus === 'running') {
       return Promise.resolve(this.initializeResult);
     }
-    this.starting ??= this.startProcess().finally(() => {
-      this.starting = undefined;
-    });
+    // An error that `startProcess` does not turn into a status itself must not leave the
+    // view at "Starting calu…" for ever.
+    this.starting ??= this.startProcess()
+      .catch((error: unknown) => (this.currentStatus === 'starting' ? this.fail('error', `Cannot start calu: ${errorText(error)}`) : Promise.reject(error)))
+      .finally(() => {
+        this.starting = undefined;
+      });
     return this.starting;
   }
 

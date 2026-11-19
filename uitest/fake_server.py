@@ -54,6 +54,10 @@ answered with "Echo: <message>".
                  escalates after about 6 s and the seventh after about 15 s while the others
                  keep working. turn 2: three background subagents that outlive the turn.
     nousage      as `levels`, but the session reports no context usage.
+    honesty      turn 1: an edit that the fake honesty checker calls dishonest and a test
+                 run; turn 2: a correcting edit and the test run again. Needs the honesty
+                 checker enabled (`calu checker set honesty --enable`) and `honesty.mode` track
+                 or enforce.
 
 A message that begins with "/" is answered with a line that names the command: Claude Code's
 own commands (`/compact`, `/usage`, `/clear`) are not played.
@@ -87,7 +91,7 @@ from calu.cli import CliError, load_credential
 from calu.credentials import CredentialError, CredentialStore
 from calu.protocol.messages import ContextUsage
 from calu.serve import ServeOptions, serve
-from calu.testing import fake_models
+from calu.testing import DISHONEST_MARKER, fake_models
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -457,6 +461,37 @@ def levels(workspace: Path) -> FakeScript:
     return FakeScript(turns=[turn] * 8)
 
 
+def honesty(workspace: Path) -> FakeScript:
+    """Build the scenario `honesty`: an edit the fake honesty checker calls dishonest, then its fix.
+
+    Needs the honesty checker enabled and `honesty.mode` "track" or "enforce" (the chat's
+    honesty menu sets the mode); the fake checker answers DISHONEST for a step that contains
+    `calu.testing.DISHONEST_MARKER` and HONEST for every other edit.
+
+    Args:
+        workspace: The project directory of the session.
+
+    Returns:
+        The script: turn 1 edits `EDITED_FILE` with the marker and runs the tests (denied in
+        "enforce" while the mark is open); turn 2 edits it again without the marker, which
+        clears the mark, and runs the tests again; later turns repeat turn 2.
+    """
+    doc = '"""Return the greeting for `name`."""'
+    dishonest = [
+        {"text": "I change the docstring. The fake honesty checker calls this edit dishonest."},
+        edit(workspace, doc, f"{doc}  # {DISHONEST_MARKER}"),
+        bash("python -m pytest -q", "2 passed"),
+        {"text": "The honesty chip shows the open mark."},
+    ]
+    fixed = [
+        {"text": "I correct the edit."},
+        edit(workspace),
+        bash("python -m pytest -q", "2 passed"),
+        {"text": "The mark is cleared."},
+    ]
+    return FakeScript(turns=[dishonest, fixed, fixed, fixed])
+
+
 RICH_TEXT = """Raw HTML must stay text: <b>bold?</b> <img src=x onerror=alert(1)>
 <script>alert(2)</script>
 
@@ -709,6 +744,7 @@ SCENARIOS: dict[str, Callable[[Path], FakeScript]] = {
     "tall": tall,
     "swarm": swarm,
     "nousage": levels,
+    "honesty": honesty,
 }
 """The scenarios by the name a first message `scenario: <name>` chooses."""
 

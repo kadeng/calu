@@ -10,6 +10,7 @@
  *               ──► otherOpenEscalations()  the strip above the input
  *               ──► heldTools() / heldByAgent()  steps calu holds back while a decision is open
  *               ──► foldTabs()     which tabs stay in the bar when there are many subagents
+ *               ──► statusBarEntry()   the "calu" item of VSCode's status bar
  *     texts     ──► middleTruncate(), shortDirectory(), splitPath(), previewLines(), toolHead(),
  *                   splitByFiles()
  *     links     ──► linkMessage()      which message a click on a Markdown link posts
@@ -20,7 +21,7 @@
 import { sessionPhase, type SessionPhase } from './activity';
 import { formatAge } from './sessionPick';
 import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BASE64, MAX_IMAGES, type ImageMediaType, type WebviewMessage } from './messages';
-import { MAIN, isAgentLaunch, isAttached, own, sessionTitle, type IdMap, type SetupHint, type ToolView, type ViewState } from './viewState';
+import { MAIN, isAgentLaunch, isAttached, openEscalationCount, own, sessionTitle, type IdMap, type SetupHint, type ToolView, type ViewState } from './viewState';
 
 // ------------------------------------------------------------------ texts
 
@@ -891,4 +892,51 @@ export function parseImageDataUrl(dataUrl: string): { mediaType: ImageMediaType;
 export function imageSrc(mediaType: string, data: string): string | undefined {
   if (!isImageType(mediaType) || !data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) return undefined;
   return `data:${mediaType};base64,${data}`;
+}
+
+// ------------------------------------------------------------------ status bar
+
+/** What the "calu" item of the status bar shows. */
+export interface StatusBarEntry {
+  /** Text with a codicon, e.g. "$(shield) calu: 2 waiting". */
+  text: string;
+  tooltip: string;
+  /** True while a decision waits: the item gets the warning background. */
+  warning: boolean;
+}
+
+/**
+ * Describe the status bar item: the one place of the window that always shows calu, also
+ * while its view is hidden (as the PyCharm plugin's "calu: N waiting" widget). A click opens
+ * the chat.
+ *
+ *     calu not found            $(shield) calu: not installed
+ *     no session attached       $(shield) calu
+ *     decisions open            $(shield) calu: 2 waiting          (warning)
+ *     session busy / idle       $(shield) calu: working / calu: idle
+ *     link reconnecting / lost  $(shield) calu: reconnecting / calu: connection lost
+ *
+ * @param state The view state.
+ * @returns The text, the tooltip and whether it is a warning.
+ */
+export function statusBarEntry(state: ViewState): StatusBarEntry {
+  const open = ' Click to open the chat.';
+  if (state.bridge.status === 'missing') {
+    return { text: '$(shield) calu: not installed', tooltip: `calu was not found on this machine.${open}`, warning: false };
+  }
+  const waiting = openEscalationCount(state);
+  const name = state.session.sessionId ? sessionTitle(state.sessions.list.find((s) => s.id === state.session.sessionId) ?? { id: state.session.sessionId, name: '', directory: state.session.workspace ?? '' }) : '';
+  if (waiting > 0) {
+    return {
+      text: `$(shield) calu: ${waiting} waiting`,
+      tooltip: `${waiting} step${waiting === 1 ? ' waits' : 's wait'} for your decision in ${name || 'the session'}.${open}`,
+      warning: true,
+    };
+  }
+  if (state.link.status === 'reconnecting') return { text: '$(shield) calu: reconnecting', tooltip: `The connection to ${name || 'the session'} is being restored.${open}`, warning: false };
+  if (state.link.status === 'lost') return { text: '$(shield) calu: connection lost', tooltip: `The connection to ${name || 'the session'} was lost.${open}`, warning: false };
+  if (state.link.status !== 'attached' || !state.session.sessionId) return { text: '$(shield) calu', tooltip: `No session is attached.${open}`, warning: false };
+  const phase = sessionPhase(state.session.state);
+  const word = phase === 'busy' ? 'working' : phase === 'waiting' ? 'waiting' : phase;
+  return { text: `$(shield) calu: ${word}`, tooltip: `Session ${name}: ${state.session.state}.${open}`, warning: false };
 }
