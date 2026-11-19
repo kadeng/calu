@@ -3396,15 +3396,18 @@ def _attach_failure(endpoint: Endpoint, exc: BaseException) -> str:
                 "CALU_TOKEN. A session started with --insecure lets local clients in "
                 "without one"
             )
-        if "server token" in str(exc):
+        # The peer's sentence without the JSON-RPC code (which `str(exc)` appends).
+        said = str(exc.error.get("message") or exc)
+        if "server token" in said:
+            # The relay's sentence repeats the advice below, so it is left out.
             return (
-                f"cannot attach to {address}: the relay refused the server token ({exc}). A "
-                "server token belongs to one `calu serve` and ends with it or with `calu token "
+                f"cannot attach to {address}: the relay refused the server token. A server "
+                "token belongs to one `calu serve` and ends with it or with `calu token "
                 "revoke --server`: mint a new one on the server's machine with `calu token "
                 "mint --server`"
             )
         return (
-            f"cannot attach to {address}: the session refused the token ({exc}). A token "
+            f"cannot attach to {address}: the session refused the token ({said}). A token "
             "belongs to one session and ends with it or with `calu token revoke`: mint a new "
             "one on the session's machine with `calu token mint <session id>`"
         )

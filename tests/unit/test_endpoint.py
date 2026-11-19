@@ -202,6 +202,27 @@ def test_a_given_address_takes_the_token_from_the_environment_or_asks_for_it(
     assert "calu token mint" in str(refused.value)
 
 
+def test_a_refused_server_token_is_said_once_without_the_protocols_error_code() -> None:
+    # The relay's own sentence already named `calu token mint --server`, and the message
+    # quoted it with "(code -32001)" before saying the same again.
+    relay = (
+        "invalid server token (`calu token mint --server` on the server's machine prints one; "
+        "a token ends with its server)"
+    )
+    message = cli._attach_failure(
+        cli.Endpoint("ws://127.0.0.1:8826", "t"),
+        RequestFailed({"code": -32001, "message": relay}),
+    )
+    assert "code -32001" not in message
+    assert message.count("calu token mint --server") == 1
+    assert message.startswith("cannot attach to ws://127.0.0.1:8826: the relay refused the")
+    session = cli._attach_failure(
+        cli.Endpoint("ws://127.0.0.1:8765", "t"),
+        RequestFailed({"code": -32001, "message": "invalid client token"}),
+    )
+    assert "code -32001" not in session and "calu token mint <session id>" in session
+
+
 def test_an_address_nobody_answers_at_names_the_tunnel() -> None:
     message = cli._attach_failure(
         cli.Endpoint("ws://127.0.0.1:18765", "t"), ConnectionRefusedError(111, "refused")
