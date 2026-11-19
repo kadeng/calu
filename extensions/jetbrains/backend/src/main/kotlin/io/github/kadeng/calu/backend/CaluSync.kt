@@ -137,9 +137,19 @@ class CaluSync(
     private val pendingRenames = ArrayList<Pair<String, String>>()
     private var flushJob: Job? = null
 
+    /** The open conflict notification of each path; expired when the path's conflict is gone. */
+    private val conflictNotes = HashMap<String, Notification>()
+
     /** Start: listen to the bridge and to local file changes, and publish the status. */
     fun start() {
         scope.launch { sync.status.collect { controller.dispatch("ui.sync", syncEvent(it)) } }
+        // A conflict resolved in the dialog, by "Sync now" or on the other side closes its notification.
+        scope.launch {
+            sync.status.map { it.conflicts.toSet() }.distinctUntilChanged().collect { open ->
+                val gone = synchronized(conflictNotes) { conflictNotes.keys.filter { it !in open }.mapNotNull { conflictNotes.remove(it) } }
+                gone.forEach { it.expire() }
+            }
+        }
         // The project view marks conflicted and held files; it is refreshed when they change.
         scope.launch {
             sync.status.map { it.conflicts to it.held }.distinctUntilChanged().drop(1).collect {
@@ -319,6 +329,7 @@ class CaluSync(
         try {
             val n = Notification(SYNC_NOTIFICATION_GROUP, "calu sync: conflict in ${conflict.path}", "Changed here and on $host: ${kindText(conflict.kind)}.", NotificationType.WARNING)
             n.addAction(NotificationAction.createSimpleExpiring("Merge…") { resolve(conflict.path) })
+            synchronized(conflictNotes) { conflictNotes.put(conflict.path, n)?.expire() }
             n.notify(project)
         } catch (error: Exception) {
             log("[calu] sync: the conflict notification could not be shown: ${error.message}")
