@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D234, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D236, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -14,54 +14,49 @@ the cases, sections A-H and the table C1-C23); the skill
 `.claude/skills/ui-testing-with-cua/SKILL.md` (how the IDE tests are run). The owner's words
 are in `REQUIREMENTS.md` 34-40.
 
-#### CI and what is on GitHub
+#### CI and what is on GitHub (updated 2026-11-19, about 04:00, by the lead)
 
-- **CI is green** on `a66e626` (run 44429485075: lint, types, unit and database tests,
-  browser tests, the wheel). The two failures named in the earlier version of this section
-  are fixed: the unformatted file (`f81d806`) and the browser test of two open cards
-  (`8d20d6a`, the state and the buttons read in one look). See the end of this section for
-  the newest pushed commit and its run.
-- **Newest pushed commit: `fa88764`**, CI run 44432454408 completed green (all four jobs).
-  It passed the pre-push run first (repo-wide format, lint, pyright; 2214 unit tests with
-  `-n 8`; 22 browser tests without the MetaTron file; 281 database tests).
-  The commit of this HANDOFF and the agents' commits before it (`0b1cab1`, `66e947f`,
-  `a2fe490`) were pushed after their own pre-push run; `gh run list --limit 3` shows that
-  run's result.
-- Local `main` was rebased onto `origin/main` once (the water change `01a88f1` had been
-  pushed from a separate worktree), so commit ids of the agents' earlier local commits
-  changed (`6281b4e` is `8d20d6a`, `09f1a87` is `a66e626`, `382249a` is `e401a0c`).
-- **Done since the handoff** (stand-in): the honesty checker's per-file result
-  (`check.result.honesty`, `honesty_escalation`) in the line client (`calu attach --plain`:
-  a `honesty:` line per file), the full-screen client (a `honesty` line under the step only
-  for a dishonest file or a request for a person; every file in the expanded step), the
-  web live view (a line per file tagged `honesty`) and the VSCode extension (a `dishonest`
-  chip on the row, every file in the details); never as a decision chip. PyCharm: agent 2's
-  brief. Honest-code review of the code since 2026-11-17 by two reviewers, fixes applied (see
-  "Coverage and honest code" below). Both agents' commits up to `0c859b4` and `efa1621` are
-  pushed with it.
+- **Everything is pushed.** `origin/main` is `7aed9c0` (or later); no agent is running and
+  no agent has uncommitted work. CI was last seen green on `fdf1e89` (run 44433852933, all
+  four jobs); the commits after it touch only `extensions/jetbrains/`, `uitest/` and
+  documents (no Python), passed the repo-wide `ruff format --check . && ruff check .`
+  locally, and their Gradle build (`./gradlew check buildPlugin verifyPlugin`) passed on the
+  agent's side. Check `gh run list --limit 3` for the run of the tip.
+- Done since the handoff of 02:30: the seven core defects (PLAN D235; held steps, which
+  database the settings commands change, start-up in about 0.45 s, trace files, the
+  revoked-token race, honesty after a denied commit and a cleared mark, migration 0037 with
+  who decided in `calu resolve`); the honesty checker's per-file result in all five clients;
+  an honest-code review of the code since 2026-11-17 with three real defects fixed
+  (`calu login` passed checker keys to Claude Code; the trace writer could create
+  directories outside the project; a dropped token revocation in `calu ide`); the PyCharm
+  plugin's SSH mode (PLAN D236; test plan section H).
+- **The owner accepted the "JetBrains Team Tools User Agreement"** of the JetBrains Client
+  in the desktop (2026-11-19). Remote development of the PyCharm plugin can now be tested:
+  `$D shell 'setsid -f bash /workspace/calu/uitest/pycharm-split.sh >/tmp/pycharm-split.log 2>&1'`
+  (close the ordinary PyCharm first; `--stop` ends it). It was started once more at about
+  03:55 and may still be running in the desktop (tmux session `calu-split`).
 
-#### Agents that were running when this was written
+#### Nobody is running now
 
-Their reports arrive in the session that started them; if that context is gone, read
-`git log origin/main..HEAD`, `git status`, and the test plan sections they fill in.
-
-1. **Core defect fixes** (Python; one commit per item; `calu-fix-pg` on 127.0.0.1:55491).
-   Committed: held steps (`91ed9bd`), which database `calu config` changes (`930d665`), lazy
-   imports in `calu.cli` (`a66e626`), trace files on a settings change (`e401a0c`), the
-   flaky revoked-token test (`0ca121e`, `0cc826e`, `0c859b4`), the two honesty workflow
-   points (`b1b87fb`), the seven smaller items (`66e947f`, schema 37) and PLAN D235
-   (`a2fe490`). It had no uncommitted files left at 03:00; its report (with the options on
-   which steps are held) goes to the session that started it.
-   It was asked NOT to change which steps are held and to write the options for the owner.
-2. **PyCharm plugin, SSH mode** (`extensions/jetbrains/`, `uitest/sshbox/`; drives the
-   desktop container). Committed: the SSH box (`46dc549`) and the plugin's file sync
-   (`efa1621`) and the honesty checker's per-file result with other defects (`0b1cab1`).
-   Still in work at 03:00 (uncommitted `ChatSurface.kt`, `Composer.kt`, `uitest/README.md`):
-   the rest of its defects, the walk in PyCharm (test plan
-   section H), remote development. **It drives the desktop**: nobody else may use it until
-   it is done.
+The reports of the last agents exist only in the session; their results are recorded in
+`docs/notes/test-plan.md` (sections B, C, D, E, G, H), PLAN D233-D236 and below.
 
 #### Next, in this order
+
+0. **Remote development of the PyCharm plugin** (agreement accepted): run the split-mode
+   checks of test plan section B (tool window in the client, RPC round trip with a
+   transcript and Allow on a card, the password dialog, editors and diffs opened by the
+   backend, the terminal action).
+0. **Core defects found by the SSH round** (PLAN D236): `session.history` omits a turn that
+   has not ended (a fork made while that turn waits on a decision misses it); the VSCode
+   extension (`extensions/vscode/src/shared/history.ts`) and the terminal client
+   (`SessionModel.load_history`) tell replayed turns by their text, so equal words in two
+   turns drop the turns between (use the prompt uuid, as the PyCharm port now does);
+   `fake_runner.py` numbers tool ids `fake-tool-N` from 1 in every session; a dead session
+   stayed listed as running (`stale: false`) for about 15 minutes after its server was
+   restarted; `ide.fs.changed` never names a file it would skip.
+0. The desktop image lacks `openssh-client` (installed by hand for the SSH round): add it to
+   `uitest/Dockerfile`.
 
 1. Collect those two agents; pre-push run of each new commit (rules below); push; wait for
    the CI run to complete.
