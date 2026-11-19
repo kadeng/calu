@@ -17,7 +17,8 @@ takes none away. A revoked server token closes the connection with
 
 With `insecure` (`calu serve --insecure`, D227) a peer on a loopback address needs no server
 token to attach; `relay.start` still needs one, so that only a holder of a token or of an
-operator login can make the server start a session (D208).
+operator login can make the server start a session (D208). A loopback peer that sends a
+valid server token is a token holder as on any relay.
 """
 
 import json
@@ -379,14 +380,20 @@ class Relay:
                     connection, request_id, -32602, "invalid params", json.loads(exc.json())
                 )
                 continue
-            if trusted:
+            if trusted and not params.token:
                 return _Peer(connection, None, "local"), request_id, params
             sha = token_hash(params.token)
             try:
                 label = await self.label(sha, new=True)
             except TokenCheckUnavailable as exc:
+                if trusted:
+                    return _Peer(connection, None, "local"), request_id, params
                 await _error(connection, request_id, -32603, f"internal error: {exc}; try again")
                 continue
+            if label is None and trusted:
+                # A loopback peer of an insecure relay attaches without a token; one it sent
+                # that is not valid gives it no more than that (no `relay.start`).
+                return _Peer(connection, None, "local"), request_id, params
             if label is None:
                 await _error(
                     connection,

@@ -275,6 +275,28 @@ async def test_insecure_lets_loopback_attach_without_a_token_but_not_ask_for_ses
         assert listed["sessions"][0]["name"] == "" and it.server.asked[-1] is None
 
 
+async def test_insecure_still_takes_a_valid_server_token_for_asking_for_sessions(
+    tmp_path: Path,
+) -> None:
+    """A loopback client with a server token may ask an insecure relay for a session.
+
+    Seen in the desktop (test plan K): `calu attach --token` through the relay of `calu serve
+    --insecure` was refused `/new` as if it had no token.
+    """
+    async with relayed(tmp_path, insecure=True) as it:
+        params = {"directory": str(tmp_path)}
+        _hello, result = await relay_call(it.relay.address, TOKEN, "relay.start", params)
+        assert result["calu_session_id"] == SESSION_ID
+        assert len(it.server.started) == 1
+        # A wrong token on loopback attaches as without one, and still asks for nothing.
+        _, listed = await relay_call(it.relay.address, "wrong", "relay.sessions")
+        assert listed["sessions"]
+        with pytest.raises(RequestFailed) as refused:
+            await relay_call(it.relay.address, "wrong", "relay.start", params)
+        assert "needs a server token" in str(refused.value)
+        assert len(it.server.started) == 1
+
+
 async def test_an_unknown_path_is_closed(tmp_path: Path) -> None:
     async with relayed(tmp_path) as it:
         with pytest.raises((RequestFailed, ConnectionError, OSError)):
