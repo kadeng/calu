@@ -57,12 +57,18 @@ Three agents started at about 07:00 (none pushes; the lead pushes):
    against a remote server.
 **Planned move of the system of records (owner, 2026-11-19), to be done by the lead only
 while no agent runs:** every document written only for and maintained by the coding agents,
-except `AGENTS.md`, moves to `.agent/records/` (the owner chose the name, 2026-11-19; it
-matches the session traces' `.agent/traces/` and is tied to no tool). Check first whether
-the agents' search tools skip hidden directories (`rg` does without `--hidden`); if they
-do, AGENTS.md must name the paths and say how to search them. Moves, with `git mv` so history follows: `HANDOFF.md`, `PLAN.md`,
+except `AGENTS.md`, moves to `agent/records/` (the owner's choice, 2026-11-19: "or better
+agent/records, similar, let's place the agent traces into agent/traces by default. No need
+to hide that, it just needs to be a single dir."). So in the same change the session
+traces' default directory becomes `agent/traces` instead of `.agent/traces`:
+`TracesSettings.directory` in `src/calu/config.py`, `TRACE_DIRECTORY` in
+`src/calu/ide/files.py` (never synchronised), `DEFAULT_EXCLUDED` in the PyCharm plugin's
+`PathMapper.kt` and `Types.kt`, their tests, CALU_GUIDE, docs/CONFIGURATION.md,
+docs/TESTING.md, README, the sync spec; record it in REQUIREMENTS 36 and a PLAN row. A
+project that already has `.agent/traces` keeps writing there only if it set the
+directory; say so in the guide. Moves, with `git mv` so history follows (into `agent/records/`): `HANDOFF.md`, `PLAN.md`,
 `REQUIREMENTS.md`, and all of `docs/notes/` (specs, research, test plan, reports, honesty
-evaluations, screenshots) to `.agent/records/notes/`. Stay where they are (written for
+evaluations, screenshots) to `agent/records/notes/`. Stay where they are (written for
 people): `README.md`, `CALU_GUIDE.md`, `LICENSE*`, `docs/CONFIGURATION.md`,
 `docs/TESTING.md`, `docs/assets/`, the extensions' READMEs; `.claude/skills/` (Claude Code
 reads it there). Then rewrite every reference (about 170 files: `PLAN.md D…` in code
