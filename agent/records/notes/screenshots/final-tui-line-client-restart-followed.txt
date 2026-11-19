@@ -1,0 +1,108 @@
+[stopped]
+[starting]
+[idle]
+[stopped]
+[starting]
+[idle]
+[stopped]
+[starting]
+[idle]
+[state] idle · ~/work/demo · model opus
+[attached] /help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  /allow <id> [note]  /deny <id> [note]  /answer <id> <text>  /inject <text>
+[stopped]
+[starting]
+[idle]
+[started] {'claude_session_id': 'fake-session', 'calu_session_id': 'c9d0d17f-fdb1-4189-9c4d-469f5231d95e'}
+[session] switching to c9d0d17f-fdb1-4189-9c4d-469f5231d95e
+[starting]
+[idle]
+[running]
+> scenario: echo plain
+*** usage limits: 5-hour limit 37 % used
+Echo: scenario: echo plain
+[turn ended: success]
+[idle]
+[checking]
+[idle]
+[stopped]
+[starting]
+[idle]
+[stopped]
+[starting]
+[idle]
+[stopped]
+[starting]
+[idle]
+[stopped]
+[starting]
+[idle]
+[state] idle · ~/work/demo · model opus
+[attached] /help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  /allow <id> [note]  /deny <id> [note]  /answer <id> <text>  /inject <text>
+[running]
+> are you there
+*** usage limits: 5-hour limit 37 % used
+I will rework the greeting and run the tests.
+
+## Plan
+
+1. Read `greeter.py`
+2. Change the greeting
+3. Run the tests, then **push**
+
+```python
+def greet(name: str) -> str:
+    return f"Good day, {name}!"
+```
+
+The table of what I touch:
+
+| file | change |
+|---|---|
+| `greeter.py` | the greeting word |
+| `test_greeter.py` | nothing |
+
+  · Read {'file_path': '~/work/demo/greeter.py'
+[checking]
+[running]
+[checking]
+[running]
+  [command checker: PASS] Fake summary of Tool call by the main agent: `Read`.
+[tool_call]
+  = def greet(name): return f"Hello, {name}"
+[running]
+  · Edit {'file_path': '~/work/demo/greeter.py'
+[checking]
+[running]
+  [edit checker: PASS] Fake summary of Tool call by the main agent: `Edit`.
+[tool_call]
+  = The file ~/work/demo/greeter.py has been upd
+[running]
+  · Bash {'command': 'python -m pytest -q', 'description': 'Run the tests'}
+[checking]
+[running]
+  [command checker: PASS] Fake summary of Tool call by the main agent: `Bash`.
+[tool_call]
+  = .. [100%] 2 passed
+[running]
+  · Bash {'command': 'git status --short # calu:allow'}
+[checking]
+[running]
+  [command checker: ALLOW] Fake summary of Tool call by the main agent: `Bash`. (Allowed by the rule-based fake checker (calu:allow).)
+[tool_call]
+  = M greeter.py
+[running]
+  · Bash {'command': 'rm -rf build dist # calu:deny'}
+[checking]
+[running]
+  [command checker: DENY] Fake summary of Tool call by the main agent: `Bash`. (Denied by the rule-based fake checker (calu:deny).)
+  ! Denied by the rule-based fake checker (calu:deny).
+  · Bash {'command': 'git push origin main # calu:escalate'}
+[checking]
+[running]
+  [command checker: ESCALATE] Fake summary of Tool call by the main agent: `Bash`. (Escalated by the rule-based fake checker (calu:escalate).)
+
+*** escalation 28: Bash
+    Escalated by the rule-based fake checker (calu:escalate).
+    /why 28 shows everything  ·  /allow 28 [note]  ·  /deny 28 [note]
+
+[escalated]

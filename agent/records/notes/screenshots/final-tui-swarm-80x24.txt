@@ -1,0 +1,24 @@
+ calu  billing   ◒ ESCALATED 0:21   1 needs you   opus / default
+  main   Review the pars… *   Run the unit te… *  9▸!        alt+←/→ · f2 panel
+            Agent  Profile the start-up                                running
+    agent   Profile the sta…: held by a decision, 3 steps, last Bash
+            Agent  Update the changelog                                running
+    agent   Update the chan…: held by a decision, 3 steps, last Bash
+            Agent  Migrate the database schema                         running
+    agent   Migrate the dat…: held by a decision, 3 steps, last Bash
+            Agent  Audit the dependencies                              running
+    agent   Audit the depen…: held by a decision, 3 steps, last Bash
+            Agent  Rebuild the search index                            running
+    agent   Rebuild the sea…: held by a decision, 3 steps, last Bash
+            Agent  Translate the error messages into German, French …  running
+    agent   Translate the e…: held by a decision, 3 steps, last Bash
+ ╭────────────────────────────────────────────────────────────────────────────╮
+ │ DECISION 1 of 1  ·  Publish the pac…  ·  Bash  ·  #29         waiting 0:21 │
+ │   deploy --job 3  # calu:escalate                                          │
+ │   Stopped: Escalated by the rule-based fake checker (calu:escalate).       │
+ │   a,a allow · d,d deny · w,w detail · n,n note                             │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+   Allow    Deny    Deny with a note    Show everything
+ to main · next turn · tab changes
+ >
+ a,a allow   d,d deny   w,w detail   n,n note   ^p palette   f1 help

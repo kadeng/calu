@@ -1,0 +1,36 @@
+ Sessions that run
+
+    524c4459  escalated · 1 open  server:/home/user/work/demo  for 2 min  (shown here)
+  ▸ 83f37fc3  escalated · 1 open  server:/home/user/work/shop  for 9 min
+  ▸ d5530398  escalated · 1 open  server:/home/user/work/shop  for 9 min
+  ▸ 1feeb90c  escalated · 1 open  "demo tour"  server:/home/user/work/demo  for 11 min
+  ▸ 3ee99882  idle        server:/home/user/work/demo  for 2 min
+  ▸ ec3c88e3  idle        server:/home/user/a/x  for 5 min
+  ▸ db86f296  idle        server:/home/user/work/shop  for 9 min
+
+  calu serve of user@server serves /home/user
+  /switch <beginning of an id or of a name> attaches to a session marked ▸
+  /running <text> lists only the sessions with that text
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ esc or q back · ↑↓ pgup pgdn scroll
