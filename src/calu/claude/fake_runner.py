@@ -155,6 +155,10 @@ class FakeRunner:
         self.session_id: str | None = "fake-session"
         self._turns = iter(script.turns)
         self._ids = itertools.count(1)
+        # Tool and message ids are unique across runners, as Claude Code's are: ids that
+        # started again at `fake-tool-1` in every session made a fork's or a second session's
+        # call look like an earlier one to a client that matches calls by their id.
+        self._id_prefix = uuid.uuid4().hex[:8]
         self._ready = anyio.Event()
         # Each queued message travels with its own images, so two sends of the same text keep
         # their images apart and nothing stays behind once the message is reported.
@@ -439,7 +443,7 @@ class FakeRunner:
         if "thinking" in action:
             await sink(AssistantThinking(agent_id=agent, text=str(action["thinking"])))
         elif "text" in action:
-            message_id = f"fake-msg-{next(self._ids)}"
+            message_id = f"fake-msg-{self._id_prefix}-{next(self._ids)}"
             text = str(action["text"])
             if action.get("stream"):
                 delay = float(action.get("delay", 0))
@@ -480,7 +484,7 @@ class FakeRunner:
                     branches.start_soon(self._actions, list(branch), agent, gate, sink)
         elif "agent" in action:
             spec = action["agent"]
-            tool_use_id = f"fake-tool-{next(self._ids)}"
+            tool_use_id = f"fake-tool-{self._id_prefix}-{next(self._ids)}"
             tool_input = {
                 "description": spec.get("description", ""),
                 "prompt": spec.get("prompt", ""),
@@ -576,7 +580,7 @@ class FakeRunner:
             gate: Decides about the call; `ask` is awaited for an ASK verdict.
             sink: Receives the events.
         """
-        tool_use_id = f"fake-tool-{next(self._ids)}"
+        tool_use_id = f"fake-tool-{self._id_prefix}-{next(self._ids)}"
         name, tool_input = str(action["tool"]), dict(action.get("input", {}))
         await sink(ToolUse(agent_id=agent, tool_use_id=tool_use_id, name=name, input=tool_input))
         step = Step(

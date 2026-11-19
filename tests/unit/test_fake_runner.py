@@ -55,6 +55,19 @@ async def play(tmp_path: Path, turns: list[list[dict[str, Any]]], tg, **attribut
     return played
 
 
+async def test_tool_ids_are_unique_across_runners(tmp_path: Path):
+    """Each session numbered its calls `fake-tool-1`, `fake-tool-2` ... again, so a client
+    that matches calls by id took a later session's call for an earlier one."""
+    ids: list[str] = []
+    for _ in range(2):
+        async with anyio.create_task_group() as tg:
+            played = await play(tmp_path, [[{"tool": "Read", "input": {}, "result": "x"}]], tg)
+            await played.until(TurnResult)
+            await played.runner.stop()
+            ids += [use.tool_use_id for use in played.of(ToolUse)]
+    assert len(ids) == 2 and len(set(ids)) == 2 and all(i.startswith("fake-tool-") for i in ids)
+
+
 async def test_an_interrupt_ends_a_slow_text_after_the_words_said(tmp_path: Path):
     text = "one two three four five six seven eight"
     async with anyio.create_task_group() as tg:
