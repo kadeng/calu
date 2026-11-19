@@ -206,6 +206,13 @@ async def test_a_session_that_ends_is_reported_as_lost(tmp_path: Path, store: Cr
         await editor.wait_link("lost")
         assert editor.links() == ["attached", "reconnecting", *editor.links()[2:]]
         assert set(editor.links()[1:-1]) == {"reconnecting"} and editor.links()[-1] == "lost"
+        # The message is the reason alone, in words (the client says "lost" itself).
+        lost = [
+            p for name, p in editor.notifications if name == "ide.link" and p["state"] == "lost"
+        ]
+        assert lost[-1]["message"] == (
+            "nothing answers at the session's address: the session or its calu server stopped"
+        )
         with pytest.raises(Failed) as gone:
             await editor.call("state.get")
         assert gone.value.code == -32015

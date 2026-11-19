@@ -50,6 +50,9 @@ const USAGE_REFRESH_MS = 2000;
 /** Milliseconds a session gets to report a honesty mode that was just stored for it. */
 const MODE_ANNOUNCE_MS = 4000;
 
+/** Key of the workspace state that holds the id of the session this workspace showed last. */
+const LAST_SESSION_KEY = 'calu.lastAttachedSession';
+
 /** What `activate` returns (used by integration tests). */
 export interface CaluApi {
   bridge: Bridge;
@@ -116,11 +119,23 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
     if (event.method === 'ui.starting' && typeof event.params.title === 'string' && event.params.slow !== true) void chat.reveal();
   };
 
-  const sessions: Sessions = new Sessions(bridge, dispatch, onAttached, updateHints, output, (id) => {
-    const entry = chat.state.sessions.list.find((s) => s.id === id);
-    if (entry) return sessionTitle(entry);
-    return id === chat.state.session.sessionId ? sessionTitle({ id, name: '', directory: chat.state.session.workspace ?? '' }) : undefined;
-  });
+  const sessions: Sessions = new Sessions(
+    bridge,
+    dispatch,
+    onAttached,
+    updateHints,
+    output,
+    (id) => {
+      const entry = chat.state.sessions.list.find((s) => s.id === id);
+      if (entry) return sessionTitle(entry);
+      return id === chat.state.session.sessionId ? sessionTitle({ id, name: '', directory: chat.state.session.workspace ?? '' }) : undefined;
+    },
+    (id) => void context.workspaceState.update(LAST_SESSION_KEY, id ?? undefined),
+  );
+  // A reloaded window (or a restarted VSCode) attaches to the session this workspace showed last,
+  // if it still runs; otherwise to the session of the workspace, as at a first start.
+  const remembered = context.workspaceState.get<string>(LAST_SESSION_KEY);
+  if (typeof remembered === 'string' && remembered) sessions.lastAttachedId = remembered;
 
   /**
    * Show a message in the chat's main list.

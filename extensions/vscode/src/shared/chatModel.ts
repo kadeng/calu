@@ -8,6 +8,8 @@
  *               ──► setupCards()       what the empty / error state shows, one primary action each
  *               ──► usageMeter()       "42% · 84k" for the composer footer
  *               ──► otherOpenEscalations()  the strip above the input
+ *               ──► heldTools() / heldByAgent()  steps calu holds back while a decision is open
+ *               ──► foldTabs()     which tabs stay in the bar when there are many subagents
  *     texts     ──► middleTruncate(), shortDirectory(), splitPath(), previewLines(), toolHead(),
  *                   splitByFiles()
  *     links     ──► linkMessage()      which message a click on a Markdown link posts
@@ -16,8 +18,9 @@
  */
 
 import { sessionPhase, type SessionPhase } from './activity';
+import { formatAge } from './sessionPick';
 import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BASE64, MAX_IMAGES, type ImageMediaType, type WebviewMessage } from './messages';
-import { MAIN, isAttached, own, sessionTitle, type IdMap, type SetupHint, type ToolView, type ViewState } from './viewState';
+import { MAIN, isAgentLaunch, isAttached, own, sessionTitle, type IdMap, type SetupHint, type ToolView, type ViewState } from './viewState';
 
 // ------------------------------------------------------------------ texts
 
@@ -252,7 +255,7 @@ export type SessionMenuEntry =
       kind: 'session';
       id: string;
       title: string;
-      /** Short directory for the second line; `directoryFull` is the tooltip. */
+      /** Second line: the short directory, the start and, for rows of the same title, the id; `directoryFull` is the tooltip. */
       directory: string;
       directoryFull: string;
       /** Phase for the state dot. */
@@ -272,7 +275,8 @@ export type SessionMenuAction = 'new' | 'resume' | 'fork' | 'rename' | 'refresh'
  * Build the rows of the session dropdown.
  *
  *     This workspace        (heading, if a session of the workspace runs)
- *       ● name / directory  one row per running session, the attached one marked
+ *       ● name              one row per running session, the attached one marked; the
+ *         directory · started 5 min ago [· first 8 characters of the id, if another row has the same name]
  *     Other sessions        (heading, if sessions of other directories run)
  *       ...
  *     (note: "No session is running." / the list's error)
@@ -280,24 +284,34 @@ export type SessionMenuAction = 'new' | 'resume' | 'fork' | 'rename' | 'refresh'
  *     Refresh · Detach
  *
  * @param state The view state.
+ * @param now The current time in milliseconds since the epoch (for "started … ago").
  * @returns The rows. "Fork conversation" needs an attached session with a conversation;
  *   "Rename session…" and "Detach" need an attached session.
  */
-export function sessionMenu(state: ViewState): SessionMenuEntry[] {
+export function sessionMenu(state: ViewState, now: number = Date.now()): SessionMenuEntry[] {
   const entries: SessionMenuEntry[] = [];
   const attachedId = state.sessions.attachedId;
-  const row = (s: ViewState['sessions']['list'][number]): SessionMenuEntry => ({
-    kind: 'session',
-    id: s.id,
-    title: sessionTitle(s),
-    directory: shortDirectory(s.directory, 36),
-    directoryFull: s.directory,
-    phase: sessionPhase(s.state),
-    state: s.state,
-    openEscalations: s.openEscalations,
-    stale: s.stale,
-    attached: s.id === attachedId,
-  });
+  // Unnamed sessions of one directory share their title; the start and the id tell them apart.
+  const titles = new Map<string, number>();
+  for (const s of state.sessions.list) titles.set(sessionTitle(s), (titles.get(sessionTitle(s)) ?? 0) + 1);
+  const row = (s: ViewState['sessions']['list'][number]): SessionMenuEntry => {
+    const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
+    const parts = [shortDirectory(s.directory, 36)];
+    if (!Number.isNaN(started)) parts.push(`started ${formatAge((now - started) / 1000)}`);
+    if ((titles.get(sessionTitle(s)) ?? 0) > 1) parts.push(s.id.slice(0, 8));
+    return {
+      kind: 'session',
+      id: s.id,
+      title: sessionTitle(s),
+      directory: parts.join(' · '),
+      directoryFull: s.directory,
+      phase: sessionPhase(s.state),
+      state: s.state,
+      openEscalations: s.openEscalations,
+      stale: s.stale,
+      attached: s.id === attachedId,
+    };
+  };
   const here = state.sessions.list.filter((s) => s.here);
   const other = state.sessions.list.filter((s) => !s.here);
   if (here.length > 0) entries.push({ kind: 'heading', label: 'This workspace' }, ...here.map(row));
@@ -378,6 +392,8 @@ export interface TabView {
   background: boolean;
   /** Number of open escalations in the tab. */
   openEscalations: number;
+  /** Number of the tab's tool calls that calu holds back (`heldTools`). */
+  held: number;
   /** True if a hidden tab has an open escalation or items the user has not seen. */
   attention: boolean;
 }
@@ -395,17 +411,108 @@ export function tabList(state: ViewState, active: string, seen: Readonly<Record<
   for (const e of Object.values(state.escalations)) {
     if (e.status === 'open') open[e.agentKey] = (Object.hasOwn(open, e.agentKey) ? open[e.agentKey] : 0) + 1;
   }
+  const held = heldByAgent(state);
   const tab = (key: string, label: string, status: TabView['status'], background: boolean): TabView => {
     const list = own(state.items, key) ?? [];
     const newest = list.length > 0 ? list[list.length - 1].id : 0;
     const escalations = Object.hasOwn(open, key) ? open[key] : 0;
     const unseen = newest > (Object.hasOwn(seen, key) ? seen[key] : 0);
-    return { key, label, status, background, openEscalations: escalations, attention: key !== active && (escalations > 0 || unseen) };
+    return {
+      key,
+      label,
+      status,
+      background,
+      openEscalations: escalations,
+      held: Object.hasOwn(held, key) ? held[key] : 0,
+      attention: key !== active && (escalations > 0 || unseen),
+    };
   };
   return [
     tab(MAIN, 'Main', '', false),
     ...state.agents.map((a) => tab(a.agent_id, a.description || a.subagent_type || a.agent_id.slice(-6), a.status ?? 'running', a.background === true)),
   ];
+}
+
+/** Subagent tabs beyond which finished subagents fold into one menu (`foldTabs`). */
+export const TAB_FOLD_LIMIT = 6;
+
+/**
+ * Decide which tabs the bar shows. With more than `limit` subagents the finished ones
+ * (completed, failed, stopped) fold into one "N finished" menu, unless a tab is the visible
+ * one, waits for a decision or has held steps; the rest keeps its order.
+ *
+ *     Main · Lint ● · Tests ⚠1 · Build held · … · [12 finished ▾]
+ *
+ * @param tabs The result of `tabList` (Main first).
+ * @param active Key of the visible tab.
+ * @param limit Number of subagent tabs that never fold (default `TAB_FOLD_LIMIT`).
+ * @returns `shown`: the tabs of the bar, in order; `folded`: the finished tabs of the menu, in
+ *   order (empty while nothing folds).
+ *
+ * @example foldTabs(tabsWith8Finished, MAIN).folded.length === 8
+ */
+export function foldTabs(tabs: readonly TabView[], active: string, limit = TAB_FOLD_LIMIT): { shown: TabView[]; folded: TabView[] } {
+  const subagents = tabs.filter((t) => t.key !== MAIN).length;
+  if (subagents <= limit) return { shown: [...tabs], folded: [] };
+  const folds = (t: TabView): boolean =>
+    t.key !== MAIN && t.key !== active && t.status !== 'running' && t.status !== '' && t.openEscalations === 0 && t.held === 0;
+  return { shown: tabs.filter((t) => !folds(t)), folded: tabs.filter(folds) };
+}
+
+/**
+ * Return the tool calls that calu holds back now: no step is approved while a decision about
+ * another step is open (`calu.escalations.EscalationDesk.hold`). The same rule as the
+ * full-screen terminal client (`calu.tui.model.SessionModel.held`):
+ *
+ *     a call the session named as held (step.held) and that has no result       -> held
+ *     else, while an escalation that is no question is open:
+ *       a call without check and result, not from the record, not itself waiting,
+ *       no question of the agent, no launch whose subagent runs                  -> held
+ *
+ * The second rule covers sessions that do not send `step.held`; a question of the agent holds
+ * nothing.
+ *
+ * @param state The view state.
+ * @returns The `toolUseId`s of the held calls.
+ */
+export function heldTools(state: ViewState): Set<string> {
+  const out = new Set<string>();
+  const waiting = new Set<string>();
+  let holding = false;
+  for (const e of Object.values(state.escalations)) {
+    if (e.status !== 'open') continue;
+    if (e.toolUseId) waiting.add(e.toolUseId);
+    if (e.questions.length === 0) holding = true;
+  }
+  const running = new Set(state.agents.filter((a) => (a.status ?? 'running') === 'running').map((a) => a.agent_id));
+  for (const tool of Object.values(state.tools)) {
+    if (tool.result || tool.stored || waiting.has(tool.toolUseId)) continue;
+    if (own(state.held, tool.toolUseId)) {
+      out.add(tool.toolUseId);
+      continue;
+    }
+    if (!holding || tool.check) continue;
+    if (tool.name === 'AskUserQuestion') continue;
+    if (isAgentLaunch(tool.name) && running.has(tool.toolUseId)) continue;
+    out.add(tool.toolUseId);
+  }
+  return out;
+}
+
+/**
+ * Count the held tool calls per tab.
+ *
+ * @param state The view state.
+ * @returns Per agent key (`MAIN` or a subagent's id) the number of its held calls; agents
+ *   without a held call are left out.
+ */
+export function heldByAgent(state: ViewState): Record<string, number> {
+  const out: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const id of heldTools(state)) {
+    const key = own(state.tools, id)?.agentKey ?? MAIN;
+    out[key] = (Object.hasOwn(out, key) ? out[key] : 0) + 1;
+  }
+  return out;
 }
 
 /**

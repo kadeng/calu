@@ -30,6 +30,7 @@ import type {
   RateLimit,
   SessionSnapshot,
   SessionState,
+  StepHeld,
   ToolFiles,
   ToolResult,
   ToolUse,
@@ -359,6 +360,8 @@ export interface SessionEntry {
   here: boolean;
   /** True if the session's process seems to be gone. */
   stale: boolean;
+  /** When the session started (ISO time); `null` if not reported. */
+  startedAt: string | null;
 }
 
 /** One side question (`side.ask`) with its answer; never part of the conversation. */
@@ -480,6 +483,14 @@ export interface ViewState {
   items: IdMap<Item[]>;
   tools: IdMap<ToolView>;
   escalations: IdMap<EscalationView>;
+  /**
+   * The tool calls the session named as held (`step.held` with `held` true and no later
+   * `held` false): calu approves no step while a decision about another step is open, and a
+   * step that is held after its approval was recorded already has its `check`. Keyed by
+   * `tool_use_id`. `heldTools` (chatModel) combines it with the rule for sessions that do not
+   * send the event.
+   */
+  held: IdMap<true>;
   /** Side questions of this client, oldest first. */
   side: SideExchangeView[];
   /** Number of `turn.result` events applied since the transcript was last cleared. */
@@ -632,6 +643,7 @@ export function initialViewState(): ViewState {
     items: withEntry<Item[]>({}, MAIN, []),
     tools: Object.create(null) as IdMap<ToolView>,
     escalations: Object.create(null) as IdMap<EscalationView>,
+    held: Object.create(null) as IdMap<true>,
     queue: [],
     side: [],
     turnCount: 0,
@@ -936,6 +948,7 @@ export function parseSessions(raw: unknown): SessionEntry[] {
       openEscalations: typeof s.open_escalations === 'number' ? s.open_escalations : 0,
       here: s.here === true,
       stale: s.stale === true,
+      startedAt: typeof s.started_at === 'string' && s.started_at ? s.started_at : null,
     }));
   return [...list.filter((s) => s.here), ...list.filter((s) => !s.here)];
 }
@@ -1001,7 +1014,7 @@ function appendItem(state: ViewState, key: AgentKey, item: DistributiveOmit<Item
 }
 
 /**
- * Remove the tools and escalations referenced by dropped items.
+ * Remove the tools (with their held marks) and escalations referenced by dropped items.
  *
  * @param state The current state (not modified).
  * @param dropped Items that are removed from their list.
@@ -1018,6 +1031,7 @@ function dropReferenced(state: ViewState, dropped: readonly Item[]): ViewState {
     ...state,
     tools: withoutEntries(state.tools, tools),
     escalations: withoutEntries(state.escalations, escalations),
+    held: withoutEntries(state.held, tools),
   };
 }
 
@@ -1324,6 +1338,7 @@ function clearTranscript(state: ViewState): ViewState {
     items: withEntry<Item[]>({}, MAIN, []),
     tools: Object.create(null) as IdMap<ToolView>,
     escalations: Object.create(null) as IdMap<EscalationView>,
+    held: Object.create(null) as IdMap<true>,
     subagents: Object.create(null) as IdMap<SubagentView>,
     agents: [],
     queue: [],
@@ -1668,6 +1683,14 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       }));
       const launched = isAgentLaunch(own(next.tools, e.tool_use_id)?.name) || Boolean(own(next.subagents, e.tool_use_id));
       return launched ? recordAgentResult(next, e.tool_use_id, content, Boolean(e.is_error)) : next;
+    }
+    case 'step.held': {
+      // The session holds a step back while a decision about another one is open, and says
+      // so when the hold begins and when it ends (agent/records/PLAN.md D237 (6)).
+      const e = p as unknown as StepHeld;
+      if (!str(e.tool_use_id)) return state;
+      if (e.held === true) return own(state.held, e.tool_use_id) ? state : { ...state, held: withEntry(state.held, e.tool_use_id, true as const) };
+      return own(state.held, e.tool_use_id) ? { ...state, held: withoutEntries(state.held, [e.tool_use_id]) } : state;
     }
     case 'chat.queue': {
       const e = p as unknown as ChatQueue;

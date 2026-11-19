@@ -171,6 +171,9 @@ button.chip.decision:hover { background: var(--calu-hover); }
 .chip.decision.deny { color: var(--calu-err); }
 .chip.decision.escalate { color: var(--calu-warn); }
 .chip.decision.pending { color: var(--calu-muted); }
+/* A step calu holds back until another decision is made: dashed, so it reads as "waiting", not as a verdict. */
+.chip.decision.held { color: var(--calu-warn); border-style: dashed; font-weight: 500; }
+.chip.agent-status.held { color: var(--calu-warn); border-color: currentColor; border-style: dashed; }
 .chip.agent-status.running { color: var(--calu-accent-text); border-color: currentColor; }
 .chip.agent-status.completed { color: var(--calu-ok); border-color: currentColor; }
 .chip.agent-status.failed { color: var(--calu-err); border-color: currentColor; }
@@ -299,18 +302,20 @@ select.pill option {
 .tabs {
   flex: none;
   display: flex;
-  gap: 2px;
+  flex-wrap: wrap;
+  gap: 0 2px;
   padding: 0 6px;
   border-bottom: 1px solid var(--calu-border);
-  overflow-x: auto;
-  scrollbar-width: none;
+  /* Wrapped rows keep every running or waiting tab in sight; beyond three rows the bar scrolls. */
+  max-height: calc(3 * 2.1em + 6px);
+  overflow-y: auto;
 }
 .tab {
   flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 16em;
+  max-width: 14em;
   padding: 5px 8px;
   border: none;
   border-bottom: 2px solid transparent;
@@ -329,6 +334,7 @@ select.pill option {
   white-space: nowrap;
 }
 .tab .chip { font-size: 0.78em; padding: 0 5px; }
+.tab.folded { color: var(--calu-muted); font-style: italic; }
 .status-mark {
   flex: none;
   width: 7px;
@@ -445,8 +451,10 @@ select.pill option {
 }
 .list:focus { outline: none; }
 .jump {
+  /* Centred: on the right it covered the decision chips of the rows behind it. */
   position: absolute;
-  right: 14px;
+  left: 50%;
+  transform: translateX(-50%);
   bottom: 8px;
   display: inline-flex;
   align-items: center;
@@ -746,6 +754,15 @@ a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-
   gap: 6px;
   min-width: 0;
 }
+.esc-line-note {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--calu-muted);
+  font-style: italic;
+}
 .esc-line-text {
   flex: 1;
   min-width: 0;
@@ -1024,6 +1041,13 @@ a.tool-head.file-link { flex: 0 1 auto; margin-right: auto; color: var(--vscode-
   opacity: 0.7;
 }
 .menu-note { padding: 3px 8px; font-size: 0.9em; opacity: 0.75; overflow-wrap: anywhere; }
+.menu-footer {
+  position: sticky;
+  bottom: -4px;
+  margin: 0 -4px -4px;
+  padding: 0 4px 4px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+}
 .menu-separator { margin: 4px 0; border-top: 1px solid var(--vscode-menu-separatorBackground, var(--calu-border)); }
 .menu-item {
   display: block;

@@ -71,6 +71,11 @@ export interface Ctx {
   escDrafts: Record<string, EscalationDraft>;
   /** The files that tool calls named (cached per `view.tools`). */
   fileIndex(): FileIndex;
+  /**
+   * The steps calu holds back now (`heldTools`) and their number per agent key (`heldByAgent`),
+   * cached per state.
+   */
+  held(): { tools: Set<string>; byAgent: Record<string, number> };
 }
 
 /** Number of lines of thinking shown before "Show all" (finished) or as the tail (streaming). */
@@ -112,7 +117,8 @@ export function itemDeps(item: Item, ctx: Ctx): unknown[] {
     case 'tool': {
       const tool = own(ctx.view.tools, item.toolUseId);
       const agent = tool && isAgentLaunch(tool.name) ? ctx.view.agents.find((a) => a.agent_id === tool.toolUseId) : undefined;
-      return [item, tool, agent, ctx.openTools.has(item.toolUseId), expanded];
+      const held = ctx.held();
+      return [item, tool, agent, ctx.openTools.has(item.toolUseId), expanded, held.tools.has(item.toolUseId), agent ? (held.byAgent[agent.agent_id] ?? 0) : 0];
     }
     case 'escalation':
       return [item, own(ctx.view.escalations, item.escalationKey), ctx.attached];
@@ -397,7 +403,17 @@ function renderTool(tool: ToolView | undefined, ctx: Ctx): HTMLElement {
         title: `${checkerLabel(tool.check.route)}: ${tool.check.decision}${tool.check.reason ? ` — ${oneLine(tool.check.reason, 200)}` : ''}. Click for the reason.`,
       }),
     );
-  } else if (!tool.result && !tool.stored) {
+  }
+  const held = ctx.held().tools.has(tool.toolUseId);
+  if (held) {
+    row.append(
+      el('span', 'chip decision held', 'held', {
+        title: tool.check
+          ? 'Approved, but calu holds this step back until the open decision about another step is made.'
+          : 'calu holds this step back until the open decision about another step is made; it is checked after that.',
+      }),
+    );
+  } else if (!tool.check && !tool.result && !tool.stored && !(launch && subagentRuns(tool, ctx))) {
     row.append(el('span', 'chip decision pending', '…', { title: 'Not checked yet' }));
   }
   const honesty = honestyRowChip(tool.honesty);
@@ -433,9 +449,24 @@ function renderTool(tool: ToolView | undefined, ctx: Ctx): HTMLElement {
 function agentChip(tool: ToolView, ctx: Ctx): HTMLElement {
   const agent = ctx.view.agents.find((a) => a.agent_id === tool.toolUseId);
   const status = agent?.status ?? (tool.result ? 'completed' : 'running');
-  return el('span', `chip agent-status ${status}`, agent?.background ? `${status} · bg` : status, {
-    title: agent?.background ? `${status}, runs in the background` : status,
+  const held = status === 'running' ? (ctx.held().byAgent[tool.toolUseId] ?? 0) : 0;
+  const shownStatus = held > 0 ? 'held' : status;
+  const title = held > 0 ? `running; ${held} of its steps held until the open decision is made` : status;
+  return el('span', `chip agent-status ${shownStatus}`, agent?.background ? `${shownStatus} · bg` : shownStatus, {
+    title: agent?.background ? `${title}, runs in the background` : title,
   });
+}
+
+/**
+ * Tell whether the subagent an Agent/Task call launched is still running.
+ *
+ * @param tool The Agent/Task tool view.
+ * @param ctx The render context.
+ * @returns True if `agents.update` lists it as running, or (not listed) the call has no result.
+ */
+function subagentRuns(tool: ToolView, ctx: Ctx): boolean {
+  const agent = ctx.view.agents.find((a) => a.agent_id === tool.toolUseId);
+  return (agent?.status ?? (tool.result ? 'completed' : 'running')) === 'running';
 }
 
 /**
@@ -604,7 +635,9 @@ function renderEscalation(esc: EscalationView | undefined, ctx: Ctx): HTMLElemen
     );
   }
   card.append(title);
-  if (esc.reason) card.append(el('div', 'esc-reason', esc.reason));
+  // calu's reason for a question is "Claude asks: <the question> (<the options>)": the card
+  // shows the question and the options itself, so the reason would say it twice.
+  if (esc.reason && !(asks && esc.reason.startsWith('Claude asks:'))) card.append(el('div', 'esc-reason', esc.reason));
   const draft = draftOf(ctx, esc);
   if (asks) esc.questions.forEach((q, i) => card.append(questionElement(esc, q, i, draft.choices[i], Boolean(esc.pending))));
   else if (esc.rendered) card.append(markdown(esc.rendered, 'md esc-step'));
@@ -733,6 +766,9 @@ function renderClosedEscalation(esc: EscalationView, attrs: Record<string, strin
     el('span', 'tool-name', esc.questions.length > 0 ? 'Question' : esc.toolName),
     el('span', 'esc-line-text', oneLine(first, 160)),
   );
+  // What the user said is the part of a decided card one looks for: on the line itself.
+  const said = esc.answer ?? esc.note ?? '';
+  if (said) summary.append(el('span', 'esc-line-note', `"${oneLine(said, 80)}"`, { title: esc.answer ? 'Your answer' : 'Your note' }));
   card.append(summary);
   if (esc.answer) card.append(el('div', 'esc-outcome', `Your answer: ${esc.answer}`));
   if (esc.note) card.append(el('div', 'esc-outcome', `Your note: ${esc.note}`));
@@ -760,12 +796,14 @@ export function renderSubagentHead(tab: string, ctx: Ctx): HTMLElement | undefin
   if (!sub && !agent) return undefined;
   const card = el('section', 'item agent-head', undefined, { 'data-testid': `agent-head-${tab}`, 'aria-label': 'Task of this subagent' });
   const title = el('div', 'agent-title');
-  const status = agent?.status ?? 'running';
+  const running = agent?.status ?? 'running';
+  const held = running === 'running' ? (ctx.held().byAgent[tab] ?? 0) : 0;
+  const status = held > 0 ? 'held' : running;
   title.append(
     icon('agent'),
     el('span', 'agent-name', sub?.description || agent?.description || 'Subagent'),
     el('span', 'chip', sub?.subagentType ?? agent?.subagent_type ?? 'subagent'),
-    el('span', `chip agent-status ${status}`, status),
+    el('span', `chip agent-status ${status}`, status, held > 0 ? { title: `running; ${held} of its steps held until the open decision is made` } : {}),
   );
   if (sub?.background ?? agent?.background) title.append(el('span', 'chip', 'background'));
   card.append(title);
@@ -787,7 +825,14 @@ export function renderSubagentHead(tab: string, ctx: Ctx): HTMLElement | undefin
  * @returns The subagent's entries of the state and the expand flags of the card.
  */
 export function subagentHeadDeps(tab: string, ctx: Ctx): unknown[] {
-  return [tab, own(ctx.view.subagents, tab), ctx.view.agents.find((a) => a.agent_id === tab), ctx.expanded.has(`task:${tab}`), ctx.expanded.has(`agent-result:${tab}`)];
+  return [
+    tab,
+    own(ctx.view.subagents, tab),
+    ctx.view.agents.find((a) => a.agent_id === tab),
+    ctx.expanded.has(`task:${tab}`),
+    ctx.expanded.has(`agent-result:${tab}`),
+    ctx.held().byAgent[tab] ?? 0,
+  ];
 }
 
 /**

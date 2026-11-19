@@ -323,7 +323,7 @@ describe('header state', () => {
     ]);
     expect(s.sessions.loaded).toBe(true);
     expect(s.sessions.list.map((x) => x.id)).toEqual(['s-here', 's-other']);
-    expect(s.sessions.list[0]).toEqual({ id: 's-here', name: 'refactor', directory: '/w', state: 'escalated', openEscalations: 2, here: true, stale: false });
+    expect(s.sessions.list[0]).toEqual({ id: 's-here', name: 'refactor', directory: '/w', state: 'escalated', openEscalations: 2, here: true, stale: false, startedAt: null });
     expect(s.serverHelp?.tool).toBe('tmux');
     expect(s.hints).toHaveLength(1);
     // An error keeps the last list; an empty ui.serverHelp clears the help.

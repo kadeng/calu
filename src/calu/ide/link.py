@@ -214,7 +214,7 @@ class SessionLink:
                     self.error = error
                     return
             except (OSError, ConnectionError, TimeoutError) as error:
-                reason = f"connecting failed: {error}"
+                reason = _connect_failure(error)
                 if first:
                     self.error = error
                     return
@@ -232,10 +232,12 @@ class SessionLink:
                 log.warning("the connection to the calu session ended: %s", reason)
                 self.is_lost = True
                 self._link.lost()
-                self._queue_link("lost", f"the connection to the session ended: {reason}")
+                # The clients put "connection lost" / "reconnecting" in front: the message is
+                # the reason alone.
+                self._queue_link("lost", reason)
                 return
             log.info("the session connection closed (%s); connecting again", reason)
-            self._queue_link("reconnecting", f"connecting to the session again ({reason})")
+            self._queue_link("reconnecting", reason)
             if not at_once:
                 await anyio.sleep(wait_s)
                 wait_s = min(LONGEST_WAIT_S, max(FIRST_WAIT_S, wait_s * 2))
@@ -285,3 +287,26 @@ class SessionLink:
                 await self._notify(method, params)
             except Exception:
                 log.info("a notification to the editor could not be written", exc_info=True)
+
+
+def _connect_failure(error: BaseException) -> str:
+    """Say in words why a connection to the session could not be made.
+
+    Args:
+        error: The exception of the connection attempt.
+
+    Returns:
+        A sentence for a person: a refused connection means that nothing listens at the
+        session's address (its server or the session stopped); other errors are named by
+        their text without the error number.
+
+    Example:
+        `_connect_failure(ConnectionRefusedError(111, "Connection refused"))` returns
+        "nothing answers at the session's address: the session or its calu server stopped".
+    """
+    if isinstance(error, ConnectionRefusedError):
+        return "nothing answers at the session's address: the session or its calu server stopped"
+    if isinstance(error, TimeoutError):
+        return "the session did not answer in time"
+    text = error.strerror if isinstance(error, OSError) and error.strerror else str(error)
+    return f"connecting failed: {text or type(error).__name__}"

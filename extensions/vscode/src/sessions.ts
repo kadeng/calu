@@ -49,11 +49,23 @@ export const SLOW_START_MS = 3000;
 export class Sessions {
   /** Id of the attached session, or null. */
   attachedId: string | null = null;
+  private last: string | null = null;
   /**
    * Id of the session that was attached last and was not left on purpose: the one to attach
-   * to again after the bridge was restarted. Cleared by `detach()`.
+   * to again after the bridge was restarted or the window was reloaded. Cleared by `detach()`
+   * and by a failed `reattach()`. Side effect of setting it: `remember` stores it (the
+   * workspace state), so that a reloaded window attaches to the same session.
+   *
+   * @returns The id, or null.
    */
-  lastAttachedId: string | null = null;
+  get lastAttachedId(): string | null {
+    return this.last;
+  }
+  set lastAttachedId(id: string | null) {
+    if (id === this.last) return;
+    this.last = id;
+    this.remember(id);
+  }
   /** The last answer of `ide.status`, or null if it was not asked yet or failed. */
   status: IdeStatusResult | null = null;
   /** True if the last `ide.start` failed because no server answered. */
@@ -70,6 +82,8 @@ export class Sessions {
    * @param onChanged Called when `status`, `noServer` or `attachedId` changed (the caller
    *   recomputes the setup hints).
    * @param output The "calu" output channel.
+   * @param remember Stores the id of the last attached session (or null) where the next
+   *   activation finds it; called whenever `lastAttachedId` changes.
    */
   constructor(
     private readonly bridge: Bridge,
@@ -78,6 +92,7 @@ export class Sessions {
     private readonly onChanged: () => void,
     private readonly output: vscode.OutputChannel,
     private readonly sessionName: (sessionId: string) => string | undefined = () => undefined,
+    private readonly remember: (sessionId: string | null) => void = () => undefined,
   ) {}
 
   /**

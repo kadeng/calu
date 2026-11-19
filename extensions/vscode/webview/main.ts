@@ -24,6 +24,9 @@ import { ACTIVITY_VERBS, FRAME_MS, activityLine, sessionPhase } from '../src/sha
 import {
   buildFileIndex,
   checkImage,
+  foldTabs,
+  heldByAgent,
+  heldTools,
   newestItemIds,
   oneLine,
   otherOpenEscalations,
@@ -40,6 +43,7 @@ import {
   type FileIndex,
   type SessionMenuAction,
   type SetupCard,
+  type TabView,
 } from '../src/shared/chatModel';
 import { fileClick, menuFor, rowClick, type ItemActionId } from '../src/shared/itemMenu';
 import { LEVELS, levelLabel, levelOf, type LevelId } from '../src/shared/levels';
@@ -128,6 +132,9 @@ let settings: ChatSettings = { showThinking: true, escalationSound: true };
 
 let fileIndexFor: ViewState['tools'] | undefined;
 let fileIndexCache: FileIndex = new Map();
+/** The state `heldCache` was computed from (the held steps depend on these four maps). */
+let heldFor: unknown[] = [];
+let heldCache: { tools: Set<string>; byAgent: Record<string, number> } = { tools: new Set(), byAgent: {} };
 
 /** The context of the item renderers (`items.ts`); `view`, `settings` and `attached` are kept current. */
 const ctx: Ctx = {
@@ -143,6 +150,14 @@ const ctx: Ctx = {
       fileIndexCache = buildFileIndex(view.tools);
     }
     return fileIndexCache;
+  },
+  held: () => {
+    const deps = [view.tools, view.escalations, view.held, view.agents];
+    if (!sameDeps(heldFor, deps)) {
+      heldFor = deps;
+      heldCache = { tools: heldTools(view), byAgent: heldByAgent(view) };
+    }
+    return heldCache;
   },
 };
 
@@ -307,7 +322,7 @@ function buildSessionButton(): HTMLElement[] {
  */
 function buildSessionMenu(): HTMLElement {
   const menu = el('div', 'menu session-menu', undefined, { role: 'menu', 'aria-label': 'Sessions' });
-  let separated = false;
+  let footer: HTMLElement | undefined;
   for (const entry of sessionMenu(view)) {
     if (entry.kind === 'heading') menu.append(el('div', 'menu-heading', entry.label, { role: 'presentation' }));
     else if (entry.kind === 'note') menu.append(el('div', 'menu-note', entry.label, { role: 'presentation' }));
@@ -328,13 +343,15 @@ function buildSessionMenu(): HTMLElement {
       b.append(first, el('span', 'entry-directory', entry.directory));
       menu.append(b);
     } else {
-      if (!separated) {
-        menu.append(el('div', 'menu-separator', undefined, { role: 'separator' }));
-        separated = true;
+      if (!footer) {
+        // The actions stay at the lower edge while a long list of sessions scrolls.
+        footer = el('div', 'menu-footer', undefined, { role: 'presentation' });
+        footer.append(el('div', 'menu-separator', undefined, { role: 'separator' }));
+        menu.append(footer);
       }
       const b = actionButton(entry.label, 'sessionAction', { class: 'menu-item', role: 'menuitem', 'data-id': entry.id });
       b.disabled = !entry.enabled;
-      menu.append(b);
+      footer.append(b);
     }
   }
   return menu;
@@ -523,29 +540,77 @@ function renderHeader(): void {
 function buildTabs(): HTMLElement[] {
   const tabs = tabList(view, ui.tab, seen);
   if (tabs.length < 2) return [];
+  const { shown: visible, folded } = foldTabs(tabs, ui.tab);
   const nav = el('div', 'tabs', undefined, { role: 'tablist', 'aria-label': 'Agents' });
-  for (const t of tabs) {
-    const active = t.key === ui.tab;
-    const title = t.key === MAIN ? 'The main agent' : `${t.label} (${t.status}${t.background ? ', background' : ''})`;
-    const b = actionButton('', 'tab', {
-      class: `tab${active ? ' active' : ''}`,
-      role: 'tab',
-      'aria-selected': String(active),
-      'aria-controls': 'transcript',
-      tabindex: active ? '0' : '-1',
-      'data-tab': t.key,
-      'data-testid': t.key === MAIN ? 'tab-main' : `tab-${t.key}`,
-      title: `${title}${t.openEscalations ? `\n${t.openEscalations} step(s) wait for your decision` : ''}`,
+  for (const t of visible) nav.append(tabButton(t));
+  if (folded.length > 0) {
+    const more = actionButton('', 'foldedTabs', {
+      class: 'tab folded',
+      'aria-haspopup': 'menu',
+      'aria-expanded': 'false',
+      'data-testid': 'tabs-folded',
+      title: `${folded.length} finished subagent${folded.length === 1 ? '' : 's'}: click to open one`,
     });
-    b.append(el('span', 'tab-label', t.label));
-    if (t.status === 'running') b.append(el('span', 'status-mark running', undefined, { 'aria-hidden': 'true' }));
-    if (t.status) b.append(el('span', `chip agent-status ${t.status}`, t.status));
-    if (t.background) b.append(el('span', 'chip', 'bg', { title: 'Runs in the background' }));
-    if (t.openEscalations > 0) b.append(el('span', 'badge', String(t.openEscalations)));
-    else if (t.attention) b.append(el('span', 'attention', undefined, { title: 'New output', 'aria-label': 'new output' }));
-    nav.append(b);
+    more.append(el('span', 'tab-label', `${folded.length} finished`), icon('chevronDown'));
+    nav.append(more);
   }
   return [nav];
+}
+
+/**
+ * Build one tab of the bar: label, status mark and chip, background mark, the number of open
+ * escalations or "held", and a dot for unseen output.
+ *
+ * @param t The tab.
+ * @returns The `role="tab"` button.
+ */
+function tabButton(t: TabView): HTMLElement {
+  const active = t.key === ui.tab;
+  const what = t.key === MAIN ? 'The main agent' : `${t.label} (${t.status}${t.background ? ', background' : ''})`;
+  const lines = [what];
+  if (t.openEscalations) lines.push(`${t.openEscalations} step(s) wait for your decision`);
+  if (t.held) lines.push(`${t.held} step(s) held until the open decision is made`);
+  const b = actionButton('', 'tab', {
+    class: `tab${active ? ' active' : ''}`,
+    role: 'tab',
+    'aria-selected': String(active),
+    'aria-controls': 'transcript',
+    tabindex: active ? '0' : '-1',
+    'data-tab': t.key,
+    'data-testid': t.key === MAIN ? 'tab-main' : `tab-${t.key}`,
+    title: lines.join('\n'),
+  });
+  const status = t.status === 'running' && t.held > 0 && t.openEscalations === 0 ? 'held' : t.status;
+  // A running subagent has the pulsing mark in front of its name only: the word would cost a
+  // tenth of a narrow bar, and behind the name it looked like the dot of new output.
+  if (status === 'running') b.append(el('span', 'status-mark running', undefined, { 'aria-hidden': 'true' }));
+  b.append(el('span', 'tab-label', t.label));
+  if (status && status !== 'running') b.append(el('span', `chip agent-status ${status}`, status));
+  else if (t.held > 0 && t.openEscalations === 0) b.append(el('span', 'chip agent-status held', 'held'));
+  if (t.background) b.append(el('span', 'chip', 'bg', { title: 'Runs in the background' }));
+  if (t.openEscalations > 0) b.append(el('span', 'badge', String(t.openEscalations)));
+  else if (t.attention) b.append(el('span', 'attention', undefined, { title: 'New output', 'aria-label': 'new output' }));
+  return b;
+}
+
+/**
+ * Build the menu of the finished subagents that `foldTabs` took out of the bar.
+ *
+ * @returns A `role="menu"` element with one entry per folded tab.
+ */
+function buildFoldedMenu(): HTMLElement {
+  const menu = el('div', 'menu', undefined, { role: 'menu', 'aria-label': 'Finished subagents' });
+  const { folded } = foldTabs(tabList(view, ui.tab, seen), ui.tab);
+  menu.append(el('div', 'menu-heading', 'Finished subagents', { role: 'presentation' }));
+  for (const t of folded) {
+    const b = actionButton('', 'tab', { class: 'menu-item', role: 'menuitem', 'data-tab': t.key, title: t.label });
+    const line = el('span', 'entry-line');
+    line.append(el('span', 'entry-title', t.label), el('span', `chip agent-status ${t.status}`, t.status));
+    if (t.attention) line.append(el('span', 'attention', undefined, { title: 'New output', 'aria-label': 'new output' }));
+    b.append(line);
+    menu.append(b);
+  }
+  return menu;
 }
 
 /**
@@ -608,14 +673,25 @@ function buildSetupCard(card: SetupCard): HTMLElement {
   if (card.sessionList && view.sessions.list.length > 0) {
     const pick = el('div', 'setup-sessions', undefined, { role: 'group', 'aria-label': 'Running sessions' });
     pick.append(el('div', 'label', 'Or attach to a running session'));
-    for (const entry of sessionMenu(view)) {
-      if (entry.kind !== 'session') continue;
+    // The sessions of this folder; those of other folders only if none runs here, and then at
+    // most five: the dropdown lists everything.
+    const all = sessionMenu(view).filter((e) => e.kind === 'session');
+    const here = new Set(view.sessions.list.filter((s) => s.here).map((s) => s.id));
+    const mine = all.filter((e) => here.has(e.id));
+    const listed = mine.length > 0 ? mine : all.slice(0, 5);
+    for (const entry of listed) {
       const b = actionButton('', 'switchSession', { class: 'menu-item session-entry', 'data-id': entry.id, title: entry.directoryFull });
       const first = el('span', 'entry-line');
       first.append(el('span', `dot ${entry.stale ? 'off' : entry.phase}`), el('span', 'entry-title', entry.title));
       if (entry.openEscalations > 0) first.append(el('span', 'badge', String(entry.openEscalations)));
       b.append(first, el('span', 'entry-directory', entry.directory));
       pick.append(b);
+    }
+    const more = all.length - listed.length;
+    if (more > 0) {
+      pick.append(
+        actionLink(`${more} more in other folders…`, 'sessionMenu', { title: 'Open the session list', 'data-testid': 'setup-more-sessions' }),
+      );
     }
     box.append(pick);
   }
@@ -840,11 +916,22 @@ function announceEscalations(): void {
  */
 function buildStrip(): HTMLElement[] {
   const entries = otherOpenEscalations(view, ui.tab);
-  if (entries.length === 0) return [];
+  const held = Object.values(ctx.held().byAgent).reduce((n, k) => n + k, 0);
+  if (entries.length === 0 && held === 0) return [];
   const strip = el('div', 'strip', undefined, { role: 'group', 'aria-label': 'Steps that wait for your decision in other tabs' });
-  strip.append(icon('pause'), el('span', 'strip-label', `${entries.length} waiting in other tabs:`));
-  for (const e of entries) {
-    strip.append(actionButton(e.label, 'jumpEsc', { class: 'chip-button', 'data-tab': e.tab, 'data-key': e.key, title: 'Show this step' }));
+  strip.append(icon('pause'));
+  if (entries.length > 0) {
+    strip.append(el('span', 'strip-label', `${entries.length} waiting in other tabs:`));
+    for (const e of entries) {
+      strip.append(actionButton(e.label, 'jumpEsc', { class: 'chip-button', 'data-tab': e.tab, 'data-key': e.key, title: 'Show this step' }));
+    }
+  }
+  if (held > 0) {
+    strip.append(
+      el('span', 'strip-held', `${held} step${held === 1 ? '' : 's'} held until you decide`, {
+        title: 'While a decision is open, calu approves no other step of the session; held steps run or are checked after it.',
+      }),
+    );
   }
   return [strip];
 }
@@ -1426,7 +1513,7 @@ function render(): void {
   renderHeader();
   const setupOnly = renderSetup();
   renderList(setupOnly);
-  setSection(stripSlot, JSON.stringify(otherOpenEscalations(view, ui.tab)), buildStrip);
+  setSection(stripSlot, JSON.stringify([otherOpenEscalations(view, ui.tab), ctx.held().byAgent]), buildStrip);
   setSection(sideSlot, JSON.stringify([ui.side, view.side]), buildSide);
   setSection(queueSlot, JSON.stringify(view.queue), buildQueue);
   renderComposer();
@@ -1699,7 +1786,12 @@ function onClick(event: MouseEvent): void {
       }
       return;
     case 'tab':
+      if (inPopup) closePopup();
       switchTab(data.tab ?? MAIN);
+      return;
+    case 'foldedTabs':
+      if (openPopupId() === 'foldedTabs') closePopup();
+      else openPopup('foldedTabs', buildFoldedMenu(), { anchor: actionEl });
       return;
     case 'jump':
       stick = true;
