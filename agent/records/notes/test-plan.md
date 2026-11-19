@@ -886,3 +886,91 @@ in `~/work/demo`, held chips, the approval card, "9 steps held until you decide"
 banana") and `docs/assets/web-live-subagents.png` (the box's live view of `swarm`, no host name
 in view; the card still shows `/home/dev/work/demo` and the scripted reason).
 
+
+### K. Desktop round 2026-11-19 evening
+
+Run 2026-11-19 (20:25 to 21:10 local, with one pause while the host slept) by an agent in the
+Cua desktop (`calu-uitest`) and the SSH box (`calu-sshbox`). calu installed in both from an
+exported `HEAD` (`git archive`), the `.vsix` and the PyCharm plugin built from `HEAD`. The
+scripted server first, then a short pass with the real Claude Code 2.1.327 on Haiku (the
+owner's key; four short prompts and the trace commits, a few cents). Screenshots
+`~/.cache/calu-uitest/share/round-k/NN.png` (numbers below); a selection in
+`agent/records/notes/screenshots/k-*.png`. Every comment was checked in the `comments` table
+of the database that recorded it (path, lines, `ref`, the excerpt, before and after).
+
+**Comments for Claude** (the existing flow; "between turns" starts a turn, "during a turn" is
+taken in after the running action)
+
+| # | Case | Status |
+|---|---|---|
+| K1 | VSCode local, file comment (Ctrl+Alt+K), between turns: "[User comment on `greeter.py`, lines 2-3]" with the excerpt; recorded `file`, lines 2-3 (05-07) | ok |
+| K2 | VSCode local, diff of Claude's edit, after side, during a turn; `ref` `edit:<tool_use_id>`, before and after line 3 (10-12) | ok |
+| K3 | VSCode local, the same diff side by side, before side, three lines, through the context menu (14, 15) | ok |
+| K4 | VSCode local, git diff (Open Changes), before side; `ref` "index or HEAD" (17, 18); the same after side between turns (22) | ok |
+| K5 | the comments sent while a question waited appear in the turn after it was answered, in order (21) | ok |
+| K6 | full-screen client `/comment greeter.py 6 8 …` between turns; `/diff`, `v`, `k`, Enter during a turn (after side, lines 2-3); `s` (unified) and Enter on the removed line: side before, "(old content)" | ok. The full-screen client sends no `ref` (VSCode sends `edit:<id>`): judgement call 4 |
+| K7 | PyCharm mode 1 (local): a file comment during a turn; the diff of the edit opened from the chat, before side (Ctrl+Alt+K) and after side (context menu) (24-31) | ok; PyCharm sends no `ref` either |
+| K8 | VSCode Remote-SSH (the box, password store): file comment during a turn, both sides of the edit's diff; recorded in the box's database (35-37) | ok |
+| K9 | PyCharm mode 3 (SSH sync, `~/work/sshproj3`): file comment, both diff sides; recorded on the box (43-45) | ok |
+| K10 | PyCharm mode 2 (JetBrains remote development, backend on the box): a normal editor | fixed d05abf0: a comment in a file Claude never edited was refused ("This editor shows no file of the project", 67), and one in a file Claude had edited went out as a diff comment on that edit ("(after the change)", recorded `diff`, 65, 66): the client's files are not in its local file system, so only the text lookup of the diffs remained. The backend now names the file (`projectPathOf`); afterwards both are file comments (72, 73) and the diff of the edit still gives diff comments on both sides (76-78) |
+| K11 | real Claude Code: a PyCharm comment on `greeter.py` line 3 right after a turn ("also quote this line"): Claude answered from the comment and said it had not opened the file (90) | ok |
+| K12 | real Claude Code: `/comment calc.py 1 2 rename add to add_numbers` from the full-screen client while a 20 s command ran (item 42's session): Claude read it at the next step, made the rename and committed it with the requested file | ok |
+
+**Live permission-mode switch** (TESTING item 43, the real Claude Code; VSCode, PyCharm, the
+web live view, the full-screen client, the line client, all attached to one session)
+
+| # | Case | Status |
+|---|---|---|
+| K13 | every client shows `auto` at the start (81-84) | ok |
+| K14 | VSCode → `default` during a turn of four 12 s commands: every client within a second (full-screen "changed by local:calu ide", line client `*** … default (switched by local:calu ide)`); commands 3 and 4 ran on the checkers' PASS alone | ok |
+| K15 | the call whose check was running when the switch landed (command 2): its hook had seen `auto` and gave no decision, then Claude Code, in `default`, asked; calu showed it as an escalation ("Claude Code's own approval asked …; the checkers had no objection") | open (core, `sdk_runner.pre_tool_use`): safe, but a human is asked for a step nobody objected to. Judgement call 1 |
+| K16 | PyCharm → `acceptEdits` during the next turn; the web view shows "acceptEdits · switched by local:calu ide" (92, 95); `date # calu:test-escalate` in `acceptEdits` waited for a decision (93) | ok |
+| K17 | VSCode kept showing "Mode: Default" after the switch from PyCharm (93) | fixed cfe29f7: the header row was not redrawn for a new mode; after the fix a switch from the full-screen client moved it (99) |
+| K18 | web → `auto` while the escalation waited; allowed from the full-screen client (`a a`); audit rows `permission_mode` auto→default, default→acceptEdits (`local:calu ide`), acceptEdits→auto (`local:calu web`) | ok. Both IDEs record as `local:calu ide`: judgement call 2 |
+| K19 | full-screen client: `/mode ac` + Tab completes `acceptEdits`; `/mode plan`, `/mode bypassPermissions`, `/mode dontAsk` refused with their reasons, nothing changed | ok |
+| K20 | a switch between turns left the session "running" with no turn (VSCode "working", the line client `[running]`) | fixed 89c6feb: the runner's log line after a mode report marked the session busy; after the fix a switch through the relay between turns left it idle |
+| K21 | `claude.require_auto_mode` and a new session: VSCode → Default refused naming the setting (102), but the selector stayed on "Default" | fixed 8d16c12: the selector returns to the reported mode at once (103). The running session keeps the setting it started with; `calu config unset` needs a new session (as D247 says) |
+| K22 | through the relay with a server token (`calu attach --plain ws://127.0.0.1:8822 --token=…`): refused under `require_auto_mode`; afterwards, in a new session, `/mode acceptEdits` ("switched by local:calu attach via relay (k-relay2)"), idle kept | ok |
+| K23 | `/new` through the relay with a valid server token on `calu serve --insecure` was refused "asking for a session needs a server token" | fixed 571c932: a loopback client of an insecure relay that sends a valid token holds it; afterwards `/new` started a session |
+| K24 | a switch made before Claude Code's first turn prints the warning "Claude Code was started in the permission mode "auto" but runs in "acceptEdits" (the model may have no auto mode)" | open (core wording): the user switched it himself. Judgement call 3 |
+
+**File synchronisation of mode 3, cases not seen before** (scripted server, `~/work/sshproj3`
+against `/home/dev/project`)
+
+| # | Case | Status |
+|---|---|---|
+| K25 | local unsaved edit of `k_a.txt` against its deletion on the server: card, chat line, notification, project view mark; "Keep Mine" puts the local file back on the server, equal hashes (48-50) | ok |
+| K26 | offline (network cut and the bridge's ssh killed): `k_c.txt` line 2 changed and saved, `k_b.txt` deleted locally, "offline: 2 changes queued"; on the server the same line of `k_c.txt` changed and `k_b.txt` changed (51-54) | ok |
+| K27 | network back: the replay gives two conflicts, "both sides changed the same lines" and "changed on the server, deleted here" (55); the three-way dialog for `k_c.txt` with both lines taken, equal on both sides (56-59); "Take Theirs" for `k_b.txt` restores the server's file locally (60, 61). Nothing was lost | ok. In the deletion dialog "Keep Mine" is the focused default also when it means deleting the other side's changed file: judgement call 5 |
+
+**Final redaction pass at commit** (TESTING item 42, the real Claude Code and redaction model,
+the throwaway repository `~/work/tracedemo` in the desktop, `traces.enabled` for its project)
+
+| # | Case | Status |
+|---|---|---|
+| K28 | "… add notes.txt with the line: ask Jane Roe, jane.roe@example.org, then commit it": Claude's first try (one line with `sed`, `git add`, `git commit`) was denied by calu's commit rule, it then committed alone; log "session traces finalized for the commit"; the trace is in the commit, ends with the marker line, name and address replaced, the request otherwise word for word | ok. The redactor also replaced the start time ("Started: [redacted: time]") |
+| K29 | second message and commit: `git diff HEAD~1 HEAD -- agent/traces` adds lines only | ok |
+| K30 | `traces.redactor_model test:missing`: the commit refused with "final pass failed", nothing committed; Claude reported it and did not retry. Afterwards the session had a second trace file `session_002.md` for the same calu session | ok; the second file is unexplained: open (traces, not examined) |
+| K31 | `calu traces hook install` refused over a hook of our own; `--chain` kept it; a hand-appended line with a name and an address committed from a shell: redacted, new marker; `hook remove` restored the old hook | ok. The commit from an IDE and the case with the database stopped: not run |
+
+Leak check after the round (a script that prints counts only): the key in none of 8,370 files of
+`~/work`, `/tmp`, the round's screenshots and calu's state directory. The real server was
+stopped again and the scripted server restarted; the SSH box got calu from `HEAD` again.
+
+Judgement calls for the owner (each also in the report):
+
+1. A switch to `default` that lands while a call is being checked: that call was checked in
+   `auto`, gets no decision from calu, and Claude Code (now in `default`) asks a human. Should
+   the hook take the mode the session holds when it answers (then the call runs on the
+   checkers' PASS) instead of the mode in the hook's input?
+2. VSCode and PyCharm both appear as `local:calu ide` in the audit log and in "switched by …".
+   Should the bridge name the editor (for example `calu ide (vscode)`)?
+3. The warning "started in auto but runs in acceptEdits (the model may have no auto mode)"
+   appears when the user switched the mode before Claude Code's first turn. Should a switch the
+   user made never produce that warning?
+4. The full-screen client and PyCharm send diff comments without `ref` (VSCode sends
+   `edit:<tool_use_id>`, or the git ref). Should all clients send it, so that the recorded
+   comment names the edit it was made on?
+5. In the sync dialog for "changed on the server, deleted here", "Keep Mine" (delete the
+   server's changed file) is the focused default. Should the default be the choice that
+   loses nothing (Take Theirs), or none?

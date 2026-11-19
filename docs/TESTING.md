@@ -827,8 +827,9 @@ escalation resolved from the database alone.
    hook of your own in place: refused; with `--chain`: kept and run after calu's), append a
    line to a trace file, `git add` it and commit from the IDE: the commit passes and the line
    is redacted; with the database stopped the same commit is refused with the message that
-   names `calu traces finalize --staged` and `--no-verify`. `calu traces hook remove`. Not run
-   yet; the unit tests cover it with stand-in models (`tests/unit/test_traces_finalize.py`,
+   names `calu traces finalize --staged` and `--no-verify`. `calu traces hook remove`. Run on
+   2026-11-19 with Haiku (test plan K28-K31), except the commit from an IDE and the stopped
+   database; the unit tests cover it with stand-in models (`tests/unit/test_traces_finalize.py`,
    `tests/unit/test_traces_session.py`).
 43. Switching Claude Code's permission mode while a session runs (PLAN D247), with a real
    `claude` and a model that has auto mode. Start a session; every client must show the mode
@@ -845,7 +846,8 @@ escalation resolved from the database alone.
    refused with their reasons and change nothing. With `calu config set
    claude.require_auto_mode true` and a new session, switching to `default` must be refused
    naming the setting. Through the relay of `calu serve` (a server token) the switch must work
-   as well. Not run yet; the unit, database and browser tests cover it with the scripted
+   as well. Run on 2026-11-19 with Haiku (test plan K13-K24); the unit, database and browser
+   tests cover it with the scripted
    runner (`tests/unit/test_permission_mode.py`, `tests/db/test_web_live.py`,
    `tests/browser/test_web_live_ui.py`, the vitest and Kotlin tests).
 
