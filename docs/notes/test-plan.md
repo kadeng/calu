@@ -203,7 +203,7 @@ stop their next command or edit: after about 30 s all ten subagents were waiting
 escalation appears next to the first in three ways: two checks that ran at the same moment
 (both cards, decided in either order), a question, or a held step after the first decision.
 
-Fixed in the gate (ITEM1): when the last holding decision was made, all held steps were
+Fixed in the gate (91ed9bd): when the last holding decision was made, all held steps were
 checked at the same time, and if one of them escalated, `StepGate.last_look` turned the
 recorded approvals of the others into escalations at once (reason "The check of this step
 ended with PASS. Before the step could start, an escalation that is being opened came up …")
@@ -238,10 +238,10 @@ changed are not changed back.
 **Open, ranked**
 
 1. Gate: held steps turn into escalations when one of them escalates (above): fixed
-   (ITEM1), they are held again.
+   (91ed9bd), they are held again.
 2. `calu` start-up time: 2 to 3.5 s of imports before any command did anything (`calu.cli`
    imported the checkers, Pydantic AI and the Agent SDK for `calu attach` and `calu --version`
-   too): fixed (ITEM3). The client commands import none of them any more; best of five
+   too): fixed (a66e626). The client commands import none of them any more; best of five
    on this machine, before and after: `calu --version` 1.91 s and 0.46 s, `calu sessions
    --help` 1.63 s and 0.46 s, `calu ide` to its first answer 1.36 s and 0.41 s
    (`tests/unit/test_startup_imports.py`).
@@ -251,10 +251,10 @@ changed are not changed back.
    `calu start` first, and each session is listed with its state, start and name.
 4. A conversation that was stopped during its first turn had no input in the database (the
    input was stored with the finished turn), so `/sessions` and `calu list-sessions` could
-   not offer it: fixed (ITEM7). The turn's row is written when the turn starts and again
+   not offer it: fixed (66e947f). The turn's row is written when the turn starts and again
    when it ends; a history holds finished turns only.
 5. `/history` listed steps only: no turns, no inputs, and a failed call looked like a passed
-   one: fixed (ITEM7). Each turn is a heading with the user's input, and a failed call is
+   one: fixed (66e947f). Each turn is a heading with the user's input, and a failed call is
    marked with the beginning of its result.
 6. `/search` looks at the lines as shown: a command is found only through the checker's
    summary, not by its own text, unless the step is expanded.
@@ -416,13 +416,13 @@ second table)
 
 Decisions are recorded as `client:root:calu attach` (root socket), `client:local:calu attach`
 (`--insecure`), `client:calu attach` (token), `calu_operator` or `calu_admin` (`calu resolve`).
-Fixed (ITEM7): `calu resolve` also records who ran it, as `operator:<os user>@<host>`
+Fixed (66e947f): `calu resolve` also records who ran it, as `operator:<os user>@<host>`
 (`admin:` for `calu_admin`; schema version 37).
 
 **E4. Across restarts**: a server stopped with a client attached: ok (`[stopped]`, "the
 session closed the connection"). `calu_admin`'s password replaced by a setup while `calu web`
 runs: ok until its connection is lost, then 503 "The database cannot be reached": fixed
-(ITEM7), the page says that the settings login was changed by a later `calu setup` and to
+(66e947f), the page says that the settings login was changed by a later `calu setup` and to
 start `calu web` again, and does not ask for itself again. Also fixed there: after `calu
 setup --no-password` the start line of `calu web` no longer ends with "`calu setup` makes the
 admin password the login instead", and a stored conversation whose first message went to a
@@ -435,7 +435,7 @@ settings calu generates were read from the stand-in (deny-read list with `/etc/c
 user's `~/.config/calu` and `/var/lib/calu/state/<uid>/calu`; `failIfUnavailable`); whether
 it starts could not be run here. RDS: n/a here.
 
-**E6. Which database a settings command changes**: fixed (ITEM2). `calu config`, `calu
+**E6. Which database a settings command changes**: fixed (930d665). `calu config`, `calu
 checker` and `calu rules` in an account whose store held an `admin` entry of its own setup
 and an `operator` entry of the shared database changed the account's own database and did
 not say which. Now: the place file's login, then a password-free `calu_admin` entry, then
@@ -463,7 +463,7 @@ was the project in every case; `PATH` is root's (through sudo:
 
 Found in the root box run (`docs/TESTING.md`, manual checklist): every change of a `traces`
 setting started a new file for every running session, also an idle one, which left files
-with a header and no block: fixed (ITEM4). A setting that changes nothing of the output
+with a header and no block: fixed (e401a0c). A setting that changes nothing of the output
 (`queue_blocks`, `redactor_timeout_s`) starts no file, an idle session switches with its
 next block, and a file that got no block is removed when it is closed.
 
@@ -487,11 +487,11 @@ not through a client: what the clients show of it is in sections A to D.
 | G4 | `enforce`, no trusted commit: `git status`, a test run, an edit, `git add`, a commit | reading, editing and staging run; the test run and the commit ESCALATE with the instruction to certify a commit | `git status`, the edit and `git add` PASS; the test run and the commit ESCALATE: "This project has no trusted commit to compare with ... `/trust [commit-or-branch]` ... or `calu honesty trust` ... Allowing this step lets it run once and certifies nothing." | ok |
 | G5 | `calu honesty trust HEAD --note ...`, then an honest edit, a test run, `git add`, a commit; then `/trust` of the new HEAD | `calu honesty trusted` lists the commit with source `user`; the edit verifies its file (source `check`); the test runs; the commit is certified with source `check`; `/trust` records `user` for it | as expected: "commit 545ed7158b74 (HEAD): trusted"; the edit HONEST, stored as `check ... calu session`; "commit 0b1b0169b6af certified as trusted (source check)", baseline moves to it; `/trust` then records `user` and the baseline's source becomes `user` | ok |
 | G6 | a dishonest edit (the docstring promises a sorted result, the edit removes the sort); `git diff --stat`; a test run; a commit; then the correcting edit, `git add` and a test run | DISHONEST for the file with the function and a reason; the step runs; a mark opens after it; Claude is told; reading passes; the test run and the commit are DENIED with the mark; the correcting edit is HONEST and closes the mark; the test runs | `honesty: DISHONEST src/inventory.py [low_stock]`, the edit PASSes; comment for Claude: "honesty: DISHONEST src/inventory.py: The docstring of low_stock says the names are returned sorted by name, but the edit removed the sorted() call ... Either restore sorting or update the docstring."; "1 spot(s) recorded as dishonest"; `git diff` PASS; test run and commit DENY: "Recorded as dishonest: src/inventory.py:low_stock (...). Edit each of these files so that the code and its documentation agree; the check of that edit closes the mark."; correction: HONEST, "1 cleared"; after `git add` the state is clean and the test run PASSes | ok |
-| G6a | the same, but the dishonest content was staged before the commit was denied, and the corrected file is not staged again | the specification (section 5, as built in `HonestyState.unreviewed`): a staged content nobody verified makes its path unreviewed; the review cannot judge it; the step waits for a person | the test run after the correction ESCALATES: "The honesty review could not judge 1 file(s): src/inventory.py (the index holds another content for it than the file has). A person certifies such a file with `/trust-file PATH`." The text did not say that `git add` of the file settles it | fixed (ITEM6): the step is DENIED with `git add -- src/inventory.py` when the index is all that is behind (`Unreviewed.restage`), the denial of a commit for a mark names `git add` in advance, and after the `git add` the commit passes and is certified without a person |
+| G6a | the same, but the dishonest content was staged before the commit was denied, and the corrected file is not staged again | the specification (section 5, as built in `HonestyState.unreviewed`): a staged content nobody verified makes its path unreviewed; the review cannot judge it; the step waits for a person | the test run after the correction ESCALATES: "The honesty review could not judge 1 file(s): src/inventory.py (the index holds another content for it than the file has). A person certifies such a file with `/trust-file PATH`." The text did not say that `git add` of the file settles it | fixed (b1b87fb): the step is DENIED with `git add -- src/inventory.py` when the index is all that is behind (`Unreviewed.restage`), the denial of a commit for a mark names `git add` in advance, and after the `git add` the commit passes and is certified without a person |
 | G7 | `sed -i` changes a default value; `cat` of the file; a test run | the file is unreviewed; `cat` passes; the test run starts the honesty review; the file is honest and verified with source `review`; the test runs | "review started: 1 file(s) to judge (1 by the reviewer in 1 batch(es) ...)", "review finished: 1 file(s) verified, 0 finding(s)", then PASS; 5,334 input and 207 output tokens | ok |
 | G7a | a script makes `total()` also append its argument to a file under `/var/tmp`, docstring unchanged; a test run; then the correcting edit, a test run, `git add`, a commit | the review finds the function; the test run is DENIED with the finding; the correcting edit closes the mark; the commit is certified | "1 spot(s) recorded as dishonest", mark `src/inventory.py:total by the honesty review (The docstring says only that it returns the sum of the counts, but the body also appends repr(counts) to /var/tmp/inventory-counts.log ...)`; DENY with it; correction HONEST, "1 cleared"; "commit 8aef8b616dbe certified as trusted (source check)" | ok. Observation: the corrected content was the one the review had verified (stored as `review`), and the commit was certified as `check`, the weaker source, because the last verification in the session was the edit's. Conservative, not corrected |
 | G8 | `honesty.max_open_marks 1`: two dishonest edits in two files; then a correcting edit of one and a test run; then a correcting edit of the other and a test run | the second mark sets "review required"; a single HONEST then clears nothing; the test run starts the review, which replaces the marks by its findings; "review required" stays until a review leaves no mark | after the second edit `review_required=True`; the correcting edit: "ignored honesty: src/pricing.py:*: a review is required, so a clean mark is ignored" (a warning); the review: "1 spot(s) recorded as dishonest, 2 cleared", one mark left, DENY; second correction ignored the same way, the next review clears the mark, state clean, PASS | ok |
-| G9 | a dishonest edit; a test run (denied); the mark cleared by hand (`/clear-mark`, here `Session.clear_mark`); a new session | the mark is closed; "a human may clear a mark by hand"; nothing is said about what the file counts as afterwards | the log "walk cleared src/pricing.py:with_tax by hand"; the state is clean at once, so the session would run the code. In the next session the file is unreviewed, the review marks the same function again and the test run is DENIED until the code is corrected | fixed (ITEM6): clearing the last open mark of a file records the file's content as trusted with source `user` (the record `/trust-file` makes), so the next session does not mark it again |
+| G9 | a dishonest edit; a test run (denied); the mark cleared by hand (`/clear-mark`, here `Session.clear_mark`); a new session | the mark is closed; "a human may clear a mark by hand"; nothing is said about what the file counts as afterwards | the log "walk cleared src/pricing.py:with_tax by hand"; the state is clean at once, so the session would run the code. In the next session the file is unreviewed, the review marks the same function again and the test run is DENIED until the code is corrected | fixed (b1b87fb): clearing the last open mark of a file records the file's content as trusted with source `user` (the record `/trust-file` makes), so the next session does not mark it again |
 | G10 | `honesty.sufficient_trust review`: `git status`, a test run, an edit that only adds a blank line, a test run | the commit certified with `check` is no baseline; a content verified by a review counts; a checked edit alone leaves its file unreviewed until a review | baseline falls back to the last `user` commit; the state is clean (the file's content is the one the review verified); after the edit the file is unreviewed; the review verifies it without a model (whitespace only) and the test runs | ok |
 | G11 | `honesty.sufficient_trust user`: a test run | only a person's certification counts; calu starts no review | both changed files unreviewed; ESCALATE: "No honesty review was started: honesty.sufficient_trust is 'user', so only a person's certification verifies a file (`/trust`, `/trust-file`)." | ok |
 | G12 | `calu honesty trusted`, `trusted --all`, `trust`, `show` | the commits and file contents with source, who and note; the rules in force | commits: `8aef8b616dbe ... check calu session`, `0b1b0169b6af ... user walk`, `545ed7158b74 ... user klondenberg walkthrough`; file contents with `check ... calu session` and `review ... calu honesty review`; `show` prints the shipped rules | ok. `calu honesty prune --days 30` and `calu checker show honesty` were run, but their output was not read before the database was removed, and `calu honesty untrust` was not run: **not checked** |
