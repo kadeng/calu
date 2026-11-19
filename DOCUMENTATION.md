@@ -198,7 +198,7 @@ This section defines the terms the rest of the document uses, in alphabetical or
 | **Side question** | A question to Claude that is answered beside the running work and does not become part of the conversation. |
 | **Step** | One tool call of Claude: a command, an edit, a read, a subagent start, a question. |
 | **Subagent** | An agent that Claude Code's main agent starts for a sub-task. Its steps are checked like the main agent's, and its final result is checked too. |
-| **Supervision level** | The kinds of step that always wait for a person, whatever the checkers said: `checkers` (none), `edits`, `writes` (edits and commands), `everything` (also subagent results). Stored as the three `auto_escalate` switches. |
+| **Supervision level** | A Calu setting that makes commands, edits or subagent results always wait for a person, whatever the checkers said: `checkers` (none), `edits`, `writes` (edits and commands), `everything` (also subagent results). Stored as the three `auto_escalate` switches. |
 | **Trace** | A Markdown file inside the project to which Calu appends a session's steps, redacted, for review with the code ([session traces](#session-traces)). |
 | **Trusted commit** | Code honesty: a commit that a person or Calu certified as honest. |
 | **Turn** | One message of the user and everything Claude does until it stops. |
@@ -403,8 +403,10 @@ calu config unset claude.permission_mode        # back to auto mode (or the sett
 
 ### The supervision level
 
-The supervision level is independent of the permission mode. It makes kinds of step wait for a
-person even when the checkers approved them. The checkers still run and record their decision.
+The supervision level is a Calu setting that decides which steps always wait for a person:
+commands, edits, subagent results, or any combination of them. Such a step waits even when the
+checkers approved it. The checkers still run and record their decision. The supervision level
+is independent of Claude Code's permission mode.
 
 | Level | Commands | Edits | Subagent results |
 |---|---|---|---|
