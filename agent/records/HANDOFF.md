@@ -120,9 +120,13 @@ Not started; the owner put it on the backlog. What ties calu to Linux today:
    the CI run to complete.
 2. **Coverage and honest code, the rest**: the `calu.cli` contracts, `_start_cancel` and
    the tests of `calu ide` that need no root are **done** (agent 2, PLAN D237; the rename is
-   `_local_socket_endpoint`). Left, all root-only (tests/root/, in the root box):
-   `asuser.prepare` on an existing directory, `launch.become` refusing a wrong identity,
-   `_after_setup` writing the place file as real root, `serve.serve` with `run_as`.
+   `_local_socket_endpoint`). The root-only rest is **done** (PLAN D240, not pushed):
+   `asuser.prepare` on existing directories, the launcher refusing an identity it cannot
+   take, `_after_setup` writing `/var/lib/calu/database.json` as real root, `calu serve
+   --user` with Claude Code's stand-in and the root socket, the sandbox-off advice under
+   `--user` and after `sudo calu setup --no-password`; `docker exec calu-rootbox
+   rootbox-tests`: 22 passed. Fixed on the way: `asuser.prepare` followed a symbolic link
+   in the place of a directory it hands to the user.
 3. ~~Open defects the core-defect agent left~~ **done** (agent 2, PLAN D237): the protocol
    event `step.held` and the full-screen client's `held` badge after a recorded approval;
    a web decision records `<role>:<user>@<host>`. VSCode and PyCharm show no held steps at

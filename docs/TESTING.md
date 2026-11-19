@@ -9,7 +9,7 @@ does. The default run needs nothing but the repository.
 | Database | `db` | PostgreSQL (`docker compose up -d caludb --wait`) | ~20 s |
 | Browser | `browser` (most also `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
-| Root | `root` (two also `db`) | real root, in the root box (`uitest/rootbox`) | ~15 s |
+| Root | `root` (five also `db`) | real root, in the root box (`uitest/rootbox`) | ~15 s |
 | Spikes | — | run by hand, against the real CLI | minutes each |
 
 ```bash
@@ -214,7 +214,13 @@ by another user and refused when it is not root's, the modes of the log file and
 root wrote, the refusals (`calu run` as root without `--user`, `--from-sudo` for another uid
 than sudo's), and whole sessions through `uitest/rootbox/fakecalu.py` (calu's command line
 with a scripted runner): as root for uid 1000, whose files in the project then belong to
-1000, and with `--user root`, which must bind no token-free socket.
+1000, and with `--user root`, which must bind no token-free socket;
+`asuser.prepare` on existing directories and its refusal of a symbolic link in their place;
+the launcher's refusal of a uid, gid or group the system calls would leave unchanged;
+`calu setup` writing `/var/lib/calu/database.json` (the tests keep and restore a file
+that was there), with and without `--no-password`, and the sandbox-off advice that follows
+it in setup and in a `--user` session; `calu serve --user` starting Claude Code (a stand-in
+that answers the Agent SDK's start-up requests) as that uid behind a root socket.
 
 The tests are skipped unless the process is root **and** `CALU_ROOT_TESTS=1` is set: they
 create directories below `/var/lib/calu` and `/run/calu` and start programs as other uids,
@@ -223,12 +229,12 @@ which a test run must not do to a developer's machine. They run in the root box,
 
 ```bash
 calu/uitest/rootbox/run.sh                    # once: build, start, install calu inside
-docker exec calu-rootbox rootbox-tests        # 12 tests, a PostgreSQL cluster of their own (port 5434)
+docker exec calu-rootbox rootbox-tests        # 22 tests, a PostgreSQL cluster of their own (port 5434)
 docker exec calu-rootbox rootbox-tests -k socket -x
 ```
 
 `rootbox-tests` syncs a virtual environment in `/opt/calu-venv` from the read-only checkout
-and runs `pytest -m root tests/root`. CI does not run this layer. Run on 2026-11-18: 12 passed.
+and runs `pytest -m root tests/root`. CI does not run this layer. Run on 2026-11-19: 22 passed.
 
 ## The live layer
 
