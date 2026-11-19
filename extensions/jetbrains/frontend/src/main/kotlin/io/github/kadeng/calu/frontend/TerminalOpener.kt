@@ -10,8 +10,13 @@ import com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager
  */
 object TerminalOpener {
     /**
-     * Open a new terminal tab named "calu server" in the project directory, type a command into
-     * it and run it. Must be called on the EDT.
+     * Open a new terminal tab named "calu server" in the terminal's start directory (by default
+     * the project directory), type a command into it and run it. Must be called on the EDT.
+     *
+     * No working directory is passed: in remote development the client's project path is a
+     * `/$tcp.ij/...` path, and a tab given that path is started as a process of the client,
+     * which the platform refuses; without it the tab's shell runs on the host like the
+     * terminal's own "+" tab.
      *
      * @param project The project.
      * @param command The command line to run.
@@ -20,7 +25,6 @@ object TerminalOpener {
      */
     fun open(project: Project, command: String) {
         val tab = TerminalToolWindowTabsManager.getInstance(project).createTabBuilder()
-            .workingDirectory(project.basePath)
             .tabName("calu server")
             .requestFocus(true)
             .createTab()

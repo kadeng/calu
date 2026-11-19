@@ -21,10 +21,11 @@ ARG PYCHARM_SHA256=70d448ee1aa2a60234a6135b7ef9af6403fb691c26446113d587ccee06f6b
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
-# tmux, and the X11/font libraries the JetBrains runtime loads at start.
+# tmux, the OpenSSH client (the PyCharm plugin's SSH mode and remote development), and the
+# X11/font libraries the JetBrains runtime loads at start.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      tmux git ca-certificates curl xdotool \
+      tmux git ca-certificates curl xdotool openssh-client \
       libxtst6 libxrender1 libxi6 libxext6 libfreetype6 fontconfig fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 

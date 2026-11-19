@@ -412,9 +412,14 @@ calu/uitest/sshbox/stop.sh --remove        # delete the container and the networ
 | Project | `/home/dev/project`: a git repository with Python files, a `.gitignore` (and an ignored `build/`), `assets/blob.bin` (200 kB of random bytes), `many/` with 300 small files, `link-inside.py` (a link to a file of the tree) and `link-outside` (a link to `/etc/hostname`) |
 | Scripted servers | tmux sessions `calu-fake` and `calu-fake-pw` of `dev` (`uitest/fake_server.py`); logs `/tmp/calu-fake-server.log`, `/tmp/calu-fake-pw-server.log` |
 
-The desktop image has no SSH client; the plugin's SSH mode starts the system's `ssh`. Once per
-desktop container: `$D shell 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-client'`
-(`run.sh` says so if it is missing).
+The desktop image has the OpenSSH client (`openssh-client` in the `Dockerfile`): the plugin's
+SSH mode and PyCharm's remote development start the system's `ssh`. A container built before
+that line was added needs it once:
+`$D shell 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-client'` (`run.sh`
+says so if it is missing). PyCharm's JetBrains daemon (`jetbrainsd`) looks for `ssh` when it
+starts: after installing the client by hand, end it (`pkill -f "[j]etbrainsd run"`; it starts
+again by itself), or "Connect to Remote" fails with "Unexpected error" ("Failed to find OpenSSH
+client executable" in `~/.local/share/JetBrains/Daemon/logs/`).
 
 Running the plugin's SSH mode in the desktop: install the plugin as above, open an **empty**
 writable folder (`$D shell 'mkdir -p ~/work/sshproj'`, `$D open-pycharm /home/cua/work/sshproj`;
