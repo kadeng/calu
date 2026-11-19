@@ -689,13 +689,8 @@ CLOSE_SERVER_TOKEN_REVOKED = 4003
 """WebSocket close code of the relay: the client's server token was revoked, or its server
 ended. Connecting again with it is refused."""
 
-RELAY_PORT = 8811
-"""The relay's port when `calu serve` is given none: fixed, so that an SSH forward written once
-keeps working after the server restarts. If it is taken, the server takes a free port and says
-which."""
-
 RELAY_SESSION_PATH = "/session/"
-"""Path prefix on a relay address that names one session: `ws://127.0.0.1:8811/session/<id>`
+"""Path prefix on a relay address that names one session: `ws://127.0.0.1:<port>/session/<id>`
 speaks the session protocol above, with the server token in `initialize`. The bare relay
 address (path `/`) speaks `RELAY_REQUESTS`."""
 
@@ -707,6 +702,9 @@ class RelayServer(BaseModel):
     """Id of the server's `servers` row; None if the server could not record itself."""
     hostname: str
     os_user: str
+    projects_directory: str = ""
+    """The resolved directory the server starts sessions in or below (D243); a `relay.start`
+    for another directory is refused."""
 
 
 class RelayInitializeResult(BaseModel):
@@ -747,8 +745,9 @@ class RelayStartParams(BaseModel):
 
     `kind` "new" needs no `claude_session_id`; "resume" continues it (with `fork_before_turn`:
     a branch before that turn); "fork" continues a copy of it. `directory` is a directory on
-    the server's machine. The result is a `RelayStartResult` once the session can be attached
-    to; a refusal or failure of the server is an error (-32000) with its reason.
+    the server's machine, inside the server's projects directory (`RelayServer`). The result
+    is a `RelayStartResult` once the session can be attached to; a refusal or failure of the
+    server is an error (-32000) with its reason.
     """
 
     kind: Literal["new", "resume", "fork"] = "new"

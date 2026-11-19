@@ -91,6 +91,7 @@ from calu import (
     localsocket,
     logfile,
     machine,
+    projects_dir,
     servers,
     session_requests,
 )
@@ -146,7 +147,6 @@ from calu.protocol.client import (
     relay_session_id,
 )
 from calu.protocol.messages import MAX_FRAME_BYTES
-from calu.protocol.messages import RELAY_PORT as RELAY_DEFAULT_PORT
 from calu.protocol.schema import protocol_schema
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
 from calu.serve import ServeOptions
@@ -2174,14 +2174,15 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`max_sessions`, `idle_timeout`, `user`, `sudo`, `secure`,
-            `insecure`, `relay_port`, `no_relay`).
+            `insecure`, `relay_port`, `no_relay`, `projects`).
         store: The credential store.
 
     Raises:
         CliError: If there is no usable `session` credential, `--max-sessions` is below 1,
             `--idle-timeout` is not above 0, `--relay-port` is no port, the user cannot be
-            switched (`_run_as`), the database refused the session login, or the named relay
-            port cannot be bound.
+            switched (`_run_as`), the projects directory is refused
+            (`calu.projects_dir.check_projects_dir`, before the password is asked), the
+            database refused the session login, or no relay port can be bound.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors at the start.
     """
@@ -2195,13 +2196,18 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.relay_port is not None and not 0 <= args.relay_port <= 65535:
         raise CliError("--relay-port takes a port number from 0 to 65535")
     run_as = _run_as(args)
+    try:
+        projects = projects_dir.check_projects_dir(
+            args.projects or ".", claude_as_root=os.geteuid() == 0 and run_as is None
+        )
+    except projects_dir.ProjectsDirRefused as exc:
+        raise CliError(str(exc)) from None
     url = _session_login(store)
     try:
         options = ServeOptions(
-            relay_port=None
-            if args.no_relay
-            else (RELAY_DEFAULT_PORT if args.relay_port is None else args.relay_port),
-            relay_port_given=args.relay_port is not None,
+            projects=projects,
+            relay=not args.no_relay,
+            relay_port=args.relay_port,
             max_sessions=args.max_sessions,
             run_as=run_as,
             idle_timeout_s=args.idle_timeout * 60 if args.idle_timeout is not None else None,
@@ -3505,7 +3511,7 @@ def _relay_target(tried: Endpoint, answer: dict[str, Any]) -> RelayTarget:
         answer: The relay's `initialize` result (`RelayInitializeResult`).
 
     Returns:
-        The relay's own address, the token, and the server's host and user.
+        The relay's own address, the token, and the server's host, user and projects directory.
     """
     server = answer.get("relay") or {}
     return RelayTarget(
@@ -3513,6 +3519,7 @@ def _relay_target(tried: Endpoint, answer: dict[str, Any]) -> RelayTarget:
         tried.token,
         str(server.get("hostname") or ""),
         str(server.get("os_user") or ""),
+        str(server.get("projects_directory") or ""),
     )
 
 
@@ -3540,6 +3547,8 @@ def _through_relay(tried: Endpoint, answer: dict[str, Any], hint: str | None) ->
     """
     target = _relay_target(tried, answer)
     who = f"{target.os_user}@{target.hostname}" if target.hostname else "the server"
+    if target.projects_directory:
+        who += f" (projects directory {target.projects_directory})"
     try:
         _hello, listed = asyncio.run(relay_call(target.address, target.token, "relay.sessions"))
     except (OSError, RequestFailed, ConnectionError) as exc:
@@ -3563,7 +3572,8 @@ def _through_relay(tried: Endpoint, answer: dict[str, Any], hint: str | None) ->
     elif not sessions:
         raise CliError(
             f"no session runs in the `calu serve` of {who} behind {target.address}. Start "
-            f"one through the relay: calu start <directory on {target.hostname or 'it'}> "
+            "one through the relay: calu start "
+            f"<directory in {target.projects_directory or 'its projects directory'}> "
             f"--relay {target.address}"
         )
     elif sys.stdin.isatty():
@@ -4505,17 +4515,20 @@ async def _server_token(db: Db, args: argparse.Namespace) -> str:
                 raise CliError(f"{len(running)} servers run; name one by its id:\n{lines}")
             row = running[0]
         token_id, token = await servers.mint(db, row.id, args.label or "")
-    except psycopg.errors.UndefinedTable as exc:
+    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn) as exc:
         raise CliError(
-            "this database has no server tokens yet; `calu setup` brings it up to date"
+            "this database has no server tokens yet, or an older form of them; `calu setup` "
+            "brings it up to date"
         ) from exc
     except ValueError as exc:
         raise CliError(str(exc)) from exc
+    serves = f", projects directory {row.projects_directory}" if row.projects_directory else ""
     report = (
         f"server token {token_id} for the `calu serve` of {row.os_user}@{row.hostname} "
-        f"(server {row.id}):\n\n    {token}\n\n"
+        f"(server {row.id}{serves}):\n\n    {token}\n\n"
         "This is the only copy; calu stores just its hash. It reaches every session of that "
-        "server and lets its holder decide their steps and ask the server for new sessions. "
+        "server and lets its holder decide their steps and ask the server for new sessions "
+        "in its projects directory. "
         f"It ends with the server or with `calu token revoke --server {token_id}`."
     )
     if row.relay_address.startswith("ws://"):
@@ -5809,6 +5822,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="one process, authenticated once, that starts sessions when `calu start` asks",
     )
     p.add_argument(
+        "--projects",
+        metavar="DIR",
+        help="the projects directory: sessions start only in it or below it (default: the "
+        "current directory). Refused: /, hidden directories and system directories",
+    )
+    p.add_argument(
         "--max-sessions",
         type=int,
         default=10,
@@ -5843,9 +5862,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--relay-port",
         type=int,
         metavar="N",
-        help=f"the port on 127.0.0.1 of the relay for every session of this server (default: "
-        f"{RELAY_DEFAULT_PORT}, or a free one if that is taken; 0: any free port). A client on "
-        "another machine needs one SSH forward of it and a token of `calu token mint --server`",
+        help="the port on 127.0.0.1 of the relay for every session of this server (default: "
+        f"one of {projects_dir.RELAY_PORT_FIRST}-{projects_dir.RELAY_PORT_LAST} derived from the "
+        "projects directory, the same after every restart, or the next free one if that is "
+        "taken; 0: any free port). A client on another machine needs one SSH forward of it and "
+        "a token of `calu token mint --server`",
     )
     relay_choice.add_argument(
         "--no-relay", action="store_true", help="no relay: each session only on its own port"
@@ -5904,8 +5925,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--relay",
         metavar="ADDRESS",
         help="ask the `calu serve` behind this relay address (e.g. a forwarded "
-        "ws://127.0.0.1:8811) instead of the database; DIRECTORY is then an absolute path on "
-        "the server's machine",
+        "ws://127.0.0.1:<port>) instead of the database; DIRECTORY is then an absolute path "
+        "on the server's machine, inside the server's projects directory",
     )
     p.add_argument(
         "--token",

@@ -1701,7 +1701,8 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
             f"the session runs on {row.hostname}, not on this machine, and listens there at "
             f"{row.address}. Forward that port and try again: `ssh -N -L "
             f"{port}:127.0.0.1:{port} {row.hostname}`; for a session of `calu serve`, one "
-            "forward of its relay port (8811 unless it said otherwise) covers all its "
+            "forward of its relay port (the one it printed, and `calu token mint --server` "
+            "prints) covers all its "
             f"sessions. Or open the `calu web` of {row.hostname} through a tunnel. Its "
             "decisions can be made here without that, on the Escalations page."
         )

@@ -89,6 +89,7 @@ from calu.claude import FakeRunner
 from calu.claude.fake_runner import FakeScript
 from calu.cli import CliError, load_credential
 from calu.credentials import CredentialError, CredentialStore
+from calu.projects_dir import ProjectsDirRefused, check_projects_dir
 from calu.protocol.messages import ContextUsage
 from calu.serve import ServeOptions, serve
 from calu.testing import DISHONEST_MARKER, fake_models
@@ -908,7 +909,8 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line without the program name; None reads `sys.argv`.
 
     Returns:
-        The exit code: 0 after a stop by signal, 1 if the login is missing or refused.
+        The exit code: 0 after a stop by signal, 1 if the login is missing or refused, or the
+        projects directory is refused.
     """
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     parser.add_argument("--dsn", help="the calu_session connection string (default: the store)")
@@ -918,13 +920,22 @@ def main(argv: list[str] | None = None) -> int:
         help="local clients of the sessions need no token (as `calu serve --insecure`)",
     )
     parser.add_argument("--max-sessions", type=int, default=10, help="sessions at once")
+    parser.add_argument(
+        "--projects",
+        default=str(Path.home()),
+        help="the projects directory (as `calu serve --projects`; default: the home directory, "
+        "where the test machines keep their projects, since these servers start elsewhere)",
+    )
     args = parser.parse_args(argv)
     try:
+        projects = check_projects_dir(args.projects)
         url = session_login(args.dsn)
-    except (CliError, CredentialError) as exc:
+    except (CliError, CredentialError, ProjectsDirRefused) as exc:
         print(f"fake_server: {exc}", file=sys.stderr)
         return 1
-    options = ServeOptions(max_sessions=args.max_sessions, insecure=args.insecure)
+    options = ServeOptions(
+        max_sessions=args.max_sessions, insecure=args.insecure, projects=projects
+    )
     print("fake_server: scripted sessions, fake checkers; no Claude Code is started", flush=True)
     return asyncio.run(
         serve(url, options, runner_factory=make_runner, checker_models=fake_models())

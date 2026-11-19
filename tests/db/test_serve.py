@@ -4,6 +4,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ from calu.protocol.client import connect as connect_client
 from calu.serve import ServeOptions, Server, os_user
 from calu.session_requests import NoServer, SessionRequest
 from calu.testing import fake_models
+from calu.tokens import token_hash
 from calu.web.app import create_app
 from tests.db.test_attach_discovery import _read_until
 from tests.db.test_run import SCRIPT, prepare
@@ -47,6 +49,8 @@ async def serving(
         The server, subscribed to new requests.
     """
     options.setdefault("relay_port", 0)
+    # The tests' directories are below the temporary directory (D243).
+    options.setdefault("projects", Path(os.path.realpath(tempfile.gettempdir())))
     server = Server(
         ConnectionSource(session_url),
         set(),
@@ -329,7 +333,10 @@ async def test_calu_serve_as_a_process_answers_and_stops_on_sigterm(db_url: str,
     errors = tmp_path / "serve-stderr.log"
     with errors.open("wb") as log:
         process = await anyio.open_process(
-            [sys.executable, "-m", "calu", "serve"], env=environment, stderr=log.fileno()
+            [sys.executable, "-m", "calu", "serve"],
+            env=environment,
+            stderr=log.fileno(),
+            cwd=str(tmp_path),  # the projects directory (D243)
         )
     seen: list[str] = []
     try:
@@ -568,6 +575,7 @@ async def test_calu_token_mint_server_names_the_forward_and_lists_and_revokes(
         report = await cli._server_token(db, args)
         assert f"ssh -N -L {port}:127.0.0.1:{port} {here}" in report
         assert f"calu attach ws://127.0.0.1:{port} --token=<the token above>" in report
+        assert f"projects directory {server.projects}" in report
         listed = await cli._server_token(db, argparse.Namespace(action="list", server=True))
         assert "valid" in listed and "laptop" in listed and server.relay.address in listed
         token_id = listed.split()[0]
@@ -613,3 +621,85 @@ async def test_the_web_live_view_falls_back_to_the_servers_relay(db_url: str, tm
                 assert first["snapshot"]["workspace"] == str(tmp_path)
         labels = await db.all("SELECT label FROM server_tokens")
         assert labels == [("calu web (live view)",)]
+
+
+async def test_a_server_starts_sessions_only_in_its_projects_directory(db_url: str, tmp_path: Path):
+    """D243: a request of `calu start` and one through the relay, inside and outside."""
+    from calu import servers
+    from calu.protocol.client import RequestFailed, relay_call
+
+    session_url = await prepare(db_url, tmp_path)
+    projects = (tmp_path / "projects").resolve()
+    (projects / "app").mkdir(parents=True)
+    (projects / ".hidden").mkdir()
+    (projects / "escape").symlink_to(tmp_path)
+    (tmp_path / "other").mkdir()
+    async with owner_db(db_url) as db, serving(session_url, projects=projects) as server:
+        [row] = await servers.running(db, HOST, USER)
+        assert row.projects_directory == str(projects)
+        assert f"projects {projects}" in row.line()
+        inside = await ask(db, request(projects / "app"))
+        assert inside.state == "started"
+        for directory, why in (
+            (tmp_path / "other", f"is not in {projects}, the projects directory"),
+            (projects / "escape", "is not in"),
+            (projects / ".hidden", "hidden directory .hidden"),
+        ):
+            done = await ask(db, request(directory))
+            assert done.state == "failed" and why in done.message, done.message
+        assert "calu serve --projects" in (await ask(db, request(tmp_path / "other"))).message
+
+        assert server.relay is not None and server.server_id is not None
+        _, token = await servers.mint(db, server.server_id, "laptop")
+        hello, _ = await relay_call(server.relay.address, token, "relay.sessions")
+        assert hello["relay"]["projects_directory"] == str(projects)
+        before = await db.all("SELECT id FROM session_requests")
+        with pytest.raises(RequestFailed, match="the projects directory this `calu serve`"):
+            await relay_call(
+                server.relay.address, token, "relay.start", {"directory": str(tmp_path / "other")}
+            )
+        # Refused before a request row is written.
+        assert await db.all("SELECT id FROM session_requests") == before
+
+
+async def test_requests_go_to_the_server_that_serves_their_directory(db_url: str, tmp_path: Path):
+    """D243, migration 0039: which of two servers of one user claims a request."""
+    from calu import servers
+
+    session_url = await prepare(db_url, tmp_path)
+    wide, narrow = str(tmp_path / "all"), str(tmp_path / "all" / "narrow")
+    conn = await connect(session_url)
+    try:
+        db = Db(conn)
+        a = await servers.record_start(db, HOST, USER, "ws://127.0.0.1:1", wide)
+        b = await servers.record_start(db, HOST, USER, "ws://127.0.0.1:2", narrow)
+        await servers.record_start(db, HOST, "somebody", "", "/elsewhere")
+        await conn.commit()
+        async with owner_db(db_url) as owner:
+            _, token = await servers.mint(owner, b, "laptop")
+            # An operator's request in the narrow directory, which both serve; one in the
+            # wide one only; one outside both; one of another user.
+            both = await session_requests.file(owner, request(Path(narrow) / "x"))
+            only_a = await session_requests.file(owner, request(Path(wide) / "y"))
+            neither = await session_requests.file(owner, request(tmp_path / "z"))
+            await session_requests.file(
+                owner,
+                SessionRequest(hostname=HOST, os_user="other", directory=str(Path(wide) / "y")),
+            )
+        # B's relay files a request that the wide server A also covers.
+        relayed = await servers.file_request(db, b, token_hash(token), request(Path(narrow) / "r"))
+        claimed_by_b = []
+        while (got := await session_requests.claim_served(db, b, 1)) is not None:
+            claimed_by_b.append(got.id)
+        # B: the request inside both, the one outside every server, and its relay's request;
+        # not the one in A's directory only.
+        assert claimed_by_b == [both, neither, relayed]
+        got = await session_requests.claim_served(db, a, 1)
+        assert got is not None and got.id == only_a
+        assert await session_requests.claim_served(db, a, 1) is None
+        # An ended server claims nothing.
+        assert await servers.record_end(db, a)
+        assert await session_requests.claim_served(db, a, 1) is None
+        await conn.commit()
+    finally:
+        await conn.close()

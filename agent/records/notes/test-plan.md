@@ -713,6 +713,20 @@ detached line says "the session closed the connection" also when the relay close
 through the relay shows how long a session has run, not how long its state has lasted, and no
 session names (`sessions.name` is not read by the relay).
 
+Projects directory and derived relay port (2026-11-19, by an agent; PLAN D243, the owner's
+requirement 43 and "Port from directory"). Automated only so far; the manual run over SSH is
+`docs/TESTING.md` item 39.
+
+| # | Case | Status |
+|---|---|---|
+| I31 | `calu serve --projects /etc`, `--projects /`, `calu serve` in a hidden directory, `--projects` a link to `/usr/lib` | ok by hand on the host (no database needed: refused before the password): one line each, "`calu serve` cannot serve the projects directory ../link (/usr/lib): it is inside /usr, a directory of the operating system. Start it in the directory that holds your projects, or name one with --projects DIR", exit 1; `test_projects_dir.py` (system and hidden directories, root's home, links, `/`, the command before the password) |
+| I32 | a `calu start` request outside the projects directory, through a link that leaves it, into a hidden directory below it | ok: "failed" with "... is not in <projects>, the projects directory this `calu serve` on <host> serves. On <host>, run `calu serve --projects <a directory that holds it>` for it, or `calu run` in that directory" (resp. "inside the hidden directory .hidden"); inside it starts (`test_serve.py::test_a_server_starts_sessions_only_in_its_projects_directory`, `test_serve_unit.py::test_a_claimed_request_outside_the_projects_directory_is_refused`) |
+| I33 | `relay.start` outside the projects directory | ok: error -32000 with the same reason, and no `session_requests` row is written (`test_relay.py::test_the_relay_refuses_a_session_outside_the_projects_directory`, `test_serve.py`); not run from a laptop yet |
+| I34 | two servers of one user, nested projects directories; a request in both, in one only, in neither, and one filed through the narrow server's relay | ok: the narrow server claims the one in both, the one in neither (and refuses it) and its relay's; the wide server only the one in its directory alone; an ended server claims nothing (`test_serve.py::test_requests_go_to_the_server_that_serves_their_directory`) |
+| I35 | the projects directory shown: `servers` row, relay `initialize`, `calu attach` through the relay, `calu token mint --server` | ok: `projects_directory` in the row and in `initialize` (`test_serve.py`, `test_relay.py`); the relay's session list and its "no session runs" hint name it (`test_relay.py::test_calu_attach_on_a_relay_picks_the_session`), and so does the token report (`test_serve.py::test_calu_token_mint_server_names_the_forward_and_lists_and_revokes`) |
+| I36 | relay port: the same for the same directory, in 8811-8999, reserved ports skipped | ok (`test_projects_dir.py::test_the_relay_port_is_stable_in_range_and_skips_reserved_ports`, `..._does_not_depend_on_the_process`) |
+| I37 | the derived port taken; all taken; `--relay-port N` taken | ok: "the relay port P of <projects> is taken (...); taking the next free one" and "the relay takes port Q instead of P; an SSH forward of P does not reach it"; all taken and a named port taken end the server (`test_serve_unit.py::test_the_relay_takes_the_next_derived_port_when_its_own_is_taken`) |
+
 Fourth round (2026-11-19, the owner's requirement 41: every conflict path resolved, `.git` on
 one side only, remote run and debug). Screenshots `~/.cache/calu-uitest/share/split1/90` onward.
 

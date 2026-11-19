@@ -22,6 +22,7 @@ and two throwaway directories: the commands Claude runs are not isolated.
 
 import argparse
 import json
+import os
 import socket
 import uuid
 from pathlib import Path
@@ -35,7 +36,7 @@ from calu import herd, session_requests
 from calu.config import SETTINGS_KEY
 from calu.db import ConnectionSource, Db, connect
 from calu.protocol.client import connect as connect_client
-from calu.serve import Server, os_user
+from calu.serve import ServeOptions, Server, os_user
 from calu.session_requests import SessionRequest
 from calu.setup import setup
 from calu.testing import fake_models
@@ -113,7 +114,14 @@ async def main(args: argparse.Namespace) -> None:
                 (SETTINGS_KEY, json.dumps(settings)),
             )
             db = Db(owner)
-            server = Server(ConnectionSource(session_url), set(), checker_models=fake_models())
+            # The projects directory (D243): the directory that holds both.
+            projects = Path(os.path.commonpath([a, b]))
+            server = Server(
+                ConnectionSource(session_url),
+                set(),
+                ServeOptions(projects=projects),
+                checker_models=fake_models(),
+            )
             async with anyio.create_task_group() as tg:
                 tg.start_soon(server.run)
                 await server.listening.wait()

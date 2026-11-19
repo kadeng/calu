@@ -990,7 +990,7 @@ another machine reaches it through SSH. Three ways, from the simplest:
 |---|---|---|
 | The client on the server | `ssh -t the-host`, then `calu attach` in the project | everything, with the server's credentials: `/new`, `/fork`, `/running`, `/switch`, saving checker instructions |
 | The web interface of the server | `ssh -N -L 8800:127.0.0.1:8800 the-host`, then the address `calu web` printed there | every session of that machine, live, through one tunnel |
-| The client on your machine, through the relay of `calu serve` | `ssh -N -L 8811:127.0.0.1:8811 the-host`, then `calu attach ws://127.0.0.1:8811` with a server token | every session of that server through one forward: `/running`, `/switch`, `/new`, `/fork`, `/rewind`; nothing of calu needs to be set up on your machine |
+| The client on your machine, through the relay of `calu serve` | `ssh -N -L <port>:127.0.0.1:<port> the-host` with the relay port the server printed, then `calu attach ws://127.0.0.1:<port>` with a server token | every session of that server through one forward: `/running`, `/switch`, `/new`, `/fork`, `/rewind`; nothing of calu needs to be set up on your machine |
 | The client on your machine, one session | `ssh -N -L <port>:127.0.0.1:<port> the-host`, then `calu attach ws://127.0.0.1:<port>` with a token | one session (also one of `calu run`, which has no relay) |
 
 The first is what a user with a headless server usually wants: `ssh -t the-host`, `cd` into
@@ -999,7 +999,10 @@ because it runs in `calu serve` (or `calu run`) on the server, not in the client
 has to outlive your SSH login (`tmux`, or a service).
 
 For the third way, `calu token mint --server` on the server prints a server token for the
-`calu serve` of your user there, together with the two commands to run on your machine:
+`calu serve` of your user there, with the server's projects directory and the two commands to
+run on your machine. The relay's port is derived from the server's projects directory
+([calu serve](#many-sessions-from-one-process-calu-serve)); the examples use 8811, the
+printed lines have the real one:
 
 ```bash
 calu token mint --server --label laptop           # on the server; prints the token once
@@ -1011,8 +1014,10 @@ calu start /home/me/src/other --relay ws://127.0.0.1:8811 -p "run the tests"
 
 With one session running, `calu attach` attaches to it; with several it lists them and asks
 which (number or beginning of the id), and without a terminal it lists them and wants
-`--session`. With none it says so and names `calu start --relay`, whose directory is a path
-on the server. In the full-screen client `/running` lists the server's sessions, `/switch`
+`--session`; the list names the server's projects directory. With none it says so and names
+`calu start --relay`, whose directory is a path on the server inside that projects
+directory: a request for another directory is refused and the message names the directory
+the server serves. In the full-screen client `/running` lists the server's sessions, `/switch`
 attaches to another one, and `/new`, `/fork` and `/rewind` ask the server for a session and
 switch to it; the line client has `/running`, `/switch`, `/new` and `/fork` through the relay.
 Saving checker instructions, `/honesty off|track|enforce` and `/rename` need the database and
@@ -1020,7 +1025,7 @@ work in a client on the server.
 
 What a server token allows: attaching to every session of that one server and doing there
 what a client token allows (sending messages, deciding steps, stopping a session), and asking
-that server for new sessions, also in other directories of its machine. It does not reach
+that server for new sessions in its projects directory or below it. It does not reach
 another server or the database. It is valid until `calu token revoke --server <id>` or until
 the server stops; a restarted server needs a new token. `calu token list` lists the server
 tokens below the client tokens, and a revoked one ends its connections within seconds. A
@@ -1068,8 +1073,8 @@ session's process is gone, it ends at once with "the session ended: its process 
 PostgreSQL port and an `operator` credential (`calu web --database operator` asks for the
 admin password of that database): lists, history, escalations, triage and settings work as
 on the server. The live view of a session needs that session's port forwarded as well, or,
-for a session of `calu serve`, the server's relay port (`ssh -N -L 8811:127.0.0.1:8811
-the-host` covers every session of it; `calu web` mints the server token itself, labelled
+for a session of `calu serve`, the server's relay port (`ssh -N -L <port>:127.0.0.1:<port>
+the-host` with the port the server printed covers every session of it; `calu web` mints the server token itself, labelled
 "calu web (live view)"); the page names the `ssh -L` line to use.
 
 ## Client tokens
@@ -1105,9 +1110,11 @@ calu token revoke --server 2
 ```
 
 For authors of other clients: the relay speaks the protocol of `calu protocol` (its `relay`
-part). Its own address (`ws://127.0.0.1:8811/`) answers `initialize` with the server token in
-`token`, `relay.sessions` and `relay.start`; `ws://127.0.0.1:8811/session/<session id>` is
-that session's own protocol, with the server token in `initialize`. It closes a connection with
+part). Its own address (`ws://127.0.0.1:<port>/`) answers `initialize` with the server token
+in `token` (the result's `relay` names the server, with its `projects_directory`),
+`relay.sessions` and `relay.start` (refused, error -32000, for a directory outside the
+projects directory); `ws://127.0.0.1:<port>/session/<session id>` is that session's own
+protocol, with the server token in `initialize`. It closes a connection with
 4003 when the server token was revoked or its server ended.
 
 ## The web interface
@@ -1618,11 +1625,12 @@ as the change itself before the repository leaves the team.
 ## Many sessions from one process: calu serve
 
 `calu run` asks for the session password and runs one session. `calu serve` asks for it once
-and then runs as many sessions as you ask for, in any project directory on the machine, until
-you stop it:
+and then runs as many sessions as you ask for, in its projects directory and the directories
+below it, until you stop it:
 
 ```bash
-calu serve                      # in a terminal of its own, or under tmux or a service unit
+cd ~/src && calu serve          # in a terminal of its own, or under tmux or a service unit
+calu serve --projects ~/src     # the same from another directory
 ```
 
 In another terminal, in a project directory:
@@ -1642,6 +1650,27 @@ session, waits until it runs, prints its Claude session id and attaches the term
 other: `calu attach` in its directory, `calu sessions`, the web interface and an ACP editor
 all work with it, and each has its own address and its own tokens.
 
+- **One projects directory.** A server starts sessions only in its projects directory (the
+  current directory, or `--projects DIR`) and below it, after resolving symbolic links. A
+  request for another directory is refused with a message that names the directory the
+  server serves; for that directory, start another `calu serve` there (`--projects`), or run
+  the one session with `calu run`. A directory below it whose path contains a hidden
+  directory (`.git`, `.config`) is refused too. This holds for every request the server
+  answers: `calu start`, the web interface, `/new` and `/fork`, and the relay. `calu serve`
+  refuses to start, before it asks for the password, when the projects directory is `/`, is
+  hidden or inside a hidden directory (a path component that starts with "."), or lies in a
+  directory of the operating system: `/etc`, `/proc`, `/sys`, `/dev`, `/boot`, `/bin`,
+  `/sbin`, `/lib`, `/lib32`, `/lib64`, `/usr` (all of it), `/run`, `/snap`, `/var/lib`,
+  `/var/log`, `/var/cache`, `/var/spool`, `/var/mail`, `/var/backups`, `/var/db`, and on
+  macOS also `/System`, `/Library`, `/Applications`, `/cores` and `/private/etc` and the
+  same directories of `/private/var`. Root's home directory (`/root`, on macOS `/var/root`)
+  is refused unless Claude Code runs as root (`--user root`): with `--user NAME` the
+  sessions run as that user, so serve a directory of theirs. `/home`, `/srv`, `/opt`,
+  `/var/www`, `/tmp` and `/mnt` are allowed.
+- **Two servers of one user.** Each serves its own projects directory; a request from
+  `calu start` goes to the server whose directory holds it (if both do, either), and one
+  that no server serves is refused by one of them with the reason. `calu run` has no
+  projects directory and runs wherever it is started.
 - **No password per session.** The server holds the session login; `calu start` uses the
   `operator` credential, as `calu attach` does. Stored without a password (`calu credential
   set operator --no-password`), it asks nothing.
@@ -1650,8 +1679,9 @@ all work with it, and each has its own address and its own tokens.
   socket of its own for this. Who may start a session is therefore decided by who has a
   database login that may write that table, and Claude Code has none: a running session
   cannot ask for another one.
-- **Which server answers.** The one that runs on the same machine as the same OS user. When
-  none answers within ten seconds, `calu start` withdraws its request and says so.
+- **Which server answers.** One that runs on the same machine as the same OS user and serves
+  the directory. When none answers within ten seconds, `calu start` withdraws its request and
+  says so.
 - **A served session waits for you.** It does not end when Claude has nothing left to do.
   `/shutdown` in a client ends that one session; detaching (`/quit`, ctrl+d) leaves it
   running. Ctrl-C or SIGTERM stops the server and every session it runs, each in order.
@@ -1672,9 +1702,15 @@ all work with it, and each has its own address and its own tokens.
 - **Forgotten sessions.** `calu serve --idle-timeout 120` ends a session that has been idle
   for two hours with no client attached; its conversation stays and `calu start --resume`
   continues it. Without the option a session waits until you shut it down.
-- **One relay port for all its sessions.** The server also listens on `ws://127.0.0.1:8811`
-  (`--relay-port N` for another port, `0` for any free one; when 8811 is taken and no port
-  was named, it takes a free one and prints which; `--no-relay` for none). Through that one
+- **One relay port for all its sessions.** The server also listens on one port of
+  127.0.0.1, which it prints at its start. The port is derived from the projects directory:
+  8811 plus the SHA-256 of the resolved path modulo 189, a port from 8811 to 8999 (8834,
+  8843, 8880, 8883, 8888, 8889 and 8983 are skipped: other programs use them). A server of
+  the same directory gets the same port after every restart, so an SSH forward written once
+  keeps working. When that port is taken, it says so and takes the next free one of the
+  range (printed; a forward of the first one does not reach it then). `--relay-port N`
+  names the port (taken: the server does not start; `0` for any free one), `--no-relay`
+  turns the relay off. Through that one
   port a client reaches every session of the server, with one server token (`calu token
   mint --server`); see [From another machine](#from-another-machine). The relay binds the
   loopback interface only, like the sessions, and each session keeps its own port and

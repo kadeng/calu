@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D241, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D243, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -83,9 +83,16 @@ Decided (do not ask again):
 - **Reconnect:** keep 5 minutes for remote addresses; a local session whose process is gone
   ends the client at once.
   Both built (PLAN D242, test plan I17-I30, not pushed): `calu serve` listens on one relay
-  port (default 8811) for all its sessions with a server token (`calu token mint --server`,
+  port (default derived from its projects directory since D243) for all its sessions with a server token (`calu token mint --server`,
   migration 0038); `calu attach ws://127.0.0.1:8811` follows `/new`, `/fork`, `/switch`;
   `calu start --relay`; `calu web` falls back to the relay for the live view.
+- **Projects directory per `calu serve`** (requirement 43) and **relay port from the
+  directory:** **Done** (PLAN D243, test plan I31-I37, migration 0039, not pushed).
+  `calu serve [--projects DIR]` (default: the current directory) refuses `/`, hidden
+  directories and system directories before the password; every request it claims
+  (`calu start`, web, `/new`, relay) must be in that directory or below; two servers of one
+  user each get the requests of their directory; the relay port is 8811 + sha256(path) mod
+  189 (next free one if taken). Not run by hand over SSH yet (`docs/TESTING.md` item 39).
 - **Tokens:** `calu start --no-attach`'s token stays valid until the session ends (keep).
 - **PyCharm:** placeholder in the message field when nothing is attached and the setup cards
   in a scrolling area; a resolved conflict's line is marked "resolved" (warning colour

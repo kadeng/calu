@@ -35,17 +35,20 @@ class ServerRow:
     """`ws://127.0.0.1:<port>` on the server's machine; "" for a server without a relay."""
     started_at: datetime
     ended_at: datetime | None
+    projects_directory: str = ""
+    """The resolved directory it starts sessions in or below (D243); "" if not recorded."""
 
     def line(self) -> str:
         """Return the server as one terminal line.
 
         Returns:
-            Id, user and host, pid, relay address and start time.
+            Id, user and host, pid, relay address, projects directory and start time.
         """
         relay = self.relay_address or "no relay"
         ended = f"  ended {self.ended_at:%Y-%m-%d %H:%M:%S}" if self.ended_at else ""
+        projects = f"  projects {self.projects_directory}" if self.projects_directory else ""
         return (
-            f"{self.id}  {self.os_user}@{self.hostname}  pid {self.pid}  {relay}"
+            f"{self.id}  {self.os_user}@{self.hostname}  pid {self.pid}  {relay}{projects}"
             f"  since {self.started_at:%Y-%m-%d %H:%M:%S}{ended}"
         )
 
@@ -98,7 +101,9 @@ class Hosted:
 # ------------------------------------------------------------------ the server's side (session)
 
 
-async def record_start(db: Db, hostname: str, os_user: str, relay_address: str) -> str:
+async def record_start(
+    db: Db, hostname: str, os_user: str, relay_address: str, projects_directory: str = ""
+) -> str:
     """Record this `calu serve` process in `servers`.
 
     Side effect: inserts the row, with this process's pid and process table
@@ -109,17 +114,25 @@ async def record_start(db: Db, hostname: str, os_user: str, relay_address: str) 
         hostname: The host the server answers requests for.
         os_user: The OS user it answers requests for.
         relay_address: The relay's address, or "" without a relay.
+        projects_directory: The resolved directory it serves (D243); "" for none recorded.
 
     Returns:
         The id of the new row.
 
     Raises:
-        psycopg.Error: On database errors, among them a schema older than migration 0038
+        psycopg.Error: On database errors, among them a schema older than migration 0039
             (`psycopg.errors.UndefinedFunction`).
     """
     row = await db.one(
-        "SELECT calu_server_started(%s, %s, %s, %s, %s)::text",
-        (hostname, os_user, os.getpid(), machine.here().text(), relay_address),
+        "SELECT calu_server_started(%s, %s, %s, %s, %s, %s)::text",
+        (
+            hostname,
+            os_user,
+            os.getpid(),
+            machine.here().text(),
+            relay_address,
+            projects_directory,
+        ),
     )
     assert row is not None  # an INSERT ... RETURNING returns its row
     return str(row[0])
@@ -224,10 +237,11 @@ async def running(
         and machine tell (`calu.herd.process_gone`).
 
     Raises:
-        psycopg.Error: On database errors, among them a schema older than migration 0038.
+        psycopg.Error: On database errors, among them a schema older than migration 0039.
     """
     rows = await db.all(
-        """SELECT id::text, hostname, os_user, pid, machine, relay_address, started_at, ended_at
+        """SELECT id::text, hostname, os_user, pid, machine, relay_address, started_at, ended_at,
+                  projects_directory
              FROM servers
             WHERE ended_at IS NULL
               AND (%s::text IS NULL OR hostname = %s) AND (%s::text IS NULL OR os_user = %s)
@@ -253,7 +267,8 @@ async def server(db: Db, server_id: str) -> ServerRow | None:
     if len(server_id) < 4:
         return None
     rows = await db.all(
-        """SELECT id::text, hostname, os_user, pid, machine, relay_address, started_at, ended_at
+        """SELECT id::text, hostname, os_user, pid, machine, relay_address, started_at, ended_at,
+                  projects_directory
              FROM servers WHERE id::text LIKE %s ORDER BY started_at DESC LIMIT 2""",
         (server_id.replace("%", "").replace("_", "") + "%",),
     )

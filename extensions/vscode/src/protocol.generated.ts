@@ -657,6 +657,7 @@ export interface RelayInitializeResult {
 export interface RelayServer {
   hostname: string;
   os_user: string;
+  projects_directory?: string;
   server_id?: string | null;
 }
 /**
@@ -682,8 +683,9 @@ export interface RelaySessionsResult {
  *
  * `kind` "new" needs no `claude_session_id`; "resume" continues it (with `fork_before_turn`:
  * a branch before that turn); "fork" continues a copy of it. `directory` is a directory on
- * the server's machine. The result is a `RelayStartResult` once the session can be attached
- * to; a refusal or failure of the server is an error (-32000) with its reason.
+ * the server's machine, inside the server's projects directory (`RelayServer`). The result
+ * is a `RelayStartResult` once the session can be attached to; a refusal or failure of the
+ * server is an error (-32000) with its reason.
  */
 export interface RelayStartParams {
   claude_session_id?: string | null;

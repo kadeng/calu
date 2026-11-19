@@ -83,7 +83,9 @@ async def relayed(tmp_path: Path, insecure: bool = False) -> AsyncGenerator[Rela
         relay = Relay(
             fake,
             check,
-            RelayServer(server_id="srv", hostname="box", os_user="dev"),
+            RelayServer(
+                server_id="srv", hostname="box", os_user="dev", projects_directory="/srv/p"
+            ),
             insecure=insecure,
             revalidate_s=0.2,
         )
@@ -99,7 +101,12 @@ async def relayed(tmp_path: Path, insecure: bool = False) -> AsyncGenerator[Rela
 async def test_the_relay_lists_the_servers_sessions(tmp_path: Path) -> None:
     async with relayed(tmp_path) as it:
         hello, listed = await relay_call(it.relay.address, TOKEN, "relay.sessions")
-        assert hello["relay"] == {"server_id": "srv", "hostname": "box", "os_user": "dev"}
+        assert hello["relay"] == {
+            "server_id": "srv",
+            "hostname": "box",
+            "os_user": "dev",
+            "projects_directory": "/srv/p",
+        }
         [one] = listed["sessions"]
         assert one["calu_session_id"] == SESSION_ID
         assert one["directory"] == str(tmp_path)
@@ -191,6 +198,54 @@ async def test_relay_start_asks_the_server_and_names_the_session(tmp_path: Path)
         assert "/nowhere is not a directory on box" in str(refused.value)
 
 
+async def test_the_relay_refuses_a_session_outside_the_projects_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D243: `relay.start` of a real `calu serve` for a directory it does not serve."""
+    from calu import servers
+    from calu.serve import ServeOptions, Server
+
+    projects = (tmp_path / "projects").resolve()
+    projects.mkdir()
+    server = Server(
+        source=None,  # type: ignore[arg-type]
+        hidden=set(),
+        options=ServeOptions(projects=projects),
+        hostname="box",
+        user="dev",
+    )
+    server._db = object()  # type: ignore[assignment]
+    server.server_id = "srv"
+    filed: list[str] = []
+
+    async def file_request(*_args: object) -> int:
+        filed.append("filed")
+        return 1
+
+    monkeypatch.setattr(servers, "file_request", file_request)
+
+    async def check(sha: str) -> str | None:
+        return "laptop" if sha == token_hash(TOKEN) else None
+
+    relay = Relay(server, check, server._relay_server())
+    await relay.open("127.0.0.1", 0)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(relay.run)
+        hello, _ = await relay_call(relay.address, TOKEN, "relay.sessions")
+        assert hello["relay"]["projects_directory"] == str(projects)
+        for outside, why in (
+            (str(tmp_path), "the projects directory this `calu serve` on box serves"),
+            ("/etc", "calu serve --projects"),
+            (str(projects / ".ssh"), "hidden directory .ssh"),
+        ):
+            with pytest.raises(RequestFailed) as refused:
+                await relay_call(relay.address, TOKEN, "relay.start", {"directory": outside})
+            assert refused.value.code == -32000
+            assert why in str(refused.value)
+        tg.cancel_scope.cancel()
+    assert filed == []
+
+
 async def test_insecure_lets_loopback_attach_without_a_token_but_not_ask_for_sessions(
     tmp_path: Path,
 ) -> None:
@@ -266,7 +321,14 @@ def test_calu_attach_on_a_relay_picks_the_session(monkeypatch: pytest.MonkeyPatc
         return {}, answers["listed"]
 
     monkeypatch.setattr(cli, "relay_call", relay_call)
-    hello = {"relay": {"server_id": "s", "hostname": "box", "os_user": "dev"}}
+    hello = {
+        "relay": {
+            "server_id": "s",
+            "hostname": "box",
+            "os_user": "dev",
+            "projects_directory": "/srv/p",
+        }
+    }
     tried = cli.Endpoint("ws://127.0.0.1:8811", "tok")
     chosen = cli._through_relay(tried, hello, "bbbb")
     assert chosen.address == "ws://127.0.0.1:8811/session/bbbb2222"
@@ -275,13 +337,18 @@ def test_calu_attach_on_a_relay_picks_the_session(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
     with pytest.raises(cli.CliError, match="name one with --session"):
         cli._through_relay(tried, hello, None)
-    with pytest.raises(cli.CliError, match="no session of dev@box start with 'cccc'"):
+    with pytest.raises(
+        cli.CliError, match=r"no session of dev@box \(projects directory /srv/p\) start with 'cccc'"
+    ):
         cli._through_relay(tried, hello, "cccc")
     answers["listed"] = _listing("aaaa1111")
     assert cli._through_relay(tried, hello, None).session_id == "aaaa1111"
     answers["listed"] = _listing()
-    with pytest.raises(cli.CliError, match=r"--relay ws://127\.0\.0\.1:8811"):
+    with pytest.raises(cli.CliError, match=r"--relay ws://127\.0\.0\.1:8811") as none:
         cli._through_relay(tried, hello, None)
+    # D243: the server's projects directory is named.
+    assert "(projects directory /srv/p)" in str(none.value)
+    assert "calu start <directory in /srv/p>" in str(none.value)
     # After the client: the command that attaches to the same session again.
     assert cli._again(chosen, True) == (
         "calu attach ws://127.0.0.1:8811 --session bbbb2222 --token=<the same token>"

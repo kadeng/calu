@@ -203,6 +203,33 @@ async def claim(db: Db, hostname: str, os_user: str, pid: int) -> SessionRequest
     return None if row is None else _request(row)
 
 
+async def claim_served(db: Db, server_id: str, pid: int) -> SessionRequest | None:
+    """Take the oldest recent pending request meant for a recorded server (D243).
+
+    The server's `servers` row names its host, OS user and projects directory. It gets the
+    requests its own relay filed, and the operators' requests of its host and user whose
+    directory is inside its projects directory or inside no other running server's
+    (migration 0039). The caller still checks the resolved directory and refuses what is
+    outside. Each request is claimed at most once.
+
+    Args:
+        db: A connection with the session login.
+        server_id: The id of the server's `servers` row (`calu.servers.record_start`).
+        pid: The server's process id, recorded with the claim.
+
+    Returns:
+        The request, now in the state "claimed", or None if nothing is pending for it (also
+        when the server's row has ended).
+
+    Raises:
+        psycopg.Error: On database errors, among them a schema older than migration 0039.
+    """
+    row = await db.one(
+        f"SELECT {COLUMNS} FROM calu_claim_served_request(%s::uuid, %s)", (server_id, pid)
+    )
+    return None if row is None else _request(row)
+
+
 async def finish(
     db: Db,
     request_id: int,

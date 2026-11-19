@@ -11,7 +11,7 @@ import psycopg
 import pytest
 
 from calu import serve, session_requests
-from calu.serve import Server
+from calu.serve import ServeOptions, Server
 from calu.session_requests import SessionRequest
 
 pytestmark = pytest.mark.anyio
@@ -68,7 +68,13 @@ def _server_and_request(tmp_path: Path) -> tuple[Server, SessionRequest]:
     Returns:
         The server and the claimed request, already listed in `server.sessions`.
     """
-    server = Server(source=None, hidden=set(), hostname="h", user="u")  # type: ignore[arg-type]
+    server = Server(
+        source=None,  # type: ignore[arg-type]
+        hidden=set(),
+        options=ServeOptions(projects=tmp_path.resolve()),
+        hostname="h",
+        user="u",
+    )
     request = SessionRequest(
         hostname="h", os_user="u", directory=str(tmp_path), id=7, state="claimed"
     )
@@ -154,7 +160,6 @@ async def test_a_session_whose_start_is_recorded_keeps_running(
 def test_every_session_of_the_server_gets_the_login_protection(tmp_path: Path) -> None:
     """Requirement 42: `calu serve` read the store once, before the switch to the user."""
     from calu.preflight import LoginProtection
-    from calu.serve import ServeOptions
 
     protection = LoginProtection(False, (), False)
     server = Server(
@@ -162,7 +167,7 @@ def test_every_session_of_the_server_gets_the_login_protection(tmp_path: Path) -
         hidden=set(),
         hostname="h",
         user="u",
-        options=ServeOptions(login_protection=protection),
+        options=ServeOptions(login_protection=protection, projects=tmp_path.resolve()),
     )
     request = SessionRequest(
         hostname="h", os_user="u", directory=str(tmp_path), id=7, state="claimed"
@@ -192,13 +197,20 @@ async def test_a_started_session_is_reachable_through_the_relay(
 
 
 async def test_relay_start_files_through_the_token_and_waits_for_the_outcome(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     from calu import servers
     from calu.protocol.messages import RelayStartParams
     from calu.relay import StartRefused
 
-    server = Server(source=None, hidden=set(), hostname="h", user="u")  # type: ignore[arg-type]
+    projects = tmp_path.resolve()
+    server = Server(
+        source=None,  # type: ignore[arg-type]
+        hidden=set(),
+        options=ServeOptions(projects=projects),
+        hostname="h",
+        user="u",
+    )
     server._db = object()  # type: ignore[assignment]
     server.server_id = "srv"
     filed: list[SessionRequest] = []
@@ -216,13 +228,106 @@ async def test_relay_start_files_through_the_token_and_waits_for_the_outcome(
             server._record_outcome(request_id, session_id, message)
 
         tg.start_soon(finish_later, 41, "s-1", "")
-        started = await server.relay_start("sha", "laptop", RelayStartParams(directory="/p"))
+        started = await server.relay_start(
+            "sha", "laptop", RelayStartParams(directory=str(projects / "p"))
+        )
         assert started == "s-1"
-        tg.start_soon(finish_later, 42, None, "/q is not a directory on h")
-        with pytest.raises(StartRefused, match="/q is not a directory"):
-            await server.relay_start("sha", "", RelayStartParams(directory="/q"))
+        tg.start_soon(finish_later, 42, None, "q is not a directory on h")
+        with pytest.raises(StartRefused, match="q is not a directory"):
+            await server.relay_start("sha", "", RelayStartParams(directory=str(projects / "q")))
+        # Outside the projects directory: refused before anything is filed (D243).
+        with pytest.raises(StartRefused, match=r"is not in .*, the projects directory"):
+            await server.relay_start("sha", "", RelayStartParams(directory="/elsewhere"))
+        with pytest.raises(StartRefused, match=r"hidden directory \.git"):
+            await server.relay_start("sha", "", RelayStartParams(directory=str(projects / ".git")))
+        (projects / "link").symlink_to(projects.parent)
+        with pytest.raises(StartRefused, match="is not in"):
+            await server.relay_start("sha", "", RelayStartParams(directory=str(projects / "link")))
     # The request names the server's own host and user, and says it came through the relay.
     assert [(w.hostname, w.os_user, w.label) for w in filed] == [
         ("h", "u", "relay: laptop"),
         ("h", "u", "relay"),
     ]
+
+
+def test_a_claimed_request_outside_the_projects_directory_is_refused(tmp_path: Path) -> None:
+    """D243: the same rule for every request the server claims, also one of `calu start`."""
+    from calu.serve import Refused
+
+    projects = (tmp_path / "projects").resolve()
+    (projects / "app").mkdir(parents=True)
+    (projects / ".cache").mkdir()
+    (projects / "out").symlink_to(tmp_path)
+    server = Server(
+        source=None,  # type: ignore[arg-type]
+        hidden=set(),
+        options=ServeOptions(projects=projects),
+        hostname="h",
+        user="u",
+    )
+
+    def options(directory: Path | str):
+        return server._options(
+            SessionRequest(hostname="h", os_user="u", directory=str(directory), id=1)
+        )
+
+    assert options(projects / "app").workspace == projects / "app"
+    assert options(projects).workspace == projects
+    with pytest.raises(Refused, match=r"is not in .*projects, the projects directory .* on h"):
+        options(tmp_path)
+    with pytest.raises(Refused, match="calu serve --projects"):
+        options("/etc")
+    with pytest.raises(Refused, match="is not in"):
+        options(projects / "out")
+    with pytest.raises(Refused, match=r"hidden directory \.cache"):
+        options(projects / ".cache")
+    with pytest.raises(Refused, match="is not a directory on h"):
+        options(projects / "missing")
+    with pytest.raises(Refused, match="no absolute path"):
+        options("app")
+
+
+async def test_the_relay_takes_the_next_derived_port_when_its_own_is_taken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D243: the port derived from the directory, else the next one of the sequence."""
+    import socket
+
+    from calu import projects_dir
+    from calu.serve import RelayPortTaken
+
+    with socket.socket() as occupied, socket.socket() as probe:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        busy = occupied.getsockname()[1]
+        probe.bind(("127.0.0.1", 0))
+        free = probe.getsockname()[1]
+        probe.close()
+
+        def server(**options: Any) -> Server:
+            return Server(
+                source=None,  # type: ignore[arg-type]
+                hidden=set(),
+                options=ServeOptions(projects=tmp_path.resolve(), **options),
+                hostname="h",
+                user="u",
+            )
+
+        monkeypatch.setattr(projects_dir, "relay_ports", lambda _projects: [busy, free])
+        relay = await server()._bind_relay()
+        try:
+            assert relay.address == f"ws://127.0.0.1:{free}"
+        finally:
+            assert relay._ws is not None
+            relay._ws.close()
+            await relay._ws.wait_closed()
+        shown = capsys.readouterr()
+        text = shown.out + shown.err
+        assert f"the relay port {busy} of {tmp_path.resolve()} is taken" in text
+        assert f"takes port {free} instead of {busy}" in text
+        monkeypatch.setattr(projects_dir, "relay_ports", lambda _projects: [busy])
+        with pytest.raises(RelayPortTaken, match="every relay port from 8811 to 8999 is taken"):
+            await server()._bind_relay()
+        # A port named with --relay-port is not replaced.
+        with pytest.raises(RelayPortTaken, match=f"the relay port {busy} cannot be bound"):
+            await server(relay_port=busy)._bind_relay()

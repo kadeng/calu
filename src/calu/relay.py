@@ -1,8 +1,8 @@
 """The relay of `calu serve`: one loopback port for every session of the server (PLAN D242).
 
-    client ──ws://127.0.0.1:8811/─────────────► Relay   initialize (server token),
+    client ──ws://127.0.0.1:<port>/───────────► Relay   initialize (server token),
                                                         relay.sessions, relay.start
-    client ──ws://127.0.0.1:8811/session/<id>─► Relay ──ws://127.0.0.1:<session port>──► session
+    client ──ws://127.0.0.1:<port>/session/<id>► Relay ──ws://127.0.0.1:<session port>──► session
              initialize (server token)                  initialize (the session's own token,
                                                         client "<name> via relay (<label>)")
            ◄─────────── every later message copied unchanged, in both directions ───────────►
@@ -40,7 +40,6 @@ from calu.protocol.client import RequestFailed, snapshot
 from calu.protocol.messages import (
     CLOSE_SERVER_TOKEN_REVOKED,
     MAX_FRAME_BYTES,
-    RELAY_PORT,
     RELAY_SESSION_PATH,
     InitializeParams,
     RelayInitializeResult,
@@ -65,12 +64,9 @@ from calu.protocol.server import (
 from calu.servers import Hosted, StartRefused
 from calu.tokens import token_hash
 
-__all__ = ["DEFAULT_PORT", "Hosted", "Relay", "StartRefused"]
+__all__ = ["Hosted", "Relay", "StartRefused"]
 
 log = logging.getLogger(__name__)
-
-DEFAULT_PORT = RELAY_PORT
-"""The relay's port when `calu serve` is given none (`calu.protocol.messages.RELAY_PORT`)."""
 
 SNAPSHOT_TIMEOUT_S = 3.0
 """How long `relay.sessions` waits for one session's `state.get`."""
@@ -171,14 +167,15 @@ class Relay:
         """Hashes seen revoked after they were valid; refused for the rest of the process."""
         self._checks: dict[str, _Check] = {}
 
-    async def open(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
+    async def open(self, host: str = "127.0.0.1", port: int = 0) -> None:
         """Bind the relay's port.
 
         Side effect: sets `address`.
 
         Args:
             host: The interface; the loopback interface, as for the sessions.
-            port: The port; 0 lets the operating system choose a free one.
+            port: The port (`calu serve` derives one from its projects directory,
+                `calu.projects_dir.relay_ports`); 0 lets the operating system choose a free one.
 
         Raises:
             OSError: If the port cannot be bound (taken, or not allowed).

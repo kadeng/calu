@@ -574,8 +574,9 @@ escalation resolved from the database alone.
    (one sentence); a database that is down (the server's refusal in one message); an older
    schema (migration 0036 taken out: `calu sessions` and `calu ide` list without names,
    `calu doctor --db` says that one migration is not applied, `calu setup` applies it).
-27. `calu serve` (D208). In one terminal `calu serve`: it asks the session password once and
-   prints that it answers requests. In two project directories `calu start -p hi`: each must
+27. `calu serve` (D208). In one terminal `calu serve` in the directory that holds your
+   projects: it asks the session password once and prints that it answers requests in that
+   directory. In two project directories below it `calu start -p hi`: each must
    attach to a session of its own without a session password, and the server prints one
    "requested", "started" and (after `/shutdown` in the client) "ended" line per session,
    with the directory's name in front. `calu start --fork <id>` of one of them must know the
@@ -751,13 +752,24 @@ escalation resolved from the database alone.
 38. The relay of `calu serve` from another machine (PLAN D242; the record is
    `agent/records/notes/test-plan.md` I17-I30). On the server: `calu serve` prints the relay
    line, two sessions from `calu start --no-attach`, then `calu token mint --server`. On the
-   laptop: the printed `ssh -N -L 8811:127.0.0.1:8811 <host>`, then `calu attach
-   ws://127.0.0.1:8811 --token=<token>` must list both sessions and ask which; in the
+   laptop: the printed `ssh -N -L <port>:127.0.0.1:<port> <host>` (the port derived from the
+   projects directory, the same after a restart of the server), then `calu attach
+   ws://127.0.0.1:<port> --token=<token>` must list both sessions and ask which; in the
    full-screen client `/running` must list the server's sessions, `/switch`, `/new` and `/fork`
    must change to the named or new session; killing the forward and opening it again must
    reattach; `calu token revoke --server <id>` on the server must detach the client within 15
    seconds. On the server, `calu attach` in a project and then `kill -9` of `calu serve` must
    end the client at once with "the session ended: its process is gone".
+39. The projects directory of `calu serve` (PLAN D243; test plan I31-I37). `calu serve
+   --projects /etc`, `--projects /`, a start in a hidden directory and `--projects` of a
+   symbolic link to `/usr/lib` must each end at once with one line that names the reason,
+   before the password is asked. `calu start` in a directory outside the projects directory
+   must end with "the server did not start the session: ... is not in <projects>, the
+   projects directory this `calu serve` on <host> serves ...", and `calu start <dir outside>
+   --relay ws://127.0.0.1:<port>` from the laptop with the same reason. Stopping and starting
+   the server must print the same relay port; a second server of the same directory must say
+   that the port is taken and print the next one; `calu token mint --server` must name the
+   projects directory and the port the server took.
 
 ## Measuring the checkers
 

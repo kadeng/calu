@@ -38,13 +38,13 @@ from typing import TYPE_CHECKING
 import anyio
 import psycopg
 
-from calu import asuser, servers, session_requests
+from calu import asuser, projects_dir, servers, session_requests
 from calu.config import load_secrets
 from calu.credentials import wipe
 from calu.db import SESSION_REQUESTED, ConnectionSource, Db, Dirty, LoginRefused, Notifier
 from calu.launch import RunAs
 from calu.preflight import LoginProtection
-from calu.protocol.messages import RELAY_PORT, RelayServer, RelayStartParams
+from calu.protocol.messages import RelayServer, RelayStartParams
 from calu.run import (
     ERRORS,
     LABEL,
@@ -106,11 +106,16 @@ class ServeOptions:
     login_protection: LoginProtection | None = None
     """What keeps Claude's commands from calu's logins, passed to every session
     (`RunOptions.login_protection`); None if unknown."""
-    relay_port: int | None = RELAY_PORT
-    """The relay's port on 127.0.0.1 (D242); 0 for any free port; None for no relay."""
-    relay_port_given: bool = False
-    """Whether the port was named (`--relay-port`): then a port that is taken ends the server
-    instead of being replaced by a free one."""
+    projects: Path | None = None
+    """The projects directory (D243), resolved and checked (`calu.projects_dir.
+    check_projects_dir`): sessions start only in it or below it. None is the current
+    directory, resolved (unchecked: the command line checks it)."""
+    relay: bool = True
+    """Whether the server listens on a relay port (D242); False for `--no-relay`."""
+    relay_port: int | None = None
+    """The relay's port on 127.0.0.1 as named with `--relay-port` (0: any free port; a named
+    port that is taken ends the server); None derives it from the projects directory
+    (`calu.projects_dir.relay_ports`, the next one if it is taken)."""
 
 
 def os_user() -> str:
@@ -165,6 +170,8 @@ class Server:
         self.checker_models = checker_models
         self.hostname = hostname or socket.gethostname()
         self.user = user or os_user()
+        self.projects = self.options.projects or Path(os.path.realpath(Path.cwd()))
+        """The resolved projects directory: sessions start only in it or below it (D243)."""
         self.sessions: dict[int, SessionRequest] = {}
         self.listening = anyio.Event()
         """Set once the server is subscribed to new requests and has looked for old ones."""
@@ -218,7 +225,7 @@ class Server:
         notifier.on(SESSION_REQUESTED, lambda _payload: wake.set())
         notifier.on_listening(wake.hint)
         self._db = db
-        await self._open_relay(db)
+        await self._start_up(db)
         async with anyio.create_task_group() as tg:
 
             def stop(exc: LoginRefused) -> None:
@@ -236,17 +243,13 @@ class Server:
             if self.relay is not None:
                 tg.start_soon(self.relay.run)
             say(
-                f"[serve] answering session requests for {self.user}@{self.hostname}; start "
-                "one with `calu start` in a project directory"
+                f"[serve] answering session requests for {self.user}@{self.hostname} in "
+                f"{self.projects}; start one with `calu start` in a project directory there"
             )
             try:
                 while True:
                     try:
-                        while (
-                            request := await session_requests.claim(
-                                db, self.hostname, self.user, os.getpid()
-                            )
-                        ) is not None:
+                        while (request := await self._claim(db)) is not None:
                             self.sessions[request.id] = request
                             tg.start_soon(self._host, db, request)
                     except (psycopg.Error, TimeoutError) as exc:
@@ -266,26 +269,105 @@ class Server:
         if refused:
             raise refused[0]
 
-    async def _open_relay(self, db: Db) -> None:
-        """Bind the relay port and record this server with its address (D242).
+    async def _claim(self, db: Db) -> SessionRequest | None:
+        """Claim the next request meant for this server.
 
-        Side effects: binds a port on 127.0.0.1 (the named one, the default one, or a free one
-        if the default is taken); inserts the `servers` row; prints where the relay listens and
-        how a client on another machine reaches it. Without the table (a schema older than
-        migration 0038) the relay runs, but no server token can be checked.
+        A recorded server claims through its row (`session_requests.claim_served`, D243): its
+        relay's requests, and the operators' requests in its projects directory or in no
+        other server's. A server without a row (a schema before migration 0039) claims every
+        request of its host and user; `_options` refuses those outside its directory.
+
+        Args:
+            db: The server's connection.
+
+        Returns:
+            The claimed request, or None if nothing is pending.
+
+        Raises:
+            psycopg.Error: On database errors.
+        """
+        if self.server_id is not None:
+            return await session_requests.claim_served(db, self.server_id, os.getpid())
+        return await session_requests.claim(db, self.hostname, self.user, os.getpid())
+
+    async def _start_up(self, db: Db) -> None:
+        """Bind the relay port (unless `--no-relay`) and record this server (D242, D243).
+
+        Side effects: binds a port on 127.0.0.1 (the named one, or the first free one of the
+        ports derived from the projects directory); inserts the `servers` row with the relay's
+        address and the projects directory; prints where the relay listens and how a client
+        on another machine reaches it. Without the row (a schema older than migration 0039)
+        the relay runs, but no server token can be checked, and requests are claimed as
+        before (`_claim`).
 
         Args:
             db: The server's connection.
 
         Raises:
-            RelayPortTaken: If the port named with `--relay-port` cannot be bound.
+            RelayPortTaken: If the port named with `--relay-port` cannot be bound, or every
+                port of the derived range is taken.
         """
-        port = self.options.relay_port
-        if port is None:
+        relay = await self._bind_relay() if self.options.relay else None
+        try:
+            with anyio.fail_after(FINISH_WAIT_S):
+                self.server_id = await servers.record_start(
+                    db,
+                    self.hostname,
+                    self.user,
+                    relay.address if relay is not None else "",
+                    str(self.projects),
+                )
+        except (psycopg.Error, TimeoutError) as exc:
+            log.info("recording the server failed", exc_info=True)
+            say(
+                f"[serve] this server could not record itself ({one_line(str(exc))}); its relay "
+                "checks no server token, so only `--insecure` clients of this machine use it. "
+                "`calu setup` brings the database up to date",
+                error=True,
+            )
+        if relay is None:
             return
+        relay.server = self._relay_server()
+        self.relay = relay
+        relay_port = relay.address.rsplit(":", 1)[-1]
+        say(f"[serve] relay for every session of this server: {relay.address}")
+        say(
+            "[serve] from another machine: `calu token mint --server` here prints a token; "
+            f"there: ssh -N -L {relay_port}:127.0.0.1:{relay_port} {self.hostname}, then "
+            f"calu attach ws://127.0.0.1:{relay_port}"
+        )
+
+    def _relay_server(self) -> RelayServer:
+        """Describe this server for the relay's `initialize`.
+
+        Returns:
+            Its row id (None if not recorded), host, user and projects directory.
+        """
+        return RelayServer(
+            server_id=self.server_id,
+            hostname=self.hostname,
+            os_user=self.user,
+            projects_directory=str(self.projects),
+        )
+
+    async def _bind_relay(self) -> Relay:
+        """Bind the relay's port.
+
+            --relay-port N  ──► N, or RelayPortTaken
+            (none)          ──► the first free port of relay_ports(projects); each taken one
+                                is printed
+
+        Returns:
+            The bound relay (not yet running).
+
+        Raises:
+            RelayPortTaken: If the named port, or every derived one, cannot be bound.
+        """
         # Imported here: the relay imports the protocol server and with it the session, which
         # `calu.cli` must not pay for at its start (`tests/unit/test_startup_imports.py`).
         from calu.relay import Relay
+
+        db = self._db
 
         async def check(sha: str) -> str | None:
             """Ask the database about a server token of this server.
@@ -299,49 +381,44 @@ class Server:
             Raises:
                 psycopg.Error: On database errors.
             """
-            if self.server_id is None:
+            if self.server_id is None or db is None:
                 return None
             return await servers.token_label(db, self.server_id, sha)
 
-        relay = Relay(
-            self,
-            check,
-            RelayServer(hostname=self.hostname, os_user=self.user),
-            insecure=self.options.insecure,
-        )
-        try:
-            await relay.open("127.0.0.1", port)
-        except OSError as exc:
-            if self.options.relay_port_given:
+        relay = Relay(self, check, self._relay_server(), insecure=self.options.insecure)
+        named = self.options.relay_port
+        if named is not None:
+            try:
+                await relay.open("127.0.0.1", named)
+            except OSError as exc:
                 raise RelayPortTaken(
-                    f"the relay port {port} cannot be bound ({exc}); name another one with "
+                    f"the relay port {named} cannot be bound ({exc}); name another one with "
                     "--relay-port, or 0 for any free port"
                 ) from exc
-            say(f"[serve] the relay port {port} is taken ({exc}); taking a free one", error=True)
-            await relay.open("127.0.0.1", 0)
-        try:
-            with anyio.fail_after(FINISH_WAIT_S):
-                self.server_id = await servers.record_start(
-                    db, self.hostname, self.user, relay.address
+            return relay
+        ports = projects_dir.relay_ports(self.projects)
+        for index, port in enumerate(ports):
+            try:
+                await relay.open("127.0.0.1", port)
+            except OSError as exc:
+                if index == 0:
+                    say(
+                        f"[serve] the relay port {port} of {self.projects} is taken ({exc}); "
+                        "taking the next free one",
+                        error=True,
+                    )
+                continue
+            if index > 0:
+                say(
+                    f"[serve] the relay takes port {port} instead of {ports[0]}; an SSH forward "
+                    f"of {ports[0]} does not reach it",
+                    error=True,
                 )
-        except (psycopg.Error, TimeoutError) as exc:
-            log.info("recording the server failed", exc_info=True)
-            say(
-                f"[serve] this server could not record itself ({one_line(str(exc))}); its relay "
-                "checks no server token, so only `--insecure` clients of this machine use it. "
-                "`calu setup` brings the database up to date",
-                error=True,
-            )
-        relay.server = RelayServer(
-            server_id=self.server_id, hostname=self.hostname, os_user=self.user
-        )
-        self.relay = relay
-        relay_port = relay.address.rsplit(":", 1)[-1]
-        say(f"[serve] relay for every session of this server: {relay.address}")
-        say(
-            "[serve] from another machine: `calu token mint --server` here prints a token; "
-            f"there: ssh -N -L {relay_port}:127.0.0.1:{relay_port} {self.hostname}, then "
-            f"calu attach ws://127.0.0.1:{relay_port}"
+            return relay
+        raise RelayPortTaken(
+            f"every relay port from {projects_dir.RELAY_PORT_FIRST} to "
+            f"{projects_dir.RELAY_PORT_LAST} is taken; name one with --relay-port, or 0 for any "
+            "free port"
         )
 
     def hosted(self) -> list[Hosted]:
@@ -367,15 +444,21 @@ class Server:
             The id of the started session's row.
 
         Raises:
-            StartRefused: If the request cannot be filed, the server refused or failed to
-                start the session, or nothing happened within `RELAY_START_WAIT_S`.
+            StartRefused: If the directory is not in the projects directory
+                (`calu.projects_dir.served_path`), the request cannot be filed, the server
+                refused or failed to start the session, or nothing happened within
+                `RELAY_START_WAIT_S`.
         """
         if self._db is None or self.server_id is None:
             raise StartRefused("this server has no record in the database to file a request with")
+        try:
+            workspace = projects_dir.served_path(self.projects, params.directory, self.hostname)
+        except projects_dir.NotServed as exc:
+            raise StartRefused(str(exc)) from None
         wanted = SessionRequest(
             hostname=self.hostname,
             os_user=self.user,
-            directory=params.directory,
+            directory=str(workspace),
             kind=params.kind,
             claude_session_id=params.claude_session_id,
             fork_before_turn=params.fork_before_turn,
@@ -427,7 +510,8 @@ class Server:
             The options of a session that stays until a client shuts it down.
 
         Raises:
-            Refused: If the server's limit is reached, the directory does not exist, an id is
+            Refused: If the server's limit is reached, the directory is not in the projects
+                directory (D243) or does not exist, an id is
                 no UUID, the effort is unknown, or this server already runs the conversation
                 that is to be resumed.
         """
@@ -437,8 +521,11 @@ class Server:
                 f"this server already runs {len(others)} sessions, its limit (`calu serve "
                 "--max-sessions`); shut one down first"
             )
-        workspace = Path(request.directory)
-        if not workspace.is_absolute() or not workspace.is_dir():
+        try:
+            workspace = projects_dir.served_path(self.projects, request.directory, self.hostname)
+        except projects_dir.NotServed as exc:
+            raise Refused(str(exc)) from None
+        if not workspace.is_dir():
             raise Refused(f"{request.directory} is not a directory on {self.hostname}")
         if request.claude_session_id is not None:
             try:

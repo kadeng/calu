@@ -447,12 +447,14 @@ class RelayTarget:
     """A `calu serve` relay a client reaches its sessions through (agent/records/PLAN.md D242)."""
 
     address: str
-    """The relay's own address, `ws://127.0.0.1:8811` (no path)."""
+    """The relay's own address, `ws://127.0.0.1:<port>` (no path)."""
     token: str
     """The server token (`calu token mint --server`), or "" for an `--insecure` relay."""
     hostname: str = ""
     """The server's host, as the relay said in `initialize`."""
     os_user: str = ""
+    projects_directory: str = ""
+    """The directory the server starts sessions in or below (D243); "" if it did not say."""
 
     def session_address(self, session_id: str) -> str:
         """Return the address of one of the server's sessions on this relay.
