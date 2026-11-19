@@ -771,6 +771,14 @@ def create_trace_file(workspace: Path, target: Path) -> tuple[Path, int]:
     root = workspace.resolve()
 
     def refuse_outside(directory: Path) -> None:
+        """Refuse a directory that lies outside the project once its links are resolved.
+
+        Args:
+            directory: An existing directory.
+
+        Raises:
+            TraceFileError: If it lies outside `root`.
+        """
         real = directory.resolve()
         if real != root and root not in real.parents:
             raise TraceFileError(f"{target} leads out of the project directory ({real})")

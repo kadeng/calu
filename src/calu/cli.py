@@ -1673,9 +1673,10 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
         store: The credential store.
 
     Raises:
-        CliError: If `name` is missing or unknown, a password confirmation does not match or the input ended, `new`
-            was asked for something other than the operator, or `set` of a login entry
-            (`LOGIN_ENTRIES`) was given a secret that is no database login (`Target.parse`).
+        CliError: If `name` is missing or unknown, a password confirmation does not match or
+            the input ended, `new` was asked for something other than the operator, or `set`
+            of a login entry (`LOGIN_ENTRIES`) was given a secret that is no database login
+            (`Target.parse`).
         CredentialError: On a wrong password.
         psycopg.Error: On database errors (for `new`).
     """
