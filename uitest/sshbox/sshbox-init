@@ -1,0 +1,39 @@
+#!/bin/bash
+# PID 1 of the SSH box: starts PostgreSQL and sshd (no systemd here), then the scripted calu
+# servers if calu is installed (a restart of the container brings them back), and waits.
+#
+# Two clusters listen on 127.0.0.1: port 5432 for dev's calu without passwords, port 5433 for
+# the second store with passwords (sshbox-install --password-store). Each gets the role
+# `calu_owner` (password `owner-pw`) and the database `calu` on the first start.
+set -u
+for cluster in $(pg_lsclusters -h | awk '{print $2}'); do
+    pg_ctlcluster 16 "$cluster" start
+done
+for port in 5432 5433; do
+    for _ in $(seq 1 60); do
+        pg_isready -q -h 127.0.0.1 -p "$port" && break
+        sleep 0.5
+    done
+    if ! su postgres -c "psql -p $port -Atc \"SELECT 1 FROM pg_roles WHERE rolname = 'calu_owner'\"" | grep -q 1; then
+        su postgres -c "psql -q -p $port" <<'SQL'
+CREATE ROLE calu_owner LOGIN CREATEROLE PASSWORD 'owner-pw';
+CREATE DATABASE calu OWNER calu_owner;
+SQL
+    fi
+done
+ssh-keygen -A >/dev/null
+/usr/sbin/sshd -e
+if [ -x /home/dev/.local/bin/calu ]; then
+    su - dev -c /usr/local/sbin/sshbox-server || true
+fi
+# `docker stop`: end the servers' sessions, then the clusters, then leave.
+stop_all() {
+    su - dev -c 'tmux kill-server' >/dev/null 2>&1
+    pkill -x sshd >/dev/null 2>&1
+    for cluster in $(pg_lsclusters -h | awk '{print $2}'); do
+        pg_ctlcluster 16 "$cluster" stop -m fast >/dev/null 2>&1
+    done
+    exit 0
+}
+trap stop_all TERM INT
+while :; do sleep 3600 & wait $!; done

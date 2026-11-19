@@ -1,0 +1,129 @@
+#!/bin/bash
+# Install calu for `dev` from the read-only checkout at /src/calu, set it up without
+# passwords, create the test project and start the scripted server. Run as root inside the
+# box; run again after a change to the checkout (idempotent; the project is kept).
+#
+#   sshbox-install                    everything below
+#   sshbox-install --reset-project    also delete /home/dev/project and create it again
+#
+#   1. Copies the sources to /opt/calu-src (the build must not write into the mount) and
+#      installs calu for dev with `uv tool install` (~/.local/bin/calu). An SSH command runs
+#      without a login shell, so ~/.local/bin is not on its PATH: /usr/local/bin/calu is a
+#      link to dev's calu, which makes `ssh sshbox calu ide` work as on a server where calu
+#      was installed system-wide.
+#   2. `calu setup --database server --no-password` (cluster on port 5432): `calu ide` as
+#      dev asks no password. The sandbox is switched off (no user namespaces in Docker).
+#   3. A second store WITH passwords below ~/pwstore (cluster on port 5433; admin password
+#      `admin-pw`, session password `sess-pw`), reached with the calu command
+#      /home/dev/pwstore/calu: for the one-password rule over SSH.
+#   4. /home/dev/project: a git repository with Python files, a .gitignore, a binary file,
+#      `many/` with 300 small files, a link inside the tree and one that points outside.
+#   5. Starts the scripted servers (sshbox-server).
+set -euo pipefail
+RESET=no
+[ "${1:-}" = "--reset-project" ] && RESET=yes
+
+rm -rf /opt/calu-src && mkdir -p /opt/calu-src/uitest
+cd /src/calu
+cp -r pyproject.toml uv.lock README.md LICENSE LICENSE.md src /opt/calu-src/
+cp uitest/fake_server.py /opt/calu-src/uitest/
+find /opt/calu-src -name __pycache__ -prune -exec rm -rf {} +
+chmod -R go-w /opt/calu-src
+
+as_dev() { su - dev -c "export PATH=\$HOME/.local/bin:\$PATH; $1"; }
+
+as_dev "uv tool install --quiet --force --reinstall-package calu /opt/calu-src" 2>&1 | tail -n 2
+ln -sf /home/dev/.local/bin/calu /usr/local/bin/calu
+as_dev "calu --version"
+
+if ! as_dev "calu credential list 2>/dev/null" | grep -q '^admin\b'; then
+    # The answers, in the order of the prompts: the owner's password, then the new session
+    # password twice (blank).
+    as_dev "printf 'owner-pw\n\n\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password"
+else
+    as_dev "printf '\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password >/dev/null 2>&1 || true"
+fi
+as_dev "calu config set claude.sandbox.enabled false"
+
+STORE=/home/dev/pwstore
+if [ ! -s "$STORE/config/calu/credentials.json" ]; then
+    as_dev "mkdir -p $STORE/config $STORE/state $STORE/data"
+    cat >"$STORE/calu" <<WRAP
+#!/usr/bin/env bash
+# calu with the password-protected store of the SSH box.
+export XDG_CONFIG_HOME="$STORE/config" XDG_STATE_HOME="$STORE/state" XDG_DATA_HOME="$STORE/data"
+exec /home/dev/.local/bin/calu "\$@"
+WRAP
+    chown dev:dev "$STORE/calu" && chmod 0755 "$STORE/calu"
+    # The answers: the owner's password, the admin password twice, the session password twice.
+    as_dev "printf 'owner-pw\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | $STORE/calu setup --database server --host 127.0.0.1 --port 5433 --dbname calu --user calu_owner --sslmode disable"
+fi
+
+PROJECT=/home/dev/project
+[ "$RESET" = yes ] && rm -rf "$PROJECT"
+if [ ! -d "$PROJECT/.git" ]; then
+    su - dev -c "bash -s" <<'PROJ'
+set -euo pipefail
+P=/home/dev/project
+mkdir -p "$P/pkg" "$P/many" "$P/assets"
+cd "$P"
+cat >greeter.py <<'PY'
+def greet(name: str) -> str:
+    """Return the greeting for `name`."""
+    return f"Hello, {name}!"
+
+
+def greet_all(names: list[str]) -> list[str]:
+    """Return one greeting per name, in the order given."""
+    return [greet(name) for name in names]
+PY
+cat >test_greeter.py <<'PY'
+from greeter import greet, greet_all
+
+
+def test_greet_names_the_person():
+    assert "Ada" in greet("Ada")
+
+
+def test_greet_all_keeps_the_order():
+    assert [g.split(", ")[1] for g in greet_all(["Ada", "Bob"])] == ["Ada!", "Bob!"]
+PY
+cat >pkg/__init__.py <<'PY'
+"""A small package for the sync tests."""
+PY
+cat >pkg/shapes.py <<'PY'
+"""Areas of simple shapes."""
+
+import math
+
+
+def circle(radius: float) -> float:
+    """Return the area of a circle."""
+    return math.pi * radius * radius
+
+
+def square(side: float) -> float:
+    """Return the area of a square."""
+    return side * side
+
+
+def triangle(base: float, height: float) -> float:
+    """Return the area of a triangle."""
+    return base * height / 2
+PY
+printf '# project\n\nThe test project of the SSH box.\n' >README.md
+printf '__pycache__/\n*.log\nbuild/\n.idea/\n' >.gitignore
+head -c 200000 /dev/urandom >assets/blob.bin
+for n in $(seq 1 300); do printf 'file %03d\nvalue = %d\n' "$n" "$n" >"many/f$(printf %03d "$n").txt"; done
+ln -s greeter.py link-inside.py
+ln -s /etc/hostname link-outside
+mkdir -p build && echo ignored >build/out.log
+git init -q -b main
+git -c user.name=sshbox -c user.email=sshbox@example.org add -A
+git -c user.name=sshbox -c user.email=sshbox@example.org commit -q -m "Test project"
+PROJ
+fi
+as_dev "cd $PROJECT && calu project add . --name project >/dev/null 2>&1 || true"
+as_dev "cd $PROJECT && printf 'admin-pw\n' | $STORE/calu project add . --name project >/dev/null 2>&1 || true"
+
+su - dev -c /usr/local/sbin/sshbox-server
