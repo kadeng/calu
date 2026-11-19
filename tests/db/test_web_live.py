@@ -211,7 +211,8 @@ async def test_the_live_view_of_a_gone_session_says_the_process_is_gone(
             async with ws_connect(url) as socket:
                 first = json.loads(await socket.recv())
             assert first["type"] == "closed"
-            assert "cannot reach" in first["message"] and "SSH tunnel" in first["message"]
+            assert "not on this machine" in first["message"]
+            assert "Forward that port" in first["message"] and "tunnel" in first["message"]
 
             await db.execute(
                 "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
