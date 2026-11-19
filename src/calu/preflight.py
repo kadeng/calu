@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -64,7 +65,7 @@ def sandbox_warnings(config: Config) -> list[str]:
             "The sandbox for Bash commands is off: commands run with calu's own rights "
             "(agent/records/PLAN.md D4). Only the checkers and the deny lists protect this machine."
         ]
-    missing = [tool for tool in SANDBOX_TOOLS if shutil.which(tool) is None]
+    missing = missing_sandbox_tools()
     if not missing:
         return []
     consequence = (
@@ -74,8 +75,8 @@ def sandbox_warnings(config: Config) -> list[str]:
     )
     return [
         f"The sandbox needs {' and '.join(missing)}, which {'is' if len(missing) == 1 else 'are'}"
-        f" not installed. {consequence} Install them (Debian/Ubuntu: apt install bubblewrap"
-        " socat)."
+        f" not installed. {consequence} Install them (Debian/Ubuntu: apt install"
+        f" {SANDBOX_PACKAGES})."
     ]
 
 
@@ -450,6 +451,131 @@ def self_approval_warnings(config: Config, store: CredentialStore | None = None)
         "such a credential can resolve escalations. Switch the sandbox on, or put a password "
         "back on them (`calu credential set operator`)."
     ]
+
+
+SANDBOX_PACKAGES = "bubblewrap socat"
+"""The Debian/Ubuntu (and Fedora) packages of `SANDBOX_TOOLS`, for an install hint."""
+
+
+def missing_sandbox_tools() -> list[str]:
+    """Name the programs of `SANDBOX_TOOLS` that are not on `PATH`.
+
+    Returns:
+        The missing ones in the order of `SANDBOX_TOOLS`; [] when all are installed.
+    """
+    return [tool for tool in SANDBOX_TOOLS if shutil.which(tool) is None]
+
+
+@dataclass(frozen=True)
+class LoginProtection:
+    """What keeps Claude Code's commands from calu's logins when the sandbox does not.
+
+    Requirement 42: with the sandbox off, Claude's commands run with the rights of the OS user
+    Claude Code runs as. Two arrangements keep calu's logins out of their reach: the logins
+    are stored encrypted with a password, or calu runs as root and Claude Code as another
+    user (`--sudo`, `--user`), so that the commands can read neither calu's store nor its
+    memory. A `calu_admin` password published in the place file (`calu setup --no-password`
+    as root, D228) is readable by every user and defeats both.
+    """
+
+    privileged: bool = False
+    """calu runs as root and Claude Code as another user (`--sudo`, `--user`)."""
+    unprotected: tuple[str, ...] | None = None
+    """Names of the credential store's entries stored without a password; None if the store
+    could not be read or holds no `session` entry (nothing is known then)."""
+    published: bool | None = None
+    """Whether the place file holds the password of `calu_admin`; None if not checked."""
+
+    def met(self) -> bool:
+        """Tell whether the recommendation of requirement 42 is known to be met.
+
+        Returns:
+            True if the place file is known to publish no password and either calu runs
+            privileged or every store entry is known to have a password. False otherwise,
+            also when a fact is unknown (None): then the warning is shown.
+        """
+        if self.published is not False:
+            return False
+        return self.privileged or self.unprotected == ()
+
+
+def published_admin_login(path: Path | None = None) -> bool:
+    """Tell whether the place file publishes the password of `calu_admin` (D228).
+
+    Args:
+        path: The place file; None is `calu.db.place.default_path()`.
+
+    Returns:
+        True if the file is root's alone (so clients use it) and holds a password; False if
+        it is missing, cannot be trusted (no client reads it then) or holds no password.
+    """
+    from calu.db import place  # imported here: `calu.db` loads psycopg
+
+    try:
+        shared = place.read(path)
+    except place.PlaceError:
+        return False
+    return bool(getattr(shared.auth, "password", ""))
+
+
+def login_protection(
+    store: CredentialStore | None, privileged: bool, place_file: Path | None = None
+) -> LoginProtection:
+    """Collect the facts of `LoginProtection` for this process.
+
+    Reads the store's entry names and kinds of protection, never a secret, and the place
+    file. Call it before `calu.asuser.enter`: afterwards root's store cannot be read.
+
+    Args:
+        store: The credential store the session's login came from; None if unknown.
+        privileged: Whether calu runs as root and Claude Code as another user.
+        place_file: The place file; None is the default one.
+
+    Returns:
+        The facts. `unprotected` is None when the store is None, cannot be read, or holds
+        no `session` entry.
+    """
+    unprotected: tuple[str, ...] | None = None
+    if store is not None:
+        try:
+            names = store.names()
+            if "session" in names:
+                unprotected = tuple(n for n in names if not store.needs_password(n))
+        except CredentialError, OSError:
+            unprotected = None
+    return LoginProtection(privileged, unprotected, published_admin_login(place_file))
+
+
+SANDBOX_OFF_ADVICE = (
+    "With Claude Code's sandbox off (claude.sandbox.enabled false), it is strongly "
+    "recommended to at least protect the session and database logins with passwords "
+    "(`calu setup --set-passwords`) and/or run calu with --sudo, so that calu runs as a more "
+    "privileged process than Claude Code and Claude's commands cannot reach its logins."
+)
+"""The recommendation of requirement 42, the same at setup, at a session's start and in
+`calu doctor`."""
+
+
+def sandbox_off_warnings(config: Config, protection: LoginProtection | None) -> list[str]:
+    """Return the recommendation for a session without the sandbox (requirement 42).
+
+    Args:
+        config: The session configuration.
+        protection: What protects calu's logins (`login_protection`); None if unknown.
+
+    Returns:
+        [] when the sandbox is on or the recommendation is known to be met
+        (`LoginProtection.met`); otherwise `SANDBOX_OFF_ADVICE`, followed by what was found
+        against it: the entries without a password, a published admin password.
+    """
+    if config.claude.sandbox.enabled or (protection is not None and protection.met()):
+        return []
+    found: list[str] = []
+    if protection is not None and protection.unprotected and not protection.privileged:
+        found.append(f"stored without a password: {', '.join(protection.unprotected)}")
+    if protection is not None and protection.published:
+        found.append("the place file publishes the password of calu_admin")
+    return [SANDBOX_OFF_ADVICE + (f" Found: {'; '.join(found)}." if found else "")]
 
 
 USER_SETTINGS_KEYS = ("hooks", "enabledPlugins", "env")
@@ -963,6 +1089,7 @@ def warnings(
     environ: Mapping[str, str] | None = None,
     checkers: Collection[str] | Mapping[str, object] = (),
     workspace: Path | None = None,
+    protection: LoginProtection | None = None,
 ) -> list[str]:
     """Return all start-up warnings (sandbox, API keys, write sets, network, permission mode).
 
@@ -976,9 +1103,13 @@ def warnings(
         workspace: The project directory, for `setting_source_warnings`,
             `settings_file_sandbox_warnings` and `permission_mode_warnings`; None skips the
             project's files.
+        protection: What keeps Claude's commands from calu's logins, for
+            `sandbox_off_warnings`; None if unknown (the recommendation is then shown
+            whenever the sandbox is off).
 
     Returns:
-        The warnings of `sandbox_warnings`, `permission_mode_warnings`,
+        The warnings of `sandbox_warnings`, `sandbox_off_warnings`,
+        `permission_mode_warnings`,
         `thin_checker_warnings`, `key_warnings`,
         `unknown_provider_warnings`, `change_warnings`, `network_warnings`,
         `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`, `bedrock_warnings`,
@@ -987,6 +1118,7 @@ def warnings(
     """
     return (
         sandbox_warnings(config)
+        + sandbox_off_warnings(config, protection)
         + permission_mode_warnings(config, workspace=workspace)
         + thin_checker_warnings(config, checkers, workspace=workspace)
         + key_warnings(config, environ)

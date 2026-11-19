@@ -859,3 +859,75 @@ def test_under_another_user_calus_own_directories_are_written_for_claudes_home(
         "/etc/calu",
         "/var/lib/calu",
     ]
+
+
+# ------------------------------------------------- requirement 42: the sandbox off, the logins
+
+
+def test_the_sandbox_off_recommendation_is_shown_unless_it_is_known_to_be_met() -> None:
+    """Requirement 42: with the sandbox off, password-protected logins and/or --sudo are
+    strongly recommended; the warning is left out only where that is known to hold."""
+    off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
+    unknown = preflight.sandbox_off_warnings(off, None)
+    assert unknown == [preflight.SANDBOX_OFF_ADVICE]
+    advice = unknown[0]
+    assert "strongly recommended" in advice and "--sudo" in advice and "passwords" in advice
+    # The sandbox on: nothing to recommend, whatever the logins.
+    assert preflight.sandbox_off_warnings(Config(), None) == []
+    protected = preflight.LoginProtection(privileged=False, unprotected=(), published=False)
+    assert preflight.sandbox_off_warnings(off, protected) == []
+    sudo = preflight.LoginProtection(privileged=True, unprotected=("admin",), published=False)
+    assert preflight.sandbox_off_warnings(off, sudo) == []
+    bare = preflight.LoginProtection(unprotected=("admin", "session"), published=False)
+    (said,) = preflight.sandbox_off_warnings(off, bare)
+    assert said.startswith(advice) and "without a password: admin, session" in said
+    # A published admin password defeats --sudo as well.
+    shared = preflight.LoginProtection(privileged=True, unprotected=(), published=True)
+    (said,) = preflight.sandbox_off_warnings(off, shared)
+    assert "publishes the password of calu_admin" in said
+    # Facts that were not collected count as not met.
+    assert preflight.sandbox_off_warnings(off, preflight.LoginProtection()) == [advice]
+    assert preflight.sandbox_off_warnings(off, preflight.LoginProtection(True, (), None))
+    assert advice in preflight.warnings(off, {}, protection=bare)[1]
+    assert not any(advice in w for w in preflight.warnings(off, {}, protection=protected))
+
+
+def test_login_protection_reads_the_store_and_the_place_file(tmp_path: Path) -> None:
+    from calu.credentials import CredentialStore, KdfParams
+
+    store = CredentialStore(
+        tmp_path / "credentials.json", KdfParams(time_cost=1, memory_cost=8, parallelism=1)
+    )
+    place = tmp_path / "missing.json"
+    # No session entry: what a session would use is unknown.
+    assert preflight.login_protection(store, False, place).unprotected is None
+    assert preflight.login_protection(None, True, place) == preflight.LoginProtection(
+        True, None, False
+    )
+    store.save("session", "postgresql://s@db/calu", "pw")
+    store.save("admin", "postgresql://a@db/calu", "pw")
+    found = preflight.login_protection(store, False, place)
+    assert found == preflight.LoginProtection(False, (), False) and found.met()
+    store.save("calu_admin", "postgresql://calu_admin@db/calu", None)
+    found = preflight.login_protection(store, False, place)
+    assert found.unprotected == ("calu_admin",) and not found.met()
+    assert preflight.login_protection(store, True, place).met()
+
+
+def test_without_the_sandbox_nothing_of_calu_or_claude_code_asks_for_bubblewrap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Requirement 42 (3): the refusal to start without bubblewrap applies only with the
+    sandbox on. Claude Code itself starts with `enabled: false, failIfUnavailable: true` and
+    neither bwrap nor socat on PATH (measured, CLI 2.1.319, spikes/RESULTS.md); calu passes
+    `enabled: false` and has no check of its own that refuses."""
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
+    off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
+    assert off.claude.sandbox.settings()["sandbox"]["enabled"] is False
+    (said,) = preflight.sandbox_warnings(off)
+    assert "refuses" not in said and "bwrap" not in said
+    home, workspace = _settings_files(tmp_path, project={"excludedCommands": ["docker"]})
+    assert preflight.settings_file_sandbox_blockers(off, home, workspace) == []
+    # With it on, the same machine is refused.
+    (said,) = preflight.sandbox_warnings(Config())
+    assert "refuses to start" in said

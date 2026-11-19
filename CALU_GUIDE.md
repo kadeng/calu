@@ -697,10 +697,30 @@ words directly. The cost of that is the three properties above.
 
 ## The sandbox and what a command may reach
 
-Without `bubblewrap` and `socat` a session refuses to start, because the sandbox cannot be
-built; setting `claude.sandbox.enabled` to false in the configuration turns the sandbox off, at
-the cost of its protection. The sandbox, not the rule lists, is the boundary for what a command
-can reach. Read denials are a list you edit; calu's own directories (`$XDG_CONFIG_HOME/calu`
+Claude's Bash commands run in Claude Code's own sandbox: calu's files hidden, network access
+only through a filtering proxy. The sandbox is Claude Code's, and it needs `bubblewrap` and
+`socat` (Debian/Ubuntu: `sudo apt install bubblewrap socat`). calu configures it and passes the
+settings to Claude Code. `calu setup` asks whether to switch it on (`claude.sandbox.enabled`
+in the global settings); the default answer is on when both programs are installed and off
+when one is missing, and a second setup offers the stored value. `calu setup --sandbox` and
+`--no-sandbox` answer without the question; without a terminal and without the option the
+stored value stays.
+
+With the sandbox on, a session refuses to start without `bubblewrap` and `socat`, because the
+sandbox cannot be built (`claude.sandbox.fail_if_unavailable`). With it off, neither program
+is needed and nothing refuses: only the checkers and the deny lists stand between Claude's
+commands and the machine, and the commands run with the rights of the user Claude Code runs as.
+In that case it is strongly recommended to at least protect the session and database logins
+with passwords (the default of `calu setup`; `calu setup --set-passwords` puts them back after
+`--no-password`) and/or to run calu with `--sudo`, so that calu runs as a more privileged
+process than Claude Code (see "calu as root, Claude Code as another user"). `calu setup`, every
+session's start (`calu run`, the sessions of `calu serve`) and `calu doctor --db` show that
+recommendation as a warning while the sandbox is off, unless it is met: calu runs as root for
+another user, or every entry of the credential store has a password; and in either case the
+place file publishes no password of `calu_admin` (`sudo calu setup --no-password`). Where calu
+cannot tell, it warns.
+
+The sandbox, not the rule lists, is the boundary for what a command can reach. Read denials are a list you edit; calu's own directories (`$XDG_CONFIG_HOME/calu`
 and `$XDG_STATE_HOME/calu`) are always denied, whatever the list holds:
 
 ```bash
@@ -1738,6 +1758,15 @@ calu setup --database rds-iam --host calu.abc.eu-central-1.rds.amazonaws.com --u
 Passwords are never options: they are asked without echo on a terminal, or read as lines from
 standard input, in this order: the database password (existing server only), the new admin
 password twice, the new session password twice.
+
+Every run of `calu setup` then asks whether Claude Code's sandbox is to be on, and says whether
+`bubblewrap` and `socat` are installed (see "The sandbox and what a command may reach");
+`--sandbox` or `--no-sandbox` answer it for a script:
+
+```bash
+calu setup --database docker --no-sandbox    # no bubblewrap here; warns unless the logins are protected
+calu setup --sandbox                         # a later run: switch it on
+```
 
 **1. A local PostgreSQL in Docker.** calu creates the database, generates its owner password and
 keeps the files in the directory you name (default `~/.local/state/calu/db`). The directory

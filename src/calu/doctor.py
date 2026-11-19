@@ -26,7 +26,7 @@ from typing import Any
 
 from calu import __version__, asuser, launch, preflight
 from calu.changes import default_root
-from calu.config import PROVIDER_KEYS_BY_PREFIX, Config, user_env_file
+from calu.config import PROVIDER_KEYS_BY_PREFIX, SETTINGS_KEY, Config, user_env_file
 from calu.credentials import CredentialStore
 from calu.db import applied_versions, migrations
 from calu.db import place as db_place
@@ -600,6 +600,82 @@ async def database_findings(url: str) -> list[Finding]:
         ]
     finally:
         await conn.close()
+
+
+async def stored_sandbox(url: str) -> bool | None:
+    """Read `claude.sandbox.enabled` from the global settings of the database.
+
+    Args:
+        url: The owner connection string from the `admin` credential.
+
+    Returns:
+        The stored value; True (the default) if the settings hold none; None if the database
+        cannot be reached or read (`database_findings` reports that).
+    """
+    try:
+        conn = await connect(url)
+    except Exception:
+        return None
+    try:
+        cur = await conn.execute(
+            "SELECT value FROM config WHERE scope = 'global' AND scope_id = '' AND key = %s",
+            (SETTINGS_KEY,),
+        )
+        row = await cur.fetchone()
+    except Exception:
+        return None
+    finally:
+        await conn.close()
+    stored = row[0] if row else {}
+    try:
+        return Config.model_validate(
+            stored if isinstance(stored, dict) else {}
+        ).claude.sandbox.enabled
+    except ValueError:
+        return None
+
+
+def sandbox_off_findings(
+    enabled: bool | None, protection: preflight.LoginProtection
+) -> list[Finding]:
+    """Report the sandbox setting and, with it off, the recommendation of requirement 42.
+
+    The same judgement as a session's start-up warning (`calu.preflight.sandbox_off_warnings`),
+    with the setting read from the global settings of the database (`--db`); a project's own
+    setting is not looked at.
+
+    Args:
+        enabled: `claude.sandbox.enabled` (`stored_sandbox`); None if it was not read.
+        protection: What keeps Claude's commands from calu's logins, collected before the
+            switch to the user (`calu.preflight.login_protection`).
+
+    Returns:
+        [] when the setting was not read; one ok finding "sandbox" when it is on, or off with
+        the recommendation met; otherwise one note with the recommendation.
+    """
+    if enabled is None:
+        return []
+    if enabled:
+        return [Finding("sandbox", True, "on (claude.sandbox.enabled in the global settings)")]
+    off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
+    said = preflight.sandbox_off_warnings(off, protection)
+    if not said:
+        return [
+            Finding(
+                "sandbox",
+                True,
+                "off; calu's logins are protected (passwords, or calu runs as root for "
+                "another user)",
+            )
+        ]
+    return [
+        Finding(
+            "sandbox",
+            False,
+            "off (claude.sandbox.enabled in the global settings)",
+            said[0],
+        )
+    ]
 
 
 def report(findings: Sequence[Finding]) -> str:

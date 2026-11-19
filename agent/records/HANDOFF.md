@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D237, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D239, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -73,6 +73,30 @@ Judgement calls the agents left for the owner (not yet asked):
   resolved conflict's warning line; offer to create the SSH interpreter and path mapping;
   disable the SSH fields in "Automatic" mode; the two start-up notifications of the test
   setup (hand-unpacked plugin, no ssh-agent).
+
+#### The sandbox question of `calu setup` (2026-11-19, PLAN D239, requirement 42)
+
+`calu setup` asks whether Claude Code's sandbox is on (`--sandbox`/`--no-sandbox` for
+scripts; without a terminal the stored value stays), and with the sandbox off `calu setup`,
+every session's start and `calu doctor --db` recommend password-protected logins and/or
+`--sudo`, unless that is known to hold. Measured: Claude Code starts without `bwrap`/`socat`
+while the sandbox is off. Not run by hand yet: `docs/TESTING.md` item 37.
+
+#### macOS support (backlog, owner 2026-11-19)
+
+Not started; the owner put it on the backlog. What ties calu to Linux today:
+- the checkers' file reads find the opened descriptor through `/proc/self/fd`
+  (`calu/checkers/tools.py`), so every read is refused on macOS (fix: `fcntl.F_GETPATH`);
+- the sandbox checks require `bwrap` and `socat` (`preflight.SANDBOX_TOOLS`, `calu doctor`,
+  the setup question), while Claude Code's sandbox on macOS uses Seatbelt (`sandbox-exec`);
+- `localsocket.peer_uid` uses `SO_PEERCRED` (fix: `LOCAL_PEERCRED` with the `xucred` struct);
+- `--sudo`/`--user` are Linux-only (`asuser.fs_identity` refuses with a message);
+- `run.harden_process` (`prctl` dumpable) does nothing there, so another process of the same
+  user could read calu's memory -- which weakens the password-protection variant of the
+  sandbox-off recommendation (D239);
+- `machine.py` finds no boot id or machine id, so finding dead sessions relies on the
+  heartbeat alone;
+- the local database through Docker Desktop is untested.
 
 #### Next, in this order
 

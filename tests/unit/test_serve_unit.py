@@ -149,3 +149,22 @@ async def test_a_session_whose_start_is_recorded_keeps_running(
     assert scope.cancelled_caught
     assert stopped == [True]
     assert recorder.outcomes == [(request.id, "started", "s-1", "")]
+
+
+def test_every_session_of_the_server_gets_the_login_protection(tmp_path: Path) -> None:
+    """Requirement 42: `calu serve` read the store once, before the switch to the user."""
+    from calu.preflight import LoginProtection
+    from calu.serve import ServeOptions
+
+    protection = LoginProtection(False, (), False)
+    server = Server(
+        source=None,  # type: ignore[arg-type]
+        hidden=set(),
+        hostname="h",
+        user="u",
+        options=ServeOptions(login_protection=protection),
+    )
+    request = SessionRequest(
+        hostname="h", os_user="u", directory=str(tmp_path), id=7, state="claimed"
+    )
+    assert server._options(request).login_protection is protection

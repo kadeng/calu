@@ -73,7 +73,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Collection, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -128,6 +128,12 @@ from calu.launch import LAUNCH_ENV, LaunchError, RunAs, claude_path, launcher_pa
 from calu.localsocket import check_socket_path
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
+from calu.preflight import (
+    SANDBOX_PACKAGES,
+    login_protection,
+    missing_sandbox_tools,
+    sandbox_off_warnings,
+)
 from calu.protocol.client import RequestFailed, probe
 from calu.protocol.messages import MAX_FRAME_BYTES
 from calu.protocol.schema import protocol_schema
@@ -1210,6 +1216,145 @@ def _check_setup_options(args: argparse.Namespace, variant: str | None) -> None:
         raise CliError("--session-aws-profile is for --session-auth iam, not password")
 
 
+SANDBOX_KEY = "claude.sandbox.enabled"
+"""The setting `calu setup` asks about (requirement 42)."""
+
+_TOOL_PACKAGES = {"bwrap": "bubblewrap (bwrap)", "socat": "socat"}
+"""How the setup question names a program of `calu.preflight.SANDBOX_TOOLS`."""
+
+
+def sandbox_intro(missing: Sequence[str]) -> str:
+    """Explain the sandbox question of `calu setup` in two lines.
+
+    Args:
+        missing: The programs of `calu.preflight.SANDBOX_TOOLS` that are not installed.
+
+    Returns:
+        What the sandbox does, and whether bubblewrap and socat are installed; if not, the
+        packages to install and what a session with the sandbox on then does.
+    """
+    what = (
+        "Claude Code's sandbox runs Claude's Bash commands with calu's own files hidden and "
+        "with network access only through a filtering proxy. It needs bubblewrap and socat"
+    )
+    if not missing:
+        return f"{what}: both are installed."
+    named = " and ".join(_TOOL_PACKAGES.get(tool, tool) for tool in missing)
+    return (
+        f"{what}: {named} {'is' if len(missing) == 1 else 'are'} not installed (Debian/Ubuntu: "
+        f"`sudo apt install {SANDBOX_PACKAGES}`).\nWith the sandbox on, a session refuses "
+        "to start until they are installed."
+    )
+
+
+def choose_sandbox(flag: bool | None, stored: bool | None, missing: Sequence[str]) -> bool | None:
+    """Decide what `calu setup` stores as `claude.sandbox.enabled` (requirement 42).
+
+        --sandbox / --no-sandbox    ──► that value
+        a terminal                  ──► the question; default: the stored value, else on
+                                        when bubblewrap and socat are installed, else off
+        no terminal, no option      ──► None: the stored value (or the default, on) stays
+
+    Side effects: on a terminal without the option, prints `sandbox_intro` and the stored
+    value, and reads one answer.
+
+    Args:
+        flag: The option (`--sandbox` True, `--no-sandbox` False), or None.
+        stored: The value the global settings hold, or None if they hold none.
+        missing: The sandbox programs that are not installed (`missing_sandbox_tools`).
+
+    Returns:
+        The value to store, or None to leave the settings as they are.
+
+    Raises:
+        CliError: If the answer is none of on, off, yes, no (y, n).
+    """
+    if flag is not None:
+        return flag
+    if not sys.stdin.isatty():
+        return None
+    print(sandbox_intro(missing))
+    if stored is not None:
+        print(f"Stored now: {'on' if stored else 'off'}.")
+    default = stored if stored is not None else not missing
+    answer = ask(
+        "Switch Claude Code's sandbox on? on/off",
+        "on" if default else "off",
+        "--sandbox or --no-sandbox",
+    ).lower()
+    if answer in ("on", "yes", "y"):
+        return True
+    if answer in ("off", "no", "n"):
+        return False
+    raise CliError(f"{answer!r} is neither on nor off")
+
+
+async def _apply_sandbox_choice(db: Db, flag: bool | None) -> tuple[bool, str]:
+    """Ask about the sandbox (`choose_sandbox`) and store the answer in the global settings.
+
+    Side effects: what `choose_sandbox` prints and reads; writes `claude.sandbox.enabled`
+    into the global settings when the chosen value differs from the stored one, or none is
+    stored. A setting that is not asked about (no terminal, no option) is never changed.
+
+    Args:
+        db: A connection of the database owner.
+        flag: `--sandbox` (True), `--no-sandbox` (False), or None.
+
+    Returns:
+        (whether the sandbox is on for sessions without a project setting of their own,
+        one line for the setup report).
+
+    Raises:
+        CliError: On an answer that is neither on nor off.
+        AdminError: If the settings cannot be validated.
+        psycopg.Error: On database errors.
+    """
+    current = await admin.settings(db)
+    claude_part = current.get("claude")
+    sandbox_part = claude_part.get("sandbox") if isinstance(claude_part, dict) else None
+    value = sandbox_part.get("enabled") if isinstance(sandbox_part, dict) else None
+    stored = value if isinstance(value, bool) else None
+    chosen = choose_sandbox(flag, stored, missing_sandbox_tools())
+    if chosen is None:
+        enabled = True if stored is None else stored
+        how = "the default" if stored is None else "as stored"
+        return enabled, (
+            f"Claude Code's sandbox: {'on' if enabled else 'off'} ({how}; `calu setup "
+            "--sandbox` or `--no-sandbox` sets it)"
+        )
+    if chosen != stored:
+        await admin.set_setting(db, SANDBOX_KEY, chosen)
+        return chosen, f"Claude Code's sandbox: {'on' if chosen else 'off'} (stored)"
+    return chosen, f"Claude Code's sandbox: {'on' if chosen else 'off'} (as stored)"
+
+
+def sandbox_setup_notes(enabled: bool, store: CredentialStore) -> list[str]:
+    """Return the warnings `calu setup` prints about the sandbox after everything is stored.
+
+    Args:
+        enabled: Whether the sandbox is on (`_apply_sandbox_choice`).
+        store: The credential store, as the setup left it.
+
+    Returns:
+        With the sandbox on: one warning if bubblewrap or socat is missing (sessions refuse
+        to start then), else []. With it off: the recommendation of requirement 42
+        (`calu.preflight.sandbox_off_warnings`), unless it is met: every stored login has a
+        password, or the setup runs as root (the store is root's alone and sessions run
+        with --sudo), and the place file publishes no password of `calu_admin`.
+    """
+    if enabled:
+        missing = missing_sandbox_tools()
+        if not missing:
+            return []
+        return [
+            f"the sandbox is on and {' and '.join(missing)} {'is' if len(missing) == 1 else 'are'}"
+            f" not installed, so sessions refuse to start: `sudo apt install {SANDBOX_PACKAGES}`"
+            " (Debian/Ubuntu), or `calu setup --no-sandbox`"
+        ]
+    off = Config.model_validate({"claude": {"sandbox": {"enabled": False}}})
+    return sandbox_off_warnings(off, login_protection(store, os.geteuid() == 0))
+
+
 def _check_session_options(args: argparse.Namespace, owner: Target, renew: bool) -> None:
     """Refuse session options that the stored database or the kept session login ignore.
 
@@ -1310,6 +1455,12 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     role; `--checker-model auto` picks one from the credentials this machine has
     (`calu.model_choice`).
 
+    Every run then asks whether Claude Code's sandbox is on (`claude.sandbox.enabled` of
+    the global settings; `--sandbox`/`--no-sandbox` answer without the question, and without
+    a terminal and without the option the stored value stays: `choose_sandbox`). With the
+    sandbox off it prints the recommendation of requirement 42 unless it is met
+    (`sandbox_setup_notes`).
+
     `--set-passwords` encrypts the stored `admin` and `session` logins with passwords typed
     now (the old ones are asked first where the entries have any) and gives the role
     `calu_admin` the new admin password: the way back from `--no-password`, and the way to
@@ -1324,7 +1475,7 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
 
     Args:
         args: Parsed arguments (`checker_model`, `database` and the options of its variants,
-            `renew_session`, `session_auth`, `no_password`, `set_passwords`).
+            `renew_session`, `session_auth`, `no_password`, `set_passwords`, `sandbox`).
         store: The credential store.
 
     Raises:
@@ -1332,8 +1483,8 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             reached or set up as it is, `--database` is given although a database is stored,
             the role `calu_session` has a login this machine does not hold (the message
             names `--renew-session`), an option does not apply (`_check_setup_options`,
-            `_check_session_options`), or `--checker-model auto` finds no provider's
-            credentials.
+            `_check_session_options`), `--checker-model auto` finds no provider's
+            credentials, or the sandbox answer is neither on nor off.
         CredentialError: On a wrong password.
         local_db.DockerError: If docker fails.
         psycopg.Error: On database errors.
@@ -1391,6 +1542,8 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     """The password `run` gave the role `calu_admin`, if it gave it one."""
     typed_admin: list[bool] = []
     """Non-empty if that password is one a person typed, not a generated one."""
+    sandbox_on: list[bool] = []
+    """Whether Claude Code's sandbox is on after `run` (`_apply_sandbox_choice`)."""
 
     async def run() -> tuple[str, Target | None]:
         """Connect and run the setup steps.
@@ -1459,6 +1612,9 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
                     "\nlogin of calu_admin: left as it is, because the `admin` credential "
                     "has no password and none was typed"
                 )
+            enabled, line = await _apply_sandbox_choice(db, args.sandbox)
+            sandbox_on.append(enabled)
+            report += f"\n{line}"
             if explicit:
                 await admin.set_all_models(db, model, effort)
                 report += "\nmodels of every checker, the narrator and the summarizer: "
@@ -1512,6 +1668,7 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             "sessions that use it)"
         )
         _after_setup(args, store, owner, admin_password, bool(typed_admin))
+        _print_sandbox_notes(sandbox_on, store)
         return
     # Asked before the database is touched: a mistyped password must not leave the role with
     # a new login that nothing holds.
@@ -1529,7 +1686,19 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
     print(report)
     print("stored credential 'session'")
     _after_setup(args, store, owner, admin_password, bool(typed_admin))
+    _print_sandbox_notes(sandbox_on, store)
     print("next: `calu project add . --name NAME` in a project directory, then `calu run`")
+
+
+def _print_sandbox_notes(sandbox_on: list[bool], store: CredentialStore) -> None:
+    """Print `sandbox_setup_notes` to stderr, each as a WARNING line.
+
+    Args:
+        sandbox_on: Holds whether the sandbox is on; empty if setup did not get that far.
+        store: The credential store, as the setup left it.
+    """
+    for note in sandbox_setup_notes(sandbox_on[0], store) if sandbox_on else []:
+        print(f"WARNING: {note}", file=sys.stderr)
 
 
 ADMIN_ENTRY = "calu_admin"
@@ -2020,6 +2189,7 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
             idle_timeout_s=args.idle_timeout * 60 if args.idle_timeout is not None else None,
             secure=args.secure,
             insecure=args.insecure,
+            login_protection=login_protection(store, run_as is not None),
         )
         code = asyncio.run(serve_sessions(url, options, user=run_as.user if run_as else None))
     finally:
@@ -2187,6 +2357,8 @@ def cmd_run(args: argparse.Namespace, store: CredentialStore) -> None:
         run_as=run_as,
         secure=args.secure,
         insecure=args.insecure,
+        # Read now: after the switch to the user, root's store cannot be read (D206).
+        login_protection=login_protection(store, run_as is not None),
     )
     if options.interactive and not options.prompt and sys.stdin.isatty():
         print(
@@ -3595,7 +3767,9 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
     workspace. With `--keys` each checker key that is set is shown to its own provider's free
     model list, so an expired or revoked key is found before it escalates every step (D131).
     With `--db` the `admin` credential is used to ask whether the database answers and whether
-    its schema is current. Nothing is changed.
+    its schema is current, and whether the global settings switch Claude Code's sandbox off,
+    in which case the recommendation of requirement 42 is a note unless it is met
+    (`doctor.sandbox_off_findings`). Nothing is changed.
 
     As root with `--user` (or as a user with `--sudo`, which runs calu again through sudo)
     the report is about the arrangement of requirement 26: calu's own files are read as
@@ -3617,13 +3791,16 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
     run_as = _run_as(args, prepare=False) if args.sudo or args.user is not None else None
     # Root's own files first: after the switch to the user they cannot be read.
     stored = doctor.store_findings(store)
+    protection = login_protection(store, run_as is not None)
     database: list[doctor.Finding] = []
     if args.db:
         url = load_credential(store, "admin", "Admin password: ")
         try:
             database = asyncio.run(doctor.database_findings(url.decode()))
+            sandbox = asyncio.run(doctor.stored_sandbox(url.decode()))
         finally:
             wipe(url)
+        database += doctor.sandbox_off_findings(sandbox, protection)
     about_user: list[doctor.Finding] = []
     if run_as is not None:
         about_user = doctor.user_findings(run_as)
@@ -5096,6 +5273,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(their old passwords are asked first, if they have any): the way back from "
         "--no-password, and the way to change a password. The role that changes settings "
         "gets the new admin password",
+    )
+    p.add_argument(
+        "--sandbox",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="switch Claude Code's sandbox for Claude's commands on (needs bubblewrap and "
+        "socat) or off (claude.sandbox.enabled), instead of the question; left out without a "
+        "terminal, the stored value stays",
     )
     p.add_argument(
         "--checker-model",

@@ -248,6 +248,10 @@ class RunOptions:
     for another user (`run_as`) also listens on a root-owned Unix socket, where a root client
     needs no token (D215). A root session whose Claude Code is root too (`--user root`) binds
     no such socket: its own commands would be root clients."""
+    login_protection: preflight.LoginProtection | None = None
+    """What keeps Claude's commands from calu's logins (`calu.preflight.login_protection`),
+    collected by the caller before the user switch; None if unknown, which makes a session
+    with the sandbox off show the recommendation of requirement 42."""
 
 
 def honesty_lines(info: HonestyInfo) -> list[str]:
@@ -990,7 +994,10 @@ async def _run(
         project=options.project,
         checker_models=checker_models,
         startup_warnings=preflight.warnings(
-            settings.config, checkers=settings.checkers, workspace=options.workspace
+            settings.config,
+            checkers=settings.checkers,
+            workspace=options.workspace,
+            protection=options.login_protection,
         ),
         # A conversation that was started with `claude` itself: the checkers are told what
         # its transcript says the user asked for (D209).

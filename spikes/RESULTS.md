@@ -1142,3 +1142,22 @@ asks in the next turn whether a question was asked beside the task.
 
 **Re-run when** the CLI or the SDK is updated: `uv run python spikes/side_question.py` (Haiku,
 well under one cent).
+
+## Does `failIfUnavailable` refuse a start while the sandbox is off? (2026-11-19, CLI 2.1.319)
+
+**Question:** with `claude.sandbox.enabled` false, calu still passes `failIfUnavailable: true`
+(`SandboxConfig.settings` writes every key). Does Claude Code then refuse to start on a machine
+without `bwrap` and `socat` (requirement 42)?
+
+**Setup:** a `PATH` holding links to every program of `/usr/bin` except `bwrap` and `socat`,
+plus `claude`; `claude -p "Reply with the single word ok." --model haiku --max-turns 1
+--settings '{"sandbox": {...}}'` in an empty directory.
+
+**Result:** with `{"enabled": false, "failIfUnavailable": true}` the session started and
+answered `ok` (exit 0). With `{"enabled": true, "failIfUnavailable": true}` it refused: "sandbox
+required but unavailable: sandbox is enabled but dependencies are missing: bubblewrap (bwrap)
+not installed, socat not installed ... refusing to start without a working sandbox". So the
+refusal applies only with the sandbox on, and calu's own start-up checks do not refuse either
+(`tests/unit/test_preflight.py`, `test_without_the_sandbox_nothing_of_calu_or_claude_code_asks_for_bubblewrap`).
+
+**Re-run when** the CLI is updated (two Haiku calls).

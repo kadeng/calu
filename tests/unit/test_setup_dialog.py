@@ -131,3 +131,140 @@ def test_calu_run_starts_a_stopped_local_database_after_the_password(
         == 0
     )
     assert order == ["hardened", "session as calu_session"]
+
+
+# --------------------------------------------- requirement 42: the sandbox question of setup
+
+
+def _terminal(monkeypatch: pytest.MonkeyPatch, answers: str) -> None:
+    """Make stdin a terminal that answers with the given lines."""
+    stdin = io.StringIO(answers)
+    monkeypatch.setattr(stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("sys.stdin", stdin)
+
+
+def test_the_sandbox_question_explains_itself_and_names_missing_programs() -> None:
+    present = cli.sandbox_intro([])
+    assert "bubblewrap and socat: both are installed." in present
+    missing = cli.sandbox_intro(["bwrap"])
+    assert "bubblewrap (bwrap) is not installed" in missing
+    assert "sudo apt install bubblewrap socat" in missing and "refuses to start" in missing
+    assert "bubblewrap (bwrap) and socat are not installed" in cli.sandbox_intro(["bwrap", "socat"])
+
+
+def test_the_sandbox_options_answer_without_a_question(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _terminal(monkeypatch, "")
+    assert cli.choose_sandbox(True, False, ["bwrap"]) is True
+    assert cli.choose_sandbox(False, True, []) is False
+    assert capsys.readouterr().out == ""
+    assert cli.build_parser().parse_args(["setup", "--no-sandbox"]).sandbox is False
+    assert cli.build_parser().parse_args(["setup", "--sandbox"]).sandbox is True
+    assert cli.build_parser().parse_args(["setup"]).sandbox is None
+
+
+def test_without_a_terminal_the_stored_sandbox_setting_stays(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert cli.choose_sandbox(None, False, []) is None
+    assert cli.choose_sandbox(None, None, ["bwrap", "socat"]) is None
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    ("stored", "missing", "answer", "shown_default", "chosen"),
+    [
+        (None, [], "", "(on)", True),  # the programs are there: on
+        (None, ["socat"], "", "(off)", False),  # one is missing: off
+        (False, [], "", "(off)", False),  # a second setup offers what is stored
+        (True, ["bwrap"], "", "(on)", True),
+        (None, [], "off", "(on)", False),
+        (False, ["bwrap"], "yes", "(off)", True),
+    ],
+)
+def test_the_sandbox_question_offers_the_stored_value_or_what_the_machine_has(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stored: bool | None,
+    missing: list[str],
+    answer: str,
+    shown_default: str,
+    chosen: bool,
+) -> None:
+    _terminal(monkeypatch, answer + "\n")
+    assert cli.choose_sandbox(None, stored, missing) is chosen
+    out = capsys.readouterr().out
+    assert out.startswith("Claude Code's sandbox runs Claude's Bash commands")
+    assert f"Switch Claude Code's sandbox on? on/off {shown_default}: " in out
+    assert ("Stored now:" in out) == (stored is not None)
+
+
+def test_an_unclear_sandbox_answer_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    _terminal(monkeypatch, "maybe\n")
+    with pytest.raises(cli.CliError, match="neither on nor off"):
+        cli.choose_sandbox(None, None, [])
+
+
+def _settings_db(monkeypatch: pytest.MonkeyPatch, stored: dict[str, object]) -> list[object]:
+    """Replace the global settings by `stored`; return the list the writes are recorded in."""
+    written: list[object] = []
+
+    async def settings(_db: object, project: str | None = None) -> dict[str, object]:
+        return stored
+
+    async def set_setting(_db: object, key: str, value: object, project: str | None = None):
+        written.append((key, value))
+        return {}
+
+    monkeypatch.setattr(cli.admin, "settings", settings)
+    monkeypatch.setattr(cli.admin, "set_setting", set_setting)
+    return written
+
+
+@pytest.mark.anyio
+async def test_setup_stores_the_sandbox_answer_and_never_changes_it_unasked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "missing_sandbox_tools", lambda: [])
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    # No terminal, no option: nothing is written, the report says where the value comes from.
+    written = _settings_db(monkeypatch, {"claude": {"sandbox": {"enabled": False}}})
+    assert await cli._apply_sandbox_choice(None, None) == (  # type: ignore[arg-type]
+        False,
+        "Claude Code's sandbox: off (as stored; `calu setup --sandbox` or `--no-sandbox` sets it)",
+    )
+    written = _settings_db(monkeypatch, {})
+    enabled, line = await cli._apply_sandbox_choice(None, None)  # type: ignore[arg-type]
+    assert enabled and "on (the default;" in line and written == []
+    # An option is stored, and the same value again is not written twice.
+    enabled, line = await cli._apply_sandbox_choice(None, False)  # type: ignore[arg-type]
+    assert not enabled and line == "Claude Code's sandbox: off (stored)"
+    assert written == [("claude.sandbox.enabled", False)]
+    written = _settings_db(monkeypatch, {"claude": {"sandbox": {"enabled": False}}})
+    enabled, line = await cli._apply_sandbox_choice(None, False)  # type: ignore[arg-type]
+    assert line.endswith("(as stored)") and written == []
+
+
+def test_setup_warns_about_the_sandbox_only_where_it_matters(
+    monkeypatch: pytest.MonkeyPatch, store: CredentialStore, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CALU_PLACE_FILE", str(tmp_path / "no-place.json"))
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(cli, "missing_sandbox_tools", lambda: ["bwrap"])
+    (note,) = cli.sandbox_setup_notes(True, store)
+    assert "sessions refuse to start" in note and "--no-sandbox" in note
+    monkeypatch.setattr(cli, "missing_sandbox_tools", lambda: [])
+    assert cli.sandbox_setup_notes(True, store) == []
+    # Off, with every login behind a password: the recommendation is met.
+    store.save("admin", "postgresql://a@db/calu", "pw")
+    store.save("session", "postgresql://s@db/calu", "pw")
+    assert cli.sandbox_setup_notes(False, store) == []
+    # Off, after --no-password in one's own account: it is not.
+    store.save("admin", "postgresql://a@db/calu", None)
+    (note,) = cli.sandbox_setup_notes(False, store)
+    assert "strongly recommended" in note and "without a password: admin" in note
+    # As root the store is root's alone and sessions run with --sudo.
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    assert cli.sandbox_setup_notes(False, store) == []

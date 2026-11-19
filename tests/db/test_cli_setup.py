@@ -301,3 +301,38 @@ async def test_a_blank_admin_password_is_accepted_and_setup_says_what_it_costs(
     assert store.needs_password("admin") is True
     assert "the admin password is blank and PostgreSQL accepts no blank password" in printed
     assert "none was typed" not in printed
+
+
+async def test_calu_setup_stores_the_sandbox_choice_and_keeps_it_on_a_rerun(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Requirement 42: `--no-sandbox` is stored in the global settings; a later setup without
+    a terminal and without the option leaves it as it is and repeats the recommendation."""
+    from calu import admin
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, None)  # without a password: the recommendation is not met
+    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+
+    def setup(*options: str) -> int:
+        return cli.main(["setup", *options], store_factory=lambda: cast(CredentialStore, store))
+
+    assert await anyio.to_thread.run_sync(setup, "--renew-session", "--no-sandbox") == 0
+    said = capsys.readouterr()
+    assert "Claude Code's sandbox: off (stored)" in said.out
+    assert "strongly recommended" in said.err and "without a password: admin" in said.err
+
+    async def stored() -> object:
+        db = Db(await connect(db_url))
+        try:
+            return (await admin.settings(db))["claude"]["sandbox"]["enabled"]
+        finally:
+            await db.aclose()
+
+    assert await stored() is False
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert await anyio.to_thread.run_sync(setup) == 0
+    said = capsys.readouterr()
+    assert "Claude Code's sandbox: off (as stored;" in said.out
+    assert "strongly recommended" in said.err
+    assert await stored() is False

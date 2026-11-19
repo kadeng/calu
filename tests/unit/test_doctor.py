@@ -478,3 +478,18 @@ def test_doctor_as_a_user_refuses_another_user(
     """`--user` is root's option, as for `calu run`."""
     assert cli.main(["doctor", "--user", "0"], store_factory=lambda: store) == 1
     assert "--user needs calu to run as root" in capsys.readouterr().err
+
+
+def test_doctor_reports_the_sandbox_off_recommendation_unless_it_is_met() -> None:
+    """Requirement 42, judged as at a session's start; only with `--db`, which reads the
+    setting."""
+    from calu.preflight import SANDBOX_OFF_ADVICE, LoginProtection
+
+    unknown = LoginProtection()
+    assert doctor.sandbox_off_findings(None, unknown) == []
+    (on,) = doctor.sandbox_off_findings(True, unknown)
+    assert on.ok and on.detail.startswith("on")
+    (off,) = doctor.sandbox_off_findings(False, unknown)
+    assert not off.ok and not off.essential and off.advice == SANDBOX_OFF_ADVICE
+    (met,) = doctor.sandbox_off_findings(False, LoginProtection(True, None, False))
+    assert met.ok and met.detail.startswith("off;")

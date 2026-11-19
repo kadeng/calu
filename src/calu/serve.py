@@ -36,6 +36,7 @@ from calu.config import load_secrets
 from calu.credentials import wipe
 from calu.db import SESSION_REQUESTED, ConnectionSource, Db, Dirty, LoginRefused, Notifier
 from calu.launch import RunAs
+from calu.preflight import LoginProtection
 from calu.run import ERRORS, LABEL, RunnerFactory, RunOptions, harden_process, run_from, say
 from calu.session_requests import SessionRequest
 
@@ -71,6 +72,9 @@ class ServeOptions:
     """Every client of every session shows a token, also root on the local socket (D226)."""
     insecure: bool = False
     """Local clients of every session need no token (D227); not together with `secure`."""
+    login_protection: LoginProtection | None = None
+    """What keeps Claude's commands from calu's logins, passed to every session
+    (`RunOptions.login_protection`); None if unknown."""
 
 
 def os_user() -> str:
@@ -265,6 +269,7 @@ class Server:
             run_as=self.options.run_as,
             secure=self.options.secure,
             insecure=self.options.insecure,
+            login_protection=self.options.login_protection,
         )
 
     async def _host(self, db: Db, request: SessionRequest) -> None:

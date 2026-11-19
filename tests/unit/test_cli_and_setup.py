@@ -9,6 +9,7 @@ from calu import cli
 from calu.credentials import CredentialStore
 from calu.db import migrations
 from calu.db.target import PasswordAuth, Target
+from calu.preflight import LoginProtection
 from calu.setup import RULE_LISTS, default_rules, parse_rule_file, recommended_rules
 
 
@@ -306,6 +307,9 @@ def test_run_maps_every_flag_onto_the_session_options(
     assert options.interactive is False  # --batch
     assert options.secure is True  # --secure (D226)
     assert options.socket_path is None  # no --socket: a TCP port
+    # Requirement 42: the store's protection is read before any user switch; the fixture's
+    # store is empty, so it says nothing about the session's login.
+    assert options.login_protection == LoginProtection(False, None, False)
 
 
 def test_run_refuses_a_prompt_file_it_cannot_read(

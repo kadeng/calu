@@ -693,6 +693,18 @@ escalation resolved from the database alone.
    starts none, an idle session switches files with its next block, and a file without a
    block is removed when it is closed. The unit tests cover the redaction with stand-in models
    (`tests/unit/test_traces.py`, `tests/unit/test_traces_session.py`).
+37. The sandbox question of `calu setup` (requirement 42, PLAN D239). On a terminal,
+   `calu setup` must explain the sandbox in two lines, say whether `bubblewrap` and `socat` are
+   installed (if not: `sudo apt install bubblewrap socat`) and ask `Switch Claude Code's
+   sandbox on? on/off` with `(on)` when both are installed, `(off)` otherwise; a second run
+   must add `Stored now: ...` and offer that value. Answer `off`: the report says `Claude
+   Code's sandbox: off (stored)`, and the recommendation (`strongly recommended ... --sudo`)
+   appears only after `calu setup --no-password` in one's own account, not after a setup
+   with passwords and not as root. Then `calu run -p hi` after a `--no-password` setup must
+   show the same recommendation among the start-up warnings; `calu run --sudo -p hi` after
+   `sudo calu setup` must not, and after `sudo calu setup --no-password` must (the place file
+   then publishes the password of `calu_admin`); `calu doctor --db` must show a `sandbox` note or an ok line accordingly. With the
+   sandbox off and `bwrap` taken off `PATH`, a session must start. Not run yet.
 
 ## Measuring the checkers
 
