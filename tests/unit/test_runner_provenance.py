@@ -23,7 +23,7 @@ from claude_agent_sdk import (
 )
 
 from calu.claude import FakeRunner, FakeScript
-from calu.claude.runner import GateResult, Verdict
+from calu.claude.runner import GateResult, PermissionModeChangeFailed, Verdict
 from calu.claude.sdk_runner import SdkRunner
 from calu.config import ClaudeConfig, Config
 from calu.protocol.messages import (
@@ -31,6 +31,7 @@ from calu.protocol.messages import (
     ChatSendParams,
     Event,
     Log,
+    PermissionModeChanged,
     TurnResult,
     UserInput,
 )
@@ -271,18 +272,26 @@ async def test_the_effective_mode_is_reported_once_and_on_every_change(tmp_path:
     events: list[Event] = []
     out = await hook_call(runner, "default", events)
     assert out["permissionDecision"] == "allow"  # D21 stays: the checkers decide alone
-    (first,) = events
+    logs = [e for e in events if isinstance(e, Log)]
+    (first,) = logs
     # Started in "auto", running in "default": a fallback the user did not choose, so a warning.
-    assert isinstance(first, Log) and first.level == "warning"
+    assert first.level == "warning"
     assert '"default"' in first.message and "classifier" in first.message
     await hook_call(runner, "default", events)
-    assert len(events) == 1  # not on every step
     await hook_call(runner, "auto", events)
-    assert isinstance(events[1], Log) and events[1].level == "info"
     await hook_call(runner, "plan", events)
-    assert isinstance(events[2], Log) and events[2].level == "info"
     await hook_call(runner, "acceptEdits", events, agent="sub-1")
-    assert isinstance(events[3], Log) and "sub-1" in events[3].message
+    logs = [e for e in events if isinstance(e, Log)]
+    assert len(logs) == 4  # not on every step
+    assert logs[1].level == "info" and logs[2].level == "info"
+    assert "sub-1" in logs[3].message
+    # The main agent's changes reach the clients as well (D247); the subagent's do not.
+    assert [e.mode for e in events if isinstance(e, PermissionModeChanged)] == [
+        "default",
+        "auto",
+        "plan",
+    ]
+    assert runner.permission_mode == "plan"
 
 
 async def test_a_mode_the_user_chose_is_information_not_a_warning(tmp_path: Path):
@@ -290,16 +299,63 @@ async def test_a_mode_the_user_chose_is_information_not_a_warning(tmp_path: Path
     runner.home = tmp_path
     events: list[Event] = []
     await hook_call(runner, "default", events)
-    (first,) = events
-    assert isinstance(first, Log) and first.level == "info" and '"default"' in first.message
+    (first,) = [e for e in events if isinstance(e, Log)]
+    assert first.level == "info" and '"default"' in first.message
 
 
 async def test_the_init_message_reports_the_mode(tmp_path: Path):
     runner = SdkRunner(tmp_path, ClaudeConfig())
     init = SystemMessage(subtype="init", data={"session_id": "s", "permissionMode": "default"})
-    (event,) = runner._translate(init)
+    changed, event = runner._translate(init)
+    assert isinstance(changed, PermissionModeChanged) and changed.mode == "default"
     assert isinstance(event, Log) and event.level == "info" and '"default"' in event.message
     assert runner._translate(init) == []
+
+
+async def test_a_status_message_reports_a_switched_mode(tmp_path: Path):
+    """Claude Code answers `set_permission_mode` with a status message (CLI 2.1.319, D247)."""
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner.home = tmp_path
+    runner._options(Passing(), None)
+    # Before Claude Code reported anything, the mode calu starts it in.
+    assert runner.permission_mode == "auto"
+    status = SystemMessage(subtype="status", data={"status": None, "permissionMode": "acceptEdits"})
+    events = runner._translate(status)
+    assert [e.mode for e in events if isinstance(e, PermissionModeChanged)] == ["acceptEdits"]
+    assert runner.permission_mode == "acceptEdits"
+    assert runner._translate(status) == []
+
+
+async def test_set_permission_mode_goes_to_the_sdk_and_reports_a_refusal(tmp_path: Path):
+    runner = SdkRunner(tmp_path, ClaudeConfig())
+    with pytest.raises(PermissionModeChangeFailed, match="no Claude session"):
+        await runner.set_permission_mode("default")
+
+    class Client:
+        """Stands in for `ClaudeSDKClient`: records the modes, refuses one as Claude Code does."""
+
+        def __init__(self) -> None:
+            self.modes: list[str] = []
+
+        async def set_permission_mode(self, mode: str) -> None:
+            """Record the mode, or refuse bypassPermissions with Claude Code's own words.
+
+            Args:
+                mode: The mode.
+
+            Raises:
+                Exception: For "bypassPermissions".
+            """
+            if mode == "bypassPermissions":
+                raise Exception("Cannot set permission mode to bypassPermissions")
+            self.modes.append(mode)
+
+    client = Client()
+    runner._client = client  # type: ignore[assignment]
+    await runner.set_permission_mode("acceptEdits")
+    assert client.modes == ["acceptEdits"]
+    with pytest.raises(PermissionModeChangeFailed, match="Cannot set permission mode"):
+        await runner.set_permission_mode("bypassPermissions")
 
 
 async def test_required_auto_mode_makes_a_passed_step_wait(tmp_path: Path):

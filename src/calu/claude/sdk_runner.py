@@ -64,6 +64,7 @@ from calu.claude.runner import (
     EventSink,
     Fork,
     ModelChangeFailed,
+    PermissionModeChangeFailed,
     Priority,
     SideQuestionFailed,
     StartRefused,
@@ -80,7 +81,11 @@ from calu.files import skill_file
 from calu.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 from calu.markdown import fence
 from calu.paths import INSIDE_SESSION_ENV
-from calu.preflight import launch_permission_mode, settings_file_sandbox_blockers
+from calu.preflight import (
+    launch_permission_mode,
+    settings_file_sandbox_blockers,
+    settings_permission_mode,
+)
 from calu.protocol.messages import (
     AgentInfo,
     AgentsUpdate,
@@ -91,6 +96,7 @@ from calu.protocol.messages import (
     ContextUsage,
     Event,
     Log,
+    PermissionModeChanged,
     RateLimit,
     ToolFiles,
     ToolResult,
@@ -338,6 +344,9 @@ class SdkRunner:
         self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
         self._launch_mode: PermissionMode | None = None
         """The `--permission-mode` of the last start (`_options`); None: none was passed."""
+        self._expected_mode: str | None = None
+        """The mode the last start should give: `_launch_mode`, else the `defaultMode` of a
+        loaded settings file; what `permission_mode` answers before Claude Code reports one."""
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
         self._sink: EventSink | None = None  # set by `run`; hooks report through it
         self.sink_failures = 0
@@ -748,6 +757,43 @@ class SdkRunner:
         except Exception as exc:  # the SDK raises bare `Exception` for an error response
             raise ModelChangeFailed(f"Claude Code did not change the model: {exc}") from exc
 
+    @property
+    def permission_mode(self) -> str | None:
+        """The main agent's permission mode (see `ClaudeRunner.permission_mode`).
+
+        Returns:
+            The mode Claude Code last reported for the main agent (init and status messages,
+            hook inputs); before its first report the mode the start should give
+            (`_expected_mode`); None while neither is known.
+        """
+        return self._modes.get(None) or self._expected_mode
+
+    async def set_permission_mode(self, mode: str) -> None:
+        """Switch Claude Code's permission mode through the SDK (`set_permission_mode`).
+
+        Measured with CLI 2.1.319 (`spikes/spike_permission_mode_switch.py`): Claude Code
+        answers the control request at once, also while a tool call of the running turn waits
+        in the hook, then sends a `status` system message with the new `permissionMode`
+        (reported as `PermissionModeChanged` by `_events_of`); the next tool call of the same
+        turn already runs in the new mode.
+
+        Args:
+            mode: The mode to switch to.
+
+        Raises:
+            PermissionModeChangeFailed: If not connected or Claude Code refused the mode (for
+                instance "bypassPermissions" in a session not started with
+                `--dangerously-skip-permissions`).
+        """
+        if self._client is None:
+            raise PermissionModeChangeFailed("no Claude session is running")
+        try:
+            await self._client.set_permission_mode(mode)  # type: ignore[arg-type]
+        except Exception as exc:  # the SDK raises bare `Exception` for an error response
+            raise PermissionModeChangeFailed(
+                f"Claude Code did not change the permission mode: {exc}"
+            ) from exc
+
     # ------------------------------------------------------------------ options and callbacks
 
     def _options(
@@ -778,6 +824,8 @@ class SdkRunner:
             `calu.preflight.launch_permission_mode` (reads Claude Code's settings files).
         """
         self._launch_mode = launch_permission_mode(self.config, self.home, self.workspace)
+        chosen = settings_permission_mode(self.config, self.home, self.workspace)
+        self._expected_mode = self._launch_mode or (chosen[0] if chosen else None)
 
         async def pre_tool_use(
             input_data: Any, tool_use_id: str | None, context: Any
@@ -1218,16 +1266,18 @@ class SdkRunner:
         (`EnterPlanMode`) can also change the mode during a session; that is information.
 
         Args:
-            mode: `permission_mode` of a hook input or `permissionMode` of the init message;
-                anything that is not a non-empty string is ignored.
+            mode: `permission_mode` of a hook input or `permissionMode` of the init or a
+                status message; anything that is not a non-empty string is ignored.
             sdk_agent_id: The SDK's id of the agent the mode belongs to; None for the main
                 agent.
 
         Returns:
             One `Log` (level "warning" in the fallback case above, else "info") if the mode is
-            new for that agent, else []. A subagent whose first mode is the one the main agent
-            runs in gives no event: the line about the main agent already says it, and a run
-            with many subagents would repeat it for each.
+            new for that agent, else []; for the main agent a `PermissionModeChanged` (with
+            `client` None) before it, which the session passes on to its clients. A subagent
+            whose first mode is the one the main agent runs in gives no event: the line about
+            the main agent already says it, and a run with many subagents would repeat it for
+            each.
         """
         if not isinstance(mode, str) or not mode:
             return []
@@ -1238,6 +1288,22 @@ class SdkRunner:
         self._modes[agent] = mode
         if agent is not None and first and self._modes.get(None) == mode:
             return []
+        if agent is None:
+            return [PermissionModeChanged(mode=mode), *self._mode_logs(mode, agent, first)]
+        return self._mode_logs(mode, agent, first)
+
+    def _mode_logs(self, mode: str, agent: str | None, first: bool) -> list[Event]:
+        """Say in a `log` event what an agent's newly seen permission mode means for a step.
+
+        Args:
+            mode: The mode, a non-empty string.
+            agent: The SDK's id of the agent; None for the main agent.
+            first: Whether this is the first mode seen for that agent.
+
+        Returns:
+            One `Log`: a warning when calu started Claude Code in "auto" and the main agent
+            reports another mode at its first sight, else information.
+        """
         who = f"The subagent {agent}" if agent else "Claude Code"
         if mode == "auto":
             return [
@@ -1533,11 +1599,13 @@ class SdkRunner:
             case SystemMessage() if msg.subtype == "background_tasks_changed":
                 tasks = msg.data.get("tasks")
                 self.background_tasks = len(tasks) if isinstance(tasks, list) else 0
-            case SystemMessage() if (
-                msg.subtype == "status" and msg.data.get("status") == "compacting"
-            ):
-                events += self._local_command()
-                events.append(Log(level="info", message=COMPACTING_NOTICE))
+            case SystemMessage() if msg.subtype == "status":
+                if msg.data.get("status") == "compacting":
+                    events += self._local_command()
+                    events.append(Log(level="info", message=COMPACTING_NOTICE))
+                # Claude Code sends a status message with the new mode after every change of
+                # it (`set_permission_mode`, measured with CLI 2.1.319).
+                events += self._mode_events(msg.data.get("permissionMode"))
             case SystemMessage() if msg.subtype == "init":
                 self.session_id = msg.data.get("session_id", self.session_id)
                 events += self._unknown_tools_warning(msg.data.get("tools"))

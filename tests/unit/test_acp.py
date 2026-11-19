@@ -894,6 +894,41 @@ async def test_set_config_option_answers_with_every_option_and_its_new_value() -
     await run_adapter(calu, body)
 
 
+async def test_claude_codes_permission_mode_is_a_select_option_of_its_own() -> None:
+    """The session modes hold the supervision level; the permission mode is a config option.
+
+    It appears once the session reports a mode, is switched with `permission_mode.set`, and a
+    change from another client reaches the editor (D247).
+    """
+    calu = FakeCalu({"state.get": {**IDLE, "permission_mode": "auto"}})
+
+    async def body(h: Harness) -> None:
+        await h.editor.call("initialize", {"protocolVersion": 1})
+        answer = await h.editor.call("session/new", {"cwd": str(WORKSPACE), "mcpServers": []})
+        session = answer["result"]["sessionId"]
+        options = {o["id"]: o for o in answer["result"]["configOptions"]}
+        permission = options[modes.PERMISSION_OPTION_ID]
+        assert permission["currentValue"] == "auto"
+        assert [o["value"] for o in permission["options"]] == ["default", "acceptEdits", "auto"]
+        assert answer["result"]["modes"]["currentModeId"] == "checkers"  # unchanged
+
+        set_answer = await h.editor.call(
+            "session/set_config_option",
+            {"sessionId": session, "configId": modes.PERMISSION_OPTION_ID, "value": "default"},
+        )
+        assert h.calu.sent("permission_mode.set") == [{"mode": "default"}]
+        values = {o["id"]: o["currentValue"] for o in set_answer["result"]["configOptions"]}
+        assert values[modes.PERMISSION_OPTION_ID] == "default"
+
+        # Plan mode entered by a tool call is shown, as ACP wants the current value listed.
+        await h.adapter.on_event("permission_mode.changed", {"mode": "plan", "client": None})
+        (update,) = await h.editor.wait_updates(1)
+        (shown,) = [o for o in update["configOptions"] if o["id"] == modes.PERMISSION_OPTION_ID]
+        assert shown["currentValue"] == "plan" and "plan" in [o["value"] for o in shown["options"]]
+
+    await run_adapter(calu, body)
+
+
 async def test_a_mode_change_by_another_client_reaches_the_editor_in_both_apis() -> None:
     """The session announces the change, so a second editor is not left showing the old mode."""
     calu = FakeCalu({"state.get": IDLE})

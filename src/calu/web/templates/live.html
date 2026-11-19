@@ -43,6 +43,13 @@
     <label><input type="checkbox" value="edits" disabled> file edits</label>
     <label><input type="checkbox" value="subagents" disabled> subagent results</label>
   </div>
+  <div class="row" id="permission">
+    <label for="permission-mode" class="muted">Claude Code's permission mode:</label>
+    <select id="permission-mode" disabled title="Claude Code's own Shift+Tab; applies from Claude's next tool call">
+      {% for mode in permission_modes %}<option value="{{ mode }}">{{ mode }}</option>{% endfor %}
+    </select>
+    <span class="muted" id="permission-note"></span>
+  </div>
   <p class="muted" id="usage"></p>
 </div>
 

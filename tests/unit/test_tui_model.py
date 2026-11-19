@@ -324,8 +324,11 @@ def test_a_session_with_the_new_requests_offers_them_and_an_older_one_says_why_n
     assert new.has("side_question") and new.has("usage") and new.has("live_model_change")
     assert new.reason("side_question") is None
     assert not new.has("queue_withdraw") and not new.has("stop_subagent")
-    old_snapshot = {k: v for k, v in session.snapshot().items() if k != "rate_limits"}
+    assert new.has("permission_mode")
+    old_snapshot = {
+        k: v for k, v in session.snapshot().items() if k not in {"rate_limits", "permission_mode"}
+    }
     old = capabilities(old_snapshot)
-    assert not old.has("side_question")
+    assert not old.has("side_question") and not old.has("permission_mode")
     assert all(entry.reason.startswith(NOT_AVAILABLE) for entry in old.missing())
     assert len(old.missing()) == len(CAPABILITIES)

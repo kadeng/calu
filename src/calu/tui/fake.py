@@ -13,7 +13,8 @@ script and the demo (`python -m calu.tui`) attach the real client to it through
 
 It answers the requests the way a session does where the client depends on it: `chat.send`
 puts the message into the queue, `escalation.decide` resolves the escalation, `interrupt`
-cancels the open escalations and ends the turn, `auto_escalate.set` announces the change,
+cancels the open escalations and ends the turn, `auto_escalate.set` and `permission_mode.set`
+announce the change,
 `side.ask` returns a scripted answer and changes nothing else. A
 method listed in `fail` is refused with that message, which is how a test sees the client's
 error handling. `drop` closes the connections with a close code.
@@ -29,7 +30,12 @@ import anyio
 
 from calu import herd
 from calu.protocol.client import OnEvent, RequestFailed
-from calu.protocol.messages import CLOSE_FELL_BEHIND, REQUESTS
+from calu.protocol.messages import (
+    CLOSE_FELL_BEHIND,
+    REFUSED_PERMISSION_MODES,
+    REQUESTS,
+    SWITCHABLE_PERMISSION_MODES,
+)
 from calu.session_requests import SessionRequest
 from calu.tui.adminaccess import (
     CONFLICT_HELP,
@@ -402,6 +408,8 @@ class FakeSession:
         self.escalations: dict[str, dict[str, Any]] = {}
         self.queue: list[dict[str, Any]] = []
         self.auto_escalate: dict[str, Any] = {"commands": False, "edits": False}
+        self.permission_mode: str | None = "auto"
+        """Claude Code's permission mode the scripted session reports."""
         self.honesty_mode = "off"
         self.honesty_marks: list[dict[str, Any]] = []
         self.honesty_extra: dict[str, Any] = {}
@@ -466,6 +474,7 @@ class FakeSession:
             "escalations": [dict(request) for request in self.escalations.values()],
             "queue": [dict(message) for message in self.queue],
             "auto_escalate": dict(self.auto_escalate),
+            "permission_mode": self.permission_mode,
             "honesty_mode": self.honesty_mode,
             "honesty_marks": [dict(mark) for mark in self.honesty_marks],
             **({"honesty": dict(self.honesty_extra)} if self.honesty_extra else {}),
@@ -498,6 +507,8 @@ class FakeSession:
                 self.queue = list(stamped["messages"])
             case "auto_escalate.changed":
                 self.auto_escalate = dict(stamped["settings"])
+            case "permission_mode.changed":
+                self.permission_mode = stamped["mode"]
             case "honesty.update":
                 self.honesty_marks = list(stamped["marks"])
                 self.honesty_mode = stamped["mode"]
@@ -652,6 +663,17 @@ class FakeSession:
                 return self._context(params["escalation_id"])
             case "auto_escalate.set":
                 await self.emit("auto_escalate.changed", {"settings": params})
+            case "permission_mode.set":
+                # As the session does (agent/records/PLAN.md D247), with the same refusals.
+                mode = params["mode"]
+                if mode not in SWITCHABLE_PERMISSION_MODES:
+                    raise self._refuse(
+                        f"permission mode {mode!r} refused: {REFUSED_PERMISSION_MODES[mode]}"
+                    )
+                if self.state in {"stopped", "failed", "starting"}:
+                    raise self._refuse("no Claude session is running (send session.start first)")
+                if mode != self.permission_mode:
+                    await self.emit("permission_mode.changed", {"mode": mode, "client": "calu-tui"})
             case "interrupt":
                 for escalation_id in list(self.escalations):
                     await self.emit(

@@ -188,7 +188,10 @@ def test_the_narrator_is_told_that_a_notice_is_automatic():
 
 async def test_a_subagent_in_the_main_agents_mode_is_not_reported_again(tmp_path: Path):
     runner = SdkRunner(tmp_path, ClaudeConfig())
-    assert len(runner._mode_events("default")) == 1
+    assert [type(e).__name__ for e in runner._mode_events("default")] == [
+        "PermissionModeChanged",
+        "Log",
+    ]
     assert runner._mode_events("default", "sub-1") == []
     assert runner._mode_events("default", "sub-2") == []
     # A subagent in another mode, and a later change of a subagent's mode, are reported.

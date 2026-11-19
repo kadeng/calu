@@ -56,12 +56,22 @@ Each user message starts the next scripted turn; when the script is exhausted, t
                                                       background tasks, and when the last one
                                                       finishes after its turn the next scripted
                                                       turn starts by itself
+    {"permission_mode": "plan"}                       Claude Code reports another permission
+                                                      mode by itself (as after an EnterPlanMode
+                                                      call): `permission_mode` changes and a
+                                                      `permission_mode.changed` event is sent
     {"parallel": [[...], [...]]}                      the action lists run at the same time (as
                                                       several tool calls or subagents of one
                                                       assistant message do)
 
 Example script (JSON): {"turns": [[{"text": "Hi"}, {"tool": "Bash", "input": {"command": "ls"},
 "result": "a.py"}]]}
+
+`FakeScript.permission_mode` is the mode the runner starts in (default "auto", reported as a
+`permission_mode.changed` event when `run` starts, as the real runner reports the init message);
+`set_permission_mode` changes it and reports it the same way, also during a turn, and every
+scripted tool call records the mode it ran in (`tool_modes`). `permission_mode_error` makes
+the next `set_permission_mode` fail as a refused mode would.
 
 Messages sent with priority "next" during a turn are taken in after the current action (a
 `UserInput` event); "later" messages start their own turn after the current one.
@@ -84,6 +94,7 @@ from calu.claude.runner import (
     NOT_FROM_USER,
     EventSink,
     Fork,
+    PermissionModeChangeFailed,
     Priority,
     SideQuestionFailed,
     ToolGate,
@@ -99,6 +110,7 @@ from calu.protocol.messages import (
     ChatImage,
     ContextUsage,
     Event,
+    PermissionModeChanged,
     RateLimit,
     ToolResult,
     ToolUse,
@@ -128,6 +140,8 @@ class FakeScript(BaseModel):
     """The script: a list of turns, each a list of action dicts (see module docstring)."""
 
     turns: list[list[dict[str, Any]]] = Field(default_factory=list)
+    permission_mode: str = "auto"
+    """The permission mode the runner starts in, as calu's default start gives it."""
 
     @classmethod
     def load(cls, path: Path) -> FakeScript:
@@ -203,6 +217,15 @@ class FakeRunner:
         """The scopes of the tool calls that wait for a human; an interrupt cancels them."""
         self._detached = 0
         """How many detached background subagents are running."""
+        self.permission_mode: str | None = script.permission_mode
+        """The main agent's permission mode (`ClaudeRunner.permission_mode`)."""
+        self.mode_changes: list[str] = []
+        """Every mode `set_permission_mode` was called with, in order, for tests."""
+        self.permission_mode_error: str | None = None
+        """If set, the next `set_permission_mode` fails with this message and changes nothing."""
+        self.tool_modes: list[tuple[str, str | None]] = []
+        """(tool name, permission mode) of every scripted tool call, at its check."""
+        self._sink: EventSink | None = None
 
     async def run(
         self,
@@ -250,29 +273,35 @@ class FakeRunner:
                 log.exception("the event sink raised on a %s event", event.method)
 
         sink = guarded
-        async with anyio.create_task_group() as tasks:
-            self._cancel = tasks.cancel_scope
-            self._tasks = tasks
-            self._ready.set()
-            async for text, images in self._receive:
-                if text is not None:
-                    await sink(
-                        UserInput(
-                            text=text,
-                            source=user_message_source(text),
-                            images=images,
-                            uuid=self._uuid(),
+        self._sink = sink
+        try:
+            async with anyio.create_task_group() as tasks:
+                self._cancel = tasks.cancel_scope
+                self._tasks = tasks
+                if self.permission_mode is not None:
+                    await sink(PermissionModeChanged(mode=self.permission_mode))
+                self._ready.set()
+                async for text, images in self._receive:
+                    if text is not None:
+                        await sink(
+                            UserInput(
+                                text=text,
+                                source=user_message_source(text),
+                                images=images,
+                                uuid=self._uuid(),
+                            )
                         )
-                    )
-                elif self._detached:
-                    continue  # another detached subagent still runs: its end starts the turn
-                await self._turn(text if text is not None else FOLLOW_UP, gate, sink)
-                while self._follow_up:
-                    # Like Claude Code (D158): the turn has ended and the session is idle; when
-                    # the background tasks "finish", the next turn starts without a message.
-                    self._follow_up = False
-                    await anyio.sleep(FOLLOW_UP_DELAY_S)
-                    await self._turn(FOLLOW_UP, gate, sink)
+                    elif self._detached:
+                        continue  # another detached subagent still runs: its end starts the turn
+                    await self._turn(text if text is not None else FOLLOW_UP, gate, sink)
+                    while self._follow_up:
+                        # Like Claude Code (D158): the turn has ended and the session is idle; when
+                        # the background tasks "finish", the next turn starts without a message.
+                        self._follow_up = False
+                        await anyio.sleep(FOLLOW_UP_DELAY_S)
+                        await self._turn(FOLLOW_UP, gate, sink)
+        finally:
+            self._sink = None
 
     async def wait_ready(self) -> None:
         """Return once `run` has started."""
@@ -344,6 +373,38 @@ class FakeRunner:
         """
         self.model = model
         self.model_changes += 1
+
+    async def set_permission_mode(self, mode: str) -> None:
+        """Switch the scripted permission mode and report it, as Claude Code's status message.
+
+        Side effects: appends `mode` to `mode_changes`, sets `permission_mode` and sends a
+        `PermissionModeChanged` event through the sink of `run` (after this call has
+        returned its control answer, as Claude Code does; a mode equal to the current one
+        sends it too). The next scripted tool call runs in the new mode.
+
+        Args:
+            mode: The new mode.
+
+        Raises:
+            PermissionModeChangeFailed: If `run` has not started, or `permission_mode_error`
+                is set (it is cleared then); nothing changes.
+        """
+        if self._sink is None:
+            raise PermissionModeChangeFailed("no Claude session is running")
+        if self.permission_mode_error is not None:
+            message, self.permission_mode_error = self.permission_mode_error, None
+            raise PermissionModeChangeFailed(message)
+        self.mode_changes.append(mode)
+        self.permission_mode = mode
+        sink = self._sink
+        assert self._tasks is not None
+
+        async def report() -> None:
+            """Send the status report after the caller got its answer."""
+            await anyio.lowlevel.checkpoint()
+            await sink(PermissionModeChanged(mode=mode))
+
+        self._tasks.start_soon(report)
 
     # ------------------------------------------------------------------ script execution
 
@@ -476,6 +537,9 @@ class FakeRunner:
             )
         elif "sleep" in action:
             await self._pause(float(action["sleep"]))
+        elif "permission_mode" in action:
+            self.permission_mode = str(action["permission_mode"])
+            await sink(PermissionModeChanged(mode=self.permission_mode))
         elif "rate_limit" in action:
             limit = RateLimit.model_validate(action["rate_limit"])
             self._rate_limits[limit.type] = limit
@@ -616,6 +680,7 @@ class FakeRunner:
         tool_use_id = f"fake-tool-{self._id_prefix}-{next(self._ids)}"
         name, tool_input = str(action["tool"]), dict(action.get("input", {}))
         await sink(ToolUse(agent_id=agent, tool_use_id=tool_use_id, name=name, input=tool_input))
+        self.tool_modes.append((name, self.permission_mode))
         step = Step(
             tool_name=name,
             tool_input=tool_input,

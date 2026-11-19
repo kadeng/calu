@@ -249,6 +249,28 @@ class Actions:
             return Outcome(False, str(error))
         return await self.set_switches(switches)
 
+    async def set_permission_mode(self, mode: str) -> Outcome:
+        """Switch Claude Code's permission mode (`permission_mode.set`).
+
+        Side effects: marks the change as this client's own, so that the event that follows
+        is not reported as made elsewhere. The model's mode changes with that event, which
+        carries the mode Claude Code reports.
+
+        Args:
+            mode: "default", "acceptEdits" or "auto"; the session refuses any other mode with
+                the reason.
+
+        Returns:
+            The outcome, with a confirmation as its message.
+        """
+        self.model.own_mode_change = True
+        outcome = await self.request("permission_mode.set", {"mode": mode})
+        if outcome.ok:
+            outcome.message = f"permission mode: {mode}, from Claude's next tool call"
+        else:
+            self.model.own_mode_change = False
+        return outcome
+
     async def ask_side(self, question: str) -> Outcome:
         """Ask Claude a question beside the running work (`side.ask`).
 

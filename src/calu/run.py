@@ -93,6 +93,7 @@ from calu.protocol.messages import (
     HonestyInfo,
     HonestyUpdate,
     Log,
+    PermissionModeChanged,
     RateLimit,
     SessionState,
     State,
@@ -431,6 +432,9 @@ def format_event(event: Event) -> str | None:
             on = [name for name, held in event.settings.model_dump().items() if held]
             waits = ", ".join(on) if on else "nothing beyond what the checkers escalate"
             return f"*** what waits for a human: {waits}"
+        case PermissionModeChanged():
+            by = f" (switched by {event.client})" if event.client else ""
+            return f"*** Claude Code's permission mode: {event.mode}{by}"
         case UsageUpdate():
             if not event.rate_limits:
                 return None
@@ -474,6 +478,7 @@ STATUS_EVENTS = (
     EscalationRequest,
     EscalationResolved,
     AutoEscalateChanged,
+    PermissionModeChanged,
     UsageUpdate,
     Log,
 )

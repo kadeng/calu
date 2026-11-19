@@ -164,6 +164,7 @@ from calu.claude.runner import (
     GateResult,
     HumanAnswer,
     ModelChangeFailed,
+    PermissionModeChangeFailed,
     SideQuestionFailed,
     Verdict,
 )
@@ -230,6 +231,8 @@ from calu.honesty import (
 )
 from calu.models import resolve_model
 from calu.protocol.messages import (
+    REFUSED_PERMISSION_MODES,
+    SWITCHABLE_PERMISSION_MODES,
     AgentInfo,
     AgentsUpdate,
     AssistantText,
@@ -255,6 +258,7 @@ from calu.protocol.messages import (
     HonestyUpdate,
     InitializeResult,
     Log,
+    PermissionModeChanged,
     QueuedMessage,
     RateLimit,
     SessionHistoryResult,
@@ -677,6 +681,13 @@ class Session:
         self._commit_hold: str | None = None
         """Claude's id of the commit call for which the trace writer is held
         (`_finalize_for_commit`); the call's tool result releases it."""
+        self._permission_mode: str | None = None
+        """Claude Code's permission mode as the runner last reported it (`permission_mode`)."""
+        self._mode_request: tuple[str, str] | None = None
+        """(mode, client) of a `permission_mode.set` under way, so that Claude Code's report
+        of that mode names the client that asked for it."""
+        self._mode_reports = 0
+        """How many mode reports of the runner arrived; `set_permission_mode` compares it."""
         self._guard_traces()
 
     @property
@@ -2273,6 +2284,7 @@ class Session:
             escalations=self.desk.requests(),
             queue=[message for message, _ in self._run_state.queue],
             auto_escalate=self.config.auto_escalate,
+            permission_mode=self._permission_mode,
             honesty_mode=self.config.honesty.mode,
             honesty_marks=list(self._honesty_sent.marks),
             honesty=self._honesty_sent.model_copy(update={"mode": self.config.honesty.mode}),
@@ -2450,6 +2462,7 @@ class Session:
         await self.announce_honesty()
         for warning in self.startup_warnings:
             await self.emit(Log(level="warning", message=warning))
+        self._permission_mode = None  # the new run reports its own
         runner = self.runner = self.runner_factory()
         # After the runner is set and without an await in between: the end of an earlier run
         # closes the trace only while its own runner is the current one (`_run`).
@@ -2480,6 +2493,10 @@ class Session:
         # timed out, for example) must still be resumable by its Claude session id (D27). An
         # id calu chose is known now; Claude Code reports it with the first turn only.
         await self._record_claude_session(runner.session_id or chosen)
+        if self._permission_mode is None and runner.permission_mode is not None:
+            # Claude Code reports its mode with the first turn; until then the mode calu
+            # started it in is the best a client can be shown.
+            await self._note_permission_mode(runner.permission_mode, None)
         if fork is not None and resume_id is not None:
             # So that the fork's page can say where its first turns come from, and the
             # conversation it left can be found from it.
@@ -2645,6 +2662,100 @@ class Session:
         await self._emit_safely(
             Log(message=f"model changed to {model or 'the default'} by {client}")
         )
+
+    @property
+    def permission_mode(self) -> str | None:
+        """Claude Code's permission mode as last reported (see `SessionSnapshot`).
+
+        Returns:
+            The mode, or None before the first run reported or started one.
+        """
+        return self._permission_mode
+
+    async def set_permission_mode(self, mode: str, client: str = "unknown") -> None:
+        """Switch Claude Code's permission mode while the session runs (`permission_mode.set`).
+
+        The live counterpart of Claude Code's Shift+Tab (agent/records/PLAN.md D247). Order:
+
+            refuse? -> audit entry -> runner.set_permission_mode -> permission_mode.changed
+
+        The audit entry comes first, as for `set_auto_escalate`: a change nobody can see
+        afterwards is worse than a refused request. If Claude Code then refuses the mode, a
+        second entry records that it stayed as it was. The change applies from the next tool
+        call on, between turns and inside a running turn. The mode is also kept as
+        `claude.permission_mode` of this process, so that a later start (a resume, a fork, a
+        new conversation) begins in it; the project's settings are not changed.
+
+        Args:
+            mode: The mode the client asked for.
+            client: Name of the client that asked, for the audit entry and the event.
+
+        Raises:
+            SessionError: If the mode is not one of `SWITCHABLE_PERMISSION_MODES` (with the
+                reason of `REFUSED_PERMISSION_MODES`), if `claude.require_auto_mode` is set
+                and the mode is not "auto", if no session runs, or if Claude Code refused the
+                mode.
+            psycopg.Error: If the audit entry cannot be written; nothing was changed then.
+
+        Side effects:
+            Writes one audit entry (two if Claude Code refused), switches Claude Code's mode,
+            changes `config.claude.permission_mode` and emits `permission_mode.changed` with
+            the client's name, unless Claude Code's own report of the mode came first (that
+            report then carries the name). A mode the session already runs in changes nothing.
+        """
+        if mode not in SWITCHABLE_PERMISSION_MODES:
+            reason = REFUSED_PERMISSION_MODES.get(mode, "Claude Code has no such mode")
+            offered = ", ".join(SWITCHABLE_PERMISSION_MODES)
+            raise SessionError(
+                f"permission mode {mode!r} refused: {reason}. calu offers {offered}."
+            )
+        if self.config.claude.require_auto_mode and mode != "auto":
+            raise SessionError(
+                f"permission mode {mode!r} refused: claude.require_auto_mode is set, so a step "
+                "needs auto mode's classifier as well as the checkers and the session stays in "
+                '"auto"'
+            )
+        runner = self._require_running()
+        before = self._permission_mode
+        if before == mode:
+            return
+        await self.store.note_setting_change(
+            "permission_mode", {"mode": before}, {"mode": mode}, client
+        )
+        reports = self._mode_reports
+        self._mode_request = (mode, client)
+        try:
+            await runner.set_permission_mode(mode)
+        except PermissionModeChangeFailed as exc:
+            await self.recorder.attempt(
+                "recording that Claude Code refused a permission mode",
+                self.store.note_setting_change(
+                    "permission_mode",
+                    {"mode": mode},
+                    {"mode": before},
+                    "session: Claude Code refused the change",
+                ),
+            )
+            raise SessionError(str(exc)) from exc
+        finally:
+            self._mode_request = None
+        self.config.claude = self.config.claude.model_copy(update={"permission_mode": mode})
+        if self._mode_reports == reports:
+            # Claude Code's status message has not arrived yet; it confirms the mode (and
+            # changes nothing) or reports the one it really took.
+            await self._note_permission_mode(mode, client)
+
+    async def _note_permission_mode(self, mode: str, client: str | None) -> None:
+        """Take a permission mode as the current one and tell every client if it is new.
+
+        Args:
+            mode: The mode Claude Code reported, or the one it accepted.
+            client: The client that asked for it; None for Claude Code's own report.
+        """
+        if mode == self._permission_mode:
+            return
+        self._permission_mode = mode
+        await self._emit_safely(PermissionModeChanged(mode=mode, client=client))
 
     async def send_chat(self, params: ChatSendParams) -> None:
         """Send a chat message to the main agent, or relayed to a background subagent.
@@ -3446,6 +3557,15 @@ class Session:
             Exception: Whatever the handling of the event itself raised (recording it in the
                 context or the store); the forwarding and the state update have happened then.
         """
+        if isinstance(event, PermissionModeChanged):
+            # Claude Code's report of its mode; no work of Claude, and repeated reports of the
+            # same mode are not passed on.
+            self._mode_reports += 1
+            asked = self._mode_request
+            await self._note_permission_mode(
+                event.mode, asked[1] if asked is not None and asked[0] == event.mode else None
+            )
+            return
         try:
             match event:
                 case UserInput() if event.source != "user":

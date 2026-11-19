@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 
+from calu.protocol.messages import SWITCHABLE_PERMISSION_MODES
 from calu.tui.capabilities import Capabilities
 
 if TYPE_CHECKING:
@@ -175,6 +176,14 @@ COMMANDS: tuple[Command, ...] = (
         "",
         "/level [name]",
         about="What waits for you besides the checkers' escalations.",
+    ),
+    Command(
+        "mode",
+        "Claude Code's permission mode",
+        "",
+        "/mode [mode]",
+        capability="permission_mode",
+        about="Claude Code's own Shift+Tab: default, acceptEdits or auto, while it runs.",
     ),
     Command("usage", "Usage: cost, context fill, usage limits", "", "/usage", capability="usage"),
     Command("state", "Session state", "", "/state"),
@@ -392,6 +401,30 @@ def completions(prefix: str) -> list[str]:
     return [
         command.name for command in COMMANDS if command.name and command.name.startswith(prefix)
     ]
+
+
+ARGUMENTS: dict[str, Sequence[str]] = {"/mode": SWITCHABLE_PERMISSION_MODES}
+"""Slash words whose argument is one of a fixed list, which Tab completes."""
+
+
+def argument_completions(text: str) -> list[str]:
+    """List the arguments of a slash command that start like the typed one.
+
+    Args:
+        text: The composer's text, e.g. `/mode ac`.
+
+    Returns:
+        The matching arguments in the order of `ARGUMENTS`; empty if the command takes no
+        argument from a fixed list or the text has more than one argument.
+
+    Example:
+        `argument_completions("/mode a")` is `["acceptEdits", "auto"]`.
+    """
+    word, _, typed = text.partition(" ")
+    choices = ARGUMENTS.get(word)
+    if choices is None or " " in typed:
+        return []
+    return [choice for choice in choices if choice.lower().startswith(typed.lower())]
 
 
 def slash_names() -> Sequence[str]:

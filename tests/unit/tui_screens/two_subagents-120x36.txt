@@ -1,4 +1,4 @@
- calu  myproject   ● running 0:18   opus / high   Checkers decide   ctx 21%   attached
+ calu  myproject   ● running 0:18   opus / high   Checkers decide   mode auto   ctx 21%   attached
   main   explore bg *   tests *   all                                                                  alt+←/→ switches
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (0)
                                                                                     ▏

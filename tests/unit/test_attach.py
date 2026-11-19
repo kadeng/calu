@@ -625,3 +625,18 @@ async def test_a_comment_on_a_missing_file_names_the_file(tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.startswith("[error] the file cannot be read (No such file or directory): ")
     assert out.rstrip().endswith("nofile.py")
+
+
+async def test_mode_shows_and_switches_claude_codes_permission_mode(capsys):
+    """`/mode` prints the mode the session reports; `/mode X` asks for it (D247)."""
+    con, client = console({"state.get": {"permission_mode": "auto"}})
+    await con.line("/mode")
+    assert "permission mode: auto" in capsys.readouterr().out
+    await con.line("/mode acceptEdits")
+    assert client.sent[-1] == ("permission_mode.set", {"mode": "acceptEdits"})
+    # The change itself is printed from the event every client gets.
+    line = render("permission_mode.changed", {"mode": "acceptEdits", "client": "vscode"})
+    assert line == "*** Claude Code's permission mode: acceptEdits (switched by vscode)"
+    assert "permission mode default" in describe_state(
+        {"state": "idle", "workspace": "/w", "model": "opus", "permission_mode": "default"}
+    )

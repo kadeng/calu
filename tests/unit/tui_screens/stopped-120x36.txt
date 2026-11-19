@@ -1,4 +1,4 @@
- calu  myproject   stopped   opus / high   Checkers decide   $0.84 · 1 turn   attached
+ calu  myproject   stopped   opus / high   Checkers decide   mode auto   $0.84 · 1 turn   attached
   main
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (0)
                                                                                     ▏

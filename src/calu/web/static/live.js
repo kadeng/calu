@@ -673,6 +673,7 @@
     }
     el("steer").disabled = el("steer").disabled || !BUSY.includes(state);
     for (const box of document.querySelectorAll("#supervision input")) box.disabled = !attached;
+    el("permission-mode").disabled = !attached || ENDED.includes(state) || !permissionMode;
     retitle();
     if (agents.size) renderAgents();
   }
@@ -692,6 +693,34 @@
       send("auto_escalate.set", settings);
     };
   }
+
+  // Claude Code's permission mode as the session reports it (`permission_mode.changed`). The
+  // select shows the reported mode only: a choice is sent, and the select follows the event
+  // that comes back, so a refused choice falls back to the mode Claude Code runs in.
+  let permissionMode = null;
+  function renderPermission(mode, client) {
+    permissionMode = mode || null;
+    const select = el("permission-mode");
+    for (const option of [...select.options]) {
+      if (option.dataset.reported) option.remove();
+    }
+    if (mode && ![...select.options].some((option) => option.value === mode)) {
+      // A mode calu does not offer (plan mode, entered by a tool call) is shown, not offered.
+      const option = new Option(mode, mode);
+      option.dataset.reported = "1";
+      option.disabled = true;
+      select.add(option);
+    }
+    select.value = mode || "";
+    el("permission-note").textContent = !mode ? "not reported yet"
+      : client ? `switched by ${visible(client)}` : "";
+    select.disabled = !attached || ENDED.includes(sessionState) || !mode;
+  }
+  el("permission-mode").onchange = () => {
+    const wanted = el("permission-mode").value;
+    el("permission-mode").value = permissionMode || "";
+    if (wanted && wanted !== permissionMode) send("permission_mode.set", { mode: wanted });
+  };
 
   // What the session knows about the usage: the context window and the account's limits.
   let limits = [];
@@ -879,6 +908,7 @@
         renderAgents();
         break;
       case "auto_escalate.changed": renderSupervision(params.settings); break;
+      case "permission_mode.changed": renderPermission(params.mode, params.client); break;
       case "usage.update": limits = params.rate_limits || []; renderUsage(); break;
       case "turn.result": {
         // Background tasks still running: Claude Code continues by itself when they end (D158).
@@ -954,6 +984,7 @@
       onState(data.snapshot.state);
       renderHonesty(data.snapshot.honesty);
       renderSupervision(data.snapshot.auto_escalate);
+      renderPermission(data.snapshot.permission_mode, null);
       limits = data.snapshot.rate_limits || [];
       renderUsage();
       countEscalations();

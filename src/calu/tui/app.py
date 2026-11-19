@@ -54,8 +54,8 @@ from textual.geometry import Size
 from textual.widgets import Static
 
 from calu import asuser, herd
-from calu.acp.modes import LADDER
-from calu.protocol.messages import ENDED_WITH_SESSION
+from calu.acp.modes import LADDER, PERMISSION_NAMES
+from calu.protocol.messages import ENDED_WITH_SESSION, SWITCHABLE_PERMISSION_MODES
 from calu.session_requests import SessionRequest
 from calu.tui import completion, gittool, render, settings
 from calu.tui.actions import Actions, Outcome
@@ -69,7 +69,14 @@ from calu.tui.adminaccess import (
     weakens,
 )
 from calu.tui.capabilities import CAPABILITIES, Capabilities
-from calu.tui.commands import COMMANDS, CaluCommands, Command, by_slash, completions
+from calu.tui.commands import (
+    COMMANDS,
+    CaluCommands,
+    Command,
+    argument_completions,
+    by_slash,
+    completions,
+)
 from calu.tui.connection import Connector, Link
 from calu.tui.difftools import unified_text
 from calu.tui.export import transcript_markdown
@@ -2396,6 +2403,12 @@ class CaluApp(App[None]):
             if found:
                 self.composer.set_text(found[0] + " ")
             return
+        arguments = argument_completions(text)
+        if text.startswith("/") and arguments:
+            word = text.partition(" ")[0]
+            grown = arguments[0] if len(arguments) == 1 else completion.common_prefix(arguments)
+            self.composer.set_text(f"{word} {grown}")
+            return
         paths = self._path_completions()
         if paths is not None:
             (row, start, column), found = paths
@@ -3648,6 +3661,32 @@ class CaluApp(App[None]):
             return
         self._request(self.actions.set_level(mode.id), f"supervision level: {mode.name}")
 
+    def _cmd_mode(self, rest: str) -> None:
+        """Switch Claude Code's permission mode, or list the modes (`/mode [mode]`).
+
+        Args:
+            rest: A mode, or the start of one; empty opens the list.
+        """
+        if not rest:
+            current = self.model.permission_mode
+            entries = [
+                (
+                    mode + (" (now)" if mode == current else ""),
+                    partial(self.run_command, "mode", mode),
+                    PERMISSION_NAMES[mode][1],
+                )
+                for mode in SWITCHABLE_PERMISSION_MODES
+            ]
+            self.search_commands(entries, placeholder="permission mode…")
+            return
+        found = argument_completions(f"/mode {rest.strip()}")
+        exact = [mode for mode in found if mode.lower() == rest.strip().lower()]
+        chosen = exact or found
+        if len(chosen) != 1:
+            # An unknown mode goes to the session, which says why it refuses it.
+            chosen = [rest.strip()]
+        self._request(self.actions.set_permission_mode(chosen[0]), "")
+
     def _page(
         self,
         title: str,
@@ -3750,6 +3789,7 @@ class CaluApp(App[None]):
             ("directory", model.workspace),
             ("model / effort", f"{model.model_name or 'default'} / {model.effort or 'default'}"),
             ("supervision level", model.level()),
+            ("permission mode", model.permission_mode or "not known yet"),
             ("Claude session", model.claude_session_id or "none yet"),
             ("calu session", model.calu_session_id or "none yet"),
             ("open decisions", str(len(model.decisions))),

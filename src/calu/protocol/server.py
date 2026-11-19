@@ -89,6 +89,7 @@ from calu.protocol.messages import (
     HonestyTrustParams,
     InitializeParams,
     ModelSetParams,
+    PermissionModeSetParams,
     SessionHistoryParams,
     SessionListParams,
     SessionListResult,
@@ -1358,6 +1359,10 @@ class Client:
             case "model.set":
                 assert isinstance(params, ModelSetParams)
                 await session.set_model(params.model, client=self.name or "unknown")
+                return {}
+            case "permission_mode.set":
+                assert isinstance(params, PermissionModeSetParams)
+                await session.set_permission_mode(params.mode, client=self.name or "unknown")
                 return {}
             case "shutdown":
                 return {}

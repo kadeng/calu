@@ -1214,7 +1214,8 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
     """Render the status bar.
 
     Cells that do not fit are left out from the least important one: connection, usage
-    limits, context fill, cost, supervision level, model. The state and the number of open
+    limits, context fill, cost, supervision level and permission mode, model. The state and
+    the number of open
     decisions always stay.
 
     Args:
@@ -1257,6 +1258,9 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
         (5, Text(f"{model.model_name or 'default'} / {model.effort or 'default'}", palette.fg))
     )
     cells.append((4, Text(model.level(), palette.muted)))
+    if model.permission_mode:
+        style = palette.muted if model.permission_mode == "auto" else palette.orange
+        cells.append((4, Text(f"mode {model.permission_mode}", style)))
     if model.usage.cost is not None:
         turns = model.usage.turns
         cells.append(

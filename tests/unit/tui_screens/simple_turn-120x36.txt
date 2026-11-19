@@ -1,4 +1,4 @@
- calu  myproject   idle   opus / high   Checkers decide   $0.84 · 1 turn   ctx 21%   attached
+ calu  myproject   idle   opus / high   Checkers decide   mode auto   $0.84 · 1 turn   ctx 21%   attached
   main
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (0)
                                                                                     ▏

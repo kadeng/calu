@@ -495,6 +495,41 @@ async def test_setting_the_auto_escalation_categories_tells_every_client(tmp_pat
                 assert snapshot["auto_escalate"] == announced["settings"]
 
 
+async def test_switching_the_permission_mode_tells_every_client(tmp_path: Path):
+    """`permission_mode.set` from one client reaches the others and the snapshot (D247).
+
+    A refused mode is a request error with the reason, and an unknown one is invalid params.
+    """
+    async with served(tmp_path) as run:
+        setter_events, watcher_events = Events(), Events()
+        async with client(run, setter_events, "setter") as setter:
+            async with client(run, watcher_events, "watcher") as watcher:
+                await setter.request("session.start", {})
+                assert (await watcher.request("state.get"))["permission_mode"] == "auto"
+                await setter.request("permission_mode.set", {"mode": "default"})
+                with anyio.fail_after(5):
+                    while not [
+                        e
+                        for e in watcher_events.of("permission_mode.changed")
+                        if e["mode"] == "default"
+                    ]:
+                        await anyio.sleep(0.01)
+                (announced,) = [
+                    e
+                    for e in watcher_events.of("permission_mode.changed")
+                    if e["mode"] == "default"
+                ]
+                assert announced["client"] == "setter"
+                assert (await watcher.request("state.get"))["permission_mode"] == "default"
+                assert run.store.setting_changes[-1][0] == "permission_mode"
+                with pytest.raises(RequestFailed) as refused:
+                    await watcher.request("permission_mode.set", {"mode": "plan"})
+                assert refused.value.code == -32000 and "plan" in str(refused.value)
+                with pytest.raises(RequestFailed) as invalid:
+                    await watcher.request("permission_mode.set", {"mode": "yolo"})
+                assert invalid.value.code == -32602
+
+
 async def test_the_history_holds_the_turn_that_just_ended(tmp_path: Path):
     """A client reading the history right after `turn.result` sees that turn.
 
@@ -1050,6 +1085,7 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
         "interrupt",
         "side.ask",
         "model.set",
+        "permission_mode.set",
         "shutdown",
     }, "a new request is checked against the token unless it is listed as read-only: decide"
 

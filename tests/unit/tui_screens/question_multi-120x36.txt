@@ -1,4 +1,4 @@
- calu  myproject   ● ESCALATED 0:00   1 needs you   opus / high   Checkers decide   ctx 21%   attached
+ calu  myproject   ● ESCALATED 0:00   1 needs you   opus / high   Checkers decide   mode auto   ctx 21%   attached
   main 1!
 ▌ you  Add tests for the gate.                                                      ▏ NEEDS YOU (1)
                                                                                     ▏ >#e1 main Question          0:00

@@ -166,6 +166,41 @@ async def test_an_escalation_is_answered_from_the_browser(db_url: str, tmp_path:
                 await conn.close()
 
 
+async def test_a_permission_mode_switched_from_the_browser_is_in_the_audit_log(
+    db_url: str, tmp_path: Path
+) -> None:
+    """`permission_mode.set` through the relay reaches Claude Code and the database (D247)."""
+    from calu import herd
+
+    async with running(db_url, tmp_path, []) as (base, session_id, session):
+        url = base.replace("http://", "ws://") + f"/ws/sessions/{session_id}"
+        async with ws_connect(url) as socket:
+            first = json.loads(await socket.recv())
+            assert first["snapshot"]["permission_mode"] == "auto"
+            await socket.send(
+                json.dumps({"method": "permission_mode.set", "params": {"mode": "acceptEdits"}})
+            )
+            seen = await read_until(socket, "permission_mode.changed")
+            if seen[-1]["params"]["mode"] == "auto":  # the start's report, replayed
+                seen = await read_until(socket, "permission_mode.changed")
+            assert seen[-1]["params"]["mode"] == "acceptEdits"
+            assert session.permission_mode == "acceptEdits"
+            await socket.send(
+                json.dumps({"method": "permission_mode.set", "params": {"mode": "dontAsk"}})
+            )
+            refused = await read_until(socket, "refused")
+            assert "dontAsk" in refused[-1]["message"]
+        conn = await connect(db_url)
+        try:
+            changes = await herd.setting_changes(Db(conn), session_id)
+        finally:
+            await conn.close()
+        (change,) = changes
+        assert change.setting == "permission_mode"
+        assert change.changed() == ["mode: 'auto' -> 'acceptEdits'"]
+        assert change.actor  # the relay's client name
+
+
 async def test_a_session_without_an_address_says_so(db_url: str, tmp_path: Path) -> None:
     conn = await connect(db_url)
     try:

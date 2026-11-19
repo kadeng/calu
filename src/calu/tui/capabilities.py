@@ -139,7 +139,12 @@ def capabilities(snapshot: dict[str, Any]) -> Capabilities:
         snapshot: The snapshot as the session returned it.
 
     Returns:
-        `GROWN_WITH_RATE_LIMITS` if the snapshot has the field `rate_limits`, else none. The
+        `GROWN_WITH_RATE_LIMITS` if the snapshot has the field `rate_limits`, and
+        "permission_mode" if it has the field `permission_mode` (which came with the request
+        `permission_mode.set`, agent/records/PLAN.md D247), even while its value is null. The
         other capabilities need protocol additions that do not exist yet and stay off.
     """
-    return Capabilities(GROWN_WITH_RATE_LIMITS if "rate_limits" in snapshot else frozenset())
+    found = set(GROWN_WITH_RATE_LIMITS if "rate_limits" in snapshot else ())
+    if "permission_mode" in snapshot:
+        found.add("permission_mode")
+    return Capabilities(frozenset(found))

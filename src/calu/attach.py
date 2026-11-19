@@ -18,6 +18,8 @@ Commands typed instead of a message:
     /stop                 stop the Claude session (`session.stop`)
     /start [resume id]    start a Claude session (`session.start`)
     /interrupt            end Claude's current turn
+    /mode [MODE]          Claude Code's permission mode: show it, or switch to default,
+                          acceptEdits or auto (`permission_mode.set`)
     /why <id>             what the checker saw and said when it escalated this step
     /checkers             the checker definitions this session uses (name, model, version)
     /allow <id> [note]    resolve an escalation (`escalation.decide`)
@@ -69,6 +71,7 @@ from calu.protocol.messages import (
     CLOSE_SERVER_TOKEN_REVOKED,
     ENDED_WITH_SESSION,
     EVENTS,
+    SWITCHABLE_PERMISSION_MODES,
     EscalationRequest,
     Event,
     HonestyInfo,
@@ -81,7 +84,7 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 """Event class per method, to turn the received params back into an event for rendering."""
 
 HELP = (
-    "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /why <id>  "
+    "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /mode [mode]  /why <id>  "
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
     "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
     "/checkers  /sessions  /history [id]  /honesty  /trust [commit-or-branch]  "
@@ -175,12 +178,16 @@ def describe_state(snapshot: dict[str, Any]) -> str:
         snapshot: The snapshot as the session returned it.
 
     Returns:
-        State, workspace, model and the number of open escalations.
+        State, workspace, model, Claude Code's permission mode (when known) and the number of
+        open escalations.
     """
     waiting = len(snapshot.get("escalations") or ())
+    mode = snapshot.get("permission_mode")
     return (
         f"[state] {snapshot.get('state')} · {snapshot.get('workspace')} · "
-        f"model {snapshot.get('model')}" + (f" · {waiting} escalation(s) open" if waiting else "")
+        f"model {snapshot.get('model')}"
+        + (f" · permission mode {mode}" if mode else "")
+        + (f" · {waiting} escalation(s) open" if waiting else "")
     )
 
 
@@ -319,6 +326,18 @@ class Console:
                     self.current = row
             case "/interrupt":
                 await self.client.request("interrupt")
+            case "/mode":
+                if not rest:
+                    snapshot = await self.client.request("state.get")
+                    say(
+                        f"[mode] Claude Code's permission mode: "
+                        f"{snapshot.get('permission_mode') or 'not known yet'}; "
+                        f"/mode {' | '.join(SWITCHABLE_PERMISSION_MODES)} switches it",
+                        flush=True,
+                    )
+                    return
+                # The session answers with `permission_mode.changed`, which is printed.
+                await self.client.request("permission_mode.set", {"mode": rest})
             case "/inject":
                 if not rest:
                     say("[error] /inject needs a text", flush=True)

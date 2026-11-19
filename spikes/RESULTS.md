@@ -1161,3 +1161,34 @@ refusal applies only with the sandbox on, and calu's own start-up checks do not 
 (`tests/unit/test_preflight.py`, `test_without_the_sandbox_nothing_of_calu_or_claude_code_asks_for_bubblewrap`).
 
 **Re-run when** the CLI is updated (two Haiku calls).
+
+## Switching the permission mode of a running session (2026-11-19, CLI 2.1.319, SDK 0.2.179, D247)
+
+**Why it matters.** Every client of calu gets Claude Code's Shift+Tab (`permission_mode.set`).
+What the switch may offer depends on how a running Claude Code takes a mode, and on whether
+calu's escalations keep working in it.
+
+**Setup** (`spikes/spike_permission_mode_switch.py`, haiku). A throwaway directory,
+`setting_sources=[]`, a PreToolUse hook that records the hook input's `permission_mode` and
+answers "ask" for files named `ask*`, else "allow", and a `can_use_tool` that records and denies.
+
+**Observations.**
+
+- `set_permission_mode` accepts default, acceptEdits, plan, auto and dontAsk on a running
+  session. bypassPermissions is refused: "Cannot set permission mode to bypassPermissions
+  because the session was not launched with --dangerously-skip-permissions". An unknown name is
+  refused with the list of the six modes.
+- After every change Claude Code sends a system message with subtype `status` and the new
+  `permissionMode`; each turn's `init` message carries the mode as well.
+- A change while a tool call waits in the PreToolUse hook is answered at once. The next tool
+  call of the same turn reports the new mode in its hook input (b1.txt in "default", b2.txt in
+  "acceptEdits").
+- In acceptEdits a hook "ask" on a Write still reaches `can_use_tool`, and the denied file was
+  not written: an escalation keeps waiting for the human in that mode.
+- In plan mode (first run only, removed from the spike since) Claude Code wrote its plan with
+  the Write tool to a file under `~/.claude/plans` of the real home directory and asked no
+  permission for it; the hook saw the call.
+
+**Conclusion.** calu offers default, acceptEdits and auto; plan, dontAsk and bypassPermissions
+are refused with a reason each (`REFUSED_PERMISSION_MODES`, D247). The runner reports the mode
+from the status message, so a client shows what Claude Code really runs in.

@@ -333,3 +333,25 @@ async def test_an_image_is_attached_to_a_message_and_shown_with_it(
         # A click enlarges it in place.
         await page.click("#stream .thumb img")
         assert await page.locator("#stream .thumb img.large").count() == 1
+
+
+async def test_the_live_view_switches_claude_codes_permission_mode(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """The select shows the reported mode, sends a choice and follows a change elsewhere (D247)."""
+    async with running(db_url, tmp_path, []) as (base, session_id, session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await page.wait_for_function("document.getElementById('permission-mode').value === 'auto'")
+        assert not await page.is_disabled("#permission-mode")
+        await page.select_option("#permission-mode", "default")
+        await page.wait_for_function(
+            "document.getElementById('permission-mode').value === 'default'"
+        )
+        assert session.permission_mode == "default"
+        # Another client switches it: the page follows the event.
+        await session.set_permission_mode("acceptEdits", client="tui on the laptop")
+        await page.wait_for_function(
+            "document.getElementById('permission-mode').value === 'acceptEdits'"
+        )
+        assert "tui on the laptop" in await page.inner_text("#permission-note")

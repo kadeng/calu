@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 from calu.checkers.model import Decision
 from calu.checkers.policy import Route
 from calu.comments.model import Comment
-from calu.config import AutoEscalate
+from calu.config import AutoEscalate, PermissionMode
 from calu.context.turns import TurnRecord
 
 __all__ = ["AutoEscalate"]  # defined in `calu.config`, which Config embeds it in; re-exported
@@ -337,6 +337,50 @@ class ModelSetParams(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=100)
 
 
+class PermissionModeSetParams(BaseModel):
+    """`permission_mode.set`: switch Claude Code's permission mode while the session runs.
+
+    Claude Code's own Shift+Tab, for every client (agent/records/PLAN.md D247). calu offers
+    `SWITCHABLE_PERMISSION_MODES`; the other modes Claude Code knows are refused with the
+    reason in `REFUSED_PERMISSION_MODES`, and with `claude.require_auto_mode` every mode but
+    "auto" is refused. The change applies between turns and inside a running turn, from the
+    next tool call on: a call whose check has started keeps the mode its hook reported. It is
+    recorded in the session's audit log (`calu sessions <id>`), reaches every client as
+    `permission_mode.changed`, and is kept for later starts of this calu process (as
+    `model.set` is), not written to the project's settings. A mode the session already runs
+    in changes nothing and is not recorded. Result: `{}`.
+    """
+
+    mode: PermissionMode
+
+
+SWITCHABLE_PERMISSION_MODES: tuple[str, ...] = ("default", "acceptEdits", "auto")
+"""The modes `permission_mode.set` accepts, in the order of Claude Code's Shift+Tab cycle.
+
+Under calu the checkers decide every tool call in all three: "auto" adds auto mode's
+classifier as a second approval of what the checkers pass; in "default" and "acceptEdits" the
+checkers decide alone (a hook "ask" still reaches the human in "acceptEdits", measured in
+`spikes/spike_permission_mode_switch.py`)."""
+
+REFUSED_PERMISSION_MODES: dict[str, str] = {
+    "plan": (
+        "calu does not offer plan mode: in plan mode Claude Code writes its plan to a file "
+        "under ~/.claude/plans, outside the project, and leaving plan mode is a request for "
+        "approval that calu does not present as a decision yet"
+    ),
+    "dontAsk": (
+        "in dontAsk mode Claude Code denies every call that would need a permission prompt, "
+        "so an escalation would become a denial without anybody being asked"
+    ),
+    "bypassPermissions": (
+        "Claude Code accepts bypassPermissions only in a session started with "
+        "--dangerously-skip-permissions, which calu never does; it would also switch off "
+        "Claude Code's own approval of what the checkers pass"
+    ),
+}
+"""Claude Code's other modes, with the reason `permission_mode.set` gives for refusing each."""
+
+
 class RateLimit(BaseModel):
     """The state of one usage limit of the Claude Code account, as Claude Code reports it."""
 
@@ -639,6 +683,10 @@ class SessionSnapshot(BaseModel):
     escalations: list[EscalationRequest] = Field(default_factory=list)
     queue: list[QueuedMessage] = Field(default_factory=list)
     auto_escalate: AutoEscalate = Field(default_factory=lambda: AutoEscalate())
+    permission_mode: str | None = None
+    """Claude Code's permission mode as it last reported it (`permission_mode.changed`); before
+    its first report the mode calu started it in; None while that is not known (no session
+    runs, or a settings file chose the mode and Claude Code has not reported it yet)."""
     honesty_mode: str = "off"
     """`honesty.mode`: `off`, `track` or `enforce`. The same value as `honesty.mode`."""
     honesty_marks: list[HonestyMarkInfo] = Field(default_factory=list)
@@ -687,6 +735,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "side.ask": SideAskParams,
     "usage.get": EmptyParams,
     "model.set": ModelSetParams,
+    "permission_mode.set": PermissionModeSetParams,
     "shutdown": EmptyParams,
 }
 """Request method -> model of its params. `shutdown` ends the calu process, so only a client
@@ -1163,6 +1212,25 @@ class AutoEscalateChanged(Event):
     settings: AutoEscalate
 
 
+class PermissionModeChanged(Event):
+    """Claude Code's permission mode changed, as Claude Code reports it.
+
+    Sent when a client switched the mode (`permission_mode.set`) and when Claude Code reports
+    another mode by itself: at the start of a run, when a tool call changed it, or when it fell
+    back from "auto" for a model without auto mode. Every attached client gets it, so a client
+    that shows the mode learns of a change made elsewhere. The event is not stored in the
+    history; a change a client asked for is in the audit log.
+    """
+
+    method: ClassVar[str] = "permission_mode.changed"
+    mode: str
+    """The mode: "default", "acceptEdits", "auto", or another mode Claude Code reports
+    ("plan" after a tool call entered it)."""
+    client: str | None = None
+    """The client that asked for the change; None when Claude Code changed it by itself or
+    reported it at a start."""
+
+
 class UsageUpdate(Event):
     """Claude Code reported the state of a usage limit of its account (the whole known list).
 
@@ -1193,6 +1261,7 @@ EVENTS: list[type[Event]] = [
     StepHeld,
     EditDiff,
     AutoEscalateChanged,
+    PermissionModeChanged,
     HonestyUpdate,
     UsageUpdate,
     Log,

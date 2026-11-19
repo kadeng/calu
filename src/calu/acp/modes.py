@@ -23,12 +23,18 @@ The two APIs fit calu's three switches differently:
 
 So a client that supports boolean options gets the three switches themselves, and one that does
 not gets the ladder.
+
+Claude Code's own permission mode (default, acceptEdits, auto; agent/records/PLAN.md D247) is a
+second, independent setting. The session modes are taken by the ladder, so it is offered only
+as a select config option (`PERMISSION_OPTION_ID`), once the session has reported a mode; a
+client that knows session modes alone cannot switch it.
 """
 
 from dataclasses import dataclass
 from typing import Any
 
 from calu.config import AutoEscalate
+from calu.protocol.messages import SWITCHABLE_PERMISSION_MODES
 
 MODE_CATEGORY = "mode"
 """The `category` of the select option that mirrors the mode list (a UX hint in ACP)."""
@@ -108,6 +114,63 @@ CUSTOM_MODE = Mode(
     AutoEscalate(),
 )
 """Shown only while it is the current mode; `settings_for` refuses it as a target."""
+
+
+PERMISSION_OPTION_ID = "claude_permission_mode"
+"""`id` of the select option for Claude Code's permission mode."""
+
+PERMISSION_CATEGORY = "_claude_permission_mode"
+"""Its `category`: a custom one (ACP's own categories start without "_"), so that a client
+does not take it for the mode picker."""
+
+PERMISSION_NAMES: dict[str, tuple[str, str]] = {
+    "default": ("Default", "The checkers decide every tool call alone."),
+    "acceptEdits": (
+        "Accept edits",
+        "Claude Code accepts file edits on its own; under calu the checkers still decide each.",
+    ),
+    "auto": (
+        "Auto",
+        "A step runs only if the checkers and auto mode's classifier both approve it.",
+    ),
+}
+"""Mode -> (name, description) the client shows for Claude Code's permission modes."""
+
+
+def permission_option(mode: str | None) -> dict[str, Any] | None:
+    """Build the select option for Claude Code's permission mode.
+
+    Args:
+        mode: The mode the session reports; None while it is not known.
+
+    Returns:
+        The option, or None while the mode is not known. A reported mode calu does not offer
+        (plan mode, entered by a tool call) is listed as well, because ACP requires the
+        current value to be one of the options; choosing it is refused by the session.
+    """
+    if mode is None:
+        return None
+    values = list(SWITCHABLE_PERMISSION_MODES)
+    if mode not in values:
+        values.append(mode)
+    return {
+        "id": PERMISSION_OPTION_ID,
+        "name": "Claude Code's permission mode",
+        "description": "Claude Code's own Shift+Tab: default, accept edits or auto mode.",
+        "category": PERMISSION_CATEGORY,
+        "type": "select",
+        "currentValue": mode,
+        "options": [
+            {
+                "value": value,
+                "name": PERMISSION_NAMES.get(value, (value, ""))[0],
+                "description": PERMISSION_NAMES.get(
+                    value, ("", "Reported by Claude Code; calu does not offer it.")
+                )[1],
+            }
+            for value in values
+        ],
+    }
 
 
 def mode_of(auto: AutoEscalate) -> str:
@@ -192,18 +255,23 @@ def mode_update(auto: AutoEscalate) -> dict[str, Any]:
     return {"sessionUpdate": "current_mode_update", "currentModeId": mode_of(auto)}
 
 
-def config_options(auto: AutoEscalate, booleans: bool) -> list[dict[str, Any]]:
+def config_options(
+    auto: AutoEscalate, booleans: bool, permission_mode: str | None = None
+) -> list[dict[str, Any]]:
     """Build the `configOptions` list for a client.
 
     Args:
         auto: The auto-escalation categories of the session.
         booleans: Whether the client advertised `session.configOptions.boolean`. An agent must
             not send boolean options to a client that did not, so with False the list holds only
-            the select option, which every client understands.
+            the select options, which every client understands.
+        permission_mode: Claude Code's permission mode as the session reports it; None leaves
+            its option out.
 
     Returns:
         The select option that mirrors the mode list first (clients should respect the order),
-        then one boolean option per switch if they are allowed.
+        then one boolean option per switch if they are allowed, then the permission mode's
+        option (`permission_option`) when the mode is known.
     """
     state = mode_state(auto)
     options: list[dict[str, Any]] = [
@@ -233,10 +301,15 @@ def config_options(auto: AutoEscalate, booleans: bool) -> list[dict[str, Any]]:
                     "currentValue": getattr(auto, field),
                 }
             )
+    permission = permission_option(permission_mode)
+    if permission is not None:
+        options.append(permission)
     return options
 
 
-def config_update(auto: AutoEscalate, booleans: bool) -> dict[str, Any]:
+def config_update(
+    auto: AutoEscalate, booleans: bool, permission_mode: str | None = None
+) -> dict[str, Any]:
     """Build a `config_option_update` notification body.
 
     ACP wants the complete list of options in an update, not only what changed, so this is
@@ -245,13 +318,14 @@ def config_update(auto: AutoEscalate, booleans: bool) -> dict[str, Any]:
     Args:
         auto: The auto-escalation categories the session now uses.
         booleans: Whether the client may receive boolean options (see `config_options`).
+        permission_mode: Claude Code's permission mode (see `config_options`).
 
     Returns:
         The `update` object of a `session/update` notification.
     """
     return {
         "sessionUpdate": "config_option_update",
-        "configOptions": config_options(auto, booleans),
+        "configOptions": config_options(auto, booleans, permission_mode),
     }
 
 

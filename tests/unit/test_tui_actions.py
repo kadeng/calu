@@ -493,3 +493,33 @@ async def test_a_reload_shows_the_stored_history_of_the_conversation_that_runs_n
                 await anyio.sleep(0.01)
         assert len(model.blocks) == 10 and any(change.rebuilt for change in changes)
         assert model.state == "idle", "the snapshot follows the reload"
+
+
+async def test_the_permission_mode_is_switched_and_a_change_elsewhere_is_noticed() -> None:
+    """`permission_mode.set`, a refusal with the reason, and the event of another client."""
+    from calu.tui.commands import argument_completions
+
+    session = waiting_session()
+    notices: list[str] = []
+
+    def notify(change: Change) -> None:
+        notices.extend(notice.text for notice in change.notices)
+
+    async with attached(session, notify) as (actions, model, _):
+        assert model.permission_mode == "auto", "from the snapshot"
+        outcome = await actions.set_permission_mode("default")
+        assert outcome.ok and session.sent("permission_mode.set") == [{"mode": "default"}]
+        with anyio.fail_after(5):
+            while model.permission_mode != "default":
+                await anyio.sleep(0.01)
+        assert not [n for n in notices if "permission mode" in n], "its own change is not news"
+        refused = await actions.set_permission_mode("bypassPermissions")
+        assert not refused.ok and "dangerously-skip-permissions" in refused.message
+        await session.emit("permission_mode.changed", {"mode": "auto", "client": "vscode"})
+        with anyio.fail_after(5):
+            while model.permission_mode != "auto":
+                await anyio.sleep(0.01)
+        assert any("changed by vscode: auto" in n for n in notices)
+    assert argument_completions("/mode a") == ["acceptEdits", "auto"]
+    assert argument_completions("/mode ") == ["default", "acceptEdits", "auto"]
+    assert argument_completions("/level a") == []

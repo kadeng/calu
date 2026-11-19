@@ -71,7 +71,11 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from calu import __version__, admin, asuser, herd, localsocket, servers, session_requests
 from calu.db import Db
 from calu.protocol.client import RequestFailed, connect
-from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED, RELAY_SESSION_PATH
+from calu.protocol.messages import (
+    CLOSE_SERVER_TOKEN_REVOKED,
+    RELAY_SESSION_PATH,
+    SWITCHABLE_PERMISSION_MODES,
+)
 from calu.setup import ADMIN_ROLE
 from calu.web import git
 from calu.web import settings as web_settings
@@ -169,6 +173,7 @@ LIVE_METHODS = frozenset(
         "session.history",
         "session.list",
         "auto_escalate.set",
+        "permission_mode.set",
         "honesty.clear",
         "honesty.trust",
         "honesty.review",
@@ -1481,6 +1486,7 @@ async def live_page(request: Request, state: _State) -> Response:
             "socket": request.url_for("live_ws", session_id=session_id),
             "efforts": EFFORTS,
             "models": MODELS,
+            "permission_modes": SWITCHABLE_PERMISSION_MODES,
         },
     )
 

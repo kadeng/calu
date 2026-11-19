@@ -69,6 +69,7 @@ HANDLED: frozenset[str] = frozenset(
         "step.held",
         "edit.diff",
         "auto_escalate.changed",
+        "permission_mode.changed",
         "honesty.update",
         "usage.update",
         "log",
@@ -951,6 +952,11 @@ class SessionModel:
         self.claude_session_id: str | None = None
         self.calu_session_id: str | None = None
         self.auto_escalate = AutoEscalate()
+        self.permission_mode: str | None = None
+        """Claude Code's permission mode as the session reports it; None while unknown."""
+        self.own_mode_change = False
+        """Set by the client before it sends `permission_mode.set`, so that the event which
+        follows is not reported as a change made elsewhere."""
         self.honesty_mode = "off"
         self.marks: list[Mark] = []
         self.honesty = Honesty()
@@ -1278,6 +1284,7 @@ class SessionModel:
         self.claude_session_id = snapshot.claude_session_id
         self.calu_session_id = snapshot.calu_session_id
         self.auto_escalate = AutoEscalate.model_validate(snapshot.auto_escalate.model_dump())
+        self.permission_mode = snapshot.permission_mode
         self._set_agents(snapshot.agents)
         self.queue = [Queued(q.id, q.text, q.delivery, q.to) for q in snapshot.queue]
         self.honesty_mode = snapshot.honesty_mode
@@ -1504,6 +1511,16 @@ class SessionModel:
                 if time is not None and not self.own_level_change:
                     change.notices.append(Notice(f"supervision level changed: {self.level()}"))
                 self.own_level_change = False
+            case m.PermissionModeChanged():
+                self.permission_mode = event.mode
+                change.status = True
+                if time is not None and not self.own_mode_change:
+                    by = f" by {event.client}" if event.client else ""
+                    change.notices.append(
+                        Notice(f"Claude Code's permission mode changed{by}: {event.mode}")
+                    )
+                if event.client is not None:
+                    self.own_mode_change = False
             case m.Log():
                 self._log(event.level, event.message)
                 if time is not None and event.level in {"warning", "error"}:

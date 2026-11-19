@@ -754,6 +754,28 @@ async def test_slash_commands_do_what_the_line_client_does() -> None:
         assert run.session.sent("shutdown") == [{}]
 
 
+async def test_mode_switches_claude_codes_permission_mode_with_completion() -> None:
+    """`/mode` completes its argument, the status bar shows the reported mode (D247)."""
+    async with running("escalation", size=(120, 36)) as run:
+        assert "mode auto" in run.line("status")
+        await run.type("/mode ac")
+        await run.press("tab")
+        assert run.composer == "/mode acceptEdits"
+        await run.press("enter")
+        await run.pilot.pause()
+        assert run.session.sent("permission_mode.set") == [{"mode": "acceptEdits"}]
+        assert "mode acceptEdits" in run.line("status")
+        await run.type("/mode plan")
+        await run.press("enter")
+        await run.pilot.pause()
+        assert "plan" in run.line("composer-head") and "refused" in run.line("composer-head")
+        assert run.app.model.permission_mode == "acceptEdits"
+        # Another client switches it: the status bar follows the event.
+        await run.session.emit("permission_mode.changed", {"mode": "default", "client": "web"})
+        await run.pilot.pause()
+        assert "mode default" in run.line("status")
+
+
 async def test_pages_show_usage_help_and_the_checkers_context() -> None:
     async with running("simple_turn") as run:
         assert "ctx 21%" in run.line("status"), "asked once after attaching"

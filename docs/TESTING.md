@@ -324,6 +324,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_fs_identity.py` | Is the file-system identity of a root process per thread, and inherited by new threads? (yes; D211 rests on it) | a kernel or C library that behaves differently is suspected |
 | `acp_host.py` | Does `calu acp` hold a whole conversation with the official ACP client library, which checks the adapter's messages against the protocol's schema? (D221) | after changes to `calu.acp`, or a new version of the protocol |
 | `spike_chat_image.py` | Does Claude Code take an image in a chat message, and how is the message replayed? (D220) | the CLI or the SDK changes |
+| `spike_permission_mode_switch.py` | Which modes does a running Claude Code take through `set_permission_mode`, how is the change reported, does it apply inside a turn, and does a hook "ask" still reach `can_use_tool` in acceptEdits? (D247) | the CLI or the SDK changes, or calu offers another mode |
 | `smoke_serve.py` | `calu serve` with the real `claude`: two sessions at once in two directories, and a fork started through the server (D208) | after changes to `calu.serve` or to how a session is started |
 
 ```bash
@@ -812,6 +813,24 @@ escalation resolved from the database alone.
    names `calu traces finalize --staged` and `--no-verify`. `calu traces hook remove`. Not run
    yet; the unit tests cover it with stand-in models (`tests/unit/test_traces_finalize.py`,
    `tests/unit/test_traces_session.py`).
+43. Switching Claude Code's permission mode while a session runs (PLAN D247), with a real
+   `claude` and a model that has auto mode. Start a session; every client must show the mode
+   `auto`: VSCode and PyCharm the "mode" selector next to the supervision level, the web live
+   view "Claude Code's permission mode", the full-screen client `mode auto` in the status line,
+   the line client `/mode`. Ask for a long task with several commands, and while it runs choose
+   `default` in VSCode: within a second every other client shows `default` (the full-screen
+   client with "changed by ..."), the next command's check runs without auto mode's
+   classifier, and `calu sessions <id>` lists "permission_mode ... mode: 'auto' -> 'default'"
+   with the VSCode client's name. Switch to `acceptEdits` from PyCharm, then from the web view
+   back to `auto`; `/mode ac` + Tab in the full-screen client completes `acceptEdits`. Make a
+   step escalate in `acceptEdits` (`calu:escalate` with the fake checker, or a deny-list
+   command): it must wait for a decision. `/mode plan` and `/mode bypassPermissions` must be
+   refused with their reasons and change nothing. With `calu config set
+   claude.require_auto_mode true` and a new session, switching to `default` must be refused
+   naming the setting. Through the relay of `calu serve` (a server token) the switch must work
+   as well. Not run yet; the unit, database and browser tests cover it with the scripted
+   runner (`tests/unit/test_permission_mode.py`, `tests/db/test_web_live.py`,
+   `tests/browser/test_web_live_ui.py`, the vitest and Kotlin tests).
 
 ## Measuring the checkers
 

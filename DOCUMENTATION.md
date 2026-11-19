@@ -461,6 +461,37 @@ whenever the mode changes (a warning only when Claude Code did not take the auto
 asked for, as for a model without auto mode), and `calu doctor` names the mode a session would
 start in and where that comes from.
 
+**Switching the mode while a session runs.** Every client has Claude Code's own Shift+Tab: the
+VSCode extension and the PyCharm plugin a "mode" selector next to the supervision level, the
+web interface's live view a "Claude Code's permission mode" selector, the full-screen client
+`/mode` (Tab completes the mode, the status line shows `mode <name>`), the line client
+`/mode [mode]`, and an ACP editor the config option "Claude Code's permission mode". calu offers
+three modes:
+
+| Mode | A step the checkers pass |
+|---|---|
+| `auto` | runs only if auto mode's classifier approves it as well |
+| `default` | runs on the checkers' approval alone |
+| `acceptEdits` | as in `default`: the checkers decide every call, also every edit |
+
+An escalation waits for you in all three. The other modes are refused with the reason: `plan`
+(Claude Code then writes its plan to a file under `~/.claude/plans`, outside the project, and
+calu does not present leaving plan mode as a decision yet), `dontAsk` (an escalation would
+become a denial without anybody being asked) and `bypassPermissions` (Claude Code accepts it
+only in a session started with `--dangerously-skip-permissions`, which calu never does). With
+`claude.require_auto_mode` set, every mode but `auto` is refused.
+
+The switch works between turns and while a turn runs: it applies from Claude's next tool call
+on, and a call whose check has started keeps its mode. Each client shows the mode Claude Code
+reports, also after a change made in another client or by Claude Code itself (a tool call that
+enters plan mode is shown as `plan`; the selector leads out of it again). The change is written
+to the session's audit log with the client that asked for it (`calu sessions <id>` and the
+session's page in the web interface list it), and later starts in the same calu process (a
+resume, a fork, a new conversation) keep it; `claude.permission_mode` in the configuration is
+not changed. Through the relay of `calu serve` a client with a server token may switch the mode
+like any other client of the session; the relay checks the token again before the request, as
+before every request that changes the session.
+
 And it goes the other way too: calu speaks the agent side of the Agent Client Protocol
 (`calu acp`), so the same checked Claude Code session is usable from every ACP client —
 JetBrains Air, Zed, Neovim, Goose — each of which otherwise needs an adapter written for Claude
@@ -819,7 +850,8 @@ is written, the thinking, the tool results as they arrive. That is what attachin
 or `TERM=dumb` give the **line client** described at the end of this section. Detaching
 (`ctrl+d`) leaves the session running.
 
-**The screen.** A status line (state, model and effort, what waits for you, cost, context),
+**The screen.** A status line (state, model and effort, what waits for you, Claude Code's
+permission mode, cost, context),
 the transcript, a side panel (NEEDS YOU, AGENTS, QUEUE, HONESTY, SESSION; `f2` shows it on a
 narrow terminal) and the input, which is always usable. The footer shows the keys that matter
 in the present state; `f1` lists all of them, `ctrl+p` opens the command palette, and `/` in the
@@ -880,6 +912,8 @@ stands, beside the running work, and becomes no part of it.
 **The rest.**
 
 - `/model`, `/effort`: the model for the session; an effort applies at the next start.
+- `/mode [default | acceptEdits | auto]`: Claude Code's permission mode (Shift+Tab); without a
+  mode it lists them ([switching the mode](#calu-does-not-replace-claude-code)).
 - `/checkers`: read the checkers' instructions; `e` edits and `ctrl+s` saves, with the `admin`
   credential of this machine (a session cannot change what it is judged by).
 - `/honesty`: the code honesty state (mode, baseline, marked and unreviewed files), with
@@ -920,6 +954,7 @@ commands are one line of `/help`. The ones that matter while a step waits:
 /inject <text>    reaches Claude inside the running turn instead of queueing
 /to <agent> ...   the same, to one of its subagents
 /trust [commit]   /honesty-review   /clear-mark 3     code honesty
+/mode acceptEdits Claude Code's permission mode; /mode alone names the current one
 ```
 
 ## From another machine
@@ -1302,6 +1337,12 @@ interface, with `calu config set` — reaches every client of the session, so tw
 browser do not disagree about what the session is doing. Switching one *off* weakens the
 session, so every such change is written to the audit log with the name of whoever asked, and
 the session's page lists them.
+
+Claude Code's own permission mode is a second setting, independent of these switches. The
+session modes are taken by what waits for a human, so the adapter offers the permission mode as
+a select config option ("Claude Code's permission mode": default, accept edits, auto) once the
+session has reported a mode; an editor that knows only session modes cannot switch it
+([switching the mode](#calu-does-not-replace-claude-code)).
 
 The ACP adapter has not yet been driven by a real editor, only by its own end-to-end test.
 

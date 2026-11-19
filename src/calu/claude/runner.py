@@ -49,6 +49,10 @@ class ModelChangeFailed(Exception):
     """The model of the running session was not changed; the message says why."""
 
 
+class PermissionModeChangeFailed(Exception):
+    """Claude Code's permission mode was not changed; the message says why."""
+
+
 class StartRefused(Exception):
     """A runner did not start the session, because calu could not be sure it would be safe.
 
@@ -212,10 +216,23 @@ class ClaudeRunner(Protocol):
 
     `session_id` is Claude's session id once known. `agents` holds the subagents of the session
     by protocol agent id (the id of the Agent tool call that started them).
+    `permission_mode` is the main agent's permission mode as Claude Code last reported it, or,
+    before its first report, the mode the runner started it in; None while neither is known.
+    The runner reports every change of it as a `PermissionModeChanged` event (`client` None).
     """
 
     session_id: str | None
     agents: dict[str, AgentInfo]
+
+    @property
+    def permission_mode(self) -> str | None:
+        """The main agent's permission mode (see the class docstring); read-only here.
+
+        Returns:
+            The mode as last reported, or the mode of the start before a report; None while
+            neither is known.
+        """
+        ...
 
     async def run(
         self,
@@ -316,5 +333,21 @@ class ClaudeRunner(Protocol):
 
         Raises:
             ModelChangeFailed: If no session runs or Claude Code refused the change.
+        """
+        ...
+
+    async def set_permission_mode(self, mode: str) -> None:
+        """Switch Claude Code's permission mode; it applies from the next tool call on.
+
+        Works between turns and inside a running turn. Claude Code reports the new mode
+        afterwards, and the runner passes that report on as a `PermissionModeChanged` event;
+        this call does not wait for it.
+
+        Args:
+            mode: A permission mode Claude Code knows; which ones calu offers is the session's
+                decision (`calu.protocol.messages.SWITCHABLE_PERMISSION_MODES`).
+
+        Raises:
+            PermissionModeChangeFailed: If no session runs or Claude Code refused the mode.
         """
         ...

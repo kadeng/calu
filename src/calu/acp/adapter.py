@@ -181,6 +181,8 @@ class Adapter:
         self.state: str = "starting"
         """Last state the calu session reported."""
         self.auto = AutoEscalate()
+        self.permission_mode: str | None = None
+        """Claude Code's permission mode as the session last reported it (D247)."""
         """Auto-escalation categories of the session, which ACP shows as its session mode."""
         self.boolean_options = False
         """Whether the client takes boolean config options (set by `initialize`)."""
@@ -654,6 +656,9 @@ class Adapter:
         found = snapshot.get("auto_escalate")
         if isinstance(found, dict):
             self.auto = AutoEscalate.model_validate(found)
+        mode = snapshot.get("permission_mode")
+        if isinstance(mode, str) and mode:
+            self.permission_mode = mode
 
     def _mode_fields(self) -> dict[str, Any]:
         """Build the mode fields of a `session/new` or `session/load` result.
@@ -666,8 +671,21 @@ class Adapter:
         """
         return {
             "modes": modes.mode_state(self.auto),
-            "configOptions": modes.config_options(self.auto, self.boolean_options),
+            "configOptions": self._options(),
         }
+
+    def _options(self, auto: AutoEscalate | None = None) -> list[dict[str, Any]]:
+        """Build the `configOptions` list for the editor.
+
+        Args:
+            auto: The categories to show; None uses the session's (`self.auto`).
+
+        Returns:
+            `modes.config_options` with this client's boolean support and the permission mode.
+        """
+        return modes.config_options(
+            auto if auto is not None else self.auto, self.boolean_options, self.permission_mode
+        )
 
     async def _apply_auto(self, auto: AutoEscalate) -> None:
         """Send new auto-escalation categories to the calu session.
@@ -724,6 +742,14 @@ class Adapter:
         """
         request = acp.SetConfigOptionParams.model_validate(params)
         self._require_session(request.session_id)
+        if request.config_id == modes.PERMISSION_OPTION_ID:
+            # Claude Code's own mode: the session refuses what calu does not offer, and its
+            # error reaches the editor as the error of this request.
+            if not isinstance(request.value, str):
+                raise RpcError(acp.INVALID_PARAMS, "the permission mode takes a mode name")
+            await self.calu.request("permission_mode.set", {"mode": request.value})
+            self.permission_mode = request.value
+            return {"configOptions": self._options()}
         try:
             auto = modes.with_option(self.auto, request.config_id, request.value)
         except ValueError as error:
@@ -732,7 +758,7 @@ class Adapter:
         # The session's `auto_escalate.changed` event may not have arrived yet, and the result
         # must already hold the new values, so answer from what was asked for.
         self.auto = auto
-        return {"configOptions": modes.config_options(auto, self.boolean_options)}
+        return {"configOptions": self._options(auto)}
 
     async def _on_auto_escalate(self, params: dict[str, Any]) -> None:
         """Mirror a change of the auto-escalation categories to the editor.
@@ -749,7 +775,23 @@ class Adapter:
             return
         self.auto = AutoEscalate.model_validate(found)
         await self._update(modes.mode_update(self.auto))
-        await self._update(modes.config_update(self.auto, self.boolean_options))
+        await self._update(
+            modes.config_update(self.auto, self.boolean_options, self.permission_mode)
+        )
+
+    async def _on_permission_mode(self, params: dict[str, Any]) -> None:
+        """Mirror a change of Claude Code's permission mode to the editor (D247).
+
+        Args:
+            params: The `permission_mode.changed` event.
+        """
+        mode = params.get("mode")
+        if not isinstance(mode, str) or not mode or mode == self.permission_mode:
+            return
+        self.permission_mode = mode
+        await self._update(
+            modes.config_update(self.auto, self.boolean_options, self.permission_mode)
+        )
 
     # ------------------------------------------------------------------ calu -> ACP
 
@@ -800,6 +842,8 @@ class Adapter:
                 await self._on_turn_result(params)
             case "auto_escalate.changed":
                 await self._on_auto_escalate(params)
+            case "permission_mode.changed":
+                await self._on_permission_mode(params)
             case "honesty.update":
                 await self._on_honesty(params)
             case "log":

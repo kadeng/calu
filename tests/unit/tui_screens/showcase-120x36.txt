@@ -1,4 +1,4 @@
- calu  myproject   ● ESCALATED 0:42   2 need you   opus / high   Checkers decide   ctx 21%   attached
+ calu  myproject   ● ESCALATED 0:42   2 need you   opus / high   Checkers decide   mode auto   ctx 21%   attached
   main 1!   explore bg *   tests 1! *   all                                                            alt+←/→ switches
 ▌ you  Rename the helper in gate.py and run the unit tests.                         ▏ NEEDS YOU (2)
                                                                                     ▏ >#e1 main Bash              0:42
