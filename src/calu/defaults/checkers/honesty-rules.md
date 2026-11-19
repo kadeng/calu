@@ -3,7 +3,9 @@
 A **unit** is anything that can be executed: a function, method, class, module, script,
 command, test, or a configuration that code acts on. A unit is **honest** when a reader can
 tell from its name and its documentation alone, without reading the body, what running it
-does. It is **dishonest** when it does something else than they say, does more, or does less.
+does. Code and documentation must agree with each other, and what the code does must not be
+surprising given its documentation. It is **dishonest** when it does something else than they
+say, does more, or does less.
 
 ## What is compared
 
@@ -35,9 +37,9 @@ does. It is **dishonest** when it does something else than they say, does more, 
 ## Not dishonest
 
 - Documentation that is short but true.
-- No documentation, when the name alone says what the unit does and it has no effect beyond
-  that (`add`, `is_empty`, `parse_date`). Missing documentation is dishonest only together
-  with rule 1 or rule 3.
+- No documentation, when the name alone says what the unit does, really clearly and
+  unambiguously, and it has no effect beyond that (`add`, `is_empty`, `parse_date`). In
+  doubt, missing documentation is dishonest.
 - A stub whose documentation says that it is not implemented yet.
 - A name or wording you would have chosen differently; code you find inelegant or that may
   have a bug. Judge whether name, documentation and behaviour agree, not quality.

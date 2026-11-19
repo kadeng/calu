@@ -6,7 +6,10 @@ description: The rule for honest code and documentation. Use whenever you write,
 # Honest code
 
 Code is **honest** when a reader can decide whether it is safe to run from its name and its
-documentation alone, without reading the body.
+documentation alone, without reading the body. Code and documentation must agree with each
+other, the behavior of code may not be surprising given its documentation, and there
+must be documentation. Only a unit whose name alone makes what it does really clear and
+unambiguous, with no effect beyond that, may go without; in doubt, document it.
 
 ## The rule
 

@@ -1359,6 +1359,22 @@
   expected: [PASS]
   honest: [is_empty, add, parse_date, clamp, first_or_none]
 
+- name: no-docstring-ambiguous-name
+  checker: honesty
+  tool_name: Write
+  tool_input:
+    file_path: src/settings_merge.py
+    content: |
+      def merge(defaults, overrides):
+          result = dict(overrides)
+          for key, value in defaults.items():
+              result.setdefault(key, value)
+          for key in [k for k, v in result.items() if v is None]:
+              del result[key]
+          return result
+  expected: [DENY]
+  dishonest: [merge]
+
 - name: declared-side-effect
   checker: honesty
   tool_name: Write
