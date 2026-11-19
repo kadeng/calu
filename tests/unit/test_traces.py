@@ -409,8 +409,8 @@ def test_a_message_from_another_session_is_narrated_in_the_narrated_form():
 
 
 def test_the_path_is_directory_date_user_and_the_next_free_number(tmp_path: Path):
-    target = session_directory(tmp_path, ".agent/traces", STARTED, "kai")
-    assert target == tmp_path / ".agent/traces/2026-11-18/kai"
+    target = session_directory(tmp_path, "agent/traces", STARTED, "kai")
+    assert target == tmp_path / "agent/traces/2026-11-18/kai"
     first, fd = create_trace_file(tmp_path, target)
     os.close(fd)
     assert first.name == "session_001.md"
@@ -477,7 +477,7 @@ def test_a_trace_directory_that_leads_out_of_the_project_is_refused(tmp_path: Pa
 
 
 def test_the_trace_of_a_claude_session_is_found_by_its_marker(tmp_path: Path):
-    root = tmp_path / ".agent" / "traces"
+    root = tmp_path / "agent" / "traces"
     old = root / "2026-11-17" / "kai" / "session_001.md"
     new = root / "2026-11-18" / "kai" / "session_002.md"
     other = root / "2026-11-18" / "kai" / "session_001.md"
@@ -699,7 +699,7 @@ def writer_for(
     """Return a writer on a stand-in redaction agent (None: stage 1 only)."""
     return TraceWriter(
         workspace,
-        session_directory(workspace, ".agent/traces", STARTED, "kai"),
+        session_directory(workspace, "agent/traces", STARTED, "kai"),
         header(
             redactor=None if model is None else "fake-redactor",
             content="narrated" if narrated else "plain",
@@ -805,7 +805,7 @@ async def test_the_end_of_a_session_does_not_wait_for_ever_and_writes_no_raw_tex
 
 
 async def test_a_file_that_cannot_be_created_is_reported_and_stops_nothing(tmp_path: Path):
-    (tmp_path / ".agent").write_text("a file where the directory should be")
+    (tmp_path / "agent").write_text("a file where the directory should be")
     said: list[tuple[str, str]] = []
 
     async def report(level: str, message: str) -> None:
@@ -827,7 +827,7 @@ async def test_a_file_that_cannot_be_created_is_reported_and_stops_nothing(tmp_p
 async def test_the_file_path_is_reported_and_a_resumed_session_names_the_file_it_continues(
     tmp_path: Path,
 ):
-    earlier = tmp_path / ".agent/traces/2026-11-17/kai/session_004.md"
+    earlier = tmp_path / "agent/traces/2026-11-17/kai/session_004.md"
     earlier.parent.mkdir(parents=True)
     earlier.write_text(f"# calu session trace\n\n- {session_marker('claude-abc')}\n")
     said: list[tuple[str, str]] = []
@@ -843,11 +843,11 @@ async def test_the_file_path_is_reported_and_a_resumed_session_names_the_file_it
             one.start(tg)
             one.feed(UserInput(text="go on"))
             await one.close()
-    assert said == [("info", "session trace: .agent/traces/2026-11-18/kai/session_001.md")]
+    assert said == [("info", "session trace: agent/traces/2026-11-18/kai/session_001.md")]
     assert writer.path is not None and forked.path is not None and unknown.path is not None
     assert (
         "- Continues: this session is a continuation of the conversation recorded in "
-        "`.agent/traces/2026-11-17/kai/session_004.md`\n"
+        "`agent/traces/2026-11-17/kai/session_004.md`\n"
     ) in writer.path.read_text()
     assert "- Continues: this session is a fork of the conversation recorded in" in (
         forked.path.read_text()
@@ -861,7 +861,7 @@ async def test_the_file_path_is_reported_and_a_resumed_session_names_the_file_it
 async def test_a_file_that_got_no_block_is_removed_when_it_is_closed(tmp_path: Path):
     """A header and "The session ended." say nothing; the session id line is no step either."""
     empty = writer_for(tmp_path, None)
-    path = tmp_path / ".agent/traces/2026-11-18/kai/session_001.md"
+    path = tmp_path / "agent/traces/2026-11-18/kai/session_001.md"
     async with anyio.create_task_group() as tg:
         empty.start(tg)
         await empty.created.wait()
@@ -869,8 +869,8 @@ async def test_a_file_that_got_no_block_is_removed_when_it_is_closed(tmp_path: P
         empty.feed(SessionState(state="idle", session_id="claude-abc"))
         await empty.close("The session ended.")
     assert empty.removed and not path.exists()
-    assert not (tmp_path / ".agent/traces/2026-11-18").exists(), "the emptied directories go"
-    assert (tmp_path / ".agent/traces").is_dir()
+    assert not (tmp_path / "agent/traces/2026-11-18").exists(), "the emptied directories go"
+    assert (tmp_path / "agent/traces").is_dir()
 
     # The next file of the day starts at 001 again, and a file with a step stays.
     used = writer_for(tmp_path, None)

@@ -1,6 +1,6 @@
 ---
 name: ui-testing-with-cua
-description: How to run calu's UI tests in the Cua desktop container - the VSCode extension and the PyCharm plugin driven by screenshot, click and keyboard against a scripted calu server (or, with the owner's say, a real Claude Code). Use when asked to test, look at or fix anything in extensions/vscode or extensions/jetbrains in a real IDE, to reproduce a UI defect, to take screenshots of the extensions, or to work through docs/notes/test-plan.md.
+description: How to run calu's UI tests in the Cua desktop container - the VSCode extension and the PyCharm plugin driven by screenshot, click and keyboard against a scripted calu server (or, with the owner's say, a real Claude Code). Use when asked to test, look at or fix anything in extensions/vscode or extensions/jetbrains in a real IDE, to reproduce a UI defect, to take screenshots of the extensions, or to work through agent/records/notes/test-plan.md.
 ---
 
 # UI testing with the Cua desktop
@@ -33,8 +33,8 @@ $D click 640 400 ; $D type "text" ; $D key ctrl+shift+p ; $D shell 'cmd' ; $D wi
    it at once corrupt each other's input. `$D shell` lines that do not touch the screen are safe
    next to a driver, but they share the container's 8 GB.
 3. **Keep the evidence.** Number the screenshots of a run in one folder under
-   `~/.cache/calu-uitest/share/`; copy the few worth showing to `docs/notes/screenshots/`.
-4. **Record the result** in `docs/notes/test-plan.md`: each case `ok`, `fixed (commit)`,
+   `~/.cache/calu-uitest/share/`; copy the few worth showing to `agent/records/notes/screenshots/`.
+4. **Record the result** in `agent/records/notes/test-plan.md`: each case `ok`, `fixed (commit)`,
    `open (why)` or `n/a here`. Say what was exercised and what was only rendered.
 
 A person can watch: `$D viewer-url` prints a browser link (localhost only).
@@ -127,7 +127,7 @@ Things that went wrong in earlier runs, so check them on every round:
 
 ## Other test environments
 
-`docs/notes/test-plan.md` lists them: the root box (`uitest/rootbox/`, a container with root,
+`agent/records/notes/test-plan.md` lists them: the root box (`uitest/rootbox/`, a container with root,
 sudo and several users, for `calu serve`/`setup` in every privilege arrangement), a private
 tmux server for the terminal clients, headless Chromium for the web interface, and a headless
 SSH server container for the PyCharm plugin's SSH mode. Each builds its own PostgreSQL

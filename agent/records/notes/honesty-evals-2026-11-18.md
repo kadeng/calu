@@ -168,6 +168,6 @@ The trigger rule, over all passes:
 About 720 case runs in all (Haiku about 655, Sonnet 67), each one to three model requests:
 roughly 3.3 million input tokens, about 80 % of them read from the provider's cache, and
 0.27 million output tokens (estimated from the reports of the runs). The walkthrough of the
-honesty workflow (`docs/notes/test-plan.md`, section G) added about 110 checker and reviewer
+honesty workflow (`agent/records/notes/test-plan.md`, section G) added about 110 checker and reviewer
 calls with Haiku. One pass of the honesty checker's set is about 360,000 input tokens
 (84 % cached) and 24,000 output tokens, about 3 seconds per case.

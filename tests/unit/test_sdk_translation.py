@@ -200,7 +200,10 @@ def test_the_session_id_arrives_with_the_init_message(tmp_path: Path) -> None:
 
 
 def test_what_claude_code_says_it_is_asking_about_is_collected() -> None:
-    """The SDK says to show its own prompt sentence rather than rebuild one (PLAN.md D60)."""
+    """The SDK says to show its own prompt sentence rather than rebuild one.
+
+    See agent/records/PLAN.md D60.
+    """
     from calu.claude.sdk_runner import permission_prompt
 
     class Context:

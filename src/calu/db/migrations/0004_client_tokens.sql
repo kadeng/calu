@@ -1,7 +1,7 @@
 -- calu schema, version 4: the tokens with which clients authenticate to a session process.
 --
 -- `calu run` issues one token per session, prints it once and stores only its SHA-256 here
--- (PLAN.md §5), so that an operator can see which sessions accept clients and revoke a token.
+-- (agent/records/PLAN.md §5), so that an operator can see which sessions accept clients and revoke a token.
 -- The session process compares the hash of the token a client sends; the token itself is never
 -- stored anywhere.
 

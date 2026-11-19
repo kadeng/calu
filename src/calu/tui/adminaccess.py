@@ -253,10 +253,10 @@ class StoreAdmin:
         Args:
             store: The credential store; the default store of this user if None.
             database: The login of the role `calu_admin` at the database of the attached
-                session, without its password (`calu.setup.admin_login`). With it, every
-                change logs in there as `calu_admin` with the admin password the user types;
-                nothing is read from the store and nothing is stored (PLAN.md D213). None
-                uses the store's `admin` credential.
+                session, without its password (`calu.setup.admin_login`). With it, every change logs
+                in there as `calu_admin` with the admin password the user types; nothing is read
+                from the store and nothing is stored (agent/records/PLAN.md D213). None uses the
+                store's `admin` credential.
             unavailable: Why nothing can be changed from this client, when neither a
                 database login nor this user's store applies (a session of root's calu whose
                 database is not known, D228); `problem` then returns it and the store is

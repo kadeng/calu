@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# What `enableWeakerNestedSandbox` changes inside a container (PLAN.md Q1, D134).
+# What `enableWeakerNestedSandbox` changes inside a container (agent/records/PLAN.md Q1, D134).
 #
 #     spikes/spike_nested_sandbox.sh WEAKER SECCOMP
 #

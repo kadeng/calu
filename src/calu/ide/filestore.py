@@ -16,7 +16,7 @@ a link during a listing can add names from outside to it, never their contents, 
 read through the descriptors (`describe`). Nothing
 here needs more rights than the user who started the bridge has. All methods block: call them
 from a worker thread. The rules that need no file access are in `calu.ide.files`, the
-contract in `docs/notes/jetbrains-sync-spec.md`.
+contract in `agent/records/notes/jetbrains-sync-spec.md`.
 """
 
 import contextlib

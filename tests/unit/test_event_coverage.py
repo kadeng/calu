@@ -30,7 +30,8 @@ SILENT_IN_THE_TERMINAL = {
 NOT_CARRIED_BY_ACP = {
     "tool.files",  # ACP carries a tool call's locations with the call itself
     "chat.queue",  # ACP has no shape for a queue of waiting messages
-    "agents.update",  # ACP has no subagents; the web interface shows them (PLAN.md §6.1)
+    # ACP has no subagents; the web interface shows them (agent/records/PLAN.md §6.1)
+    "agents.update",
     "usage.update",  # ACP has no shape for the usage limits of the agent's account
     "step.held",  # ACP has no state of a tool call that waits for another one's decision
 }
@@ -58,7 +59,7 @@ def test_every_event_is_printed_or_deliberately_silent() -> None:
 
 
 def test_every_event_reaches_an_editor_or_is_named_as_one_that_cannot() -> None:
-    """The ACP adapter translates the stream for an editor (PLAN.md D24)."""
+    """The ACP adapter translates the stream for an editor (agent/records/PLAN.md D24)."""
     source = inspect.getsource(adapter.Adapter.on_event)
     unhandled = {
         event.method

@@ -196,7 +196,9 @@ async def test_calu_acp_answers_an_editor_and_keeps_stdout_clean(tmp_path: Path)
 
 
 async def test_calu_acp_carries_a_denial_and_replays_a_loaded_session(tmp_path: Path) -> None:
-    """A denied step and `session/load`, through the real pipes (PLAN.md D24, D65b, D81).
+    """A denied step and `session/load`, through the real pipes.
+
+    See agent/records/PLAN.md D24, D65b, D81.
 
     These are the two paths an editor depends on and that no in-process test covers end to end:
     a refusal has to arrive as a failed tool call with the reason, because an editor shows

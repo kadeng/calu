@@ -1,8 +1,8 @@
 """Allow and deny lists for commands, reads and writes.
 
 Six lists hold Python regular expressions. calu keeps them in the database (table `rules`,
-PLAN.md §7); the session loads them into a `Rules` object and replaces them when the database
-announces a change (`config_changed`).
+agent/records/PLAN.md §7); the session loads them into a `Rules` object and replaces them when the
+database announces a change (`config_changed`).
 
 | List            | Matched against                                 |
 |-----------------|-------------------------------------------------|
@@ -28,16 +28,15 @@ Which parts a tool call has: Bash -> its simple commands, the paths its commands
 Read, NotebookRead, Grep, Glob, LS -> the path they read; Edit, Write, MultiEdit, NotebookEdit ->
 the file they write. Other tools have no parts; the rules do not affect them.
 
-Built-in rules that the lists cannot remove: reading or writing calu's own directories always
-asks the human. These are the directory of the credentials and of the env file with the checker
-keys and the directory above the snapshots, at the place they really have on this machine
+Built-in rules that the lists cannot remove: reading or writing calu's own directories always asks
+the human. These are the directory of the credentials and of the env file with the checker keys and
+the directory above the snapshots, at the place they really have on this machine
 (`calu.paths.calu_private_dirs`: `$XDG_CONFIG_HOME/calu`, `$XDG_STATE_HOME/calu` and the two
-defaults below the home directory), plus every path with a `.config/calu` component. While
-session traces are written (`traces.enabled`, PLAN.md D232), writing into the trace directory
-always asks the human as well: the files there are calu's record of the session, and a change
-to them is not an ordinary edit (`Rules.trace_directory`). An
-invalid pattern makes every checked call ask the human until it is fixed, so a broken deny list
-never lets a call through.
+defaults below the home directory), plus every path with a `.config/calu` component. While session
+traces are written (`traces.enabled`, agent/records/PLAN.md D232), writing into the trace directory
+always asks the human as well: the files there are calu's record of the session, and a change to
+them is not an ordinary edit (`Rules.trace_directory`). An invalid pattern makes every checked call
+ask the human until it is fixed, so a broken deny list never lets a call through.
 """
 
 import os
@@ -204,12 +203,12 @@ BUILT_IN_COMMAND_DENY = (
         "built-in",
     ),
 )
-"""Claude running calu itself always asks (PLAN.md D160). calu runs as the same OS user as
-Claude, and `calu resolve`, `calu config set`, `calu rules`, `calu checker` or a `calu attach`
-that mints its own token (D105) would let Claude decide its own escalations or switch off the
-checks. With the sandbox on, `~/.config/calu` is unreadable to Claude's commands and such a
-call fails anyway; without it, this rule is what stops it. Built in, like the `~/.config/calu`
-path rules, so that no rule list can drop it and existing installations get it at once."""
+"""Claude running calu itself always asks (agent/records/PLAN.md D160). calu runs as the same OS
+user as Claude, and `calu resolve`, `calu config set`, `calu rules`, `calu checker` or a `calu
+attach` that mints its own token (D105) would let Claude decide its own escalations or switch off
+the checks. With the sandbox on, `~/.config/calu` is unreadable to Claude's commands and such a call
+fails anyway; without it, this rule is what stops it. Built in, like the `~/.config/calu` path
+rules, so that no rule list can drop it and existing installations get it at once."""
 
 
 def parse_rules(text: str, name: str) -> tuple[list[Rule], list[str]]:
@@ -561,7 +560,9 @@ class Rules:
         return False
 
     def _search_allowed(self, step: Step, directory: Path, outcome: RuleOutcome) -> bool:
-        """Apply the read deny list to every file a Grep of `directory` reads (PLAN.md D146).
+        """Apply the read deny list to every file a Grep of `directory` reads.
+
+        See agent/records/PLAN.md D146.
 
         Claude Code's Grep reads every file below the directory that git does not ignore,
         hidden ones included, so a check of the directory alone let it read `.env` or a `.key`
@@ -595,7 +596,9 @@ class Rules:
         return True
 
     def _evaluate_named_paths(self, step: Step, outcome: RuleOutcome) -> RuleOutcome:
-        """Apply the deny lists to the paths any other tool's input names (PLAN.md D166).
+        """Apply the deny lists to the paths any other tool's input names.
+
+        See agent/records/PLAN.md D166.
 
         An MCP server -- a filesystem server, say -- reads and writes files the rules never see:
         `mcp__fs__read_file(path="~/.ssh/id_rsa")` reached only the checker. For every tool the
@@ -633,7 +636,7 @@ class Rules:
         return outcome
 
     def _evaluate_other(self, step: Step, outcome: RuleOutcome) -> RuleOutcome:
-        """Apply the rules to the tools of `OTHER_RULED_TOOLS` (PLAN.md D165).
+        """Apply the rules to the tools of `OTHER_RULED_TOOLS` (agent/records/PLAN.md D165).
 
         `DesignSync` reads files from disk itself and uploads them to claude.ai: the directory
         of `finalize_plan` (`localDir`) and each `localPath` of `write_files` are reads, so the
@@ -690,7 +693,9 @@ class Rules:
         return outcome
 
     def _recursive_search_allowed(self, used: ShellPath, outcome: RuleOutcome) -> bool:
-        """Apply the read deny list to the files a `grep -r` or `rg` reads (PLAN.md D149).
+        """Apply the read deny list to the files a `grep -r` or `rg` reads.
+
+        See agent/records/PLAN.md D149.
 
         Args:
             used: The searched path, with its `search` description.
@@ -810,7 +815,9 @@ class Rules:
         return _first_match([*built_in, *self.lists(f"{kind}-deny")[0]], self.match_form(path))
 
     def match_form(self, path: Path) -> str:
-        r"""Return the form of `path` that the path rules are matched against (PLAN.md D155).
+        r"""Return the form of `path` that the path rules are matched against.
+
+        See agent/records/PLAN.md D155.
 
         Like `display`, except inside a Claude Code worktree: `EnterWorktree` and subagents with
         `isolation: worktree` work in `<workspace>/.claude/worktrees/<name>/`, a full checkout of
@@ -1395,7 +1402,9 @@ class DiffTargets:
 
 
 def diff_targets(command: str, cwd: Path, parsed: ParsedCommand | None = None) -> DiffTargets:
-    """Return the files a diff applied by `command` may change (PLAN.md D169, D174, D175).
+    """Return the files a diff applied by `command` may change.
+
+    See agent/records/PLAN.md D169, D174, D175.
 
     `patch` and `git apply`/`git am` write the files named inside the diff, which the command
     line does not show. Which command is a diff tool is read from the shell splitter's simple

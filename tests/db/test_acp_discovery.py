@@ -1,4 +1,6 @@
-"""`calu acp` with no arguments, driven the way an editor drives it (PLAN.md D105, D106).
+"""`calu acp` with no arguments, driven the way an editor drives it.
+
+See agent/records/PLAN.md D105, D106.
 
 This is the configuration CALU_GUIDE.md tells an editor to use --
 `{"command": "calu", "args": ["acp"]}` with the project as the working directory -- and nothing

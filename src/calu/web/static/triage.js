@@ -98,7 +98,7 @@
     const rendered = document.createElement("pre");
     rendered.textContent = window.caluShared.visible(entry.rendered || "");
     if ((entry.questions || []).length) {
-      // A question of the agent: the options are the answer (PLAN.md D35). The form is the
+      // A question of the agent: the options are the answer (agent/records/PLAN.md D35). The form is the
       // one of the live view (shared.js): several questions and several choices make one
       // answer text.
       const form = window.caluShared.questionForm(entry.questions, (text) => answer("answer", text));

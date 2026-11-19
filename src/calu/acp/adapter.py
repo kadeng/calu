@@ -1,4 +1,6 @@
-"""Translation between the Agent Client Protocol and calu's own protocol (PLAN.md D24, §6.1).
+"""Translation between the Agent Client Protocol and calu's own protocol.
+
+See agent/records/PLAN.md D24, §6.1.
 
     editor ──ACP over stdio──► calu acp ──WebSocket, JSON-RPC──► calu session ──► Claude Code
 
@@ -600,11 +602,10 @@ class Adapter:
         """Check that the editor's directory is inside the project this adapter serves.
 
         The session's project directory itself is accepted, and so is a directory below it: an
-        editor opened on one package of a repository is still working inside the project whose
-        rules and checkers the session enforces, and `calu acp` with no address finds that
-        session from a subdirectory for the same reason (PLAN.md D105). A directory **outside**
-        the project is refused, because the editor would then act on files the session does not
-        cover.
+        editor opened on one package of a repository is still working inside the project whose rules
+        and checkers the session enforces, and `calu acp` with no address finds that session from a
+        subdirectory for the same reason (agent/records/PLAN.md D105). A directory **outside** the
+        project is refused, because the editor would then act on files the session does not cover.
 
         An editor on Windows that names a directory inside WSL the way Windows sees it
         (`//wsl.localhost/<distribution>/...`) means the path inside the distribution

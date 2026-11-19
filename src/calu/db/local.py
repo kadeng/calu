@@ -1,4 +1,6 @@
-"""A local PostgreSQL in Docker (the variant `docker` of `calu setup`, PLAN.md D14, D205).
+"""A local PostgreSQL in Docker: the variant `docker` of `calu setup`.
+
+See agent/records/PLAN.md D14, D205.
 
 The container runs from `local-compose.yml` (compose project `calu-db`) and listens on
 127.0.0.1 only. Its files are in a host directory chosen at setup (default
@@ -349,7 +351,9 @@ def listening(port: int, timeout_s: float = 0.5) -> bool:
 
 
 def ensure_running(block: DockerBlock) -> bool:
-    """Start the local database if it does not answer (the on-demand start, PLAN.md D205).
+    """Start the local database if it does not answer: the on-demand start.
+
+    See agent/records/PLAN.md D205.
 
     Nothing is done, and docker is not called, while the port answers. Otherwise the container
     is started as `up` does. A location without an initialized cluster is an error and not a
@@ -402,7 +406,9 @@ does nothing when none is left (D163)."""
 
 
 def harden() -> None:
-    """Make PostgreSQL in the container ask every connection for a password (PLAN.md D163).
+    """Make PostgreSQL in the container ask every connection for a password.
+
+    See agent/records/PLAN.md D163.
 
     The official image trusts connections from inside the container, so `docker exec <container>
     psql -U calu_owner` gets in without a password -- for any program of the user that may use

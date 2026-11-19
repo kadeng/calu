@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the single-file `calu` binary and prove it runs (PLAN.md D41, REQUIREMENTS 21).
+# Build the single-file `calu` binary and prove it runs (agent/records/PLAN.md D41, REQUIREMENTS 21).
 #
 #   scripts/build-binary.sh [output directory]      # default: dist/
 #

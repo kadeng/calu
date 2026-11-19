@@ -21,8 +21,8 @@ from calu.config import Config
 HEADER = """# calu configuration
 
 Every value below is a row in the database, not a file in the project: a session may read the
-configuration and may not change it (`PLAN.md` §6.2). Read and change it with the `admin`
-credential:
+configuration and may not change it (`agent/records/PLAN.md` §6.2). Read and change it with the
+`admin` credential:
 
 ```bash
 calu config list --changed                       # what is set, where it comes from, defaults
@@ -150,7 +150,7 @@ def setting_rows() -> list[tuple[str, str, str, str]]:
     """Return every configuration key with its type, default and description.
 
     The same walk the reference document is built from, so `calu config list` and
-    `docs/CONFIGURATION.md` cannot describe different sets of keys (PLAN.md D128).
+    `docs/CONFIGURATION.md` cannot describe different sets of keys (agent/records/PLAN.md D128).
 
     Returns:
         One (dotted key, type, default, description) tuple per field, nested models included

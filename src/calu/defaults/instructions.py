@@ -1,6 +1,6 @@
 """The built-in checker instructions, and how a checker's full prompt is put together.
 
-A checker's prompt has up to three parts (PLAN.md D181, D224):
+A checker's prompt has up to three parts (agent/records/PLAN.md D181, D224):
 
     system/<route>.md         calu's own: the task, how to answer            fixed
     <checker>.md              the user's: the project's rules, and the      `calu checker edit`

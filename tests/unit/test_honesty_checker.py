@@ -1,4 +1,4 @@
-"""The honesty checker's own answer: HONEST or DISHONEST per file (PLAN.md D217).
+"""The honesty checker's own answer: HONEST or DISHONEST per file (agent/records/PLAN.md D217).
 
 The tests use a fake model and a temporary directory; they print nothing.
 """

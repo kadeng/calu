@@ -62,7 +62,7 @@ Priority = Literal["next", "later"]
 
 
 class Verdict(StrEnum):
-    """Result of the first stage of a tool call check (PreToolUse), see PLAN.md D21.
+    """Result of the first stage of a tool call check (PreToolUse), see agent/records/PLAN.md D21.
 
     PASS leaves the decision to Claude Code's own approval (the hook answers without a
     decision); ALLOW runs the step whatever Claude Code would have decided; DENY stops it; ASK
@@ -109,7 +109,7 @@ class HumanAnswer:
 
 @dataclass(frozen=True)
 class Fork:
-    """Where a resumed session branches off (PLAN.md D36, D203).
+    """Where a resumed session branches off (agent/records/PLAN.md D36, D203).
 
     A forked session gets a new session id, which leaves the original conversation untouched.
 
@@ -158,7 +158,9 @@ class ToolGate(Protocol):
         ...
 
     async def review_write_set(self, step: Step) -> str:
-        """Review what a finished command wrote, before the agent goes on (PLAN.md D31).
+        """Review what a finished command wrote, before the agent goes on.
+
+        See agent/records/PLAN.md D31.
 
         The runner calls this after a command has run, while the agent waits, so the review may
         take its time and may even ask a human. It is a no-op unless the write-set snapshot is
@@ -235,8 +237,8 @@ class ClaudeRunner(Protocol):
             gate: Asked before every tool call of the main agent and of subagents.
             sink: Receives the session's events in order.
             resume_id: Claude session id to resume, or None for a new session.
-            fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
-                whole. Needs `resume_id`, and gives the new session its own id.
+            fork: Where to branch off the resumed conversation (agent/records/PLAN.md D36); None
+                resumes it whole. Needs `resume_id`, and gives the new session its own id.
             session_id: The id the conversation gets, a UUID, so that the caller knows it
                 before the first turn (D203). Used for a new conversation and for a fork; a
                 plain resume keeps the id of `resume_id` and ignores it. None lets Claude Code

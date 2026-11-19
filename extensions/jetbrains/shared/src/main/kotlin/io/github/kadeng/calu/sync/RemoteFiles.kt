@@ -1,6 +1,6 @@
 /**
  * The remote project directory as the plugin reaches it: the `ide.fs.*` requests of the bridge
- * with their paging, continuation, chunking and errors (`docs/notes/jetbrains-sync-spec.md`
+ * with their paging, continuation, chunking and errors (`agent/records/notes/jetbrains-sync-spec.md`
  * sections 2 to 5 and 13). This file sends requests through a function it is given and touches
  * no local file.
  *

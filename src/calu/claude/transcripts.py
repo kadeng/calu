@@ -1,4 +1,4 @@
-"""Conversations that Claude Code keeps itself, read for calu (PLAN.md D209).
+"""Conversations that Claude Code keeps itself, read for calu (agent/records/PLAN.md D209).
 
 Claude Code stores every conversation of a directory as a transcript below its configuration
 directory, whether calu started it or `claude` was run directly. calu reads them through the

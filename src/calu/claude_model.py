@@ -1,4 +1,6 @@
-"""A checker model that runs on the machine's Claude Code account (PLAN.md §3, D16, D117).
+"""A checker model that runs on the machine's Claude Code account.
+
+See agent/records/PLAN.md §3, D16, D117.
 
 It lives next to `calu.models` rather than in the `calu.claude` package, which imports the
 checkers and would make the import circular.

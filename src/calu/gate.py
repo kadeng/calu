@@ -290,13 +290,12 @@ class Decided:
     """The outcome of checking one tool call, as `StepGate.decide` reports it.
 
     `source` is who decided: "rules", "policy", "checker", "auto", "held", "changeset" (the
-    deterministic refusal of a compound commit line, or of a commit whose diff calu could not
-    read), "honesty" (the honesty state stops a step that executes project code or commits),
-    "clock", "question" or "internal". `rules` is what the allow and deny
-    lists found ("deny", "allow", "unlisted") or None for a tool the lists do not cover. `runs`
-    holds one model call per checker that ran, in the order of the route's checkers (PLAN.md
-    D81) -- for a commit followed by the changeset checkers -- and is empty when no checker
-    ran.
+    deterministic refusal of a compound commit line, or of a commit whose diff calu could not read),
+    "honesty" (the honesty state stops a step that executes project code or commits), "clock",
+    "question" or "internal". `rules` is what the allow and deny lists found ("deny", "allow",
+    "unlisted") or None for a tool the lists do not cover. `runs` holds one model call per checker
+    that ran, in the order of the route's checkers (agent/records/PLAN.md D81) -- for a commit
+    followed by the changeset checkers -- and is empty when no checker ran.
     """
 
     route: Route
@@ -346,7 +345,7 @@ class Hold(Protocol):
 
 
 def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecision:
-    """Combine the verdicts of the checkers of one route into one (PLAN.md D81).
+    """Combine the verdicts of the checkers of one route into one (agent/records/PLAN.md D81).
 
     Most restrictive wins: one DENY denies the step, else one ESCALATE escalates it, else it
     passes. ALLOW is the exception and needs every checker to say it, because ALLOW overrules
@@ -357,7 +356,7 @@ def combine_decisions(verdicts: list[tuple[str, CheckDecision]]) -> CheckDecisio
 
     The reason is composed of the reasons of the checkers that produced the winning decision --
     without the honesty checker's when it does not escalate: its text lists its statuses per
-    file, which are a result of their own (PLAN.md D224 part 4) and stay in its own
+    file, which are a result of their own (agent/records/PLAN.md D224 part 4) and stay in its own
     `checker_runs` row -- and every non-empty comment is kept; both name the checker they came
     from when more than one checker ran, so a denial can be attributed. The summary of the step
     is taken from the first checker that wrote one, because all of them describe the same step
@@ -428,7 +427,7 @@ def route_checkers(
     definitions: Mapping[str, CheckerDefinition],
     make: Callable[[str, CheckerConfig], Checker],
 ) -> list[Checker]:
-    """Create every enabled checker of one step route (PLAN.md D81).
+    """Create every enabled checker of one step route (agent/records/PLAN.md D81).
 
     The route's own name (`command`, `edit`, `changeset`) comes first and is always present,
     with the built-in instructions when the database holds none. Every other enabled
@@ -811,7 +810,7 @@ class StepGate:
             )
         if route is Route.QUESTION:
             # Only the human knows the answer, so no checker runs: the step is held and the
-            # answer travels back as the message of the refusal (PLAN.md D35).
+            # answer travels back as the message of the refusal (agent/records/PLAN.md D35).
             return Decided(
                 route=route,
                 decision=CheckDecision(
@@ -834,9 +833,9 @@ class StepGate:
         if route is Route.ALLOW and step.tool_name in READ_PATH_TOOLS and not outcome.allowed:
             route = Route.COMMAND  # a read outside the read allowlist: the command checker decides
         if route is Route.ALLOW and step.tool_name == "SendMessage" and not self._own_agent(step):
-            # Unchecked only while it stays inside this session (PLAN.md D69). Claude Code's
-            # SendMessage also reaches other sessions on the machine, which the checkers never
-            # see, so a message out of the session is decided like any other unknown action.
+            # Unchecked only while it stays inside this session (agent/records/PLAN.md D69). Claude
+            # Code's SendMessage also reaches other sessions on the machine, which the checkers
+            # never see, so a message out of the session is decided like any other unknown action.
             route = Route.COMMAND
         if outcome.notes:
             step = step.model_copy(update={"notes": [*step.notes, *outcome.notes]})

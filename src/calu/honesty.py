@@ -1150,7 +1150,7 @@ class HonestyState:
         self.excluded: tuple[str, ...] = ()
         """Directories, relative to the workspace, whose files are never unreviewed and that
         no honesty review reads: calu's own output inside the project (the session traces,
-        PLAN.md D232). The session sets it when the configuration changes."""
+        agent/records/PLAN.md D232). The session sets it when the configuration changes."""
         self.trusted_hashes: Mapping[str, TrustSource] = {}
         """SHA-256 -> source, from the table `trusted_files`, set by the session
         (`SessionStore.trusted_file_sources`). A file with such a content is verified wherever

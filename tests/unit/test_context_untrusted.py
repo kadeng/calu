@@ -1,8 +1,9 @@
 """What a checker's context is built from: the conversation, and no file of the workspace.
 
 `AGENTS.md`, `CLAUDE.md`, skill descriptions and the like are in the workspace, where the agent
-under review can write, and a cloned repository brings its own. They are not part of the
-context (PLAN.md D193); the chat summary keeps the user's inputs in a section only calu builds.
+under review can write, and a cloned repository brings its own. They are not part of the context
+(agent/records/PLAN.md D193); the chat summary keeps the user's inputs in a section only calu
+builds.
 """
 
 from pathlib import Path

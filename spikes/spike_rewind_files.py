@@ -1,6 +1,6 @@
 """What does `rewind_files` put back -- only what a tool edited, or what a command wrote too?
 
-PLAN.md Q14 asks whether a fork (D36) should also rewind the working tree to its state at the
+agent/records/PLAN.md Q14 asks whether a fork (D36) should also rewind the working tree to its state at the
 turn it forks from. A fork rewinds the *conversation*; the files keep whatever the dropped turn
 wrote. The Agent SDK offers `enable_file_checkpointing=True` plus
 `ClaudeSDKClient.rewind_files(<user message uuid>)`, but the promise only says "tracked files",

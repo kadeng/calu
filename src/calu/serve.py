@@ -1,4 +1,6 @@
-"""`calu serve`: one process, authenticated once, that runs many sessions (PLAN.md D208).
+"""`calu serve`: one process, authenticated once, that runs many sessions.
+
+See agent/records/PLAN.md D208.
 
     password ──► decrypt the `session` credential ──► kept in one ConnectionSource
     loop:  notified (`session_requested`) or every POLL_S seconds

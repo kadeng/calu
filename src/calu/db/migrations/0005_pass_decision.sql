@@ -1,4 +1,4 @@
--- calu schema, version 5: the fourth decision, PASS (PLAN.md D21).
+-- calu schema, version 5: the fourth decision, PASS (agent/records/PLAN.md D21).
 --
 -- A checker now answers PASS when it has no objection and Claude Code's own auto mode may
 -- decide; ALLOW and DENY are deliberate exceptions. Earlier rows used "allow" for both cases.

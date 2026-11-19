@@ -184,7 +184,9 @@ async def test_the_sources_of_the_cases_are_added_in_order(db_url: str, tmp_path
 
 
 async def test_the_collected_cases_can_be_listed_and_kept(db_url: str, tmp_path: Path) -> None:
-    """`--list` and `--export` are the replacement for a training mode (PLAN.md D55, Q9).
+    """`--list` and `--export` are the replacement for a training mode.
+
+    See agent/records/PLAN.md D55, Q9.
 
     A human already labelled every escalation they resolved. What was missing was a way to see
     those labels and keep them, so this checks both: the lines name the case, its checker and

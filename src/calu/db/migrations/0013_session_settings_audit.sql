@@ -1,5 +1,5 @@
 -- calu schema, version 13: a client's change of a running session's settings is on the record
--- (PLAN.md D43).
+-- (agent/records/PLAN.md D43).
 --
 -- `auto_escalate.set` is the one setting a client may change through the session protocol (D42):
 -- it holds back steps the checkers approved, and it lives in the running process only. Turning

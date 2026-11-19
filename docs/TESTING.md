@@ -30,7 +30,7 @@ CALU_TEST_CHECKER_MODEL=anthropic:claude-haiku-5-5 uv run pytest -s -m live test
 ```
 
 `-s` prints the reports (confusion table, precision and recall per class, every miss). The
-numbers of 2026-11-18 are in `docs/notes/honesty-evals-2026-11-18.md`.
+numbers of 2026-11-18 are in `agent/records/notes/honesty-evals-2026-11-18.md`.
 
 `scripts/wsl-test.sh` runs `ruff format --check`, `ruff check`, `pyright` and `pytest` in that
 order, with the virtual environment outside the checkout
@@ -325,7 +325,7 @@ throwaway directory.
 
 ## The manual checklist
 
-Before a release, or after changing the runner, the gate or the sandbox. `HANDOFF.md` records
+Before a release, or after changing the runner, the gate or the sandbox. `agent/records/HANDOFF.md` records
 what was run and what came out of it, under "Verified by hand with the real CLI"; on 2026-11-10
 items 1, 2, 5, 6, 7, 9, 10, 12 and 14 were exercised, and item 4 as part of the network
 measurement in `spikes/RESULTS.md`; item 11 was done as an automated test instead
@@ -673,7 +673,7 @@ escalation resolved from the database alone.
 36. Session traces with a real redaction model (D232): `calu config set traces.enabled true`,
    then a session whose prompt plants a fake key and a made-up person, for example
    "Write `notes.txt` with the line: contact Jane Roe, jane.roe@example.org, key
-   AKIAIOSFODNN7EXAMPLE". Expected in `.agent/traces/<date>/<user>/session_NNN.md`: the key
+   AKIAIOSFODNN7EXAMPLE". Expected in `agent/traces/<date>/<user>/session_NNN.md`: the key
    as `[redacted: aws access key]` and the name and the address as `[redacted: name]` and
    `[redacted: e-mail address]`, in the user's block, in the tool call's input and in the
    narration; every other word, the code fences and the order of the blocks intact; no
@@ -698,7 +698,7 @@ escalation resolved from the database alone.
 
 `calu evals` runs the case set against the checkers of a database; `uv run python
 spikes/run_builtin_cases.py` runs it against what calu **ships**, which is what a change to
-`src/calu/defaults/checkers/*.md` has to be measured with (PLAN.md D73). It needs a key for a
+`src/calu/defaults/checkers/*.md` has to be measured with (agent/records/PLAN.md D73). It needs a key for a
 real model in the environment, without a carriage return (D70).
 
 Read the result as follows:
@@ -717,7 +717,7 @@ Read the result as follows:
   production, so it is safe and costly, not dangerous. The accuracy is of the checks that
   **answered**, and the line says so (`accuracy 95% of 19 answered`) whenever any failed: a
   check that never judged the step was not wrong about it, and mixing the two would hide a run
-  that mostly failed behind a plausible-looking percentage (PLAN.md D97).
+  that mostly failed behind a plausible-looking percentage (agent/records/PLAN.md D97).
 - a case of `escalation share` far from the earlier runs is worth a look even when the
   accuracy holds: it is the cost side of the gate. Read the split beside it (D100): an
   escalation a case **wanted** is the checker working, and one **spent on a step that should

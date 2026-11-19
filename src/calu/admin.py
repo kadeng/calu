@@ -1,9 +1,9 @@
 """Changing what steers the checkers: projects, configuration, checker definitions and rules.
 
 These are the operations behind `calu project`, `calu config`, `calu checker` and `calu rules`
-(PLAN.md §8). They need the `admin` credential, because the role of a session may only read the
-configuration (PLAN.md D6, §5): a running session cannot change the rules it is judged by, and
-neither can the agent.
+(agent/records/PLAN.md §8). They need the `admin` credential, because the role of a session may
+only read the configuration (agent/records/PLAN.md D6, §5): a running session cannot change the
+rules it is judged by, and neither can the agent.
 
 Every change announces itself on `config_changed`, so a running session reloads within a
 moment (`calu.store.ConfigStore.reload_loop`), and the audit trigger records who changed what.
@@ -35,7 +35,7 @@ from calu.setup import RuleRow as SetupRuleRow
 from calu.setup import parse_rule_file, recommended_rules
 
 NETWORK_POLICIES = ("none", "proxy", "full")
-"""Values of `projects.network_policy` (PLAN.md §7)."""
+"""Values of `projects.network_policy` (agent/records/PLAN.md §7)."""
 
 ROUTES = ("command", "edit", "subagent", "narrator")
 """Values of `checker_types.route`."""
@@ -128,8 +128,8 @@ async def add_project(
     refers to.
 
     With the "proxy" policy and no allow list of its own, the project is given
-    `DEFAULT_ALLOWED_DOMAINS` as its starter list (PLAN.md D45). That is written into the
-    project's settings rather than applied silently at load time, so `calu config get --project`
+    `DEFAULT_ALLOWED_DOMAINS` as its starter list (agent/records/PLAN.md D45). That is written into
+    the project's settings rather than applied silently at load time, so `calu config get --project`
     shows it and `calu config add|remove claude.sandbox.allowed_domains` edits it. Without it
     "proxy" would mean the same as "none" -- an empty allow list reaches nothing -- and every
     package install in a new project would fail.
@@ -170,7 +170,7 @@ async def add_project(
 
 
 async def chat_summary(db: Db, session_id: str) -> str:
-    """Read the chat summary of one session (PLAN.md D40).
+    """Read the chat summary of one session (agent/records/PLAN.md D40).
 
     Args:
         db: The connection.
@@ -190,7 +190,9 @@ async def chat_summary(db: Db, session_id: str) -> str:
 
 
 async def set_chat_summary(db: Db, session_id: str, summary: str) -> None:
-    """Replace the chat summary of one session and tell its session process (PLAN.md D40).
+    """Replace the chat summary of one session and tell its session process.
+
+    See agent/records/PLAN.md D40.
 
     The summary is the conversation the checkers read for everything older than the unfolded
     turns, so correcting it changes what they are told — which is the point. The session picks
@@ -206,7 +208,7 @@ async def set_chat_summary(db: Db, session_id: str, summary: str) -> None:
     Raises:
         AdminError: If no session has that id, or the text is empty — a summary of nothing
             would silently hide the folded turns from the checkers, which is why the message
-            says what to write instead (PLAN.md D114).
+            says what to write instead (agent/records/PLAN.md D114).
         psycopg.Error: On database errors.
     """
     if not summary.strip():
@@ -231,7 +233,7 @@ async def set_chat_summary(db: Db, session_id: str, summary: str) -> None:
 
 
 async def set_network_policy(db: Db, name: str, network_policy: str) -> ProjectRow:
-    """Change what a project's sandboxed commands may reach (PLAN.md D39).
+    """Change what a project's sandboxed commands may reach (agent/records/PLAN.md D39).
 
     A running session applies it at its **next start**, not at its next step: the policy becomes
     part of the sandbox that Claude Code was started with.
@@ -778,7 +780,9 @@ def render_rule_list(rows: Sequence[RuleRow], rule_list: str, scope: str) -> str
 
 
 def rule_list_text(rows: Sequence[RuleRow]) -> str:
-    """Render the rules of one list as the text the web interface edits (PLAN.md D137).
+    """Render the rules of one list as the text the web interface edits.
+
+    See agent/records/PLAN.md D137.
 
     The format of `calu rules edit` (`render_rule_list`) without its explanatory header, which
     the page states once above all lists: one pattern per line, and a rule's comment as a
@@ -1074,7 +1078,7 @@ EFFORT_KEYS = (
 async def set_all_models(
     db: Db, model: str, effort: str | None = None, project: str | None = None
 ) -> list[str]:
-    """Point every model role at one model, in one scope (PLAN.md D129).
+    """Point every model role at one model, in one scope (agent/records/PLAN.md D129).
 
     Two places hold models, and a model set in only one of them is not what runs: the
     configuration's role keys (`MODEL_KEYS`, which win over a definition, D51) and the checker

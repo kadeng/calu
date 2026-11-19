@@ -1,4 +1,4 @@
-"""How a checker's prompt is put together from its parts (PLAN.md D181)."""
+"""How a checker's prompt is put together from its parts (agent/records/PLAN.md D181)."""
 
 import pytest
 

@@ -1,4 +1,4 @@
-"""Choose the checkers' model from the credentials this machine has (PLAN.md D129).
+"""Choose the checkers' model from the credentials this machine has (agent/records/PLAN.md D129).
 
 A new installation should not need a model string typed in before its first check. The order
 is the owner's, and the first provider whose credentials are present wins:

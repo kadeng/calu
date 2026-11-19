@@ -13,8 +13,8 @@
                               (listing + lstat; hash what changed)        ▼
                                                               ChangeLog ─► ide.fs.changed
 
-The requests exist for an editor that works on a copy of the project and reaches the server
-over SSH only (`docs/notes/jetbrains-sync-spec.md`). A write of the editor is the user's own
+The requests exist for an editor that works on a copy of the project and reaches the server over SSH
+only (`agent/records/notes/jetbrains-sync-spec.md`). A write of the editor is the user's own
 edit: no checker judges it. One lock serialises the writes and the scans of one bridge, so
 that the comparison with the base and the replacement have no other write of the bridge
 between them, and a scan never reports the bridge's own write a second time.

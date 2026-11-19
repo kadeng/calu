@@ -1,4 +1,4 @@
--- calu schema, version 1 (PLAN.md §7).
+-- calu schema, version 1 (agent/records/PLAN.md §7).
 --
 -- Roles (cluster-wide, created here without login; `calu setup` gives calu_session a login
 -- password):

@@ -1,4 +1,6 @@
-"""Where root's calu database is, written down for every user of the machine (PLAN.md D228).
+"""Where root's calu database is, written down for every user of the machine.
+
+See agent/records/PLAN.md D228.
 
     /var/lib/calu/database.json     root, 0644; the directory is root's and only root writes it
 

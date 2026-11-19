@@ -177,7 +177,7 @@ async def test_the_fleet_and_the_waiting_steps_are_listed(prepared, capsys) -> N
 
 
 async def test_one_escalation_shows_what_the_decision_needs(prepared, capsys) -> None:
-    """`calu escalation <id>` must carry the decision on its own (PLAN.md D30)."""
+    """`calu escalation <id>` must carry the decision on its own (agent/records/PLAN.md D30)."""
     _db, _session_id, escalation = prepared
     assert await run(["escalation", str(escalation)]) == 0
     said = capsys.readouterr().out
@@ -241,7 +241,7 @@ async def test_tokens_are_minted_listed_and_revoked_from_the_command_line(prepar
 
 
 async def test_the_summary_command_shows_the_folded_conversation(prepared, capsys) -> None:
-    """`calu summary` is the checkers' view of what came before (PLAN.md D40)."""
+    """`calu summary` is the checkers' view of what came before (agent/records/PLAN.md D40)."""
     db, session_id, _escalation = prepared
     await db.execute(
         "INSERT INTO chat_summaries (session_id, summary, covered_turns) VALUES (%s::uuid, %s, 3)",
@@ -254,7 +254,7 @@ async def test_the_summary_command_shows_the_folded_conversation(prepared, capsy
 
 
 async def test_the_editor_flow_stores_what_was_written(prepared, capsys, tmp_path) -> None:
-    """`calu checker edit` and `calu summary --edit` go through $EDITOR (PLAN.md D40).
+    """`calu checker edit` and `calu summary --edit` go through $EDITOR (agent/records/PLAN.md D40).
 
     The editor is a stub script that rewrites the file it is given, so the whole path is
     covered: calu writes the current text out, the editor changes it, calu reads it back and
@@ -396,7 +396,7 @@ async def test_evals_lists_and_exports_without_calling_a_model(prepared, capsys,
 
 
 async def test_cancelling_an_escalation_says_no_decision_was_recorded(prepared, capsys) -> None:
-    """`calu resolve <id> cancel` clears a queue honestly (PLAN.md D57)."""
+    """`calu resolve <id> cancel` clears a queue honestly (agent/records/PLAN.md D57)."""
     db, session_id, escalation = prepared
     await db.execute(
         "UPDATE sessions SET last_seen = now() - interval '1 hour' WHERE id = %s::uuid",
@@ -418,7 +418,10 @@ async def test_cancelling_an_escalation_says_no_decision_was_recorded(prepared, 
 
 
 async def test_the_checkers_record_is_readable_from_the_command_line(prepared, capsys) -> None:
-    """`calu checker stats` answers "are my checkers any good?" for free (PLAN.md D61)."""
+    """`calu checker stats` answers "are my checkers any good?" for free.
+
+    See agent/records/PLAN.md D61.
+    """
     db, _session_id, _escalation = prepared
     assert await run(["checker", "stats"]) == 0
     said = capsys.readouterr().out

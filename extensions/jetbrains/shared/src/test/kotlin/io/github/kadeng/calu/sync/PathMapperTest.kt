@@ -13,7 +13,7 @@ class PathMapperTest {
     private val windows = PathMapper(localRoot = "C:\\work\\proj", remoteRoot = "/srv/proj", windowsLocal = true)
 
     @Test fun `valid relative paths have no problem`() {
-        for (path in listOf("a", "src/a.py", ".gitignore", ".agent/notes.md", "a b/ü.txt", "x/.github/ci.yml", "a..b/c")) {
+        for (path in listOf("a", "src/a.py", ".gitignore", "agent/notes.md", "a b/ü.txt", "x/.github/ci.yml", "a..b/c")) {
             assertNull(linux.problem(path), path)
         }
     }
@@ -34,11 +34,11 @@ class PathMapperTest {
     }
 
     @Test fun `the excluded directories are rejected at the documented places`() {
-        for (path in listOf(".git", ".git/config", "sub/.git/HEAD", ".GIT/config", ".agent/traces", ".agent/traces/2026/s.md", ".Agent/Traces/x")) {
+        for (path in listOf(".git", ".git/config", "sub/.git/HEAD", ".GIT/config", "agent/traces", "agent/traces/2026/s.md", "Agent/Traces/x")) {
             assertEquals(PathProblem.EXCLUDED, linux.problem(path), path)
             assertTrue(linux.isExcluded(path), path)
         }
-        for (path in listOf(".gitignore", ".github/x", ".agent/notes.md", "sub/.agent/traces/x", "git/config")) {
+        for (path in listOf(".gitignore", ".github/x", "agent/notes.md", "sub/agent/traces/x", "git/config")) {
             assertFalse(linux.isExcluded(path), path)
         }
         val more = PathMapper(excluded = PathMapper.DEFAULT_EXCLUDED + ".calu")
@@ -63,7 +63,7 @@ class PathMapperTest {
     }
 
     @Test fun `normalize rejects absolute paths, parent segments and excluded directories`() {
-        for (path in listOf("/etc/passwd", "../x", "a/../../x", ".git/config", ".agent/traces/x.md", "", ".", "a\\b")) {
+        for (path in listOf("/etc/passwd", "../x", "a/../../x", ".git/config", "agent/traces/x.md", "", ".", "a\\b")) {
             assertThrows(IllegalArgumentException::class.java, { linux.normalize(path) }, path)
         }
         for (path in listOf("C:\\Windows\\x", "\\\\server\\share\\x", "..\\x", "a\\..\\..\\x", ".git\\config", "\\x")) {
@@ -118,6 +118,6 @@ class PathMapperTest {
     @Test fun `the defaults follow the local operating system flag`() {
         assertTrue(windows.caseInsensitiveLocal)
         assertFalse(linux.caseInsensitiveLocal)
-        assertEquals(listOf(".git", ".agent/traces"), PathMapper.DEFAULT_EXCLUDED)
+        assertEquals(listOf(".git", "agent/traces"), PathMapper.DEFAULT_EXCLUDED)
     }
 }

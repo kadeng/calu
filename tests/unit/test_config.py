@@ -46,7 +46,7 @@ def test_the_configuration_wins_over_a_checker_definition() -> None:
     configuration (`calu config set`, the web interface's settings form). The configuration is
     the layer a project overrides, so it wins, and the definition's value is the default for
     what nobody configured. Until 2026-11-10 it was the other way round and the documented
-    `calu config set command_checker.model` silently did nothing (PLAN.md D51).
+    `calu config set command_checker.model` silently did nothing (agent/records/PLAN.md D51).
     """
     rows = [
         ("command", "definition:command", 7, 700, 70),

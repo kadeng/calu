@@ -147,8 +147,8 @@ class CheckOutcome:
     cache_read_tokens: int | None = None
     duration_ms: int = 0
     honesty: HonestyAnswer | None = None
-    """The honesty checker's own result: a status per file and its units (PLAN.md D224 part
-    4). `decision` is only the adapter the gate and the honesty state take
+    """The honesty checker's own result: a status per file and its units (agent/records/PLAN.md D224
+    part 4). `decision` is only the adapter the gate and the honesty state take
     (`HonestyAnswer.decision`). None for every other checker and for a failed call."""
 
 
@@ -209,13 +209,13 @@ class Checker:
     `check` does not raise for model, network or file errors: such failures yield an ESCALATE
     decision whose reason names the error, so a human decides instead.
 
-    The agent has the read-only tools of `calu.checkers.tools` — reading a file or a range of
-    its lines, finding files by glob, grepping, and, if `times` is given, the times of the
-    session's steps and which step last changed a file — with which it can find out what the
-    code actually does, and who did it, when the step alone does not say enough (PLAN.md D22,
-    D25, D32). Those tools confine every read to `workspace` after resolving symbolic links
-    and apply the read deny lists of `rules` (`CodeTools.confine`); calu enforces this itself
-    and relies on no library for it. It has no other tool: no writes, no commands, no network.
+    The agent has the read-only tools of `calu.checkers.tools` — reading a file or a range of its
+    lines, finding files by glob, grepping, and, if `times` is given, the times of the session's
+    steps and which step last changed a file — with which it can find out what the code actually
+    does, and who did it, when the step alone does not say enough (agent/records/PLAN.md D22, D25,
+    D32). Those tools confine every read to `workspace` after resolving symbolic links and apply the
+    read deny lists of `rules` (`CodeTools.confine`); calu enforces this itself and relies on no
+    library for it. It has no other tool: no writes, no commands, no network.
     """
 
     name: str
@@ -242,7 +242,7 @@ class Checker:
 
     @property
     def judges_honesty(self) -> bool:
-        """Whether this is the honesty checker, which answers per file (PLAN.md D217).
+        """Whether this is the honesty checker, which answers per file (agent/records/PLAN.md D217).
 
         Returns:
             True for the checker type `HONESTY_CHECKER`: its model answers with an
@@ -281,7 +281,8 @@ class Checker:
                 judging.output_validator(_require_verdict_reason)
                 agent = judging
             else:
-                # A `StepVerdict`, which has no field for honesty marks (PLAN.md D224).
+                # A `StepVerdict`, which has no field for honesty marks (agent/records/PLAN.md
+                # D224).
                 deciding: Agent[None, StepVerdict] = Agent(
                     output_type=StepVerdict,
                     instructions=instructions,

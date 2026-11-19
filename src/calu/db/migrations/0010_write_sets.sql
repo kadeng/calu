@@ -1,4 +1,4 @@
--- What a Bash step actually wrote, when the optional snapshot of PLAN.md D31 is on.
+-- What a Bash step actually wrote, when the optional snapshot of agent/records/PLAN.md D31 is on.
 --
 -- `Edit` and `Write` reach the tool gate with their content, so their effect is known before
 -- they run. A command does not: `sed -i`, a formatter or a script can write anything, and the

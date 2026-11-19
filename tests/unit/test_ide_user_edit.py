@@ -153,7 +153,7 @@ async def test_the_session_takes_note_of_a_user_edit_and_names_its_own_directori
         async with client(run, events, name="an editor") as editor:
             await editor.request("session.start", {})
             assert await editor.request("files.user_edit", {"paths": []}) == {
-                "excluded": [".agent/traces"]
+                "excluded": ["agent/traces"]
             }
             assert not events.of("log") or all(
                 "the user wrote" not in e["message"] for e in events.of("log")

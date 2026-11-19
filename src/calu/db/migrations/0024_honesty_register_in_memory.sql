@@ -1,4 +1,4 @@
--- The honesty register lives in the session's memory (PLAN.md D180, the owner's answer to Q19).
+-- The honesty register lives in the session's memory (agent/records/PLAN.md D180, the owner's answer to Q19).
 --
 -- Dirty and clean are transient states of the code a session is working on: they are kept in
 -- memory and persisted nowhere -- certainly not in a table as easy to change as this one. A

@@ -1,4 +1,7 @@
-"""PostgreSQL access (PLAN.md §7, D13): connections, migrations, notifications, local Docker."""
+"""PostgreSQL access: connections, migrations, notifications, local Docker.
+
+See agent/records/PLAN.md §7, D13.
+"""
 
 from calu.db.connection import (
     ConnectionSource,

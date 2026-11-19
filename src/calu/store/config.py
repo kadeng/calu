@@ -1,4 +1,4 @@
-"""Configuration, rules and checker instructions, read from the database (PLAN.md D6).
+"""Configuration, rules and checker instructions, read from the database (agent/records/PLAN.md D6).
 
 Everything that steers the checkers lives in the database, out of reach of Claude Code and of
 the commands it runs. A session loads it once at start and reloads it when the database

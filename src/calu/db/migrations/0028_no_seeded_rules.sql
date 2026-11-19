@@ -2,7 +2,7 @@
 -- rules. Rules are overrides of the checkers: an allow rule lets a step skip them, a deny rule
 -- stops a step without asking them, and an allow rule matches a command by its text, whatever
 -- program that text starts. They are meant to be the exception, written by the owner
--- (PLAN.md D179, D198). This removes the rules of the global scope that are exactly the ones
+-- (agent/records/PLAN.md D179, D198). This removes the rules of the global scope that are exactly the ones
 -- old versions seeded; rules with another pattern, and every project's rules, stay.
 
 DELETE FROM rules r

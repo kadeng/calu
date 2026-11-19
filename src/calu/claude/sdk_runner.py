@@ -11,7 +11,7 @@ The SDK runs Claude Code headless (stream-json over stdin/stdout). This runner
   text that the session sent for a human through `send`; calu's own notes, task notifications
   and everything else Claude Code puts into the conversation are reported as not from the user,
 - reports the effective permission mode, because outside the auto mode the checkers decide
-  alone (PLAN.md D5, D21),
+  alone (agent/records/PLAN.md D5, D21),
 - does not start, and makes a Bash step wait for a human, while a settings file of Claude Code
   holds a sandbox entry beyond calu's configuration and `claude.sandbox.fail_if_unavailable`
   is set (`calu.preflight.settings_file_sandbox_blockers`),
@@ -221,7 +221,7 @@ def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
 
 
 def permission_prompt(ctx: Any) -> str:
-    """Return what Claude Code says it is asking permission for (PLAN.md D60).
+    """Return what Claude Code says it is asking permission for (agent/records/PLAN.md D60).
 
     `ToolPermissionContext` carries its own prompt sentence (`title`), a subtitle
     (`description`), why the request was raised (`decision_reason`) and the path that triggered
@@ -372,7 +372,7 @@ class SdkRunner:
             gate: Decides about every tool call (PreToolUse hook and `can_use_tool`).
             sink: Receives the translated events.
             resume_id: Claude session id to resume, or None for a new session.
-            fork: Where to branch off the resumed conversation (PLAN.md D36).
+            fork: Where to branch off the resumed conversation (agent/records/PLAN.md D36).
             session_id: The id a new or forked conversation gets (`ClaudeRunner.run`).
 
         Raises:
@@ -760,13 +760,13 @@ class SdkRunner:
         Claude Code authenticates as configured on this machine; only checker keys are hidden
         from it (`_claude_env`). The sandbox settings of `config.sandbox` are passed as a
         `--settings` JSON document, which has precedence over the settings files of the project
-        and of the user (PLAN.md D15; what was measured of that: `SandboxConfig`).
+        and of the user (agent/records/PLAN.md D15; what was measured of that: `SandboxConfig`).
 
         Args:
             gate: Used by the PreToolUse hook and by `can_use_tool`.
             resume_id: Claude session id to resume, or None.
-            fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes
-                it whole.
+            fork: Where to branch off the resumed conversation (agent/records/PLAN.md D36); None
+                resumes it whole.
             session_id: The id a new or forked conversation gets (`--session-id`; measured
                 with CLI 2.1.321, `spikes/spike_session_id.py`: Claude Code reports exactly
                 this id, also for a fork). Not passed for a plain resume, which keeps its id.
@@ -780,16 +780,15 @@ class SdkRunner:
         ) -> dict[str, Any]:
             """PreToolUse hook: ask `gate.pre_tool_use` and return its verdict to Claude Code.
 
-            For an ASK verdict the step is stored, so that `can_use_tool` reuses it. A PASS
-            verdict is answered without a decision where Claude Code's auto mode is in effect
-            (the permission mode of the hook input, whatever set it), so that the auto mode
-            classifier decides as well (PLAN.md D5, D21); where there is no auto mode to defer
-            to, PASS becomes "allow" -- or, with `claude.require_auto_mode`, "ask", so that a
-            human decides in the classifier's place. ALLOW answers "allow". One case overrides
-            both PASS and ALLOW: a shell command (`SHELL_TOOLS`) is answered "ask" while a
-            settings file holds a sandbox entry beyond calu's configuration
-            (`_sandbox_blockers`, read again for every command), so a human decides whether
-            it runs.
+            For an ASK verdict the step is stored, so that `can_use_tool` reuses it. A PASS verdict
+            is answered without a decision where Claude Code's auto mode is in effect (the
+            permission mode of the hook input, whatever set it), so that the auto mode classifier
+            decides as well (agent/records/PLAN.md D5, D21); where there is no auto mode to defer
+            to, PASS becomes "allow" -- or, with `claude.require_auto_mode`, "ask", so that a human
+            decides in the classifier's place. ALLOW answers "allow". One case overrides both PASS
+            and ALLOW: a shell command (`SHELL_TOOLS`) is answered "ask" while a settings file holds
+            a sandbox entry beyond calu's configuration (`_sandbox_blockers`, read again for every
+            command), so a human decides whether it runs.
 
             Side effect: the first mode seen for the calling agent, and every change of it, is
             reported as a `log` event (`_mode_events`).
@@ -884,7 +883,7 @@ class SdkRunner:
         async def post_command(
             input_data: Any, tool_use_id: str | None, context: Any
         ) -> dict[str, Any]:
-            """PostToolUse hook for Bash: review what the command wrote (PLAN.md D31).
+            """PostToolUse hook for Bash: review what the command wrote (agent/records/PLAN.md D31).
 
             Claude waits while this runs, so the review may measure the write set, ask a checker
             and even wait for a human; the matcher therefore gets `REVIEW_HOOK_TIMEOUT_S`. A
@@ -1115,7 +1114,7 @@ class SdkRunner:
             },
             setting_sources=self.config.setting_sources,  # type: ignore[arg-type]
             # `--settings` as a JSON document: it overrides the project's and the user's
-            # settings files (PLAN.md D15). The keys it holds: `PINNED_SANDBOX_KEYS`.
+            # settings files (agent/records/PLAN.md D15). The keys it holds: `PINNED_SANDBOX_KEYS`.
             settings=json.dumps(self.config.sandbox.settings()),
             extra_args={
                 "replay-user-messages": None,
@@ -1126,10 +1125,10 @@ class SdkRunner:
             include_partial_messages=self.config.stream_partial,
             resume=resume_id,
             session_id=session_id if resume_id is None or fork is not None else None,
-            # A fork runs under a new session id, so the original stays intact (PLAN.md D36).
-            # With a fork point it keeps the conversation up to `resume_at` and discards the
-            # turn that starts at `drops_turn`; the CLI validates the pair and refuses a
-            # mismatch. Without one it keeps the whole conversation.
+            # A fork runs under a new session id, so the original stays intact
+            # (agent/records/PLAN.md D36). With a fork point it keeps the conversation up to
+            # `resume_at` and discards the turn that starts at `drops_turn`; the CLI validates the
+            # pair and refuses a mismatch. Without one it keeps the whole conversation.
             fork_session=fork is not None,
             resume_session_at=fork.resume_at if fork else None,
             resume_drops_turn=fork.drops_turn if fork else None,
@@ -1207,10 +1206,10 @@ class SdkRunner:
     def _mode_events(self, mode: Any, sdk_agent_id: Any = None) -> list[Event]:
         """Report the permission mode of an agent when it is first seen and when it changes.
 
-        Outside the auto mode a step the checkers pass runs without the classifier's second
-        approval (PLAN.md D21). That is allowed, but it must not happen unnoticed: Claude Code
-        falls back to another mode without a word for a model that has no auto mode, and a
-        tool call (`EnterPlanMode`) changes the mode during a session.
+        Outside the auto mode a step the checkers pass runs without the classifier's second approval
+        (agent/records/PLAN.md D21). That is allowed, but it must not happen unnoticed: Claude Code
+        falls back to another mode without a word for a model that has no auto mode, and a tool call
+        (`EnterPlanMode`) changes the mode during a session.
 
         Args:
             mode: `permission_mode` of a hook input or `permissionMode` of the init message;

@@ -59,13 +59,13 @@ from calu.db import Db
 CheckerName = Literal["command", "edit", "changeset", "subagent", "honesty", "honesty-review"]
 """The checkers an evaluation can measure.
 
-"honesty" is the honesty checker (PLAN.md D217): such a case is an edit, and what is scored is
-whether the checker calls the file HONEST or DISHONEST, or escalates. "honesty-review" is the
-reviewer agent of the honesty review (`calu.checkers.honesty_review`), which judges a batch of
+"honesty" is the honesty checker (agent/records/PLAN.md D217): such a case is an edit, and what is
+scored is whether the checker calls the file HONEST or DISHONEST, or escalates. "honesty-review" is
+the reviewer agent of the honesty review (`calu.checkers.honesty_review`), which judges a batch of
 files.
 
-"changeset" is the checker that reviews a whole commit (PLAN.md D26): such a case is a `git
-commit` call plus the `diff` the commit would record, which is what the session hands the
+"changeset" is the checker that reviews a whole commit (agent/records/PLAN.md D26): such a case is a
+`git commit` call plus the `diff` the commit would record, which is what the session hands the
 checker beside the step (D75).
 
 "subagent" is the checker that reviews what a subagent hands back (D77). Such a case is the
@@ -91,11 +91,11 @@ class EvalCase(BaseModel):
     """True if a good checker leaves `comment` empty (e.g. it would contradict the user)."""
     cwd: str = ""
     """The working directory the case claims to run in; "" uses `runner.EVAL_CWD`. It is
-    deliberately not the temporary directory the case really runs in (PLAN.md D71)."""
+    deliberately not the temporary directory the case really runs in (agent/records/PLAN.md D71)."""
     expect_no_marks: bool = False
-    """True if a good checker records **no** dishonest code for this step (PLAN.md D94). The
-    label of a mark a person overruled: somebody looked at the spot and said it was honest, so
-    a checker that marks it again is wrong in the way that costs the user steps."""
+    """True if a good checker records **no** dishonest code for this step (agent/records/PLAN.md
+    D94). The label of a mark a person overruled: somebody looked at the spot and said it was
+    honest, so a checker that marks it again is wrong in the way that costs the user steps."""
     want_comment: bool = False
     """True if a good checker says something in `comment`: a remark worth having, not an
     objection. For a subagent case it is the ANNOTATE verdict -- a triage note for Claude
@@ -143,8 +143,8 @@ class EvalCase(BaseModel):
     def _diff_belongs_to_a_changeset_case(self) -> EvalCase:
         """Check that every field that belongs to one kind of case is used with that kind.
 
-        A changeset case without a diff would measure the checker on a commit command alone,
-        which is not what the session gives it (PLAN.md D26); a field on a case of another
+        A changeset case without a diff would measure the checker on a commit command alone, which
+        is not what the session gives it (agent/records/PLAN.md D26); a field on a case of another
         kind would silently not be read.
 
         Returns:
@@ -321,7 +321,7 @@ def builtin_cases() -> list[EvalCase]:
 
 
 def cases_to_yaml(cases: Sequence[EvalCase]) -> str:
-    r"""Render cases in the YAML form that `load_case_file` reads back (PLAN.md D55).
+    r"""Render cases in the YAML form that `load_case_file` reads back (agent/records/PLAN.md D55).
 
     This is how the labels a herd produced leave the database: `calu evals --export` writes
     them, a person reads the file, commits what is worth keeping, and later runs it as a fixed
@@ -351,10 +351,10 @@ def case_line(case: EvalCase) -> str:
         case: The case.
 
     Returns:
-        Its name, checker, tool, the acceptable decisions, what else it expects and where it
-        came from. The extra expectations are named because they are what the case is **for**:
-        two cases can agree on the decision and differ entirely in what they measure -- a
-        remark, the absence of one, or whether any code is recorded as dishonest (PLAN.md D96).
+        Its name, checker, tool, the acceptable decisions, what else it expects and where it came
+        from. The extra expectations are named because they are what the case is **for**: two cases
+        can agree on the decision and differ entirely in what they measure -- a remark, the absence
+        of one, or whether any code is recorded as dishonest (agent/records/PLAN.md D96).
 
     Example:
         "escalation-12  edit  Write  [DENY, ESCALATE]  escalations".
@@ -390,8 +390,8 @@ async def cases_from_escalations(db: Db, limit: int = 500) -> list[EvalCase]:
 
     * the checker escalated and a human decided -- how good its caution was;
     * the checker approved the step and a human still had to decide it, because one of the
-      auto-escalation categories was on (PLAN.md D42). These are the valuable ones: a human
-      verdict on a step the checkers let through is the only way a **false negative** gets a
+      auto-escalation categories was on (agent/records/PLAN.md D42). These are the valuable ones: a
+      human verdict on a step the checkers let through is the only way a **false negative** gets a
       label, and a checker that approved something a human then denied is scored here as the
       critical miss it is.
 

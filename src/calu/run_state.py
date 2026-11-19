@@ -31,7 +31,7 @@ from calu.context.narrator import ClaudeOutput
 from calu.protocol.messages import QueuedMessage
 
 STEP_TIMES_KEPT = 500
-"""How many step times a session keeps in memory for `step_times` (PLAN.md D32)."""
+"""How many step times a session keeps in memory for `step_times` (agent/records/PLAN.md D32)."""
 
 
 @dataclass
@@ -47,7 +47,7 @@ class PendingHonesty:
         default_factory=list[tuple[str, list[CodeMark], list[CodeMark]]]
     )
     """(checker name, its `marks_dirty`, its `marks_clean`) for each run of the honesty checker
-    that wrote marks. Marks of other checkers are not kept (PLAN.md D224)."""
+    that wrote marks. Marks of other checkers are not kept (agent/records/PLAN.md D224)."""
     edit_path: str | None = None
     """The file an Edit, Write, MultiEdit or NotebookEdit call targets, as the tool names it;
     None for every other call."""
@@ -56,7 +56,7 @@ class PendingHonesty:
     (`HonestyState.expect_edit`); None if it could not be predicted."""
     checked: bool = False
     """True if the honesty checker judged the edit and every checker of the edit route approved
-    it (PLAN.md D224): only then does the edit verify its file."""
+    it (agent/records/PLAN.md D224): only then does the edit verify its file."""
     clean_commit: bool = False
     """True for a plain `git commit` that the gate decided while the honesty state was clean."""
     head_before: str | None = None
@@ -78,8 +78,9 @@ class PerCall:
     time_seq: int | None = None
     """Sequence number of the call's entry in `RunState.times`; None once the call ended."""
     before: tuple[str, int | None, str] | None = None
-    """The snapshot taken before an approved command (PLAN.md D31): the tree, the `steps` row id
-    and the checker's summary of the step. None if no snapshot is open for the call."""
+    """The snapshot taken before an approved command (agent/records/PLAN.md D31): the tree, the
+    `steps` row id and the checker's summary of the step. None if no snapshot is open for the call.
+    """
     overlapped: bool = False
     """True if another command ran while this call's snapshot was open, so the write set cannot
     be attributed to one of them."""

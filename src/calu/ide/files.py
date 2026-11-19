@@ -8,7 +8,7 @@
     changes ──► ChangeLog ──► `ide.fs.changed` notifications: merged per path, cut into
                               batches, numbered, kept for a replay
 
-The contract is `docs/notes/jetbrains-sync-spec.md`. This module holds what can be decided
+The contract is `agent/records/notes/jetbrains-sync-spec.md`. This module holds what can be decided
 from values alone; `calu.ide.filestore` touches the files and `calu.ide.filesync` answers the
 requests. Every function here is free of side effects unless its docstring names one.
 """
@@ -104,7 +104,7 @@ KEPT_NOTIFICATIONS = 1000
 UPLOAD_PREFIX = ".calu-upload-"
 """Start of the name of the temporary file of a write; such files are never listed."""
 
-TRACE_DIRECTORY = ".agent/traces"
+TRACE_DIRECTORY = "agent/traces"
 """The default directory of the session traces; excluded whatever the settings say."""
 
 WALK_IGNORED = frozenset(

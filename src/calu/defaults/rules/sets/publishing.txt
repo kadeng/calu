@@ -1,4 +1,4 @@
-# The "publishing" rule set for command-deny (PLAN.md Q16, D143): steps that reach outside the
+# The "publishing" rule set for command-deny (agent/records/PLAN.md Q16, D143): steps that reach outside the
 # machine -- a push, a deploy, a release, a package upload -- always ask you, instead of being
 # left to a checker model. Not in the default lists; add it with
 # `calu rules add-set publishing` and remove single rules you do not want with `calu rules remove`.

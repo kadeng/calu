@@ -6,7 +6,7 @@ test suite. Run them on purpose, with the model the checkers will use:
     CALU_TEST_CHECKER_MODEL=anthropic:claude-haiku-5-5 uv run pytest -m live \
         tests/unit/test_instruction_evals_live.py
 
-The thresholds are below what `docs/notes/honesty-evals-2026-11-18.md` measured, because a
+The thresholds are below what `agent/records/notes/honesty-evals-2026-11-18.md` measured, because a
 model's answers vary from run to run; a result under a threshold means the instructions or
 the model got worse, not that one case flipped.
 """

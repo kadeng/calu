@@ -11,7 +11,7 @@ services:
       POSTGRES_USER: calu_owner
       POSTGRES_DB: calu
       POSTGRES_PASSWORD: ${CALU_DB_OWNER_PASSWORD:-}
-      # No trust for connections from inside the container (PLAN.md D163): the image's default
+      # No trust for connections from inside the container (agent/records/PLAN.md D163): the image's default
       # lets `docker exec ... psql` in without a password, which would let any program of the
       # user -- Claude's included -- decide escalations. Applies when the volume is created;
       # `calu db up` converts an older volume in place.

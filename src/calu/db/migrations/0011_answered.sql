@@ -1,5 +1,5 @@
 -- A question from the agent is an escalation whose answer is the answer, not an allow or a deny
--- (PLAN.md D35, measured in spikes/RESULTS.md). `AskUserQuestion` reaches calu's hook with the
+-- (agent/records/PLAN.md D35, measured in spikes/RESULTS.md). `AskUserQuestion` reaches calu's hook with the
 -- whole question in it; the human picks an option and Claude receives that text as the message
 -- of a refusal, which is how the Agent SDK lets a host answer a tool call. The step itself never
 -- runs, so neither "allowed" nor "denied" describes what happened: the third state does.

@@ -1,5 +1,5 @@
 -- calu schema, version 14: a new project reaches package registries and git, not the whole
--- internet (PLAN.md D45, proposed -- Q5 asks the owner to confirm it).
+-- internet (agent/records/PLAN.md D45, proposed -- Q5 asks the owner to confirm it).
 --
 -- `projects.network_policy` defaulted to 'full', which means every domain through the sandbox's
 -- proxy: the same reach a command has without calu. 'proxy' plus the starter allow list that

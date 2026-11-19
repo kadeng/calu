@@ -1,4 +1,4 @@
-"""What a command actually wrote, measured with git snapshots (PLAN.md D31).
+"""What a command actually wrote, measured with git snapshots (agent/records/PLAN.md D31).
 
 `Edit`, `Write` and `NotebookEdit` reach the tool gate with their exact content, so calu knows
 what they change before they run. A Bash command does not: `sed -i`, a formatter, a code

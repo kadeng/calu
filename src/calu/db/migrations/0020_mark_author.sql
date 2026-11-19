@@ -1,4 +1,4 @@
--- Which checker opened an honesty mark (PLAN.md D87).
+-- Which checker opened an honesty mark (agent/records/PLAN.md D87).
 --
 -- A route carries several checkers (D81), and honesty, security and over-engineering are
 -- plausibly separate ones, so "12 marks are open" is not an answer to "is this checker any

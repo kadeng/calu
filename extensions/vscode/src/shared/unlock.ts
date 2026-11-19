@@ -1,5 +1,5 @@
 /**
- * Decisions of the "one password, asked once" flow (docs/notes/vscode-extension-spec.md,
+ * Decisions of the "one password, asked once" flow (agent/records/notes/vscode-extension-spec.md,
  * section 8). Pure: no `vscode` import, no DOM, no I/O. `src/bridge.ts` connects these functions
  * to the input box, to VSCode's secret storage and to the bridge request `ide.unlock`.
  *

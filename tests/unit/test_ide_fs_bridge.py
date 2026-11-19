@@ -1,7 +1,7 @@
 """The file requests of `calu ide` through the in-memory editor: no stdio, no database.
 
-The contract is `docs/notes/jetbrains-sync-spec.md`. The session, where one is attached, is a
-served fake session (`tests.unit.test_protocol_server.served`).
+The contract is `agent/records/notes/jetbrains-sync-spec.md`. The session, where one is attached, is
+a served fake session (`tests.unit.test_protocol_server.served`).
 """
 
 import base64
@@ -207,7 +207,7 @@ async def test_the_manifest_of_a_git_tree_leaves_out_ignored_files(
         nothing = await editor.request("ide.fs.manifest", {"paths": []})
         assert nothing["files"] == [] and nothing["head"] == manifest["head"]
 
-        for bad in ([".git"], ["../x"], ["/etc"], [".agent/traces"]):
+        for bad in ([".git"], ["../x"], ["/etc"], ["agent/traces"]):
             error = await refused(editor, "ide.fs.manifest", {"paths": bad})
             assert error.code == files.PATH_REFUSED
         assert (await refused(editor, "ide.fs.manifest", {"scope": "some"})).code == -32602
@@ -302,7 +302,7 @@ async def test_a_file_is_read_in_ranges(project: Path, store: CredentialStore):
         ("", "invalid"),
         (".git/config", "excluded"),
         ("sub/.git/HEAD", "excluded"),
-        (".agent/traces/s.md", "excluded"),
+        ("agent/traces/s.md", "excluded"),
     ],
 )
 async def test_every_file_request_refuses_a_path_outside_the_project(
@@ -736,8 +736,8 @@ async def test_ignored_and_excluded_files_are_not_reported(project: Path, store:
     async with bridged(project, store, **FAST) as editor:
         await editor.request("ide.fs.subscribe")
         (project / "debug.log").write_bytes(b"noise")
-        (project / ".agent" / "traces").mkdir(parents=True)
-        (project / ".agent" / "traces" / "s.md").write_text("trace")
+        (project / "agent" / "traces").mkdir(parents=True)
+        (project / "agent" / "traces" / "s.md").write_text("trace")
         (project / ".git" / "marker").write_text("x")
         (project / "real.txt").write_bytes(b"real")
         await wait_change(editor, "real.txt")

@@ -1,4 +1,4 @@
--- The changeset checker gets more requests than a step checker (PLAN.md D75).
+-- The changeset checker gets more requests than a step checker (agent/records/PLAN.md D75).
 --
 -- It reviews a whole commit, and its instructions ask it to use its read-only tools: "A few
 -- calls are expected here, because the whole change is being judged". Measured on the new

@@ -1,5 +1,5 @@
 -- A session accepts every non-revoked client token of its own session, not only the one it
--- printed (PLAN.md D30, part of Q4). That is what makes a stored token practical: an editor's
+-- printed (agent/records/PLAN.md D30, part of Q4). That is what makes a stored token practical: an editor's
 -- ACP adapter, a local command or a remote interface keeps working when the session restarts,
 -- and an operator can revoke one token without touching the others.
 --

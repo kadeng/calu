@@ -1,4 +1,4 @@
-"""Requests for a session: the rows a `calu serve` process answers (PLAN.md D208).
+"""Requests for a session: the rows a `calu serve` process answers (agent/records/PLAN.md D208).
 
     requester (operator login)                      calu serve (session login)
     file ──► session_requests row, state pending

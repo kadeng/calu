@@ -1,4 +1,4 @@
-"""The live view: the web server as a client of a real session (PLAN.md D34).
+"""The live view: the web server as a client of a real session (agent/records/PLAN.md D34).
 
 No browser here — this drives the relay WebSocket directly, so the chain under test is
 browser command -> web server -> client token minted in the database -> the session's own
@@ -190,7 +190,7 @@ async def test_a_session_without_an_address_says_so(db_url: str, tmp_path: Path)
 async def test_the_live_view_of_a_gone_session_says_the_process_is_gone(
     db_url: str, tmp_path: Path
 ) -> None:
-    """Not "cannot reach the address": the heartbeat already knows why (PLAN.md D56).
+    """Not "cannot reach the address": the heartbeat already knows why (agent/records/PLAN.md D56).
 
     No session runs here: the row carries an address nothing listens on, which is exactly what
     a process that was killed leaves behind.

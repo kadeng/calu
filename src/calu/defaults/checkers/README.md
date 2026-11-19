@@ -1,6 +1,6 @@
 # The checker instructions that ship with calu
 
-A checker's prompt is put together from parts (PLAN.md D181, D224):
+A checker's prompt is put together from parts (agent/records/PLAN.md D181, D224):
 
 | File | What it holds | Who edits it |
 |---|---|---|

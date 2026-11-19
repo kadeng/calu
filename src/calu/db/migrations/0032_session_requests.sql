@@ -1,4 +1,4 @@
--- calu schema, version 32: requests for a session, answered by `calu serve` (PLAN.md D208).
+-- calu schema, version 32: requests for a session, answered by `calu serve` (agent/records/PLAN.md D208).
 --
 -- `calu serve` is one process that holds the session login and starts sessions on request.
 -- A request is a row of `session_requests`, written with the operator login (or by the

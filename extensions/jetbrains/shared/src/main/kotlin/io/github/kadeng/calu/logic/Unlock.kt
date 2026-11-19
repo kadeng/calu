@@ -1,5 +1,5 @@
 /**
- * Decisions of the "one password, asked once" flow (docs/notes/vscode-extension-spec.md,
+ * Decisions of the "one password, asked once" flow (agent/records/notes/vscode-extension-spec.md,
  * section 8). Pure: no IntelliJ Platform import, no UI, no I/O. The bridge code of the plugin
  * connects these functions to the password dialog, to the IDE's password store and to the bridge
  * request `ide.unlock`.

@@ -6,8 +6,14 @@ stay-in-the-loop (sitl).
 
 ## Status
 
-Implementation in progress; see `HANDOFF.md` for the current state and `PLAN.md` §12 for the
-phases.
+Implementation in progress; see `agent/records/HANDOFF.md` for the current state and
+`agent/records/PLAN.md` §12 for the phases.
+
+`agent/` holds what the coding agents write and maintain for themselves: the system of records
+in `agent/records/` (requirements, plan, handoff, and `notes/` with specs, research, the test
+plan and reports) and, when session traces are switched on, the traces in `agent/traces/`.
+Everything written for people stays outside it (README, guide, `docs/`, the extensions'
+READMEs). This file stays at the top level, where every agent looks first.
 
 ## Files
 
@@ -15,9 +21,10 @@ phases.
 |---|---|
 | `README.md` | Description for end users, getting started |
 | `CALU_GUIDE.md` | The user documentation: commands, credentials, sandbox, remote access, web interface, ACP, checkers |
-| `REQUIREMENTS.md` | The owner's requirements and priorities, only as stated by the owner. Do not add derived requirements; those belong in `PLAN.md`. |
-| `PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
-| `HANDOFF.md` | State of the work and next steps, for the next session |
+| `agent/records/REQUIREMENTS.md` | The owner's requirements and priorities, only as stated by the owner. Do not add derived requirements; those belong in `agent/records/PLAN.md`. |
+| `agent/records/PLAN.md` | Design, decisions, threat model, database sketch, CLI, open questions, phases |
+| `agent/records/HANDOFF.md` | State of the work and next steps, for the next session |
+| `agent/records/notes/` | Specs, research notes, the test plan (`test-plan.md`), reports, evaluations and their screenshots |
 | `docs/TESTING.md` | The four test layers, the spikes and the manual checklist |
 | `docs/CONFIGURATION.md` | Every setting with its type, default and meaning -- **generated** from `calu.config` by `calu.configdoc`; a test fails when the two disagree |
 | `LICENSE` | GPL-2.0, verbatim -- never edited |
@@ -72,7 +79,7 @@ phases.
 | `src/calu/protocol/` | Client protocol: messages (Pydantic), JSON-RPC server and client over WebSocket, JSON Schema export |
 | `src/calu/web/` | `calu web`: the herd overview (Starlette), the settings form generated from `Config` (`settings.py`), the live relay to a session's own WebSocket, links into a git browser (`git.py`) |
 | `src/calu/acp/` | `calu acp`: the Agent Client Protocol adapter — shapes (`messages.py`), JSON-RPC over newline-delimited JSON (`peer.py`), the translation to calu's protocol (`adapter.py`), the entry point (`serve.py`) |
-| `src/calu/ide/` | `calu ide`: the bridge an editor extension starts (JSON-RPC over newline-delimited JSON on stdin and stdout, `docs/notes/vscode-extension-spec.md`) — the requests (`bridge.py`), the connection to the attached session with its reconnects (`link.py`), the database logins chosen without a prompt (`access.py`), what the editor reads and writes in the database (`database.py`), the model presets (`presets.py`), the entry point (`serve.py`); and the file synchronisation for an editor that works on a copy over SSH (`docs/notes/jetbrains-sync-spec.md`): the rules that need no file access (`files.py`: path checks, limits, hash cache, change log, held files), every access to the project's files, confined to the project directory (`filestore.py`), the `ide.fs.*` requests, the polling watcher and the `ide.fs.changed` notifications (`filesync.py`) |
+| `src/calu/ide/` | `calu ide`: the bridge an editor extension starts (JSON-RPC over newline-delimited JSON on stdin and stdout, `agent/records/notes/vscode-extension-spec.md`) — the requests (`bridge.py`), the connection to the attached session with its reconnects (`link.py`), the database logins chosen without a prompt (`access.py`), what the editor reads and writes in the database (`database.py`), the model presets (`presets.py`), the entry point (`serve.py`); and the file synchronisation for an editor that works on a copy over SSH (`agent/records/notes/jetbrains-sync-spec.md`): the rules that need no file access (`files.py`: path checks, limits, hash cache, change log, held files), every access to the project's files, confined to the project directory (`filestore.py`), the `ide.fs.*` requests, the polling watcher and the `ide.fs.changed` notifications (`filesync.py`) |
 | `src/calu/lightcycles/` | An easter egg, hidden from `calu --help` and not in the user documentation: `calu lightcycles` serves MetaTron for the browser (after MetaTron by Kai Londenberg) on 127.0.0.1. `server.py` is the static file server with its Content-Security-Policy; the game is plain JavaScript in `static/` (`sim.js` one frame of a round, `flow.js` the menus, `water.js`, `render.js`, `main.js`), tested in `tests/browser/test_lightcycles.py` |
 | `src/calu/comments/` | User comments on selections in diffs and files |
 | `src/calu/models.py` | Model resolution and bounded agent runs (Pydantic AI) |
@@ -113,7 +120,7 @@ outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
 - CI runs the same checks on every push and pull request, plus the browser layer and the installed wheel (`.github/workflows/checks.yml`). The live layer never runs in CI.
 - Every `calu ...` line in the documentation's code blocks is parsed by the real parser in a test (`tests/unit/test_documented_commands.py`), so a renamed flag or a stale example fails the suite rather than a reader's terminal.
 
-## Coding rules (from sitl, PLAN.md D11)
+## Coding rules (from sitl, agent/records/PLAN.md D11)
 
 - Python first. Other languages only where an integration requires it; keep that layer thin.
 - Design by contract: every function and method has a Google-style docstring with its full

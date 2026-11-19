@@ -1,7 +1,7 @@
-"""What a running session writes to the database (PLAN.md §7, REQUIREMENTS 11).
+"""What a running session writes to the database (agent/records/PLAN.md §7, REQUIREMENTS 11).
 
     calu run ──► SessionStore.start          sessions row, state "starting"
-                 set_state                   every state change (PLAN.md §3.1)
+                 set_state                   every state change (agent/records/PLAN.md §3.1)
                  add_step  ─► decide_step ─► finish_step        one row per tool call
                  add_checker_run             one row per checker model call
                  open_escalation ─► escalation ─► close_escalation
@@ -15,7 +15,7 @@
 it against PostgreSQL with the rights of the role `calu_session`; `MemorySessionStore`
 (`calu.store.memory`) implements it without a database, for unit tests.
 
-Escalations can be resolved from two sides (PLAN.md D28):
+Escalations can be resolved from two sides (agent/records/PLAN.md D28):
 
 - an **operator** resolves any escalation in the database (`calu_resolve_escalation`, used by
   `calu resolve` and by a herd interface with its own database login); the waiting session
@@ -56,7 +56,8 @@ from calu.store.trust import TrustSource
 
 EscalationState = Literal["open", "allowed", "denied", "answered", "cancelled"]
 """States of an `escalations` row. "answered" belongs to a question of the agent: the step
-neither ran nor was refused, and the note holds the answer (PLAN.md D35, migration 0011)."""
+neither ran nor was refused, and the note holds the answer (agent/records/PLAN.md D35, migration
+0011)."""
 
 
 SESSION_ENDED_NOTE = "the session ended before anybody answered"
@@ -170,11 +171,10 @@ class SessionStore(Protocol):
     """Where a session records what it does. See the module docstring.
 
     Every method may raise `psycopg.Error` (or, for the in-memory store, nothing). The session
-    reports a failed call as a `log` error and counts it: a single failure is tolerated, because
-    a network hiccup must not end an overnight run, and
-    `config.store_failures_before_stop` failures in a row stop the session, because one nobody
-    can watch or unblock should give the machine back (PLAN.md D59). The count resets on the
-    next call that works.
+    reports a failed call as a `log` error and counts it: a single failure is tolerated, because a
+    network hiccup must not end an overnight run, and `config.store_failures_before_stop` failures
+    in a row stop the session, because one nobody can watch or unblock should give the machine back
+    (agent/records/PLAN.md D59). The count resets on the next call that works.
     """
 
     session_id: str | None
@@ -222,7 +222,7 @@ class SessionStore(Protocol):
         ...
 
     async def set_address(self, address: str) -> None:
-        """Record where this session process listens for clients (PLAN.md D29).
+        """Record where this session process listens for clients (agent/records/PLAN.md D29).
 
         Args:
             address: "ws://host:port" or a Unix socket path.
@@ -257,9 +257,9 @@ class SessionStore(Protocol):
         """Record that a setting of this running session changed, and who asked for it.
 
         For the audit log, not for the session's own behaviour: `auto_escalate.set` is the one
-        setting a client may change through the protocol (PLAN.md D42), and switching it off
-        weakens the session, so an operator reading the history afterwards must be able to see
-        it (D43). Changes of the project's configuration are logged by database triggers
+        setting a client may change through the protocol (agent/records/PLAN.md D42), and switching
+        it off weakens the session, so an operator reading the history afterwards must be able to
+        see it (D43). Changes of the project's configuration are logged by database triggers
         instead; this is for the ones that live in the process.
 
         Args:
@@ -272,7 +272,7 @@ class SessionStore(Protocol):
         ...
 
     async def heartbeat(self) -> None:
-        """Record that this session's process is still running (PLAN.md D56).
+        """Record that this session's process is still running (agent/records/PLAN.md D56).
 
         Called on an interval while the session lives. A reader compares `sessions.last_seen`
         with the current time to tell a working session from one whose process is gone: nothing
@@ -294,7 +294,7 @@ class SessionStore(Protocol):
         Every client token belongs to one session (`client_tokens.session_id`), so when the
         session ends none of them can ever authenticate anything again. Marking them revoked
         keeps `calu token list` truthful: a row that says "valid" for a session whose process
-        is gone invites a user to hand that token out (PLAN.md D108).
+        is gone invites a user to hand that token out (agent/records/PLAN.md D108).
 
         Args:
             state: The final state, "stopped" or "failed".
@@ -339,7 +339,9 @@ class SessionStore(Protocol):
         undeclared: Sequence[str] = (),
         overlapping: bool = False,
     ) -> None:
-        """Record what a step wrote, as the optional snapshot measured it (PLAN.md D31).
+        """Record what a step wrote, as the optional snapshot measured it.
+
+        See agent/records/PLAN.md D31.
 
         Args:
             step_id: Id from `add_step`.
@@ -393,8 +395,8 @@ class SessionStore(Protocol):
     async def load_summary(self) -> str:
         """Read the chat summary of this session back from the database.
 
-        A session reads it again after a `config_changed` notification, because an operator may
-        have corrected it (PLAN.md D40): the summary is part of what steers the checkers.
+        A session reads it again after a `config_changed` notification, because an operator may have
+        corrected it (agent/records/PLAN.md D40): the summary is part of what steers the checkers.
 
         Returns:
             The stored summary, or "" if this session has none.
@@ -439,7 +441,7 @@ class SessionStore(Protocol):
         ...
 
     async def add_client_token(self, token_sha256: str, address: str) -> int:
-        """Record the hash of a client token of this session (PLAN.md §5).
+        """Record the hash of a client token of this session (agent/records/PLAN.md §5).
 
         The token itself is never stored: a client sends it, and the session compares the hash.
 
@@ -531,7 +533,7 @@ class SessionStore(Protocol):
         answered: bool = False,
         token_sha256: str | None = None,
     ) -> bool:
-        """Record the decision of a client of this session (PLAN.md D28).
+        """Record the decision of a client of this session (agent/records/PLAN.md D28).
 
         Args:
             escalation_id: Id from `open_escalation`.
@@ -540,8 +542,8 @@ class SessionStore(Protocol):
                 question of the agent.
             actor: Name of the client that decided, for the record.
             answered: True if this was a question of the agent and `note` holds its answer
-                (PLAN.md D35); the row is then recorded as "answered", because the step neither
-                ran nor was refused.
+                (agent/records/PLAN.md D35); the row is then recorded as "answered", because the
+                step neither ran nor was refused.
             token_sha256: SHA-256 of the token the deciding client authenticated with. The
                 database records the decision only for a non-revoked token of this session.
                 None uses a token hash the store remembers (the first one it saw accepted).
@@ -752,7 +754,7 @@ class DatabaseSessionStore:
             # Through the function, not with a plain INSERT: under row-level security a session
             # may only touch rows that carry its own id, and at this moment that id does not
             # exist yet. The function runs as the owner, stores the hash of the session key
-            # and hands the id back (PLAN.md D49, migration 0025).
+            # and hands the id back (agent/records/PLAN.md D49, migration 0025).
             cur = await conn.execute(
                 b"SELECT calu_start_session(%s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
@@ -1205,11 +1207,11 @@ class DatabaseSessionStore:
     async def load_previous(self, claude_session_id: str) -> tuple[list[TurnRecord], str]:
         """Load the conversation's unfolded turns and its chat summary (see `SessionStore`).
 
-        The state is read from **every** session of the conversation, not from the last one,
-        because a resume splits it (PLAN.md D65): the resumed session saves only the turns it
+        The state is read from **every** session of the conversation, not from the last one, because
+        a resume splits it (agent/records/PLAN.md D65): the resumed session saves only the turns it
         runs itself and writes a `chat_summaries` row only when it folds. Reading one session
-        therefore lost the whole earlier conversation after the second resume -- the newest
-        session held turns but no summary, so the checkers started again from nothing.
+        therefore lost the whole earlier conversation after the second resume -- the newest session
+        held turns but no summary, so the checkers started again from nothing.
 
         What is read:
 
@@ -1241,7 +1243,7 @@ class DatabaseSessionStore:
         """
         async with self._db.exclusive() as conn:
             # Through the function: the sibling rows of one conversation are what row-level
-            # security keeps this role out of (PLAN.md D49).
+            # security keeps this role out of (agent/records/PLAN.md D49).
             await self._claim_conversation(conn, claude_session_id)
             cur = await conn.execute(
                 b"SELECT id FROM calu_conversation_sessions(%s) WHERE id IS DISTINCT FROM %s::uuid",
@@ -1271,8 +1273,8 @@ class DatabaseSessionStore:
         """Read the newest chat summary of a conversation and how far it reaches.
 
         The newest fold is the one with the highest `covered_turns`, whichever session of the
-        conversation performed it (PLAN.md D65): a resumed session writes a summary row only
-        when it folds, so the row may belong to any of them.
+        conversation performed it (agent/records/PLAN.md D65): a resumed session writes a summary
+        row only when it folds, so the row may belong to any of them.
 
         Args:
             conn: The connection to use (the caller holds the lock).
@@ -1359,7 +1361,7 @@ class DatabaseSessionStore:
         """
         # Through the function: this spans other sessions' rows, which row-level security
         # keeps this role out of, and the function returns their metadata and first prompt and
-        # nothing else of them (PLAN.md D49).
+        # nothing else of them (agent/records/PLAN.md D49).
         rows = await self._db.all(
             "SELECT id, claude_session_id, state, directory, started_at, ended_at, first_input"
             " FROM calu_recent_sessions(%s, %s)",
@@ -1413,13 +1415,12 @@ class DatabaseSessionStore:
     ) -> SessionHistoryResult:
         """Read the recorded conversation for a replay (see `SessionStore.load_history`).
 
-        The turns and the chat summary are those of the whole conversation, the steps are those
-        of its newest session (PLAN.md D65). The reason for the split is that turn numbers
-        continue across a resume while a step's `seq` starts again at 1 in every session, so
-        merging steps would hand a client two different steps under one number -- and `seq` is
-        what a client identifies a step by (`events.subscribe {after_seq}`). A replay therefore
-        shows the conversation as a person wrote it, with the tool calls of the run that is
-        being loaded.
+        The turns and the chat summary are those of the whole conversation, the steps are those of
+        its newest session (agent/records/PLAN.md D65). The reason for the split is that turn
+        numbers continue across a resume while a step's `seq` starts again at 1 in every session, so
+        merging steps would hand a client two different steps under one number -- and `seq` is what
+        a client identifies a step by (`events.subscribe {after_seq}`). A replay therefore shows the
+        conversation as a person wrote it, with the tool calls of the run that is being loaded.
 
         Args:
             claude_session_id: Which conversation; None is this session's own.

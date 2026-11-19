@@ -2,12 +2,12 @@
 
     calu web                # http://calu.localhost:8800/?token=..., needs the `admin` credential
 
-It is the herd client of PLAN.md §6.2: it works on the database, so it sees the sessions of
-every host without a process of its own on them, and it holds the `admin` credential, so it can
-also change what steers the checkers. For the live view of one session it is a client of that
+It is the herd client of agent/records/PLAN.md §6.2: it works on the database, so it sees the
+sessions of every host without a process of its own on them, and it holds the `admin` credential, so
+it can also change what steers the checkers. For the live view of one session it is a client of that
 session as well (D34): it mints a client token, connects to the address the session recorded and
-relays the event stream to the browser, so the browser needs no token and the session needs no
-new protocol.
+relays the event stream to the browser, so the browser needs no token and the session needs no new
+protocol.
 
 Pages:
 
@@ -24,8 +24,8 @@ Pages:
                           lists, per scope
 
 **The login is the token `calu web` prints** (`TokenGate`, D161); there are no user accounts
-(PLAN.md Q4 is open), so the server refuses to bind anything but the loopback interface: reach
-it from another machine through an SSH tunnel
+(agent/records/PLAN.md Q4 is open), so the server refuses to bind anything but the loopback
+interface: reach it from another machine through an SSH tunnel
 
     ssh -L 8800:127.0.0.1:8800 the-host      # then open the printed address at home
 
@@ -190,7 +190,7 @@ GROUPS: tuple[tuple[str, str, frozenset[str]], ...] = (
     ("idle", "Idle", frozenset({"idle"})),
     ("ended", "Ended", frozenset({"stopped", "failed"})),
 )
-"""How the fleet page groups the sessions, in the order it shows them (PLAN.md D33).
+"""How the fleet page groups the sessions, in the order it shows them (agent/records/PLAN.md D33).
 
 Every agent UI that manages many sessions leads with the ones that cannot go on without a
 human — Claude Code's agent view groups into "Needs input", "Working", "Completed", Orca into
@@ -227,7 +227,7 @@ class NotLocal(Exception):
 
 
 def check_host(host: str) -> None:
-    """Refuse to serve anything but the loopback interface (PLAN.md Q4).
+    """Refuse to serve anything but the loopback interface (agent/records/PLAN.md Q4).
 
     Args:
         host: The address `calu web` was asked to bind.
@@ -242,13 +242,13 @@ def check_host(host: str) -> None:
     except ValueError as exc:
         raise NotLocal(
             f"{host!r} is not an IP address; the web interface serves 127.0.0.1 only, because it "
-            "has no login yet (PLAN.md Q4)"
+            "has no login yet (agent/records/PLAN.md Q4)"
         ) from exc
     if not address.is_loopback:
         raise NotLocal(
             f"the web interface has no login yet, so it refuses to serve {host}. Reach it from "
             "another machine through an SSH tunnel (ssh -L 8800:127.0.0.1:8800 <host>) or put a "
-            "TLS proxy with its own authentication in front of it (PLAN.md Q4)."
+            "TLS proxy with its own authentication in front of it (agent/records/PLAN.md Q4)."
         )
 
 
@@ -520,7 +520,7 @@ LOGIN_FAILURES_FORGET_S = 60.0
 
 
 class TokenGate:
-    """Let through only what a logged-in browser of the operator sends (PLAN.md D161).
+    """Let through only what a logged-in browser of the operator sends (agent/records/PLAN.md D161).
 
     `LocalOnly` keeps other websites out, but not other processes of this user: Claude runs
     as the same user, and a `curl -X POST .../escalations/1/resolve` from its Bash would decide
@@ -558,9 +558,9 @@ class TokenGate:
         Args:
             app: The ASGI application.
             token: The secret a browser logs in with, as `?token=`.
-            check_password: Says whether a typed password is the admin password; with it, a
-                browser without a login gets a page that asks for the password (PLAN.md
-                D216). None leaves the token as the only login.
+            check_password: Says whether a typed password is the admin password; with it, a browser
+                without a login gets a page that asks for the password (agent/records/PLAN.md D216).
+                None leaves the token as the only login.
         """
         self.app = app
         self.token = token
@@ -893,7 +893,7 @@ def _same(given: str, token: str) -> bool:
 
 
 class LocalOnly:
-    """Refuse requests that a page from another site could have caused (PLAN.md D136).
+    """Refuse requests that a page from another site could have caused (agent/records/PLAN.md D136).
 
     The interface serves loopback only -- but a browser on this machine will send requests to
     a loopback address on behalf of **any** site it has open, with the login's cookie where
@@ -1346,7 +1346,7 @@ async def session_file(request: Request, state: _State) -> Response:
 
 
 async def request_session(request: Request, state: _State) -> Response:
-    """Ask the `calu serve` of a session's machine for another session (PLAN.md D208).
+    """Ask the `calu serve` of a session's machine for another session (agent/records/PLAN.md D208).
 
     The new session is in the same directory, for the same host and OS user, and in the same
     project as the session of the page: a new conversation, a continuation of this one, or a
@@ -1416,7 +1416,7 @@ async def request_session(request: Request, state: _State) -> Response:
 
 
 async def summary_page(request: Request, state: _State) -> Response:
-    """Show and correct the chat summary a session's checkers read (PLAN.md D40).
+    """Show and correct the chat summary a session's checkers read (agent/records/PLAN.md D40).
 
     The summary is what the checkers see of everything older than the unfolded turns, so a wrong
     one misleads every later check. A running session re-reads it at its next check.
@@ -1482,7 +1482,7 @@ async def live_page(request: Request, state: _State) -> Response:
 
 
 async def live_socket(websocket: WebSocket, state: _State) -> None:
-    """Relay one browser's live view to the session's own WebSocket (PLAN.md D34).
+    """Relay one browser's live view to the session's own WebSocket (agent/records/PLAN.md D34).
 
     The server mints a client token for the session (D30), connects to the address the session
     recorded (D29), forwards every event to the browser and every command of the browser to the

@@ -93,7 +93,7 @@ between the baseline and the present state for the files that are unreviewed or 
   required is cleared.
 - Cap: `honesty.review_max_files` (default 300). More files than that: the review does not
   run; the step that needed it is **escalated** to a human with the reason and the counts.
-  (The owner's intended later solution, to be recorded in PLAN.md by the lead and not built
+  (The owner's intended later solution, to be recorded in agent/records/PLAN.md by the lead and not built
   now: build the call graph of the unclean functions and review in waves from its leaves, so
   each reviewer can rely on the documentation of what the reviewed function calls.)
 - A review that fails (model error, timeout, malformed answer) verifies nothing; the step

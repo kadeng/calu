@@ -1,4 +1,6 @@
-"""`calu attach` with no arguments, as a real process against a real session (PLAN.md D105).
+"""`calu attach` with no arguments, as a real process against a real session.
+
+See agent/records/PLAN.md D105.
 
 The pieces are tested apart: `_pick_session` chooses (tests/unit/test_endpoint.py), the lookup
 and the minting work against the database (tests/db/test_herd.py) and the client speaks the

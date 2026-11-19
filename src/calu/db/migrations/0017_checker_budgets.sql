@@ -1,4 +1,4 @@
--- Raise the checkers' request and token budgets (PLAN.md D72).
+-- Raise the checkers' request and token budgets (agent/records/PLAN.md D72).
 --
 -- Measured against the built-in evaluation cases with a thinking checker model (Nemotron
 -- Lightning on Fireworks, 25 cases, three runs each): with the old budgets, 5 of 18 edit-checker

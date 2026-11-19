@@ -1,7 +1,7 @@
 -- calu schema, version 8: how to reach a session process, and the agents inside a session.
 --
 -- Many calu processes wrap many Claude sessions, and each session runs subagents, so the
--- database has to answer two questions it could not answer before (PLAN.md D29):
+-- database has to answer two questions it could not answer before (agent/records/PLAN.md D29):
 --
 --   "where does this session listen?"   sessions.address, next to the pid, host and OS user
 --                                       that were already there

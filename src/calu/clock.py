@@ -1,4 +1,6 @@
-"""Watching calu's own clock, because the attribution of file changes rests on it (PLAN.md D32).
+"""Watching calu's own clock, because the attribution of file changes rests on it.
+
+See agent/records/PLAN.md D32.
 
 A checker tells which step changed a file by comparing the file's ctime with the times of the
 steps (`calu.checkers.tools.changed_files`). An unprivileged process cannot forge a ctime, so

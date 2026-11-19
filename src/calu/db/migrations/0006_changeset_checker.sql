@@ -1,4 +1,4 @@
--- calu schema, version 6: the changeset checker (PLAN.md D26).
+-- calu schema, version 6: the changeset checker (agent/records/PLAN.md D26).
 --
 -- It reviews the whole change that a `git commit` would record, before the commit happens, and
 -- is therefore a route of its own: the step checkers judge one edit with limited context, this

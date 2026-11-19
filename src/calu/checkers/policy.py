@@ -2,22 +2,23 @@
 
 Each tool name maps to a `Route`:
 
-    Bash                                  -> COMMAND  (command checker)
-    Edit, Write, MultiEdit, NotebookEdit  -> EDIT     (edit checker)
-    AskUserQuestion                       -> QUESTION (the human answers it; PLAN.md D35)
-    read-only built-in tools              -> ALLOW    (no check)
-    anything else (WebFetch, MCP tools…)  -> `default` (COMMAND unless configured otherwise)
+    Bash                                  -> COMMAND  (command checker) Edit, Write, MultiEdit,
+    NotebookEdit  -> EDIT     (edit checker) AskUserQuestion                       -> QUESTION (the
+    human answers it; agent/records/PLAN.md D35) read-only built-in tools              -> ALLOW
+    (no check) anything else (WebFetch, MCP tools…)  -> `default` (COMMAND unless configured
+    otherwise)
 
 The table can be overridden per tool name, for example to escalate all calls of one MCP tool.
 The user's allow and deny lists (`calu.checkers.rules`) are applied before the
-route: they can escalate a call, let a Bash call run without a check, or send a read of an
-unlisted path to the command checker. A shell call that creates a git commit stays on COMMAND:
-the command checkers judge the line, and for a line that is one plain `git commit` the session
-runs the checkers of CHANGESET in addition, with the diff the commit would record; any other
-line with a commit is denied (`calu.checkers.changeset`, `calu.session`). CHANGESET is also the
-route of the review of what a command wrote (PLAN.md D31). `AskUserQuestion` goes to QUESTION:
-no checker judges it, because only the human knows the answer, and the answer reaches Claude as
-the message of the refusal that keeps the call from running (D35).
+route: they can escalate a call, let a Bash call run without a check, or send a read of an unlisted
+       path to the command checker. A shell call that creates a git commit stays on COMMAND: the
+       command checkers judge the line, and for a line that is one plain `git commit` the session
+       runs the checkers of CHANGESET in addition, with the diff the commit would record; any other
+       line with a commit is denied (`calu.checkers.changeset`, `calu.session`). CHANGESET is also
+       the route of the review of what a command wrote (agent/records/PLAN.md D31).
+       `AskUserQuestion` goes to QUESTION: no checker judges it, because only the human knows the
+       answer, and the answer reaches Claude as the message of the refusal that keeps the call from
+       running (D35).
 """
 
 from enum import StrEnum
@@ -43,8 +44,8 @@ EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
 
 SHELL_TOOLS = frozenset({"Bash", "Monitor"})
 """Tools whose `command` input is a shell command. `Monitor` (CLI 2.1.319) runs its script "in
-the same shell environment as Bash", so the deny lists, the commit rules and the command
-checker treat it like Bash (PLAN.md D156); a Monitor without `command` (a WebSocket) names no
+the same shell environment as Bash", so the deny lists, the commit rules and the command checker
+treat it like Bash (agent/records/PLAN.md D156); a Monitor without `command` (a WebSocket) names no
 command and goes to the checker."""
 
 READ_ONLY_TOOLS = frozenset(
@@ -79,13 +80,13 @@ whatever they set in motion is itself checked:
   goes through the same gate, and what it hands back is reviewed by the subagent result checker,
   so starting one buys no unchecked work.
 * `SendMessage` is how the main agent relays a client's message to one of its subagents
-  (`calu.protocol.messages`, `chat.send {to: <agent id>}`), so checking it would put a checker
-  call and a possible denial in the way of calu's own relay. The free route holds **only while
-  the message stays inside the session**: Claude Code's `SendMessage` also reaches other
-  sessions on the machine, whose steps no checker of this session sees. The session therefore
-  compares the `to` value with its own subagents and sends a message to anything else to the
-  command checker (`Session._own_agent`, PLAN.md D69). calu's own relay always matches,
-  because the id it tells the main agent to use comes from that same registry.
+  (`calu.protocol.messages`, `chat.send {to: <agent id>}`), so checking it would put a checker call
+  and a possible denial in the way of calu's own relay. The free route holds **only while the
+  message stays inside the session**: Claude Code's `SendMessage` also reaches other sessions on the
+  machine, whose steps no checker of this session sees. The session therefore compares the `to`
+  value with its own subagents and sends a message to anything else to the command checker
+  (`Session._own_agent`, agent/records/PLAN.md D69). calu's own relay always matches, because the id
+  it tells the main agent to use comes from that same registry.
 * `Skill` loads instructions. The tool calls the skill then asks for are checked like any other.
 
 Everything that leaves the machine (`WebFetch`, `WebSearch`) or that calu does not know is
@@ -140,7 +141,9 @@ route only because nobody looked at it (`unknown_tools`, D154)."""
 
 
 def unknown_tools(offered: list[str], configured: dict[str, Route] | None = None) -> list[str]:
-    """Return the tools Claude Code offers that no route was chosen for (PLAN.md D154).
+    """Return the tools Claude Code offers that no route was chosen for.
+
+    See agent/records/PLAN.md D154.
 
     Claude Code adds tools with its own updates (2.1.319 offers `RemoteTrigger`, `CronCreate`,
     `Artifact`, `Workflow` and others). Such a tool goes to `default_route` -- the command

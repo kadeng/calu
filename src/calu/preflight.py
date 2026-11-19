@@ -48,7 +48,7 @@ SANDBOX_TOOLS = ("bwrap", "socat")
 
 
 def sandbox_warnings(config: Config) -> list[str]:
-    """Report missing prerequisites of the sandbox (PLAN.md D15).
+    """Report missing prerequisites of the sandbox (agent/records/PLAN.md D15).
 
     Args:
         config: The session configuration.
@@ -62,7 +62,7 @@ def sandbox_warnings(config: Config) -> list[str]:
     if not sandbox.enabled:
         return [
             "The sandbox for Bash commands is off: commands run with calu's own rights "
-            "(PLAN.md D4). Only the checkers and the deny lists protect this machine."
+            "(agent/records/PLAN.md D4). Only the checkers and the deny lists protect this machine."
         ]
     missing = [tool for tool in SANDBOX_TOOLS if shutil.which(tool) is None]
     if not missing:
@@ -228,7 +228,7 @@ def unknown_provider_warnings(
 
 
 def change_warnings(config: Config) -> list[str]:
-    """Return warnings about a write-set configuration that cannot work (PLAN.md D31).
+    """Return warnings about a write-set configuration that cannot work (agent/records/PLAN.md D31).
 
     Args:
         config: The session configuration.
@@ -247,7 +247,7 @@ def change_warnings(config: Config) -> list[str]:
 
 
 def network_warnings(config: Config) -> list[str]:
-    """Return warnings about the sandbox's network settings (PLAN.md D39).
+    """Return warnings about the sandbox's network settings (agent/records/PLAN.md D39).
 
     Args:
         config: The session configuration, with the project's network policy already applied.
@@ -279,7 +279,7 @@ def network_warnings(config: Config) -> list[str]:
 
 
 def heartbeat_warnings(config: Config) -> list[str]:
-    """Return no warning: the heartbeat no longer depends on a setting (PLAN.md D56).
+    """Return no warning: the heartbeat no longer depends on a setting (agent/records/PLAN.md D56).
 
     `clock.check_interval_s` used to be the heartbeat interval as well, so a long or
     switched-off clock watch made a live session look stale after `herd.STALE_AFTER_S` seconds,
@@ -300,11 +300,11 @@ def heartbeat_warnings(config: Config) -> list[str]:
 def honesty_warnings(config: Config, checkers: Collection[str] = ()) -> list[str]:
     """Warn when code honesty is switched on by halves.
 
-    The honesty checker (an extra checker of the edit route) and `honesty.mode` are set
-    separately. Honesty is judged by the honesty checker alone (PLAN.md D224): with the mode
-    on and the checker disabled, no step is judged for honesty, no edit verifies its file, and
-    only the honesty review and a person's trust decide. With the checker enabled and the mode
-    off, its marks are dropped.
+    The honesty checker (an extra checker of the edit route) and `honesty.mode` are set separately.
+    Honesty is judged by the honesty checker alone (agent/records/PLAN.md D224): with the mode on
+    and the checker disabled, no step is judged for honesty, no edit verifies its file, and only the
+    honesty review and a person's trust decide. With the checker enabled and the mode off, its marks
+    are dropped.
 
     Args:
         config: The session configuration.
@@ -340,15 +340,14 @@ def bedrock_warnings(
 ) -> list[str]:
     """Report Bedrock models configured on a machine where boto3 finds no AWS credentials.
 
-    `key_warnings` cannot cover Bedrock: its credentials come from the environment, `~/.aws`,
-    SSO or an instance role, not from one variable. Leaving it unchecked meant a session whose
-    checkers are on Bedrock started without a word and then escalated every step (PLAN.md
-    D132). This asks boto3's credential chain; whether AWS **accepts** the credentials is
-    `calu doctor --keys`. Measured: 7 ms when credentials are found, and about 2 s when none
-    are, because the chain's last step asks the EC2 metadata service and waits for it -- so the
-    delay is paid only in the misconfiguration this warning exists for. The metadata probe is
-    not switched off, because on EC2 an instance role is a legitimate source and the warning
-    would then be false.
+    `key_warnings` cannot cover Bedrock: its credentials come from the environment, `~/.aws`, SSO or
+    an instance role, not from one variable. Leaving it unchecked meant a session whose checkers are
+    on Bedrock started without a word and then escalated every step (agent/records/PLAN.md D132).
+    This asks boto3's credential chain; whether AWS **accepts** the credentials is `calu doctor
+    --keys`. Measured: 7 ms when credentials are found, and about 2 s when none are, because the
+    chain's last step asks the EC2 metadata service and waits for it -- so the delay is paid only in
+    the misconfiguration this warning exists for. The metadata probe is not switched off, because on
+    EC2 an instance role is a legitimate source and the warning would then be false.
 
     Args:
         config: The session configuration.
@@ -388,7 +387,7 @@ def bedrock_warnings(
 
 
 def cli_model_warnings(config: Config) -> list[str]:
-    """Report the roles that run on the machine's Claude Code account (PLAN.md D117).
+    """Report the roles that run on the machine's Claude Code account (agent/records/PLAN.md D117).
 
     A `claude:` model is not an API client: each call runs the `claude` CLI, which calu starts
     with `--tools ""`. Such a checker therefore cannot read a file, glob or grep, however its
@@ -460,7 +459,9 @@ USER_SETTINGS_KEYS = ("hooks", "enabledPlugins", "env")
 def setting_source_warnings(
     config: Config, home: Path | None = None, workspace: Path | None = None
 ) -> list[str]:
-    """Name the user's own Claude Code setup that a calu session leaves out (PLAN.md D144, Q21).
+    """Name the user's own Claude Code setup that a calu session leaves out.
+
+    See agent/records/PLAN.md D144, Q21.
 
     `claude.setting_sources` loads every source by default, as a plain `claude` does (D178).
     Someone who narrows it (to keep personal permission rules out, say) leaves out
@@ -547,13 +548,13 @@ def settings_file_sandbox_findings(
 ) -> list[tuple[str, list[str]]]:
     """List sandbox entries of Claude Code's settings files that go beyond calu's configuration.
 
-    calu's sandbox settings come from the database and reach Claude Code as `--settings`, which
-    has precedence over the settings files (PLAN.md D15). The files of the loaded sources
+    calu's sandbox settings come from the database and reach Claude Code as `--settings`, which has
+    precedence over the settings files (agent/records/PLAN.md D15). The files of the loaded sources
     (`claude.setting_sources`: `~/.claude/settings.json`, `<workspace>/.claude/settings.json`,
-    `<workspace>/.claude/settings.local.json`) may still hold a `sandbox` object. This reads
-    those files and compares; it changes nothing. A missing file holds no entries. A file that
-    exists and that calu cannot read as a JSON object is itself a finding, because calu cannot
-    say what it sets; so is a `sandbox` key calu does not know.
+    `<workspace>/.claude/settings.local.json`) may still hold a `sandbox` object. This reads those
+    files and compares; it changes nothing. A missing file holds no entries. A file that exists and
+    that calu cannot read as a JSON object is itself a finding, because calu cannot say what it
+    sets; so is a `sandbox` key calu does not know.
 
     Args:
         config: The session configuration, or its `claude` part alone (which is all a runner
@@ -752,8 +753,8 @@ def permission_mode_line(
 ) -> tuple[bool, str]:
     """Say in one line whether auto mode's classifier is expected to decide next to the checkers.
 
-    In the mode "auto" a step runs only if calu's checkers (or the allow lists) and Claude
-    Code's classifier approve it (PLAN.md D5). In every other mode the checkers decide alone,
+    In the mode "auto" a step runs only if calu's checkers (or the allow lists) and Claude Code's
+    classifier approve it (agent/records/PLAN.md D5). In every other mode the checkers decide alone,
     or, with `claude.require_auto_mode`, a step they pass waits for a human. Which of the three
     holds is what a person starting an unattended run has to see.
 

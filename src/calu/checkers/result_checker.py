@@ -114,7 +114,7 @@ class ResultChecker:
     effort: CheckerEffort | None = None
     """How much the model may think, as for a step checker (`Checker.effort`); None leaves the
     provider's default. It was missing here, so `subagent_checker.effort` was a setting that
-    reached nothing (PLAN.md D135)."""
+    reached nothing (agent/records/PLAN.md D135)."""
     _agent: Agent[None, ResultReview] | None = field(default=None, init=False, repr=False)
     _built_for: str | None = field(default=None, init=False, repr=False)
     cache_key: str = field(default_factory=lambda: f"calu-result-{secrets.token_hex(6)}")

@@ -174,7 +174,7 @@ class FakeRunner:
         self.sink_failures = 0
         """How often the sink raised on an event; each time is logged (`run`)."""
         self.fork: Fork | None = None
-        """The fork point `run` was called with, for tests (PLAN.md D36)."""
+        """The fork point `run` was called with, for tests (agent/records/PLAN.md D36)."""
         self._follow_up = False
         self.side_questions: list[tuple[str, list[tuple[str, str]]]] = []
         """Every side question asked, with the history it came with, for tests."""
@@ -216,8 +216,8 @@ class FakeRunner:
             gate: Asked before every scripted tool call.
             sink: Receives the events of the turns.
             resume_id: If given, becomes `session_id` (no history is restored).
-            fork: Where a real runner would branch off (PLAN.md D36). The fake runner has no
-                transcript, so it only records it as `self.fork` for tests to assert on.
+            fork: Where a real runner would branch off (agent/records/PLAN.md D36). The fake runner
+                has no transcript, so it only records it as `self.fork` for tests to assert on.
             session_id: The id a new or forked conversation gets, as with the real runner: it
                 becomes `self.session_id` unless this is a plain resume.
 
@@ -604,7 +604,8 @@ class FakeRunner:
                 finally:
                     self._asks.discard(waiting)
         else:
-            # The fake runner has no auto mode of its own, so PASS runs the step (PLAN.md D21).
+            # The fake runner has no auto mode of its own, so PASS runs the step
+            # (agent/records/PLAN.md D21).
             allowed = gate_result.verdict in (Verdict.PASS, Verdict.ALLOW)
             message = gate_result.reason
         note = ""

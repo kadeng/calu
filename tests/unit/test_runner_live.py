@@ -85,7 +85,7 @@ async def test_only_what_a_human_sent_is_recorded_as_user_input(tmp_path: Path) 
     human = [event.text.strip() for event in inputs if event.source == "user"]
     assert sorted(human) == sorted([PROMPT, INJECTED, QUEUED]), seen
     # The prompt and the queued message each start a turn, and Claude Code replays both with
-    # the transcript uuid a fork needs (PLAN.md D36).
+    # the transcript uuid a fork needs (agent/records/PLAN.md D36).
     by_text = {event.text.strip(): event for event in inputs}
     assert by_text[PROMPT].uuid and by_text[QUEUED].uuid, seen
     # calu's own note arrives in the user role as well, and is not the user's.

@@ -13,7 +13,7 @@ provider's own default alone, and a model without a thinking mode ignores it."""
 
 
 class Decision(StrEnum):
-    """Outcome of a check (PLAN.md D21).
+    """Outcome of a check (agent/records/PLAN.md D21).
 
     PASS is the normal answer: the checker has no objection, and Claude Code's auto mode decides
     about the step as it would without calu. ESCALATE pauses the tool call until a human allows
@@ -90,7 +90,7 @@ class StepVerdict(BaseModel):
     This is the form the model of the command, edit and changeset checkers and of every
     user-defined checker answers in. Field descriptions are part of the JSON schema the
     checker model sees. It has no field for honesty marks: honesty is judged by the honesty
-    checker alone (PLAN.md D224), which answers with an `HonestyAnswer`.
+    checker alone (agent/records/PLAN.md D224), which answers with an `HonestyAnswer`.
     """
 
     decision: Decision = Field(
@@ -142,10 +142,10 @@ class StepVerdict(BaseModel):
 class CheckDecision(StepVerdict):
     """The decision of one checker about a step, as the gate and the session take it.
 
-    A `StepVerdict` plus the honesty marks. `marks_dirty` and `marks_clean` belong to the
-    honesty checker (PLAN.md D224): calu fills them when it converts an `HonestyAnswer`
-    (`HonestyAnswer.decision`), and the session reads them only from the honesty checker's
-    runs. No other checker's model can write them: its answer is a `StepVerdict`.
+    A `StepVerdict` plus the honesty marks. `marks_dirty` and `marks_clean` belong to the honesty
+    checker (agent/records/PLAN.md D224): calu fills them when it converts an `HonestyAnswer`
+    (`HonestyAnswer.decision`), and the session reads them only from the honesty checker's runs. No
+    other checker's model can write them: its answer is a `StepVerdict`.
     """
 
     marks_dirty: list[CodeMark] = Field(
@@ -210,7 +210,7 @@ class FileHonesty(BaseModel):
 
 
 class HonestyAnswer(BaseModel):
-    """Structured output of the honesty checker (PLAN.md D217).
+    """Structured output of the honesty checker (agent/records/PLAN.md D217).
 
     It judges files, it does not approve or refuse the step: `decision` turns the answer into
     what the gate and the honesty state take.
@@ -346,7 +346,7 @@ class Step(BaseModel):
     """Claude's thinking and text before this call, narrated in indirect speech (may be "")."""
     asked_about: str = ""
     """What Claude Code says it is asking permission for, when **it** raised the question
-    (PLAN.md D60).
+    (agent/records/PLAN.md D60).
 
     Its own prompt sentence and subtitle, e.g. "Claude wants to fetch https://example.net/" --
     the SDK says to show this rather than rebuilding a sentence from the tool name and the

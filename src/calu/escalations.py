@@ -43,8 +43,9 @@ ANSWER_TEMPLATE = (
     "The user answered your question: {answer}\nThe AskUserQuestion call itself was not run; "
     "this is the answer. Carry on with it."
 )
-"""What Claude receives when a human answers its question (PLAN.md D35). It travels as the
-message of the refusal that keeps the call from running, which the spike showed Claude acts on."""
+"""What Claude receives when a human answers its question (agent/records/PLAN.md D35). It travels as
+the message of the refusal that keeps the call from running, which the spike showed Claude acts on.
+"""
 
 ASK_PENDING_S = 30.0
 """How long a step whose gate verdict was ASK counts as an escalation that is being opened
@@ -653,10 +654,11 @@ class EscalationDesk:
         """Resolve an open escalation from a client. Only the first decision counts.
 
         The decision is recorded in the `escalations` row as the resolution it is, with
-        `resolved_by` saying that a client of this session decided and which one (PLAN.md D28).
-        A client needs no database login for that: it authenticates to the session with its
-        token, and the session speaks to the database for it. An operator who resolves the row
-        in the database instead reaches the session through `note_resolution` or its poll.
+        `resolved_by` saying that a client of this session decided and which one
+        (agent/records/PLAN.md D28). A client needs no database login for that: it authenticates to
+        the session with its token, and the session speaks to the database for it. An operator who
+        resolves the row in the database instead reaches the session through `note_resolution` or
+        its poll.
 
         The database decides first, and the step is released only by a decision it accepted:
 
@@ -677,9 +679,9 @@ class EscalationDesk:
             decision: "allow" or "deny"; ignored when `answer` is given.
             note: Optional text from the user; Claude receives it with a denial.
             client: Name of the client that decided, for the record.
-            answer: The answer to a question of the agent (`escalation.request` with
-                `questions`, PLAN.md D35). The call does not run; Claude receives this text as
-                its result, and the row is recorded as "answered".
+            answer: The answer to a question of the agent (`escalation.request` with `questions`,
+                agent/records/PLAN.md D35). The call does not run; Claude receives this text as its
+                result, and the row is recorded as "answered".
             token_sha256: SHA-256 of the token the deciding client authenticated with, which
                 the database checks before it records the decision; None uses a token of this
                 session that the store remembers.

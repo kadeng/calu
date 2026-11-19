@@ -1,4 +1,4 @@
-# Publish a release to PyPI (PLAN.md D1: the wheel is the shipping format, D41: no binary).
+# Publish a release to PyPI (agent/records/PLAN.md D1: the wheel is the shipping format, D41: no binary).
 #
 # This workflow does nothing until two one-time steps are done, both of which only the
 # maintainer can do:
@@ -95,7 +95,7 @@ jobs:
     needs: binary
     # A tag only. `gh release` needs nothing but the token every run already has, so this works
     # without the PyPI setup the next job waits for: a tag publishes the binaries even while
-    # the wheel cannot be published yet (PLAN.md Q15).
+    # the wheel cannot be published yet (agent/records/PLAN.md Q15).
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

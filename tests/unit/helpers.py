@@ -57,7 +57,7 @@ def default_settings(
         rules: The rules; None uses the built-in ones.
         model: Model string of the checker definitions.
         honesty: True also enables the honesty checker, which `calu setup` seeds switched
-            off; it is the only checker that judges honesty (PLAN.md D224).
+            off; it is the only checker that judges honesty (agent/records/PLAN.md D224).
 
     Returns:
         Settings with the enabled built-in checker definitions (version 1), the built-in
@@ -78,7 +78,7 @@ def default_settings(
         )
         for name, route, _, request_limit, enabled in CHECKER_DEFAULTS
         # Only the enabled ones: that is what `ConfigStore.load` returns, and the
-        # honesty checker is seeded off (PLAN.md D85).
+        # honesty checker is seeded off (agent/records/PLAN.md D85).
         if enabled or (honesty and name == "honesty")
     }
     return ProjectSettings(

@@ -1,4 +1,6 @@
-"""Watching and unblocking sessions through the database (PLAN.md §8, REQUIREMENTS 12, 13).
+"""Watching and unblocking sessions through the database.
+
+See agent/records/PLAN.md §8, REQUIREMENTS 12, 13.
 
 These queries need no running session: they work on the database alone, from any machine that
 can reach it. `resolve` calls `calu_resolve_escalation`, which notifies the waiting session, so
@@ -6,7 +8,7 @@ the session continues within a second.
 
 `calu sessions`, `calu escalations`, `calu resolve` and `calu token` use the `admin` credential
 for now. A separate login for the role `calu_operator` (reads everything, resolves escalations,
-mints and revokes client tokens, changes nothing else) is still open (PLAN.md Q4).
+mints and revokes client tokens, changes nothing else) is still open (agent/records/PLAN.md Q4).
 
 `calu token` is the other half of D30: a session accepts every non-revoked token of its own
 session, so a token minted here lets a client (an editor's ACP adapter, a local command, a
@@ -38,7 +40,7 @@ from calu.tokens import new_token, token_hash
 log = logging.getLogger(__name__)
 
 STALE_AFTER_S = 60.0
-"""Silence after which a session is called stale (PLAN.md D56, D237).
+"""Silence after which a session is called stale (agent/records/PLAN.md D56, D237).
 
 A session stamps `last_seen` every `HEARTBEAT_S` seconds, so one minute is six missed beats
 -- long enough that a slow machine, a paused process or a short database outage is not called
@@ -153,7 +155,7 @@ class EscalationRow:
     about: str = ""
     """What the step is: the command, the edited path, or the tool's name. A queue of reasons
     without the steps they are about cannot be triaged -- a reader had to open every entry to
-    see what it was (PLAN.md D127)."""
+    see what it was (agent/records/PLAN.md D127)."""
 
     @property
     def unanswerable(self) -> bool:
@@ -215,7 +217,7 @@ async def close_gone(db: Db) -> int:
     """Close the open escalations of sessions that are gone, so the queue holds none of them.
 
     An escalation is closed -- recorded as "cancelled" with a note that says why, because
-    nobody decided it (PLAN.md D57) -- when its session
+    nobody decided it (agent/records/PLAN.md D57) -- when its session
 
     1. has ended (`sessions.ended_at`), or
     2. is stale (silent for more than `STALE_AFTER_S`, D56), ran in this machine's process
@@ -761,8 +763,9 @@ async def resolve(
 ) -> bool:
     """Allow, deny, answer or cancel an open escalation and notify the waiting session.
 
-    "answer" belongs to a question of the agent (PLAN.md D35): `note` is then the answer Claude
-    receives as the result of its `AskUserQuestion` call, and the call itself does not run.
+    "answer" belongs to a question of the agent (agent/records/PLAN.md D35): `note` is then the
+    answer Claude receives as the result of its `AskUserQuestion` call, and the call itself does not
+    run.
 
     "cancel" is **not** a decision and is recorded as such: it clears an escalation nobody can
     act on any more -- a session whose process is gone (D56) -- so the queue a human works
@@ -791,7 +794,7 @@ async def resolve(
     if decision == "cancel":
         # Not a decision: the step never ran and nobody acted on it. A separate function,
         # because `calu_resolve_escalation` only writes the three states a human chose
-        # (PLAN.md D57).
+        # (agent/records/PLAN.md D57).
         return bool(
             await db.scalar("SELECT calu_cancel_escalation(%s, %s)", (escalation_id, note or None))
         )
@@ -863,7 +866,7 @@ async def steps(db: Db, session_id: str, limit: int = 200) -> list[StepRow]:
 
 @dataclass(frozen=True)
 class ForkPoint:
-    """Where a fork of a session starts (PLAN.md D36).
+    """Where a fork of a session starts (agent/records/PLAN.md D36).
 
     `resume_at` is the last transcript entry of the turn that is kept, `drops_turn` the prompt of
     the first turn that is discarded. The CLI validates the pair and refuses a mismatch, so both
@@ -1031,7 +1034,10 @@ async def agents(db: Db, session_id: str) -> list[AgentRow]:
 
 @dataclass(frozen=True)
 class SettingChange:
-    """One change of a running session's settings, from the audit log (PLAN.md D43)."""
+    """One change of a running session's settings, from the audit log.
+
+    See agent/records/PLAN.md D43.
+    """
 
     at: datetime
     actor: str
@@ -1160,9 +1166,9 @@ class CheckerRunRow:
 async def escalation_runs(db: Db, escalation_id: int) -> list[CheckerRunRow]:
     """Read what the checkers decided about the step of one escalation.
 
-    The escalation's own `reason` says why the step stopped, which is not the same thing: when
-    an auto-escalation category holds a step back (PLAN.md D42) the reason is "every edit waits
-    for a human" and what the checkers actually thought is only here. `calu escalation` prints
+    The escalation's own `reason` says why the step stopped, which is not the same thing: when an
+    auto-escalation category holds a step back (agent/records/PLAN.md D42) the reason is "every edit
+    waits for a human" and what the checkers actually thought is only here. `calu escalation` prints
     these, so a decision taken from the database alone sees them (D30).
 
     Args:
@@ -1193,10 +1199,10 @@ def render_escalation(
 ) -> str:
     """Render everything needed to decide an escalation, for a terminal.
 
-    This is the **database-only** view (PLAN.md D30): an operator who can reach the database can
-    see why a step was escalated, what it would do, what Claude asked if it was a question, and
-    the conversation as the checkers saw it — without connecting to the session process, which
-    may be on another host or already gone.
+    This is the **database-only** view (agent/records/PLAN.md D30): an operator who can reach the
+    database can see why a step was escalated, what it would do, what Claude asked if it was a
+    question, and the conversation as the checkers saw it — without connecting to the session
+    process, which may be on another host or already gone.
 
     Args:
         row: The escalation row.
@@ -1348,7 +1354,10 @@ def _tokens(n: int) -> str:
 
 @dataclass(frozen=True)
 class CheckerStats:
-    """How one checker has decided so far, and how often a human disagreed (PLAN.md D61)."""
+    """How one checker has decided so far, and how often a human disagreed.
+
+    See agent/records/PLAN.md D61.
+    """
 
     checker_name: str
     runs: int
@@ -1370,7 +1379,7 @@ class CheckerStats:
     output_tokens: int
     """Output tokens of all its checks."""
     cache_read_tokens: int
-    """Input tokens the provider served from its cache (PLAN.md D63).
+    """Input tokens the provider served from its cache (agent/records/PLAN.md D63).
 
     calu builds the checkers' context so that the long part can be cached (the cached prefix of
     §2.4, `CachePoint`). If this stays near zero while `input_tokens` grows, the caching is not
@@ -1459,7 +1468,10 @@ class CheckerStats:
 
 @dataclass(frozen=True)
 class StepStats:
-    """How many steps calu decided, by which path, and how long they waited (PLAN.md D64)."""
+    """How many steps calu decided, by which path, and how long they waited.
+
+    See agent/records/PLAN.md D64.
+    """
 
     steps: int
     """Steps recorded in the window."""
@@ -1664,7 +1676,7 @@ async def checker_stats(db: Db, since_days: int | None = None) -> list[CheckerSt
 
 @dataclass(frozen=True)
 class CheckerMiss:
-    """A step a checker approved that a human then denied (PLAN.md D62)."""
+    """A step a checker approved that a human then denied (agent/records/PLAN.md D62)."""
 
     escalation_id: int
     checker_name: str
@@ -1758,7 +1770,7 @@ async def project_of(db: Db, session_id: str) -> tuple[str, str] | None:
 
 
 async def mint_token(db: Db, session_id: str, label: str = "") -> tuple[int, str]:
-    """Create a client token for a session (PLAN.md D30).
+    """Create a client token for a session (agent/records/PLAN.md D30).
 
     Only the token's hash is stored, so the returned token is the only copy: the caller prints
     it once. The session accepts it at its next `initialize`, without being restarted.

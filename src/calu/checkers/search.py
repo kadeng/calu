@@ -1,4 +1,4 @@
-"""Which files a search tool reads when it is pointed at a directory (PLAN.md D146).
+"""Which files a search tool reads when it is pointed at a directory (agent/records/PLAN.md D146).
 
 A `Read` of `.env` names the file, so the read deny list sees it. A `Grep` of the project
 directory names only the directory, and Claude Code's Grep reads every file below it -- hidden

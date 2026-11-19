@@ -674,7 +674,10 @@ async def test_a_session_that_ends_closes_its_open_escalations(db_url: str) -> N
 
 
 async def test_an_escalation_nobody_waits_for_can_be_cancelled(db_url: str) -> None:
-    """Cancelling records that nothing was decided, which is the truth (PLAN.md D57)."""
+    """Cancelling records that nothing was decided, which is the truth.
+
+    See agent/records/PLAN.md D57.
+    """
     owner = await connect(db_url)
     db = Db(owner)
     try:
@@ -712,7 +715,10 @@ async def test_an_escalation_nobody_waits_for_can_be_cancelled(db_url: str) -> N
 
 
 async def test_the_checkers_record_says_where_a_human_disagreed(db_url: str) -> None:
-    """The free half of the evals: what already happened, per checker (PLAN.md D61)."""
+    """The free half of the evals: what already happened, per checker.
+
+    See agent/records/PLAN.md D61.
+    """
     owner = await connect(db_url)
     db = Db(owner)
     try:

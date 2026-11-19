@@ -245,7 +245,10 @@ async def first_set(*events: anyio.Event) -> None:
 
 
 UNIX_PREFIX = "unix:"
-"""How a Unix socket address is written: `unix:/run/user/1000/calu/<id>.sock` (PLAN.md §6)."""
+"""How a Unix socket address is written: `unix:/run/user/1000/calu/<id>.sock`.
+
+See agent/records/PLAN.md §6.
+"""
 
 
 @asynccontextmanager
@@ -296,7 +299,7 @@ async def connect(
 
     Args:
         address: The address that `calu run` printed: `ws://127.0.0.1:8765`, or `unix:<path>`
-            for a session that serves a Unix socket (PLAN.md §6).
+            for a session that serves a Unix socket (agent/records/PLAN.md §6).
         token: The client token that `calu run` printed.
         client: Name of this client, for the session's log.
         on_event: Called with `(method, params)` for every event.
@@ -346,7 +349,7 @@ async def probe(address: str, token: str, client: str, timeout_s: float = 3.0) -
     Args:
         address: `ws://host:port` or `unix:<path>`.
         token: The client token; "" for a session's root-owned socket, where a root peer needs
-            none (PLAN.md D215).
+            none (agent/records/PLAN.md D215).
         client: Name of this client, for the session's log.
         timeout_s: How long the whole exchange may take.
 

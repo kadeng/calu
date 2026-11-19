@@ -1,4 +1,4 @@
-"""The stored record of a database login, in both of its forms (PLAN.md D205)."""
+"""The stored record of a database login, in both of its forms (agent/records/PLAN.md D205)."""
 
 import anyio
 import psycopg

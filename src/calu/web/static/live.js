@@ -1,5 +1,5 @@
 // The live view of one session. Everything arrives over one WebSocket, which the calu web
-// server relays from the session's own protocol (PLAN.md D34); this file only renders it and
+// server relays from the session's own protocol (agent/records/PLAN.md D34); this file only renders it and
 // sends commands back. No framework and no build step, as the project's rules ask.
 //
 //     #controls      start, interrupt, stop, what always waits for the user, the usage
@@ -258,7 +258,7 @@
   // requests to the session.
   // The honesty checker's result of one step (`check.result.honesty`, `honesty_escalation`):
   // one line per file under the step's check, tagged "honesty" and never with a decision
-  // class, because the honesty checker approves or refuses nothing (PLAN.md D224).
+  // class, because the honesty checker approves or refuses nothing (agent/records/PLAN.md D224).
   function honestyResult(params, agent) {
     for (const status of params.honesty || []) {
       const dishonest = status.verdict !== "HONEST";

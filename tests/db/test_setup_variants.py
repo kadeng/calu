@@ -1,4 +1,4 @@
-"""`calu setup` for a server that exists already, and what it refuses (PLAN.md D205).
+"""`calu setup` for a server that exists already, and what it refuses (agent/records/PLAN.md D205).
 
 The local Docker variant is tested without Docker in tests/unit/test_setup_dialog.py; RDS with
 IAM authentication needs an RDS instance and is on the manual checklist (docs/TESTING.md),

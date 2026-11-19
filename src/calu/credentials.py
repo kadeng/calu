@@ -1,4 +1,4 @@
-"""Encrypted store for database credentials (PLAN.md D12).
+"""Encrypted store for database credentials (agent/records/PLAN.md D12).
 
 The store is one JSON file, by default `~/.config/calu/credentials.json` (directory mode 0700,
 file mode 0600). It maps a credential name (`admin`, `session`) to an encrypted secret, usually
@@ -29,7 +29,7 @@ narrow `operator` credential (read and resolve, no schema rights) is the one wor
 The name is the associated data of the encryption, so an entry copied under another name does
 not decrypt. Decrypted secrets are returned as `bytearray`, so callers can overwrite them with
 `wipe` once they are no longer needed. Python and the libraries used here may keep further
-copies in memory; PLAN.md §5 explains why that is accepted.
+copies in memory; agent/records/PLAN.md §5 explains why that is accepted.
 """
 
 import base64

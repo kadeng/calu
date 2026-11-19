@@ -198,8 +198,8 @@ def listed(root: Path = ROOT, owner: int = 0) -> list[Path]:
     """Return the sessions' sockets that are root's alone. Needs root's file access.
 
     This is how a root client finds the running sessions without asking the database
-    (PLAN.md D226): every session that runs as root and was not started with `--secure`
-    listens on `<root>/<session id>.sock`.
+    (agent/records/PLAN.md D226): every session that runs as root and was not started with
+    `--secure` listens on `<root>/<session id>.sock`.
 
     Args:
         root: The directory of the sockets.

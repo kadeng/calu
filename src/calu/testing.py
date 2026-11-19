@@ -156,8 +156,8 @@ def rule_based_checker() -> Model:
 def fixed_checker(decision: str, reason: str = "", comment: str = "") -> Model:
     """Create a checker model that answers with the same decision every time.
 
-    Used where a test needs two checkers of one route to disagree (PLAN.md D81), which the
-    marker-driven `rule_based_checker` cannot do: both of them read the same step and would
+    Used where a test needs two checkers of one route to disagree (agent/records/PLAN.md D81), which
+    the marker-driven `rule_based_checker` cannot do: both of them read the same step and would
     answer the same.
 
     Args:
@@ -204,9 +204,9 @@ def marking_checker(
 ) -> Model:
     """Create a checker model that answers in the common form with fixed fields.
 
-    Stands in for the command checker's `executes_project_code`, and for a checker that
-    writes marks into the common answer although it is not the honesty checker: the session
-    ignores those (PLAN.md D224). The stand-in for the honesty checker is `honesty_answering`.
+    Stands in for the command checker's `executes_project_code`, and for a checker that writes marks
+    into the common answer although it is not the honesty checker: the session ignores those
+    (agent/records/PLAN.md D224). The stand-in for the honesty checker is `honesty_answering`.
 
     Args:
         dirty: (path, symbol, reason) of each entry of `marks_dirty`.

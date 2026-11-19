@@ -36,10 +36,10 @@ The server closes a connection itself in two cases, each with its own WebSocket 
                                 connects again and subscribes after the last sequence number
                                 it received.
 
-Token revocation (PLAN.md D30) and open connections: a token is checked against the database
-at `initialize`, again before every request that is not in `READ_ONLY_METHODS`, every
-`REVALIDATE_S` seconds for every open connection (`SessionServer.sweep`), when the session
-ends and when a new one has started. A connection whose token was revoked is closed. See
+Token revocation (agent/records/PLAN.md D30) and open connections: a token is checked against the
+database at `initialize`, again before every request that is not in `READ_ONLY_METHODS`, every
+`REVALIDATE_S` seconds for every open connection (`SessionServer.sweep`), when the session ends and
+when a new one has started. A connection whose token was revoked is closed. See
 `SessionServer.observe` for what counts as revoked.
 
 While the database gives no answer (an error of any kind, or no answer within
@@ -321,7 +321,7 @@ class SessionServer:
             revalidate_s: Seconds between two checks of the tokens of the open connections.
             check_s: Seconds a request waits for the database's answer about its token.
             insecure: Let every connection on a Unix socket and every TCP connection from a
-                loopback address in without a token (`--insecure`, PLAN.md D227). Any
+                loopback address in without a token (`--insecure`, agent/records/PLAN.md D227). Any
                 process on this machine that can reach the port, and any process of the
                 socket's owner, then acts as a client.
 
@@ -364,18 +364,19 @@ class SessionServer:
     ) -> None:
         """Accept clients until `shutdown` is set or the caller is cancelled.
 
-        With `socket_path` the server binds a **Unix socket** instead of a TCP port (PLAN.md
-        §6): the file system then decides who may connect, instead of every process on the
-        machine being able to reach a loopback port. Its directory is created with mode 0700 and
-        the socket itself with 0600, so only this user can reach it; a stale socket from a
-        process that died is replaced.
+        With `socket_path` the server binds a **Unix socket** instead of a TCP port
+        (agent/records/PLAN.md §6): the file system then decides who may connect, instead of every
+        process on the machine being able to reach a loopback port. Its directory is created with
+        mode 0700 and the socket itself with 0600, so only this user can reach it; a stale socket
+        from a process that died is replaced.
 
         Side effects: sets `address` once the socket is bound (the port the operating system
         chose if `port` was 0, or `unix:<path>`) and then sets `ready`; with `socket_path`,
         creates the directory and the socket file and removes the socket when it stops.
 
         Args:
-            host: Interface to bind; the default accepts only local clients (PLAN.md §6).
+            host: Interface to bind; the default accepts only local clients (agent/records/PLAN.md
+                  §6).
             port: TCP port, or 0 to let the operating system choose a free one.
             socket_path: Path of a Unix socket to bind instead; None binds TCP.
 
@@ -864,7 +865,7 @@ class SessionServer:
                 await anyio.to_thread.run_sync(_remove_socket, socket_path)
 
     async def listen_local(self, listener: socket.socket, path: Path) -> None:
-        """Accept root clients on the session's root-owned socket (PLAN.md D215).
+        """Accept root clients on the session's root-owned socket (agent/records/PLAN.md D215).
 
         Runs next to `listen`, until `shutdown` is set or the caller is cancelled. A
         connection whose peer the kernel reports as root needs no client token; any other

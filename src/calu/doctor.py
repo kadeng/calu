@@ -627,7 +627,9 @@ def report(findings: Sequence[Finding]) -> str:
 def permission_mode_findings(
     workspace: Path | None = None, home: Path | None = None, config: Config | None = None
 ) -> list[Finding]:
-    """Say whether auto mode's classifier would decide next to the checkers (PLAN.md D5).
+    """Say whether auto mode's classifier would decide next to the checkers.
+
+    See agent/records/PLAN.md D5.
 
     A step needs the checkers **and** the classifier only in Claude Code's permission mode
     "auto"; in every other mode the checkers decide alone. Which mode a session starts in comes
@@ -929,7 +931,7 @@ Each key is sent only to the provider it belongs to."""
 def key_validity_findings(
     environ: Mapping[str, str] | None = None, client: Any = None
 ) -> list[Finding]:
-    """Ask each provider whether the key calu holds for it is accepted (PLAN.md D131).
+    """Ask each provider whether the key calu holds for it is accepted (agent/records/PLAN.md D131).
 
     `key_findings` only sees that a key is **set**. A key that is set and expired passes it,
     and every check on that provider then fails and escalates the step -- which is how an
@@ -992,7 +994,7 @@ def key_validity_findings(
 
 
 def aws_findings(session_factory: Callable[[], Any] | None = None) -> list[Finding]:
-    """Ask AWS STS whether the credentials boto3 finds are accepted (PLAN.md D132).
+    """Ask AWS STS whether the credentials boto3 finds are accepted (agent/records/PLAN.md D132).
 
     The Bedrock counterpart of `key_validity_findings`: Bedrock is first in the order calu
     chooses models by (D129), and its credentials are not one key that can be shown to a model

@@ -1,7 +1,7 @@
 # Spike results
 
 Spikes for the open questions Q1 (isolation of tool calls) and Q7 (checkers through headless
-Claude Code) of [PLAN.md](../PLAN.md) §11, and for the question whether a hook that does not
+Claude Code) of [agent/records/PLAN.md](../agent/records/PLAN.md) §11, and for the question whether a hook that does not
 answer in time lets the tool call run (Q11). Date: 2026-11-09. Claude Code CLI 2.1.319 (native
 build), WSL2 Ubuntu 24.04 (kernel 6.18.54.1-microsoft-standard-WSL2), bubblewrap from Ubuntu,
 model haiku. All runs used scratch projects in `/tmp/calu-spike-*`, `--setting-sources` limited as
@@ -85,7 +85,7 @@ background commands, when calu passes `--settings` with `enabled`, `failIfUnavai
 `allowUnsandboxedCommands: false`. calu must add `denyRead` entries for secrets (at least
 `~/.claude/.credentials.json`, `~/.ssh`, cloud credentials, calu's own credential file), because
 reads are allowed by default. Not covered by this sandbox: Edit/Write/Read tools (they run in the
-Claude Code process; calu's hook and deny lists must cover them, see PLAN.md §4.2).
+Claude Code process; calu's hook and deny lists must cover them, see agent/records/PLAN.md §4.2).
 
 ## Q1b: CLAUDE_CODE_SHELL_PREFIX
 
@@ -139,7 +139,7 @@ object with `decision` (enum ALLOW, DENY, ESCALATE), `reason`, `summary`, all re
 **Conclusion.** Feasible: `claude -p --json-schema` gives schema-validated structured answers.
 The cost is latency (about 1 s CLI start on top of the model time) and no control over prompt
 caching beyond what Claude Code does. Suitable as a model type for checkers on the Anthropic
-subscription (PLAN.md §3.2).
+subscription (agent/records/PLAN.md §3.2).
 
 ## Recommendation for Q1
 
@@ -198,7 +198,7 @@ decision long before its own timeout; the wait for a human is not in the hook at
 
 A **shell hook of a plugin** is the opposite case: the reference says its timeout discards the
 output and lets the call continue through the normal permission flow (fail-open). That is one of
-the reasons why PLAN.md §4.5 does not move calu's hooks into a plugin, and if that mode is ever
+the reasons why agent/records/PLAN.md §4.5 does not move calu's hooks into a plugin, and if that mode is ever
 built (Q10), the shell hook must answer "deny" itself when it cannot reach the calu process,
 instead of leaving the decision to its timeout.
 
@@ -919,7 +919,7 @@ a background subagent of the same session (`relay`, above).
 
 Measuring it needs two sessions and a peer discovery that may behave differently under `-p`. It is
 worth doing, but the gate no longer rests on the answer: calu routes a `SendMessage` whose target
-is not one of the session's own subagents to the command checker (PLAN.md D69), so delivery to
+is not one of the session's own subagents to the command checker (agent/records/PLAN.md D69), so delivery to
 another session is a judged step either way. Before that, the tool was unchecked on the stated
 grounds that it "cannot reach anything outside this session", which the documentation contradicts.
 

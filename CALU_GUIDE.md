@@ -406,7 +406,7 @@ match yours yet -- change the instructions (`calu checker edit honesty`, `calu h
 or use a stronger model. `calu evals` measures the enabled honesty checker and the honesty
 reviewer against labelled cases (53 edits and 14 batches of files: honest, dishonest, and
 deliberate) and prints precision and recall for HONEST, DISHONEST and ESCALATE; what calu's
-own instructions reach with Haiku is in `docs/notes/honesty-evals-2026-11-18.md`.
+own instructions reach with Haiku is in `agent/records/notes/honesty-evals-2026-11-18.md`.
 
 The honesty checker may mark a file other than the one the step edits, because an edit to
 `src/parser.py` can be what makes a caller's documentation wrong -- but that should be the
@@ -516,7 +516,7 @@ calu config set command_checker.effort low      # or "off" for no thinking at al
 
 **With a subscription and no API key at all**, a checker can run on the machine's own Claude
 Code account instead. A `claude:` model is not an API client: each check starts the `claude` CLI
-once in headless mode and reads its structured answer (PLAN.md D117).
+once in headless mode and reads its structured answer (agent/records/PLAN.md D117).
 
 ```bash
 calu setup --checker-model claude:haiku        # a new project, no checker key needed
@@ -610,7 +610,7 @@ for code honesty — the spots it found dishonest and the spots it considers hon
 Those become marks in the session's honesty state; they touch no file. Because the paths in
 them are text a model wrote, calu checks each one before it is recorded: a path must be
 relative, must stay inside the project, and must name a file that exists or that the step
-itself is creating. Anything else is dropped and said in the log (PLAN.md D112), so an invented
+itself is creating. Anything else is dropped and said in the log (agent/records/PLAN.md D112), so an invented
 path cannot become a mark.
 
 With that, the worst a broken or compromised checker model can do is answer wrongly, and the
@@ -904,7 +904,7 @@ that name its own host, `calu.localhost`, from a browser that logged in with the
 `calu web` prints at start; the token is new on every start. A request that changes state also
 needs a second secret, which only calu's own pages hold. So neither a web page you happen to
 have open nor another program on the machine can answer an escalation through the web
-interface (PLAN.md D136, D190). Two ways to work remotely:
+interface (agent/records/PLAN.md D136, D190). Two ways to work remotely:
 
 **Through the database.** The five commands above need nothing but a reachable PostgreSQL, so
 an operator anywhere can watch the fleet and answer escalations without touching the machines
@@ -1170,7 +1170,7 @@ The adapter has no terminal, so it cannot ask for a password: store the operator
 with `calu credential set operator --no-password` (above) and the editor needs no
 configuration beyond that line. With a password on it, the adapter says so and stops rather
 than prompting -- a prompt would read the editor's first request from the protocol stream and
-treat it as the password (PLAN.md D106). An editor that attaches while escalations are open
+treat it as the password (agent/records/PLAN.md D106). An editor that attaches while escalations are open
 gets a permission dialog for each of them. `calu acp` ends when the session's connection ends,
 so that the editor can start it again. A session on another machine, reached through a tunnel, is
 given its address and token instead:
@@ -1181,7 +1181,7 @@ calu acp ws://127.0.0.1:8765 --token=<the token it printed>
 
 Write `--token=` with the equals sign, also in an editor's `args` list. A token is base64url
 and may contain `-`; one issued before calu stopped generating tokens that **start** with a
-dash would otherwise be read as an option rather than as the token's value (PLAN.md D102).
+dash would otherwise be read as an option rather than as the token's value (agent/records/PLAN.md D102).
 
 The editor's own agent-mode picker works too. calu offers what waits for a human as an ACP
 session mode and, for an editor that supports the newer config options, as three switches:
@@ -1225,7 +1225,7 @@ file requests exist for this case only; an editor that opens the server's files 
 
 - **Only the project directory.** A path is relative to it. An absolute path, a path with
   `..`, and a path through a symbolic link are refused; links are listed as skipped and never
-  followed. `.git`, the session traces (`.agent/traces`, and the trace directory of the
+  followed. `.git`, the session traces (`agent/traces`, and the trace directory of the
   attached session if `traces.directory` names another one) and calu's own configuration
   and state directories are neither listed nor read nor written.
 - **Which files.** In a git repository the tracked and the untracked files, without the
@@ -1432,9 +1432,9 @@ not in it. Switching it off ends the file.
 
     <project>/.agent/traces/<YYYY-MM-DD>/<user>/session_NNN.md
 
-    .agent/traces/2026-11-18/kai/session_001.md
-    .agent/traces/2026-11-18/kai/session_002.md      the second session of that day
-    .agent/traces/2026-11-19/kai/session_001.md
+    agent/traces/2026-11-18/kai/session_001.md
+    agent/traces/2026-11-18/kai/session_002.md      the second session of that day
+    agent/traces/2026-11-19/kai/session_001.md
 
 The date is the day the session started (UTC), the user is the OS user Claude Code runs as,
 and NNN is the next free number in that directory. Two sessions that start at the same moment

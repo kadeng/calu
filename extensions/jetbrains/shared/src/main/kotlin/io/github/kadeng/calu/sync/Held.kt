@@ -10,7 +10,7 @@ private val QUIET_STATES: Set<String> = setOf("idle", "stopped", "failed")
 
 /**
  * The files whose upload is held because the agent is editing them in the running turn
- * (`docs/notes/jetbrains-sync-spec.md`, "holds").
+ * (`agent/records/notes/jetbrains-sync-spec.md`, "holds").
  *
  *     session idle, stopped or failed          -> nothing is held
  *     a turn runs                              -> every file an edit tool of this turn touched:

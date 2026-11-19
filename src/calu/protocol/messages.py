@@ -1,4 +1,6 @@
-"""Messages of the calu client protocol between a session and its clients (PLAN.md §6, D2).
+"""Messages of the calu client protocol between a session and its clients.
+
+See agent/records/PLAN.md §6, D2.
 
 Transport: one JSON object per WebSocket message, following JSON-RPC 2.0:
 
@@ -16,7 +18,7 @@ tool call that started it.
 A client proves with `initialize` that it may talk to the session (the token that `calu run`
 prints). The configuration, the rules and the checker instructions are not part of this
 protocol: they live in the database and are changed with calu's own commands, which need other
-credentials than a session (PLAN.md D6, §5).
+credentials than a session (agent/records/PLAN.md D6, §5).
 """
 
 import base64
@@ -107,7 +109,7 @@ MAX_FRAME_BYTES = 32 * 1024 * 1024
 
 
 class ChatImage(BaseModel):
-    """An image a user attached to a chat message (PLAN.md D220).
+    """An image a user attached to a chat message (agent/records/PLAN.md D220).
 
     `data` is the image file, base64. Only the listed raster formats: an SVG is a document
     that can carry scripts.
@@ -183,10 +185,10 @@ class CommentAddResult(BaseModel):
 class EscalationDecideParams(BaseModel):
     """The human's answer to an `escalation.request`. Result: `{}`.
 
-    `answer` belongs to a question of the agent (`escalation.request` with `questions`, PLAN.md
-    D35): it is the text Claude receives as the result of its `AskUserQuestion` call, and the
-    call itself never runs. With an answer the `decision` is ignored, and the escalation is
-    recorded as "answered" rather than allowed or denied.
+    `answer` belongs to a question of the agent (`escalation.request` with `questions`,
+    agent/records/PLAN.md D35): it is the text Claude receives as the result of its
+    `AskUserQuestion` call, and the call itself never runs. With an answer the `decision` is
+    ignored, and the escalation is recorded as "answered" rather than allowed or denied.
     """
 
     escalation_id: str
@@ -236,12 +238,12 @@ class HonestyTrustParams(BaseModel):
 class FilesUserEditParams(BaseModel):
     """`files.user_edit`: the user is about to write these files through an editor.
 
-    `calu ide` sends it immediately before it replaces, deletes or renames a file for the
-    editor's file synchronisation (`docs/notes/jetbrains-sync-spec.md`). Such a write is the
-    user's own edit, not a step of Claude: no checker judges it. The session leaves the paths
-    out of the write set of a command that runs at that moment and watches the files for the
-    code honesty state, where they count as unreviewed like any change made outside calu.
-    With an empty list nothing is recorded and only the result is of use.
+    `calu ide` sends it immediately before it replaces, deletes or renames a file for the editor's
+    file synchronisation (`agent/records/notes/jetbrains-sync-spec.md`). Such a write is the user's
+    own edit, not a step of Claude: no checker judges it. The session leaves the paths out of the
+    write set of a command that runs at that moment and watches the files for the code honesty
+    state, where they count as unreviewed like any change made outside calu. With an empty list
+    nothing is recorded and only the result is of use.
     """
 
     paths: list[str] = Field(default_factory=list, max_length=1000)
@@ -498,8 +500,8 @@ class EscalationContextResult(BaseModel):
 class CheckerInfo(BaseModel):
     """One checker definition as a client may read it (a row of `checker_types`).
 
-    Clients read these; changing them needs other credentials than a session has (PLAN.md §6.2),
-    so there is no request to write them here.
+    Clients read these; changing them needs other credentials than a session has
+    (agent/records/PLAN.md §6.2), so there is no request to write them here.
     """
 
     name: str
@@ -699,7 +701,7 @@ class Event(BaseModel):
 State = Literal[
     "starting", "idle", "running", "checking", "tool_call", "escalated", "stopped", "failed"
 ]
-"""States of a session (PLAN.md §3.1):
+"""States of a session (agent/records/PLAN.md §3.1):
 
     starting ─► idle ◄──► running ─► checking ─► tool_call ─► running
                             │           │
@@ -910,7 +912,10 @@ class HonestyUnitStatus(BaseModel):
 
 
 class HonestyFileStatus(BaseModel):
-    """The honesty checker's status of one file a step changes (PLAN.md D224 part 4)."""
+    """The honesty checker's status of one file a step changes.
+
+    See agent/records/PLAN.md D224 part 4.
+    """
 
     path: str
     """The file, relative to the project root as the checker named it."""
@@ -969,10 +974,10 @@ class EscalationRequest(Event):
     rendered: str
     """Markdown rendering of the step, as the checker saw it."""
     questions: list[dict[str, Any]] = Field(default_factory=list)
-    """For a question of the agent (`AskUserQuestion`, PLAN.md D35): the questions as Claude
-    asked them, each with `question`, `header`, `options` (`label` and `description`) and
-    `multiSelect`. A client shows the options and answers with `escalation.decide {answer}`.
-    Empty for every other escalation."""
+    """For a question of the agent (`AskUserQuestion`, agent/records/PLAN.md D35): the questions as
+    Claude asked them, each with `question`, `header`, `options` (`label` and `description`) and
+    `multiSelect`. A client shows the options and answers with `escalation.decide {answer}`. Empty
+    for every other escalation."""
     opened_at: datetime | None = None
     """When the step began to wait. The snapshot of `state.get` carries the same value, so a
     client that attaches later can say how long the step has waited. None from a session that
@@ -994,13 +999,12 @@ class EscalationResolved(Event):
 class StepHeld(Event):
     """A tool call starts or stops waiting because a decision about another step is open.
 
-    While a human decides about one step, calu approves no other step of the session (the
-    hold, PLAN.md D235). A step is held either before its check or after its approval was
-    recorded, when an escalation came up meanwhile; in the second case its `check.result`
-    has already been sent, so a client cannot tell from the other events that the step
-    waits. Every hold sends one event with `held` true when it begins and one with `held`
-    false when it ends (the step then runs, or is escalated itself). A `log` line says the
-    same in words.
+    While a human decides about one step, calu approves no other step of the session (the hold,
+    agent/records/PLAN.md D235). A step is held either before its check or after its approval was
+    recorded, when an escalation came up meanwhile; in the second case its `check.result` has
+    already been sent, so a client cannot tell from the other events that the step waits. Every hold
+    sends one event with `held` true when it begins and one with `held` false when it ends (the step
+    then runs, or is escalated itself). A `log` line says the same in words.
     """
 
     method: ClassVar[str] = "step.held"

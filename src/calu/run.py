@@ -1,4 +1,6 @@
-"""`calu run`: starts one checked Claude Code session in the foreground (PLAN.md phase 3).
+"""`calu run`: starts one checked Claude Code session in the foreground.
+
+See agent/records/PLAN.md phase 3.
 
     password ──► decrypt the `session` credential ──► two database connections
                  │                                     queries + notifications
@@ -15,7 +17,7 @@
 The Claude Code process never gets calu's secrets: the connection string is in no environment
 variable, command line or file that calu hands to it, the checker API keys are blanked in its
 environment (`calu.config.load_secrets`, `SdkRunner.hidden_env`), and its sandbox hides
-`~/.config/calu` (PLAN.md D15).
+`~/.config/calu` (agent/records/PLAN.md D15).
 
 What "the credentials are dropped before Claude Code starts" (REQUIREMENTS 16) means here: the
 password, the key derived from it and the buffer the credential was decrypted into are wiped
@@ -204,13 +206,15 @@ class RunOptions:
     session id and leaves the original as it was (D203). Not together with `resume_id`."""
     fork_before_turn: int | None = None
     """With `resume_id`: branch the conversation off before this turn instead of continuing it
-    (PLAN.md D36). The new session gets its own id, so the original stays as it was."""
+    (agent/records/PLAN.md D36). The new session gets its own id, so the original stays as it
+    was."""
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max", "default"] | None = None
     interactive: bool = True
     socket_path: Path | None = None
-    """Serve a Unix socket at this path instead of a TCP port (PLAN.md §6): the file system then
-    decides who may connect, and `sessions.address` records it as `unix:<path>` (D29)."""
+    """Serve a Unix socket at this path instead of a TCP port (agent/records/PLAN.md §6): the file
+    system then decides who may connect, and `sessions.address` records it as `unix:<path>` (D29).
+    """
     host: str = "127.0.0.1"
     """Interface the protocol server binds; the default accepts only local clients."""
     port: int = 0
@@ -320,8 +324,8 @@ def limit_text(limit: RateLimit) -> str:
 def check_honesty_lines(event: CheckResult) -> list[str]:
     """Render the honesty checker's result of one step as terminal lines.
 
-    The honesty checker does not approve or refuse a step (PLAN.md D224), so its result is
-    shown as a status per file, never as a decision like ALLOW or PASS.
+    The honesty checker does not approve or refuse a step (agent/records/PLAN.md D224), so its
+    result is shown as a status per file, never as a decision like ALLOW or PASS.
 
     Args:
         event: The `check.result` of the step.
@@ -393,8 +397,8 @@ def format_event(event: Event) -> str | None:
                 ]
             )
         case EscalationRequest():
-            # A question of the agent is answered, not allowed or denied (PLAN.md D35), so the
-            # line says how to answer it instead.
+            # A question of the agent is answered, not allowed or denied (agent/records/PLAN.md
+            # D35), so the line says how to answer it instead.
             how = (
                 f"answer it with: calu resolve {event.escalation_id} answer 'your answer'"
                 if event.questions
@@ -1070,7 +1074,7 @@ async def _run(
     notifier.on_listening(dirty.hint)
     failed = False
     # Before anything starts: a fork that cannot be made must not turn into a plain resume,
-    # which would continue the conversation instead of branching it (PLAN.md D36).
+    # which would continue the conversation instead of branching it (agent/records/PLAN.md D36).
     fork = await _fork_point(db, options, console)
     if (options.fork_before_turn is not None or options.fork_id) and fork is None:
         return 1

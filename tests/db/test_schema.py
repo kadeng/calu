@@ -41,7 +41,7 @@ async def test_setup_seeds_defaults_once_and_creates_session_login(db_url: str) 
             "SELECT name, model, version, enabled FROM checker_types ORDER BY name"
         )
         # The honesty checker is seeded **off**: it is a feature a user switches on, and its
-        # judgement needs a capable model (PLAN.md D85, Q17).
+        # judgement needs a capable model (agent/records/PLAN.md D85, Q17).
         assert await cur.fetchall() == [
             ("changeset", "test:model", 1, True),
             ("command", "test:model", 1, True),
@@ -502,7 +502,10 @@ async def test_a_session_records_its_own_setting_changes_and_cannot_forge_others
 async def test_the_operator_login_reads_and_resolves_and_changes_nothing_else(
     db_url: str,
 ) -> None:
-    """`calu credential new operator` hands out a login for watching a herd (PLAN.md D48)."""
+    """`calu credential new operator` hands out a login for watching a herd.
+
+    See agent/records/PLAN.md D48.
+    """
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")
@@ -537,8 +540,8 @@ async def test_the_operator_login_reads_and_resolves_and_changes_nothing_else(
         assert row is not None
         assert row[0] == "allowed" and row[2] == "from the operator"
 
-        # Minting a client token for someone is part of the job (PLAN.md D30), so the role
-        # may insert, list and revoke one -- migrations 0004 and 0009 grant exactly that.
+        # Minting a client token for someone is part of the job (agent/records/PLAN.md D30), so the
+        # role may insert, list and revoke one -- migrations 0004 and 0009 grant exactly that.
         session_id = await (await owner.execute("SELECT id FROM sessions LIMIT 1")).fetchone()
         assert session_id is not None
         token_row = await (
@@ -570,7 +573,7 @@ async def test_the_operator_login_reads_and_resolves_and_changes_nothing_else(
 
 
 async def test_a_session_reads_and_writes_only_its_own_rows(db_url: str) -> None:
-    """Row-level security keeps one session out of another's history (PLAN.md D49)."""
+    """Row-level security keeps one session out of another's history (agent/records/PLAN.md D49)."""
     conn = await connect(db_url)
     try:
         _, session_url = await setup(conn, db_url, "test:model")

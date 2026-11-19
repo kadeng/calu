@@ -60,7 +60,7 @@ def traced(**changes: object) -> Config:
 
 def trace_files(workspace: Path) -> list[Path]:
     """Return the trace files of a workspace, oldest first."""
-    return sorted((workspace / ".agent" / "traces").rglob("session_*.md"))
+    return sorted((workspace / "agent" / "traces").rglob("session_*.md"))
 
 
 async def run_script(session: Session, rec, text: str = "go") -> None:
@@ -92,7 +92,7 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
 
     (path,) = trace_files(workspace)
     assert re.fullmatch(
-        r"\.agent/traces/\d{4}-\d\d-\d\d/kai/session_001\.md", str(path.relative_to(workspace))
+        r"agent/traces/\d{4}-\d\d-\d\d/kai/session_001\.md", str(path.relative_to(workspace))
     )
     text = re.sub(r"(?m)^- Started: .*$", "- Started: <time>", path.read_text())
     assert text == (
@@ -259,7 +259,7 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
         "\n"
     )
     assert any(
-        isinstance(event, Log) and event.message.startswith("session trace: .agent/traces/")
+        isinstance(event, Log) and event.message.startswith("session trace: agent/traces/")
         for event in rec.events
     )
 
@@ -290,7 +290,7 @@ async def test_narrated_content_without_a_narrator_is_plain_and_the_header_says_
 async def test_tracing_is_off_by_default(tmp_path: Path):
     session, rec, _ = make_session(tmp_path, SCRIPT)
     await run_script(session, rec)
-    assert session.traces is None and not (tmp_path / ".agent").exists()
+    assert session.traces is None and not (tmp_path / "agent").exists()
 
 
 async def test_a_failing_redaction_agent_withholds_blocks_and_the_session_goes_on(
@@ -454,7 +454,7 @@ async def test_a_write_into_the_trace_directory_waits_for_a_person(tmp_path: Pat
                 {
                     "tool": "Write",
                     "input": {
-                        "file_path": str(tmp_path / ".agent/traces/2026-11-18/kai/session_001.md"),
+                        "file_path": str(tmp_path / "agent/traces/2026-11-18/kai/session_001.md"),
                         "content": "rewritten",
                     },
                     "result": "written",
@@ -481,16 +481,16 @@ def test_the_rule_covers_edits_and_commands_only_while_traces_are_written(tmp_pa
         step = Step(tool_name=tool, tool_input=tool_input, cwd=str(tmp_path))
         return rules.evaluate(step).reason
 
-    inside = {"file_path": ".agent/traces/2026-11-18/kai/session_001.md", "content": "x"}
-    command = {"command": "echo more >> .agent/traces/2026-11-18/kai/session_001.md"}
+    inside = {"file_path": "agent/traces/2026-11-18/kai/session_001.md", "content": "x"}
+    command = {"command": "echo more >> agent/traces/2026-11-18/kai/session_001.md"}
     assert "session traces" not in asks("Write", inside)
     assert "session traces" not in asks("Bash", command)
 
-    rules.trace_directory = tmp_path / ".agent/traces"
-    assert "built-in (calu's session traces) `^\\.agent/traces(/|$)`" in asks("Write", inside)
+    rules.trace_directory = tmp_path / "agent/traces"
+    assert "built-in (calu's session traces) `^agent/traces(/|$)`" in asks("Write", inside)
     assert "session traces" in asks("Edit", {**inside, "old_string": "a", "new_string": "b"})
     assert "session traces" in asks("Bash", command)
-    assert "session traces" not in asks("Write", {"file_path": ".agent/notes.md", "content": "x"})
+    assert "session traces" not in asks("Write", {"file_path": "agent/notes.md", "content": "x"})
     assert "session traces" not in asks("Read", {"file_path": inside["file_path"]}), (
         "reading a trace is an ordinary read"
     )
@@ -498,13 +498,13 @@ def test_the_rule_covers_edits_and_commands_only_while_traces_are_written(tmp_pa
 
 def test_the_trace_directory_is_recognised_through_a_linked_directory(tmp_path: Path):
     rules = default_rules(tmp_path)
-    rules.trace_directory = tmp_path / ".agent/traces"
-    (tmp_path / ".agent/traces").mkdir(parents=True)
-    (tmp_path / "alias").symlink_to(tmp_path / ".agent")
-    assert rules.in_trace_directory(tmp_path / ".agent/traces")
+    rules.trace_directory = tmp_path / "agent/traces"
+    (tmp_path / "agent/traces").mkdir(parents=True)
+    (tmp_path / "alias").symlink_to(tmp_path / "agent")
+    assert rules.in_trace_directory(tmp_path / "agent/traces")
     assert rules.in_trace_directory(tmp_path / "alias/traces/x.md")
     assert rules.write_denied(tmp_path / "alias/traces/x.md")
-    assert not rules.in_trace_directory(tmp_path / ".agent/traces-old/x.md")
+    assert not rules.in_trace_directory(tmp_path / "agent/traces-old/x.md")
 
 
 def test_the_session_tells_the_guards_where_the_traces_are(tmp_path: Path):
@@ -516,30 +516,30 @@ def test_the_session_tells_the_guards_where_the_traces_are(tmp_path: Path):
     assert off.rules.trace_directory is None
     assert off.honesty.excluded == () and off.write_sets.excluded == ()
     off.apply_settings(default_settings(tmp_path, traced()))
-    assert off.rules.trace_directory == tmp_path / ".agent/traces"
-    assert off.honesty.excluded == (".agent/traces",)
+    assert off.rules.trace_directory == tmp_path / "agent/traces"
+    assert off.honesty.excluded == ("agent/traces",)
 
 
 async def test_the_write_set_of_a_command_leaves_the_trace_directory_out(tmp_path: Path):
     project = tmp_path / "project"
     project.mkdir()
     snapshots = SnapshotStore(
-        workspace=project, root=tmp_path / "snapshots", exclude=(".agent/traces",)
+        workspace=project, root=tmp_path / "snapshots", exclude=("agent/traces",)
     )
     await snapshots.prepare()
     before = await snapshots.take()
-    trace = project / ".agent/traces/2026-11-18/kai"
+    trace = project / "agent/traces/2026-11-18/kai"
     trace.mkdir(parents=True)
     (trace / "session_001.md").write_text("# calu session trace\n")
-    (project / ".agent/notes.md").write_text("mine\n")
+    (project / "agent/notes.md").write_text("mine\n")
     (project / "a.py").write_text("x = 1\n")
     after = await snapshots.take()
     change = await snapshots.changes(before, after)
-    assert sorted(entry.path for entry in change.changes) == [".agent/notes.md", "a.py"]
+    assert sorted(entry.path for entry in change.changes) == ["a.py", "agent/notes.md"]
 
     # A directory that is excluded later leaves the snapshots from then on.
-    snapshots.exclude = (".agent/traces", ".agent")
-    (project / ".agent/notes.md").write_text("changed\n")
+    snapshots.exclude = ("agent/traces", "agent")
+    (project / "agent/notes.md").write_text("changed\n")
     (project / "a.py").write_text("x = 2\n")
     later = await snapshots.changes(after, await snapshots.take())
     assert [entry.path for entry in later.changes] == ["a.py"]
@@ -562,32 +562,32 @@ def test_the_honesty_state_never_lists_a_trace_file(tmp_path: Path):
     git("commit", "-q", "-m", "first")
     state = HonestyState(tmp_path)
     state.baseline = Baseline(git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}"), "user")
-    trace = tmp_path / ".agent/traces/2026-11-18/kai/session_001.md"
+    trace = tmp_path / "agent/traces/2026-11-18/kai/session_001.md"
     trace.parent.mkdir(parents=True)
     trace.write_text("# calu session trace\n")
     (tmp_path / "b.py").write_text("y = 2\n")
     state.watch(trace)
 
     assert set(state.unreviewed().paths) == {
-        ".agent/traces/2026-11-18/kai/session_001.md",
+        "agent/traces/2026-11-18/kai/session_001.md",
         "b.py",
     }
-    state.excluded = (".agent/traces",)
+    state.excluded = ("agent/traces",)
     assert state.unreviewed().paths == ("b.py",)
-    assert state.left_out(".agent/traces") and not state.left_out(".agent/traces-old/x.md")
+    assert state.left_out("agent/traces") and not state.left_out("agent/traces-old/x.md")
     plan = state.review_plan(max_files=10)
     assert [file.path for file in plan.files] == ["b.py"]
 
 
 def test_a_checkers_code_tools_do_not_read_the_traces(tmp_path: Path):
-    trace = tmp_path / ".agent/traces/2026-11-18/kai/session_001.md"
+    trace = tmp_path / "agent/traces/2026-11-18/kai/session_001.md"
     trace.parent.mkdir(parents=True)
     trace.write_text("# calu session trace\n")
     rules = default_rules(tmp_path)
     tools = CodeTools(workspace=tmp_path, rules=rules)
     relative = trace.relative_to(tmp_path).as_posix()
     assert tools.read_lines(relative) == ["# calu session trace"]
-    rules.trace_directory = tmp_path / ".agent/traces"
+    rules.trace_directory = tmp_path / "agent/traces"
     with pytest.raises(ReadRefused, match="session traces"):
         tools.read_lines(relative)
 
@@ -596,7 +596,7 @@ def test_a_checkers_code_tools_do_not_read_the_traces(tmp_path: Path):
 
 
 def test_the_trace_directory_must_stay_inside_the_project():
-    assert TracesConfig().directory == ".agent/traces" and not TracesConfig().enabled
+    assert TracesConfig().directory == "agent/traces" and not TracesConfig().enabled
     assert TracesConfig(directory="./docs//chats/").directory == "docs/chats"
     for refused in ("/var/log/calu", "../outside", "a/../../b", "~/traces", "", " ", ".", "C:/x"):
         with pytest.raises(ValidationError, match=r"traces\.directory is a path inside"):

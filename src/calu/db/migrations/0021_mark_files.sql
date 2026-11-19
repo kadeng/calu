@@ -1,4 +1,4 @@
--- The file a mark was opened on, as it was then (PLAN.md D95).
+-- The file a mark was opened on, as it was then (agent/records/PLAN.md D95).
 --
 -- An overruled mark becomes an evaluation case (D94), and a case about an **edit** can only be
 -- reproduced with the file the edit applies to: without it the edit does not apply, the checker
@@ -13,5 +13,5 @@ ALTER TABLE honesty_marks ADD COLUMN files jsonb NOT NULL DEFAULT '{}';
 
 COMMENT ON COLUMN honesty_marks.files IS
     'Workspace-relative path -> content of the file this mark was opened on, as it was then, '
-    'so that an evaluation case built from the mark can be reproduced (PLAN.md D95). Empty '
+    'so that an evaluation case built from the mark can be reproduced (agent/records/PLAN.md D95). Empty '
     'for a mark on a step that is not an edit, or whose file was missing, long or binary.';

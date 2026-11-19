@@ -1,5 +1,5 @@
 /**
- * Data types of the file synchronisation of the SSH mode (`docs/notes/jetbrains-sync-spec.md`).
+ * Data types of the file synchronisation of the SSH mode (`agent/records/notes/jetbrains-sync-spec.md`).
  *
  * The local side is the project copy on the user's machine, the remote side is the project
  * directory on the server, reached through `calu ide`. Every path in these types is a project
@@ -142,7 +142,7 @@ enum class SkipReason {
     /** The path is not a valid project relative path ([PathProblem.EMPTY], `ABSOLUTE`, `PARENT_SEGMENT`, `INVALID_CHARACTER`). */
     INVALID_PATH,
 
-    /** The path is inside a directory that is never synchronised (`.git`, `.agent/traces`). */
+    /** The path is inside a directory that is never synchronised (`.git`, `agent/traces`). */
     EXCLUDED,
 
     /** The local file system cannot hold a file of this name. */

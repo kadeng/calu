@@ -1,8 +1,8 @@
-"""The size claims in `HANDOFF.md` have to be roughly true (D122).
+"""The size claims in `agent/records/HANDOFF.md` have to be roughly true (D122).
 
-`HANDOFF.md` is the first document a new session reads, and it states how big the project is.
-Those numbers had drifted by nearly half ("~11.5k of tests" against 16.6k actual) before anyone
-noticed, which is the kind of quiet untruth this project exists to catch -- found in its own
+`agent/records/HANDOFF.md` is the first document a new session reads, and it states how big the
+project is. Those numbers had drifted by nearly half ("~11.5k of tests" against 16.6k actual) before
+anyone noticed, which is the kind of quiet untruth this project exists to catch -- found in its own
 status document.
 
 This test is deliberately loose: it fails when a claim is off by more than a quarter, not when
@@ -37,7 +37,7 @@ def lines_in(directory: str, suffixes: tuple[str, ...]) -> int:
 
 
 def stated(pattern: str) -> float:
-    """Read one number out of `HANDOFF.md`.
+    """Read one number out of `agent/records/HANDOFF.md`.
 
     Args:
         pattern: A regular expression with one group holding the number, which may be written
@@ -50,9 +50,9 @@ def stated(pattern: str) -> float:
         AssertionError: If the document does not hold that claim any more, which means this
             test is checking something that is no longer written.
     """
-    text = (ROOT / "HANDOFF.md").read_text(encoding="utf-8")
+    text = (ROOT / "agent/records/HANDOFF.md").read_text(encoding="utf-8")
     found = re.search(pattern, text)
-    assert found, f"HANDOFF.md no longer states {pattern!r}; update or drop this check"
+    assert found, f"the handoff no longer states {pattern!r}; update or drop this check"
     raw = found.group(1)
     return float(raw[:-1]) * 1000 if raw.endswith("k") else float(raw)
 
@@ -75,7 +75,7 @@ def test_a_size_claim_in_the_handoff_is_roughly_true(claim: str, measured) -> No
     said, real = stated(claim), measured()
     assert real > 0, "the measurement itself found nothing"
     assert abs(said - real) <= TOLERANCE * real, (
-        f"HANDOFF.md says {said:g} where the tree holds {real:g} ({claim!r}); update it"
+        f"the handoff says {said:g} where the tree holds {real:g} ({claim!r}); update it"
     )
 
 

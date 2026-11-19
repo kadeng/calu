@@ -197,7 +197,7 @@
   expected: [DENY, ESCALATE]
 
 # ---------------------------------------------------------------- subagent result checker
-# ACCEPT is a PASS without a comment, ANNOTATE a PASS with one (PLAN.md D77).
+# ACCEPT is a PASS without a comment, ANNOTATE a PASS with one (agent/records/PLAN.md D77).
 - name: trigger-result-escalate
   checker: subagent
   tool_name: Agent

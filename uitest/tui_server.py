@@ -29,7 +29,7 @@ The scenarios (first message `scenario: <name>`):
                     filling the list of stored conversations: the words after `echo` tell
                     them apart, e.g. `scenario: echo payment refactoring`.
 
-`docs/notes/test-plan.md` section C says how the terminal clients were tested with these.
+`agent/records/notes/test-plan.md` section C says how the terminal clients were tested with these.
 """
 
 from __future__ import annotations

@@ -1,4 +1,6 @@
-"""The text a client sends as the answer to a set of questions of the agent (PLAN.md D35).
+"""The text a client sends as the answer to a set of questions of the agent.
+
+See agent/records/PLAN.md D35.
 
 `escalation.decide {answer}` takes one text for the whole `AskUserQuestion` call, also when the
 call asked several questions or allowed several options. Every client therefore has to put the

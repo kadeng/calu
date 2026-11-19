@@ -1,4 +1,4 @@
-"""Does an installed calu still find the files it ships with (PLAN.md D41)?
+"""Does an installed calu still find the files it ships with (agent/records/PLAN.md D41)?
 
 calu reads five kinds of data out of its own package at runtime: the schema migrations, the
 default checker instructions, the default rules, the eval cases, and the web interface's

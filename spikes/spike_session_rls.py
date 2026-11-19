@@ -1,6 +1,6 @@
 """Would row-level security keep one session out of another session's rows? (Q3)
 
-PLAN.md Q3 asks whether calu should give every session its own database role. The
+agent/records/PLAN.md Q3 asks whether calu should give every session its own database role. The
 recommendation there is **not** a role per session -- it needs the owner credential at session
 start and a reaper for dead roles -- but row-level security on the one `calu_session` login,
 keyed on a session id the connection sets once. That is cheap to describe and easy to get
@@ -24,7 +24,7 @@ What it tries, with the candidate policies applied to the tables a session write
    before it writes anything else.
 
 **This is the original measurement, kept as the record.** The answer it produced shipped the
-same day as migration 0015 (PLAN.md D49), and the shipped policies go further than the ones
+same day as migration 0015 (agent/records/PLAN.md D49), and the shipped policies go further than the ones
 below: a conversation spans several `sessions` rows when it is resumed or forked, so there the
 turns, steps and chat summary of the sibling rows stay readable (`calu_same_conversation`) and
 `calu_recent_sessions` and `calu_conversation_sessions` serve the reads that span sessions. Read

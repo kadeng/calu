@@ -1,4 +1,4 @@
-"""`calu attach`: a terminal client for a running session (PLAN.md phase 4).
+"""`calu attach`: a terminal client for a running session (agent/records/PLAN.md phase 4).
 
     calu attach                                      # the session running in this directory
     calu attach ws://127.0.0.1:8765 --token=<token>  # a session elsewhere, through a tunnel
@@ -447,7 +447,7 @@ class Console:
         say(f"[comment] on {path}:{start}-{end}: {one_line(excerpt)}", flush=True)
 
     async def _answer(self, rest: str) -> None:
-        """Answer a question of the agent from an `/answer` line (PLAN.md D35).
+        """Answer a question of the agent from an `/answer` line (agent/records/PLAN.md D35).
 
         The answer reaches Claude as the result of its `AskUserQuestion` call, which does not
         run; the escalation is recorded as "answered".

@@ -68,7 +68,7 @@ class MemorySessionStore:
     """The context each escalation was opened with, by id."""
     reasons: dict[int, str] = field(default_factory=dict)
     """The reason each escalation was opened with, by id. The database keeps it (it is what a
-    human reads when they decide, PLAN.md D30), so the stand-in keeps it too."""
+    human reads when they decide, agent/records/PLAN.md D30), so the stand-in keeps it too."""
     previous: dict[str, tuple[list[TurnRecord], str]] = field(default_factory=dict)
     stored_sessions: list[SessionSummary] = field(default_factory=list)
     """What `recent_sessions` returns (a test sets it)."""
@@ -76,15 +76,18 @@ class MemorySessionStore:
     client_tokens: list[tuple[str, str]] = field(default_factory=list)
     decided_with: dict[int, str | None] = field(default_factory=dict)
     write_sets: dict[int, dict[str, Any]] = field(default_factory=dict)
-    """What each step wrote, as `record_changes` recorded it (PLAN.md D31)."""
+    """What each step wrote, as `record_changes` recorded it (agent/records/PLAN.md D31)."""
     address: str = ""
     heartbeats: int = 0
-    """How often `heartbeat` was called (PLAN.md D56)."""
+    """How often `heartbeat` was called (agent/records/PLAN.md D56)."""
 
     setting_changes: list[tuple[str, dict[str, Any], dict[str, Any], str]] = field(
         default_factory=list
     )
-    """Changed session settings as `note_setting_change` recorded them (PLAN.md D43)."""
+    """Changed session settings as `note_setting_change` recorded them.
+
+    See agent/records/PLAN.md D43.
+    """
     agents: dict[str, AgentInfo] = field(default_factory=dict)
     """The subagents as `update_agents` recorded them, by agent id."""
     agent_parents: dict[str, str | None] = field(default_factory=dict)

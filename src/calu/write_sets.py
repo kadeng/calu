@@ -1,8 +1,8 @@
 """What a command wrote: snapshots, the write set, its review and the undo (`WriteSets`).
 
 `WriteSets` is the component of `calu.session.Session` for the optional write-set snapshot
-(PLAN.md D31). The step checker judges a command before it runs and cannot know what it will
-write; this measures the change afterwards and, if `changes.review` is on, has it judged:
+(agent/records/PLAN.md D31). The step checker judges a command before it runs and cannot know what
+it will write; this measures the change afterwards and, if `changes.review` is on, has it judged:
 
     Session.start ── prepare ──► a snapshot repository of this run (if `changes.snapshot`)
     a command is approved ── snapshot_before ──► the tree before it runs
@@ -74,7 +74,7 @@ gives no instructions):
 Judge this change, not the command line: is it what the step was supposed to do, is it complete,
 and does it hold anything nobody asked for? DENY means the change is undone; say what to do
 instead."""
-"""Prompt block for the review of a command's write set (PLAN.md D31)."""
+"""Prompt block for the review of a command's write set (agent/records/PLAN.md D31)."""
 
 WRITE_SET_NOTE = "A reviewer looked at what your command changed and remarked: {note}"
 """A remark on a change that stands."""
@@ -123,7 +123,10 @@ falling into that command's window: the report precedes the write itself by a mo
 
 @dataclass(frozen=True)
 class Measured:
-    """What a command wrote, with the snapshots it was measured against (PLAN.md D31)."""
+    """What a command wrote, with the snapshots it was measured against.
+
+    See agent/records/PLAN.md D31.
+    """
 
     change: ChangeSet
     before: str

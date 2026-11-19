@@ -106,8 +106,8 @@ session id (D27). `decide_escalation` is the second path: a client attached to t
 process decides. The decision is written to the row first and releases the step only once the
 database accepted it, so the row never says anything else than what happened to the step.
 
-States (`calu.protocol.messages.State`, PLAN.md §3.1) follow what runs at the moment; steps of
-the main agent and of subagents overlap, so the most important one wins:
+States (`calu.protocol.messages.State`, agent/records/PLAN.md §3.1) follow what runs at the moment;
+steps of the main agent and of subagents overlap, so the most important one wins:
 
     escalated (an escalation is open) > checking (a checker or the narrator runs)
     > tool_call (an approved call runs) > running (Claude works) > idle
@@ -336,7 +336,7 @@ HARNESS_ASKED = (
     "Claude Code's own approval asked for a confirmation; calu's checkers had no objection to "
     "this step (PASS, see the check above). Whoever answers decides whether it runs."
 )
-"""Reason of an escalation that nothing in calu raised (PLAN.md D38).
+"""Reason of an escalation that nothing in calu raised (agent/records/PLAN.md D38).
 
 Claude Code's auto mode does not only allow and deny: it can also ask. A PASS leaves the
 decision to it (D21), and when it decides to ask, the SDK calls `can_use_tool`, which is calu's
@@ -487,13 +487,13 @@ class Session:
                 (tests pass fake models here).
             startup_warnings: Warnings about missing prerequisites, emitted as `log` warnings
                 at every `start`, before the runner starts.
-            snapshot_root: Where the optional write-set snapshots live (PLAN.md D31); None
-                uses `calu.changes.default_root()`.
+            snapshot_root: Where the optional write-set snapshots live (agent/records/PLAN.md D31);
+                None uses `calu.changes.default_root()`.
             transcript_inputs: Reads what the user typed in a conversation from Claude Code's
-                own transcript, by Claude session id (it may block: it is run in a worker
-                thread). Used when a conversation is resumed or forked that the store knows
-                nothing about, because it was started without calu (PLAN.md D209); None
-                starts such a session without that context.
+                own transcript, by Claude session id (it may block: it is run in a worker thread).
+                Used when a conversation is resumed or forked that the store knows nothing about,
+                because it was started without calu (agent/records/PLAN.md D209); None starts such a
+                session without that context.
             secret_env: Names of environment variables whose values are secret (the ones calu
                 hides from Claude Code, `calu.config.load_secrets`). A session trace never
                 holds their values (`calu.traces.redact`).
@@ -545,7 +545,7 @@ class Session:
         self._honesty_sent = HonestyInfo()
         """What the last `honesty.update` said, so an unchanged state is not sent again."""
         self.snapshot_root = snapshot_root or default_root()
-        """Where the write-set snapshots of this process live (PLAN.md D31)."""
+        """Where the write-set snapshots of this process live (agent/records/PLAN.md D31)."""
         self.policy = ToolPolicy(
             overrides=self.config.tool_routes, default=self.config.default_route
         )
@@ -634,7 +634,7 @@ class Session:
             wrote=self._watch_written,
         )
         """Measures what each command wrote, has it reviewed and undoes a refused change
-        (`calu.write_sets`, PLAN.md D31)."""
+        (`calu.write_sets`, agent/records/PLAN.md D31)."""
         self.state: State = "stopped"
         self._git_head_value: str | None = None
         self._git_head_time = float("-inf")
@@ -645,7 +645,7 @@ class Session:
         self._login_hint_sent = False
         self.traces: TraceWriter | None = None
         """The writer of this run's trace file while `traces.enabled` is on (`calu.traces`,
-        PLAN.md D232); None otherwise."""
+        agent/records/PLAN.md D232); None otherwise."""
         self._secret_env = set(secret_env)
         self._trace_as: tuple[object, ...] | None = None
         """`_trace_settings` as they were when the running trace was started (or when it
@@ -725,7 +725,7 @@ class Session:
 
         One place for the start and for every reload: before, the reload updated its model and
         its instructions in place and left its request and token limits as they were at the
-        start, and no path passed its effort at all (PLAN.md D135).
+        start, and no path passed its effort at all (agent/records/PLAN.md D135).
 
         Returns:
             The checker.
@@ -1618,8 +1618,8 @@ class Session:
         recorded when the checkers answer (`_mark_at_once`).
 
         Marks are taken from the honesty checker's run alone (`Checker.judges_honesty`,
-        PLAN.md D224); marks in the answer of any other checker are ignored. An edit verifies
-        its file only if the honesty checker judged it and every checker of the route
+        agent/records/PLAN.md D224); marks in the answer of any other checker are ignored. An edit
+        verifies its file only if the honesty checker judged it and every checker of the route
         approved: without the honesty checker nothing judges honesty per step, and the file
         stays unreviewed until an honesty review or a person's trust.
 
@@ -1680,11 +1680,11 @@ class Session:
 
         A honesty checker that runs on the command route, or with the changeset checkers of a
         commit, marks code that exists in the project whatever the command does. So its
-        `marks_dirty` are recorded for every decision, also for a step that is denied,
-        escalated or fails. The marks of an edit are different: they name what the edit would
-        write, and are applied only after it ran (`_keep_honesty`, `_apply_honesty`). Marks in
-        the answer of any other checker are ignored (PLAN.md D224). The shipped honesty
-        checker is on the edit route, so with the defaults this records nothing.
+        `marks_dirty` are recorded for every decision, also for a step that is denied, escalated or
+        fails. The marks of an edit are different: they name what the edit would write, and are
+        applied only after it ran (`_keep_honesty`, `_apply_honesty`). Marks in the answer of any
+        other checker are ignored (agent/records/PLAN.md D224). The shipped honesty checker is on
+        the edit route, so with the defaults this records nothing.
 
         Side effects: as `_apply_record`. Never raises.
 
@@ -1903,12 +1903,11 @@ class Session:
     ) -> tuple[CheckDecision, list[tuple[Checker, CheckOutcome]]]:
         """Run the checkers that review a command's write set, with the honesty state.
 
-        Like `StepGate.run_checkers`, with two additions while `honesty.mode` is not "off":
-        the checkers get the note of the honesty state, and the marks of a honesty checker
-        among them are recorded at once, because the command has already run
-        (`_apply_record`); marks in the answer of any other checker are ignored (PLAN.md
-        D224). A change the checkers deny is undone, so the marks of a DENY, which name that
-        change, are not recorded.
+        Like `StepGate.run_checkers`, with two additions while `honesty.mode` is not "off": the
+        checkers get the note of the honesty state, and the marks of a honesty checker among them
+        are recorded at once, because the command has already run (`_apply_record`); marks in the
+        answer of any other checker are ignored (agent/records/PLAN.md D224). A change the checkers
+        deny is undone, so the marks of a DENY, which name that change, are not recorded.
 
         Args:
             route: The route whose checkers run (the changeset route).
@@ -1944,7 +1943,9 @@ class Session:
         return decision, runs
 
     async def reload_summary(self) -> None:
-        """Read the chat summary again, in case an operator corrected it (PLAN.md D40).
+        """Read the chat summary again, in case an operator corrected it.
+
+        See agent/records/PLAN.md D40.
 
         The summary is part of what steers the checkers — it is the conversation they read for
         everything older than the unfolded turns — so a wrong one is worth correcting by hand
@@ -1987,10 +1988,10 @@ class Session:
         """Replace the auto-escalation categories, record who did it, tell every client.
 
         Takes effect from the next check on: a step already waiting for a decision keeps the
-        escalation it has. The change lives in the running session only -- it is not written to
-        the project's settings -- so a restart goes back to what `calu config` holds. Switching a
-        category off weakens the session, so the change goes into the audit log with the name of
-        the client that asked for it (PLAN.md D43); a change that changes nothing is not
+        escalation it has. The change lives in the running session only -- it is not written to the
+        project's settings -- so a restart goes back to what `calu config` holds. Switching a
+        category off weakens the session, so the change goes into the audit log with the name of the
+        client that asked for it (agent/records/PLAN.md D43); a change that changes nothing is not
         recorded.
 
         Args:
@@ -2088,7 +2089,9 @@ class Session:
     # ------------------------------------------------------------------ client requests
 
     def step_times(self) -> Sequence[StepTime]:
-        """Return when the recent steps of this session ran, oldest first (PLAN.md D32).
+        """Return when the recent steps of this session ran, oldest first.
+
+        See agent/records/PLAN.md D32.
 
         The checkers get this as a tool (`calu.checkers.tools.step_times`) and use it to
         attribute a file's change time to a step. Only the last `STEP_TIMES_KEPT` steps are
@@ -2127,10 +2130,10 @@ class Session:
     async def beat(self, interval_s: float) -> None:
         """Tell the database every `interval_s` seconds that this process is still running.
 
-        A killed process cannot set its own state, so without this a row stays at its last
-        state for ever and a herd cannot tell a working session from a dead one (PLAN.md D56).
-        Runs until cancelled; a failed heartbeat is logged and the loop goes on, because losing
-        the stamp is not a reason to stop a session that is otherwise fine.
+        A killed process cannot set its own state, so without this a row stays at its last state for
+        ever and a herd cannot tell a working session from a dead one (agent/records/PLAN.md D56).
+        Runs until cancelled; a failed heartbeat is logged and the loop goes on, because losing the
+        stamp is not a reason to stop a session that is otherwise fine.
 
         The first heartbeat is due one interval after the start, not at once: `calu run` starts
         this loop before the session row exists (the row is created by `start`, which needs the
@@ -2195,7 +2198,9 @@ class Session:
         await self._refresh_state()
 
     async def accepts_token(self, token: str) -> bool:
-        """Tell whether a client may attach to this session with `token` (PLAN.md D30).
+        """Tell whether a client may attach to this session with `token`.
+
+        See agent/records/PLAN.md D30.
 
         Every token of this session counts until it is revoked: the one `calu run` printed and
         every one an operator minted (`calu token mint`). The protocol server asks the store
@@ -2338,7 +2343,7 @@ class Session:
 
         A client shows them so that a human can see which instructions, which model and which
         version judged a step. Changing them needs other credentials than a session has
-        (PLAN.md §6.2), so this is read-only.
+        (agent/records/PLAN.md §6.2), so this is read-only.
 
         Returns:
             The definitions by name, with their instructions.
@@ -2385,9 +2390,9 @@ class Session:
         Args:
             tg: Task group that runs the session; it must outlive the session.
             resume_id: Claude session id to resume, or None for a new session.
-            fork: Where to branch off the resumed conversation (PLAN.md D36); None resumes it
-                whole. Needs `resume_id`; the forked conversation gets its own session id, so
-                the one that was forked from is left untouched.
+            fork: Where to branch off the resumed conversation (agent/records/PLAN.md D36); None
+                resumes it whole. Needs `resume_id`; the forked conversation gets its own session
+                id, so the one that was forked from is left untouched.
             session_id: The Claude session id a new or forked conversation gets, a UUID
                 (D203); None lets Claude Code choose, and the id is then known with the first
                 turn. Ignored for a plain resume, which keeps `resume_id`.
@@ -2486,7 +2491,7 @@ class Session:
         Args:
             runner: The runner of this session.
             resume_id: Claude session id to resume, or None.
-            fork: Where to branch off the resumed conversation, or None (PLAN.md D36).
+            fork: Where to branch off the resumed conversation, or None (agent/records/PLAN.md D36).
             session_id: The id a new or forked conversation gets, or None (D203).
         """
         try:
@@ -2743,10 +2748,11 @@ class Session:
         """Resolve an open escalation from a client. Only the first decision counts.
 
         The decision is recorded in the `escalations` row as the resolution it is, with
-        `resolved_by` saying that a client of this session decided and which one (PLAN.md D28).
-        A client needs no database login for that: it authenticates to the session with its
-        token, and the session speaks to the database for it. An operator who resolves the row
-        in the database instead reaches the session through `note_resolution` or its poll.
+        `resolved_by` saying that a client of this session decided and which one
+        (agent/records/PLAN.md D28). A client needs no database login for that: it authenticates to
+        the session with its token, and the session speaks to the database for it. An operator who
+        resolves the row in the database instead reaches the session through `note_resolution` or
+        its poll.
 
         The database decides first, and the step is released only by a decision it accepted:
 
@@ -2767,9 +2773,9 @@ class Session:
             decision: "allow" or "deny"; ignored when `answer` is given.
             note: Optional text from the user; Claude receives it with a denial.
             client: Name of the client that decided, for the record.
-            answer: The answer to a question of the agent (`escalation.request` with
-                `questions`, PLAN.md D35). The call does not run; Claude receives this text as
-                its result, and the row is recorded as "answered".
+            answer: The answer to a question of the agent (`escalation.request` with `questions`,
+                agent/records/PLAN.md D35). The call does not run; Claude receives this text as its
+                result, and the row is recorded as "answered".
             token_sha256: SHA-256 of the token the deciding client authenticated with, which
                 the database checks before it records the decision; None uses a token of this
                 session that the store remembers.
@@ -3928,7 +3934,7 @@ class Session:
     # ------------------------------------------------------------------ session traces
 
     def add_trace_secret(self, value: str, kind: str) -> None:
-        """Name a value that a session trace must never hold (PLAN.md D232).
+        """Name a value that a session trace must never hold (agent/records/PLAN.md D232).
 
         Args:
             value: The secret, e.g. the client token of this session.

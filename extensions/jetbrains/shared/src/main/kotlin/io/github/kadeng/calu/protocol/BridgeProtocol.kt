@@ -1,6 +1,6 @@
 /**
  * The bridge protocol as far as the plugin names it: error codes and readers for error data
- * (`docs/notes/vscode-extension-spec.md`, sections 2 and 6, and "Deviations").
+ * (`agent/records/notes/vscode-extension-spec.md`, sections 2 and 6, and "Deviations").
  *
  *     plugin --request--> calu ide            ide.* and session.call {method, params}
  *     plugin <--notification-- calu ide       session.event {method, params}, ide.link, ide.log

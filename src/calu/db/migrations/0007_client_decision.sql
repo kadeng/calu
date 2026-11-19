@@ -1,4 +1,4 @@
--- calu schema, version 7: a session records the decision of one of its clients (PLAN.md D28).
+-- calu schema, version 7: a session records the decision of one of its clients (agent/records/PLAN.md D28).
 --
 -- A client of a session process -- `calu attach`, the ACP adapter, an IDE panel -- has no
 -- database login of its own: it authenticates to the session with a client token and the session

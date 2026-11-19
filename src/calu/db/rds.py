@@ -1,4 +1,6 @@
-"""Login tokens for an AWS RDS instance with IAM database authentication (PLAN.md D205).
+"""Login tokens for an AWS RDS instance with IAM database authentication.
+
+See agent/records/PLAN.md D205.
 
 The owner login of the variant `rds-iam` uses them (`calu.db.target`): `calu setup`, the admin
 commands and `calu web`. By default the session login `calu_session` uses them too (it is made a

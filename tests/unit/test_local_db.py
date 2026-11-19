@@ -192,7 +192,7 @@ def test_new_volumes_are_created_without_trust() -> None:
 def test_a_new_database_gets_a_private_directory_with_a_mountable_one_inside(
     tmp_path: Path,
 ) -> None:
-    """The cluster's files go into a host directory the user chose (PLAN.md D205). The
+    """The cluster's files go into a host directory the user chose (agent/records/PLAN.md D205). The
     container's PostgreSQL has a user id of its own and must reach the mount, so the mounted
     directory is a subdirectory and the chosen one stays private to the host user (measured
     with postgres:18: the cluster ends up owned by the container's user, mode 0700)."""

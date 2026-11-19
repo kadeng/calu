@@ -1,8 +1,8 @@
 """ACP session modes and config options, mapped onto calu's auto-escalation categories.
 
 An editor shows a picker for how much the agent may do on its own. calu's equivalent is
-`AutoEscalate` (PLAN.md D21, D38): three independent switches that make every command, every
-edit or every subagent result wait for a human, whatever the checker decided.
+`AutoEscalate` (agent/records/PLAN.md D21, D38): three independent switches that make every command,
+every edit or every subagent result wait for a human, whatever the checker decided.
 
 ACP has two APIs for this. **Session modes** (`modes`, `session/set_mode`,
 `current_mode_update`) are one flat list of named modes, and the newer **session config

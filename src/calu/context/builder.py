@@ -17,12 +17,12 @@ Chat summary layout (an operator may edit both parts):
     ## User inputs (verbatim)
     <one block per folded user input>
 
-No file of the workspace is put into the context (PLAN.md D193). The agent under review can
-write there, and a cloned repository brings its own files, so `AGENTS.md`, `CLAUDE.md`, a skill's
-description and the like are not a source a checker may take guidance from. What a project
-wants its checkers to hold Claude to is written into the checker instructions, which live in
-the database. A checker that needs to see a file reads it with its tools, where the content
-arrives as the result of a tool call.
+No file of the workspace is put into the context (agent/records/PLAN.md D193). The agent under
+review can write there, and a cloned repository brings its own files, so `AGENTS.md`, `CLAUDE.md`, a
+skill's description and the like are not a source a checker may take guidance from. What a project
+wants its checkers to hold Claude to is written into the checker instructions, which live in the
+database. A checker that needs to see a file reads it with its tools, where the content arrives as
+the result of a tool call.
 
 The summarizer's narrative gets no heading above level 3 and no `**User:**`
 (`_plain_narrative`), so the only "## User inputs (verbatim)" section is the one calu builds
@@ -164,7 +164,7 @@ class ContextBuilder:
             text: The user input, kept verbatim.
             uuid: Transcript uuid of the prompt, if Claude Code reported one. The first one of a
                 turn is kept as the turn's `prompt_uuid`, which is where a fork that drops this
-                turn points (PLAN.md D36).
+                turn points (agent/records/PLAN.md D36).
         """
         turn = self._ensure_turn()
         turn.user_inputs.append(text)
@@ -174,8 +174,8 @@ class ContextBuilder:
     def assistant_entry(self, uuid: str) -> None:
         """Note the transcript uuid of an assistant entry of the running turn.
 
-        The last one is where a fork that keeps this turn resumes from (PLAN.md D36). Nothing is
-        recorded when no turn runs or the SDK reported no uuid.
+        The last one is where a fork that keeps this turn resumes from (agent/records/PLAN.md D36).
+        Nothing is recorded when no turn runs or the SDK reported no uuid.
 
         Args:
             uuid: The transcript entry's uuid.

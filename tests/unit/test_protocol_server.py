@@ -468,7 +468,7 @@ async def test_setting_the_auto_escalation_categories_tells_every_client(tmp_pat
 
     A client may offer the categories as a setting of its own -- the ACP adapter maps them to
     ACP's session modes -- so one client changing them must not leave another showing the old
-    state (PLAN.md D42).
+    state (agent/records/PLAN.md D42).
     """
     async with served(tmp_path) as run:
         setter_events, watcher_events = Events(), Events()

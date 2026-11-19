@@ -102,7 +102,7 @@ export interface ToolView {
   /**
    * The honesty checker's result of the step (`check.result.honesty`, `honesty_escalation`);
    * absent if it did not judge the step. It is a status per file and no decision: the row never
-   * shows it as a PASS or ALLOW chip (PLAN.md D224).
+   * shows it as a PASS or ALLOW chip (agent/records/PLAN.md D224).
    */
   honesty?: HonestyResultView;
   /** The result; `content` is cut to `MAX_STORED_TEXT` characters. */

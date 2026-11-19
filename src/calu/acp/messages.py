@@ -1,4 +1,6 @@
-"""The part of the Agent Client Protocol that calu's adapter speaks (PLAN.md D24, §6.1).
+"""The part of the Agent Client Protocol that calu's adapter speaks.
+
+See agent/records/PLAN.md D24, §6.1.
 
 ACP (agentclientprotocol.com) is how an editor talks to a coding agent: JSON-RPC 2.0, the
 editor is the *client*, the agent is the *server*, newline-delimited JSON over stdin and

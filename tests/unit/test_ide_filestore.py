@@ -428,8 +428,8 @@ def test_a_git_tree_is_listed_without_ignored_files_and_without_dot_git(root: Pa
     (root / "debug.log").write_bytes(b"ignored")
     (root / "build").mkdir()
     (root / "build" / "out.o").write_bytes(b"ignored")
-    (root / ".agent" / "traces").mkdir(parents=True)
-    (root / ".agent" / "traces" / "session_001.md").write_text("trace")
+    (root / "agent" / "traces").mkdir(parents=True)
+    (root / "agent" / "traces" / "session_001.md").write_text("trace")
     (root / "link").symlink_to("src/a.py")
     os.mkfifo(root / "pipe")  # git lists no special files
 

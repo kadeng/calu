@@ -205,7 +205,10 @@ def test_resolve_takes_the_answer_as_one_argument(
 def test_watching_a_herd_prefers_the_operator_credential(
     monkeypatch: pytest.MonkeyPatch, store: CredentialStore, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Read-and-resolve commands take the narrow credential when there is one (PLAN.md D48)."""
+    """Read-and-resolve commands take the narrow credential when there is one.
+
+    See agent/records/PLAN.md D48.
+    """
     watching = (
         ["sessions"],
         ["escalations"],

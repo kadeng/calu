@@ -1,4 +1,4 @@
--- Whether a mark names a file other than the ones its step was about (PLAN.md D141, Q20 (c)).
+-- Whether a mark names a file other than the ones its step was about (agent/records/PLAN.md D141, Q20 (c)).
 --
 -- A checker may mark any existing file of the project (D112), because an edit to one file can
 -- be what makes another one lie. The owner's question Q20 is how far that reach should go. Until
@@ -13,4 +13,4 @@ ALTER TABLE honesty_marks ADD COLUMN beyond_step boolean;
 
 COMMENT ON COLUMN honesty_marks.beyond_step IS
     'True when the mark names a file the step that opened it did not touch, false when it names '
-    'one of that step''s files, NULL when the step named no file (PLAN.md D141).';
+    'one of that step''s files, NULL when the step named no file (agent/records/PLAN.md D141).';

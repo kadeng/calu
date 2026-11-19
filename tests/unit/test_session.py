@@ -1110,7 +1110,10 @@ async def test_a_corrected_chat_summary_reaches_the_checkers(tmp_path: Path):
 async def test_changing_the_auto_escalation_categories_is_recorded_with_who_asked(
     tmp_path: Path,
 ) -> None:
-    """A client can weaken a running session, so the change goes on the record (PLAN.md D43)."""
+    """A client can weaken a running session, so the change goes on the record.
+
+    See agent/records/PLAN.md D43.
+    """
     session, rec, store = make_session(tmp_path, [])
     await session.set_auto_escalate(AutoEscalate(edits=True), client="zed on the laptop")
     assert session.config.auto_escalate.edits is True
@@ -1156,7 +1159,7 @@ async def test_a_reloaded_configuration_records_the_categories_it_changed(tmp_pa
 
 
 async def test_the_session_beats_until_it_is_cancelled(tmp_path: Path) -> None:
-    """A herd tells a live session from a dead one by this alone (PLAN.md D56)."""
+    """A herd tells a live session from a dead one by this alone (agent/records/PLAN.md D56)."""
     session, _rec, store = make_session(tmp_path, [])
     with anyio.move_on_after(1):
         async with anyio.create_task_group() as tg:
@@ -1214,7 +1217,7 @@ async def test_a_failing_heartbeat_is_reported_and_the_loop_goes_on(tmp_path: Pa
 
 
 async def test_a_database_that_keeps_refusing_stops_the_session(tmp_path: Path) -> None:
-    """A session nobody can watch or unblock gives the machine back (PLAN.md D59)."""
+    """A session nobody can watch or unblock gives the machine back (agent/records/PLAN.md D59)."""
     session, rec, store = make_session(
         tmp_path,
         [[{"tool": "Bash", "input": {"command": "ls"}, "result": "ok"}]],

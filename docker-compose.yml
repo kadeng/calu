@@ -1,4 +1,4 @@
-# Development and test environment (PLAN.md §10).
+# Development and test environment (agent/records/PLAN.md §10).
 #
 #   docker compose up -d caludb                       # test database only
 #   docker compose run --rm dev uv run pytest -m 'not live'
@@ -15,7 +15,7 @@ services:
       dockerfile: docker/dev.Dockerfile
     working_dir: /work
     # Docker's default seccomp profile blocks `unshare(CLONE_NEWUSER)`, so bubblewrap — and with
-    # it Claude Code's sandbox — cannot start inside a container without this (measured: PLAN.md
+    # it Claude Code's sandbox — cannot start inside a container without this (measured: agent/records/PLAN.md
     # Q1, spikes/RESULTS.md). It loosens the *container's* seccomp, not calu's own isolation, and
     # it is the least of the options that work: `--cap-add SYS_ADMIN` and `--privileged` grant
     # more, `apparmor=unconfined` does not help at all. This is the development system; a

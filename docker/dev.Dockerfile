@@ -4,7 +4,7 @@
 #
 # Claude Code's sandbox needs bubblewrap **and** socat, and it needs the container to allow
 # unprivileged user namespaces, which Docker's default seccomp profile blocks — hence
-# `security_opt` on the service (PLAN.md Q1, measured in spikes/RESULTS.md).
+# `security_opt` on the service (agent/records/PLAN.md Q1, measured in spikes/RESULTS.md).
 FROM ghcr.io/astral-sh/uv:python3.14-bookworm
 
 RUN apt-get update \

@@ -1,4 +1,4 @@
-"""Notification channels of the calu schema (PLAN.md §7).
+"""Notification channels of the calu schema (agent/records/PLAN.md §7).
 
 PostgreSQL announces three kinds of change with `pg_notify`:
 

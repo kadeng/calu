@@ -91,7 +91,7 @@ CREATE POLICY session_inserts ON escalations FOR INSERT TO calu_session
 --
 -- An open escalation is a question to a human, and only a running session process acts on
 -- the answer. Two functions close the ones nobody waits for any more. Both record
--- 'cancelled', which is not a decision: nobody allowed or denied the step (PLAN.md D57).
+-- 'cancelled', which is not a decision: nobody allowed or denied the step (agent/records/PLAN.md D57).
 --
 --     calu_close_session_escalations(session, note)   every open escalation of one session;
 --         the session calls it for itself when it ends, an operator may call it for any

@@ -1,6 +1,6 @@
 """What calu stores about the database it uses: where it is, how to log in, how it is run.
 
-`calu setup` offers three variants (PLAN.md D205):
+`calu setup` offers three variants (agent/records/PLAN.md D205):
 
     variant     the database is ...                          the login authenticates with ...
     docker      a PostgreSQL container calu starts itself    a password calu generated

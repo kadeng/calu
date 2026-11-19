@@ -11,12 +11,12 @@ escalating. The tools are:
     step_times(limit)                         when the recent tool calls ran
     changed_files(since_step, path_glob)      which step last changed which file (by ctime)
 
-The last two answer "who did this?" instead of "what does this say?" (PLAN.md D32). A file's
-ctime cannot be set by an unprivileged process, so comparing it with the times of the steps
+The last two answer "who did this?" instead of "what does this say?" (agent/records/PLAN.md D32). A
+file's ctime cannot be set by an unprivileged process, so comparing it with the times of the steps
 attributes a change to a step. What that does **not** give: the content of the change (D31's
-snapshot is the option for that), and more than the *last* change of a file, because a later
-write overwrites the evidence of an earlier one — the later write is attributed in its place.
-calu watches its own clock for exactly this reason (`calu.clock`).
+snapshot is the option for that), and more than the *last* change of a file, because a later write
+overwrites the evidence of an earlier one — the later write is attributed in its place. calu watches
+its own clock for exactly this reason (`calu.clock`).
 
 The checker runs inside the calu process, outside the sandbox that confines the agent under
 review, and the agent can ask it (through a file it wrote) to read something. So every bound is
@@ -38,8 +38,8 @@ confines nothing by its own account, and is no longer used):
   a thread) would stop calu's event loop: no heartbeat, no answers to escalations;
 - the framing: a file's content is data the agent may have written, never an instruction.
 
-The checkers get no other tool: no writes, no commands, no network. Tools that tell a checker
-more about the code — a language server, for example — belong here as well (PLAN.md D25).
+The checkers get no other tool: no writes, no commands, no network. Tools that tell a checker more
+about the code — a language server, for example — belong here as well (agent/records/PLAN.md D25).
 """
 
 import fnmatch

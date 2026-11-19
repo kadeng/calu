@@ -1,4 +1,4 @@
--- calu schema, version 15: a session may read and write only its own rows (PLAN.md D49, Q3).
+-- calu schema, version 15: a session may read and write only its own rows (agent/records/PLAN.md D49, Q3).
 --
 -- Until now one `calu_session` login could read and write **every** session's rows: the grants
 -- of migration 0001 are per table, not per session. A compromised session process could

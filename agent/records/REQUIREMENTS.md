@@ -224,6 +224,13 @@ broken down or extended. Derived requirements and design decisions belong in
     review and therefore should be run through an additional redaction agent which (by
     default) censors potential secrets and personally identifiable information (PII) in the
     chat logs. Also, images are not included of course." (stated 2026-11-18, "for the plan")
+    Later: "Plan that the system of records ( e.g. all the documents intended only for
+    consumption and maintenance by and for the coding agent ) except AGENTS.md will be moved
+    to a separate directory ( for example .agent/records or such ). Do this only when no
+    subagents are running and ensure file references are updated everywhere ( especially in
+    AGENTS.md )." and, choosing the place: "or better agent/records, similar, let's place the
+    agent traces into agent/traces by default. No need to hide that, it just needs to be a
+    single dir." (stated 2026-11-19)
 37. "over the course of this development session, test it all in this: The pycharm extension,
     the VSCode extension, the TUI, the web app, calu serve with/without password. Develop test
     plans and go through them, ensuring everything works as intended and has a good

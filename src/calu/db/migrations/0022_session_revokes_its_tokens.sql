@@ -1,4 +1,4 @@
--- Ending a session revokes its own client tokens (PLAN.md D108). The session role must not get
+-- Ending a session revokes its own client tokens (agent/records/PLAN.md D108). The session role must not get
 -- UPDATE on `client_tokens` back: migration 0009 took it away so that a session cannot
 -- **un**-revoke a token an operator revoked, and migration 0007 took SELECT away so that the
 -- token hash is a capability the process holds rather than a value its role can read. Both stay

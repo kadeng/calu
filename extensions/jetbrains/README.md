@@ -3,10 +3,10 @@
 A tool window "calu" (on the right) that shows a Claude Code session which calu runs and checks:
 the transcript with the checkers' decisions, cards to allow or deny a waiting step, the diff of
 every edit, and calu's settings. It offers what the VSCode extension offers
-(`../vscode`, `docs/notes/vscode-extension-spec.md`) and reaches calu in three ways.
+(`../vscode`, `agent/records/notes/vscode-extension-spec.md`) and reaches calu in three ways.
 
 State: fourth round. The plugin runs in PyCharm 2026.3 on Linux in all three modes below, each
-walked through in the UI-test desktop ("State" at the end, `docs/notes/test-plan.md` sections B
+walked through in the UI-test desktop ("State" at the end, `agent/records/notes/test-plan.md` sections B
 and H): a local IDE; JetBrains remote development with the IDE backend on a headless SSH server
 and the JetBrains Client on the desktop; a local copy kept equal over SSH, with PyCharm's SSH
 interpreter running and debugging the code on the server.
@@ -37,7 +37,7 @@ Settings | Tools | calu: "How calu is reached" = "On a server, over SSH", the SS
 alias of `~/.ssh/config` or `user@host`), the remote project directory, and "Sync":
 
 - **Through calu** (default): this project folder is kept equal to the remote directory
-  through the bridge (`ide.fs.*`, `docs/notes/jetbrains-sync-spec.md`); no second connection
+  through the bridge (`ide.fs.*`, `agent/records/notes/jetbrains-sync-spec.md`); no second connection
   and no other tool. It refuses to start, with what to do, if the server's bridge reports no
   `fs` capability.
 - **None (I sync myself)**: only the chat is remote; file links and diffs open the local file
@@ -260,7 +260,7 @@ found, with the buttons of the chat's setup cards).
 
 "seen" = walked through in PyCharm 2026.3 in the UI-test desktop (`uitest/README.md`,
 "Running the PyCharm plugin in the desktop") against the scripted server; the cases are in
-`docs/notes/test-plan.md` section B.
+`agent/records/notes/test-plan.md` section B.
 
 | Part | State |
 |---|---|

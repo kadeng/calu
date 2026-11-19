@@ -720,7 +720,10 @@ async def test_the_chat_summary_can_be_read_and_corrected(db_url: str) -> None:
 
 
 async def test_the_session_page_names_who_weakened_the_session(db_url: str) -> None:
-    """A client's change of what waits for a human is visible to an operator (PLAN.md D43)."""
+    """A client's change of what waits for a human is visible to an operator.
+
+    See agent/records/PLAN.md D43.
+    """
     conn = await connect(db_url)
     try:
         await setup(conn, db_url, "test:model")

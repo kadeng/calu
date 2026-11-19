@@ -1,4 +1,4 @@
--- Where a session can be forked (PLAN.md D36, measured in spikes/RESULTS.md).
+-- Where a session can be forked (agent/records/PLAN.md D36, measured in spikes/RESULTS.md).
 --
 -- The Agent SDK forks a conversation at an earlier point with `resume_session_at` (the last
 -- transcript entry of the turn to keep) and `resume_drops_turn` (the prompt of the turn to

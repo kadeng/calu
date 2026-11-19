@@ -1,4 +1,4 @@
-"""Session configuration, built from the database (PLAN.md D6).
+"""Session configuration, built from the database (agent/records/PLAN.md D6).
 
 Sources, later ones override earlier ones:
 
@@ -50,7 +50,7 @@ inference profile, which keeps the requests in EU regions."""
 
 
 def default_model(use_bedrock: bool) -> str:
-    """Return the model a role uses when its model is left blank (PLAN.md D194).
+    """Return the model a role uses when its model is left blank (agent/records/PLAN.md D194).
 
     Args:
         use_bedrock: Whether Bedrock mode is on (`claude.use_bedrock`).
@@ -84,13 +84,12 @@ class CheckerConfig(ConfigModel):
 
     model: str = ""
     """Pydantic AI model string of this checker; blank uses the default: Haiku on the Anthropic
-    API, or Haiku through AWS Bedrock in an EU region when `claude.use_bedrock` is on. Other
-    values are e.g. "mistral:mistral-small-2603",
-    "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or "bedrock:eu.anthropic....".
-    `claude:<alias>` ("claude:haiku", "claude:sonnet") is special: the check then runs through
-    the `claude` CLI on this machine's own Claude Code account, which is the only way a
-    claude.ai subscription can answer a check and needs no API key (PLAN.md D117). That model
-    type has **no tools**, so such a checker cannot read files, glob or grep."""
+    API, or Haiku through AWS Bedrock in an EU region when `claude.use_bedrock` is on. Other values
+    are e.g. "mistral:mistral-small-2603", "anthropic:claude-haiku-4-5", "fireworks:accounts/..." or
+    "bedrock:eu.anthropic....". `claude:<alias>` ("claude:haiku", "claude:sonnet") is special: the
+    check then runs through the `claude` CLI on this machine's own Claude Code account, which is the
+    only way a claude.ai subscription can answer a check and needs no API key (agent/records/PLAN.md
+    D117). That model type has **no tools**, so such a checker cannot read files, glob or grep."""
     effort: CheckerEffort | None = None
     """Thinking effort: "off" for none, "low" to "max", or None for the model's default.
     More effort buys accuracy with latency and tokens."""
@@ -98,7 +97,7 @@ class CheckerConfig(ConfigModel):
     """Maximum model requests for one check, including the tool calls a checker makes. Five
     covers the request itself, two tool calls and one retry after an answer that was too long;
     with less, a check that uses its tools and then retries fails instead of deciding
-    (measured, PLAN.md D72)."""
+    (measured, agent/records/PLAN.md D72)."""
     output_tokens_limit: int = 24_000
     """Token budget for all answers of one check (thinking included on most providers).
     A check that hits it is retried once, then escalated. It holds three times `max_tokens`,
@@ -106,7 +105,7 @@ class CheckerConfig(ConfigModel):
     max_tokens: int = 8_000
     """Token cap for one answer of this checker. On a provider that counts thinking towards the
     answer, a reasoning model can spend several thousand tokens before writing its decision, so
-    a lower cap makes it fail rather than decide (measured, PLAN.md D72)."""
+    a lower cap makes it fail rather than decide (measured, agent/records/PLAN.md D72)."""
 
 
 CHANGESET_REQUEST_LIMIT = 40
@@ -120,7 +119,7 @@ CHANGESET_MAX_TOKENS = 16_000
 
 
 def changeset_limits() -> CheckerConfig:
-    """Return the default limits of the changeset checker (PLAN.md D197).
+    """Return the default limits of the changeset checker (agent/records/PLAN.md D197).
 
     Returns:
         A `CheckerConfig` with a blank model and the three `CHANGESET_*` limits.
@@ -136,10 +135,10 @@ class ContextConfig(ConfigModel):
     """Context summary settings (see `calu.context`).
 
     Every `fold_every` unfolded turns, the oldest `fold_count` turns are folded into the chat
-    summary. No file of the workspace is part of a checker's context: the agent under review
-    can write there, so project rules that must bind belong in the checker instructions
-    (PLAN.md D193). A stored `context.files` or `context.skill_dirs` of an earlier version is
-    ignored.
+    summary. No file of the workspace is part of a checker's context: the agent under review can
+    write there, so project rules that must bind belong in the checker instructions
+    (agent/records/PLAN.md D193). A stored `context.files` or `context.skill_dirs` of an earlier
+    version is ignored.
     """
 
     fold_every: int = Field(default=30, ge=2)
@@ -175,9 +174,9 @@ DEFAULT_DENY_READ = (
     "~/.npmrc",
     "~/.pypirc",
 )
-"""Paths that sandboxed commands must not read (PLAN.md D15): calu's encrypted credentials,
-Claude Code's own credentials, SSH, cloud and registry credentials. Claude Code's built-in
-defaults additionally deny the container sockets, `/run/dbus` and `/run/user`.
+"""Paths that sandboxed commands must not read (agent/records/PLAN.md D15): calu's encrypted
+credentials, Claude Code's own credentials, SSH, cloud and registry credentials. Claude Code's
+built-in defaults additionally deny the container sockets, `/run/dbus` and `/run/user`.
 
 The two calu entries are listed for the reader of the setting; removing them changes nothing,
 because `SandboxConfig.settings` always adds `calu_private_paths()`."""
@@ -211,10 +210,10 @@ DEFAULT_ALLOWED_DOMAINS = (
 """What a coding task normally has to reach: package registries, git over HTTPS, OS packages.
 
 `calu project add` writes this into a new project's settings as the starter allow list of the
-"proxy" policy (PLAN.md D45), where `calu config add|remove claude.sandbox.allowed_domains ...`
-edits it one entry at a time. It is deliberately **not** the default of
-`SandboxConfig.allowed_domains`: a session whose project says nothing, or that runs without a
-project at all, reaches nothing, and that is the side to err on.
+"proxy" policy (agent/records/PLAN.md D45), where `calu config add|remove
+claude.sandbox.allowed_domains ...` edits it one entry at a time. It is deliberately **not** the
+default of `SandboxConfig.allowed_domains`: a session whose project says nothing, or that runs
+without a project at all, reaches nothing, and that is the side to err on.
 
 Claude Code itself runs outside the sandbox (D4), so the model API is not in this list; only the
 commands Claude runs are limited by it.
@@ -222,7 +221,9 @@ commands Claude runs are limited by it.
 
 
 DEFAULT_NETWORK_POLICY = "proxy"
-"""The policy a new project gets (PLAN.md D45, proposed; Q5 asks the owner to confirm it).
+"""The policy a new project gets.
+
+See agent/records/PLAN.md D45, proposed; Q5 asks the owner to confirm it.
 
 "proxy" together with `DEFAULT_ALLOWED_DOMAINS` lets a session install packages and use git
 over HTTPS and reach nothing else. `calu project add --network full` gives a project the old
@@ -230,7 +231,8 @@ behaviour, and `calu project network --name <p> --network <policy>` changes it l
 """
 
 NetworkPolicy = Literal["none", "proxy", "full"]
-"""What a project's commands may reach (`projects.network_policy`, PLAN.md §7 and D39).
+"""What a project's commands may reach (`projects.network_policy`, agent/records/PLAN.md §7 and
+D39).
 
 Measured with the real CLI (`spikes/RESULTS.md`, "The sandbox's network policy"): the sandbox
 runs a filtering HTTP proxy and exports it as `HTTPS_PROXY`, and raw TCP is blocked whatever the
@@ -243,7 +245,7 @@ policy says. So the three policies are expressed through the proxy's allow list:
 
 
 class SandboxConfig(ConfigModel):
-    """Isolation of Bash commands by Claude Code's own sandbox (PLAN.md D15).
+    """Isolation of Bash commands by Claude Code's own sandbox (agent/records/PLAN.md D15).
 
     calu passes these settings with `--settings`, which has precedence over the project's and
     the user's settings files, so a settings file does not switch the sandbox off. `settings()`
@@ -263,13 +265,12 @@ class SandboxConfig(ConfigModel):
     calu's own directories (`calu_private_paths()`) are always on the read deny list; the
     `deny_read` setting holds further paths and cannot remove them.
 
-    `fail_if_unavailable` makes Claude Code refuse to start without a working sandbox, instead
-    of running commands unsandboxed, and makes calu refuse to start a session whose settings
-    files hold sandbox entries beyond calu's configuration. `allow_unsandboxed_commands` False
-    stops a call from leaving the sandbox with `dangerouslyDisableSandbox`. `auto_allow_bash`
-    stays False: Claude Code would otherwise approve sandboxed Bash calls by itself, which
-    would skip the auto-mode classifier that PLAN.md D5 uses as the second opinion next to the
-    checkers.
+    `fail_if_unavailable` makes Claude Code refuse to start without a working sandbox, instead of
+    running commands unsandboxed, and makes calu refuse to start a session whose settings files hold
+    sandbox entries beyond calu's configuration. `allow_unsandboxed_commands` False stops a call
+    from leaving the sandbox with `dangerouslyDisableSandbox`. `auto_allow_bash` stays False: Claude
+    Code would otherwise approve sandboxed Bash calls by itself, which would skip the auto-mode
+    classifier that agent/records/PLAN.md D5 uses as the second opinion next to the checkers.
 
     `excluded_commands` run outside the sandbox and are therefore only covered by the checkers
     and the deny lists; the default is empty. `allowed_domains` and `denied_domains` configure
@@ -289,12 +290,12 @@ class SandboxConfig(ConfigModel):
     """Let a call leave the sandbox with `dangerouslyDisableSandbox`. False keeps it in."""
     auto_allow_bash: bool = False
     """Let Claude Code approve sandboxed Bash calls by itself. Stays False: it would skip
-    auto mode's classifier, which PLAN.md D5 uses as the second opinion next to the
+    auto mode's classifier, which agent/records/PLAN.md D5 uses as the second opinion next to the
     checkers."""
     weaker_nested_sandbox: bool = False
-    """Claude Code's `enableWeakerNestedSandbox`. Measured in calu's own container (PLAN.md
-    D134): it does **not** make the sandbox work under Docker's default seccomp profile --
-    bubblewrap still cannot create a user namespace there, so the container needs
+    """Claude Code's `enableWeakerNestedSandbox`. Measured in calu's own container
+    (agent/records/PLAN.md D134): it does **not** make the sandbox work under Docker's default
+    seccomp profile -- bubblewrap still cannot create a user namespace there, so the container needs
     `seccomp:unconfined` either way -- and where the namespaces do work, calu's probe saw no
     difference in isolation. There is no known reason to switch it on."""
     excluded_commands: list[str] = Field(default_factory=list)
@@ -308,7 +309,7 @@ class SandboxConfig(ConfigModel):
     allowed_domains: list[str] = Field(default_factory=list)
     """Domains a sandboxed command may reach through the sandbox's HTTP proxy; `["*"]` is
     every domain and an empty list is none. A project's network policy sets this
-    (PLAN.md D39, D45); raw TCP is blocked whatever it says."""
+    (agent/records/PLAN.md D39, D45); raw TCP is blocked whatever it says."""
     denied_domains: list[str] = Field(default_factory=list)
     """Domains that stay blocked even when `allowed_domains` holds the wildcard, which is how
     "everything except these" is written."""
@@ -316,7 +317,7 @@ class SandboxConfig(ConfigModel):
     """Unix sockets a sandboxed command may connect to (e.g. a local database socket)."""
 
     def with_policy(self, policy: NetworkPolicy) -> SandboxConfig:
-        """Return a copy whose network settings express `policy` (PLAN.md D39).
+        """Return a copy whose network settings express `policy` (agent/records/PLAN.md D39).
 
         The deny list is kept in every case: it still overrides the wildcard of "full", which is
         how "everything except these domains" is written.
@@ -432,18 +433,17 @@ class ClaudeConfig(ConfigModel):
     with the AWS credentials of the environment (e.g. an EC2 instance role or `AWS_PROFILE`);
     false (default) leaves the variable as it is.
 
-    `permission_mode`: None (default) leaves the permission mode to Claude Code, which takes
-    it from its own settings (`permissions.defaultMode`). Measured with CLI 2.1.319: a headless
-    start without that setting reports the mode "default", not "auto". The auto mode is the
-    intended way to run calu, because then a step runs only if the checkers (or the allow
-    lists) **and** auto mode's classifier approve it (PLAN.md D5); set "auto" here or in Claude
-    Code's settings to get it. Whatever the mode ends up being, the checkers work: the hook
-    reads the effective mode from its input, defers a PASS to the classifier where the mode is
-    "auto", and otherwise answers "allow" itself, so that the checkers decide alone (D21). The
-    runner reports the effective mode as a `log` event at the start and whenever it changes,
-    as a warning while it is not "auto". Before that, the start-up warnings and `calu doctor`
-    say which mode is expected and whether the classifier will be active
-    (`calu.preflight.permission_mode_line`).
+    `permission_mode`: None (default) leaves the permission mode to Claude Code, which takes it from
+    its own settings (`permissions.defaultMode`). Measured with CLI 2.1.319: a headless start
+    without that setting reports the mode "default", not "auto". The auto mode is the intended way
+    to run calu, because then a step runs only if the checkers (or the allow lists) **and** auto
+    mode's classifier approve it (agent/records/PLAN.md D5); set "auto" here or in Claude Code's
+    settings to get it. Whatever the mode ends up being, the checkers work: the hook reads the
+    effective mode from its input, defers a PASS to the classifier where the mode is "auto", and
+    otherwise answers "allow" itself, so that the checkers decide alone (D21). The runner reports
+    the effective mode as a `log` event at the start and whenever it changes, as a warning while it
+    is not "auto". Before that, the start-up warnings and `calu doctor` say which mode is expected
+    and whether the classifier will be active (`calu.preflight.permission_mode_line`).
 
     `require_auto_mode`: if true, a step the checkers PASS while the effective mode is not
     "auto" waits for a human instead of running on the checkers' word alone.
@@ -495,7 +495,7 @@ class ClaudeConfig(ConfigModel):
     from starting (`claude.sandbox.fail_if_unavailable`), or is named in a start-up warning
     when that setting is off."""
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
-    """Isolation of Bash commands (PLAN.md D15, D4)."""
+    """Isolation of Bash commands (agent/records/PLAN.md D15, D4)."""
 
 
 class AutoEscalate(ConfigModel):
@@ -518,7 +518,7 @@ class AutoEscalate(ConfigModel):
 
 
 class WebConfig(ConfigModel):
-    """Settings of the web interface (PLAN.md phase 6)."""
+    """Settings of the web interface (agent/records/PLAN.md phase 6)."""
 
     git_url_template: str = ""
     """URL of one commit in whatever git browser the project uses, with `{commit}` and
@@ -528,7 +528,7 @@ class WebConfig(ConfigModel):
 
 
 class ChangesConfig(ConfigModel):
-    """Whether calu measures what a command wrote, and how much of it (PLAN.md D31).
+    """Whether calu measures what a command wrote, and how much of it (agent/records/PLAN.md D31).
 
     Off by default: it costs disk and hashing time in every session, while the attribution of
     `ClockConfig`/D32 needs nothing. A project turns it on when it wants the content of a
@@ -576,7 +576,7 @@ class HonestyConfig(ConfigModel):
     state is not clean. Editing is never blocked. Default `off`."""
     rules: str | None = None
     """The honesty standard the checkers that judge changes read: what dishonesty is and what an
-    API contract must say (PLAN.md D181). Empty uses the rules calu ships
+    API contract must say (agent/records/PLAN.md D181). Empty uses the rules calu ships
     (`calu honesty show`). Set it, globally or per project, to fit a project's documentation
     standards (`calu honesty edit [--project NAME]`); it is not meant to be edited often."""
     sufficient_trust: Literal["check", "review", "user"] = "check"
@@ -644,7 +644,7 @@ class TracesConfig(ConfigModel):
     in indirect speech by the narrator, as the checkers read them; with `context.narrate` off
     there is no narrator, and the file holds what `plain` holds. `plain`: Claude's text as
     written; its thinking is left out."""
-    directory: str = ".agent/traces"
+    directory: str = "agent/traces"
     """Where the trace files go, relative to the project directory. An absolute path, and a
     path with a `..` component, are refused. While `enabled` is on, a tool call of Claude that
     would write into this directory waits for a person, the files are left out of the write
@@ -707,7 +707,7 @@ class TracesConfig(ConfigModel):
 
 
 class ClockConfig(ConfigModel):
-    """How closely calu watches its own clock (PLAN.md D32, `calu.clock`).
+    """How closely calu watches its own clock (agent/records/PLAN.md D32, `calu.clock`).
 
     A checker attributes a file change to a step by comparing the file's change time with the
     times of the steps, which only holds while the wall clock moves forward. calu therefore
@@ -740,16 +740,18 @@ class Config(ConfigModel):
     """Code honesty: whether calu tracks which code is verified, and whether running and
     committing code need a clean state."""
     changeset_checker: CheckerConfig = Field(default_factory=lambda: changeset_limits())
-    """The checker that reviews a whole change before a commit (PLAN.md D26). Its limits are
-    far above a step checker's (`changeset_limits`): judging a whole change means reading the
-    files around the diff, following callers and comparing the result with what was asked,
-    which takes many tool calls and a long answer."""
+    """The checker that reviews a whole change before a commit (agent/records/PLAN.md D26). Its
+    limits are far above a step checker's (`changeset_limits`): judging a whole change means reading
+    the files around the diff, following callers and comparing the result with what was asked, which
+    takes many tool calls and a long answer."""
     check_subagent_results: bool = True
     """Review the final result of every subagent with the subagent checker."""
     auto_escalate: AutoEscalate = Field(default_factory=AutoEscalate)
     """Categories that always wait for the human (see `AutoEscalate`); all off by default."""
     escalation_timeout_s: float = Field(default=8 * 3600, ge=0)
-    """How long an escalation waits for a human before the session stops (PLAN.md D27).
+    """How long an escalation waits for a human before the session stops.
+
+    See agent/records/PLAN.md D27.
 
     An unsupervised run can sit in front of an escalation for a long time; at some point the
     session should give the machine and the Claude session back instead of waiting for ever. On
@@ -757,7 +759,9 @@ class Config(ConfigModel):
     that `calu run --resume <id>` takes the conversation up again. 0 waits without a limit.
     """
     store_failures_before_stop: int = Field(default=10, ge=0)
-    """How many database writes may fail in a row before the session stops (PLAN.md D59).
+    """How many database writes may fail in a row before the session stops.
+
+    See agent/records/PLAN.md D59.
 
     A session that cannot write is a session nobody can watch or unblock: its steps, its turns
     and its escalations do not reach the database, and with the heartbeat of D56 the fleet shows
@@ -784,14 +788,14 @@ class Config(ConfigModel):
     claude: ClaudeConfig = Field(default_factory=ClaudeConfig)
     """The Claude Code session itself: model, effort, permission mode, sandbox."""
     clock: ClockConfig = Field(default_factory=ClockConfig)
-    """Watching the system clock for tampering (PLAN.md D32)."""
+    """Watching the system clock for tampering (agent/records/PLAN.md D32)."""
     changes: ChangesConfig = Field(default_factory=ChangesConfig)
-    """Measuring what a command wrote, and reviewing it afterwards (PLAN.md D31)."""
+    """Measuring what a command wrote, and reviewing it afterwards (agent/records/PLAN.md D31)."""
     web: WebConfig = Field(default_factory=WebConfig)
     """Settings of the web interface."""
     traces: TracesConfig = Field(default_factory=TracesConfig)
     """Session traces: the conversation as a redacted Markdown file inside the project, for
-    version control and review (PLAN.md D232); off by default."""
+    version control and review (agent/records/PLAN.md D232); off by default."""
 
     @field_validator("hidden_env")
     @classmethod
@@ -820,7 +824,7 @@ class Config(ConfigModel):
 
     @model_validator(mode="after")
     def _fill_blank_models(self) -> Config:
-        """Give every role whose model is blank the default model (PLAN.md D194).
+        """Give every role whose model is blank the default model (agent/records/PLAN.md D194).
 
         Runs on every validation, so a `Config` never holds a blank model: readers use
         `command_checker.model`, `context.narrator_model` and the others as they are. What is

@@ -1,4 +1,4 @@
--- The honesty register: which code says something other than what it does (PLAN.md D82, §13).
+-- The honesty register: which code says something other than what it does (agent/records/PLAN.md D82, §13).
 --
 -- A complex change makes a codebase temporarily dishonest on purpose -- a signature changes in
 -- one step and its callers and documentation follow in the next five -- so a checker records the
@@ -40,7 +40,7 @@ CREATE UNIQUE INDEX honesty_marks_open
 CREATE INDEX honesty_marks_project ON honesty_marks (project_id) WHERE closed_at IS NULL;
 
 COMMENT ON TABLE honesty_marks IS
-    'Code that says something other than what it does, per project (PLAN.md D82). An open row '
+    'Code that says something other than what it does, per project (agent/records/PLAN.md D82). An open row '
     '(closed_at IS NULL) blocks steps that would run that code when honesty.mode is enforce.';
 
 -- A session writes its own marks and reads the project's; an operator reads everything and may

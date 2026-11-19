@@ -2,7 +2,7 @@
 
 What `calu evals` does, without a database: it reads the instructions from
 `src/calu/defaults/checkers/` and the cases from `src/calu/defaults/evals/`, so it measures what
-calu *ships* rather than what one machine has configured. Used for PLAN.md D73 and to be re-run
+calu *ships* rather than what one machine has configured. Used for agent/records/PLAN.md D73 and to be re-run
 after every change to the default instructions.
 
     FIREWORKS_API_KEY=... uv run python spikes/run_builtin_cases.py

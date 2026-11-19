@@ -99,7 +99,9 @@ class ShellPath:
 
 @dataclass(frozen=True)
 class SearchSpec:
-    """How a recursive search command chooses the files below a directory (PLAN.md D149).
+    """How a recursive search command chooses the files below a directory.
+
+    See agent/records/PLAN.md D149.
 
     `directories`: the searched directory for each candidate working directory (None where
     unknown). `git_ignore`: it leaves out what git ignores (rg, ag; not grep). `hidden`: it
@@ -188,7 +190,9 @@ _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
 def command_variants(command: str, words: list[str] | None = None) -> list[str]:
-    """Return a simple command and the forms of it a deny rule must also see (PLAN.md D145).
+    """Return a simple command and the forms of it a deny rule must also see.
+
+    See agent/records/PLAN.md D145.
 
     Deny rules are anchored at the start of a command (`^(sudo|su|doas)( |$)`), and three
     ordinary spellings put something else there: a variable assignment (`X=1 sudo ...`), a

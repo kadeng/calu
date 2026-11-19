@@ -66,8 +66,8 @@ end that lacks a function by design says so in its own section.)
 ## Sections (each owner extends its own)
 
 ### A. VSCode extension
-First and second run: see the reports summarised in `HANDOFF.md`; screenshots in
-`docs/notes/screenshots/run1-*.png`. To be transferred into the table above by the next
+First and second run: see the reports summarised in `agent/records/HANDOFF.md`; screenshots in
+`agent/records/notes/screenshots/run1-*.png`. To be transferred into the table above by the next
 round, which also runs C5, C6, C11 and C12 at scale.
 
 ### B. PyCharm plugin
@@ -140,7 +140,7 @@ model: `uitest/tui_server.py` (the scripted server of `fake_server.py` plus the 
 (`XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `CALU_PLACE_FILE=/nonexistent`) and
 seven demo projects (small git repositories). The setup was `calu setup --database server
 --no-password`: it asks for the owner's password and twice for the session password (blank
-here). Captures: `docs/notes/screenshots/tui/` (host name and paths replaced).
+here). Captures: `agent/records/notes/screenshots/tui/` (host name and paths replaced).
 
     start it again:  tmux -L calutest new -d -s srv 'uv run python uitest/tui_server.py --insecure --max-sessions 20 </dev/null'
                      calu start -p 'scenario: many-subagents'      (in a registered project directory)
@@ -291,7 +291,7 @@ Run 2026-11-18 by an agent in a headless Chromium (the browser layer's Playwrigh
 PostgreSQL of its own (container `calu-manual-web`), with the admin password as the login.
 Console errors and Content-Security-Policy violations were collected on every page: none,
 apart from the browser's own line for the 401 of the sign-in page and for requests while
-`calu web` was stopped on purpose. Screenshots: `docs/notes/screenshots/web/`. Fixes are in
+`calu web` was stopped on purpose. Screenshots: `agent/records/notes/screenshots/web/`. Fixes are in
 commit 706b3b8 unless another is named; the scenario `swarm` (3f2e3d3) was added for C5/C6.
 
 What the web interface does not have, by design: no editor integration (comments on
@@ -462,7 +462,7 @@ by "changing settings in <host:port/dbname> as <role>" on stderr.
 With keys in `/etc/calu/.env`: none reaches Claude Code under `--user` (fixed e5f8554: the
 `ANTHROPIC_*` ones arrived present and empty; they are left out now). The working directory
 was the project in every case; `PATH` is root's (through sudo:
-`secure_path`), not the user's own (see the usability findings in `HANDOFF.md`).
+`secure_path`), not the user's own (see the usability findings in `agent/records/HANDOFF.md`).
 
 ### F. Session traces
 
@@ -484,7 +484,7 @@ covers a restart. The settings were changed with `calu config set` and `calu che
 between the cases, and trust with `calu honesty trust`. Not run with the real `claude`, and
 not through a client: what the clients show of it is in sections A to D.
 
-| # | Case | Expected by the specification (`docs/notes/honesty-spec.md`, PLAN.md D196, D217, D224) | Observed | Status |
+| # | Case | Expected by the specification (`agent/records/notes/honesty-spec.md`, agent/records/PLAN.md D196, D217, D224) | Observed | Status |
 |---|---|---|---|---|
 | G1 | `honesty.mode` off (the default), honesty checker disabled: an edit, then `python -m pytest -q` | nothing of this runs: no state, no note, no warning | no `honesty.update`, no start-up warning; both steps PASS | ok |
 | G2 | `honesty.mode track`, honesty checker still disabled | a start-up warning that nothing judges honesty per step; the edit verifies nothing | the warning of `preflight.honesty_warnings` ("nothing judges honesty per step: no mark is recorded, no edit verifies its file ..."); state: baseline none, every file unreviewed; the edit PASSes with an empty `honesty` list | ok (the warning text and the rule that an edit verifies nothing without the honesty checker are new: 0c3c1d5) |
@@ -504,10 +504,10 @@ not through a client: what the clients show of it is in sections A to D.
 | G14 | what the short checkers say on ordinary steps | PASS without a reason and without a remark | with the first wording every PASS came with a sentence such as "No project rule applies ..." and the edit and changeset checkers added remarks nobody asked for (the docstring, the commit message) | fixed (this commit: "leave `reason` empty" with PASS, a comment only where a rule asks for one); afterwards the PASSes were empty |
 
 Deviations of the specification text from what is built, found on the way: section 3 of
-`docs/notes/honesty-spec.md` still says that the checkers of the command, edit and changeset
+`agent/records/notes/honesty-spec.md` still says that the checkers of the command, edit and changeset
 routes may return marks; D224 replaced that (only the honesty checker). Section 6 still names
 `system/marks.md`; the file is now `system/honesty-state.md` and says nothing about marks.
-The specification file is a dated record and was not rewritten; PLAN.md D224 holds what is
+The specification file is a dated record and was not rewritten; agent/records/PLAN.md D224 holds what is
 built.
 
 ### H. PyCharm plugin: SSH mode and file synchronisation

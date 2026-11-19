@@ -1,4 +1,4 @@
-"""Does `calu run --fork-before-turn` really branch a conversation calu recorded? (PLAN.md D36)
+"""Does `calu run --fork-before-turn` really branch a conversation calu recorded? (agent/records/PLAN.md D36)
 
 `spike_fork_session.py` showed that the Agent SDK can fork at an earlier point. This checks
 calu's own path end to end with the real CLI: the uuids Claude Code replays are recorded with

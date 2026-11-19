@@ -15,8 +15,8 @@ The buffer keeps the images of the newest `REPLAY_IMAGE_EVENTS` such events only
 stays in the buffer with an empty `images` list, so the buffer cannot grow to gigabytes. A client
 connected at the time got the images live; the replayed text is unchanged.
 
-Token streams are not written to the database (PLAN.md D3), so the buffer is the only place
-where an event lives after it was sent; it is lost when the process ends. What a client needs
+Token streams are not written to the database (agent/records/PLAN.md D3), so the buffer is the only
+place where an event lives after it was sent; it is lost when the process ends. What a client needs
 after a restart (steps, turns, escalations) is in the database.
 
 A slow client must not slow the session down: each client has a bounded queue, and a client
@@ -178,10 +178,10 @@ class Bus:
         """
         subscription = Subscription(bus=self)
         if not self._clients:
-            # Only the first client replaces the event, and only because an `anyio.Event`
-            # cannot be cleared. Replacing it on every subscribe orphaned a waiter that had
-            # captured the old object -- `calu run` awaits `bus.no_clients` while a client is
-            # attached, so a second client joining left the run waiting for ever (PLAN.md D80).
+            # Only the first client replaces the event, and only because an `anyio.Event` cannot be
+            # cleared. Replacing it on every subscribe orphaned a waiter that had captured the old
+            # object -- `calu run` awaits `bus.no_clients` while a client is attached, so a second
+            # client joining left the run waiting for ever (agent/records/PLAN.md D80).
             self.no_clients = anyio.Event()
         self._clients.append(subscription)
         return subscription

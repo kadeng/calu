@@ -122,7 +122,7 @@ SKIP: frozenset[str] = frozenset()
 holds the names of variables Claude Code must not see, never their values."""
 
 MARKDOWN = frozenset({"honesty.rules"})
-"""Text settings that hold a Markdown document and get an editor (PLAN.md D181)."""
+"""Text settings that hold a Markdown document and get an editor (agent/records/PLAN.md D181)."""
 
 ROUTE_CHECKERS = {
     "command": "command_checker",
@@ -1197,8 +1197,13 @@ def _reason(exc: Exception) -> str:
 
 
 _POINTER = r"(?:[DQ]\d+|§[\d.]+)"
-REFERENCE = re.compile(rf"\s*\((?:see\s+)?(?:PLAN\.md\s+)?{_POINTER}(?:[,;]\s*{_POINTER})*\)")
-"""A parenthesised pointer into PLAN.md, e.g. " (PLAN.md D27)" or " (§13)"."""
+REFERENCE = re.compile(
+    rf"\s*\((?:see\s+)?(?:(?:agent/records/)?PLAN\.md\s+)?{_POINTER}(?:[,;]\s*{_POINTER})*\)"
+)
+"""A parenthesised pointer into agent/records/PLAN.md.
+
+E.g. " (agent/records/PLAN.md D27)", " (PLAN.md D27)" or " (§13)".
+"""
 
 
 def _help(description: str | None) -> str:
@@ -1208,7 +1213,7 @@ def _help(description: str | None) -> str:
         description: The field description of the configuration model.
 
     Returns:
-        The text without pointers into PLAN.md, which mean nothing on the page.
+        The text without pointers into agent/records/PLAN.md, which mean nothing on the page.
     """
     return REFERENCE.sub("", description or "")
 

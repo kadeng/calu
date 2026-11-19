@@ -1,6 +1,6 @@
 /**
  * Types of the bridge protocol: what the extension asks `calu ide` and what `calu ide` tells the
- * extension (docs/notes/vscode-extension-spec.md, sections 2 and 6). Hand-written; the session
+ * extension (agent/records/notes/vscode-extension-spec.md, sections 2 and 6). Hand-written; the session
  * protocol that the bridge relays is in `protocol.generated.ts`.
  *
  *     extension --request--> calu ide            ide.* and session.call {method, params}

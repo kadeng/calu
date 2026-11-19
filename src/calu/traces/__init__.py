@@ -1,9 +1,9 @@
 """Session traces: the conversation of a session as a redacted Markdown file in the project.
 
 With `traces.enabled` on, a session appends every step to
-`<traces.directory>/<YYYY-MM-DD>/<user>/session_NNN.md`, so that the conversation can be
-committed and reviewed with the code it produced (PLAN.md D232, REQUIREMENTS 36). The file
-only grows; nothing is folded or summarised; it holds no images. calu never commits it.
+`<traces.directory>/<YYYY-MM-DD>/<user>/session_NNN.md`, so that the conversation can be committed
+and reviewed with the code it produced (agent/records/PLAN.md D232, REQUIREMENTS 36). The file only
+grows; nothing is folded or summarised; it holds no images. calu never commits it.
 
     calu.session.Session
         │ every event it emits, in order          the narrations it computes for its checkers

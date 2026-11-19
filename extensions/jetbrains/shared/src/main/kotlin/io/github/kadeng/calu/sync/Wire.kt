@@ -1,6 +1,6 @@
 /**
  * The `ide.fs.*` requests and answers as the bridge takes and gives them
- * (`docs/notes/jetbrains-sync-spec.md` sections 2 to 5, with the deviations of section 13).
+ * (`agent/records/notes/jetbrains-sync-spec.md` sections 2 to 5, with the deviations of section 13).
  * Pure: builds params, reads results; sends nothing.
  *
  *     fsWriteParams / fsWriteBeginParams / fsDeleteParams / fsRenameParams   -> params (JSON)

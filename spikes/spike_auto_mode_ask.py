@@ -1,4 +1,4 @@
-"""Does Claude Code's auto mode ask, and where does the question arrive? (PLAN.md D38)
+"""Does Claude Code's auto mode ask, and where does the question arrive? (agent/records/PLAN.md D38)
 
 calu's PASS leaves the decision to Claude Code's own approval (D21): the hook answers with no
 decision at all. The owner observed that auto mode does not only allow and deny but can also ask

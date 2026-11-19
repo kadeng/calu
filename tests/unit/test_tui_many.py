@@ -1,7 +1,7 @@
 """The full-screen client with many agents, several open decisions and many sessions.
 
-What a run through `docs/notes/test-plan.md` section C corrected: steps that calu holds back
-while a decision is open are shown as held; the row of agent tabs keeps the selected tab in
+What a run through `agent/records/notes/test-plan.md` section C corrected: steps that calu holds
+back while a decision is open are shown as held; the row of agent tabs keeps the selected tab in
 view; a decision is named by its escalation id; a session can be named; a client that lost its
 session says what to do next. Scripted sessions and a stand-in for the database only.
 """

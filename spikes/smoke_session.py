@@ -28,7 +28,7 @@ Result on 2026-11-09 (CLI 2.1.319, haiku): `sudo -n ls /root` matched the deny r
 `^(sudo|su|doas)( |$)`, the session went to state `escalated` and waited; after
 `calu_resolve_escalation(1, 'denied', ...)` it continued within a second and Claude reported the
 denial with the note. An allow-listed `ls` ran without a model call; a `Write` went to the edit
-checker. See `HANDOFF.md`.
+checker. See `agent/records/HANDOFF.md`.
 """
 
 import argparse
@@ -59,7 +59,7 @@ REPORT = (
     "SELECT checker_name, checker_version, decision, duration_ms IS NOT NULL FROM checker_runs"
     " ORDER BY id",
     "SELECT state, resolved_by, note FROM escalations ORDER BY id",
-    # What a human sees for an escalation: the tool, its input and the reason (PLAN.md D30).
+    # What a human sees for an escalation: the tool, its input and the reason (agent/records/PLAN.md D30).
     "SELECT reason, context->>'tool_name', context->'tool_input', left(coalesce("
     "context->>'rendered', ''), 200) FROM escalations ORDER BY id",
     "SELECT seq, tool_name, snapshot_before IS NOT NULL AS snapshotted, wrote FROM steps"
@@ -235,7 +235,7 @@ parser.add_argument(
 parser.add_argument(
     "--changes",
     action="store_true",
-    help="measure and review what a command writes (PLAN.md D31): snapshot and review on",
+    help="measure and review what a command writes (agent/records/PLAN.md D31): snapshot and review on",
 )
 parser.add_argument("--model", default="haiku")
 parser.add_argument(
@@ -250,7 +250,9 @@ parser.add_argument(
     "calu would choose from the credentials found (D129). Costs real model calls.",
 )
 parser.add_argument(
-    "--socket", metavar="PATH", help="serve the clients on a Unix socket at PATH (PLAN.md §6)"
+    "--socket",
+    metavar="PATH",
+    help="serve the clients on a Unix socket at PATH (agent/records/PLAN.md §6)",
 )
 parser.add_argument("--timeout", type=float, default=240, help="how long the operator waits")
 parser.add_argument(
@@ -276,7 +278,7 @@ parser.add_argument(
     "--honesty",
     choices=["off", "track", "enforce"],
     default="off",
-    help="honesty.mode of the session (PLAN.md D196); useful with --checker-model only, because"
+    help="honesty.mode of the session (agent/records/PLAN.md D196); useful with --checker-model only, because"
     " the rule-based fake checkers never say whether a command executes project code",
 )
 parser.add_argument(

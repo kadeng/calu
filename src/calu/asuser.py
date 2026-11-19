@@ -1,4 +1,6 @@
-"""calu as root, everything it does in the project as the unprivileged user (PLAN.md D206).
+"""calu as root, everything it does in the project as the unprivileged user.
+
+See agent/records/PLAN.md D206.
 
 When calu runs as root and Claude Code as another user, the project directory belongs to that
 user. Whatever calu itself does there must not carry root's rights: git runs programs a

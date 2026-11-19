@@ -1,4 +1,4 @@
--- calu schema, version 16: a session says it is still there (PLAN.md D56).
+-- calu schema, version 16: a session says it is still there (agent/records/PLAN.md D56).
 --
 -- A herd is watched through the database (REQUIREMENTS 13), and until now the database could
 -- not tell a working session from a dead one. A process that is killed -- OOM, `kill -9`, a
@@ -19,4 +19,4 @@
 ALTER TABLE sessions ADD COLUMN last_seen timestamptz NOT NULL DEFAULT now();
 
 COMMENT ON COLUMN sessions.last_seen IS
-    'When the session process last said it was running (PLAN.md D56).';
+    'When the session process last said it was running (agent/records/PLAN.md D56).';

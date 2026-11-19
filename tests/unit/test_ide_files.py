@@ -111,18 +111,18 @@ def test_a_malformed_path_is_refused_as_invalid(path: object):
         ".git/config",
         "sub/.git/hooks/pre-commit",
         ".GIT/config",
-        ".agent/traces/2026/x.md",
+        "agent/traces/2026/x.md",
         "own/state/file",
         ".calu-upload-abc",
         "src/.calu-upload-abc",
     ],
 )
 def test_a_path_in_an_excluded_directory_is_refused(path: str):
-    assert reason_of(path, (".agent/traces", "own/state")) == "excluded"
+    assert reason_of(path, ("agent/traces", "own/state")) == "excluded"
 
 
 def test_excluded_prefixes_match_whole_segments_only():
-    assert not is_excluded(".agent/traces-old/x", (".agent/traces",))
+    assert not is_excluded("agent/traces-old/x", ("agent/traces",))
     assert not is_excluded(".gitignore", ())
     assert not is_excluded("a/.github/x", ())
     assert is_excluded("anything/at/all", ("",))
@@ -144,8 +144,8 @@ def test_calus_own_directories_inside_the_project_are_prefixes(tmp_path: Path):
 
 
 def test_the_directories_a_session_names_are_checked_like_paths():
-    assert session_prefixes([".agent/traces/", "../x", "/abs", 5, "ok/dir"]) == (
-        ".agent/traces",
+    assert session_prefixes(["agent/traces/", "../x", "/abs", 5, "ok/dir"]) == (
+        "agent/traces",
         "ok/dir",
     )
     assert session_prefixes("no list") == ()

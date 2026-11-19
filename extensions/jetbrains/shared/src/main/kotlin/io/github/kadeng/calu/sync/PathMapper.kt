@@ -46,7 +46,7 @@ enum class PathProblem {
  *   file (Windows, default macOS).
  * @property excluded directories that are never synchronised, as relative paths. An entry of one
  *   segment (`.git`) excludes a directory of that name at any depth; an entry of several
- *   segments (`.agent/traces`) excludes that directory under the project root. Letter case is
+ *   segments (`agent/traces`) excludes that directory under the project root. Letter case is
  *   ignored in the comparison.
  */
 class PathMapper(
@@ -83,8 +83,8 @@ class PathMapper(
      * Tells whether a relative path is inside an excluded directory, or is one. No side effects.
      *
      * @param relative a relative path with "/" separators.
-     * @return true for `.git`, `.git/config`, `sub/.git/HEAD`, `.agent/traces/x.md` with the
-     *   default list; false for `.gitignore` and `.agent/notes.md`.
+     * @return true for `.git`, `.git/config`, `sub/.git/HEAD`, `agent/traces/x.md` with the
+     *   default list; false for `.gitignore` and `agent/notes.md`.
      */
     fun isExcluded(relative: String): Boolean {
         val segments = relative.lowercase(Locale.ROOT).split('/')
@@ -245,7 +245,7 @@ class PathMapper(
          * The directories no side ever synchronises: git's own data and the session traces
          * that calu writes itself (requirement 36).
          */
-        val DEFAULT_EXCLUDED: List<String> = listOf(".git", ".agent/traces")
+        val DEFAULT_EXCLUDED: List<String> = listOf(".git", "agent/traces")
 
         private val DRIVE = Regex("[A-Za-z]:")
 

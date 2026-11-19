@@ -1,4 +1,4 @@
-"""Command line entry point `calu` (PLAN.md §8).
+"""Command line entry point `calu` (agent/records/PLAN.md §8).
 
     calu db up                     start the local PostgreSQL (Docker) by hand; commands that
                                    need it start it themselves
@@ -236,7 +236,7 @@ def read_password(prompt: str, confirm: bool = False) -> bytearray:
 
 _typed: dict[str, str] = {}
 """`admin`: the admin password as it was typed in this command, kept until the command ends
-so that `calu setup` can give the role `calu_admin` the same one (PLAN.md D213)."""
+so that `calu setup` can give the role `calu_admin` the same one (agent/records/PLAN.md D213)."""
 
 _admin_place: list[Target] = []
 """The database the last herd command of this process connected to, without any secret: the
@@ -248,7 +248,7 @@ _held: list[Target] = []
 """The database login a client that runs as root keeps in memory (`calu attach --sudo`): read
 once from root's store, then used for every later step (minting and revoking tokens,
 switching sessions, changing settings), because after the switch to the user's file identity
-the store cannot be read again, and so that nothing is asked twice (PLAN.md D214)."""
+the store cannot be read again, and so that nothing is asked twice (agent/records/PLAN.md D214)."""
 
 _hold: list[bool] = []
 """Non-empty while the next credential a herd command loads is to be kept in `_held`."""
@@ -357,7 +357,9 @@ def _announce_change(login: Target) -> None:
 
 
 def _admin_secret(store: CredentialStore, args: argparse.Namespace | None = None) -> bytearray:
-    """Return a login that may change settings, asking for what it needs (PLAN.md D213).
+    """Return a login that may change settings, asking for what it needs.
+
+    See agent/records/PLAN.md D213.
 
     Without `--database` (`args.database` is None):
 
@@ -471,8 +473,8 @@ def _admin_login_for(store: CredentialStore, database: str | None) -> Target:
 def _root_store_hint(store: CredentialStore) -> str:
     """Say how a calu that was started through sudo gets the invoking user's credentials.
 
-    A root calu keeps its credentials in `/etc/calu` (PLAN.md D212), so what the user set up
-    in the own home directory is not seen after `--sudo`.
+    A root calu keeps its credentials in `/etc/calu` (agent/records/PLAN.md D212), so what the user
+    set up in the own home directory is not seen after `--sudo`.
 
     Args:
         store: The credential store that lacks the credential.
@@ -500,9 +502,10 @@ def _root_store_hint(store: CredentialStore) -> str:
 def load_credential(store: CredentialStore, name: str, prompt: str) -> bytearray:
     """Return the secret of credential `name`, asking for its password if it has one.
 
-    An entry stored with `calu credential set <name> --no-password` is read without asking: it
-    is protected by the file's mode rather than by a password, and prompting for a password
-    that is then thrown away would teach the user that the prompt means nothing (PLAN.md D104).
+    An entry stored with `calu credential set <name> --no-password` is read without asking: it is
+    protected by the file's mode rather than by a password, and prompting for a password that is
+    then thrown away would teach the user that the prompt means nothing (agent/records/PLAN.md
+    D104).
 
     Args:
         store: The credential store.
@@ -1662,10 +1665,10 @@ def cmd_credential(args: argparse.Namespace, store: CredentialStore) -> None:
     `set` stores a connection string the user has; `new operator` is the other direction -- it
     needs the `admin` credential, gives `calu_operator` a fresh password in the database and
     prints the connection string once, for a person who should watch the herd without owning it
-    (PLAN.md D48).
+    (agent/records/PLAN.md D48).
 
-    `set --no-password` stores the connection string protected by the file's mode alone, so
-    that the commands that use it ask nothing; it prints what that costs (PLAN.md D104). It is
+    `set --no-password` stores the connection string protected by the file's mode alone, so that the
+    commands that use it ask nothing; it prints what that costs (agent/records/PLAN.md D104). It is
     refused for the `session` credential, because starting a session is password protected
     (REQUIREMENTS 17, D115).
 
@@ -1984,7 +1987,7 @@ def _session_login(store: CredentialStore) -> bytearray:
 
 
 def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Answer session requests in the foreground until interrupted (PLAN.md D208).
+    """Answer session requests in the foreground until interrupted (agent/records/PLAN.md D208).
 
     Asks for the session password once; every session that `calu start` asks for afterwards
     runs in this process without a further password.
@@ -2026,7 +2029,7 @@ def cmd_serve(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Ask the running `calu serve` for a session and attach to it (PLAN.md D208).
+    """Ask the running `calu serve` for a session and attach to it (agent/records/PLAN.md D208).
 
     Side effects: writes a `session_requests` row and, unless `--no-attach`, a client token
     that is revoked when the client ends; prints the session's ids.
@@ -2242,7 +2245,7 @@ async def _with_admin(url: str, work: Callable[[Db], Awaitable[str]]) -> str:
 
 
 OPERATOR_FIRST = ("operator", "admin")
-"""Credentials a read-and-resolve command tries, in order (PLAN.md D48).
+"""Credentials a read-and-resolve command tries, in order (agent/records/PLAN.md D48).
 
 `operator` is the `calu_operator` login: it reads every table and resolves an escalation and can
 change nothing else, which is exactly what watching a herd needs. `admin` is the database owner
@@ -2324,7 +2327,7 @@ def _admin_command(
 
 @dataclass(frozen=True)
 class Endpoint:
-    """Where a client should connect, and with which token (PLAN.md D105)."""
+    """Where a client should connect, and with which token (agent/records/PLAN.md D105)."""
 
     address: str
     """`ws://host:port` or `unix:<path>`, as `sessions.address` holds it."""
@@ -2587,15 +2590,15 @@ def _find_endpoint(
 ) -> Endpoint:
     """Find the local session a client should connect to and mint a token for it.
 
-    This is the zero-argument path of `calu attach` and `calu acp` (PLAN.md D105): instead of
-    the address and the 43-character token that `calu run` printed, the client asks the
-    database which session runs in this directory on this host and mints its own token. The
-    token is minted rather than read because only the hash of a token is stored, so a token
-    printed once cannot be recovered; `calu attach` revokes the one it minted when it ends.
-    Every client first tries the local sockets (`_local_socket_endpoint`: root's own for a
-    root client, the user's `--insecure` ones otherwise), which need neither the database nor
-    a token (D226, D227); a session found in the database that has such a socket is reached
-    through it too (`_local_endpoint`).
+    This is the zero-argument path of `calu attach` and `calu acp` (agent/records/PLAN.md D105):
+    instead of the address and the 43-character token that `calu run` printed, the client asks the
+    database which session runs in this directory on this host and mints its own token. The token is
+    minted rather than read because only the hash of a token is stored, so a token printed once
+    cannot be recovered; `calu attach` revokes the one it minted when it ends. Every client first
+    tries the local sockets (`_local_socket_endpoint`: root's own for a root client, the user's
+    `--insecure` ones otherwise), which need neither the database nor a token (D226, D227); a
+    session found in the database that has such a socket is reached through it too
+    (`_local_endpoint`).
 
     Side effects: inserts a `client_tokens` row, unless the session was reached through a
     local socket; with a local socket, keeps a password-free login in memory
@@ -2838,9 +2841,9 @@ def _socket_path(chosen: str | None) -> Path | None:
 def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
     """Attach a terminal client to a running session.
 
-    With an ADDRESS it needs no database credential: the session process authenticates the
-    client with the token it printed at its start. Without one it finds the session running in
-    this directory and mints its own token, which it revokes when it ends (PLAN.md D105).
+    With an ADDRESS it needs no database credential: the session process authenticates the client
+    with the token it printed at its start. Without one it finds the session running in this
+    directory and mints its own token, which it revokes when it ends (agent/records/PLAN.md D105).
 
     On a terminal this is the full-screen client (`calu.tui`); with `--plain`,
     through a pipe, or without Textual installed it is the line client (`calu.attach`). The
@@ -3104,7 +3107,7 @@ def _endpoint_of(
 
     An address on the command line is used as it is, with the token next to it; that is the
     remote path and it touches no database. Without an address the session of this directory is
-    looked up and a token minted for this client (PLAN.md D105).
+    looked up and a token minted for this client (agent/records/PLAN.md D105).
 
     Args:
         args: Parsed arguments (`address`, `token`, `session`).
@@ -3228,14 +3231,14 @@ def cmd_login(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_acp(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve a running session to an editor that speaks the Agent Client Protocol.
 
-    The editor spawns this command and talks ACP on its stdin and stdout; stdout therefore
-    carries protocol lines only and every message goes to stderr. With an ADDRESS it needs no
-    database credential: the session authenticates the client with the token it printed.
-    Without one -- which is what an editor is configured with, because it has neither an
-    address nor a token to put in its arguments -- the session running in the editor's project
-    directory is looked up and a token is minted for this adapter (PLAN.md D105). That lookup
-    must not ask for a password: an editor gives this process no terminal, so the credential
-    has to be stored with `calu credential set operator --no-password` (D104).
+    The editor spawns this command and talks ACP on its stdin and stdout; stdout therefore carries
+    protocol lines only and every message goes to stderr. With an ADDRESS it needs no database
+    credential: the session authenticates the client with the token it printed. Without one -- which
+    is what an editor is configured with, because it has neither an address nor a token to put in
+    its arguments -- the session running in the editor's project directory is looked up and a token
+    is minted for this adapter (agent/records/PLAN.md D105). That lookup must not ask for a
+    password: an editor gives this process no terminal, so the credential has to be stored with
+    `calu credential set operator --no-password` (D104).
 
     Args:
         args: Parsed arguments (`address`, `token`, `session`).
@@ -3314,9 +3317,9 @@ def _web_token_line(host: str, port: int, token: str, has_admin_password: bool) 
 def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve the web interface: every session of every host, their history, the checkers.
 
-    It needs the `admin` credential, because it also changes what steers the checkers, and it
-    serves the loopback interface only: its login is the token in the address it prints, there
-    are no user accounts (PLAN.md Q4), so reach it from another machine through an SSH tunnel.
+    It needs the `admin` credential, because it also changes what steers the checkers, and it serves
+    the loopback interface only: its login is the token in the address it prints, there are no user
+    accounts (agent/records/PLAN.md Q4), so reach it from another machine through an SSH tunnel.
 
     The address it prints names the host `calu.localhost` (`calu.web.app.WEB_HOST_NAME`), not
     the bound address: the server answers to no other name, so that the browser keeps the
@@ -3644,7 +3647,7 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Show or correct the chat summary a session's checkers read (PLAN.md D40).
+    """Show or correct the chat summary a session's checkers read (agent/records/PLAN.md D40).
 
     The summary is the conversation the checkers see for everything older than the unfolded
     turns, written by the summarizer model. A wrong one misleads every later check, so it is
@@ -3730,7 +3733,9 @@ def cmd_summary(args: argparse.Namespace, store: CredentialStore) -> None:
 
 
 def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Show everything needed to decide one escalation, from the database alone (PLAN.md D30).
+    """Show everything needed to decide one escalation, from the database alone.
+
+    See agent/records/PLAN.md D30.
 
     No session process is involved: an operator who can reach the database sees why the step
     was escalated, what each checker decided about it and why, what it would do, what Claude
@@ -3774,8 +3779,8 @@ def cmd_escalation(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
     """Allow, deny, answer or cancel an open escalation; the waiting session continues.
 
-    "answer" belongs to a question Claude asked (`AskUserQuestion`, PLAN.md D35): the note is
-    the answer it receives, and the call itself does not run.
+    "answer" belongs to a question Claude asked (`AskUserQuestion`, agent/records/PLAN.md D35): the
+    note is the answer it receives, and the call itself does not run.
 
     "cancel" is for an escalation nobody can act on any more -- the session's process is gone
     (D56), which `calu escalations` marks. It records a cancellation rather than a decision, so
@@ -3847,7 +3852,7 @@ def _attach_recipe(row: herd.SessionRow) -> str:
 
 
 def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Mint, list or revoke the client tokens of a session (PLAN.md D30).
+    """Mint, list or revoke the client tokens of a session (agent/records/PLAN.md D30).
 
     A minted token lets a client attach to that session without the terminal that started it:
     an editor's ACP adapter, a local command or a remote interface keeps its token in its own
@@ -3917,7 +3922,7 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
 
     With `--list` or `--export` the cases are only collected: they are printed or written as
     YAML and no model is called, which is how the labels a herd produced are read, kept and
-    later re-run as a fixed set (PLAN.md D55).
+    later re-run as a fixed set (agent/records/PLAN.md D55).
 
     Raises:
         CliError: If neither credential is stored (`operator` or `admin`), a case file cannot
@@ -3995,7 +4000,7 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
 
     if args.list_cases or args.export:
         # Looking at the labels, or keeping them, calls no model and costs nothing: this is the
-        # path that replaces a training mode (PLAN.md D55, Q9).
+        # path that replaces a training mode (agent/records/PLAN.md D55, Q9).
         _herd_command(store, collect)
         return
     _herd_command(store, work)
@@ -4164,10 +4169,10 @@ def _configuration_table(
     """Render every configuration key with its effective value, its origin and its default.
 
     `calu config get` prints the **stored** values of one scope, which is `{}` on a fresh
-    installation and says nothing about what a session will actually use. This answers the
-    other question -- "what is set, what could be set, and where does each value come from"
-    (PLAN.md D128). The keys and defaults come from `calu.configdoc`, the same walk the
-    reference document is generated from.
+    installation and says nothing about what a session will actually use. This answers the other
+    question -- "what is set, what could be set, and where does each value come from"
+    (agent/records/PLAN.md D128). The keys and defaults come from `calu.configdoc`, the same walk
+    the reference document is generated from.
 
     Args:
         global_values: The stored global settings (`calu.admin.settings`).
@@ -4342,11 +4347,11 @@ def cmd_config(args: argparse.Namespace, store: CredentialStore) -> None:
 def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
     """List, show or change the checker definitions, or report how they have decided.
 
-    `stats` reads what the checkers already decided and what humans did with it, so it costs
-    nothing and describes this project's real steps rather than the eval set (PLAN.md D61).
-    `misses` lists the rows those counts point at -- a step a checker approved that a human
-    then denied -- with the escalation id, so `calu escalation <id>` shows the whole context
-    and the instructions can be fixed against a real case (D62).
+    `stats` reads what the checkers already decided and what humans did with it, so it costs nothing
+    and describes this project's real steps rather than the eval set (agent/records/PLAN.md D61).
+    `misses` lists the rows those counts point at -- a step a checker approved that a human then
+    denied -- with the escalation id, so `calu escalation <id>` shows the whole context and the
+    instructions can be fixed against a real case (D62).
 
     `set --instructions-file` reads the new instructions from a file, or from stdin for "-";
     `edit` opens them in `$EDITOR` and stores them when the editor closes.
@@ -4403,7 +4408,7 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
             return "\n\n".join(row.line() for row in found)
         if args.action == "stats":
             # From the record, not by running anything: free, and about this project's real
-            # steps rather than the eval set (PLAN.md D61).
+            # steps rather than the eval set (agent/records/PLAN.md D61).
             stats = await herd.checker_stats(db, args.days)
             if not stats:
                 return "no checker has run yet"
@@ -5634,12 +5639,12 @@ def main(
         store_factory: Creates the credential store (tests pass a store in a temporary dir).
 
     Side effects: as root, points calu at `/etc/calu` and `/var/lib/calu`
-    (`calu.asuser.use_system_directories`); remembers the arguments for `--sudo`; loads calu's
-    own env file (`~/.config/calu/.env`) into the process
-    environment before any command runs, without overwriting what is already set. Every command
-    then sees the same checker keys a session sees: only `calu run` used to read the file, so
-    `calu doctor` reported "none of the known providers has a key" with a key in it, and
-    `calu evals` ran its checkers without one (PLAN.md D131). The keys stay hidden from Claude
+    (`calu.asuser.use_system_directories`); remembers the arguments for `--sudo`; loads calu's own
+    env file (`~/.config/calu/.env`) into the process environment before any command runs, without
+    overwriting what is already set. Every command then sees the same checker keys a session sees:
+    only `calu run` used to read the file, so `calu doctor` reported "none of the known providers
+    has a key" with a key in it, and `calu evals` ran its checkers without one
+    (agent/records/PLAN.md D131). The keys stay hidden from Claude
     Code: a session (`calu run`, `calu serve`) removes them (`SdkRunner.hidden_env`), and
     `calu login` starts `claude auth` without them (`claude_login_command`). Other programs
     calu starts may inherit them (the browser of `calu lightcycles`, for one).

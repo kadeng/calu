@@ -29,7 +29,7 @@ DOCUMENTS = [
     "docs/TESTING.md",
     "docs/CONFIGURATION.md",
     "AGENTS.md",
-    "HANDOFF.md",
+    "agent/records/HANDOFF.md",
 ]
 FENCE = re.compile(r"^\s*(?:```|~~~)")
 """The opening or closing line of a fenced code block."""

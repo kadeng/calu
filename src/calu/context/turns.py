@@ -55,10 +55,11 @@ class TurnRecord(BaseModel):
     """True if narration was on for this turn: `render` then never shows `answer` verbatim."""
     prompt_uuid: str = ""
     """Transcript uuid of the prompt that started this turn ("" if Claude Code did not report
-    one). With `last_entry_uuid` of the previous turn it is what a fork needs (PLAN.md D36)."""
+    one). With `last_entry_uuid` of the previous turn it is what a fork needs (agent/records/PLAN.md
+    D36)."""
     last_entry_uuid: str = ""
     """Transcript uuid of the last assistant entry of this turn: where a fork that keeps this
-    turn resumes from (PLAN.md D36)."""
+    turn resumes from (agent/records/PLAN.md D36)."""
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     ended_at: datetime | None = None
 

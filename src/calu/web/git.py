@@ -1,4 +1,4 @@
-"""Links into a git browser, instead of a git browser of calu's own (PLAN.md phase 6).
+"""Links into a git browser, instead of a git browser of calu's own (agent/records/PLAN.md phase 6).
 
 Every step records the commit the workspace was on (`steps.git_commit`) and every project may
 record its git remote (`projects.git_remote`), which is enough to link a step to the commit it

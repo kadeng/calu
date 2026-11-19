@@ -30,8 +30,8 @@ CHECKER_DEFAULTS = (
     ("command", "command", "checkers/command.md", None, True),
     ("edit", "edit", "checkers/edit.md", None, True),
     ("subagent-result", "subagent", "checkers/subagent-result.md", None, True),
-    # Far more than a step checker: judging a whole change means reading files around the
-    # diff and following callers (PLAN.md D197); its token limits are set below as well.
+    # Far more than a step checker: judging a whole change means reading files around the diff and
+    # following callers (agent/records/PLAN.md D197); its token limits are set below as well.
     ("changeset", "changeset", "checkers/changeset.md", CHANGESET_REQUEST_LIMIT, True),
     ("narrator", "narrator", "checkers/narrator.md", None, True),
     # Seeded but **off**: honesty enforcement is a feature a user switches on deliberately, its
@@ -63,7 +63,7 @@ ADMIN_OPTION_VERSION = 160000
 or was granted with the admin option (PostgreSQL 16)."""
 """Role of a human who watches a herd: reads every table and resolves an escalation, and may
 change nothing else (migration 0001). It is created `NOLOGIN`; `enable_operator_login` gives it
-a password when an operator needs one (PLAN.md D48)."""
+a password when an operator needs one (agent/records/PLAN.md D48)."""
 
 
 @dataclass(frozen=True)
@@ -110,7 +110,9 @@ def parse_rule_file(list_name: str, text: str) -> list[RuleRow]:
 
 
 def default_rules() -> list[RuleRow]:
-    """Return the rules a new database starts with: none (PLAN.md D179, the owner's Q16).
+    """Return the rules a new database starts with: none.
+
+    See agent/records/PLAN.md D179, the owner's Q16.
 
     calu ships no allow or deny rules; every list starts empty, and every step goes to a
     checker until someone adds rules. `recommended_rules` holds the former defaults, which
@@ -126,7 +128,7 @@ def default_rules() -> list[RuleRow]:
 RECOMMENDED_LISTS = tuple(name for name in RULE_LISTS if name != "command-allow")
 """The lists the `recommended` set has rules for. There is no shipped command allow list: an
 allow rule matches a command by its text, so it also matches another program of that name, and
-a match skips the checker (PLAN.md D198)."""
+a match skips the checker (agent/records/PLAN.md D198)."""
 
 
 def recommended_rules() -> list[RuleRow]:

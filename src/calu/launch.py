@@ -1,8 +1,8 @@
 """`calu-claude`: starts Claude Code as another user with an environment built for it (D207).
 
-calu may run as root while Claude Code runs as an unprivileged user (PLAN.md D206). The Agent
-SDK starts one executable and appends its own arguments; its own `user` option changes the uid
-only and passes calu's whole environment on (`spikes/RESULTS.md`). calu therefore names this
+calu may run as root while Claude Code runs as an unprivileged user (agent/records/PLAN.md D206).
+The Agent SDK starts one executable and appends its own arguments; its own `user` option changes the
+uid only and passes calu's whole environment on (`spikes/RESULTS.md`). calu therefore names this
 launcher as the executable:
 
     calu (root) ── Agent SDK ──► calu-claude --output-format stream-json ...

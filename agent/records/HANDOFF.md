@@ -9,7 +9,7 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 ### State of the repository (updated 2026-11-19, about 03:00, by the lead's stand-in)
 
 **Read first:** `PLAN.md` D233 (what the test campaign changed and the decisions that wait
-for the owner) and D234 (server and setup side); `docs/notes/test-plan.md` (the record of
+for the owner) and D234 (server and setup side); `agent/records/notes/test-plan.md` (the record of
 the cases, sections A-H and the table C1-C23); the skill
 `.claude/skills/ui-testing-with-cua/SKILL.md` (how the IDE tests are run). The owner's words
 are in `REQUIREMENTS.md` 34-40.
@@ -45,44 +45,34 @@ locally and remotely. The PyCharm plugin supports JetBrains remote development (
 and also a local IDE that syncs files over SSH, with remote run and debug through
 PyCharm's SSH interpreter.
 
-Three agents started at about 07:00 (none pushes; the lead pushes):
-1. **PyCharm in the Cua desktop**: split mode; local IDE + SSH sync + SSH interpreter
-   run/debug; "Sync: none" with Deployment/rsync; open B/H cases; `openssh-client` in
-   `uitest/Dockerfile`.
-2. **Core defects** (items 0, 2, 3 below): history of an unended turn, replay boundary by
-   uuid, tool ids, stale sessions, skipped files in `ide.fs.changed`, held badge, web
-   decision recorder, `_start_cancel`, `calu.cli` contracts.
-3. **Terminal client and web, remote**: an own copy of the SSH box (`calu-sshbox2`), `calu
-   attach` over TCP, over an SSH tunnel and over `ssh -t`, `calu web` remote and local
-   against a remote server.
-**Planned move of the system of records (owner, 2026-11-19), to be done by the lead only
-while no agent runs:** every document written only for and maintained by the coding agents,
-except `AGENTS.md`, moves to `agent/records/` (the owner's choice, 2026-11-19: "or better
-agent/records, similar, let's place the agent traces into agent/traces by default. No need
-to hide that, it just needs to be a single dir."). So in the same change the session
-traces' default directory becomes `agent/traces` instead of `.agent/traces`:
-`TracesSettings.directory` in `src/calu/config.py`, `TRACE_DIRECTORY` in
-`src/calu/ide/files.py` (never synchronised), `DEFAULT_EXCLUDED` in the PyCharm plugin's
-`PathMapper.kt` and `Types.kt`, their tests, CALU_GUIDE, docs/CONFIGURATION.md,
-docs/TESTING.md, README, the sync spec; record it in REQUIREMENTS 36 and a PLAN row. A
-project that already has `.agent/traces` keeps writing there only if it set the
-directory; say so in the guide. Moves, with `git mv` so history follows (into `agent/records/`): `HANDOFF.md`, `PLAN.md`,
-`REQUIREMENTS.md`, and all of `docs/notes/` (specs, research, test plan, reports, honesty
-evaluations, screenshots) to `agent/records/notes/`. Stay where they are (written for
-people): `README.md`, `CALU_GUIDE.md`, `LICENSE*`, `docs/CONFIGURATION.md`,
-`docs/TESTING.md`, `docs/assets/`, the extensions' READMEs; `.claude/skills/` (Claude Code
-reads it there). Then rewrite every reference (about 170 files: `PLAN.md D…` in code
-comments, Kotlin, TypeScript, tests such as `test_handoff_counts.py` and
-`test_documentation_links.py`, `.github/workflows/`, `scripts/`, the extensions' READMEs,
-README, CALU_GUIDE, docs/TESTING.md, the skills, AGENTS.md above all), taking care not to
-touch references to the parent project's `docs/PLAN.md`; regenerate
-`extensions/vscode/src/protocol.generated.ts` with `npm run gen:protocol`; check that no
-packaging step (release workflow, `scripts/build-binary.sh`, `.vsix`, plugin zip) ships or
-needs the moved files; update the memory notes that name the paths; full pre-push run;
-push.
+The three agents of 07:00 have finished and their work is pushed: the PyCharm plugin's
+three modes (PLAN D236 and the owner's REQUIREMENTS 41 addendum: local; JetBrains remote
+development with the backend on the SSH box; a local copy synchronised with calu on the
+server, `.git` on the server only, conflicts always resolved, run and debug through the SSH
+interpreter), test plan sections B and H; the core defects (PLAN D237); the terminal clients
+and the web interface used remotely through SSH (test plan section I).
 
-After agent 1: **VSCode in the desktop**, locally and over Remote-SSH to the SSH box, C5,
-C6, C11, C12 at scale, integration tests. Results go into `docs/notes/test-plan.md`.
+**The system of records moved to `agent/records/`** (PLAN D238, about 11:00): done, with the
+traces' default `agent/traces/`. Two links in `README.md` (to `HANDOFF.md` and
+`docs/notes/test-plan.md`) still point at the old places, because the owner was editing the
+README by hand and asked that nobody touch it until he is done; `test_documentation_links`
+fails on README until they are changed to `agent/records/HANDOFF.md` and
+`agent/records/notes/test-plan.md`.
+
+Next: **VSCode in the desktop**, locally and over Remote-SSH to the SSH box, C5, C6, C11,
+C12 at scale, integration tests, and whether VSCode and PyCharm show the new `step.held`
+event. Results go into `agent/records/notes/test-plan.md`.
+
+Judgement calls the agents left for the owner (not yet asked):
+- Terminal and web: a client given an address cannot follow `/new`, `/fork`, `/switch`
+  (a `calu attach ssh://host` mode, or one relay port per `calu serve`?); the 5-minute
+  retry window, and whether a refused local session should end the client at once;
+  `calu start --no-attach` leaves its token valid until the session ends.
+- PyCharm: a placeholder in the composer when no session is attached; stacked setup cards
+  overrun the composer in a short tool window (scroll or collapse?); keep or replace a
+  resolved conflict's warning line; offer to create the SSH interpreter and path mapping;
+  disable the SSH fields in "Automatic" mode; the two start-up notifications of the test
+  setup (hand-unpacked plugin, no ssh-agent).
 
 #### Next, in this order
 
@@ -247,7 +237,7 @@ The owner's machine: he reinstalls the root calu from GitHub after a push and ru
 ### The VSCode extension and the PyCharm plugin: what the owner wants
 
 **D231 lists every requirement with its state**; the contract is
-`docs/notes/vscode-extension-spec.md` (sections 1-8), his words are requirements 34 and 35.
+`agent/records/notes/vscode-extension-spec.md` (sections 1-8), his words are requirements 34 and 35.
 In short: parity with Claude Code's chat first (images, rewind, fork, several sessions,
 slash commands, model and effort, context usage, questions, escalations, notifications),
 dark theme first, then calu's features one click away (checker context, checker
@@ -256,7 +246,7 @@ presets), subagents in full, a session dropdown and session names, installing uv
 checking for `claude`, working in VSCode's remote modes, instructions for a persistent
 `calu serve` in tmux or screen, at most one password once, and never refusing a blank
 password. Then a PyCharm plugin with local, remote and SSH-only modes
-(`docs/notes/pycharm-plugin-research.md`).
+(`agent/records/notes/pycharm-plugin-research.md`).
 
 Next steps for the extension, in order:
 1. Collect what the run agent left and reported (above); commit; relay its list of open
@@ -373,7 +363,7 @@ Next steps for the extension, in order:
    real home (not run); `calu doctor` knows nothing of `--user`; the single-file binary has
    no launcher.
    **2026-11-18, after the run in the root box** (`uitest/rootbox`, PLAN D234,
-   `docs/notes/test-plan.md` section E): a named user with a real home ran (`ada`, `bob`,
+   `agent/records/notes/test-plan.md` section E): a named user with a real home ran (`ada`, `bob`,
    also through a real sudo with and without its password); `calu doctor` has `--user` and
    `--sudo`; of the sandbox under the other uid only the settings calu generates were read,
    because an unprivileged container may not create user namespaces (it needs a machine or
@@ -464,8 +454,8 @@ credentials are the `admin` and `session` entries of his own store. gitui is in
      `calu attach`, the honesty panel of the web live view, a review of more than one batch,
      a review that fails, and the reviewer on a large change. The manual checklist
      (`docs/TESTING.md`, item 25) covers the first two.
-   - The specification is `docs/notes/honesty-spec.md`. Where the build deviated from it, and
-     what each step left out, is in `docs/notes/reports-2026-11-12.md`; several deviations
+   - The specification is `agent/records/notes/honesty-spec.md`. Where the build deviated from it, and
+     what each step left out, is in `agent/records/notes/reports-2026-11-12.md`; several deviations
      are stricter than the specification on purpose. Read them before changing the feature.
    - The full-screen client's honesty screens were written before the real protocol existed
      and were reconciled with it at the merge (`src/calu/tui/model.py: honesty_from`, the
@@ -518,11 +508,11 @@ credentials are the `admin` and `session` entries of his own store. gitui is in
      automatic, so no checker takes it for user input).
 5. **Done: the user documentation of the honesty redesign** (README "Code honesty";
    `CALU_GUIDE.md` "Code honesty enforcement" with "Verified code, ..." and "Judging the
-   checkers before you let them block"). Written from the reports in `docs/notes/` and checked
+   checkers before you let them block"). Written from the reports in `agent/records/notes/` and checked
    against the live runs of item 1 and the command line's own help. `PLAN.md` §13 still
    describes the register of 2026-11-10 as history; D196 is what holds.
 6. **Done: the three defects the split of `session.py` left open**
-   (`docs/notes/reports-2026-11-12.md`, "defects found"), each with a test that fails on the
+   (`agent/records/notes/reports-2026-11-12.md`, "defects found"), each with a test that fails on the
    old code: the state stayed "tool_call" after a human allowed an escalated subagent result
    (`RunState.forget`); the clock alarm was forgotten when the gate returned its escalation,
    so an escalation that ended without a human decision left the next step unescalated (the

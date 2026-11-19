@@ -18,7 +18,7 @@ Guarantees:
 - `attempt`, `attempt_value`, `failed` and `add_step` never raise because the store failed. A
   step is checked also when its row could not be written; only its history is lost then.
 - Every failed write is reported as a `log` error and counted. Only a write that succeeds
-  resets the count (PLAN.md D59).
+  resets the count (agent/records/PLAN.md D59).
 - The stop after too many failures is started once and in a task of its own, because the
   failed write runs inside a call that must not wait for the stop.
 
@@ -104,7 +104,7 @@ class Recorder:
 
         Side effects:
             Counts the failure (`failed`), which stops the session once writes have
-            failed `config.store_failures_before_stop` times in a row (PLAN.md D59).
+            failed `config.store_failures_before_stop` times in a row (agent/records/PLAN.md D59).
         """
         try:
             await call
@@ -251,10 +251,10 @@ class Recorder:
     def checker_run(self, checker: Checker, route: str, outcome: CheckOutcome) -> CheckerRun:
         """Build the `checker_runs` row of one step check.
 
-        The row is keyed by the **checker's own name**, not by its route: a route may carry
-        several checkers (PLAN.md D81), and a row named after the route would merge them, so
-        `calu checker stats` and `calu checker misses` could no longer tell which of them
-        decided or what each one costs.
+        The row is keyed by the **checker's own name**, not by its route: a route may carry several
+        checkers (agent/records/PLAN.md D81), and a row named after the route would merge them, so
+        `calu checker stats` and `calu checker misses` could no longer tell which of them decided or
+        what each one costs.
 
         Args:
             checker: The checker that ran; its name and version go into the row.
@@ -298,7 +298,9 @@ class Recorder:
     # ------------------------------------------------------------------ step times
 
     def step_times(self) -> Sequence[StepTime]:
-        """Return when the recent steps of this session ran, oldest first (PLAN.md D32).
+        """Return when the recent steps of this session ran, oldest first.
+
+        See agent/records/PLAN.md D32.
 
         The checkers get this as a tool (`calu.checkers.tools.step_times`) and use it to
         attribute a file's change time to a step. Only the last `STEP_TIMES_KEPT` steps are

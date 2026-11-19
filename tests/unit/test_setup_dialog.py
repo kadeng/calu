@@ -1,4 +1,7 @@
-"""`calu setup` and `calu run` for the local Docker database, without Docker (PLAN.md D205)."""
+"""`calu setup` and `calu run` for the local Docker database, without Docker.
+
+See agent/records/PLAN.md D205.
+"""
 
 import io
 from pathlib import Path

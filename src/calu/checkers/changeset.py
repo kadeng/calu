@@ -1,4 +1,4 @@
-"""The changeset a commit would create, and how to recognise a commit (PLAN.md D26).
+"""The changeset a commit would create, and how to recognise a commit (agent/records/PLAN.md D26).
 
 A step checker judges one edit with limited context, which is the right altitude for style,
 documentation and local design, and the wrong one for "is this change correct and complete?".

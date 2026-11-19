@@ -1,4 +1,4 @@
-"""Database connections and schema migrations (PLAN.md §7, D13).
+"""Database connections and schema migrations (agent/records/PLAN.md §7, D13).
 
 `Db` wraps one connection so that several tasks of a session can use it one after another.
 Given a `ConnectionSource`, it also replaces a connection that was lost (a restarted server, a
@@ -258,10 +258,10 @@ async def connect(url: str | bytes | bytearray) -> psycopg.AsyncConnection:
 class ConnectionSource:
     """Keeps a database login inside the calu process, so a lost connection can be reopened.
 
-    This object is the one place where a session keeps what it needs to log in again
-    (REQUIREMENTS 16; this replaces PLAN.md D19): the login lives in this process's memory only.
-    It is never written to the environment, to a command line or to a file, so the Claude Code
-    process that calu starts does not inherit it, and `repr` does not show it.
+    This object is the one place where a session keeps what it needs to log in again (REQUIREMENTS
+    16; this replaces agent/records/PLAN.md D19): the login lives in this process's memory only. It
+    is never written to the environment, to a command line or to a file, so the Claude Code process
+    that calu starts does not inherit it, and `repr` does not show it.
     """
 
     def __init__(self, target: Target | str | bytes | bytearray) -> None:

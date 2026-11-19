@@ -6,7 +6,7 @@
 export const PROTOCOL_VERSION = 1;
 
 /**
- * Outcome of a check (PLAN.md D21).
+ * Outcome of a check (agent/records/PLAN.md D21).
  *
  * PASS is the normal answer: the checker has no objection, and Claude Code's auto mode decides
  * about the step as it would without calu. ESCALATE pauses the tool call until a human allows
@@ -132,7 +132,7 @@ export interface AutoEscalateSetParams {
   subagents?: boolean;
 }
 /**
- * An image a user attached to a chat message (PLAN.md D220).
+ * An image a user attached to a chat message (agent/records/PLAN.md D220).
  *
  * `data` is the image file, base64. Only the listed raster formats: an SVG is a document
  * that can carry scripts.
@@ -206,7 +206,9 @@ export interface CheckResult {
   tool_use_id: string | null;
 }
 /**
- * The honesty checker's status of one file a step changes (PLAN.md D224 part 4).
+ * The honesty checker's status of one file a step changes.
+ *
+ * See agent/records/PLAN.md D224 part 4.
  */
 export interface HonestyFileStatus {
   path: string;
@@ -235,8 +237,8 @@ export interface CheckerContextResult {
 /**
  * One checker definition as a client may read it (a row of `checker_types`).
  *
- * Clients read these; changing them needs other credentials than a session has (PLAN.md §6.2),
- * so there is no request to write them here.
+ * Clients read these; changing them needs other credentials than a session has
+ * (agent/records/PLAN.md §6.2), so there is no request to write them here.
  */
 export interface CheckerInfo {
   enabled?: boolean;
@@ -386,10 +388,10 @@ export interface EscalationContextResult {
 /**
  * The human's answer to an `escalation.request`. Result: `{}`.
  *
- * `answer` belongs to a question of the agent (`escalation.request` with `questions`, PLAN.md
- * D35): it is the text Claude receives as the result of its `AskUserQuestion` call, and the
- * call itself never runs. With an answer the `decision` is ignored, and the escalation is
- * recorded as "answered" rather than allowed or denied.
+ * `answer` belongs to a question of the agent (`escalation.request` with `questions`,
+ * agent/records/PLAN.md D35): it is the text Claude receives as the result of its
+ * `AskUserQuestion` call, and the call itself never runs. With an answer the `decision` is
+ * ignored, and the escalation is recorded as "answered" rather than allowed or denied.
  */
 export interface EscalationDecideParams {
   answer?: string | null;
@@ -472,12 +474,12 @@ export interface FileLink {
 /**
  * `files.user_edit`: the user is about to write these files through an editor.
  *
- * `calu ide` sends it immediately before it replaces, deletes or renames a file for the
- * editor's file synchronisation (`docs/notes/jetbrains-sync-spec.md`). Such a write is the
- * user's own edit, not a step of Claude: no checker judges it. The session leaves the paths
- * out of the write set of a command that runs at that moment and watches the files for the
- * code honesty state, where they count as unreviewed like any change made outside calu.
- * With an empty list nothing is recorded and only the result is of use.
+ * `calu ide` sends it immediately before it replaces, deletes or renames a file for the editor's
+ * file synchronisation (`agent/records/notes/jetbrains-sync-spec.md`). Such a write is the user's
+ * own edit, not a step of Claude: no checker judges it. The session leaves the paths out of the
+ * write set of a command that runs at that moment and watches the files for the code honesty
+ * state, where they count as unreviewed like any change made outside calu. With an empty list
+ * nothing is recorded and only the result is of use.
  */
 export interface FilesUserEditParams {
   /**
@@ -1027,13 +1029,12 @@ export interface SideAskResult {
 /**
  * A tool call starts or stops waiting because a decision about another step is open.
  *
- * While a human decides about one step, calu approves no other step of the session (the
- * hold, PLAN.md D235). A step is held either before its check or after its approval was
- * recorded, when an escalation came up meanwhile; in the second case its `check.result`
- * has already been sent, so a client cannot tell from the other events that the step
- * waits. Every hold sends one event with `held` true when it begins and one with `held`
- * false when it ends (the step then runs, or is escalated itself). A `log` line says the
- * same in words.
+ * While a human decides about one step, calu approves no other step of the session (the hold,
+ * agent/records/PLAN.md D235). A step is held either before its check or after its approval was
+ * recorded, when an escalation came up meanwhile; in the second case its `check.result` has
+ * already been sent, so a client cannot tell from the other events that the step waits. Every hold
+ * sends one event with `held` true when it begins and one with `held` false when it ends (the step
+ * then runs, or is escalated itself). A `log` line says the same in words.
  */
 export interface StepHeld {
   agent_id?: string | null;

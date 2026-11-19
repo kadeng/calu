@@ -16,8 +16,8 @@
                                                                 editor that works on a copy
 
 The method table, the error codes and the notifications are specified in
-`docs/notes/vscode-extension-spec.md` §2 and §6, those of the file requests in
-`docs/notes/jetbrains-sync-spec.md`. One session is attached at a time: an attach
+`agent/records/notes/vscode-extension-spec.md` §2 and §6, those of the file requests in
+`agent/records/notes/jetbrains-sync-spec.md`. One session is attached at a time: an attach
 while one is attached detaches first. The bridge never asks on a terminal; a credential that
 needs a password is the error `NEEDS_PASSWORD`, and the request is repeated with `password`.
 

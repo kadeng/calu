@@ -1,4 +1,6 @@
-"""Which machine a process runs on, as far as its process table is concerned (PLAN.md D202).
+"""Which machine a process runs on, as far as its process table is concerned.
+
+See agent/records/PLAN.md D202.
 
 `calu sessions` closes the open escalations of a silent session whose process is gone
 (`calu.herd.close_gone`). "Gone" is read from this machine's process table, so it only means
