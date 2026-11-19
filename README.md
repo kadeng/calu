@@ -211,7 +211,7 @@ All of them work on the same sessions: start a session in one, follow or answer 
 
 <p>
 <img src="docs/assets/pycharm-approval.png" width="32%" alt="The PyCharm plugin: a command waits for a decision in the tool window">
-<img src="docs/assets/web-live-subagents.png" width="32%" alt="Ten subagents in the web live view, one waiting for a decision">
+<img src="docs/assets/web-live-subagents.png" width="32%" alt="The web live view: a decision asked for by one of ten subagents">
 <img src="docs/assets/vscode-settings.png" width="32%" alt="The settings dialog of the VSCode extension">
 </p>
 
