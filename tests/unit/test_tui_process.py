@@ -219,6 +219,23 @@ def test_the_lines_after_the_client_name_the_relay_that_closed_the_connection() 
     )
 
 
+def test_the_lines_after_a_refused_server_token_do_not_offer_the_same_token_again() -> None:
+    # The relay refuses that token for good (revoked, or its server ended): "attach again
+    # with ... --token=<the same token>" would only be refused again.
+    from calu.attach import closer
+    from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED
+
+    by = closer(CLOSE_SERVER_TOKEN_REVOKED)
+    ended = TuiExit(1, "idle", None, 0, "the server token was revoked", closed_by=by)
+    again = "calu attach ws://127.0.0.1:8826 --session 83f3 --token=<the same token>"
+    lines = exit_lines(ended, again)
+    assert "<the same token>" not in "\n".join(lines)
+    assert lines[-1].startswith(
+        "attach again with: calu attach ws://127.0.0.1:8826 --session 83f3 --token=<a new token>"
+    )
+    assert any("calu token mint --server" in line for line in lines)
+
+
 def test_the_lines_after_the_client_say_why_a_connection_ended() -> None:
     lines = exit_lines(TuiExit(1, "idle", None, 1, "the client token was revoked"))
     assert lines[:3] == [

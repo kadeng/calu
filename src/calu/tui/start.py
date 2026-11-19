@@ -132,9 +132,16 @@ def exit_lines(ended: TuiExit, again: str = "calu attach") -> list[str]:
 
     Returns:
         The lines: why the connection ended (if the session closed it or it broke), the
-        session and its state, how many decisions wait, and how to attach again.
+        session and its state, how many decisions wait, and how to attach again (after the
+        relay refused the server token: with a new one, and where to mint it).
     """
+    from calu.attach import closer
+    from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED
+
     lines = []
+    if ended.closed_by == closer(CLOSE_SERVER_TOKEN_REVOKED):
+        # The relay refuses that server token for good (revoked, or its server ended).
+        again = again.replace("<the same token>", "<a new token>")
     if ended.lost:
         lines.append(f"the connection to the session was lost: {ended.message}")
         lines.append("the session may still run; its state below is the last one this client saw")
@@ -148,6 +155,11 @@ def exit_lines(ended: TuiExit, again: str = "calu attach") -> list[str]:
         count = ended.open_decisions
         what = "1 step waits" if count == 1 else f"{count} steps wait"
         lines.append(f"{what} for a decision")
+    if ended.closed_by == closer(CLOSE_SERVER_TOKEN_REVOKED):
+        lines.append(
+            "that server token is refused from now on: `calu token mint --server` on the "
+            "server's machine prints a new one"
+        )
     lines.append(f"attach again with: {again}   (the line client: add --plain)")
     return lines
 
