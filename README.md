@@ -28,7 +28,17 @@ These checker agents focus on a much narrower task than your main coding agent. 
 and decide, never act or write on their own. They are much better at keeping your instructions
 in mind at all times.
 
-What that gives you is much more control over what happens. These agents are faster than
+>
+> Is this not just what "Auto" approval mode does? 
+>
+
+*Yes and no. Auto-approval is very generic and stops generally unsafe actions. While it adapts a bit to your
+stated intent ( e.g. to what you write in the LLM chat), it will not remember your custom instructions over
+longer timespans or sessions. It will stop generally unsafe actions like uploading your SSH keys to a
+remote server. It won't stop your agent from writing "load-bearing" in every third sentence, it won't steer your
+coding model to behave like you want it to. And it can be tricked by deception (dishonest code).*
+
+What this gives you is much more control over what happens. These agents are faster than
 your coding agent, and they look at what happens from multiple angles.
 
 - **Security and Confidentiality.** You can give your own standing instructions about which commands
