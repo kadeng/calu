@@ -31,6 +31,10 @@ What you can do with it, if you want to:
   it back: an abstraction nobody asked for, work beyond the task, a test weakened to pass.
 - **Your repo, your rules.** The instructions are yours, in Markdown, stored where the session
   cannot change them.
+- **More autonomy where you trust it, less where you don't.** If auto mode keeps asking about
+  something you always approve, tell a checker to allow it, and the step runs without a
+  prompt. If auto mode lets something through that you want to see first, tell a checker to
+  ask, and the session waits for you.
 - **Honest and readable docs at every step.** Names, docstrings and comments can be checked
   with each edit instead of at the end of the task.
 - **You are not a bystander. Contribute whenever you like and review at every level of
