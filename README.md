@@ -141,9 +141,19 @@ and switch user interfaces or even use multiple of them in parallel.
 ## Getting started
 
 You need Linux where Claude Code runs (clients may be anywhere), Python 3.14 with
-[uv](https://docs.astral.sh/uv/), Claude Code set up for your project, PostgreSQL (Calu can
-start one in Docker, or use a server or RDS you have), credentials for the checker models, and
-`bubblewrap` and `socat` for the sandbox.
+[uv](https://docs.astral.sh/uv/), Claude Code set up for your project, PostgreSQL (see below)
+and credentials for the checker models.
+
+**Calu needs a PostgreSQL database.** Either a central server (your own, or RDS) that several
+machines share, or a local one that `calu setup` runs in Docker on the machine where `calu
+serve` or `calu run` runs (that variant needs Docker installed there). It holds your messages, every step with its command or edit, the
+checkers' summaries and decisions, the settings and the checker instructions. That record can
+contain code, secrets the agent came across and personal data: protect, back up and upgrade
+the database like any other that holds sensitive data.
+([The database](CALU_GUIDE.md#the-database))
+
+Claude Code's own sandbox is optional; `calu setup` asks whether to switch it on (it needs
+`bubblewrap` and `socat`).
 
 ```bash
 uv tool install git+https://github.com/kadeng/calu   # one package, every command

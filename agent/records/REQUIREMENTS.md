@@ -300,6 +300,20 @@ broken down or extended. Derived requirements and design decisions belong in
     the server, two-way sync through `calu ide`, `.git` on the server only) was described to
     him: "No, let's keep that, it's good. Instead of my variant 3. We just need to ensure edit
     conflicts gets resolved and one side only holds .git." (stated 2026-11-19)
+42. On the README's requirements: "The "getting started" in the readme mentions bubblewrap and
+    socat for the sandbox. This is a claude code requirement for a Claude Code managed
+    sandbox. Calu does not modify or interfere with this sandboxing. Don't consider it a
+    requirement of calu. But you do need to highlight that calu requires a postgresql
+    instance running somewhere, either centrally or dockerized on the machine where calu
+    serve/calu run is running. This needs to be made plain since it has implications for
+    sysadmins/devops and managing security ( the DB might contain sensitive information in
+    form of chat logs and might need protection, upgrades etc.). Ensure this is clearly (but
+    shortly) mentioned in the Readme, with a link to the corresponding documentation section
+    for details." When told that calu does configure the sandbox and refuses to start without
+    bubblewrap: "Calu should ask whether it should enable it during setup. If it's off, it
+    should warn that in this case it's strongly recommended to at least password protect
+    session and db and/or use --sudo so calu itself runs as a more privileged process than
+    claude." (stated 2026-11-19)
 
 ## Soft goals and priorities
 
