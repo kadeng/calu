@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.editor.EditorKind
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.application.EDT
@@ -36,7 +37,8 @@ const val CALU_DIFF_TITLE_PREFIX: String = "calu: "
  * "Add Comment for Claude" (editor popup menu, Ctrl+Alt+K): sends a comment on the selected
  * lines to the attached session (`comment.add`), which relays it to Claude and stores it.
  *
- *     normal editor   path relative to the project, the selected lines, the whole file text
+ *     normal editor   path relative to the project, the selected lines, the whole file text;
+ *                     in remote development the backend names the path (`projectPathOf`)
  *     diff viewer     the same, plus the side of the selection and the text of both sides;
  *                     in a diff the plugin opened for an edit the path comes from its title,
  *                     or in remote development from its side titles
@@ -81,12 +83,22 @@ class CommentAction : DumbAwareAction() {
             ask(project, path, selection, diff, document.text)
             return
         }
-        // In remote development a diff opened by the backend reaches the client without its
-        // request; the backend finds the edit by the editor's text.
+        // In remote development the client's files are not in its local file system: for a
+        // normal editor the backend names the file relative to its project directory. A diff
+        // opened by the backend reaches the client without its request; the backend finds the
+        // edit by the editor's text. The text lookup comes second, so that a normal editor of
+        // a file whose text equals an edit's result is not taken for that edit's diff.
         val text = document.text
         val service = CaluFrontendService.of(project)
+        val shownFile = file?.path?.takeIf { request == null && editor.editorKind != EditorKind.DIFF }
         service.launch {
-            val found = parseObjectOrNull(CaluRemoteApi.getInstance().diffOfText(project.projectId(), text))
+            val api = CaluRemoteApi.getInstance()
+            val filePath = shownFile?.let { api.projectPathOf(project.projectId(), it) }.orEmpty()
+            if (filePath.isNotEmpty()) {
+                withContext(Dispatchers.EDT) { ask(project, filePath, selection, null, text) }
+                return@launch
+            }
+            val found = parseObjectOrNull(api.diffOfText(project.projectId(), text))
             withContext(Dispatchers.EDT) {
                 val foundPath = found?.str("path")
                 if (found == null || foundPath == null) {

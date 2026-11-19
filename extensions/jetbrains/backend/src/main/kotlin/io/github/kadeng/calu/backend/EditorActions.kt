@@ -160,6 +160,22 @@ class EditorActions(private val project: Project) {
     }
 
     /**
+     * Name a file of the project relative to the project directory (for a comment the client
+     * makes in a normal editor).
+     *
+     * @param shown The file's absolute path on this machine, as the client shows it.
+     * @return The relative path, or `null` if `shown` is not absolute, names no existing file
+     *   here (a diff side's in-memory file has a bare name), or lies outside the project.
+     */
+    fun projectPathOf(shown: String): String? {
+        if (!shown.startsWith("/")) return null
+        val base = project.basePath ?: return null
+        val file = LocalFileSystem.getInstance().findFileByPath(shown) ?: return null
+        if (file.isDirectory) return null
+        return commentPathFromShown(base, shown)
+    }
+
+    /**
      * Build the diff request of one edit.
      *
      * @param diff Before and after.

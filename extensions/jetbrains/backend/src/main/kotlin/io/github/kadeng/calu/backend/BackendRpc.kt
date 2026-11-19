@@ -146,4 +146,9 @@ class BackendCaluRemoteApi : CaluRemoteApi {
         val project = projectId.findProjectOrNull() ?: return ""
         return EditorActions(project).diffOfText(text)?.toString().orEmpty()
     }
+
+    override suspend fun projectPathOf(projectId: ProjectId, path: String): String {
+        val project = projectId.findProjectOrNull() ?: return ""
+        return EditorActions(project).projectPathOf(path).orEmpty()
+    }
 }

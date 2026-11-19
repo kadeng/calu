@@ -214,4 +214,17 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *   project.
      */
     suspend fun diffOfText(projectId: ProjectId, text: String): String
+
+    /**
+     * Name a file of the project relative to the project directory, for a comment made in a
+     * normal editor of the client (in remote development the client's files are not in its
+     * local file system, and its project directory need not be the backend's).
+     *
+     * @param projectId The project.
+     * @param path The file's path as the client shows it: absolute, on the backend's machine.
+     * @return The path relative to the project directory ("/" separators), or "" if the path
+     *   is not absolute, names no existing file on the backend's machine, or lies outside the
+     *   project directory.
+     */
+    suspend fun projectPathOf(projectId: ProjectId, path: String): String
 }
