@@ -244,7 +244,8 @@ The same as pseudocode:
 
 ```
 decide(step):
-    if the wall clock jumped backwards and no person has seen that yet: return ESCALATE
+    if the wall clock jumped backwards and no person has yet allowed or denied
+       the escalation for that jump:             return ESCALATE
     if step is a question of Claude to the user: return ESCALATE   # shown as a question
     if a deny rule matches any part of step:     return ESCALATE   # no model call
     if the tool's route is fixed:                return that outcome
@@ -430,8 +431,12 @@ calu config set auto_escalate.subagents true  # ... and every subagent's result
 - A change made anywhere (a client, the web interface, `calu config set`) reaches every client
   of the session.
 - Switching one of the three switches off reduces the supervision of the session. Calu
-  therefore writes each such change to the audit log, together with who asked for it. The
-  session's page in the web interface lists these changes.
+  therefore writes every change of the switches to the audit log, with the name of the client
+  that asked for it (the name the client reports, such as `calu attach` or `vscode`; with the
+  prefix `root:` for a client on a root session's socket). The entry names a client, not a
+  person. A change made with `calu config set` is recorded when the session reloads its
+  settings, without a client name. The session's page in the web interface lists these
+  changes.
 - While a session cannot read its configuration, all three switches count as on.
 
 ---
@@ -825,7 +830,7 @@ calu web --sudo   # the same, run as root on your behalf: Claude Code cannot rea
 | Page | Content |
 |---|---|
 | Sessions | every session, with those that need you listed first; a filter; the label "stale" on a session that has stopped writing its timestamp to the database |
-| Escalations, Triage | the open decisions; on the Triage page, the keys `a` and `d` decide once Escape has moved the focus out of the note field |
+| Escalations, Triage | the open decisions. The Triage page shows one at a time and puts the focus into its note field. Outside the note field, `a` allows, `d` denies, `s` skips to the next decision and `n` returns to the note field; Escape leaves the note field. For a question of Claude these keys do nothing: type an answer |
 | A session's page | its name (editable), history at four levels of detail (from the checker's summary to every tool input), its forks, changes of the supervision level and the permission mode, buttons for new sessions |
 | Live view | the stream of a running session, decision cards, a message queue, stop, interrupt, "steer" into the running turn, a conversation with a background subagent |
 | Settings | everything that steers a session, for the global scope or one project |
@@ -943,8 +948,10 @@ A session on another machine, reached through a tunnel, is named by address and 
 calu acp ws://127.0.0.1:8765 --token=<the token it printed>
 ```
 
-Write `--token=<token>` with the equals sign, in an editor's `args` list too, because a token
-may contain `-`.
+Write `--token=<token>` with the equals sign, in an editor's `args` list too. The argument
+parser reads a value after `--token` that begins with `-` as an option and refuses it ("expected
+one argument"). The tokens that Calu mints never begin with `-`, but the form with `=` passes
+every value unchanged.
 
 ### Usage, cost and limits
 
@@ -1104,8 +1111,8 @@ Claude Code's own terminal interface:
 | Client | Control |
 |---|---|
 | VSCode, PyCharm | the "mode" selector next to the supervision level |
-| Full-screen client | `/mode [default \| acceptEdits \| auto]`; Tab completes; the status line shows `mode <name>` |
-| Line client | `/mode [mode]`; `/mode` alone names the current one |
+| Full-screen client | `/mode [default \| acceptEdits \| auto]`; Tab completes; the status line shows `mode <name>`. `/mode` alone opens a list of the three modes, marks the current one "(now)" and switches to the one you choose |
+| Line client | `/mode [mode]`; `/mode` alone prints the current mode and the modes it can switch to |
 | Web live view | the selector "Claude Code's permission mode" |
 | ACP editor | the config option "Claude Code's permission mode" |
 
@@ -2293,8 +2300,8 @@ sudo calu setup              # 2. root's credentials in /etc/calu
 calu doctor --sudo .         # 3. check the arrangement; starts nothing
 calu login --sudo            # 4. only if Claude Code is not logged in for you yet
 calu serve --sudo            # 5. calu as root, Claude Code as you
-calu attach --sudo           # 6. the client as root, for you
-calu web --sudo              #    the web interface as root, for you
+calu attach --sudo           # 6. the client runs as root; it opens files and starts programs as you
+calu web --sudo              #    the web interface runs as root; it reads and writes files as you
 ```
 
 - With `--sudo`, Calu starts itself again as root through `sudo`, and `sudo` asks for the
@@ -2345,15 +2352,23 @@ ignores `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 | `calu attach --sudo`, `calu web --sudo` | none. They use the root-only Unix socket: the client checks that the socket and its directory are root's alone, and the session asks the kernel whether the peer is root. `calu attach --sudo` in the project directory finds its session through these sockets, without the database |
 | your own `calu attach` without `--sudo` | a token. This also applies to a session that runs Claude Code as you: every program that Claude Code starts runs as you too, and the kernel cannot tell your client from such a program |
 
-- `calu attach --sudo` (and `calu start --sudo`) asks for one password, the admin password of
-  `/etc/calu`, and keeps the login in memory. Saving a checker's instructions, changing
-  `honesty.mode`, `/new`, `/fork`, `/running` and `/switch` then need no further password.
-- `/running`, `/switch`, `/new`, `/fork` and saving settings need a database login: one that
-  root's store holds without a password (`sudo calu credential set operator --no-password`),
-  and the admin password when a setting is saved.
+- `calu attach --sudo` asks for no password when it finds its session through a root-only
+  socket. `calu start --sudo`, and `calu attach --sudo` for a session that it finds only in the
+  database, ask once for the password of the `admin` credential in `/etc/calu` (the admin
+  password), or of the `operator` credential where no `admin` credential is stored. The client
+  keeps that login in memory. Minting and revoking its tokens, and attaching to the session
+  that `/new`, `/fork` or `/switch` names, then need no further password.
+- `/running`, `/switch`, `/new`, `/fork`, saving a checker's instructions and changing
+  `honesty.mode` log in to the database as the role `calu_admin`. They ask for no password when
+  the client has a complete login of that role: a `calu_admin` entry without a password in
+  `/etc/calu`, or the login in `/var/lib/calu/database.json` (both written by `sudo calu setup
+  --no-password`). Otherwise the client asks for the admin password at each of these commands
+  and keeps it nowhere. A client that does not know the database says that these commands are
+  not available.
 - No program that Claude Code starts can read or steer a client that runs as root. The
   client's editor and git program still run as you.
-- A client that found a root session through a socket reads `/var/lib/calu/database.json`
+- A client that found a root session through a socket learns the database from an entry
+  without a password in root's store. Without such an entry it reads `/var/lib/calu/database.json`
   (after checking that only root can write it) and logs in there with the admin password you
   type. Until `sudo calu setup` has run once after an update, such a client says that it does
   not know the database.
@@ -2604,7 +2619,7 @@ for Claude. A `/word` that Calu does not know goes to Claude Code as typed.
 | `/allow <id> [note]`, `/deny <id> [note]` | decide an escalation |
 | `/answer <id> TEXT` | answer a question Claude asked (line client) |
 | `/why <id>` | the checker's full input and answer for that step: its verdict, the step as it rendered it, the file before the change, the conversation as the checkers read it |
-| `/mode [default \| acceptEdits \| auto]` | Claude Code's permission mode; without an argument it shows the current mode or lists the modes |
+| `/mode [default \| acceptEdits \| auto]` | Claude Code's permission mode. Without an argument the full-screen client opens a list of the modes to choose from, with the current one marked; the line client prints the current mode |
 | `/checkers` | the checker definitions (line client: name, model, version; full-screen: read the instructions, `e` edits, `ctrl+s` saves with the admin credential) |
 | `/checker-context` | the conversation as the checkers read it |
 | `/usage` | the usage panel |
