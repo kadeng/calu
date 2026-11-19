@@ -310,6 +310,13 @@ async def test_the_presets_need_no_database_and_hold_no_large_mistral_model(
 async def test_the_status_reports_the_tools_and_a_missing_database(
     tmp_path: Path, store: CredentialStore, monkeypatch: pytest.MonkeyPatch
 ):
+    """`ide.status` lists the tools and says the database is missing.
+
+    Side effects: the environment check is real except `claude --version`: it starts
+    `uv --version` and a `bwrap` test, looks up tmux and screen, and reads the tester's
+    Claude Code settings and which provider-key variables are set; a failed assertion prints
+    those findings (paths, the permission mode, provider names; never a key's value).
+    """
     monkeypatch.setattr(doctor, "claude_version", lambda: (True, "2.1.0 (test)"))
     async with bridged(tmp_path, store) as editor:
         status = await editor.request("ide.status")
@@ -403,3 +410,37 @@ async def test_calu_ide_as_a_process_keeps_stdout_for_the_protocol(
     assert answers[1]["error"]["code"] == -32015
     assert answers[2]["result"] == {}
     assert (tmp_path / "state" / "calu" / "log" / "ide.log").exists()
+
+
+@pytest.mark.parametrize("outcome", ["refused", "no answer"])
+async def test_a_token_that_cannot_be_revoked_is_reported_to_the_editor(
+    tmp_path: Path, store: CredentialStore, monkeypatch: pytest.MonkeyPatch, outcome: str
+):
+    """A refused revocation and one without an answer both end in an `ide.log` warning."""
+    from calu.acp.peer import RpcError
+    from calu.ide import bridge as bridge_module
+    from calu.ide.link import Endpoint
+
+    monkeypatch.setattr(bridge_module, "DRAIN_S", 0.01)
+    told: list[tuple[str, dict]] = []
+
+    async def read(work, password=None):
+        if outcome == "refused":
+            raise RpcError(-32000, "the database refused")
+        await anyio.sleep(10)
+
+    async def notify(method: str, params: dict) -> None:
+        told.append((method, params))
+
+    async with anyio.create_task_group() as tasks:
+        bridge = bridge_module.Bridge(tmp_path, store, tasks)
+        monkeypatch.setattr(bridge.access, "read", read)
+        bridge.notify = notify  # type: ignore[method-assign]
+        await bridge._revoke(Endpoint("ws://127.0.0.1:1", "t", token_id=7))
+        await bridge._revoke(Endpoint("ws://127.0.0.1:1", "t"))  # nothing minted: no call
+        tasks.cancel_scope.cancel()
+    assert len(told) == 1
+    method, params = told[0]
+    assert method == "ide.log" and params["level"] == "warning"
+    assert "token 7 could not be revoked" in params["message"]
+    assert ("refused" if outcome == "refused" else "no answer within") in params["message"]

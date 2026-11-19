@@ -267,7 +267,12 @@ async def test_a_file_the_user_wrote_through_the_bridge_is_unreviewed(
 
 
 def bridge_environment(tmp_path: Path, runtime: Path) -> dict[str, str]:
-    """Return an environment in which `calu ide` reads and writes nothing of the tester's.
+    """Return the tester's environment with calu's own directories moved into the test's.
+
+    calu's configuration, state and runtime directories point below `tmp_path` and
+    `runtime`, so `calu ide` finds no credential, log or session of the tester's. `HOME`,
+    `PATH` and the checker keys that `tests/conftest.py` loaded stay, so git still reads the
+    tester's global configuration.
 
     Args:
         tmp_path: The test's temporary directory.

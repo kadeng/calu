@@ -305,7 +305,13 @@ class Access:
         password: str | None = None,
         start_local: bool = True,
     ) -> T:
-        """Run `work` with a login that reads, and close the connection.
+        """Run `work` with the reading login of this machine, and close the connection.
+
+        "Reading" names the login, not what `work` may do with it: the login chosen
+        (`_reading_login`: the operator's, or an admin login where only that is stored) also
+        writes what an operator may, and callers use it for that: client tokens, session
+        requests, session names, and the closing of gone sessions' escalations
+        (`herd.sessions`).
 
         Args:
             work: Called with the open connection.

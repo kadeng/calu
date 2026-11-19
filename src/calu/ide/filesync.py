@@ -352,7 +352,9 @@ class FileSync:
         self._dirty.set()
 
     def _wrote(self, path: str, before: str | None, state: State) -> None:
-        """Record a write of this bridge, so that no scan reports it again.
+        """Record a write of this bridge and queue its change; no scan reports it again.
+
+        The queued change carries `origin: "ide"`.
 
         Args:
             path: The written file.

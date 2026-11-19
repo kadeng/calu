@@ -9,8 +9,11 @@
       ├─ delete, rename         compare first, then unlink or link + unlink
       └─ listing, describe      git ls-files (or a walk), then lstat and streamed hashes
 
-Every operation names files relative to an open directory descriptor, so that a directory
-which is replaced by a link while a request runs cannot lead it out of the project. Nothing
+Every read and write of a file names it relative to an open directory descriptor, so that a
+directory which is replaced by a link while a request runs cannot lead it out of the project.
+The listing (the walk, git and its existence checks) works on paths: a directory swapped for
+a link during a listing can add names from outside to it, never their contents, which are
+read through the descriptors (`describe`). Nothing
 here needs more rights than the user who started the bridge has. All methods block: call them
 from a worker thread. The rules that need no file access are in `calu.ide.files`, the
 contract in `docs/notes/jetbrains-sync-spec.md`.
@@ -679,7 +682,9 @@ class Tree:
 
         Side effects: on success one `rename` replaces the target (a reader sees the old or
         the new content) and the temporary file's place is closed. On any failure the
-        temporary file is discarded and the target is untouched.
+        temporary file is discarded and the target is untouched, unless the failure comes
+        after the rename (reading the new file's state): then the new content is in place
+        although the request reports `IO_ERROR`.
 
         Args:
             temp: The temporary file with the whole content.
@@ -772,7 +777,9 @@ class Tree:
 
         Side effects: creates the target's missing directories; `link` then `unlink` (so an
         existing target is never replaced; where the file system has no hard links, a
-        check and a `rename`); removes the source's directories that became empty.
+        check and a `rename`); removes the source's directories that became empty. If the
+        source cannot be removed after the link, the file is at both paths and the request
+        reports `IO_ERROR`.
 
         Args:
             source: A checked relative path: the file.

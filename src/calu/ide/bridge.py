@@ -503,9 +503,12 @@ class Bridge:
     async def _status(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer `ide.status`: what is installed, and whether the database answers.
 
-        Side effects: runs `claude --version` and `uv --version`; opens one database
-        connection if a login is readable without a password (a stopped local Docker
-        database is not started).
+        Side effects: runs `claude --version`, `uv --version` and the sandbox test of
+        `calu.doctor` (a start of `bwrap`); reads Claude Code's settings files; opens one
+        database connection if a login is readable without a password (a stopped local
+        Docker database is not started), and through it closes the open escalations of
+        sessions that are gone (`herd.sessions`, `herd.close_gone`). Without a database it
+        connects once to each token-free local socket and counts those sessions instead.
 
         Args:
             params: Unused.
@@ -625,8 +628,11 @@ class Bridge:
                                 `--insecure`, or root's own for a root bridge)
             else             ─► the database: the session is picked and a token minted
 
-        Side effects: detaches first if a session is attached; may write a `client_tokens`
-        row; starts the connection, whose events flow after the response.
+        Side effects: detaches first if a session is attached; connects once to each
+        token-free local socket to find the session (each session logs that); a lookup
+        through the database also closes the open escalations of gone sessions
+        (`herd.sessions`) and may write a `client_tokens` row; starts the connection, whose
+        events flow after the response.
 
         Args:
             params: `session` (an id or its beginning; null for the workspace's session),
@@ -785,7 +791,10 @@ class Bridge:
 
         Side effects: each waiting `ide.start` withdraws its `session_requests` row (so that
         no server starts a session nobody waits for) and fails with `START_CANCELLED`. A
-        request whose session has already started is not affected: it attaches.
+        request whose session has already started and is attaching is normally not
+        affected; a cancel in the moment after the server reported the start, while the
+        session is being named and its token minted, still fails the request, and the
+        session then runs with nobody attached (`calu sessions` lists it).
 
         Args:
             params: Unused.
@@ -857,7 +866,9 @@ class Bridge:
     async def _find(self, hint: str | None, password: str | None) -> Endpoint:
         """Find the session `ide.attach` means: through a local socket, else the database.
 
-        Side effect: mints a client token when the session is found through the database.
+        Side effects: connects once to each token-free local socket (each session logs
+        that); through the database it closes the open escalations of gone sessions
+        (`herd.sessions`) and mints a client token for the session it finds.
 
         Args:
             hint: A session id or its beginning, or None for the workspace's session.
@@ -969,7 +980,8 @@ class Bridge:
     async def _revoke(self, endpoint: Endpoint) -> None:
         """Revoke the token the bridge minted for an endpoint. Never raises.
 
-        A failure is logged and reported to the editor as `ide.log`: the token then stays
+        A failure, or no answer within `DRAIN_S * 5` seconds, is logged and reported to the
+        editor as `ide.log`: the token then stays
         usable until the session ends, and `calu token revoke` removes it.
 
         Args:
@@ -978,14 +990,19 @@ class Bridge:
         token_id = endpoint.token_id
         if token_id is None:
             return
+        problem = ""
         try:
-            with anyio.move_on_after(DRAIN_S * 5):
+            with anyio.move_on_after(DRAIN_S * 5) as scope:
                 await self.access.read(
                     lambda db: herd.revoke_token(db, token_id), endpoint.password
                 )
+            if scope.cancelled_caught:
+                problem = f"no answer within {DRAIN_S * 5:g} s"
         except RpcError as error:
+            problem = error.message
+        if problem:
             message = (
-                f"the client token {token_id} could not be revoked ({error.message}); "
+                f"the client token {token_id} could not be revoked ({problem}); "
                 f"`calu token revoke {token_id}` does it"
             )
             log.warning(message)
