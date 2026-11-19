@@ -143,6 +143,61 @@ fun relativePathWithin(folder: String, file: String): String {
     return normaliseRelativePath(target.substring(root.length + 1))
 }
 
+/** The words after the file name in the title of a diff side the plugin opens for an edit. */
+private val DIFF_SIDE_WORDS = mapOf("before" to "before the edit", "after" to "after the edit")
+
+/** Separator between the file name and the side's words in a diff side title. */
+private const val DIFF_SIDE_SEPARATOR = " · "
+
+/**
+ * Title of one side of the diff the plugin opens for an edit: the file and the side, e.g.
+ * "greeter.py · after the edit".
+ *
+ * The comment action reads the file back from this title (`pathFromDiffSideTitle`): in remote
+ * development the diff opened by the backend reaches the client with its side titles but
+ * without the request's own title, so the side titles are the one place both halves see.
+ *
+ * @param shownPath The file as shown to the user: relative to the project directory where
+ *   possible, otherwise the absolute path on the IDE's machine.
+ * @param side "before" or "after".
+ * @return The title.
+ * @throws IllegalArgumentException if `side` is neither "before" nor "after".
+ */
+fun diffSideTitle(shownPath: String, side: String): String {
+    val words = requireNotNull(DIFF_SIDE_WORDS[side]) { "side must be before or after: $side" }
+    return "$shownPath$DIFF_SIDE_SEPARATOR$words"
+}
+
+/**
+ * Read the file back from a title made by `diffSideTitle`.
+ *
+ * Example: "src/a.py · after the edit" -> "src/a.py"; "Before" -> null.
+ *
+ * @param title A diff side's title, or `null`.
+ * @return The file as it was shown (relative or absolute), or `null` if the title was not made
+ *   by `diffSideTitle`.
+ */
+fun pathFromDiffSideTitle(title: String?): String? {
+    if (title == null) return null
+    val words = DIFF_SIDE_WORDS.values.firstOrNull { title.endsWith("$DIFF_SIDE_SEPARATOR$it") } ?: return null
+    return title.removeSuffix("$DIFF_SIDE_SEPARATOR$words").takeIf { it.isNotBlank() }
+}
+
+/**
+ * The path of a commented file relative to the project directory, from what the editor shows.
+ *
+ * @param base The project directory on the IDE's machine (absolute).
+ * @param shown The file as a diff title or the editor names it: absolute on the IDE's machine,
+ *   or already relative to the project directory.
+ * @return The relative path with "/" separators, or `null` if `shown` is outside the project
+ *   or not a valid relative path.
+ */
+fun commentPathFromShown(base: String, shown: String): String? {
+    val normal = shown.replace('\\', '/')
+    val absolute = normal.startsWith("/") || DRIVE_PREFIX.containsMatchIn(normal)
+    return runCatching { if (absolute) relativePathWithin(base, normal) else normaliseRelativePath(normal) }.getOrNull()
+}
+
 /**
  * The two sides of a diff editor in which a selection was made.
  *

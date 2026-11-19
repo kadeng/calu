@@ -201,4 +201,16 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      * @return The command line; "" if the project is not open in the backend.
      */
     suspend fun serverTerminalCommand(projectId: ProjectId): String
+
+    /**
+     * Tell which edit's diff shows a text, for a comment made in a diff editor of the client
+     * (in remote development the client's diff editor does not know its file).
+     *
+     * @param projectId The project.
+     * @param text The whole text of the editor the selection was made in.
+     * @return JSON object text `{"path", "side", "before", "after"}` with `path` relative to
+     *   the project directory, or "" if no held diff has that text or its file is outside the
+     *   project.
+     */
+    suspend fun diffOfText(projectId: ProjectId, text: String): String
 }

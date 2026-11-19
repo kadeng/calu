@@ -51,6 +51,24 @@ class DiffStore {
     @Synchronized
     fun get(toolUseId: String): DiffData? = diffs[toolUseId]
 
+    /**
+     * Find the newest held diff one of whose sides has exactly this text. The comment action
+     * of a diff in remote development uses it: there the client's diff editor knows its text
+     * but not which file it shows.
+     *
+     * @param text The whole text of the editor the selection was made in.
+     * @return The diff and the side ("after" is preferred when both sides are equal), or
+     *   `null` if no held diff has that text on either side.
+     */
+    @Synchronized
+    fun findByText(text: String): Pair<DiffData, String>? {
+        for (diff in diffs.values.reversed()) {
+            if (diff.after == text) return diff to "after"
+            if (diff.before == text) return diff to "before"
+        }
+        return null
+    }
+
     /** Forget every diff (another session is attached). */
     @Synchronized
     fun clear() = diffs.clear()

@@ -37,6 +37,8 @@ import io.github.kadeng.calu.json.asObj
 import io.github.kadeng.calu.json.int
 import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.absoluteRemotePath
+import io.github.kadeng.calu.logic.commentPathFromShown
+import io.github.kadeng.calu.logic.diffSideTitle
 import io.github.kadeng.calu.logic.formatCheckerContext
 import io.github.kadeng.calu.logic.formatEscalationContext
 import io.github.kadeng.calu.logic.splitArgs
@@ -49,6 +51,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.awt.datatransfer.StringSelection
@@ -137,21 +140,46 @@ class EditorActions(private val project: Project) {
     }
 
     /**
+     * Find the held diff that shows a text (`DiffStore.findByText`) and name its file relative
+     * to the project directory.
+     *
+     * @param text The whole text of a diff editor's side.
+     * @return `{"path", "side", "before", "after"}`, or `null` if no held diff has that text or
+     *   its file has no path inside the project on this machine.
+     */
+    fun diffOfText(text: String): JsonObject? {
+        val (diff, side) = service.controller.diffs.findByText(text) ?: return null
+        val base = project.basePath ?: return null
+        val path = commentPathFromShown(base, localPath(diff.path) ?: return null) ?: return null
+        return buildJsonObject {
+            put("path", JsonPrimitive(path))
+            put("side", JsonPrimitive(side))
+            put("before", JsonPrimitive(diff.before))
+            put("after", JsonPrimitive(diff.after))
+        }
+    }
+
+    /**
      * Build the diff request of one edit.
      *
      * @param diff Before and after.
      * @return A two-sided request titled with the file's path, highlighted by the file's type,
-     *   with the scroll position at `diff.startLine` on the right side if it is known.
+     *   with the scroll position at `diff.startLine` on the right side if it is known. Each
+     *   side's title names the file too (`diffSideTitle`, relative to the project where it is
+     *   inside): in remote development only the side titles reach the client, and the comment
+     *   action reads the file from them.
      */
     fun diffRequest(diff: DiffData): SimpleDiffRequest {
         val type = FileTypeManager.getInstance().getFileTypeByFileName(diff.path.substringAfterLast('/'))
         val factory = DiffContentFactory.getInstance()
+        val local = localPath(diff.path) ?: diff.path
+        val shown = project.basePath?.let { commentPathFromShown(it, local) } ?: local
         val request = SimpleDiffRequest(
-            "calu: ${localPath(diff.path) ?: diff.path}",
+            "calu: $local",
             factory.create(project, diff.before, type),
             factory.create(project, diff.after, type),
-            "Before the edit",
-            "After the edit",
+            diffSideTitle(shown, "before"),
+            diffSideTitle(shown, "after"),
         )
         diff.startLine?.takeIf { it >= 1 }?.let { request.putUserData(DiffUserDataKeys.SCROLL_TO_LINE, Pair.create(Side.RIGHT, it - 1)) }
         return request

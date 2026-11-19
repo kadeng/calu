@@ -140,4 +140,9 @@ class BackendCaluRemoteApi : CaluRemoteApi {
 
     override suspend fun serverTerminalCommand(projectId: ProjectId): String =
         projectId.findProjectOrNull()?.let { EditorActions(it).serverTerminalCommand() }.orEmpty()
+
+    override suspend fun diffOfText(projectId: ProjectId, text: String): String {
+        val project = projectId.findProjectOrNull() ?: return ""
+        return EditorActions(project).diffOfText(text)?.toString().orEmpty()
+    }
 }

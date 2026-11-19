@@ -64,6 +64,26 @@ class CommentPayloadTest {
     }
 
     @Test
+    fun `a diff side title names the file and reads it back`() {
+        assertEquals("src/a.py · after the edit", diffSideTitle("src/a.py", "after"))
+        assertEquals("src/a.py", pathFromDiffSideTitle(diffSideTitle("src/a.py", "after")))
+        assertEquals("/w/proj/a b.py", pathFromDiffSideTitle(diffSideTitle("/w/proj/a b.py", "before")))
+        assertEquals(null, pathFromDiffSideTitle("Before the edit"))
+        assertEquals(null, pathFromDiffSideTitle(" · after the edit"))
+        assertEquals(null, pathFromDiffSideTitle(null))
+        refused("before or after") { diffSideTitle("a.py", "left") }
+    }
+
+    @Test
+    fun `the comment path comes from a relative or an absolute name inside the project`() {
+        assertEquals("src/a.py", commentPathFromShown("/w/proj", "src/a.py"))
+        assertEquals("src/a.py", commentPathFromShown("/w/proj", "/w/proj/src/a.py"))
+        assertEquals("src/a.py", commentPathFromShown("C:\\w\\proj", "C:\\w\\proj\\src\\a.py"))
+        assertEquals(null, commentPathFromShown("/w/proj", "/etc/passwd"))
+        assertEquals(null, commentPathFromShown("/w/proj", "../x.py"))
+    }
+
+    @Test
     fun `rejects files outside the folder, sibling prefixes and dot-dot`() {
         refused("not inside") { relativePathWithin("/w/proj", "/w/other/a.py") }
         refused("not inside") { relativePathWithin("/w/proj", "/w/project2/a.py") }

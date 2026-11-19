@@ -56,6 +56,14 @@ if ! "${PSQL[@]}" -c "SELECT 1 FROM pg_database WHERE datname='calu_pw'" | grep 
 fi
 if [ ! -s "$STORE/config/calu/credentials.json" ] || ! grep -q calu_admin "$STORE/config/calu/credentials.json"; then
     rm -f "$STORE/config/calu/credentials.json"
+    # A store that is incomplete (an earlier setup failed, or calu stores other logins now)
+    # starts from an empty database: calu refuses to take over the roles of a setup whose
+    # logins this machine no longer holds. The cluster is this script's own throwaway.
+    "${PSQL[@]}" -c "DROP DATABASE IF EXISTS calu_pw" >/dev/null
+    for role in calu_session calu_operator calu_admin; do
+        "${PSQL[@]}" -c "DROP ROLE IF EXISTS $role" >/dev/null
+    done
+    sudo -u postgres createdb -p 5433 -O calu_owner calu_pw
     # The answers, in the order of the prompts: the owner's password, the admin password
     # twice, the session password twice.
     printf 'calu-uitest\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | "$STORE/calu" setup --database server \
