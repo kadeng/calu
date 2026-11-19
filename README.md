@@ -2,10 +2,17 @@
 
 [![checks](https://github.com/kadeng/calu/actions/workflows/checks.yml/badge.svg)](https://github.com/kadeng/calu/actions/workflows/checks.yml)
 
-> **Flynn:** "Who's that guy?"
-> **Program:** "That's Tron. He fights for the Users."
+> **Ed Dillinger:** "What's the project you're working on?"
 >
-> — *Tron* (1982)
+> **Alan Bradley:** "Well, it's called Tron. It's a security program itself, actually. It
+> monitors all contacts between our system and other systems. It finds anything going on
+> that's not scheduled, it shuts it down. I sent you a memo on it."
+>
+> **Ed Dillinger:** "Part of the Master Control Program?"
+>
+> **Alan Bradley:** "No, it'll run independently. It can watchdog the MCP as well."
+>
+> — *Tron* (1982), [quotes on IMDb](https://www.imdb.com/title/tt0084827/quotes/)
 
 ## Stay in control of Claude Code
 
@@ -52,16 +59,20 @@ What you can do with it, if you want to:
 Claude Code itself is unchanged underneath: its tools, permission rules, auto mode, plugins,
 MCP servers, skills and subagents work as your project configures them.
 
+> **Flynn:** "Who's that guy?"
+>
+> **Program:** "That's Tron. He fights for the Users."
+>
+> — *Tron* (1982)
+
 <img src="docs/assets/vscode-approval.png" width="720" alt="An approval card in the VSCode extension: Claude Code asked to edit a shell profile, the checker's remark is above, Allow and Deny below">
 
 **Status: early.** What has and has not been tested is listed in [HANDOFF.md](HANDOFF.md).
 Not on PyPI yet. calu succeeds [stay-in-the-loop](https://github.com/kadeng/stay-in-the-loop).
 
-## Pair programming instead of watching silently or babysitting
+## Pair programming instead of just watching
 
-> **Alan Bradley:** "It's called Tron. It's a security program itself, actually. It monitors
-> all contacts between our system and other systems. Finds anything going on that's not
-> scheduled, it shuts it down. … It'll run independently and watchdog the MCP as well."
+> **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
 >
 > — *Tron* (1982)
 
@@ -157,6 +168,15 @@ calu evals                   # the checkers against the built-in cases
 
 ## How a session with calu differs from Claude Code on its own
 
+> **Dr. Walter Gibbs:** "That MCP, that's half our problem right there."
+>
+> **Ed Dillinger:** "The MCP is the most efficient way of handling what we do! I can't sit
+> here and worry about every little user request that comes in!"
+>
+> **Dr. Walter Gibbs:** "User requests are what computers are for!"
+>
+> — *Tron* (1982)
+
 The agent and the chat are Claude Code's: images, rewind, fork, several sessions, slash
 commands, model and thinking level, context usage, questions, approvals, notifications. The
 differences, by area:
@@ -245,7 +265,3 @@ to be copied and rewritten, and are placed in the public domain as far as the la
 
 calu comes with **no warranty of any kind**. A checker is a language model reading a step,
 not a promise that nothing bad gets through.
-
-> **Dr. Walter Gibbs:** "Computers and programs will start thinking, and the people will stop."
->
-> — *Tron* (1982)
