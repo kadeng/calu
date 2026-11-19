@@ -271,6 +271,24 @@ broken down or extended. Derived requirements and design decisions belong in
     and: "It does not matter which license it states: I wrote it and hold the copyright. My
     name is Kai Londenberg ... The user who uploaded that archive to sourceforge is called
     "klondenberg", that's me." (stated 2026-11-19)
+41. "Remember that you can test drive everything in cua and that I gave the task to try and
+    refine all the workflows and user interfaces. ... please ensure we have a well rounded,
+    tested, robust and convenient application with good usability and modern UI in the end.
+    All of the TUI interface, the web interface, the VSCode plugin and the Pycharm plugin need
+    to have been tested, ideally both for local and remote operation." Then, on the PyCharm
+    plugin: "Let's focus on three operation modes in Pycharm: 1.) Entirely local (should work
+    already). Pycharm is local, execution is local, calu server and claude run locally. 2.)
+    Pycharm remote development. In this scenario, Pycharm connects to a headless IDE instance
+    over SSH (similar to VSCode remote development). The local IDE is just the GUI, the code
+    analysis, execution, calu, claude, terminal sessions etc. and source code all lie
+    remotely. 3.) Legacy PyCharm remote development. In this mode, we have a local IDE and a
+    local project directory and git repo, but everything is synchronized to a remote server
+    via SCP/SFTP/Rsync. Execution and debugging might happen through SSH (or not), depending
+    on Python Interpreter settings ( SSH Remote interpreter or not). In this case it's likely
+    best to have calu and claude run locally and just tell them that they need to (rsync?)
+    sync to remote and prefix shell commands with something like "ssh user@remote bash -c
+    '<original command>'" or similar. Letting calu run remotely in this scenario would have to
+    involve two-way sync, which can lead to races and data corruption." (stated 2026-11-19)
 
 ## Soft goals and priorities
 
