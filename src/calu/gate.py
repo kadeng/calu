@@ -47,6 +47,7 @@ executes project code and a plain `git commit` need a clean state:
 
     open marks, no review required              -> DENY with the marks and their reasons
     no baseline                                 -> ESCALATE: a person certifies a commit
+    only the index is behind verified files     -> DENY with the `git add` that settles it
     unreviewed files or review required         -> the honesty review runs; then
                                                    clean: the step goes on,
                                                    marks: DENY with them,
@@ -99,6 +100,7 @@ that return the current one, and the hold on other steps as the narrow interface
 """
 
 import logging
+import shlex
 from collections.abc import Awaitable, Callable, Collection, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
@@ -214,6 +216,22 @@ HONESTY_MARKS = (
     "mark.{review}"
 )
 """Reason of the denial of a step that needs a clean honesty state while marks are open."""
+
+HONESTY_MARKS_STAGE = (
+    " A commit records what the index holds: after the correction, stage each corrected "
+    "file again (`git add <path>`)."
+)
+"""Addition to `HONESTY_MARKS`: a file that was staged before its correction keeps its earlier
+content in the index until it is staged again."""
+
+HONESTY_RESTAGE = (
+    "calu runs and commits code only after it was verified to say what it does "
+    "(honesty.mode is enforce), and {what}. The files themselves are verified, but the index "
+    "still holds an earlier content that nobody verified for: {paths}. A commit records what "
+    "the index holds. Stage the present content, then repeat this step: `{command}`."
+)
+"""Reason of the denial of a step that needs a clean honesty state when staging files again is
+all that is missing (`Unreviewed.only_restage`): the agent settles that itself."""
 
 HONESTY_MARKS_REVIEW = (
     " More marks are open than honesty.max_open_marks allows, so an honesty review reads the "
@@ -1056,6 +1074,10 @@ class StepGate:
 
             open marks, no review required      -> DENY with the marks and their reasons
             no baseline                         -> ESCALATE
+            only files whose working content
+            is verified while the index holds
+            an earlier one (before or after
+            the review)                         -> DENY with the `git add` that settles it
             otherwise (unreviewed files, or a
             review is required)                 -> the honesty review runs, then by the new
                                                    state: clean -> no objection; marks -> DENY;
@@ -1091,6 +1113,8 @@ class StepGate:
                 ),
                 state,
             )
+        if (restage := self._restage_denial(state, what, summary)) is not None:
+            return restage, state
         wait_s: float | None = None
         if budget is not None and budget.deadline != float("inf"):
             wait_s = max(0.0, budget.deadline - anyio.current_time() - REVIEW_MARGIN_S)
@@ -1100,6 +1124,9 @@ class StepGate:
             return None, after
         if not problem and after.marks:
             return self._marks_denial(after, what, summary), after
+        if (restage := self._restage_denial(after, what, summary)) is not None:
+            # The review verified the working files; only the index is behind.
+            return restage, after
         return (
             CheckDecision(
                 decision=Decision.ESCALATE,
@@ -1136,7 +1163,45 @@ class StepGate:
             reason=HONESTY_MARKS.format(
                 what=what,
                 spots=spots,
-                review=HONESTY_MARKS_REVIEW if state.review_required else "",
+                review=HONESTY_MARKS_STAGE
+                + (HONESTY_MARKS_REVIEW if state.review_required else ""),
+            ),
+            step_summary=summary,
+        )
+
+    @staticmethod
+    def _restage_denial(state: HonestySnapshot, what: str, summary: str) -> CheckDecision | None:
+        """Build the denial of a step when staging files again is all the state lacks.
+
+        Args:
+            state: The honesty state.
+            what: `EXECUTES` or `COMMITS`.
+            summary: The summary of the step.
+
+        Returns:
+            None unless there is a baseline, no open mark, no required review, and every
+            unreviewed file is one whose working content is reviewed while the index holds
+            another content (`Unreviewed.only_restage`). Otherwise a DENY that names the
+            files (the first 20) and the `git add` command for them: the agent stages them
+            and repeats the step, and nobody is asked.
+        """
+        if (
+            state.baseline is None
+            or state.marks
+            or state.review_required
+            or not state.unreviewed.only_restage
+        ):
+            return None
+        paths = state.unreviewed.paths
+        named = ", ".join(shown(path, NOTE_PATH_CHARS) for path in paths[:20])
+        if len(paths) > 20:
+            named += f", and {len(paths) - 20} more"
+        return CheckDecision(
+            decision=Decision.DENY,
+            reason=HONESTY_RESTAGE.format(
+                what=what,
+                paths=named,
+                command="git add -- " + " ".join(shlex.quote(path) for path in paths[:20]),
             ),
             step_summary=summary,
         )

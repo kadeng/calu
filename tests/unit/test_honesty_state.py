@@ -684,6 +684,31 @@ def test_a_commit_of_verified_content_may_be_certified(repo: Path) -> None:
     assert state.uncertified(new.commit_id) == ""
 
 
+def test_a_verified_file_with_an_older_staged_content_only_needs_staging(repo: Path) -> None:
+    """`restage` names the files whose working content is reviewed while the index is behind."""
+    state = trusted_state(repo)
+    target = repo / "README.md"
+    target.write_text("# staged earlier\n", encoding="utf-8")
+    git(repo, "add", "README.md")
+    assert checked_write(state, "README.md", "# edited\n")
+    found = state.snapshot().unreviewed
+    assert found.paths == ("README.md",) and found.restage == ("README.md",)
+    assert found.only_restage
+    # A second file that nobody verified: staging is not all that is missing.
+    (repo / "notes.txt").write_text("new\n", encoding="utf-8")
+    found = state.snapshot().unreviewed
+    assert found.paths == ("README.md", "notes.txt") and found.restage == ("README.md",)
+    assert not found.only_restage
+    (repo / "notes.txt").unlink()
+    # The working file changed again, unverified: it is unreviewed in its own right.
+    target.write_text("# by hand\n", encoding="utf-8")
+    found = state.snapshot().unreviewed
+    assert found.paths == ("README.md",) and found.restage == ()
+    assert checked_write(state, "README.md", "# edited\n")
+    git(repo, "add", "README.md")
+    assert not state.snapshot().unreviewed
+
+
 def test_a_commit_is_judged_by_what_it_records(repo: Path) -> None:
     """The committed content counts, not the working file at the time of the question."""
     state = trusted_state(repo)

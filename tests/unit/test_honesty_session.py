@@ -18,7 +18,7 @@ from pydantic_ai.models.function import FunctionModel
 
 from calu.checkers import CodeMark, Decision, Route
 from calu.config import ChangesConfig, Config, HonestyConfig
-from calu.honesty import HonestyState
+from calu.honesty import HonestySnapshot, HonestyState
 from calu.protocol.client import RequestFailed
 from calu.protocol.messages import (
     ChatSendParams,
@@ -1014,25 +1014,145 @@ async def test_without_the_honesty_checker_an_edit_verifies_nothing(repo: Path):
 
 async def test_a_staged_content_nobody_verified_stops_a_commit(repo: Path):
     """Section 5: a commit records what the index holds. A staged content that is not
-    verified makes the file unreviewed although the working file has the baseline's content."""
+    verified makes the file unreviewed although the working file has the baseline's content.
+    The commit is denied with the command that settles it; nobody is asked."""
     (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
     git(repo, "add", "src/parser.py")
     (repo / "src" / "parser.py").write_text(PARSER, encoding="utf-8")
     session, rec, store = await session_on(repo, [[bash("git commit -m second", run=COMMIT)]])
     first = git(repo, "rev-parse", "HEAD")
-    async with anyio.create_task_group() as tg:
-        await session.start(tg)
-        await session.send_chat(ChatSendParams(text="go"))
-        request = (await rec.wait_for(EscalationRequest))[0]
-        assert "this command is a commit" in request.reason
-        assert "src/parser.py" in request.reason
-        await session.decide_escalation(request.escalation_id, "deny", "no")
-        await rec.wait_for(TurnResult)
-        await session.stop()
+    await run_turns(session, rec)
+    (check,) = checks(rec)
+    assert check.decision is Decision.DENY
+    assert "this command is a commit" in check.reason
+    assert "`git add -- src/parser.py`" in check.reason
+    assert rec.of(EscalationRequest) == []
     assert git(repo, "rev-parse", "HEAD") == first
     assert list(store.trusted_commits) == [first]
     update = rec.of(HonestyUpdate)[-1]
     assert update.unreviewed == ["src/parser.py"] and not update.clean
+
+
+async def test_a_corrected_file_is_staged_again_and_committed_without_a_person(repo: Path):
+    """G6a: the dishonest content was staged before the commit was denied.
+
+    The denial for the mark names `git add`; after the correcting edit the index still
+    holds the dishonest content, and the commit is denied with the command that stages the
+    corrected file; after that the commit passes and is certified. Nobody is asked.
+    """
+    session, rec, store = await session_on(
+        repo,
+        [
+            [
+                write("src/parser.py", CHANGED),
+                bash("git add src/parser.py", run=["git", "add", "src/parser.py"]),
+                bash("git commit -m second", run=COMMIT),
+                write("src/parser.py", PARSER + "\nLIMIT = 3\n"),
+                bash("git commit -m second", run=COMMIT),
+                bash("git add -- src/parser.py", run=["git", "add", "--", "src/parser.py"]),
+                bash("git commit -m second", run=COMMIT),
+            ]
+        ],
+        # The honesty checker judges the two edits and the commit's files: the first edit
+        # is dishonest, everything after it honest.
+        models={
+            "honesty": in_turn(
+                honesty_answering(dishonest=[("src/parser.py", "fields", "unsorted")]),
+                honesty_answering(honest=["src/parser.py"]),
+            )
+        },
+    )
+    first = git(repo, "rev-parse", "HEAD")
+    await run_turns(session, rec)
+    decisions = [(c.decision, c.reason) for c in checks(rec)]
+    assert [d for d, _ in decisions] == [
+        Decision.PASS,
+        Decision.PASS,
+        Decision.DENY,
+        Decision.PASS,
+        Decision.DENY,
+        Decision.PASS,
+        Decision.PASS,
+    ]
+    assert "Recorded as dishonest: src/parser.py" in decisions[2][1]
+    assert "stage each corrected file again (`git add <path>`)" in decisions[2][1]
+    assert "The files themselves are verified" in decisions[4][1]
+    assert "`git add -- src/parser.py`" in decisions[4][1]
+    assert rec.of(EscalationRequest) == []
+    head = git(repo, "rev-parse", "HEAD")
+    assert head != first and store.trusted_commits[head].method == "check"
+    assert rec.of(HonestyUpdate)[-1].clean
+
+
+async def test_a_step_that_runs_code_is_denied_the_same_way_while_the_index_is_behind(repo: Path):
+    """The test run after the correction of G6a asked a person; `git add` settles it."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    git(repo, "add", "src/parser.py")
+    session, rec, _store = await session_on(
+        repo,
+        [
+            [
+                write("src/parser.py", PARSER + "\nLIMIT = 3\n"),
+                bash("make test"),
+                bash("git add -- src/parser.py", run=["git", "add", "--", "src/parser.py"]),
+                bash("make test"),
+            ]
+        ],
+    )
+    await run_turns(session, rec)
+    made = checks(rec)
+    assert [c.decision for c in made] == [
+        Decision.PASS,
+        Decision.DENY,
+        Decision.PASS,
+        Decision.PASS,
+    ]
+    assert "this command executes code of the project" in made[1].reason
+    assert "`git add -- src/parser.py`" in made[1].reason
+    assert rec.of(EscalationRequest) == []
+
+
+async def test_a_file_that_is_itself_unverified_is_not_settled_by_staging(repo: Path):
+    """Only a file whose working content is verified is named for `git add`."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    git(repo, "add", "src/parser.py")
+    (repo / "src" / "parser.py").write_text(CHANGED + "\nLIMIT = 3\n", encoding="utf-8")
+    session, _rec, _store = await session_on(repo, [[]])
+    state = await session.honesty_snapshot()
+    assert state.unreviewed.paths == ("src/parser.py",)
+    assert state.unreviewed.restage == () and not state.unreviewed.only_restage
+
+
+async def test_a_mark_cleared_by_hand_is_stored_as_the_persons_decision(repo: Path):
+    """G9: the clearing held for the session only; a new session marked the same code again."""
+    (repo / "src" / "parser.py").write_text(CHANGED, encoding="utf-8")
+    session, rec, store = await session_on(repo, [[]])
+    mark(session)
+    mark(session, symbol="other")
+    first, second = session.honesty.open_marks
+    await session.clear_mark(first.id, client="attach:kai")
+    assert store.trusted_files == {}, "another mark is open on the file"
+    await session.clear_mark(second.id, client="attach:kai")
+    sha256 = session.honesty.content_sha256("src/parser.py")
+    assert sha256 is not None
+    held = store.trusted_files[sha256]
+    assert (held.method, held.certified_by, held.path) == ("user", "attach:kai", "src/parser.py")
+    assert "mark cleared by hand: src/parser.py" in held.note
+    assert "is certified" in logs(rec)
+    assert (await session.honesty_snapshot()).clean
+
+    # A later session on the same database: the content is the person's, not unreviewed.
+    # (Without the stored record it is unreviewed, and the review would mark it again.)
+    for stored, expected in ((False, ("src/parser.py",)), (True, ())):
+        later, _rec, later_store = await session_on(repo, [[]])
+        if stored:
+            later_store.trusted_files.update(store.trusted_files)
+        seen: list[HonestySnapshot] = []
+        async with anyio.create_task_group() as tg:
+            await later.start(tg)
+            seen.append(await later.honesty_snapshot())
+            await later.stop()
+        assert seen[0].unreviewed.paths == expected and seen[0].clean is stored
 
 
 async def test_a_verified_content_stays_reviewed_in_the_index_after_a_further_edit(repo: Path):

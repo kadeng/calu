@@ -70,7 +70,10 @@ or failed edit changes nothing.
 - More than `honesty.max_open_marks` open marks: review required. Single `marks_clean` answers
   are then ignored (and the checker is told so); only an honesty review clears the marks. This
   keeps documentation updates close to the edits they belong to.
-- A human may clear a mark by hand (`honesty.clear`, as today).
+- A human may clear a mark by hand (`honesty.clear`). Clearing the last open mark of a file
+  records the file's present content as trusted with the source `user`, the record
+  `honesty.trust` with a path makes (2026-11-19: before, the clearing held for the session
+  only, and the review of the next session marked the same code again).
 
 ## 4. The honesty review
 
@@ -122,6 +125,10 @@ as its evidence. calu then decides:
   them; over the cap or failed: ESCALATE);
 - no baseline: ESCALATE, with the instruction that a person certifies a commit with `/trust`
   or asks for an honesty review.
+- the only problem is the index (2026-11-19): every unreviewed file has a verified working
+  content, and the index holds an earlier content of it that nobody verified. DENY with the
+  `git add` that settles it, before the review and again after it; the agent stages the
+  files and repeats the step. The same holds for a commit.
 While the state is not clean in enforce mode, the allow lists must not let a command skip the
 command checker (otherwise an allow-listed test command would run unjudged). Remove the
 present path matcher (`command_paths`, `blocking_marks`): it refused commands that merely name

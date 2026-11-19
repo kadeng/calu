@@ -824,13 +824,20 @@ class Session:
     async def clear_mark(self, mark_id: int, client: str = "unknown") -> HonestyMark:
         """Close one open mark by hand: a person's override of a checker (`honesty.clear`).
 
-        Side effects: closes the mark in the honesty state, logs who did it and sends
-        `honesty.update`. Whether a review is required does not change, and nothing is
-        verified or stored: the file counts as it did without the mark.
+        Clearing the last open mark of a file is a person's decision about that content, and
+        it is stored as one: the SHA-256 of the file's present content is recorded as trusted
+        with the source "user", the record `honesty.trust` with a path makes
+        (`SessionStore.trust_file`). So the review of a later session does not mark the same
+        content again. While other marks are open on the file, nothing is recorded.
+
+        Side effects: closes the mark in the honesty state, records the file's content as
+        described (a failure is logged and reported as a warning; the mark stays closed for
+        this session), logs who did it and sends `honesty.update`. Whether a review is
+        required does not change.
 
         Args:
             mark_id: The mark's id, as `honesty.update` reported it.
-            client: Who asked, for the log.
+            client: Who asked, for the log and the record.
 
         Returns:
             The closed mark.
@@ -838,14 +845,33 @@ class Session:
         Raises:
             SessionError: If no open mark has that id.
         """
+        by = client or "unknown"
         async with self._honesty_lock:
-            closed = await anyio.to_thread.run_sync(
-                self.honesty.clear, mark_id, f"{client} (by hand)"
-            )
+            closed = await anyio.to_thread.run_sync(self.honesty.clear, mark_id, f"{by} (by hand)")
         if closed is None:
             raise SessionError(f"no open honesty mark {mark_id}")
+        stored = ""
+        if not any(mark.path == closed.path for mark in self.honesty.open_marks):
+            try:
+                sha256 = await anyio.to_thread.run_sync(self.honesty.content_sha256, closed.path)
+                if sha256 is not None:
+                    note = f"mark cleared by hand: {closed.label()}"[:500]
+                    await self.store.trust_file(sha256, closed.path, "user", by, note)
+                    self._trust_stale = True
+                    stored = f"; the content of {closed.path} ({sha256[:12]}) is certified"
+            except Exception as exc:
+                log.exception("recording a mark cleared by hand failed")
+                await self._emit_safely(
+                    Log(
+                        level="warning",
+                        message=(
+                            f"honesty: the clearing of {closed.label()} could not be stored "
+                            f"({type(exc).__name__}: {exc}); it holds for this session only"
+                        ),
+                    )
+                )
         await self._emit_safely(
-            Log(level="info", message=f"honesty: {client} cleared {closed.label()} by hand")
+            Log(level="info", message=f"honesty: {by} cleared {closed.label()} by hand{stored}")
         )
         await self.announce_honesty()
         return closed

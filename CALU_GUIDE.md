@@ -271,10 +271,12 @@ is only trailing whitespace, line endings or blank lines is verified without a m
 - A review that fails, more files than `honesty.review_max_files` (300), and files the review
   cannot judge make the step wait for a person, with the reason. Not judged are a file over
   2,000,000 bytes, a file whose text for the reviewer is over 200,000 bytes, a file that is not
-  UTF-8 text, a symbolic link, a submodule, and a staged content that differs from the working
-  file. A person certifies those (below) or stages the file again. The last case is common
-  after a denied commit: the index still holds the content from before the correction, and
-  `git add` of the corrected file settles it.
+  UTF-8 text, a symbolic link, and a submodule. A person certifies those (below).
+- A file that is verified while the index still holds an earlier content of it asks nobody:
+  the step is denied with the command that settles it (`git add -- <path>`), Claude stages
+  the file and repeats the step. This is common after a denied commit: the index holds the
+  content from before the correction. The denial of a commit for a dishonest file says the
+  same in advance.
 - In a repository without a trusted commit, a review that a person asks for judges every file
   git lists, up to the cap. If every file `HEAD` records is then verified and the working tree
   holds nothing else, `HEAD` is certified and becomes the baseline. A review calu starts by
@@ -317,10 +319,11 @@ A branch or tag means the commit it points at now; later commits are not covered
 certified by the SHA-256 of its content: the trust ends when the content changes and holds
 wherever a file with that content lies. `calu honesty trust`, `untrust` and `prune` refuse to
 run inside a calu session, so that they are typed by a person in a terminal of their own.
-Clearing a mark by hand verifies nothing and stores nothing: the session goes on with the
-file as the edit check left it, and after a restart the file is unreviewed again, so the next
-review judges it afresh. To make your judgement last, certify the file (`/trust-file`). Certifications are global to the
-database and written to its audit log.
+Clearing the last open mark of a file by hand is your decision about that content, and it is
+stored as one: the file's present content is certified with the source `user`, the record
+`/trust-file` makes, so a later session does not mark the same code again (`calu honesty
+untrust --file PATH` withdraws it). While other marks are open on the file, nothing is
+stored. Certifications are global to the database and written to its audit log.
 
 Details worth knowing:
 

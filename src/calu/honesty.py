@@ -318,6 +318,20 @@ class Unreviewed:
     it. Empty when `everything` is set."""
     problem: str = ""
     """Why git could not be asked, or ""."""
+    restage: tuple[str, ...] = ()
+    """The files of `paths` that are unreviewed only because of the index: the working file's
+    content is reviewed (the baseline's, or verified), and the index holds another content
+    for the path that nobody verified. Staging the file again (`git add <path>`) settles
+    it, which the agent can do itself; no review can (a review reads working files)."""
+
+    @property
+    def only_restage(self) -> bool:
+        """Tell whether staging files again is all that is missing.
+
+        Returns:
+            True if at least one file is unreviewed and every unreviewed file is in `restage`.
+        """
+        return bool(self.paths) and not self.everything and set(self.paths) <= set(self.restage)
 
     def __bool__(self) -> bool:
         """Tell whether anything is unreviewed.
@@ -2182,6 +2196,9 @@ class HonestyState:
         commit is not the baseline's. After a restart a staged content that differs from the
         working file is unreviewed until the file is staged again.
 
+        Where the working file of such a path is reviewed and only the index is behind, the
+        path is also named in `restage`: staging the file again makes it reviewed.
+
         Returns:
             The unreviewed files. `everything` is set when there is no baseline that counts,
             and when git could not list the files (then with `problem`).
@@ -2198,6 +2215,8 @@ class HonestyState:
             return Unreviewed(everything=True, problem=str(exc))
         found: set[str] = set()
         listed: set[str] = set()
+        stale: dict[str, ContentIds] = {}
+        """Path -> the working file's content, where the index holds another, unverified one."""
         for record in staged.split(b"\0"):
             head, tab, name = record.partition(b"\t")
             parts = head.split()
@@ -2216,6 +2235,8 @@ class HonestyState:
             # file. Any other staged content is not reviewed.
             if ids is None or ids.blob != blob:
                 found.add(key)
+                if ids is not None:
+                    stale[key] = ids
         for raw in set(output.split(b"\0")) - {b""}:
             inside = os.fsdecode(raw).rstrip("/")
             entry = base.get(inside)
@@ -2247,7 +2268,13 @@ class HonestyState:
             ids = self._content(key)
             if ids is None or self._verified_source(key, ids) is None:
                 found.add(key)
-        return Unreviewed(paths=tuple(sorted(key for key in found if not self.left_out(key))))
+        paths = tuple(sorted(key for key in found if not self.left_out(key)))
+        restage = tuple(
+            key
+            for key in paths
+            if key in stale and self._reviewed_source(key, stale[key]) is not None
+        )
+        return Unreviewed(paths=paths, restage=restage)
 
     @_locked
     def snapshot(self) -> HonestySnapshot:
