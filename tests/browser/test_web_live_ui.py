@@ -55,6 +55,41 @@ async def test_the_live_view_streams_and_answers_an_escalation(
         assert "ship it" in stream  # the user's own message came back as an event
 
 
+async def test_a_denial_in_the_stream_shows_the_users_note_not_the_sessions_sentence(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    # `escalation.resolved` carries the whole text Claude received ("The user denied this
+    # step. Note from the user: ..."); the stream line called that text the note.
+    turns = [
+        [
+            {"tool": "Bash", "input": {"command": "deploy # calu:escalate"}, "result": "ok"},
+            {"tool": "Bash", "input": {"command": "publish # calu:escalate"}, "result": "ok"},
+        ]
+    ]
+    async with running(db_url, tmp_path, turns) as (base, session_id, _session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await page.fill("#text", "ship it")
+        await page.get_by_role("button", name="Send (queued)").click()
+        await page.wait_for_selector(".escalation")
+        await page.fill(".escalation input[type=text]", "not on main")
+        await page.get_by_role("button", name="Deny").click()
+        await page.wait_for_function(
+            "document.getElementById('stream').textContent.includes('note: not on main')"
+        )
+        await page.wait_for_selector(".escalation")
+        await page.get_by_role("button", name="Deny").click()
+        await page.wait_for_function(
+            "document.querySelectorAll('#stream .check .decision.deny').length >= 2"
+        )
+        lines = await page.locator("#stream .check").all_inner_texts()
+        decided = [line for line in lines if "a person decided" in line]
+        assert len(decided) == 2, lines
+        assert "note: not on main" in decided[0]
+        assert "The user denied" not in decided[0] and "Note from the user" not in decided[0]
+        assert "note" not in decided[1], "a denial without a note names none"
+
+
 async def test_a_session_that_serves_no_clients_says_so_in_the_browser(
     db_url: str, tmp_path: Path, page
 ) -> None:

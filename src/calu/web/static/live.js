@@ -442,6 +442,19 @@
     countEscalations();
   }
 
+  // The user's own words in the note of `escalation.resolved`, which for a denied step is the
+  // whole text Claude received: "The user denied this step." and, if the user wrote one,
+  // "Note from the user: <note>" (calu.escalations; calu.tui.model.own_words does the same).
+  // "" for a denial without a note; any other text unchanged.
+  function ownWords(note) {
+    const text = note.trim();
+    const denied = "The user denied this step.";
+    const prefix = "Note from the user:";
+    if (!text.startsWith(denied)) return text;
+    const rest = text.slice(denied.length).trim();
+    return rest.startsWith(prefix) ? rest.slice(prefix.length).trim() : rest;
+  }
+
   // Removes the card of an escalation that was decided, here or by another client.
   function dropEscalation(id) {
     const entry = escalations.get(id);
@@ -831,9 +844,10 @@
                { className: "decision allow", text: "answered" }, about);
           break;
         }
+        const words = ownWords(params.note || "");
         line("check", params.decision === "cancelled"
                ? "the open decision was withdrawn (stop or interrupt); the step did not run"
-               : `a person decided the escalation${params.note ? ` — note: ${params.note}` : ""}`, "",
+               : `a person decided the escalation${words ? ` — note: ${words}` : ""}`, "",
              { className: `decision ${params.decision === "allow" ? "allow" : "deny"}`, text: params.decision }, about);
         break;
       }
