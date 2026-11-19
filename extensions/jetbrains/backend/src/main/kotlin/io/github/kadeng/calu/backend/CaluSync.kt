@@ -52,7 +52,9 @@ import io.github.kadeng.calu.sync.SyncStatus
 import io.github.kadeng.calu.sync.SyncStore
 import io.github.kadeng.calu.sync.SyncUi
 import io.github.kadeng.calu.sync.Synchronizer
+import io.github.kadeng.calu.sync.deploymentWarning
 import io.github.kadeng.calu.sync.heldPaths
+import io.github.kadeng.calu.sync.parseDeployment
 import io.github.kadeng.calu.sync.isProbablyBinary
 import io.github.kadeng.calu.sync.syncMark
 import io.github.kadeng.calu.sync.syncStatusText
@@ -162,6 +164,35 @@ class CaluSync(
             override fun after(events: List<VFileEvent>) = onVfsEvents(events)
         })
         driver.start()
+        scope.launch { checkDeployment() }
+    }
+
+    /** The last Deployment warning shown, so that an unchanged file does not warn again. */
+    @Volatile private var deploymentWarned: String? = null
+
+    /**
+     * Warn when PyCharm's Deployment uploads changed files by itself into the directory calu
+     * synchronises (`deploymentWarning`): in the chat and as a notification, once per distinct
+     * text. A missing or unreadable `.idea/deployment.xml` warns nothing.
+     */
+    private fun checkDeployment() {
+        val text = try {
+            Files.readString(root.resolve(".idea/deployment.xml"))
+        } catch (_: Exception) {
+            null
+        }
+        val warning = deploymentWarning(text?.let(::parseDeployment), remoteDir)
+        if (warning == null || warning == deploymentWarned) {
+            deploymentWarned = warning
+            return
+        }
+        deploymentWarned = warning
+        controller.notice("warning", "calu sync: $warning")
+        try {
+            Notification(SYNC_NOTIFICATION_GROUP, "calu sync: two writers on $host", warning, NotificationType.WARNING).notify(project)
+        } catch (error: Exception) {
+            log("[calu] sync: the Deployment warning could not be shown: ${error.message}")
+        }
     }
 
     /** Stop listening and end the synchronisation's coroutines; the status becomes "off". */
@@ -222,6 +253,7 @@ class CaluSync(
      * @param events the events, after they were applied.
      */
     private fun onVfsEvents(events: List<VFileEvent>) {
+        if (events.any { it.path.endsWith("/.idea/deployment.xml") }) scope.launch { checkDeployment() }
         val changed = ArrayList<String>()
         val renames = ArrayList<Pair<String, String>>()
         for (event in events) {
