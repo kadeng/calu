@@ -31,7 +31,7 @@ from typing import Any, NoReturn, Protocol
 import anyio
 import psycopg
 
-from calu import admin, herd, session_requests
+from calu import admin, herd, servers, session_requests
 from calu.credentials import CredentialError, CredentialStore, WrongPassword, wipe
 from calu.db.connection import Db
 from calu.db.connection import open_stored as connect
@@ -89,6 +89,25 @@ class SavedMode:
     """"global", or `project <name>` when the project's own setting was changed."""
 
 
+@dataclass(frozen=True)
+class Served:
+    """A `calu serve` that runs, as `/running` names it (agent/records/PLAN.md D243)."""
+
+    hostname: str
+    os_user: str
+    projects_directory: str
+    """The directory it starts sessions in or below; "" if it did not record one."""
+
+    def line(self) -> str:
+        """Return the server as one line of the `/running` page.
+
+        Returns:
+            For example `calu serve of ada@box serves /home/ada/projects`.
+        """
+        where = self.projects_directory or "a directory it did not record"
+        return f"calu serve of {self.os_user}@{self.hostname} serves {where}"
+
+
 class AdminAccess(Protocol):
     """The database changes the client can make (see the module docstring)."""
 
@@ -137,6 +156,23 @@ class AdminAccess(Protocol):
 
         Returns:
             The sessions that have not ended.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the database cannot be reached.
+        """
+        ...
+
+    async def served(self, password: str | None) -> list[Served]:
+        """List the `calu serve` processes that run, with the directory each one serves.
+
+        A server that died without ending its row is left out (`calu.servers.running`).
+
+        Args:
+            password: The credential's password, or None if none is needed.
+
+        Returns:
+            The servers; empty when they cannot be read with this login or schema.
 
         Raises:
             PasswordNeeded: If the password is missing or wrong.
@@ -484,6 +520,44 @@ class StoreAdmin:
         """
         return await self._with_db(password, herd.sessions)
 
+    async def served(self, password: str | None) -> list[Served]:
+        """List the `calu serve` processes that run, with the directory each one serves.
+
+        A server that died without ending its row is left out (`calu.servers.running`).
+
+        Args:
+            password: The credential's password, or None if none is needed.
+
+        Returns:
+            The servers, newest first; empty when the login or the schema (before migration
+            0040) cannot read them.
+
+        Raises:
+            PasswordNeeded: If the password is missing or wrong.
+            AdminFailed: If the database cannot be reached.
+        """
+
+        async def work(db: Db) -> list[Served]:
+            """Read the servers.
+
+            Args:
+                db: The connection.
+
+            Returns:
+                The servers that run; empty if they cannot be read.
+            """
+            try:
+                rows = await servers.running(db)
+            except (
+                psycopg.errors.UndefinedTable,
+                psycopg.errors.UndefinedColumn,
+                psycopg.errors.InsufficientPrivilege,
+            ):
+                return []
+            return [Served(row.hostname, row.os_user, row.projects_directory) for row in rows]
+
+        return await self._with_db(password, work)
+
     async def rename_session(self, session_id: str, name: str, password: str | None) -> str:
         """Give a session a name, or take its name away (`calu.herd.rename_session`).
 
@@ -760,6 +834,7 @@ class RelayAdmin:
         rows = []
         for entry in (result or {}).get("sessions") or []:
             started = datetime.fromisoformat(str(entry["started_at"]))
+            since = entry.get("state_since")
             session_id = str(entry["calu_session_id"])
             rows.append(
                 herd.SessionRow(
@@ -768,15 +843,27 @@ class RelayAdmin:
                     os_user=self.relay.os_user,
                     directory=str(entry.get("directory") or ""),
                     state=str(entry.get("state") or "unknown"),
-                    state_since=started,
+                    state_since=datetime.fromisoformat(str(since)) if since else started,
                     started_at=started,
                     ended_at=None,
                     claude_session_id=entry.get("claude_session_id"),
                     open_escalations=int(entry.get("open_escalations") or 0),
                     address=self.relay.session_address(session_id),
+                    name=str(entry.get("name") or ""),
                 )
             )
         return rows
+
+    async def served(self, password: str | None) -> list[Served]:
+        """Name the relay's server and the directory it serves.
+
+        Args:
+            password: Ignored; the server token is the access.
+
+        Returns:
+            The one server, as the relay described it in `initialize`.
+        """
+        return [Served(self.session_host(), self.relay.os_user, self.relay.projects_directory)]
 
     async def rename_session(self, session_id: str, name: str, password: str | None) -> NoReturn:
         """Refuse: a name is stored in the database.

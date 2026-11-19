@@ -732,6 +732,12 @@ class RelaySession(BaseModel):
     model: str | None = None
     open_escalations: int = 0
     started_at: datetime
+    name: str = ""
+    """The name a person gave the session (`sessions.name`); "" for none, and for a client
+    without a server token (`--insecure`)."""
+    state_since: datetime | None = None
+    """When the session entered its current state, from the database; None if not known (a
+    client without a server token, a schema before migration 0040)."""
 
 
 class RelaySessionsResult(BaseModel):

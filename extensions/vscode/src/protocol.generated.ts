@@ -668,9 +668,11 @@ export interface RelaySession {
   claude_session_id?: string | null;
   directory: string;
   model?: string | null;
+  name?: string;
   open_escalations?: number;
   started_at: string;
   state: string;
+  state_since?: string | null;
 }
 /**
  * Result of `relay.sessions`: the server's running sessions, newest first.

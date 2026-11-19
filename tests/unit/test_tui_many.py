@@ -369,6 +369,27 @@ async def test_running_lists_one_line_per_session_waiting_first_and_filters() ->
         assert run.app.switch_to == "bbbb2222-0000", "the beginning of a name is enough"
 
 
+async def test_running_names_the_projects_directory_of_each_server() -> None:
+    """D243, D244: `/new` and `/fork` start sessions only inside a server's directory."""
+    from calu.tui.adminaccess import Served
+
+    session = FakeSession()
+    access = FakeAdmin(session)
+    access.running = [row("aaaa1111-0000", "/home/ada/projects/one")]
+    access.servers = [Served("box", "ada", "/home/ada/projects")]
+    async with running("simple_turn", session=session, admin=access, size=(100, 30)) as run:
+        await command(run, "/running")
+        page = run.app.screen
+        assert isinstance(page, TextScreen)
+        assert "calu serve of ada@box serves /home/ada/projects" in page.text
+        await run.press("escape")
+        access.servers = []
+        await command(run, "/running")
+        page = run.app.screen
+        assert isinstance(page, TextScreen)
+        assert "calu serve of" not in page.text and "aaaa1111" in page.text
+
+
 def test_a_session_row_is_cut_at_the_start_of_its_directory() -> None:
     from calu.tui.app import session_row_text
 

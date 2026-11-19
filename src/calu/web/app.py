@@ -1612,15 +1612,16 @@ async def _server_of(state: _State, row: herd.SessionRow) -> servers.ServerRow |
         row: The session; its host, user and pid name the server.
 
     Returns:
-        The server's row, or None if the session runs in no recorded server with a relay, or
-        the database has no `servers` table yet.
+        The server's row, or None if the session runs in no running server with a relay
+        (`servers.running`: a server that died without ending its row does not count), or
+        the database has no `servers` table or heartbeat yet (before migration 0040).
 
     Raises:
         psycopg.OperationalError: If the database cannot be reached.
     """
     try:
         rows = await servers.running(state.db, row.hostname, row.os_user)
-    except psycopg.errors.UndefinedTable:
+    except psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn:
         return None
     for server in rows:
         if server.pid == row.pid and server.relay_address.startswith("ws://"):

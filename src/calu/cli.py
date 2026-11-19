@@ -4470,8 +4470,9 @@ async def _server_token(db: Db, args: argparse.Namespace) -> str:
         reach the relay from another machine.
 
     Raises:
-        CliError: If no server or several match, the token is unknown, or the database has
-            no `servers` table yet (`calu setup` adds it).
+        CliError: If no running server or several match (a server that died without ending
+            its row does not run: `calu.servers.running`), the token is unknown, or the
+            database has no `servers` table or heartbeat yet (`calu setup` adds them).
     """
     try:
         if args.action == "list":
@@ -4492,19 +4493,18 @@ async def _server_token(db: Db, args: argparse.Namespace) -> str:
             )
         if args.session:
             row = await servers.server(db, args.session)
-            if row is None or row.ended_at is not None:
+            if row is None or not row.live:
+                stopped = ""
+                if row is not None and row.stale:
+                    why = "its process is gone" if row.gone else "it has not reported for a minute"
+                    stopped = f"; server {row.id} did not end its row, but {why}"
                 raise CliError(
-                    f"no running server has an id that starts with {args.session!r} "
+                    f"no running server has an id that starts with {args.session!r}{stopped} "
                     "(`calu token list --server` names the servers of the tokens)"
                 )
         else:
             here, user = socket.gethostname(), serve_os_user()
-            this = machine.here()
-            running = [
-                row
-                for row in await servers.running(db, here, user)
-                if not herd.process_gone(row.pid, row.machine, this)
-            ]
+            running = await servers.running(db, here, user)
             if not running:
                 raise CliError(
                     f"no `calu serve` runs for {user} on {here}; start one, or name a server's "

@@ -39,10 +39,23 @@ class FakeServer:
     running: list[Hosted] = field(default_factory=list)
     started: list[RelayStartParams] = field(default_factory=list)
     refuse: str = ""
+    details: dict[str, tuple[str, datetime]] = field(default_factory=dict)
+    """What the database would say about the sessions' names and state times."""
+    asked: list[str | None] = field(default_factory=list)
+    """The token hashes `session_details` was called with."""
 
     def hosted(self) -> list[Hosted]:
         """Return the sessions."""
         return list(self.running)
+
+    async def session_details(
+        self, sha: str | None, session_ids: list[str]
+    ) -> dict[str, tuple[str, datetime]]:
+        """Return the scripted names and state times, only for a client with a token."""
+        self.asked.append(sha)
+        if sha is None:
+            return {}
+        return {key: value for key, value in self.details.items() if key in session_ids}
 
     async def relay_start(self, sha: str, label: str, params: RelayStartParams) -> str:
         """Record the request and name the first session, or refuse."""
@@ -256,6 +269,10 @@ async def test_insecure_lets_loopback_attach_without_a_token_but_not_ask_for_ses
             await relay_call(it.relay.address, "", "relay.start", {"directory": str(tmp_path)})
         assert "needs a server token" in str(refused.value)
         assert it.server.started == []
+        # Listing works without a token, but the database is not asked about the names.
+        it.server.details[SESSION_ID] = ("secret plans", datetime.now(UTC))
+        _, listed = await relay_call(it.relay.address, "", "relay.sessions")
+        assert listed["sessions"][0]["name"] == "" and it.server.asked[-1] is None
 
 
 async def test_an_unknown_path_is_closed(tmp_path: Path) -> None:
@@ -281,11 +298,20 @@ async def test_the_full_screen_clients_relay_access_lists_and_starts(tmp_path: P
     from calu.tui.app import switch_refusal
 
     async with relayed(tmp_path) as it:
-        admin = RelayAdmin(RelayTarget(it.relay.address, TOKEN, "box", "dev"), "")
+        admin = RelayAdmin(RelayTarget(it.relay.address, TOKEN, "box", "dev", "/srv"), "")
         assert admin.sessions_problem() is None and admin.problem() is not None
         assert not admin.needs_password() and admin.session_host() == "box"
         [row] = await admin.sessions(None)
         assert row.id == SESSION_ID and row.hostname == "box"
+        # Without the database's answer: no name, and the state counts from the start.
+        assert row.name == "" and row.state_since == row.started_at
+        since = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+        it.server.details[SESSION_ID] = ("payment refactoring", since)
+        [row] = await admin.sessions(None)
+        assert row.name == "payment refactoring" and row.state_since == since
+        assert it.server.asked[-1] == token_hash(TOKEN)
+        [served] = await admin.served(None)
+        assert served.line() == "calu serve of dev@box serves /srv"
         assert row.address.endswith(f"/session/{SESSION_ID}")
         # Through the relay the server's host counts, not this machine's.
         assert switch_refusal(row, None, admin.session_host()) == ""

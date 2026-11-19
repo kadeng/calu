@@ -493,6 +493,18 @@ async def test_the_relay_reaches_every_session_with_one_server_token(db_url: str
             hello, listed = await relay_call(relay.address, token, "relay.sessions")
             assert hello["relay"]["server_id"] == server.server_id
             assert [s["calu_session_id"] for s in listed["sessions"]] == [a.session_id]
+            # D244: the names and state times come from the database, for the token's holder.
+            assert await herd.rename_session(db, a.session_id, "payment refactoring")
+            since = await db.one(
+                "SELECT state_since FROM sessions WHERE id = %s::uuid", (a.session_id,)
+            )
+            _, listed = await relay_call(relay.address, token, "relay.sessions")
+            [entry] = listed["sessions"]
+            assert entry["name"] == "payment refactoring"
+            assert since is not None and entry["state_since"] is not None
+            from datetime import datetime
+
+            assert datetime.fromisoformat(entry["state_since"]) == since[0]
 
             # A second session, asked for through the relay with the server token.
             _, started = await relay_call(
@@ -703,3 +715,145 @@ async def test_requests_go_to_the_server_that_serves_their_directory(db_url: str
         await conn.commit()
     finally:
         await conn.close()
+
+
+async def _dead_pid() -> int:
+    """Return the pid of a process that has just ended (it is not reused within a test).
+
+    Returns:
+        The pid.
+    """
+    process = await anyio.open_process([sys.executable, "-c", "pass"])
+    await process.wait()
+    return process.pid
+
+
+async def test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_or_gone(
+    db_url: str, tmp_path: Path
+):
+    """D244, migration 0040: server A died without ending its row; B takes its requests."""
+    from calu import servers
+
+    session_url = await prepare(db_url, tmp_path)
+    in_a, in_b = str(tmp_path / "a"), str(tmp_path / "b")
+    conn = await connect(session_url)
+    try:
+        db = Db(conn)
+        a = await servers.record_start(db, HOST, USER, "ws://127.0.0.1:1", in_a)
+        b = await servers.record_start(db, HOST, USER, "ws://127.0.0.1:2", in_b)
+        await conn.commit()
+        async with owner_db(db_url) as owner:
+            _, token = await servers.mint(owner, a, "laptop")
+            sha = token_hash(token)
+            first = await session_requests.file(owner, request(Path(in_a) / "x"))
+            # A is running: B leaves the request in A's directory alone.
+            assert await session_requests.claim_served(db, b, 1) is None
+            assert await servers.token_label(db, a, sha) == "laptop"
+
+            # A stops beating (its process died, the row stayed open): stale after a minute.
+            await owner.execute(
+                "UPDATE servers SET last_seen = now() - interval '61 seconds' WHERE id = %s",
+                (a,),
+            )
+            assert [row.id for row in await servers.running(owner, HOST, USER)] == [b]
+            stale = await servers.server(owner, a)
+            assert stale is not None and stale.stale and "SILENT" in stale.line()
+            # Its token stops working, for attaching and for filing requests.
+            assert await servers.token_label(db, a, sha) is None
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                await servers.file_request(db, a, sha, request(Path(in_a) / "y"))
+            await conn.rollback()
+            with pytest.raises(ValueError, match="no running server"):
+                await servers.mint(owner, a)
+            got = await session_requests.claim_served(db, b, 1)
+            assert got is not None and got.id == first
+
+            # A server that beats again counts again (a database outage, not a death).
+            assert await servers.beat(db, a)
+            assert await servers.token_label(db, a, sha) == "laptop"
+
+            # Now A's process is gone: B ends A's row at once, without waiting a minute.
+            await owner.execute("UPDATE servers SET pid = %s WHERE id = %s", (await _dead_pid(), a))
+            second = await session_requests.file(owner, request(Path(in_a) / "z"))
+            assert await session_requests.claim_served(db, b, 1) is None
+            assert [row.id for row in await servers.running(owner, HOST, USER)] == [b]
+            gone = await servers.server(owner, a)
+            assert gone is not None and gone.gone and "GONE" in gone.line()
+            assert await servers.end_gone_peers(db, b) == [a]
+            got = await session_requests.claim_served(db, b, 1)
+            assert got is not None and got.id == second
+            assert await servers.token_label(db, a, sha) is None
+            assert await owner.all(
+                "SELECT revoked FROM server_tokens WHERE server_id = %s", (a,)
+            ) == [(True,)]
+            assert not await servers.beat(db, a), "an ended row stays ended"
+
+            # A row of another process table is not ended by B: B cannot see its process.
+            c = await servers.record_start(db, HOST, USER, "", str(tmp_path / "c"))
+            await owner.execute(
+                "UPDATE servers SET pid = %s, machine = 'm|other-boot|pid:[1]' WHERE id = %s",
+                (await _dead_pid(), c),
+            )
+            assert await servers.end_gone_peers(db, b) == []
+            ended = await db.one("SELECT calu_server_gone(%s::uuid, %s::uuid)", (b, c))
+            assert ended == (False,)
+        await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def test_a_running_server_takes_the_requests_of_a_dead_one_at_once(
+    db_url: str, tmp_path: Path
+):
+    """D244: the request is started by server B, not left for a server that died."""
+    from calu import servers
+
+    session_url = await prepare(db_url, tmp_path)
+    dead = tmp_path / "dead"
+    (dead / "project").mkdir(parents=True)
+    conn = await connect(session_url)
+    try:
+        db = Db(conn)
+        a = await servers.record_start(db, HOST, USER, "", str(dead))
+        await conn.commit()
+    finally:
+        await conn.close()
+    async with owner_db(db_url) as owner:
+        await owner.execute("UPDATE servers SET pid = %s WHERE id = %s", (await _dead_pid(), a))
+        async with serving(session_url) as server:
+            done = await ask(owner, request(dead / "project"))
+            assert done.state == "started", done.message
+            assert done.session_id is not None
+            assert server.server_id is not None
+        row = await owner.one("SELECT ended_at IS NOT NULL FROM servers WHERE id = %s", (a,))
+        assert row == (True,)
+
+
+async def test_a_server_beats_and_records_itself_again_after_its_row_was_ended(
+    db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """D244: the heartbeat keeps the row fresh; an ended row is replaced by a new one."""
+    from calu import herd as herd_module
+    from calu import servers
+
+    monkeypatch.setattr(herd_module, "HEARTBEAT_S", 0.2)
+    session_url = await prepare(db_url, tmp_path)
+    async with owner_db(db_url) as owner, serving(session_url) as server:
+        first = server.server_id
+        assert first is not None
+        await owner.execute(
+            "UPDATE servers SET last_seen = now() - interval '50 seconds' WHERE id = %s", (first,)
+        )
+        with anyio.fail_after(10):
+            while True:
+                row = await servers.server(owner, first)
+                if row is not None and row.silent_for_s < 5:
+                    break
+                await anyio.sleep(0.1)
+        await owner.execute("SELECT calu_server_ended(%s::uuid)", (first,))
+        with anyio.fail_after(10):
+            while server.server_id == first:
+                await anyio.sleep(0.1)
+        assert server.relay is not None and server.relay.server.server_id == server.server_id
+        [row] = await servers.running(owner, HOST, USER)
+        assert row.id == server.server_id

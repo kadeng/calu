@@ -38,6 +38,7 @@ from calu.tui.adminaccess import (
     PasswordNeeded,
     SavedChecker,
     SavedMode,
+    Served,
 )
 from calu.tui.connection import Connection, Connector
 
@@ -184,6 +185,8 @@ class FakeAdmin:
         """Every `(session id, name)` stored (`rename_session`), oldest first."""
         self.running: list[herd.SessionRow] = []
         """What `sessions` answers."""
+        self.servers: list[Served] = []
+        """What `served` answers."""
         """The sessions that were asked for (`request_session`)."""
         """Every `(mode, project)` stored, oldest first."""
         self.fail = ""
@@ -312,6 +315,22 @@ class FakeAdmin:
         """
         self._check(password)
         return list(self.running)
+
+    async def served(self, password: str | None) -> list[Served]:
+        """Return the scripted list of running servers.
+
+        Args:
+            password: The password the client passed.
+
+        Returns:
+            `self.servers`.
+
+        Raises:
+            PasswordNeeded: If the password is not the one of this access.
+            AdminFailed: Without a credential or with `fail` set.
+        """
+        self._check(password)
+        return list(self.servers)
 
     async def request_session(self, wanted: SessionRequest, password: str | None) -> str:
         """Record the request and answer with a made-up session id.

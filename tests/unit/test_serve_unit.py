@@ -331,3 +331,50 @@ async def test_the_relay_takes_the_next_derived_port_when_its_own_is_taken(
         # A port named with --relay-port is not replaced.
         with pytest.raises(RelayPortTaken, match=f"the relay port {busy} cannot be bound"):
             await server(relay_port=busy)._bind_relay()
+
+
+def test_a_server_row_counts_as_running_only_while_it_beats() -> None:
+    """D244: stale after `herd.STALE_AFTER_S` of silence, at once when its process is gone."""
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from calu import herd
+    from calu.servers import ServerRow
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+    row = ServerRow("5e7", "box", "ada", 42, None, "ws://127.0.0.1:8811", now, None, "/srv/p")
+    assert row.live and not row.stale and "SILENT" not in row.line()
+    silent = replace(row, silent_for_s=herd.STALE_AFTER_S + 1)
+    assert silent.stale and not silent.live and "SILENT for 1 min" in silent.line()
+    gone = replace(row, gone=True)
+    assert gone.stale and "GONE" in gone.line()
+    ended = replace(silent, ended_at=now, gone=True)
+    assert not ended.stale and not ended.live and "ended 2026-11-19" in ended.line()
+
+
+async def test_end_gone_peers_ends_only_rows_whose_process_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The database names the peers; this process looks up their pids (D244)."""
+    import os
+
+    from calu import machine, servers
+
+    here = machine.here().text()
+    asked: list[tuple[str, tuple]] = []
+
+    class FakeDb:
+        """Answers `calu_server_peers` with a live and a dead peer, and records the ends."""
+
+        async def all(self, sql: str, params: tuple) -> list[tuple]:
+            """Return the peers."""
+            return [("alive", os.getpid(), here), ("dead", 2147483646, here)]
+
+        async def one(self, sql: str, params: tuple) -> tuple:
+            """Record a `calu_server_gone` call."""
+            asked.append((sql, params))
+            return (True,)
+
+    ended = await servers.end_gone_peers(FakeDb(), "me")  # type: ignore[arg-type]
+    assert ended == ["dead"]
+    assert [params for _sql, params in asked] == [("me", "dead")]

@@ -24,6 +24,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -83,6 +84,21 @@ class Sessions(Protocol):
 
         Returns:
             The sessions.
+        """
+        ...
+
+    async def session_details(
+        self, sha: str | None, session_ids: list[str]
+    ) -> dict[str, tuple[str, datetime]]:
+        """Name the sessions and say since when each is in its state.
+
+        Args:
+            sha: SHA-256 of the asking client's server token; None for a client without one.
+            session_ids: The sessions' row ids.
+
+        Returns:
+            Session id -> (name, "" for none; start of its current state); a session that
+            cannot be described is missing. Never raises.
         """
         ...
 
@@ -432,7 +448,7 @@ class Relay:
                 )
             elif method == "relay.sessions":
                 await _result(
-                    connection, request_id, RelaySessionsResult(sessions=await self.listing())
+                    connection, request_id, RelaySessionsResult(sessions=await self.listing(peer))
                 )
             elif method == "relay.start":
                 await self._start(peer, request_id, data.get("params") or {})
@@ -480,8 +496,13 @@ class Relay:
             return
         await _result(connection, request_id, RelayStartResult(calu_session_id=session_id))
 
-    async def listing(self) -> list[RelaySession]:
+    async def listing(self, peer: _Peer | None = None) -> list[RelaySession]:
         """Describe the server's sessions, each asked for its state at the same time.
+
+        Args:
+            peer: The asking client; its server token lets the server read the sessions'
+                names and state times from the database (`Sessions.session_details`). None,
+                or a client without a token, gets neither.
 
         Returns:
             One entry per session, newest first; a session that does not answer within
@@ -489,6 +510,16 @@ class Relay:
         """
         hosted = self.sessions.hosted()
         found: dict[str, dict[str, Any]] = {}
+        details: dict[str, tuple[str, datetime]] = {}
+
+        async def describe() -> None:
+            """Ask the server for the names and state times."""
+            details.update(
+                await self.sessions.session_details(
+                    peer.sha if peer is not None else None,
+                    [one.calu_session_id for one in hosted],
+                )
+            )
 
         async def ask(one: Hosted) -> None:
             """Take one session's snapshot.
@@ -504,11 +535,13 @@ class Relay:
                 log.info("session %s did not answer the relay: %s", one.calu_session_id, exc)
 
         async with anyio.create_task_group() as tg:
+            tg.start_soon(describe)
             for one in hosted:
                 tg.start_soon(ask, one)
         listed = []
         for one in hosted:
             state = found.get(one.calu_session_id, {})
+            name, since = details.get(one.calu_session_id, ("", None))
             listed.append(
                 RelaySession(
                     calu_session_id=one.calu_session_id,
@@ -518,6 +551,8 @@ class Relay:
                     model=state.get("model"),
                     open_escalations=len(state.get("escalations") or ()),
                     started_at=one.started_at,
+                    name=name,
+                    state_since=since,
                 )
             )
         return listed

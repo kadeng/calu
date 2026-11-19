@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D243, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D244, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -93,6 +93,15 @@ Decided (do not ask again):
   (`calu start`, web, `/new`, relay) must be in that directory or below; two servers of one
   user each get the requests of their directory; the relay port is 8811 + sha256(path) mod
   189 (next free one if taken). Not run by hand over SSH yet (`docs/TESTING.md` item 39).
+- **A dead `calu serve` still counted as serving its directory** (D243's known limit) and the
+  full-screen client's `/running` did not name the servers' projects directories: **Done**
+  (PLAN D244, test plan I38-I41, migration 0040, not pushed). Servers beat every 10 s like
+  sessions; stale after 60 s, and at once when another server of the same user and process
+  table finds the pid gone (it ends that row). Claims, server tokens, `calu token mint
+  --server`, `calu web`'s relay fallback and `ide.status` ignore such servers. `/running`
+  lists "calu serve of user@host serves DIR"; through a relay it shows session names and the
+  time in the current state (`relay.sessions` gained `name`, `state_since`). The owner's
+  machine needs `sudo calu setup` again for migration 0040.
 - **Tokens:** `calu start --no-attach`'s token stays valid until the session ends (keep).
 - **PyCharm:** placeholder in the message field when nothing is attached and the setup cards
   in a scrolling area; a resolved conflict's line is marked "resolved" (warning colour
@@ -682,7 +691,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2031 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~49k of tests, 37 migrations, 27 CLI commands (26 in `calu --help` and the hidden easter egg
+default instructions), ~49k of tests, 40 migrations, 27 CLI commands (26 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 23 protocol requests,
 20 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs

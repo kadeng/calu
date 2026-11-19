@@ -1027,8 +1027,11 @@ What a server token allows: attaching to every session of that one server and do
 what a client token allows (sending messages, deciding steps, stopping a session), and asking
 that server for new sessions in its projects directory or below it. It does not reach
 another server or the database. It is valid until `calu token revoke --server <id>` or until
-the server stops; a restarted server needs a new token. `calu token list` lists the server
-tokens below the client tokens, and a revoked one ends its connections within seconds. A
+the server stops running; a restarted server needs a new token. The tokens of a server that
+was killed without ending cleanly are refused after a minute, or at once when another `calu
+serve` of the same user on that machine finds its process gone ("A server that died" in
+[Many sessions from one process](#many-sessions-from-one-process-calu-serve)). `calu token
+list` lists the server tokens below the client tokens, and a revoked one ends its connections within seconds. A
 decision made through the relay is recorded with the client's name and the token's label
 (`client:calu attach via relay (laptop)`). The relay checks the server token and then
 connects to the session with the session's own token, so the session's own checks apply
@@ -1115,7 +1118,9 @@ in `token` (the result's `relay` names the server, with its `projects_directory`
 `relay.sessions` and `relay.start` (refused, error -32000, for a directory outside the
 projects directory); `ws://127.0.0.1:<port>/session/<session id>` is that session's own
 protocol, with the server token in `initialize`. It closes a connection with
-4003 when the server token was revoked or its server ended.
+4003 when the server token was revoked or its server ended. Each entry of `relay.sessions`
+carries the session's `name` and `state_since` (when it entered its current state) for a
+client with a server token; without one (`--insecure`) the name is "" and `state_since` null.
 
 ## The web interface
 
@@ -1671,6 +1676,15 @@ all work with it, and each has its own address and its own tokens.
   `calu start` goes to the server whose directory holds it (if both do, either), and one
   that no server serves is refused by one of them with the reason. `calu run` has no
   projects directory and runs wherever it is started.
+- **A server that died.** A server stamps the database every 10 seconds, as a session does.
+  One that was killed (or whose machine went away) without ending cleanly stops counting as
+  running after a minute of silence, and at once when another `calu serve` of the same user
+  in the same process table (the same machine or container) finds no process with its pid:
+  that server ends the dead one's record. From then on the dead server's directory is served
+  by the remaining servers, its server tokens are refused, and `calu token mint --server`,
+  the relay fallback of `calu web` and the editor's server count leave it out. A server whose
+  record was ended while it still ran records itself again and says so; its old server
+  tokens stay revoked.
 - **No password per session.** The server holds the session login; `calu start` uses the
   `operator` credential, as `calu attach` does. Stored without a password (`calu credential
   set operator --no-password`), it asks nothing.

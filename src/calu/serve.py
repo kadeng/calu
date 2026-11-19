@@ -21,6 +21,11 @@ The server also listens on one relay port for all its sessions (`calu.relay`, D2
 itself in `servers` (`calu.servers`), and a client with a server token reaches every session it
 runs through that one port, and may ask it for a new session (a request row filed through the
 token, `calu.servers.file_request`).
+
+The server stamps its row every `herd.HEARTBEAT_S` seconds and, before each look for
+requests, ends the rows of this user's other servers in its process table whose process is
+gone, so that a server that died without ending its row does not keep the requests of its
+directory (agent/records/PLAN.md D244).
 """
 
 import getpass
@@ -38,7 +43,7 @@ from typing import TYPE_CHECKING
 import anyio
 import psycopg
 
-from calu import asuser, projects_dir, servers, session_requests
+from calu import asuser, herd, projects_dir, servers, session_requests
 from calu.config import load_secrets
 from calu.credentials import wipe
 from calu.db import SESSION_REQUESTED, ConnectionSource, Db, Dirty, LoginRefused, Notifier
@@ -242,6 +247,8 @@ class Server:
             tg.start_soon(notifier.run)
             if self.relay is not None:
                 tg.start_soon(self.relay.run)
+            if self.server_id is not None:
+                tg.start_soon(self._beat, db)
             say(
                 f"[serve] answering session requests for {self.user}@{self.hostname} in "
                 f"{self.projects}; start one with `calu start` in a project directory there"
@@ -249,6 +256,7 @@ class Server:
             try:
                 while True:
                     try:
+                        await self._end_gone_peers(db)
                         while (request := await self._claim(db)) is not None:
                             self.sessions[request.id] = request
                             tg.start_soon(self._host, db, request)
@@ -268,6 +276,93 @@ class Server:
                             log.warning("recording the end of the server failed: %s", exc)
         if refused:
             raise refused[0]
+
+    async def _beat(self, db: Db) -> None:
+        """Stamp this server's heartbeat every `herd.HEARTBEAT_S` seconds until cancelled.
+
+        A server that stops stamping counts as not running after `herd.STALE_AFTER_S`
+        (agent/records/PLAN.md D244). If the row has ended while the server runs (an operator
+        ended it, or another server took its process for gone), the server records a new row,
+        so that it claims requests again; the tokens of the old row stay revoked.
+
+        Side effects: writes `servers.last_seen`; may insert a new `servers` row and change
+        `server_id`; prints a line when it does. A failed stamp is logged and tried again at
+        the next beat.
+
+        Args:
+            db: The server's connection.
+        """
+        while True:
+            await anyio.sleep(herd.HEARTBEAT_S)
+            server_id = self.server_id
+            if server_id is None:
+                return
+            try:
+                with anyio.fail_after(FINISH_WAIT_S):
+                    if await servers.beat(db, server_id):
+                        continue
+                    self.server_id = await servers.record_start(
+                        db,
+                        self.hostname,
+                        self.user,
+                        self.relay.address if self.relay is not None else "",
+                        str(self.projects),
+                    )
+            except (psycopg.Error, TimeoutError) as exc:
+                log.warning("the heartbeat of the server failed: %s", exc)
+                continue
+            if self.relay is not None:
+                self.relay.server = self._relay_server()
+            say(
+                f"[serve] the row of this server ({server_id}) was ended while it ran; it "
+                f"recorded itself again as {self.server_id}. Its server tokens were revoked: "
+                "`calu token mint --server` prints a new one",
+                error=True,
+            )
+
+    async def _end_gone_peers(self, db: Db) -> None:
+        """End the rows of this host's and user's other servers whose process is gone.
+
+        So a request in the directory of a server that died without ending its row is
+        claimed at once (`calu.servers.end_gone_peers`) rather than after the row is stale.
+        Errors are logged only (a schema before migration 0040 has no such function).
+
+        Args:
+            db: The server's connection.
+        """
+        if self.server_id is None:
+            return
+        try:
+            with anyio.fail_after(FINISH_WAIT_S):
+                ended = await servers.end_gone_peers(db, self.server_id)
+        except (psycopg.Error, TimeoutError) as exc:
+            log.info("looking for gone servers failed: %s", exc)
+            return
+        for other in ended:
+            say(f"[serve] the server {other} of this user is gone; its row is ended")
+
+    async def session_details(
+        self, sha: str | None, session_ids: list[str]
+    ) -> dict[str, tuple[str, datetime]]:
+        """Read the names and state times of sessions of this server for `relay.sessions`.
+
+        Args:
+            sha: SHA-256 of the asking client's server token; None for a client without one
+                (`--insecure`), which gets nothing.
+            session_ids: The sessions' row ids.
+
+        Returns:
+            Session id -> (name, when it entered its current state); empty when the database
+            cannot be asked (no token, no row, a schema before migration 0040, an error).
+        """
+        if sha is None or self._db is None or self.server_id is None:
+            return {}
+        try:
+            with anyio.fail_after(FINISH_WAIT_S):
+                return await servers.session_details(self._db, self.server_id, sha, session_ids)
+        except (psycopg.Error, TimeoutError) as exc:
+            log.info("the names of the sessions could not be read: %s", exc)
+            return {}
 
     async def _claim(self, db: Db) -> SessionRequest | None:
         """Claim the next request meant for this server.

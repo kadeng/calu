@@ -48,7 +48,6 @@ from calu import (
     doctor,
     herd,
     localsocket,
-    machine,
     servers,
     session_requests,
 )
@@ -528,11 +527,11 @@ class Bridge:
             `finding_json`), `database` (`{reachable, place, problem}`, and `needs` with the
             credential's name when only a password is missing), `server`
             (`{sessions_running, servers_running}`: the sessions of this host that say they
-            are running, and the `calu serve` processes of this host whose `servers` row is
-            not ended and whose process is not known to be gone (`herd.process_gone`);
-            `servers_running` is None when that is not known: no database, a login that may
-            not read `servers`, or a schema older than migration 0038; it says that a server
-            ran when it was recorded, not that it answers now),
+            are running, and the `calu serve` processes of this host that run
+            (`calu.servers.running`: row not ended, a heartbeat within the last minute, and a
+            process not known to be gone); `servers_running` is None when that is not known:
+            no database, a login that may not read `servers`, or a schema older than
+            migration 0040),
             `locked` (a protected credential exists and no login is held: the editor asks
             for the one password, `ide.unlock`) and `unlocked` (the held logins' names).
         """
@@ -553,12 +552,10 @@ class Bridge:
             rows = await herd.sessions(db, active_only=True)
             sessions = len([r for r in rows if r.hostname == host and not r.stale])
             try:
-                recorded = await servers.running(db, hostname=host)
+                alive = await servers.running(db, hostname=host)
             except psycopg.Error as error:
                 log.info("the servers of this host were not read: %s", error)
                 return sessions, None
-            here = machine.here()
-            alive = [s for s in recorded if not herd.process_gone(s.pid, s.machine, here)]
             return sessions, len(alive)
 
         place = await anyio.to_thread.run_sync(self.access.place)

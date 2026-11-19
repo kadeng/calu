@@ -63,6 +63,7 @@ from calu.tui.adminaccess import (
     AdminAccess,
     AdminFailed,
     PasswordNeeded,
+    Served,
     StoreAdmin,
     weakens,
 )
@@ -3029,18 +3030,55 @@ class CaluApp(App[None]):
         One line per session (`session_row_text`): those with open decisions first, then the
         newest. A session `/switch` can attach to starts with `▸`; any other is followed by
         the reason it cannot (`switch_refusal`), and the attached one by "(shown here)".
+        Below the sessions, one line per running `calu serve` names the projects directory it
+        serves (`AdminAccess.served`), so that `/new` and `/fork` can be aimed inside it.
 
         Args:
             rest: If not empty, only the sessions whose id, name, directory or host contains
                 this text are listed (upper and lower case count as equal).
         """
         wanted = rest.strip().lower()
+        problem = self.admin.sessions_problem()
+        if problem is not None:
+            self.flash(f"not read here; use: calu sessions · {problem}", error=True)
+            return
 
-        def show(rows: list[herd.SessionRow]) -> None:
+        async def read(password: str | None) -> tuple[list[herd.SessionRow], list[Served]]:
+            """Read the sessions and the servers with one password.
+
+            Args:
+                password: The credential's password, or None if none is needed.
+
+            Returns:
+                The running sessions, and the running servers (empty if those cannot be
+                read; the sessions are still shown).
+
+            Raises:
+                PasswordNeeded: If the password is missing or wrong.
+                AdminFailed: If the sessions cannot be read.
+            """
+            rows = await self.admin.sessions(password)
+            try:
+                served = await self.admin.served(password)
+            except AdminFailed:
+                served = []
+            return rows, served
+
+        def shown(found: tuple[list[herd.SessionRow], list[Served]]) -> None:
+            """Take the attached session's name from the rows and open the page.
+
+            Args:
+                found: What `read` returned.
+            """
+            self._take_name(found[0])
+            show(*found)
+
+        def show(rows: list[herd.SessionRow], served: list[Served]) -> None:
             """Open the page.
 
             Args:
                 rows: The running sessions.
+                served: The running servers.
             """
             listed = [
                 row
@@ -3066,6 +3104,8 @@ class CaluApp(App[None]):
                 none = f"no running session contains {rest.strip()}" if wanted else None
                 body = [Text(none or "no session is running", self.palette.muted)]
             body.append(Text(""))
+            for server in served:
+                body.append(Text(server.line(), self.palette.muted))
             count = f"{len(listed)} of {len(rows)} running sessions" if wanted else ""
             for hint in (
                 count,
@@ -3077,7 +3117,9 @@ class CaluApp(App[None]):
                     body.append(Text(hint, self.palette.muted))
             self._page("Sessions that run", body)
 
-        self._with_sessions(show)
+        self._with_admin(
+            "It reads the list of sessions.", read, shown, "the sessions could not be read"
+        )
 
     def _cmd_rename(self, rest: str) -> None:
         """Give the attached session a name, or take its name away (`/rename [name]`).

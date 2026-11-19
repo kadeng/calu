@@ -770,6 +770,13 @@ escalation resolved from the database alone.
    the server must print the same relay port; a second server of the same directory must say
    that the port is taken and print the next one; `calu token mint --server` must name the
    projects directory and the port the server took.
+40. A `calu serve` that died (PLAN D244; test plan I38-I41). Start two servers of one user,
+   A with `--projects ~/a` and B with `--projects ~`, and `kill -9` A. `calu start ~/a/x`
+   must be started by B at once (B ends A's row before it claims), A's server token must be
+   refused by the relay, and `calu token mint --server` must name only B. In the full-screen
+   client, `/running` must end with one line per running server, "calu serve of user@host
+   serves DIR"; through the relay from the laptop it must show the sessions' names (`/rename`
+   on the server) and how long each has been in its state.
 
 ## Measuring the checkers
 
