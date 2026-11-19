@@ -742,10 +742,20 @@ data class LaunchItem(
  *
  * @property level "info", "warning" or "error".
  * @property text The message.
+ * @property key Names what the message is about (e.g. "sync-conflict:src/a.py"), so that a later
+ *   `ui.noticeResolved` can mark it; `null` for a message that is never resolved.
+ * @property resolved Whether what the message reported was settled since (a sync conflict that
+ *   was merged). The line stays in the transcript and is drawn without the warning colour.
  */
 @Serializable
 @SerialName(ItemKind.NOTICE)
-data class NoticeItem(override val id: Int, val level: String, val text: String) : Item {
+data class NoticeItem(
+    override val id: Int,
+    val level: String,
+    val text: String,
+    val key: String? = null,
+    val resolved: Boolean = false,
+) : Item {
     override val kind: String get() = ItemKind.NOTICE
 }
 
@@ -897,6 +907,19 @@ data class SyncView(
 )
 
 /**
+ * The offer to set up running and debugging on the server of the SSH mode: PyCharm's SSH
+ * interpreter with the path mapping local copy <-> server folder.
+ *
+ * @property host The SSH host as the plugin's settings name it.
+ * @property directory The project directory on the server.
+ * @property phase "offer" (nothing done yet), "working" (the path is guessed or the interpreter
+ *   is being created) or "failed" (`message` says why; the offer stands again).
+ * @property message What went wrong, for "failed"; `null` otherwise.
+ */
+@Serializable
+data class InterpreterOfferView(val host: String, val directory: String, val phase: String, val message: String? = null)
+
+/**
  * The context window of the main agent.
  *
  * @property tokens Tokens in the context.
@@ -1040,6 +1063,9 @@ data class FocusRequest(val tab: String, val seq: Int)
  * @property lastSeq Sequence number of the last session event applied (0 before the first).
  * @property sync The file synchronisation of the SSH mode; `null` in every other mode and with
  *   "Sync: none".
+ * @property interpreter The offer to create PyCharm's SSH interpreter for the server of the SSH
+ *   mode; `null` when there is nothing to offer (another mode, not connected, a matching
+ *   interpreter exists, or no Python support in the IDE).
  * @property nextId Next free item id.
  */
 @Serializable
@@ -1064,6 +1090,7 @@ data class ViewState(
     val escalations: Map<String, EscalationView> = emptyMap(),
     val side: List<SideExchangeView> = emptyList(),
     val sync: SyncView? = null,
+    val interpreter: InterpreterOfferView? = null,
     val turnCount: Int = 0,
     val turnBase: Int? = null,
     val lastSeq: Int = 0,
@@ -1091,8 +1118,10 @@ data class ViewState(
  * - `ui.hints` `{hints: SetupHint[]}`: replace `hints`;
  * - `ui.model` `{model?: string | null, effort?: string | null}`: the model or effort changed;
  * - `ui.usage` `{context, rate_limits, cost_usd, num_turns}`: the result of `usage.get`;
- * - `ui.notice` `{level: "info" | "warning" | "error", text}`: a message for the user (e.g. a
+ * - `ui.notice` `{level: "info" | "warning" | "error", text, key?}`: a message for the user (e.g. a
  *   failed request) shown in the main list;
+ * - `ui.noticeResolved` `{key}`: mark every unresolved notice of the main list with this key as
+ *   resolved (it stays in the list);
  * - `ui.clear` `{}`: drop messages, tool calls, escalations, subagent tabs, queued messages and
  *   side questions;
  * - `ui.decisionPending` `{escalation_key, answer?}` / `ui.decisionFailed` `{escalation_key}`:
@@ -1101,6 +1130,8 @@ data class ViewState(
  *   state, the surface opens its session list;
  * - `ui.sync` `{phase, text, message?, conflicts, held, notes, queued}` or `{}`: the file
  *   synchronisation's status changed / is off (see `SyncView`);
+ * - `ui.interpreter` `{host, directory, phase, message?}` or `{}`: set or clear the offer of an
+ *   SSH interpreter (see `InterpreterOfferView`);
  * - `ui.sideAsk` `{id, question}` / `ui.sideAnswer` `{id, answer}` or `{id, error}`: a side
  *   question was sent / answered.
  *

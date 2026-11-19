@@ -47,6 +47,7 @@ dependencies {
         pluginModule(implementation(project(":shared")))
         pluginModule(implementation(project(":frontend")))
         pluginModule(implementation(project(":backend")))
+        pluginModule(implementation(project(":python")))
         testFramework(TestFrameworkType.Platform)
     }
     testImplementation(libs.junit4)

@@ -145,11 +145,15 @@ class CaluSync(
     /** Start: listen to the bridge and to local file changes, and publish the status. */
     fun start() {
         scope.launch { sync.status.collect { controller.dispatch("ui.sync", syncEvent(it)) } }
-        // A conflict resolved in the dialog, by "Sync now" or on the other side closes its notification.
+        // A conflict resolved in the dialog, by "Sync now" or on the other side closes its
+        // notification, and its line in the transcript is marked "resolved" (it stays).
         scope.launch {
+            var before = emptySet<String>()
             sync.status.map { it.conflicts.toSet() }.distinctUntilChanged().collect { open ->
                 val gone = synchronized(conflictNotes) { conflictNotes.keys.filter { it !in open }.mapNotNull { conflictNotes.remove(it) } }
                 gone.forEach { it.expire() }
+                for (path in before - open) controller.noticeResolved(conflictKey(path))
+                before = open
             }
         }
         // The project view marks conflicted and held files; it is refreshed when they change.
@@ -357,7 +361,11 @@ class CaluSync(
     }
 
     override fun conflict(conflict: SyncConflict) {
-        controller.notice("warning", "calu sync: ${conflict.path} was changed here and on $host (${kindText(conflict.kind)}). Neither side is overwritten; choose \"Merge\" on the card above the chat.")
+        controller.notice(
+            "warning",
+            "calu sync: ${conflict.path} was changed here and on $host (${kindText(conflict.kind)}). Neither side is overwritten; choose \"Merge\" on the card above the chat.",
+            conflictKey(conflict.path),
+        )
         try {
             val n = Notification(SYNC_NOTIFICATION_GROUP, "calu sync: conflict in ${conflict.path}", "Changed here and on $host: ${kindText(conflict.kind)}.", NotificationType.WARNING)
             n.addAction(NotificationAction.createSimpleExpiring("Merge…") { resolve(conflict.path) })
@@ -369,6 +377,14 @@ class CaluSync(
     }
 
     override fun note(level: String, text: String) = controller.notice(level, text)
+
+    /**
+     * Name the transcript line of a path's conflict, for marking it resolved later.
+     *
+     * @param path the conflict's relative path.
+     * @return the notice key, "sync-conflict:<path>".
+     */
+    private fun conflictKey(path: String): String = "sync-conflict:$path"
 
     /**
      * Word a conflict kind.

@@ -132,7 +132,7 @@ class MalformedParamsTest {
     fun `returns a state for every method with members of the wrong type`() {
         val methods = listOf(
             "bridge.status", "ui.link", "ui.attached", "ui.history", "ui.honestyStored", "ui.starting", "ui.detached", "ui.sessions",
-            "ui.serverHelp", "ui.hints", "ui.model", "ui.usage", "ui.notice", "ui.clear", "ui.decisionPending", "ui.decisionFailed",
+            "ui.serverHelp", "ui.hints", "ui.model", "ui.usage", "ui.notice", "ui.noticeResolved", "ui.clear", "ui.decisionPending", "ui.decisionFailed",
             "ui.sideAsk", "ui.sideAnswer", "session.state", "assistant.delta", "assistant.text", "assistant.thinking", "user.input",
             "tool.use", "check.result", "tool.result", "chat.queue", "tool.files", "edit.diff", "escalation.request",
             "escalation.resolved", "turn.result", "agents.update", "auto_escalate.changed", "honesty.update", "usage.update", "log",

@@ -185,7 +185,11 @@ private fun rawRowOf(state: ViewState, item: Item): RowModel = when (item) {
         action = RowAction("openTab", buildJsonObject { put("tab", JsonPrimitive(item.toolUseId)) }),
         tooltip = "Open the subagent's tab",
     )
-    is NoticeItem -> RowModel(item.id, item.kind, text = item.text, chipKind = if (item.level == "info") "" else item.level)
+    is NoticeItem -> if (item.resolved) {
+        RowModel(item.id, item.kind, text = item.text, chip = "resolved", dim = true)
+    } else {
+        RowModel(item.id, item.kind, text = item.text, chipKind = if (item.level == "info") "" else item.level)
+    }
     is RelayItem -> RowModel(
         item.id, item.kind, text = "Message sent to a subagent", dim = true,
         action = RowAction("openTab", buildJsonObject { put("tab", JsonPrimitive(item.to)) }), tooltip = "Open the subagent's tab",

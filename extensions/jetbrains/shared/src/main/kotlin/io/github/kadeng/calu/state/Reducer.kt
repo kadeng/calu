@@ -129,11 +129,19 @@ private fun reduceUi(state: ViewState, method: String, p: JsonObject): ViewState
     "ui.notice" -> {
         val level = p.str("level") ?: "info"
         val text = textOrEmpty(p["text"])
-        appendItem(state, MAIN) { id -> NoticeItem(id, level, text) }
+        appendItem(state, MAIN) { id -> NoticeItem(id, level, text, nonEmptyStr(p, "key")) }
     }
+    "ui.noticeResolved" -> nonEmptyStr(p, "key")?.let { resolveNotices(state, it) } ?: state
     "ui.sync" -> state.copy(
         sync = p.str("phase")?.let { phase ->
             SyncView(phase, p.str("text").orEmpty(), nonEmptyStr(p, "message"), p.strings("conflicts"), p.strings("held"), p.strings("notes"), p.int("queued") ?: 0)
+        },
+    )
+    "ui.interpreter" -> state.copy(
+        interpreter = p.str("phase")?.let { phase ->
+            val host = nonEmptyStr(p, "host")
+            val directory = nonEmptyStr(p, "directory")
+            if (host == null || directory == null) null else InterpreterOfferView(host, directory, phase, nonEmptyStr(p, "message"))
         },
     )
     "ui.clear" -> clearTranscript(state)
@@ -588,4 +596,18 @@ private fun onTurnResult(state: ViewState, p: JsonObject): ViewState {
             numTurns = p.int("num_turns") ?: next.usage.numTurns,
         ),
     )
+}
+
+/**
+ * Mark the unresolved notices of the main list that carry a key as resolved.
+ *
+ * @param state The current state (not modified).
+ * @param key The notices' key, e.g. "sync-conflict:src/a.py".
+ * @return The new state; the same object if no notice matched.
+ */
+internal fun resolveNotices(state: ViewState, key: String): ViewState {
+    val list = state.items[MAIN] ?: return state
+    if (list.none { it is NoticeItem && it.key == key && !it.resolved }) return state
+    val next = list.map { if (it is NoticeItem && it.key == key && !it.resolved) it.copy(resolved = true) else it }
+    return state.copy(items = withEntry(state.items, MAIN, next))
 }

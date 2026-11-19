@@ -13,5 +13,6 @@
         <module name="calu.shared" loading="required"/>
         <module name="calu.frontend"/>
         <module name="calu.backend"/>
+        <module name="calu.python"/>
     </content>
 </idea-plugin>

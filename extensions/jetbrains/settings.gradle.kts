@@ -37,3 +37,4 @@ dependencyResolutionManagement {
 include("shared")
 include("frontend")
 include("backend")
+include("python")

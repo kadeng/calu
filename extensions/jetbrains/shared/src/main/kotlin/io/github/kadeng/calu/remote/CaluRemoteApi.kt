@@ -135,7 +135,7 @@ interface CaluRemoteApi : RemoteApi<Unit> {
      *     unlock {}                    openDiff {tool_use_id}       openFile {path, line?}
      *     editChecker {name}           showContext {escalation_id?} 
      *     setHonesty {mode}            syncNow {}                   syncResolve {path?}
-     *     syncUploadNow {}             syncShowSkipped {}
+     *     syncUploadNow {}             syncShowSkipped {}           setupInterpreter {}
      *
      * @param projectId The project.
      * @param action The action's name.

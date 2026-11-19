@@ -53,11 +53,35 @@ class CaluConfigurable(private val project: Project) : Configurable {
 
     override fun getDisplayName(): String = "calu"
 
-    override fun createComponent(): JComponent = FormBuilder.createFormBuilder()
+    /** The fields that only the SSH mode reads; disabled (their values kept) in the other modes. */
+    private val sshFields: List<JComponent> get() = listOf(sshHost, sshDirectory, sshOptions, sync)
+
+    /**
+     * Enable the SSH fields when "On a server, over SSH" is chosen and disable them otherwise.
+     * A disabled field keeps its value, which is stored as before.
+     */
+    private fun updateSshFields() {
+        val on = MODE_CHOICES[maxOf(0, mode.selectedIndex)].first == "ssh"
+        for (field in sshFields) field.isEnabled = on
+    }
+
+    override fun createComponent(): JComponent {
+        mode.addActionListener { updateSshFields() }
+        updateSshFields()
+        return form()
+    }
+
+    /**
+     * Lay out the page.
+     *
+     * @return The page's panel.
+     */
+    private fun form(): JComponent = FormBuilder.createFormBuilder()
         .addLabeledComponent("How calu is reached:", mode)
         .addComponent(note("Automatic: inside WSL for a project below \\\\wsl.localhost on Windows, else on this machine. \"On this machine\" is also right for JetBrains remote development, where the plugin's backend runs on the host. \"On a server, over SSH\": this project is a local copy."))
         .addLabeledComponent("calu command:", command)
         .addSeparator()
+        .addComponent(note("The SSH fields below are used only when \"How calu is reached\" is \"On a server, over SSH\"."))
         .addLabeledComponent("SSH host:", sshHost)
         .addLabeledComponent("Remote project directory:", sshDirectory)
         .addLabeledComponent("Extra ssh options:", sshOptions)
@@ -113,6 +137,7 @@ class CaluConfigurable(private val project: Project) : Configurable {
         sudo.isSelected = s.serverSudo
         insecure.isSelected = s.serverInsecure
         extraArgs.text = s.serverExtraArgs
+        updateSshFields()
     }
 
     override fun isModified(): Boolean = current() != loaded

@@ -258,13 +258,21 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
     }
 
     /**
-     * Build a notice: an icon of its level and the wrapped text.
+     * Build a notice: an icon of its level and the wrapped text. A resolved notice (chip
+     * "resolved") keeps its text, drawn dim with a check mark and a "RESOLVED" badge instead of
+     * the warning colour.
      *
      * @param m The model of a "notice" row.
      * @return The component.
      */
     private fun notice(m: RowModel): JComponent {
         val p = JPanel(BorderLayout(JBUI.scale(6), 0)).apply { isOpaque = false; border = JBUI.Borders.empty(2, 0) }
+        if (m.chip == "resolved") {
+            p.add(JBLabel(AllIcons.General.InspectionsOK).apply { verticalAlignment = SwingConstants.TOP }, BorderLayout.WEST)
+            p.add(textArea(m.text).apply { foreground = UiStyle.dim }, BorderLayout.CENTER)
+            p.add(JPanel(BorderLayout()).apply { isOpaque = false; add(Chip("RESOLVED", "ok"), BorderLayout.NORTH) }, BorderLayout.EAST)
+            return p
+        }
         val icon = when (m.chipKind) {
             "error" -> AllIcons.General.Error
             "warning" -> AllIcons.General.Warning

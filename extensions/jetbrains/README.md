@@ -96,11 +96,36 @@ Integration", a clone into a repository) is listed under "not synchronised" with
 once per IDE start that says so; git commands belong on the server (an SSH terminal, or
 Claude).
 
-Running and debugging on the server: add PyCharm's SSH interpreter for the same host
-(Add Interpreter | On SSH), sync folder `<Project root>` → the remote directory, and leave
-"Automatically upload project files to the server" off. Run and Debug then start the code on
-the server; breakpoints and line numbers match because calu keeps both copies equal (checked
-after an edit on the server that moved lines). If PyCharm's Deployment uploads changed files
+Running and debugging on the server: while the plugin is connected and the project has no
+SSH interpreter for that host and folder, a card offers "Set up running and debugging on
+<host>":
+
+    ssh <host> '<guess>'        the project's .venv/venv on the server, else python3 on the PATH of
+                                an SSH command, else the newest ~/.local/bin/python3*
+    dialog "Python on <host>"   prefilled with the guess; the user confirms or corrects it
+    ssh <host> '<python> -c …'  it runs and tells its version
+    module calu.python          PyCharm's SSH configuration (an existing one of the same host, user
+                                and port is reused), a deployment server with the mapping local
+                                folder -> remote directory, automatic upload off, the Python SDK on
+                                that target; the project's and its modules' interpreter
+
+The result is stored as PyCharm's own Add Interpreter | On SSH stores it, so it can be changed
+there. Run and Debug then start the code on the server; breakpoints and line numbers match
+because calu keeps both copies equal (checked after an edit on the server that moved lines).
+By hand: Add Interpreter | On SSH, sync folder `<Project root>` → the remote directory, and
+"Automatically upload project files to the server" off.
+
+PyCharm 2026.3 has no public API that creates an SSH interpreter: the data class of such an
+SDK (`PyTargetAwareAdditionalData`), its constructors and loader, and the "add interpreter"
+packages are internal API. `calu.python` therefore builds the SDK's data with the platform's
+public persistence methods (`SdkType.loadAdditionalData`/`saveAdditionalData` of
+`PythonSdkType`) from an element written by the platform's own `saveTargetConfiguration`, and
+reads it through the public interfaces `TargetBasedSdkAdditionalData` and
+`RemoteSdkProperties`; no XML is written by hand. That depends on PyCharm's stored format of SSH
+interpreters (which PyCharm must keep readable for its users' settings); the deployment and SSH
+configuration classes it uses are public, without a compatibility promise. The module loads
+only in an IDE with PyCharm's Python, SSH, remote-run and deployment plugins; elsewhere no card
+is shown. If PyCharm's Deployment uploads changed files
 by itself into the same directory, the plugin warns in the chat and with a notification: two
 writers can overwrite each other.
 
@@ -143,9 +168,11 @@ only after the next full comparison.
     frontend/  the tool window (native Swing): UiKit (cards, chips, wrapping layout), Transcript,
                EscalationCard, Composer, ChatSurface, SettingsDialog, CommentAction, TerminalOpener,
                notifications, status bar widget, settings page
+    python/    optional module calu.python: PyCharm's SSH interpreter for the SSH mode (loaded only
+               where PyCharm's Python, SSH, remote-run and deployment plugins are)
     src/       plugin.xml (wiring only) and the tests of the whole plugin in a headless IDE
 
-In a local IDE all three load in one process. In remote development `backend` runs on the remote
+In a local IDE all of them load in one process. In remote development `backend` runs on the remote
 host and `frontend` in the thin client; `shared` is in both.
 
 ## Rules this plugin follows
@@ -199,9 +226,10 @@ synchronisation's test against a real bridge starts `uv run calu ide` from this 
 is skipped where `uv` or `git` is missing). The Gradle build cache is off (`gradle.properties`):
 it restored test classes compiled against an older `shared`.
 
-Plugin Verifier result (2026-11-19): compatible with PyCharm 2026.3 (PY-263.7307.206), 8
-usages of deprecated API (default methods of `ToolWindowFactory` and `StatusBarWidget`,
-`FileEditorManager.openFile`), 23 of experimental API, none of internal API (the progress
+Plugin Verifier result (2026-11-19, fifth round): compatible with PyCharm 2026.3
+(PY-263.7307.206), 10 usages of deprecated API (default methods of `ToolWindowFactory`,
+`StatusBarWidget` and `ProjectViewNodeDecorator`, `FileEditorManager.openFile`), 22 of
+experimental API, none of internal API (the progress
 indicator of the synchronisation has no percentage for that reason) (the RPC and `ProjectId` API that split
 mode needs, and the Reworked Terminal API). No EAP of the next version (2027.1) was published
 when this was written (JetBrains' release list held 2026.3 as the newest build of every
@@ -229,7 +257,9 @@ The tool window "calu" is in the right stripe (below "More tool windows" until i
                what Claude does and since when, the honesty chip (mode, marks, review, trust)
     cards      what is missing, each with its button: install calu, unlock (one password), the
                server command for tmux or screen with "Open terminal with this command",
-               the running sessions, a session request that waits (with Cancel)
+               the running sessions, a session request that waits (with Cancel), in SSH mode the
+               synchronisation and "Set up running and debugging on <host>"; the cards scroll, so
+               that the composer and the footer stay visible in a short tool window
     tabs       Main and one chip per subagent: running, finished, failed, "⚠" for a decision that
                waits there, "held" for a step calu holds back; beyond six tabs finished ones fold
     transcript Markdown (tables, code that wraps), tool rows with the checker's decision and, under a
@@ -249,7 +279,9 @@ The tool window "calu" is in the right stripe (below "More tool windows" until i
 
 Settings | Tools | calu holds only what belongs to the editor: how calu is reached, the calu
 command, SSH host, remote directory and options, the sync mode, notifications, and the flags of
-the server command. They are stored in `.idea/calu.xml` by the backend. calu's own settings are
+the server command. The SSH fields (host, remote directory, extra options, sync) can be edited
+only while "On a server, over SSH" is chosen; in the other modes they are greyed and keep their
+values. They are stored in `.idea/calu.xml` by the backend. calu's own settings are
 in calu's database: the title action "calu Settings" opens a dialog generated from
 `ide.settings.get` (sections, search, a control per kind, a marker for what differs from the
 default, reset, global or per project), with the pages "Models" (presets, one model for
@@ -278,7 +310,7 @@ found, with the buttons of the chat's setup cards).
 | File sync for mode C | built; unit-tested, tested against `calu ide` as a local process and over SSH, and seen in the IDE (section H of the test plan) |
 | A message to a subagent | built; not confirmed in the IDE this round |
 | Remote development | seen with the backend on the SSH box and the JetBrains Client on the desktop: tool window, sessions, a turn with Allow and Deny with a note, diffs and file links opened by the backend, a comment in a diff, the terminal with the server command; with `runIdeSplitMode` also the one-password dialog, the settings dialog with a refused value and Reset, the checker editor |
-| SSH interpreter next to the SSH mode | seen: run and debug on the server with a breakpoint, line numbers match after a server edit; the "two writers" warning for PyCharm's automatic upload; "Sync: none" with PyCharm's Deployment uploading |
+| SSH interpreter next to the SSH mode | seen: run and debug on the server with a breakpoint, line numbers match after a server edit; the "two writers" warning for PyCharm's automatic upload; "Sync: none" with PyCharm's Deployment uploading. Fifth round: the card "Set up running and debugging on <host>" creates it (guess, confirmation, creation, run and breakpoint seen; test plan H30 to H35) |
 | The activity verbs' spinner, a browser surface | not built in the UI |
 
 Known gaps: thinking text is shown only when its row is expanded; with ten subagents the tab

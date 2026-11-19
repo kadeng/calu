@@ -89,8 +89,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import java.awt.CardLayout
+import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.datatransfer.StringSelection
 import javax.swing.JButton
@@ -224,7 +226,19 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     }
     private val activity = JBLabel().apply { foreground = UiStyle.dim }
     private val honesty = Chip().apply { isVisible = false }
-    private val cards = JPanel(VerticalLayout(JBUI.scale(6))).apply { border = JBUI.Borders.empty(0, 10, 6, 10); isOpaque = false }
+    private val cards = WidthTrackingPanel(VerticalLayout(JBUI.scale(6))).apply { border = JBUI.Borders.empty(0, 10, 6, 10); isOpaque = false }
+
+    /**
+     * The setup cards in a scrolling area. Its preferred height is the cards' height, capped by
+     * [cardsRoom], so that the composer and the footer below stay visible in a short tool window.
+     */
+    private val cardsScroll = object : JBScrollPane(cards, VERTICAL_SCROLLBAR_AS_NEEDED, HORIZONTAL_SCROLLBAR_NEVER) {
+        override fun getPreferredSize(): Dimension {
+            val wanted = super.getPreferredSize()
+            val room = cardsRoom()
+            return if (room == null || wanted.height <= room) wanted else Dimension(wanted.width, room)
+        }
+    }.apply { border = JBUI.Borders.empty(); isOpaque = false; viewport.isOpaque = false; isVisible = false }
     private var cardsShown: List<Any?> = emptyList()
     private val attention = JPanel(WrapLayout(8, 2)).apply { border = JBUI.Borders.empty(0, 10, 4, 10); isOpaque = false; isVisible = false }
     private var attentionShown: List<Any?> = emptyList()
@@ -243,6 +257,8 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     private val level = ActionLink("level") { levelMenu() }.apply { setDropDownLinkIcon() }
     private val usage = Chip().apply { toolTipText = "" }
     private val root = JPanel(BorderLayout())
+    private val header = JPanel(BorderLayout(JBUI.scale(10), 0))
+    private val south = JPanel(VerticalLayout(JBUI.scale(4)))
     private val clock = Timer(1000) { renderActivity() }
 
     override val component: JComponent get() = root
@@ -268,22 +284,26 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         private set
 
     init {
-        val header = JPanel(BorderLayout(JBUI.scale(10), 0)).apply {
+        header.apply {
             isOpaque = false
             border = JBUI.Borders.empty(6, 10)
             add(sessionLink, BorderLayout.WEST)
             add(activity, BorderLayout.CENTER)
             add(honesty, BorderLayout.EAST)
         }
-        root.add(JPanel(VerticalLayout(0)).apply { isOpaque = false; add(header); add(cards); add(attention); add(tabStrip) }, BorderLayout.NORTH)
+        root.add(JPanel(VerticalLayout(0)).apply { isOpaque = false; add(header); add(cardsScroll); add(attention); add(tabStrip) }, BorderLayout.NORTH)
         root.add(transcriptsPanel, BorderLayout.CENTER)
         val footer = JPanel(WrapLayout(12, 2)).apply { isOpaque = false; add(model); add(effort); add(level); add(usage) }
-        val south = JPanel(VerticalLayout(JBUI.scale(4))).apply {
+        south.apply {
             isOpaque = false
             border = JBUI.Borders.empty(4, 8, 6, 8)
             add(queue); add(composer.component); add(footer)
         }
         root.add(south, BorderLayout.SOUTH)
+        // A new height of the tool window changes the room of the cards: lay them out again.
+        root.addComponentListener(object : java.awt.event.ComponentAdapter() {
+            override fun componentResized(e: java.awt.event.ComponentEvent) = cardsScroll.revalidate()
+        })
         clickable(honesty, "Code honesty: what is verified to say what it does. Click for the mode, the marks and a review.") { honestyMenu() }
         clickable(usage) { usageMenu() }
         host.onUi { method, params ->
@@ -407,9 +427,28 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         hintTexts = list.map { it.message } + listOfNotNull(state.serverHelp?.command?.takeIf { list.any { c -> c.serverHelp } })
         cards.removeAll()
         for (card in list) cards.add(if (card.compact) compactCard(card) else setupCard(card))
-        cards.isVisible = list.isNotEmpty()
+        cardsScroll.isVisible = list.isNotEmpty()
         cards.revalidate()
+        cardsScroll.revalidate()
         cards.repaint()
+    }
+
+    /**
+     * Compute the height the setup cards may take: the tool window's height minus the header,
+     * the attention line, the tabs, the composer with its footer and a strip of the transcript.
+     *
+     * In a very short window the transcript's strip is given up first, then the cards; the
+     * composer and the footer are never covered.
+     *
+     * @return The height in pixels (0 or more), or `null` before the window is laid out.
+     */
+    private fun cardsRoom(): Int? {
+        if (root.height <= 0) return null
+        val taken = header.preferredSize.height + south.preferredSize.height +
+            (if (attention.isVisible) attention.preferredSize.height else 0) +
+            (if (tabStrip.isVisible) tabStrip.preferredSize.height else 0)
+        val free = root.height - taken
+        return maxOf(0, if (free > JBUI.scale(100)) free - JBUI.scale(40) else free)
     }
 
     /**
@@ -475,7 +514,14 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             "copyServerCommand" -> state.serverHelp?.let { CopyPasteManager.getInstance().setContents(StringSelection(it.command)) }
             "newSession" -> newSession()
             "attach" -> if (state.sessions.list.isEmpty()) resumeMenu() else sessionMenu()
-            else -> host.act(a.action)
+            else -> if (a.action.startsWith("dismiss:")) {
+                // "Not now" on a card: hide it until the IDE restarts.
+                dismissed.add(a.action.removePrefix("dismiss:"))
+                cardsShown = emptyList()
+                renderCards()
+            } else {
+                host.act(a.action)
+            }
         }
     }
 

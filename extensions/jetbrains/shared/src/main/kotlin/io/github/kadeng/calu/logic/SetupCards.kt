@@ -166,7 +166,40 @@ fun setupCards(state: ViewState, dismissed: Collection<String> = emptyList()): L
         cards = listOf(SetupCard("link-lost", "warning", "The connection to the session was lost$why")) + cards
     }
     state.starting?.let { cards = listOf(startingCard(it)) + cards.filter { c -> c.id != "no-session" } }
-    return syncCards(state.sync, dismissed) + cards
+    return syncCards(state.sync, dismissed) + listOfNotNull(interpreterCard(state.interpreter, dismissed)) + cards
+}
+
+/** Id of the card that offers PyCharm's SSH interpreter (`ViewState.interpreter`). */
+const val INTERPRETER_CARD: String = "ssh-interpreter"
+
+/**
+ * Build the card that offers to set up running and debugging on the server (SSH mode).
+ *
+ *     offer     "PyCharm can run and debug this project on <host> …"   [Set up running and debugging on <host>] [Not now]
+ *     working   the same sentence with a spinner, no button
+ *     failed    the reason                                              [Try again] [Not now]
+ *
+ * "Set up …" and "Try again" are the action "setupInterpreter"; "Not now" is
+ * "dismiss:ssh-interpreter", which the surface handles by hiding the card until the IDE restarts.
+ *
+ * @param offer The offer; `null` for none.
+ * @param dismissed Ids of cards the user dismissed.
+ * @return The card, or `null` if there is no offer or it was dismissed.
+ */
+fun interpreterCard(offer: io.github.kadeng.calu.state.InterpreterOfferView?, dismissed: Collection<String> = emptyList()): SetupCard? {
+    if (offer == null || INTERPRETER_CARD in dismissed) return null
+    val label = "Set up running and debugging on ${offer.host}"
+    val notNow = CardAction("Not now", "dismiss:$INTERPRETER_CARD")
+    val sentence = "PyCharm can run and debug this project on ${offer.host}: an SSH interpreter whose path mapping " +
+        "joins this folder and ${offer.directory}, so that breakpoints and line numbers match. You confirm the Python on the server first."
+    return when (offer.phase) {
+        "working" -> SetupCard(INTERPRETER_CARD, "info", "Setting up the SSH interpreter on ${offer.host}…", busy = true)
+        "failed" -> SetupCard(
+            INTERPRETER_CARD, "warning", "The SSH interpreter was not created: ${offer.message ?: "unknown reason"}",
+            CardAction("Try again", "setupInterpreter"), listOf(notNow),
+        )
+        else -> SetupCard(INTERPRETER_CARD, "info", sentence, CardAction(label, "setupInterpreter"), listOf(notNow))
+    }
 }
 
 /**

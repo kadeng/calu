@@ -1298,11 +1298,20 @@ one: `.git` is never copied in either direction, and a `.git` that appears in th
 (`git init`, "Enable Version Control Integration") is shown with an explanation; run git on
 the server, in a terminal or through Claude.
 
-To run and debug on the server in mode 3, add PyCharm's SSH interpreter (Python Interpreter,
-Add Interpreter, On SSH) for the same host, with the sync folder `<Project root>` →
-the remote project directory, and **without** "Automatically upload project files to the
-server": calu already puts every saved file there. Breakpoints and line numbers then match,
-because both copies hold the same text. If PyCharm's Deployment uploads changed files by
+To run and debug on the server in mode 3, the chat offers it: while the plugin is connected
+and the project has no SSH interpreter for that host and folder, a card says "Set up running
+and debugging on <host>". Its button looks for the Python on the server (the project's
+`.venv` or `venv`, else `python3` on the PATH of an SSH command, else the newest
+`~/.local/bin/python3*`), asks you to confirm or correct the path, checks that it runs, and
+then creates PyCharm's SSH interpreter: an SSH configuration for the host (an existing one is
+reused), a deployment server with the path mapping local folder → remote project directory,
+automatic upload off, and the interpreter as the project's. "Not now" hides the card until the
+IDE restarts. PyCharm may then show its own notice "SSH interpreter has changed" with
+"Auto-upload files": leave it, calu already puts every saved file on the server. To do the same
+by hand: Python Interpreter, Add Interpreter, On SSH, for the same host, with the sync folder
+`<Project root>` → the remote project directory, and **without** "Automatically upload project
+files to the server". Breakpoints and line numbers then match, because both copies hold the
+same text. If PyCharm's Deployment uploads changed files by
 itself into the same directory, the plugin warns ("two writers"); turn one of them off. With
 Sync "None", PyCharm's Deployment (or rsync) is the only writer and calu only shows the chat;
 the agent's edits then reach the local copy only through whatever download you use.

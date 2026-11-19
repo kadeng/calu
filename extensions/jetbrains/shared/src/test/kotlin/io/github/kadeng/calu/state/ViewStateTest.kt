@@ -183,6 +183,33 @@ class ApplyEventTest {
     }
 
     @Test
+    fun `marks a resolved notice and keeps it`() {
+        val s = applyEvents(
+            initialViewState(),
+            listOf(
+                ev("ui.notice", "level" to "warning", "text" to "conflict in a.py", "key" to "sync-conflict:a.py"),
+                ev("ui.notice", "level" to "warning", "text" to "conflict in b.py", "key" to "sync-conflict:b.py"),
+                ev("ui.noticeResolved", "key" to "sync-conflict:a.py"),
+                ev("ui.noticeResolved", "key" to "sync-conflict:unknown"),
+            ),
+        )
+        assertEquals(
+            listOf<Item>(
+                NoticeItem(id = 1, level = "warning", text = "conflict in a.py", key = "sync-conflict:a.py", resolved = true),
+                NoticeItem(id = 2, level = "warning", text = "conflict in b.py", key = "sync-conflict:b.py"),
+            ),
+            list(s),
+        )
+        val rows = io.github.kadeng.calu.chat.rowsOf(s, MAIN)
+        assertEquals("resolved", rows[0].chip)
+        assertEquals("", rows[0].chipKind)
+        assertEquals("warning", rows[1].chipKind)
+        // A second conflict of the same path gets a new line; the old one stays resolved.
+        val again = applyEvents(s, listOf(ev("ui.notice", "level" to "warning", "text" to "again", "key" to "sync-conflict:a.py")))
+        assertEquals(false, (list(again).last() as NoticeItem).resolved)
+    }
+
+    @Test
     fun `caps list length`() {
         val events = List(MAX_ITEMS_PER_AGENT + 5) { i -> ev("assistant.text", "text" to "m$i") }
         val s = applyEvents(initialViewState(), events)

@@ -174,6 +174,18 @@ file synchronisation of the SSH mode (section H).
 | B7 | SSH mode and file synchronisation | built and run: section H |
 | B8 | mode 1 (local) with the fourth round's build | ok (`split1/130`, `131`): `~/work/demo` in the ordinary PyCharm, New Session, a `tour` turn with the escalation card and Allow |
 
+Fifth round (2026-11-19, the owner's decisions of the afternoon), by an agent in the desktop
+against the SSH box, mode 3 with "Sync: through calu". Screenshots
+`~/.cache/calu-uitest/share/pycharm5/` (numbers below; a selection in
+`agent/records/notes/screenshots/pycharm5-*.png`).
+
+| # | Case | Status |
+|---|---|---|
+| B9 | no session attached: the message field's placeholder | ok (05): "Start or attach a session to chat" in the disabled field (was "Attach to a session to write to Claude") |
+| B10 | the setup cards in a scrolling area; a short tool window | ok (05, 21, 31): with five cards the area scrolls and the composer and its footer stay visible; with the Run window opened below it (the tool window about 250 px high) the cards keep a scrolling strip; at about 185 px (30) the cards' strip closes and the composer and the footer are still not covered |
+| B11 | plugin settings page: SSH fields disabled unless "On a server, over SSH" | ok (27 to 29): "On this machine" greys SSH host, remote directory, extra ssh options and Sync with their values kept; back to SSH they are editable with the same values; "Automatic" and WSL also disable them. A note above the fields says when they are used |
+| B12 | the offer of an SSH interpreter in mode 3 | ok: see H30 to H35 |
+
 ### C. Full-screen client and line client (`calu attach`)
 
 Run 2026-11-18 by an agent in a private tmux server (`tmux -L calutest`) on the host: the
@@ -596,6 +608,17 @@ to the box) and, case by case, by `SynchronizerTest` and `SyncIoTest` over a scr
 | H27 | a bridge without the `fs` capability | test (`SynchronizerTest`): refused with what to do, no `ide.fs.*` request. No such bridge exists to run against |
 | H28 | unsaved editor text and a remote change of other lines | test (merged; never uploaded before it is saved); H13 is the overlapping case by hand |
 | H29 | a restart of the IDE | ok (58): the plugin connects by itself, compares (no question, the bases are stored) and is "in sync" |
+
+Fifth round (2026-11-19), screenshots `~/.cache/calu-uitest/share/pycharm5/` (see B9):
+
+| # | Case | Status |
+|---|---|---|
+| H30 | a resolved conflict's line in the transcript | ok (23 to 26): unsaved local text and a change of the same line on the server gave the card, the notification and the orange line; "Merge…", Accept Right, and the line stays with a check mark, dim text and a RESOLVED badge (no warning colour); the card and the notification are gone. Unit test: `ViewStateTest` "marks a resolved notice and keeps it" |
+| H31 | connected, no matching SSH interpreter: the card | ok (05, 16): "Set up running and debugging on sshbox" with "Not now", shown as soon as the bridge runs (also before the first sync is confirmed) |
+| H32 | the button: the guess, the dialog, the creation | ok (08, 09, 17): the Python was guessed over SSH (`/home/dev/.local/bin/python3.12`: the box has no `python3` on a non-interactive PATH and no `.venv`), the dialog is prefilled with it, a relative path disables OK (18); after OK the version is checked and the interpreter "Python 3.12.12 on sshbox (/home/dev/.local/bin/python3.12)" is the project's (status bar), a line in the chat says what was made. Stored as PyCharm makes it by hand: `ssh/web-deployment` target with `projectRootOnTarget` = `/home/dev/project`, the deployment server's mapping `$PROJECT_DIR$` → `/home/dev/project`, automatic upload off; an existing SSH configuration and deployment server of the same host were reused |
+| H33 | a path that does not run | ok (19): "/usr/bin/nopython did not run on sshbox" on the card with "Try again"; the second try with the guess succeeded (20) and reused the interpreter made for the first project. PyCharm then shows its own "SSH interpreter has changed" notice with "Auto-upload files" (20): documented as "leave it" |
+| H34 | Run and Debug on the server | ok (10, 12, 21): `run_demo.py` ran as `/home/dev/.local/bin/python3.12 /home/dev/project/run_demo.py` with "host: sshbox"; Debug stopped at a breakpoint in `greeter.py` line 3 with `name = 'Ada'` and the frames `greet`, `greet_all`, `<module>` |
+| H35 | no card where a matching interpreter exists; "Not now" | ok (13, 32, 33): no card after a restart in the project that got the interpreter, nor in `~/work/sshproj` with the SSH interpreter made by hand in PyCharm's dialog; "Not now" hides the card |
 
 Measurements (the box and the desktop are containers on one host): the first clone of the 307
 files 1.3 s in the IDE after the confirmation (8 s before the VFS was refreshed once instead

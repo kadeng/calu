@@ -5,6 +5,12 @@
         <module name="calu.shared"/>
     </dependencies>
 
+    <extensionPoints>
+        <!-- PyCharm's SSH interpreter for the SSH mode; implemented by the optional module calu.python. -->
+        <extensionPoint qualifiedName="io.github.kadeng.calu.sshInterpreterSetup"
+                        interface="io.github.kadeng.calu.backend.SshInterpreterSetup" dynamic="true"/>
+    </extensionPoints>
+
     <extensions defaultExtensionNs="com.intellij">
         <platform.rpc.backend.remoteApiProvider implementation="io.github.kadeng.calu.backend.BackendRpcApiProvider"/>
         <editorNotificationProvider implementation="io.github.kadeng.calu.backend.CheckerBannerProvider"/>

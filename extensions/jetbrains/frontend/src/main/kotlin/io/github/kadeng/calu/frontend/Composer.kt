@@ -214,7 +214,7 @@ class Composer(private val project: Project, private val host: ComposerHost) {
         working = isAttached && state.session.state !in setOf("idle", "stopped", "failed")
         input.isEnabled = canSend
         input.emptyText.text = when {
-            !isAttached -> "Attach to a session to write to Claude"
+            !isAttached -> "Start or attach a session to chat"
             target.reason != null -> target.reason!!
             else -> "Message to ${target.label}  (/ for commands)"
         }

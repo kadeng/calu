@@ -649,9 +649,25 @@ class ChatController(
      *
      * @param level "info", "warning" or "error".
      * @param text The message.
+     * @param key What the message is about, for a later [noticeResolved]; `null` for none.
      */
-    fun notice(level: String, text: String) =
-        dispatch("ui.notice", buildJsonObject { put("level", JsonPrimitive(level)); put("text", JsonPrimitive(text)) })
+    fun notice(level: String, text: String, key: String? = null) =
+        dispatch(
+            "ui.notice",
+            buildJsonObject {
+                put("level", JsonPrimitive(level))
+                put("text", JsonPrimitive(text))
+                if (key != null) put("key", JsonPrimitive(key))
+            },
+        )
+
+    /**
+     * Mark the messages of the main transcript that carry a key as resolved: they stay and lose
+     * their warning colour.
+     *
+     * @param key The key given to [notice].
+     */
+    fun noticeResolved(key: String) = dispatch("ui.noticeResolved", buildJsonObject { put("key", JsonPrimitive(key)) })
 
     /**
      * Build the command that starts `calu serve`, from the editor-side settings and from what

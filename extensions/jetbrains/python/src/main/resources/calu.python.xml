@@ -1,0 +1,22 @@
+<idea-plugin>
+    <!-- Loaded only in an IDE with PyCharm's Python, SSH, remote-run and deployment support.
+         intellij.platform.execution and intellij.platform.remote.core (TargetBasedSdks, AuthType)
+         are core modules on the IDE's boot class path; a plugin may not declare a dependency on
+         them (internal visibility), and needs none to load their classes. -->
+    <dependencies>
+        <module name="calu.backend"/>
+        <module name="calu.shared"/>
+        <plugin id="PythonCore"/>
+        <plugin id="Pythonid"/>
+        <plugin id="org.jetbrains.plugins.remote-run"/>
+        <plugin id="com.jetbrains.plugins.webDeployment"/>
+        <plugin id="com.intellij.platform.ssh"/>
+        <module name="intellij.python.sdk.backend"/>
+        <module name="intellij.python.community.impl"/>
+        <module name="intellij.platform.ssh.core"/>
+    </dependencies>
+
+    <extensions defaultExtensionNs="io.github.kadeng.calu">
+        <sshInterpreterSetup implementation="io.github.kadeng.calu.python.PySshInterpreterSetup"/>
+    </extensions>
+</idea-plugin>

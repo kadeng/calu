@@ -62,7 +62,13 @@ class CaluPasswords {
 @Service(Service.Level.PROJECT)
 class CaluProjectService(private val project: Project, private val scope: CoroutineScope) : Disposable {
     /** The parts that are rebuilt when the settings change how calu is reached. */
-    class Wiring(val choice: LauncherChoice, val supervisor: BridgeSupervisor, val controller: ChatController, val sync: CaluSync? = null)
+    class Wiring(
+        val choice: LauncherChoice,
+        val supervisor: BridgeSupervisor,
+        val controller: ChatController,
+        val sync: CaluSync? = null,
+        val interpreter: CaluInterpreter? = null,
+    )
 
     private val log = Logger.getInstance(CaluProjectService::class.java)
     private val lock = Any()
@@ -81,7 +87,7 @@ class CaluProjectService(private val project: Project, private val scope: Corout
      * @return Launcher choice, supervisor and controller.
      */
     fun wiring(): Wiring = synchronized(lock) {
-        wiring ?: build().also { wiring = it; it.sync?.start(); it.controller.start() }
+        wiring ?: build().also { wiring = it; it.sync?.start(); it.interpreter?.start(); it.controller.start() }
     }
 
     /**
@@ -111,6 +117,7 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         val old = synchronized(lock) { if (same) null else wiring.also { wiring = null } }
         if (old != null) {
             old.sync?.dispose()
+            old.interpreter?.dispose()
             old.supervisor.dispose()
             wiring()
             restarted.value += 1
@@ -165,7 +172,9 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         } else {
             null
         }
-        return Wiring(choice, supervisor, controller, sync)
+        // SSH mode (with either sync mode): offer PyCharm's SSH interpreter for the server.
+        val interpreter = if (choice.mode == "ssh" && project.basePath != null) CaluInterpreter(project, controller, settings, scope) { log.info(it) } else null
+        return Wiring(choice, supervisor, controller, sync, interpreter)
     }
 
     /**
@@ -188,6 +197,7 @@ class CaluProjectService(private val project: Project, private val scope: Corout
 
     override fun dispose() {
         synchronized(lock) { wiring }?.sync?.dispose()
+        synchronized(lock) { wiring }?.interpreter?.dispose()
         synchronized(lock) { wiring }?.supervisor?.dispose()
     }
 
