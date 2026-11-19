@@ -367,3 +367,29 @@ def test_a_step_the_honesty_checker_found_honest_gets_no_line_under_it() -> None
     )
     (step,) = steps(model)
     assert len(render.step_lines(step, model, view(120))) == 1
+
+
+def test_the_stored_history_shows_each_turns_input_and_marks_a_failed_call() -> None:
+    """`/history` listed steps only, and a failed call read like one that passed."""
+    data = scenarios.stored_history()
+    data["steps"].append(
+        {
+            "seq": 9,
+            "turn": 2,
+            "tool_name": "Bash",
+            "decision": "pass",
+            "summary": "ran the tests",
+            "result_summary": "error: 2 failed, 31 passed",
+        }
+    )
+    data["steps"].append({"seq": 10, "tool_name": "Read", "decision": "pass", "summary": "x"})
+    lines = plain(render.history_lines(data, 80, DARK_PALETTE))
+    first, second = lines.index("Turn 1"), lines.index("Turn 2")
+    assert lines[first + 1] == "> Find out where the step gate decides."
+    assert lines[first + 2].startswith("PASS      Grep")
+    assert lines[second + 1] == "> Add a docstring to it."
+    failed = next(line for line in lines if "ran the tests" in line)
+    assert failed.endswith("✗ failed: 2 failed, 31 passed")
+    assert sum("failed" in line for line in lines) == 1, "the other calls are not marked"
+    assert lines[-2:] == ["Steps without a turn", "PASS      Read   x"]
+    assert plain(render.history_lines({}, 80, DARK_PALETTE)) == ["no stored steps"]

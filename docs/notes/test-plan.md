@@ -249,10 +249,13 @@ changed are not changed back.
    `calu run`, not `calu start`; with two sessions in the directory it lists two ids without
    state, name or age. In `calu.cli`. **Fixed 15c9fc7** (section E): the message names
    `calu start` first, and each session is listed with its state, start and name.
-4. A conversation that was stopped during its first turn has no input in the database (the
-   input is stored with the finished turn), so `/sessions` and `calu list-sessions` cannot
-   offer it.
-5. `/history` lists steps only: no turns, no inputs, and a failed call looks like a passed one.
+4. A conversation that was stopped during its first turn had no input in the database (the
+   input was stored with the finished turn), so `/sessions` and `calu list-sessions` could
+   not offer it: fixed (ITEM7). The turn's row is written when the turn starts and again
+   when it ends; a history holds finished turns only.
+5. `/history` listed steps only: no turns, no inputs, and a failed call looked like a passed
+   one: fixed (ITEM7). Each turn is a heading with the user's input, and a failed call is
+   marked with the beginning of its result.
 6. `/search` looks at the lines as shown: a command is found only through the checker's
    summary, not by its own text, unless the step is expanded.
 7. `end` of a session row revokes its client tokens; whether a client that stays connected
@@ -413,11 +416,18 @@ second table)
 
 Decisions are recorded as `client:root:calu attach` (root socket), `client:local:calu attach`
 (`--insecure`), `client:calu attach` (token), `calu_operator` or `calu_admin` (`calu resolve`).
+Fixed (ITEM7): `calu resolve` also records who ran it, as `operator:<os user>@<host>`
+(`admin:` for `calu_admin`; schema version 37).
 
 **E4. Across restarts**: a server stopped with a client attached: ok (`[stopped]`, "the
 session closed the connection"). `calu_admin`'s password replaced by a setup while `calu web`
-runs: ok until its connection is lost, then 503 "The database cannot be reached" (open,
-usability: it does not say to start `calu web` again). Older schema: E1.11.
+runs: ok until its connection is lost, then 503 "The database cannot be reached": fixed
+(ITEM7), the page says that the settings login was changed by a later `calu setup` and to
+start `calu web` again, and does not ask for itself again. Also fixed there: after `calu
+setup --no-password` the start line of `calu web` no longer ends with "`calu setup` makes the
+admin password the login instead", and a stored conversation whose first message went to a
+subagent is titled with the user's own words, not with calu's request to relay them. Older
+schema: E1.11.
 
 **E5. Open in the privileged model (HANDOFF)**: a named user with a real home: ok (`ada`,
 `bob`). `calu doctor` and `--user`: fixed (E1.12). The sandbox under the other uid: the

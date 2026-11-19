@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from calu.context.foreign import CROSS_SESSION_MARKER
+from calu.context.foreign import CROSS_SESSION_MARKER, own_words
 from calu.context.turns import TurnRecord
 
 log = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ def transcripts(directory: Path, limit: int | None = None) -> list[Transcript]:
         Transcript(
             session_id=info.session_id,
             last_activity=datetime.fromtimestamp(info.last_modified / 1000, UTC),
-            first_input=(info.first_prompt or "").strip(),
+            first_input=own_words((info.first_prompt or "").strip()),
         )
         for info in found
     ]

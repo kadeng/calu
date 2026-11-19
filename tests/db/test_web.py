@@ -1148,6 +1148,53 @@ async def test_what_a_request_carries_is_never_put_into_a_page_unescaped(db_url:
         await conn.close()
 
 
+async def test_a_settings_login_that_was_changed_is_said_so(db_url: str) -> None:
+    """Root box, E4: a later `calu setup` gave `calu_admin` another password.
+
+    A running `calu web` then answered "The database cannot be reached" once its connection
+    was replaced, and tried again every five seconds, which cannot help.
+    """
+    from calu.db import LoginRefused
+    from calu.web.database import ReopeningDb
+
+    conn = await connect(db_url)
+    killer = await connect(db_url)
+
+    async def refused() -> psycopg.AsyncConnection:
+        """Stand in for a login with a password that is no longer valid."""
+        raise LoginRefused(
+            'connection failed: FATAL:  password authentication failed for user "calu_admin"',
+            "28P01",
+        )
+
+    db = ReopeningDb(conn, refused, probe_after=0.0)
+    try:
+        await setup(conn, db_url, "test:model")
+        app = create_app(db, git_url_template="")
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://127.0.0.1",
+        ) as client:
+            assert (await client.get("/api/escalations")).status_code == 200
+            await killer.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            )
+            polled = await client.get("/api/escalations")
+            assert polled.status_code == 503
+            assert polled.json()["error"] == "database login changed"
+            page = await client.get("/")
+            assert page.status_code == 503
+            assert "The settings login was changed" in page.text
+            assert "changed by a later `calu setup`" in page.text
+            assert "Start `calu web` again" in page.text
+            assert "cannot be reached" not in page.text
+            assert "location.reload" not in page.text, "asking again cannot help"
+    finally:
+        await db.close()
+        await killer.close()
+
+
 async def test_a_database_that_is_gone_is_said_so_and_found_again(db_url: str) -> None:
     """wa3: `calu web` held one connection for its whole life.
 

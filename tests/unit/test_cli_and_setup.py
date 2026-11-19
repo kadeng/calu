@@ -666,3 +666,15 @@ def test_a_database_choice_without_its_entry_is_refused(
     assert run_cli(monkeypatch, store, [*CHANGES[0], "--database", "operator"], "") == 1
     assert "no credential 'operator'" in capsys.readouterr().err
     assert connections == []
+
+
+def test_the_start_line_of_calu_web_names_the_admin_password_only_where_there_is_one() -> None:
+    """After `calu setup --no-password` the line ended with advice that does not apply."""
+    without = cli._web_token_line("calu.localhost", 8800, "tok", has_admin_password=False)
+    assert without == (
+        "calu web on http://calu.localhost:8800/?token=tok (open it once per browser; the "
+        "token is your login, keep it to yourself)."
+    )
+    with_one = cli._web_token_line("calu.localhost", 8800, "tok", has_admin_password=True)
+    assert with_one.startswith(without)
+    assert with_one.endswith("`calu setup` makes the admin password the login instead.")

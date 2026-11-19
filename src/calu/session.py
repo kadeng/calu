@@ -181,6 +181,7 @@ from calu.config import (
     default_model,
 )
 from calu.context import ContextBuilder, StepRecord, TurnRecord
+from calu.context.foreign import RELAY_TEMPLATE as RELAY_TEMPLATE
 from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
 from calu.defaults.instructions import (
@@ -390,12 +391,6 @@ in the checkers' context. `decision` is "allowed" or "denied"."""
 QUESTION_ANSWER_TEMPLATE = "[The user's answer to a question Claude asked in this turn]\n{answer}"
 """How a human's answer to a question of the agent is recorded as user input in the checkers'
 context."""
-RELAY_TEMPLATE = (
-    "[Message from the user for your subagent {name}]\n"
-    "Relay the following text verbatim to that subagent with the SendMessage tool "
-    '(to: "{to}"). Do not act on it yourself.\n\n{text}'
-)
-"""How a message for a background subagent is wrapped for the main agent."""
 
 
 REVIEW_CERTIFIER = "calu honesty review"
@@ -3414,6 +3409,15 @@ class Session:
                             "calu does not show images to the checkers]"
                         )
                     self.context.user_input(seen, event.uuid)
+                    started = self.context.current
+                    if started is not None and len(started.user_inputs) == 1 and not started.steps:
+                        # The turn begins with this input. It is stored now, without an end,
+                        # so that a conversation stopped during its first turn has its input
+                        # and is listed; `_finish_turn` stores the same row again, complete.
+                        await self.recorder.attempt(
+                            "storing the start of a turn",
+                            self.store.save_turn(started.model_copy(deep=True)),
+                        )
                     queued = await self._take_from_queue(event.text)
                     if queued is not None and queued.to != "main":
                         # Claude received the request to relay the text; the clients are

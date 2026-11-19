@@ -23,6 +23,42 @@ UserSource = Literal["user", "cross_session"]
 """Who a user message comes from: the user, or another Claude session (`CROSS_SESSION_MARKER`)."""
 
 
+RELAY_TEMPLATE = (
+    "[Message from the user for your subagent {name}]\n"
+    "Relay the following text verbatim to that subagent with the SendMessage tool "
+    '(to: "{to}"). Do not act on it yourself.\n\n{text}'
+)
+"""How a message of the user for a background subagent is wrapped for the main agent
+(`calu.session.Session.send_chat`). The user's own text follows the first blank line."""
+
+_RELAY_HEAD = RELAY_TEMPLATE.partition("{name}")[0]
+_RELAY_ORDER = RELAY_TEMPLATE.partition("]\n")[2].partition("{to}")[0]
+
+
+def own_words(text: str) -> str:
+    """Return what the user typed, for a message that calu wrapped for relaying.
+
+    A message the user sent to a subagent reaches the main agent, the stored turn and Claude
+    Code's transcript inside `RELAY_TEMPLATE`. A list that titles a conversation with its
+    first or last input shows the user's own words, not calu's request to relay them.
+
+    Args:
+        text: A user input as it was stored or read from a transcript.
+
+    Returns:
+        The text after the wrapper if `text` has the form of `RELAY_TEMPLATE`; otherwise
+        `text` unchanged.
+
+    Example:
+        For the text that `RELAY_TEMPLATE.format(name="tests", to="a1", text="run them
+        again")` gives, the result is "run them again"; `own_words("Fix it.")` is "Fix it.".
+    """
+    if not text.startswith(_RELAY_HEAD):
+        return text
+    head, blank, own = text.partition("\n\n")
+    return own if blank and _RELAY_ORDER in head else text
+
+
 def user_message_source(text: str) -> UserSource:
     """Classify the text of a user message that Claude has taken in.
 

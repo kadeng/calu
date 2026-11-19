@@ -71,6 +71,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from calu import __version__, admin, asuser, herd, localsocket, session_requests
 from calu.db import Db
 from calu.protocol.client import RequestFailed, connect
+from calu.setup import ADMIN_ROLE
 from calu.web import git
 from calu.web import settings as web_settings
 
@@ -2249,10 +2250,26 @@ async def _database_down(request: Request, exc: Exception) -> Response:
         Status 503: `{"ok": false, "error": "database unreachable", "message": ...}` for the
         paths under `/api/`, the error page otherwise. The page of a GET asks for itself again
         after five seconds; the page of a request that was to change something does not, and
-        says that the change may not have happened.
+        says that the change may not have happened. If the database refused the password of
+        `calu_admin` (`_login_was_changed`), the error is "database login changed", the text
+        says to start `calu web` again, and no page asks for itself again.
     """
     log.warning("the database could not be reached for %s: %s", request.url.path, exc)
     reading = request.method in SAFE_METHODS
+    if _login_was_changed(exc):
+        # Trying again cannot help: this process holds the login as it was at its start.
+        message = (
+            "The database refuses the login calu web was started with: the settings login "
+            "was changed by a later `calu setup`. Start `calu web` again; it reads the new "
+            "login. Sessions that wait for a decision keep waiting."
+            + ("" if reading else " What you sent did not take effect.")
+        )
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {"ok": False, "error": "database login changed", "message": message},
+                status_code=503,
+            )
+        return _error(request, 503, "The settings login was changed", message)
     message = f"calu web cannot reach the database ({type(exc).__name__}: {exc}). " + (
         "This page tries again every five seconds. Sessions that wait for a decision keep waiting."
         if reading
@@ -2263,6 +2280,25 @@ async def _database_down(request: Request, exc: Exception) -> Response:
             {"ok": False, "error": "database unreachable", "message": message}, status_code=503
         )
     return _error(request, 503, "The database cannot be reached", message, retry=reading)
+
+
+def _login_was_changed(exc: Exception) -> bool:
+    """Tell whether a connection failed because the password of `calu_admin` is no longer valid.
+
+    `calu setup` after `--no-password` gives the role a new generated password. A `calu web`
+    that runs since before then keeps working until its connection is replaced, and is then
+    refused with the login it holds.
+
+    Args:
+        exc: What opening the connection or a statement raised.
+
+    Returns:
+        True if the server answered "password authentication failed" (SQLSTATE 28P01) for the
+        role `calu_admin`.
+    """
+    text = str(exc)
+    refused = getattr(exc, "code", None) == "28P01" or "password authentication failed" in text
+    return refused and f'"{ADMIN_ROLE}"' in text
 
 
 async def _schema_too_old(request: Request, exc: Exception) -> Response:

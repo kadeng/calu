@@ -1,5 +1,7 @@
 """Herd management on the database alone: list sessions, list and resolve escalations."""
 
+from datetime import UTC, datetime
+
 import anyio
 import psycopg
 import pytest
@@ -60,6 +62,50 @@ async def test_sessions_escalations_and_resolution(db_url: str) -> None:
         assert len(await herd.sessions(db, active_only=False)) == 1
     finally:
         await owner.close()
+
+
+async def test_a_decision_from_the_database_names_who_made_it(
+    db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`calu resolve` recorded the database role alone, the same for everyone who holds it."""
+    from tests.db.test_trust import logins
+
+    _session_url, operator_url = await logins(db_url)
+    owner = await connect(db_url)
+    operator = await connect(operator_url)
+    db = Db(owner)
+    try:
+        store = DatabaseSessionStore(db)
+        await store.start(IDENTITY)
+        step = await store.add_step(StepRow(seq=1, tool_name="Bash", tool_input={"command": "x"}))
+        ids = [await store.open_escalation(f"decision {n}", {}, step) for n in range(4)]
+
+        monkeypatch.delenv("SUDO_USER", raising=False)
+        monkeypatch.setattr(herd.getpass, "getuser", lambda: "kai")
+        monkeypatch.setattr(herd.socket, "gethostname", lambda: "buildbox")
+        assert herd.caller() == "kai@buildbox"
+        monkeypatch.setenv("SUDO_USER", "ada")
+        assert herd.caller() == "ada@buildbox", "the person who called sudo, not root"
+
+        assert await herd.resolve(Db(operator), ids[0], "allow", "ok", actor="kai@buildbox")
+        assert await herd.resolve(db, ids[1], "deny", actor="kai@buildbox\x1b[2J\n" + "x" * 300)
+        assert await herd.resolve(db, ids[2], "allow")
+        by = [(await store.escalation(one)).resolved_by for one in ids[:3]]
+        assert by[0] == "operator:kai@buildbox"
+        assert by[1] is not None and by[1].startswith("owner:kai@buildbox[2Jxxx")
+        assert len(by[1]) == len("owner:") + 200 and "\x1b" not in by[1] and "\n" not in by[1]
+        assert by[2] == "calu_owner", "without a caller the role alone, as before"
+        row = await herd.escalation(db, ids[0])
+        assert row is not None
+        assert "answered by operator:kai@buildbox: ok" in herd.render_escalation(row, {})
+
+        # A database from before version 37 has no function that takes the caller.
+        await db.execute("DROP FUNCTION calu_resolve_escalation(bigint, text, text, text)")
+        assert await herd.resolve(db, ids[3], "allow", actor="kai@buildbox")
+        assert (await store.escalation(ids[3])).resolved_by == "calu_owner"
+    finally:
+        await owner.close()
+        await operator.close()
 
 
 async def test_resolved_escalations_become_evaluation_cases(db_url: str) -> None:
@@ -350,6 +396,64 @@ async def test_the_conversations_of_a_directory_are_listed_freshest_first(db_url
             (running,),
         )
         assert not (await listed("/w", 1))[0].running
+    finally:
+        await owner.close()
+
+
+async def test_a_conversation_stopped_in_its_first_turn_is_listed_with_its_input(
+    db_url: str,
+) -> None:
+    """The turn's row is written at its start; a list shows it, a history does not."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(SessionIdentity(hostname="box", os_user="u", directory="/w", pid=7))
+        await store.set_claude_session("c-cut")
+        started = TurnRecord(index=1, user_inputs=["look into the parser"])
+        await store.save_turn(started)
+
+        (row,) = await herd.conversations(db, "/w", "box", "u", 5)
+        assert (row.claude_session_id, row.last_input, row.turns) == (
+            "c-cut",
+            "look into the parser",
+            1,
+        )
+        (summary,) = await store.recent_sessions("/w")
+        assert summary.first_input == "look into the parser"
+        assert (await store.load_history()).turns == []
+
+        # The same turn, finished: one row, complete, and part of the history.
+        started.answer = "The parser splits on commas."
+        started.ended_at = datetime.now(UTC)
+        await store.save_turn(started)
+        assert await db.scalar("SELECT count(*) FROM turns") == 1
+        (turn,) = (await store.load_history()).turns
+        assert turn.user_inputs == ["look into the parser"] and turn.answer.startswith("The parser")
+    finally:
+        await owner.close()
+
+
+async def test_a_conversation_is_titled_with_the_users_words_not_calus_relay_request(
+    db_url: str,
+) -> None:
+    """A first message to a subagent is stored inside calu's request to relay it."""
+    from calu.context.foreign import RELAY_TEMPLATE
+
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        store = DatabaseSessionStore(db)
+        await store.start(SessionIdentity(hostname="box", os_user="u", directory="/w", pid=7))
+        await store.set_claude_session("c-relay")
+        wrapped = RELAY_TEMPLATE.format(name="tests", to="a1", text="run them\n\nonce more")
+        await store.save_turn(TurnRecord(index=1, user_inputs=[wrapped]))
+        (row,) = await herd.conversations(db, "/w", "box", "u", 5)
+        assert row.last_input == "run them\n\nonce more"
+        (summary,) = await store.recent_sessions("/w")
+        assert summary.first_input == "run them\n\nonce more"
     finally:
         await owner.close()
 

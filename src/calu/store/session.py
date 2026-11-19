@@ -39,6 +39,7 @@ from typing import Any, Literal, Protocol
 import psycopg
 
 from calu.comments import Comment
+from calu.context.foreign import own_words
 from calu.context.turns import StepRecord, TurnRecord
 from calu.db import Db
 from calu.protocol.messages import (
@@ -362,7 +363,10 @@ class SessionStore(Protocol):
         ...
 
     async def save_turn(self, turn: TurnRecord) -> None:
-        """Store a finished turn, replacing an earlier version of the same turn.
+        """Store a turn, replacing an earlier version of the same turn.
+
+        The session calls it when a turn starts (the user's input, no end time), so that a
+        conversation is listed from its first input on, and again when the turn ends.
 
         Args:
             turn: The turn record; `turn.index` is its number in the session.
@@ -1088,7 +1092,7 @@ class DatabaseSessionStore:
         )
 
     async def save_turn(self, turn: TurnRecord) -> None:
-        """Store a finished turn (see `SessionStore.save_turn`).
+        """Store a started or finished turn (see `SessionStore.save_turn`).
 
         Args:
             turn: The turn record.
@@ -1313,13 +1317,19 @@ class DatabaseSessionStore:
                 for a replay to a person (`load_history`).
 
         Returns:
-            The turns, oldest first, each with its transcript uuids where they were recorded:
-            a client finds the turn of a message by `prompt_uuid` (to fork before it).
+            The turns that have ended, oldest first, each with its transcript uuids where
+            they were recorded: a client finds the turn of a message by `prompt_uuid` (to fork
+            before it). The row of a turn that only started (`save_turn` at its first input)
+            is left out.
 
         Raises:
             psycopg.Error: On database errors.
         """
         condition = b"" if above is None else b" AND NOT t.folded AND t.number > %s"
+        # A turn is stored when it starts (its input, nothing else) and again when it ends.
+        # The row of a turn that has not ended is for the lists of conversations only: the
+        # running turn reaches a client as events, and a turn that was cut off has no answer.
+        condition += b" AND NOT (t.ended_at IS NULL AND t.steps = '[]'::jsonb AND t.answer = '')"
         cur = await conn.execute(
             b"SELECT DISTINCT ON (t.number)"
             b" t.number, t.user_inputs, t.steps, t.answer, t.narrated_answer, t.narrated,"
@@ -1359,7 +1369,7 @@ class DatabaseSessionStore:
                 directory=row[3],
                 started_at=row[4],
                 ended_at=row[5],
-                first_input=(row[6] or "")[:200],
+                first_input=own_words(row[6] or "")[:200],
             )
             for row in rows
         ]

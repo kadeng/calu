@@ -171,3 +171,20 @@ async def test_a_conversation_the_store_knows_is_not_read_from_the_transcript(tm
         await session.start(tg, resume_id="old-session")
         assert "the earlier request" in session.checker_context().recent
         await session.stop()
+
+
+def test_a_relayed_message_is_listed_with_the_users_own_words() -> None:
+    """The list of stored conversations showed "[Message from the user for your subagent ..."."""
+    from calu.context.foreign import RELAY_TEMPLATE, own_words
+
+    wrapped = RELAY_TEMPLATE.format(name="tests", to="a1", text="run them again\n\nall of them")
+    assert own_words(wrapped) == "run them again\n\nall of them"
+    assert own_words("Fix it.") == "Fix it."
+    # Text that only begins like the wrapper is the user's own.
+    lookalike = "[Message from the user for your subagent x]\n\nhello"
+    assert own_words(lookalike) == lookalike
+
+    now = datetime(2026, 11, 19, tzinfo=UTC)
+    found = [Transcript(session_id="outside", last_activity=now, first_input="first")]
+    (row,) = herd.with_transcripts([], set(), found, lambda _id: wrapped, 5, now=now)
+    assert row.last_input == "run them again\n\nall of them"

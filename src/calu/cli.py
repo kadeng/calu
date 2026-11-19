@@ -3135,6 +3135,31 @@ def cmd_ide(args: argparse.Namespace, store: CredentialStore) -> None:
     asyncio.run(serve_ide(Path.cwd(), store))
 
 
+def _web_token_line(host: str, port: int, token: str, has_admin_password: bool) -> str:
+    """Build the start line of `calu web` when the address carries the login token.
+
+    Args:
+        host: The host name the interface is opened under.
+        port: Its port.
+        token: The login token.
+        has_admin_password: Whether this installation has an admin password a person types.
+            Then the database is older than the role `calu_admin`, and `calu setup` would
+            make that password the browser's login. After `calu setup --no-password` there
+            is no such password, and the token is the only login there is.
+
+    Returns:
+        One line: the address with the token, what the token is, and, only with an admin
+        password, how the password becomes the login.
+    """
+    line = (
+        f"calu web on http://{host}:{port}/?token={token}"
+        " (open it once per browser; the token is your login, keep it to yourself)."
+    )
+    if has_admin_password:
+        line += " `calu setup` makes the admin password the login instead."
+    return line
+
+
 def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
     """Serve the web interface: every session of every host, their history, the checkers.
 
@@ -3224,12 +3249,7 @@ def cmd_web(args: argparse.Namespace, store: CredentialStore) -> None:
                     flush=True,
                 )
             else:
-                print(
-                    f"calu web on http://{WEB_HOST_NAME}:{args.port}/?token={token}"
-                    " (open it once per browser; the token is your login, keep it to "
-                    "yourself). `calu setup` makes the admin password the login instead.",
-                    flush=True,
-                )
+                print(_web_token_line(WEB_HOST_NAME, args.port, token, typed_password), flush=True)
             config = uvicorn.Config(
                 app,
                 host=args.host,
@@ -3362,7 +3382,7 @@ def cmd_list_sessions(args: argparse.Namespace, store: CredentialStore) -> None:
         if not rows:
             return (
                 f"no Claude session of {here} on this host for this user\n"
-                "(a session of calu is listed once its first turn has ended; `calu sessions "
+                "(a session of calu is listed from its first message on; `calu sessions "
                 "--all` lists the sessions of every directory, host and user)"
             )
         lines = [row.line(width) for row in rows]
@@ -3636,7 +3656,7 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
             CliError: If the escalation is not open any more.
         """
         note = args.note or args.text or ""
-        if not await herd.resolve(db, args.id, args.decision, note):
+        if not await herd.resolve(db, args.id, args.decision, note, actor=herd.caller()):
             raise CliError(f"escalation {args.id} is not open (resolved, cancelled or unknown)")
         shown = f": {note}" if note else ""
         if args.decision == "cancel":

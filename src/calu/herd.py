@@ -15,6 +15,7 @@ that access again.
 """
 
 import dataclasses
+import getpass
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ import psycopg
 
 from calu import machine
 from calu.claude.transcripts import Transcript
+from calu.context.foreign import own_words
 from calu.context.turns import TurnRecord
 from calu.db import Db
 from calu.store.session import turn_record
@@ -455,9 +457,10 @@ async def conversations(
     same path elsewhere cannot be resumed here.
 
     The last activity of a conversation is the latest of: the start of one of its `calu run`s
-    and the start or end of one of its stored turns. A turn is stored when it ends, so a
-    conversation whose first turn still runs is not listed yet, and the input of a running
-    turn is not the "last input". A conversation without a stored turn has nothing to resume.
+    and the start or end of one of its stored turns. A turn is stored when it starts, with
+    the user's input, and again when it ends, so a conversation is listed from its first
+    input on, also when it was stopped during its first turn, and the input of a running
+    turn is the "last input". A conversation without a stored turn has nothing to resume.
     A fork stores the turns it inherits when it starts, so it is listed from then on, with
     the last input of the conversation it copied until it has a turn of its own.
 
@@ -507,7 +510,11 @@ async def conversations(
         "  LIMIT %s",
         (directory, hostname, os_user, STALE_AFTER_S, max(1, limit)),
     )
-    return [ConversationRow(*row) for row in rows]
+    return [
+        # The user's own words, where calu wrapped the message for a subagent.
+        dataclasses.replace(found, last_input=own_words(found.last_input))
+        for found in (ConversationRow(*row) for row in rows)
+    ]
 
 
 @dataclass(frozen=True)
@@ -642,7 +649,9 @@ def with_transcripts(
     ]
     merged = sorted([*rows, *outside], key=lambda row: row.age_s)[: max(1, limit)]
     return [
-        dataclasses.replace(row, last_input=last_input(row.claude_session_id) or row.last_input)
+        dataclasses.replace(
+            row, last_input=own_words(last_input(row.claude_session_id) or row.last_input)
+        )
         if row.outside
         else row
         for row in merged
@@ -684,7 +693,24 @@ async def escalations(db: Db, session_id: str | None = None) -> list[EscalationR
     return [EscalationRow(*row) for row in rows]
 
 
-async def resolve(db: Db, escalation_id: int, decision: str, note: str = "") -> bool:
+def caller() -> str:
+    """Name the OS user and the host a command runs as, for the record of a decision.
+
+    Returns:
+        `<os user>@<host>`, e.g. "kai@buildbox": the user who called sudo if the command runs
+        through sudo, else the user of this process ("unknown" if the system does not tell
+        it). It is what the caller says about itself, not something the database checks.
+    """
+    try:
+        user = os.environ.get("SUDO_USER") or getpass.getuser() or "unknown"
+    except OSError, KeyError:
+        user = "unknown"
+    return f"{user}@{socket.gethostname() or 'unknown'}"
+
+
+async def resolve(
+    db: Db, escalation_id: int, decision: str, note: str = "", actor: str = ""
+) -> bool:
     """Allow, deny, answer or cancel an open escalation and notify the waiting session.
 
     "answer" belongs to a question of the agent (PLAN.md D35): `note` is then the answer Claude
@@ -702,6 +728,9 @@ async def resolve(db: Db, escalation_id: int, decision: str, note: str = "") -> 
         decision: "allow", "deny", "answer" or "cancel".
         note: Text for Claude and for the record; the answer itself for "answer"; the reason
             for "cancel".
+        actor: Who decides, as `caller` names them; recorded after the database role, e.g.
+            "operator:kai@buildbox" (migration 0037). "" records the role alone, and so
+            does a database whose schema is older than version 37. Not used for "cancel".
 
     Returns:
         True if the escalation was open and is now resolved or cancelled; False if it was
@@ -722,6 +751,17 @@ async def resolve(db: Db, escalation_id: int, decision: str, note: str = "") -> 
     if decision not in states:
         raise ValueError(f"decision must be allow, deny, answer or cancel, not {decision!r}")
     state = states[decision]
+    if actor:
+        try:
+            return bool(
+                await db.scalar(
+                    "SELECT calu_resolve_escalation(%s, %s, %s, %s)",
+                    (escalation_id, state, note or None, actor),
+                )
+            )
+        except psycopg.errors.UndefinedFunction:
+            # A schema from before version 37: the decision counts, the role is recorded.
+            log.info("the database records no caller of a decision yet (schema before 37)")
     return bool(
         await db.scalar(
             "SELECT calu_resolve_escalation(%s, %s, %s)", (escalation_id, state, note or None)

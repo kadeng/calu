@@ -90,7 +90,7 @@ phases.
 | `src/calu/defaults/` | Built-in checker instructions and rule lists (loaded into the database) and the built-in evaluation cases |
 | `tests/unit/` | Tests without database, `claude` or API keys |
 | `tests/db/` | Tests against the test database (marker `db`) |
-| `tests/browser/` | Tests in a headless browser (markers `browser` and `db`; `scripts/get-browser.sh` installs it without root) |
+| `tests/browser/` | Tests in a headless browser (marker `browser`; those of the web interface also `db`, the easter egg's not: `-m browser` runs all of them; `scripts/get-browser.sh` installs it without root) |
 | `tests/root/` | Tests that need real root (marker `root`; skipped unless root and `CALU_ROOT_TESTS=1`); they run in the root box: `docker exec calu-rootbox rootbox-tests` |
 | `uitest/rootbox/` | The root box: a container with root, sudo and three users for running the privileged arrangements for real; `fakecalu.py` is calu's command line with a scripted runner (`uitest/README.md`) |
 
@@ -100,7 +100,7 @@ Run from the repository root on Linux (on a Windows host: in WSL, with the virtu
 outside the Windows checkout: `UV_PROJECT_ENVIRONMENT=$HOME/.cache/calu-venv`).
 
 - `uv run pytest` (unit tests), `uv run pytest -m 'not live'` (also database tests; start the
-  database first with `docker compose up -d caludb --wait`), `uv run pytest -m 'browser and db'`
+  database first with `docker compose up -d caludb --wait`), `uv run pytest -m browser`
   (a headless browser; `scripts/get-browser.sh` installs it without root), `uv run pytest -m live`
   (a real `claude` or API keys). `docs/TESTING.md` explains the layers, the spikes and the
   manual checklist.

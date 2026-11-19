@@ -200,6 +200,43 @@ async def test_a_denial_in_the_database_is_noticed_by_the_poll(tmp_path: Path):
     assert result.is_error and "too risky" in result.content
 
 
+async def test_the_input_of_a_turn_is_stored_when_the_turn_starts(tmp_path: Path):
+    """A conversation stopped during its first turn had no stored input and was not listed."""
+    session, rec, store = make_session(
+        tmp_path,
+        [
+            [{"sleep": 5}, {"text": "never said"}],
+        ],
+    )
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="look into the parser"))
+        await rec.wait_for(UserInput)
+        with anyio.fail_after(5):
+            while 1 not in store.turns:
+                await anyio.sleep(0.01)
+        started = store.turns[1]
+        assert started.user_inputs == ["look into the parser"] and started.ended_at is None
+        # What a client reads as history holds finished turns only: the running turn
+        # reaches it as events.
+        assert (await store.load_history()).turns == []
+        await session.stop()
+    assert store.turns[1].user_inputs == ["look into the parser"]
+    assert store.turns[1].ended_at is None and store.turns[1].answer == ""
+
+
+async def test_a_finished_turn_replaces_the_row_of_its_start(tmp_path: Path):
+    session, rec, store = make_session(tmp_path, [[{"text": "done"}]])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (turn,) = store.turns.values()
+    assert turn.user_inputs == ["go"] and turn.answer == "done" and turn.ended_at is not None
+    assert [t.index for t in (await store.load_history()).turns] == [1]
+
+
 async def test_inject_is_taken_in_during_turn(tmp_path: Path):
     session, rec, _ = make_session(
         tmp_path,

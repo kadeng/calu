@@ -761,6 +761,12 @@ calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting f
 calu attach                                     # the full event stream, and a prompt
 ```
 
+A decision made with `calu resolve` is recorded with the database role and with who ran the
+command: `operator:kai@buildbox` is the role `calu_operator`, used by the OS user `kai` on the
+host `buildbox` (`admin:` for `calu_admin`). `calu escalation 12` shows it as "answered by".
+The role is what the database checked; the user and host are what the command says about
+itself.
+
 `calu attach` and `calu acp` take no arguments in the project directory: they ask the database
 which session runs there on this host, mint a client token for themselves and revoke it when
 they end, so `calu token list` shows one row per client and not one per attach. Two sessions in
@@ -857,8 +863,9 @@ stands, beside the running work, and becomes no part of it.
   name another program. Without gitui the client offers to install it; it runs no command
   with `sudo`, it shows it. The program is started as it is, whatever the state of the
   repository; without one, `f4` opens nothing and offers the install again.
-- `/sessions`, `/history`, `/search`, `/export`: stored sessions, the stored steps of this
-  one, search in the transcript, the transcript as Markdown.
+- `/sessions`, `/history`, `/search`, `/export`: stored sessions, the stored turns of this
+  one (each with your input as a heading, its steps below, a failed call marked), search in
+  the transcript, the transcript as Markdown.
 - `/running [text]`: the sessions that run, of every directory, one line each and those with
   open decisions first; with a text only those whose id, name or directory contains it.
   `/switch <beginning of an id or of a name>` attaches this client to one of them, and the
@@ -1301,7 +1308,8 @@ Each line shows how long ago the conversation was last active, its session id an
 message you sent in it; "running" marks one that a process still has (use `calu attach` for
 that one). Listed are the conversations that were run in this directory on this machine by
 your user, because that is where Claude Code keeps their transcripts. A conversation appears
-once its first turn has ended; a fork appears when it starts, with the last message of the
+with its first message, also when it was stopped during its first turn; a message you sent to
+a subagent is shown with your own words. A fork appears when it starts, with the last message of the
 conversation it copied until it has one of its own. The command reads the database with the
 `operator` or `admin` credential, like `calu sessions`, which lists the sessions of every
 directory, host and user.

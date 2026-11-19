@@ -18,6 +18,15 @@ from calu.store import (
 
 pytestmark = [pytest.mark.db, pytest.mark.anyio]
 
+
+def finished(**fields: object) -> TurnRecord:
+    """Build a turn that has ended, as the session stores it at the end of a turn.
+
+    (A turn is also stored when it starts, without an end; a history leaves that row out.)
+    """
+    return TurnRecord(**{"ended_at": datetime.now(UTC), **fields})  # type: ignore[arg-type]
+
+
 IDENTITY = SessionIdentity(
     hostname="box",
     os_user="u",
@@ -149,7 +158,7 @@ async def test_turns_and_summary_survive_a_resume(db_url: str) -> None:
     try:
         await store.start(IDENTITY)
         await store.set_claude_session("claude-1")
-        first = TurnRecord(
+        first = finished(
             index=1,
             user_inputs=["fix the typo"],
             steps=[StepRecord(tool_name="Edit", decision="allow", summary="Fixes a typo.")],
@@ -158,7 +167,7 @@ async def test_turns_and_summary_survive_a_resume(db_url: str) -> None:
             narrated=True,
         )
         await store.save_turn(first)
-        await store.save_turn(TurnRecord(index=2, user_inputs=["and the next one"]))
+        await store.save_turn(finished(index=2, user_inputs=["and the next one"]))
         await store.save_turn(first.model_copy(update={"answer": "really done"}))
         await store.save_summary("# Chat summary\n\nEarlier turns.\n", 1)
         await store.mark_folded(1)
@@ -183,7 +192,7 @@ async def test_turn_records_round_trip(db_url: str) -> None:
     try:
         await store.start(IDENTITY)
         await store.set_claude_session("claude-2")
-        turn = TurnRecord(
+        turn = finished(
             index=7,
             user_inputs=["a", "b"],
             steps=[
@@ -291,7 +300,7 @@ async def test_comments_and_recent_sessions(db_url: str) -> None:
     try:
         await store.start(IDENTITY)
         await store.set_claude_session("claude-9")
-        await store.save_turn(TurnRecord(index=1, user_inputs=["the first request", "more"]))
+        await store.save_turn(finished(index=1, user_inputs=["the first request", "more"]))
         comment = Comment(
             kind="diff",
             path="src/a.py",
@@ -341,7 +350,7 @@ async def test_the_history_of_a_session_comes_back_from_the_database(db_url: str
             second, StepDecision(decision="escalate", reason="needs a human", summary="Deploys.")
         )
         await store.save_turn(
-            TurnRecord(
+            finished(
                 index=1,
                 user_inputs=["have a look"],
                 steps=[StepRecord(tool_name="Bash", decision="pass", summary="Lists.")],
@@ -549,7 +558,7 @@ async def test_a_second_fold_after_a_resume_keeps_every_turn_exactly_once(db_url
         await store.start(IDENTITY)
         await store.set_claude_session("claude-9")
         for i in (1, 2, 3):
-            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+            await store.save_turn(finished(index=i, user_inputs=[f"turn {i}"]))
         await store.save_summary("covers 1-2", 2)
         await store.mark_folded(2)
 
@@ -563,7 +572,7 @@ async def test_a_second_fold_after_a_resume_keeps_every_turn_exactly_once(db_url
         # The resumed session continues the numbering and folds again, this time over a turn it
         # restored (3) and one of its own (4).
         for i in (4, 5):
-            await resumed.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+            await resumed.save_turn(finished(index=i, user_inputs=[f"turn {i}"]))
         await resumed.save_summary("covers 1-4", 4)
         await resumed.mark_folded(4)
 
@@ -594,7 +603,7 @@ async def test_a_second_resume_keeps_the_summary_and_the_turns_between(db_url: s
         await store.start(IDENTITY)
         await store.set_claude_session("claude-7")
         for i in (1, 2, 3):
-            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+            await store.save_turn(finished(index=i, user_inputs=[f"turn {i}"]))
         await store.save_summary("covers 1-2", 2)
         await store.mark_folded(2)
 
@@ -606,7 +615,7 @@ async def test_a_second_resume_keeps_the_summary_and_the_turns_between(db_url: s
         # It runs two turns and never folds, which is the normal case: the default is to fold
         # every 30 turns.
         for i in (4, 5):
-            await second.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+            await second.save_turn(finished(index=i, user_inputs=[f"turn {i}"]))
 
         third = DatabaseSessionStore(Db(conn))
         await third.start(IDENTITY)
@@ -644,7 +653,7 @@ async def test_a_replay_covers_the_conversation_but_keeps_one_session_of_steps(
         await store.start(IDENTITY)
         await store.set_claude_session("claude-8")
         for i in (1, 2):
-            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+            await store.save_turn(finished(index=i, user_inputs=[f"turn {i}"]))
         first_step = await store.add_step(
             StepRow(seq=1, tool_name="Bash", tool_input={"command": "first"})
         )
@@ -655,7 +664,7 @@ async def test_a_replay_covers_the_conversation_but_keeps_one_session_of_steps(
         resumed = DatabaseSessionStore(Db(conn))
         await resumed.start(IDENTITY)
         await resumed.set_claude_session("claude-8")
-        await resumed.save_turn(TurnRecord(index=3, user_inputs=["turn 3"]))
+        await resumed.save_turn(finished(index=3, user_inputs=["turn 3"]))
         await resumed.add_step(StepRow(seq=1, tool_name="Bash", tool_input={"command": "again"}))
 
         history = await resumed.load_history("claude-8")
@@ -681,7 +690,7 @@ async def test_the_history_of_a_fork_holds_the_turns_it_inherited(db_url: str) -
         await store.start(IDENTITY)
         await store.set_claude_session("claude-original")
         inherited = [
-            TurnRecord(
+            finished(
                 index=i,
                 user_inputs=[f"turn {i}"],
                 prompt_uuid=f"u{i}",
@@ -714,7 +723,7 @@ async def test_the_history_of_a_fork_holds_the_turns_it_inherited(db_url: str) -
         assert before.steps == [], "the original's step rows are not the fork's"
 
         # The fork's own turn takes the number of the first discarded one.
-        await fork.save_turn(TurnRecord(index=3, user_inputs=["another way"], prompt_uuid="f3"))
+        await fork.save_turn(finished(index=3, user_inputs=["another way"], prompt_uuid="f3"))
         await fork.add_step(StepRow(seq=1, turn=3, tool_name="Bash", tool_input={"command": "new"}))
         after = await fork.load_history()
         assert [(t.index, t.user_inputs[0]) for t in after.turns] == [
@@ -739,7 +748,7 @@ async def test_a_corrected_summary_survives_the_next_resume(db_url: str) -> None
         await store.start(IDENTITY)
         await store.set_claude_session("claude-6")
         for i in (1, 2):
-            await store.save_turn(TurnRecord(index=i, user_inputs=[f"turn {i}"]))
+            await store.save_turn(finished(index=i, user_inputs=[f"turn {i}"]))
         await store.save_summary("the summarizer's version", 1)
         await store.mark_folded(1)
 

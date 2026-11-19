@@ -19,7 +19,7 @@ a denial, the reason of an escalation, the answer to a question.
 
 import io
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, ClassVar
@@ -390,6 +390,70 @@ def markdown_lines(source: str, width: int, palette: Palette, dark: bool = True)
     while lines and not lines[-1].plain:
         lines.pop()
     return lines or [Text("")]
+
+
+FAILED_RESULT = "error: "
+"""How the stored result of a failed tool call begins (`calu.steps.result_summary`)."""
+
+
+def history_lines(data: Mapping[str, Any], width: int, palette: Palette) -> list[Text]:
+    """Render the stored history of a session for `/history`: turns with their steps.
+
+        (the chat summary, if there is one)
+
+        Turn 1
+        > the user's input of that turn
+        PASS      Grep   searched for the definition of check_step
+        PASS      Bash   ran the tests  ✗ failed: 2 failed, 31 passed
+        Turn 2
+        ...
+
+    A step whose stored result begins with `FAILED_RESULT` is a call that failed; it is
+    marked and its result is shown, so that it does not read like a call that passed. Steps
+    without a turn number, or of a turn that is not among `turns`, are listed under a heading
+    of their own turn number, or last under "Steps without a turn".
+
+    Args:
+        data: The result of `session.history` as a dict (`SessionHistoryResult`).
+        width: The width in columns for the chat summary and the user's inputs.
+        palette: The colours.
+
+    Returns:
+        The lines; one line saying that nothing is stored if there is neither a summary, a
+        turn nor a step.
+    """
+    lines: list[Text] = []
+    summary = str(data.get("chat_summary") or "").strip()
+    if summary:
+        lines += markdown_lines(summary, min(100, width), palette)
+        lines.append(Text(""))
+    inputs: dict[int, list[str]] = {}
+    for turn in data.get("turns") or []:
+        if isinstance(turn.get("index"), int):
+            inputs[turn["index"]] = [str(text) for text in turn.get("user_inputs") or []]
+    by_turn: dict[int | None, list[Mapping[str, Any]]] = {}
+    for step in data.get("steps") or []:
+        number = step.get("turn")
+        by_turn.setdefault(number if isinstance(number, int) else None, []).append(step)
+    numbered = sorted({*inputs, *(key for key in by_turn if key is not None)})
+    for number in [*numbered, *([None] if None in by_turn else [])]:
+        if number is not None or numbered:
+            heading = f"Turn {number}" if number is not None else "Steps without a turn"
+            lines.append(Text(heading, f"bold {palette.accent}"))
+        for text in inputs.get(number, []) if number is not None else []:
+            lines.append(Text(f"> {cut(text, max(20, width - 2))}", palette.fg))
+        for step in by_turn.get(number, []):
+            result = str(step.get("result_summary") or "")
+            line = Text.assemble(
+                (f"{str(step.get('decision') or '').upper():<9} ", palette.muted),
+                (f"{tool_label(str(step.get('tool_name'))):<6} ", f"bold {palette.fg}"),
+                (cut(str(step.get("summary") or step.get("tool_input") or ""), 120), palette.fg),
+            )
+            if result.startswith(FAILED_RESULT):
+                failure = cut(result[len(FAILED_RESULT) :], 80)
+                line.append(f"  ✗ failed: {failure}", f"bold {palette.red}")
+            lines.append(line)
+    return lines or [Text("no stored steps", palette.muted)]
 
 
 def tool_label(tool: str) -> str:

@@ -319,7 +319,11 @@ class MemorySessionStore:
         return SessionHistoryResult(
             calu_session_id=self.session_id,
             claude_session_id=claude_session_id or self.claude_session_id,
-            turns=[self.turns[number] for number in sorted(self.turns)],
+            turns=[
+                self.turns[number]
+                for number in sorted(self.turns)
+                if self.turns[number].ended_at is not None  # a started turn is not history
+            ],
             chat_summary=self.summaries[-1][0] if self.summaries else "",
         )
 

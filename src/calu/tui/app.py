@@ -4250,43 +4250,22 @@ class CaluApp(App[None]):
         self._spawn(load())
 
     def _cmd_history(self, rest: str) -> None:
-        """Show the stored steps of a session (`/history [id]`).
+        """Show the stored turns and steps of a session (`/history [id]`).
 
         Args:
             rest: A Claude session id; empty is the running session.
         """
 
         def shape(data: Any) -> list[Text]:
-            """Render the stored steps, one line each.
+            """Render the stored turns and steps (`render.history_lines`).
 
             Args:
                 data: The result of `session.history`.
 
             Returns:
-                The chat summary and one line per step.
+                The chat summary, then each turn's input as a heading with its steps.
             """
-            lines = []
-            summary = str(data.get("chat_summary") or "").strip()
-            if summary:
-                lines += render.markdown_lines(summary, min(100, self.size.width - 6), self.palette)
-                lines.append(Text(""))
-            for step in data.get("steps") or []:
-                lines.append(
-                    Text.assemble(
-                        (f"{str(step.get('decision') or '').upper():<9} ", self.palette.muted),
-                        (
-                            f"{render.tool_label(str(step.get('tool_name'))):<6} ",
-                            f"bold {self.palette.fg}",
-                        ),
-                        (
-                            render.cut(
-                                str(step.get("summary") or step.get("tool_input") or ""), 120
-                            ),
-                            self.palette.fg,
-                        ),
-                    )
-                )
-            return lines or [Text("no stored steps", self.palette.muted)]
+            return render.history_lines(data, self.size.width - 6, self.palette)
 
         params = {"claude_session_id": rest} if rest else {}
         self._read_page(

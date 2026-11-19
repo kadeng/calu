@@ -7,7 +7,7 @@ does. The default run needs nothing but the repository.
 |---|---|---|---|
 | Unit | none | nothing (a few spawn `python -m calu` or a stub `docker`) | ~1.5 min |
 | Database | `db` | PostgreSQL (`docker compose up -d caludb --wait`) | ~20 s |
-| Browser | `browser` (and `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
+| Browser | `browser` (most also `db`) | a headless Chromium (`scripts/get-browser.sh`) | ~8 s |
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
 | Root | `root` (two also `db`) | real root, in the root box (`uitest/rootbox`) | ~15 s |
 | Spikes | — | run by hand, against the real CLI | minutes each |
@@ -15,7 +15,7 @@ does. The default run needs nothing but the repository.
 ```bash
 scripts/wsl-test.sh                 # format, lint, types and the unit tests
 scripts/wsl-test.sh -m 'not live'   # ... and the database tests (start the database first)
-uv run pytest -m 'browser and db'   # the browser tests
+uv run pytest -m browser            # the browser tests (most also need the database)
 uv run pytest -m live               # the live tests (needs keys)
 ```
 
@@ -102,9 +102,10 @@ for the disk (recreate it once: `docker compose up -d caludb --wait`).
 | A quick loop: no process starts, no waited-out timers | `uv run pytest -n 8 -m 'not slow and not live and not db and not browser'` | about 25 s |
 | The full-screen client only | `uv run pytest -n 8 tests/unit/test_tui_*.py` | about 25 s |
 | The database layer without the slow ones | `uv run pytest -m 'db and not browser and not slow'` | about 100 s |
-| The database and browser layers | `uv run pytest -m 'db and not live'` | about 3 min |
+| The database layer | `uv run pytest -m 'db and not live and not browser'` | about 2.5 min |
+| The browser layer (every test marked `browser`; those of the web interface are also marked `db`, the easter egg's are not) | `uv run pytest -m browser` | about 1 min |
 | One area | by path, e.g. `tests/unit/test_web_*.py tests/db/test_web*.py tests/browser`, or `-k 'honesty or trust'` | under a minute |
-| Everything before a push | `uv run pytest -n 8 && uv run pytest -m 'db and not live'` | about 3.5 min |
+| Everything before a push | `uv run pytest -n 8 && uv run pytest -m 'db and not live and not browser' && uv run pytest -m browser` | about 4 min |
 
 - The marker `slow` is on the tests that start a `calu` process or wait out a real timer.
   They belong to every full run and to CI; only a quick loop leaves them out.
@@ -188,7 +189,7 @@ that a session's own writes pass them with the session login.
 
 ```bash
 scripts/get-browser.sh              # once; needs no root
-uv run pytest -m 'browser and db'
+uv run pytest -m browser
 ```
 
 `get-browser.sh` installs Playwright's headless Chromium and unpacks `libnss3` and `libnspr4`
@@ -334,7 +335,7 @@ and the clients -- an allow-listed command and an edit through a real `claude`, 
 escalation resolved from the database alone.
 
 1. `calu doctor --db` on the machine — nothing essential missing.
-2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m 'browser and db'`.
+2. `scripts/wsl-test.sh -m 'not live'` — clean, and `uv run pytest -m browser`.
 3. `spikes/spike_hook_timeout.py` — the gate fails closed.
 4. `smoke_session.py --sandbox` with a prompt that runs a command, and read the probe output of
    `spikes/probe.sh` from inside the sandbox (own PID namespace, no `claude` process,
