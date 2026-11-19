@@ -21,11 +21,10 @@ The shipped `command.md` and `edit.md` therefore contain no rule at all; `change
 `subagent-result.md` contain the few rules that no classifier can apply (an incomplete commit,
 a subagent's result that grows the task).
 
-This relies on auto mode being on: `calu config set claude.permission_mode auto`, or
-`"permissions": {"defaultMode": "auto"}` in Claude Code's settings. calu does not switch it on
-by itself. A session that starts with the shipped instructions and without auto mode prints a
-warning; `calu config set claude.require_auto_mode true` makes every step that the checkers
-pass wait for a person in that case.
+This relies on auto mode being on. A session runs in auto mode unless the user chose another
+permission mode (`claude.permission_mode`, or `permissions.defaultMode` in Claude Code's
+settings); `calu config set claude.require_auto_mode true` makes every step that the checkers
+pass wait for a person while auto mode is off.
 
 ## Test triggers
 

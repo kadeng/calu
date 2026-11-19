@@ -418,6 +418,10 @@ Effort = Literal["low", "medium", "high", "xhigh", "max"]
 """Reasoning effort levels of Claude Code (`--effort`, `/effort`)."""
 
 
+PermissionMode = Literal["default", "auto", "acceptEdits", "plan", "dontAsk", "bypassPermissions"]
+"""Claude Code's permission modes, as `claude.permission_mode` and `--permission-mode` take them."""
+
+
 class ClaudeConfig(ConfigModel):
     """Settings for the Claude Code session.
 
@@ -433,17 +437,20 @@ class ClaudeConfig(ConfigModel):
     with the AWS credentials of the environment (e.g. an EC2 instance role or `AWS_PROFILE`);
     false (default) leaves the variable as it is.
 
-    `permission_mode`: None (default) leaves the permission mode to Claude Code, which takes it from
-    its own settings (`permissions.defaultMode`). Measured with CLI 2.1.319: a headless start
-    without that setting reports the mode "default", not "auto". The auto mode is the intended way
-    to run calu, because then a step runs only if the checkers (or the allow lists) **and** auto
-    mode's classifier approve it (agent/records/PLAN.md D5); set "auto" here or in Claude Code's
-    settings to get it. Whatever the mode ends up being, the checkers work: the hook reads the
-    effective mode from its input, defers a PASS to the classifier where the mode is "auto", and
-    otherwise answers "allow" itself, so that the checkers decide alone (D21). The runner reports
-    the effective mode as a `log` event at the start and whenever it changes, as a warning while it
-    is not "auto". Before that, the start-up warnings and `calu doctor` say which mode is expected
-    and whether the classifier will be active (`calu.preflight.permission_mode_line`).
+    `permission_mode`: None (default) gives the mode a plain interactive `claude` starts in:
+    `permissions.defaultMode` of Claude Code's settings files when one of them sets it, else
+    "auto". Measured with CLI 2.1.319: an interactive start without that setting runs in auto
+    mode, a start through the Agent SDK without `--permission-mode` in "default"; so calu passes
+    "auto" when no settings file chooses a mode (`calu.preflight.launch_permission_mode`,
+    agent/records/PLAN.md D241). A value set here is passed as it is. In the auto mode a step
+    runs only if the checkers (or the allow lists) **and** auto mode's classifier approve it
+    (D5). Whatever the mode ends up being, the checkers work: the hook reads the effective mode
+    from its input, defers a PASS to the classifier where the mode is "auto", and otherwise
+    answers "allow" itself, so that the checkers decide alone (D21). Another mode is the user's
+    choice and gives no warning at the start; the runner reports the effective mode as a `log`
+    event at the start and whenever it changes (a warning only when Claude Code does not take
+    the "auto" calu passed, e.g. for a model without auto mode), and `calu doctor` states the
+    expected mode (`calu.preflight.permission_mode_line`).
 
     `require_auto_mode`: if true, a step the checkers PASS while the effective mode is not
     "auto" waits for a human instead of running on the checkers' word alone.
@@ -459,18 +466,17 @@ class ClaudeConfig(ConfigModel):
     """Set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, so that it runs on AWS Bedrock with
     the environment's AWS credentials. False leaves the variable as it is; calu does not
     otherwise touch how Claude Code authenticates."""
-    permission_mode: (
-        Literal["default", "auto", "acceptEdits", "plan", "dontAsk", "bypassPermissions"] | None
-    ) = None
-    """Permission mode for Claude Code; None leaves it to Claude Code's own settings
-    (`permissions.defaultMode`; without that setting a headless start runs in the mode
-    "default", where the checkers decide alone). "auto" adds auto mode's classifier as the
-    second approval next to the checkers."""
+    permission_mode: PermissionMode | None = None
+    """Permission mode for Claude Code. None (default): `permissions.defaultMode` of Claude
+    Code's settings files when one sets it, else "auto", as in an interactive `claude` (calu
+    passes it, because a start through the Agent SDK would run in "default"). In "auto" auto
+    mode's classifier is the second approval next to the checkers; in another mode the checkers
+    decide alone."""
     require_auto_mode: bool = False
     """Whether a step needs auto mode's classifier as well as the checkers. False (default):
     outside the auto mode (another mode was chosen, the model has none, or a tool switched
-    the mode during the session) a step the checkers pass runs, and the session logs a
-    warning that the classifier is not active. True: such a step waits for a human instead."""
+    the mode during the session) a step the checkers pass runs, and the session logs the mode
+    it runs in. True: such a step waits for a human instead."""
     stream_partial: bool = True
     """Stream text and thinking token by token (`assistant.delta`). False delivers completed
     blocks only."""
@@ -643,7 +649,7 @@ class TracesConfig(ConfigModel):
     """What the file holds of Claude's own words. `narrated`: Claude's text and thinking retold
     in indirect speech by the narrator, as the checkers read them; with `context.narrate` off
     there is no narrator, and the file holds what `plain` holds. `plain`: Claude's text as
-    written; its thinking is left out."""
+    written, and the summary of each thinking block in the last form Claude Code sent it."""
     directory: str = "agent/traces"
     """Where the trace files go, relative to the project directory. An absolute path, and a
     path with a `..` component, are refused. While `enabled` is on, a tool call of Claude that

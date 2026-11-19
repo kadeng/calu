@@ -30,7 +30,8 @@ def test_layers_and_checker_rows_build_the_config() -> None:
     assert config.context.narrator_model == "mistral:small"
 
 
-def test_the_permission_mode_is_left_to_claude_code() -> None:
+def test_the_permission_mode_is_unset_by_default() -> None:
+    """Unset: Claude Code's settings files decide, else calu passes "auto" (D241)."""
     assert build_config([]).claude.permission_mode is None
 
 

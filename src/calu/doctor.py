@@ -703,16 +703,17 @@ def report(findings: Sequence[Finding]) -> str:
 def permission_mode_findings(
     workspace: Path | None = None, home: Path | None = None, config: Config | None = None
 ) -> list[Finding]:
-    """Say whether auto mode's classifier would decide next to the checkers.
+    """State the permission mode a session would start in, as information.
 
-    See agent/records/PLAN.md D5.
+    See agent/records/PLAN.md D5 and D241.
 
     A step needs the checkers **and** the classifier only in Claude Code's permission mode
-    "auto"; in every other mode the checkers decide alone. Which mode a session starts in comes
-    from calu's `claude.permission_mode` or, when that is unset, from `permissions.defaultMode`
-    of Claude Code's settings files (`calu.preflight.expected_permission_mode`). `calu doctor`
-    runs without the database, so without `config` it reports what the settings files say,
-    which is what holds while `claude.permission_mode` is unset.
+    "auto"; in every other mode the checkers decide alone. calu starts Claude Code in "auto"
+    unless calu's `claude.permission_mode` or `permissions.defaultMode` of Claude Code's
+    settings files chooses another mode (`calu.preflight.expected_permission_mode`). Another
+    mode is the user's choice, so the finding is never a problem: it is "ok" and says what
+    follows. `calu doctor` runs without the database, so without `config` it reports what the
+    settings files say, which is what holds while `claude.permission_mode` is unset.
 
     Args:
         workspace: The project directory, whose `.claude/settings.json` and
@@ -723,19 +724,15 @@ def permission_mode_findings(
             unset, `claude.require_auto_mode` false).
 
     Returns:
-        One finding named "auto mode": ok when the classifier is expected to be active,
-        otherwise a note with the line of `calu.preflight.permission_mode_line` and how to
-        switch the classifier on.
+        One finding named "permission mode", always ok, whose detail is the line of
+        `calu.preflight.permission_mode_line`.
     """
-    active, line = preflight.permission_mode_line(config or Config(), home, workspace)
+    _, line = preflight.permission_mode_line(config or Config(), home, workspace)
     return [
         Finding(
-            "auto mode",
-            active,
+            "permission mode",
+            True,
             line + ("" if config else " (Judged with claude.permission_mode unset.)"),
-            "Switch the second approval on with `calu config set claude.permission_mode auto`, "
-            "or make a step the checkers pass wait for a human with `calu config set "
-            "claude.require_auto_mode true`.",
         )
     ]
 
@@ -747,7 +744,7 @@ def local_findings(store: CredentialStore) -> list[Finding]:
         store: The credential store.
 
     Returns:
-        The tool, the auto-mode, credential, place-file, key, directory and
+        The tool, the permission-mode, credential, place-file, key, directory and
         optional-dependency findings, in that order (`machine_findings` around
         `store_findings`).
     """
@@ -787,7 +784,7 @@ def machine_findings() -> list[Finding]:
     programs are started as that user, and the settings files are that user's.
 
     Returns:
-        The tool, the auto-mode, directory and optional-dependency findings, in that order.
+        The tool, the permission-mode, directory and optional-dependency findings, in that order.
     """
     return [
         *tool_findings(),
@@ -915,7 +912,7 @@ def workspace_findings(workspace: Path) -> list[Finding]:
         changeset checker and the commit links need), for the sandbox the CLI would build
         here (`posture_findings`), for sandbox entries of the settings files that would keep a
         session from starting (`settings_file_findings`), and, when a settings file of the
-        project sets the permission mode, the auto-mode finding with that file taken into
+        project sets the permission mode, the permission-mode finding with that file taken into
         account.
     """
     mode: list[Finding] = []

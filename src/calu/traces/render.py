@@ -9,6 +9,9 @@ Everything here is rendering without input or output, except `create_trace_file`
     user.input, other sources        "Message from another Claude session" / "Automatic
                                      message"; the text, quoted (narrated: its narration)
     assistant.text                   plain: "Claude"; the text, quoted
+    assistant.thinking, .delta       plain: "Claude's thinking"; the final text of one thinking
+                                     block, quoted, written once the block is complete
+                                     (`_PendingThinking`)
     assistant.text, .thinking        narrated: one block per run of them up to the agent's
                                      next tool call or the end of the turn; the narration
     tool.use                         "Tool call N: <tool>"; every input value in a code fence
@@ -41,6 +44,19 @@ agent that started it:
 In the narrated form a block is created where Claude's first words appear and filled later:
 `Block.outputs` collects the text and thinking, `Block.closed` says that no more will come,
 and the writer (`calu.traces.writer`) sets the narration.
+
+Thinking in the plain form (agent/records/PLAN.md D241). Claude Code returns thinking as a
+summary, which can arrive as streamed fragments (`assistant.delta` with `thinking`) and as one
+or more completed texts of the same message (`assistant.thinking`; a later one rewrites the
+earlier). The renderer keeps one pending thinking block per agent and writes it once, in its
+last completed form (else the fragments streamed so far), when the agent's thinking is over:
+
+    pending block of agent A is written when    A's text, tool call, check or escalation
+                                                comes; A's thinking of another message
+                                                comes; A stops (subagent); the turn or the
+                                                trace ends
+    an assistant.thinking of A replaces it when it has the pending block's message id, or
+                                                the pending block holds fragments only
 """
 
 from __future__ import annotations
@@ -58,6 +74,7 @@ from calu.context.narrator import ClaudeOutput
 from calu.markdown import fence
 from calu.protocol.messages import (
     AgentsUpdate,
+    AssistantDelta,
     AssistantText,
     AssistantThinking,
     CheckResult,
@@ -112,6 +129,26 @@ class Block:
     """False while a block of the narrated form may still get more `outputs`."""
     narration: str | None = None
     """The narration of `outputs`, once somebody delivered it; None before that."""
+
+
+@dataclass
+class _PendingThinking:
+    """One thinking block of one agent that is not written yet (plain form)."""
+
+    message_id: str | None
+    """The id of the message the thinking belongs to, or None if the event carried none."""
+    final: str | None = None
+    """The last completed text (`assistant.thinking`), or None while only fragments came."""
+    partial: str = ""
+    """The fragments (`assistant.delta`) streamed since the last completed text."""
+
+    def text(self) -> str:
+        """Return what the trace holds of this block.
+
+        Returns:
+            The last completed text if there is one, else the fragments joined.
+        """
+        return self.final if self.final is not None else self.partial
 
 
 def quote(text: str) -> str:
@@ -273,7 +310,7 @@ def render_header(header: Header) -> str:
     content = {
         "narrated": "narrated (Claude's text and thinking retold in indirect speech by the "
         "narrator; no images)",
-        "plain": "plain (Claude's text as written; its thinking is left out; no images)",
+        "plain": "plain (Claude's text and the summaries of its thinking as written; no images)",
     }.get(header.content, header.content)
     if header.content_note:
         content += f". {header.content_note}"
@@ -348,7 +385,7 @@ class TraceRenderer:
 
         Args:
             narrated: True for the narrated form (Claude's text and thinking as blocks to be
-                narrated), False for the plain form (text verbatim, thinking left out).
+                narrated), False for the plain form (text and thinking verbatim).
             max_input_chars: Longer values of a tool call's input are cut.
             max_result_chars: Longer tool results are cut.
             claude_session: The Claude session id the header already names, or None.
@@ -365,6 +402,8 @@ class TraceRenderer:
         """agent id (the id of the tool call that started it) -> (number, depth from 1)."""
         self._open: dict[str | None, Block] = {}
         """Agent id (None: the main agent) -> its open block of the narrated form."""
+        self._thinking: dict[str | None, _PendingThinking] = {}
+        """Agent id (None: the main agent) -> its thinking block not written yet (plain form)."""
         self._escalations: dict[str, tuple[str | None, bool]] = {}
         """Id of an open escalation -> (the agent of its step, whether it is a question of the
         agent)."""
@@ -373,7 +412,9 @@ class TraceRenderer:
         """Return the blocks that `event` adds to the trace.
 
         Side effects: numbers turns, tool calls and subagents; in the narrated form, adds
-        text to an open block or closes one (`Block.closed`) instead of returning a new one.
+        text to an open block or closes one (`Block.closed`) instead of returning a new one;
+        in the plain form, keeps an agent's thinking until its block is complete (module
+        docstring) and returns it then, before the block that showed the end.
 
         Args:
             event: An event of the session, in the order the session emitted it.
@@ -390,18 +431,25 @@ class TraceRenderer:
             case UserInput():
                 blocks += self._start_turn()
                 blocks += self._user_input(event)
+            case AssistantDelta() if event.thinking and not self.narrated:
+                blocks += self._thinking_fragment(event)
+            case AssistantThinking() if not self.narrated:
+                blocks += self._thinking_done(event)
             case AssistantText() | AssistantThinking():
                 blocks += self._claude_output(event)
             case ToolUse():
                 self._close(event.agent_id)
+                blocks += self._flush_thinking(event.agent_id)
                 blocks += self._start_turn()
                 blocks.append(self._tool_use(event))
             case CheckResult():
                 self._close(event.agent_id)
+                blocks += self._flush_thinking(event.agent_id)
                 blocks += self._start_turn()
                 blocks.append(self._check(event))
             case EscalationRequest():
                 self._close(event.agent_id)
+                blocks += self._flush_thinking(event.agent_id)
                 blocks += self._start_turn()
                 blocks.append(self._escalation(event))
             case EscalationResolved():
@@ -412,19 +460,99 @@ class TraceRenderer:
                 for agent in event.agents:
                     if agent.status != "running":
                         self._close(agent.agent_id)
+                        blocks += self._flush_thinking(agent.agent_id)
             case TurnResult():
-                self.close_all()
+                blocks += self.close_all()
                 blocks += self._session_id(event.session_id)
                 blocks.append(self._turn_end(event))
             case _:
                 pass
         return blocks
 
-    def close_all(self) -> None:
-        """Close every open block of the narrated form (the end of a turn or of the trace)."""
+    def close_all(self) -> list[Block]:
+        """Close every open block (the end of a turn or of the trace).
+
+        Side effects: closes the open blocks of the narrated form and forgets the pending
+        thinking of every agent (plain form).
+
+        Returns:
+            The pending thinking blocks of the plain form, main agent first, then the
+            subagents in the order their thinking began; they belong in the file now.
+        """
         for block in self._open.values():
             block.closed = True
         self._open.clear()
+        blocks: list[Block] = []
+        for agent in sorted(self._thinking, key=lambda a: a is not None):
+            blocks += self._flush_thinking(agent)
+        return blocks
+
+    def _thinking_fragment(self, event: AssistantDelta) -> list[Block]:
+        """Keep a streamed fragment of thinking (plain form).
+
+        Args:
+            event: An `assistant.delta` with `thinking` true.
+
+        Returns:
+            The agent's pending thinking block if this fragment belongs to another message
+            (that block is complete), else nothing.
+        """
+        pending = self._thinking.get(event.agent_id)
+        blocks: list[Block] = []
+        if pending is not None and pending.message_id != event.message_id:
+            blocks = self._flush_thinking(event.agent_id)
+            pending = None
+        if pending is None:
+            pending = self._thinking[event.agent_id] = _PendingThinking(event.message_id)
+        pending.partial += event.text
+        return blocks
+
+    def _thinking_done(self, event: AssistantThinking) -> list[Block]:
+        """Keep a completed thinking text, replacing the version it rewrites (plain form).
+
+        The text replaces the agent's pending block when both carry the same message id or
+        when the pending block holds fragments only (the fragments' id and the completed
+        message's id need not agree); otherwise the pending block is complete and this text
+        starts the next one.
+
+        Args:
+            event: An `assistant.thinking`.
+
+        Returns:
+            The agent's earlier pending thinking block if this text does not replace it, else
+            nothing.
+        """
+        pending = self._thinking.get(event.agent_id)
+        blocks: list[Block] = []
+        same = pending is not None and (
+            pending.final is None
+            or (event.message_id is not None and pending.message_id == event.message_id)
+        )
+        if pending is not None and not same:
+            blocks = self._flush_thinking(event.agent_id)
+            pending = None
+        if pending is None:
+            pending = self._thinking[event.agent_id] = _PendingThinking(event.message_id)
+        pending.message_id = event.message_id or pending.message_id
+        pending.final, pending.partial = event.text, ""
+        return blocks
+
+    def _flush_thinking(self, agent_id: str | None) -> list[Block]:
+        """Return an agent's pending thinking as a block and forget it (plain form).
+
+        Args:
+            agent_id: The agent; None is the main agent.
+
+        Returns:
+            The turn's heading if no turn runs, and one block "Claude's thinking" (for a
+            subagent "Subagent K: thinking") with the text quoted; nothing if the agent has no
+            pending thinking or its text is blank.
+        """
+        pending = self._thinking.pop(agent_id, None)
+        if pending is None or not pending.text().strip():
+            return []
+        said = "Claude's thinking" if agent_id is None else "thinking"
+        return [*self._start_turn(), Block(self._heading(agent_id, said), quote(pending.text()))]
 
     def _close(self, agent_id: str | None) -> None:
         """Close the open block of one agent, if it has one.
@@ -549,15 +677,19 @@ class TraceRenderer:
             event: The event.
 
         Returns:
-            Plain form: one block with the text quoted; nothing for thinking. Narrated form:
-            a new open block if the agent has none (else the text joins the open one).
+            Plain form: the agent's pending thinking block (`_flush_thinking`), then one
+            block with the text quoted (thinking itself is handled by `_thinking_done`).
+            Narrated form: a new open block if the agent has none (else the text joins the
+            open one).
         """
         thinking = isinstance(event, AssistantThinking)
         if not self.narrated:
+            blocks = self._flush_thinking(event.agent_id)
             if thinking or not event.text.strip():
-                return []
+                return blocks
             said = "Claude" if event.agent_id is None else "text"
             return [
+                *blocks,
                 *self._start_turn(),
                 Block(self._heading(event.agent_id, said), quote(event.text)),
             ]

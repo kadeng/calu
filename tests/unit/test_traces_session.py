@@ -264,16 +264,67 @@ async def test_a_scripted_session_is_traced_as_one_redacted_file(
     )
 
 
-async def test_the_plain_form_holds_claudes_text_and_no_thinking(tmp_path: Path):
+async def test_the_plain_form_holds_claudes_text_and_thinking(tmp_path: Path):
     session, rec, _ = make_session(tmp_path, SCRIPT, traced(content="plain", redact=False))
     await run_script(session, rec)
     text = trace_files(tmp_path)[0].read_text()
-    assert "- Content: plain (Claude's text as written" in text
+    assert "- Content: plain (Claude's text and the summaries of its thinking as written" in text
     assert "(`traces.redact` is off): personal data is not removed" in text
-    assert "### Claude\n\n> I will run the tests. Mail jane.roe@example.org if they fail.\n" in text
-    assert "The user wants the tests run" not in text, "thinking is left out"
+    assert (
+        "### Claude's thinking\n\n> The user wants the tests run.\n\n"
+        "### Claude\n\n> I will run the tests. Mail jane.roe@example.org if they fail.\n"
+    ) in text, "the thinking block once, before the text that follows it"
+    assert text.count("The user wants the tests run.") == 1
     assert "[redacted: aws access key]" in text, "the deterministic stage always runs"
     assert "#### Subagent 1: text\n\n> Looking.\n" in text
+
+
+async def run_turn(session: Session, rec) -> None:
+    """Start the session, send one message, wait for the turn's end, stop."""
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="go"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+
+
+async def test_a_rewritten_thinking_block_is_traced_once_in_its_final_form(tmp_path: Path):
+    """D241: the summary streams and is rewritten; the file holds its last version once."""
+    script = [
+        [
+            {"thinking": "First draft of the plan", "message": "m1", "stream": True},
+            {"thinking": "Run the tests, then report.", "message": "m1"},
+            {"agent": {"description": "look", "actions": [{"thinking": "Sub plan"}]}},
+            {"text": "Done."},
+            {"thinking": "Last thought, at the end of the turn.", "stream": True},
+        ]
+    ]
+    session, rec, _ = make_session(tmp_path, script, traced(content="plain", redact=False))
+    await run_turn(session, rec)
+    text = trace_files(tmp_path)[0].read_text()
+    assert "First draft" not in text, "the rewritten version is not written"
+    assert text.count("### Claude's thinking\n\n> Run the tests, then report.\n") == 1
+    assert "#### Subagent 1: thinking\n\n> Sub plan\n" in text
+    assert text.index("Run the tests, then report.") < text.index("> Done.")
+    # Thinking with nothing after it in the turn is written before the turn's end, once.
+    last = "### Claude's thinking\n\n> Last thought, at the end of the turn.\n"
+    assert text.count(last) == 1 and text.index(last) < text.index("### End of turn 1")
+
+
+async def test_thinking_is_redacted_like_every_other_block(tmp_path: Path):
+    script = [
+        [
+            {"thinking": "Use sk-proj-abc123DEF456ghi789JKL0 and ask jane.roe@example.org."},
+            {"text": "Done."},
+        ]
+    ]
+    session, rec, _ = make_session(tmp_path, script, traced(content="plain"))
+    await run_turn(session, rec)
+    text = trace_files(tmp_path)[0].read_text()
+    assert (
+        "### Claude's thinking\n\n> Use [redacted: api key] and ask [redacted: e-mail address].\n"
+    ) in text
+    assert "sk-proj-" not in text and "jane.roe" not in text
 
 
 async def test_narrated_content_without_a_narrator_is_plain_and_the_header_says_why(

@@ -622,7 +622,11 @@ class TraceWriter:
             note: A last line of calu's own for the file, e.g. "The session ended.", or "".
         """
         if not self._closing:
-            self.renderer.close_all()
+            try:
+                for block in self.renderer.close_all():  # the thinking not written yet
+                    self._append(block)
+            except Exception:
+                log.exception("rendering the last blocks of the session trace failed")
             if note:
                 self.note(note)
             self._closing = True

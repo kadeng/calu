@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D239, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D241, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -70,11 +70,14 @@ Decided (do not ask again):
 - **Auto mode:** Claude Code uses auto mode by default; if it is off, that is the user's
   choice. If a session launched through the Agent SDK does not get auto mode by default,
   calu makes it the default (plain `claude` has it). No warning at every start when the
-  user turned it off.
+  user turned it off. **Done** (PLAN D241, not pushed): measured, an SDK start gets
+  "default"; calu now passes "auto" unless a settings file or `claude.permission_mode`
+  chooses; the start-up warnings are gone, `calu doctor` states the mode.
 - **Hold scope:** keep holding every checked step of every agent while a decision is open.
 - **Traces:** include Claude's thinking in the plain trace, redacted. Thinking is only a
   summary, usually only on the last step, and rewritten while it streams: collect it when
-  it happens and keep it. Redaction stays per block; no export of past sessions.
+  it happens and keep it. Redaction stays per block; no export of past sessions. **Done**
+  (PLAN D241, not pushed): one block per thinking block, written once in its final form.
 - **Remote attach:** one relay port per `calu serve` for all its sessions, so one SSH forward
   covers every session and `/new`, `/fork`, `/switch` work from a laptop.
 - **Reconnect:** keep 5 minutes for remote addresses; a local session whose process is gone

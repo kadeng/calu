@@ -461,10 +461,11 @@ escalation resolved from the database alone.
    the first command runs: the second command must wait as an escalation that names the file.
    `calu doctor <directory>` must name the entry too.
 20. The permission mode: `calu run` with `claude.permission_mode` unset on a machine whose
-   Claude Code settings do not set `permissions.defaultMode` must print, among the start-up
-   warnings, that auto mode's classifier is NOT active; with `calu config set
-   claude.permission_mode auto` the session must report the mode "auto" when it starts.
-   `calu doctor` must show an `auto mode` line in both cases.
+   Claude Code settings do not set `permissions.defaultMode` must report the mode "auto" when
+   the session starts, with no start-up warning about the mode. With `calu config set
+   claude.permission_mode default` the session must report the mode "default" as information,
+   again without a start-up warning. `calu doctor` must show a `permission mode` line marked
+   `ok` in both cases, naming the mode and where it comes from.
 21. Resetting the database: on a scratch database with a project and a rule, run
    `calu db reset`. It must list what it would delete, ask for the admin password and for the
    phrase `yes delete the db`. Paste the phrase (it arrives at once): nothing may be deleted.

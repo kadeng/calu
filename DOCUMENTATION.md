@@ -55,11 +55,10 @@ judges on evidence rather than on the diff alone. That is all it can do: it cann
   and **your project's rules** -- which start out empty for commands and edits. General
   safety (destructive commands, secrets, data leaving the machine) is not restated in them:
   that judgement is Claude Code's auto mode classifier, which sees every step the checkers
-  pass. **calu does not switch auto mode on by itself**: set
-  `calu config set claude.permission_mode auto` (or `permissions.defaultMode` in Claude
-  Code's settings), or `calu config set claude.require_auto_mode true` so that a passed
-  step waits for a person where the classifier is not active. A session that starts with
-  the shipped instructions and without either prints a warning that says so. What you add
+  pass. **A session runs in auto mode by default**, as a plain `claude` does; another mode
+  is your choice (`claude.permission_mode`, or `permissions.defaultMode` in Claude Code's
+  settings), and `calu config set claude.require_auto_mode true` makes a passed step wait
+  for a person wherever the classifier is not active. What you add
   are the rules you would otherwise have to repeat to Claude every day (see
   [what you can enforce](#what-you-can-enforce-with-a-checker)), as plain Markdown. The
   shipped instructions also hold **test triggers** for trying calu out
@@ -132,7 +131,7 @@ judges on evidence rather than on the diff alone. That is all it can do: it cann
 - **Comments on a selection.** Mark lines in a diff or in any project file and write a comment.
   It reaches Claude at once and is kept as potential training data for the checkers.
 - **Unsupervised runs.** The checkers judge every step, and in Claude Code's auto mode its
-  classifier judges it as well ([how to switch it on](#calu-does-not-replace-claude-code)), so
+  classifier judges it as well ([the permission mode](#calu-does-not-replace-claude-code)), so
   a session can run for hours — overnight, for example — and stops only when something
   genuinely needs you.
 
@@ -439,21 +438,28 @@ The one exception is the sandbox: a session does not start while one of these fi
 sandbox entry that goes beyond calu's configuration
 ([the sandbox](#the-sandbox-and-what-a-command-may-reach)).
 
-calu changes none of those rules and by default does not set the permission mode. It only adds a
-layer in front of each tool call and a layer around the process. Running in the auto mode is the
-intended way to use calu, because a step then needs the harness **and** your checkers — a PASS
-from a checker leaves the harness's decision exactly where it was. In any other mode a PASS is
-the only approval of a step. A headless Claude Code starts in the mode `default` (measured with
-CLI 2.1.319) unless `claude.permission_mode` or `permissions.defaultMode` in one of Claude
-Code's settings files says otherwise, so the auto mode has to be chosen:
+calu changes none of those rules. It only adds a layer in front of each tool call and a layer
+around the process. Running in the auto mode is the intended way to use calu, because a step
+then needs the harness **and** your checkers — a PASS from a checker leaves the harness's
+decision exactly where it was. In any other mode a PASS is the only approval of a step.
+
+**The permission mode.** A plain `claude` starts in auto mode unless a settings file chooses
+another mode; Claude Code started through the Agent SDK would start in the mode `default`
+(both measured with CLI 2.1.319). calu therefore starts a session in auto mode, unless you chose
+a mode: `claude.permission_mode` is used as it is, and a `permissions.defaultMode` in one of
+Claude Code's loaded settings files is left to Claude Code to apply. Another mode is your
+choice, and the session does not warn about it at every start:
 
 ```bash
-calu config set claude.permission_mode auto     # the classifier decides next to the checkers
+calu config set claude.permission_mode default  # the checkers decide alone
 calu config set claude.require_auto_mode true   # outside the auto mode, a passed step waits for a human
+calu config unset claude.permission_mode        # back to auto mode (or your settings file's mode)
 ```
 
-Both apply from the next session start. A session names the mode in effect when it starts and
-whenever the mode changes, and `calu doctor` has a line for it.
+These apply from the next session start. A session names the mode in effect when it starts and
+whenever the mode changes (a warning only when Claude Code did not take the auto mode calu
+asked for, as for a model without auto mode), and `calu doctor` names the mode a session would
+start in and where that comes from.
 
 And it goes the other way too: calu speaks the agent side of the Agent Client Protocol
 (`calu acp`), so the same checked Claude Code session is usable from every ACP client —
@@ -1308,10 +1314,9 @@ checkers follow them. A checker's prompt has two parts: calu's fixed part -- its
 tools, the answers it can give, the summary it writes -- and your instructions, which only say
 what to pass, deny and escalate. You edit only the second part, so it stays short. Both parts
 together are about 300 words for each checker, because they hold project rules only: general
-safety is left to Claude Code's auto mode, which therefore has to be on (`calu config set
-claude.permission_mode auto`; a start-up warning tells you when the shipped instructions run
-without it). Only the honesty checker reads the honesty rules (`calu honesty edit`, above).
-The instructions calu ships are a starting point you are meant to
+safety is left to Claude Code's auto mode, which a session uses unless you chose another
+permission mode ([calu does not replace Claude Code](#calu-does-not-replace-claude-code)).
+Only the honesty checker reads the honesty rules (`calu honesty edit`, above). The instructions calu ships are a starting point you are meant to
 rewrite, and they are in the public domain rather than under calu's licence: what you make of
 them is yours, under any terms or none ([LICENSE.md](LICENSE.md)).
 
@@ -1480,6 +1485,7 @@ nothing is folded or summarised.
 | `## Turn N` ... `### End of turn N` | One turn of the conversation |
 | `### User` | The user's message. Images are not included; a line says how many were attached |
 | `### Claude, narrated` or `### Claude` | Claude's words (see `traces.content` below) |
+| `### Claude's thinking` | Plain form only: the summary of one block of Claude's thinking, as Claude Code returned it last (see below) |
 | `### Tool call N: <tool>` | The tool's input, every value in a code fence; long values are cut |
 | `### Check of tool call N (<tool>): <DECISION>` | The route, the checkers' reason, their summary of the step and their comment to Claude |
 | `### Escalation E: ... waits for a person`, `### Escalation E: allowed` | The reason; who decided, and the note. The context the checker had is not included |
@@ -1491,9 +1497,15 @@ nothing is folded or summarised.
 | Value | Claude's text | Claude's thinking |
 |---|---|---|
 | `narrated` (default) | retold in indirect speech by the narrator, as the checkers read it | retold with the text |
-| `plain` | as Claude wrote it | left out |
+| `plain` | as Claude wrote it | the summary, as Claude Code returned it |
 
 With `context.narrate` off there is no narrator, and the file holds the plain form.
+
+Claude Code returns thinking only as a summary, often only for the last step of a turn, and it
+can revise a summary while it streams. The plain form keeps each thinking block until the block
+is over (Claude's text or next tool call follows, or the turn ends) and then writes it once, in
+the last form Claude Code sent. Earlier versions and streamed fragments are not written. A
+thinking block is redacted like every other block.
 
 **What is redacted.** The files are meant to be shared, so every block passes two stages
 before it is written, and nothing is written before it passed them:

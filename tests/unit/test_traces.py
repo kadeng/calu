@@ -138,7 +138,8 @@ def test_the_header_says_what_the_file_is_and_how_it_was_redacted():
         "- User: kai\n"
         "- Claude model: opus\n"
         "- calu version: 1.2.3\n"
-        "- Content: plain (Claude's text as written; its thinking is left out; no images)\n"
+        "- Content: plain (Claude's text and the summaries of its thinking as written; no "
+        "images)\n"
         "- Redaction: the secret values calu knows and common shapes of keys and tokens are "
         "replaced; secrets and personal data are replaced by the redaction agent "
         "(`fake-redactor`)\n"
@@ -179,7 +180,7 @@ def test_a_plain_turn_is_rendered_block_by_block():
         [
             SessionState(state="idle", session_id="claude-1"),
             UserInput(text="Fix the bug\n# please", images=[image, image]),
-            AssistantThinking(text="hidden thoughts"),
+            AssistantThinking(text="my thoughts"),
             AssistantDelta(message_id="m", text="I wi"),
             AssistantText(text="I will look."),
             ToolUse(tool_use_id="t1", name="Bash", input={"command": "ls"}),
@@ -207,6 +208,8 @@ def test_a_plain_turn_is_rendered_block_by_block():
         "### User\n\n"
         "> Fix the bug\n> # please\n\n"
         "_2 images were attached; images are not part of the trace._\n\n"
+        "### Claude's thinking\n\n"
+        "> my thoughts\n\n"
         "### Claude\n\n"
         "> I will look.\n\n"
         "### Tool call 1: Bash\n\n"
@@ -228,6 +231,48 @@ def test_a_plain_turn_is_rendered_block_by_block():
         "Result: success\n\n"
         "Background tasks still running: 2\n\n"
     )
+
+
+def test_a_rewritten_thinking_block_is_rendered_once_in_its_final_form():
+    """D241: fragments and earlier versions of a thinking summary never reach the file."""
+    renderer = TraceRenderer(narrated=False)
+    events: list[Event] = [
+        UserInput(text="go"),
+        AssistantDelta(message_id="s1", text="Draft ", thinking=True),
+        AssistantDelta(message_id="s1", text="one", thinking=True),
+    ]
+    assert [b.heading for e in events for b in renderer.render(e)] == ["## Turn 1", "### User"]
+    later: list[Event] = [
+        AssistantThinking(text="Draft one", message_id="m1"),
+        AssistantThinking(text="The final summary.", message_id="m1"),
+        AssistantThinking(text="A second block.", message_id="m2"),
+        AssistantText(text="Done.", message_id="m2"),
+        TurnResult(result="done"),
+    ]
+    text = rendered(renderer, later)
+    assert text == (
+        "### Claude's thinking\n\n> The final summary.\n\n"
+        "### Claude's thinking\n\n> A second block.\n\n"
+        "### Claude\n\n> Done.\n\n"
+        "### End of turn 1\n\nResult: success\n\n"
+    )
+
+
+def test_thinking_that_only_streamed_is_written_at_the_end_of_the_turn_or_trace():
+    renderer = TraceRenderer(narrated=False)
+    rendered(renderer, [UserInput(text="go")])
+    fragments: list[Event] = [
+        AssistantDelta(message_id="s1", text="Half a ", thinking=True),
+        AssistantDelta(message_id="s1", text="thought", thinking=True),
+        AssistantDelta(agent_id="sub", message_id="s2", text="Sub thought", thinking=True),
+    ]
+    assert rendered(renderer, fragments) == ""
+    blocks = renderer.close_all()
+    assert [(b.heading, b.body) for b in blocks] == [
+        ("### Claude's thinking", "> Half a thought"),
+        ("#### Subagent 1: thinking", "> Sub thought"),
+    ]
+    assert renderer.close_all() == [], "written once"
 
 
 def test_messages_that_are_not_the_users_are_labelled_and_a_failed_turn_says_so():

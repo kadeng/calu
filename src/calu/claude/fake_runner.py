@@ -5,6 +5,12 @@ Each user message starts the next scripted turn; when the script is exhausted, t
 
     {"text": "..."}                                   Claude writes text
     {"thinking": "..."}                               Claude's thinking (assistant.thinking)
+    {"thinking": "...", "message": "m1"}              ... with the message id of the name "m1":
+                                                      a second thinking of the same name is a
+                                                      rewrite of the first, as Claude Code
+                                                      sends a summary it revised
+    {"thinking": "...", "stream": true}               ... preceded by word-wise assistant.delta
+                                                      events with `thinking` true
     {"text": "...", "stream": true}                   ... preceded by word-wise assistant.delta
     {"text": "...", "stream": true, "delay": 0.05}    ... with a pause after each word; an
                                                       interrupt ends the text after the words
@@ -441,7 +447,7 @@ class FakeRunner:
             ValueError: If the action has none of the known keys.
         """
         if "thinking" in action:
-            await sink(AssistantThinking(agent_id=agent, text=str(action["thinking"])))
+            await self._thinking(action, agent, sink)
         elif "text" in action:
             message_id = f"fake-msg-{self._id_prefix}-{next(self._ids)}"
             text = str(action["text"])
@@ -558,6 +564,33 @@ class FakeRunner:
                 await sink(UserInput(text=note, source=NOT_FROM_USER))
         else:
             raise ValueError(f"unknown fake action: {action!r}")
+
+    async def _thinking(self, action: dict[str, Any], agent: str | None, sink: EventSink) -> None:
+        """Report a thinking action: its fragments if it streams, then the completed text.
+
+        Args:
+            action: The action dict, with `thinking` and optionally `message` (a name: the
+                same name gives the same message id within this runner) and `stream`.
+            agent: Protocol id of the subagent that thinks, or None for the main agent.
+            sink: Receives the events.
+        """
+        text = str(action["thinking"])
+        name = action.get("message")
+        if name is not None:
+            message_id: str | None = f"fake-msg-{self._id_prefix}-{name}"
+        elif action.get("stream"):
+            message_id = f"fake-msg-{self._id_prefix}-{next(self._ids)}"
+        else:
+            message_id = None
+        if action.get("stream") and message_id is not None:
+            for word in text.split(" "):
+                await sink(
+                    AssistantDelta(
+                        agent_id=agent, message_id=message_id, text=word + " ", thinking=True
+                    )
+                )
+                await anyio.lowlevel.checkpoint()
+        await sink(AssistantThinking(agent_id=agent, text=text, message_id=message_id))
 
     async def _tool(
         self, action: dict[str, Any], agent: str | None, gate: ToolGate, sink: EventSink

@@ -24,12 +24,12 @@ from calu.config import (
     PROVIDER_KEYS_BY_PREFIX,
     ClaudeConfig,
     Config,
+    PermissionMode,
     default_model,
     provider_key_variables,
     user_env_file,
 )
 from calu.credentials import CredentialError, CredentialStore
-from calu.defaults.instructions import default_instructions, without_test_triggers
 
 
 def claude_home() -> Path:
@@ -831,34 +831,26 @@ AUTO_MODE = "auto"
 """The permission mode in which Claude Code's classifier decides next to calu's checkers."""
 
 
-def expected_permission_mode(
-    config: Config, home: Path | None = None, workspace: Path | None = None
-) -> tuple[str, str]:
-    """Work out the permission mode a session is expected to start in, and what sets it.
+def settings_permission_mode(
+    config: Config | ClaudeConfig, home: Path | None = None, workspace: Path | None = None
+) -> tuple[str, str] | None:
+    """Read `permissions.defaultMode` from the Claude Code settings files a session loads.
 
-    `claude.permission_mode` decides when it is set. Otherwise Claude Code takes
-    `permissions.defaultMode` from its settings files; of the loaded sources
-    (`claude.setting_sources`) the local file has precedence over the project's and that over
-    the user's. Without any of them a headless start runs in the mode "default" (measured, CLI
-    2.1.319). This reads files only. It is an expectation: a managed policy or a model without
-    an auto mode can make Claude Code start in another mode, which is why the runner reports
-    the mode Claude Code really runs in when the session starts.
+    Of the loaded sources (`claude.setting_sources`) the local file has precedence over the
+    project's and that over the user's, as in Claude Code. This reads files only; a file that
+    is missing or not a JSON object counts as not setting the mode.
 
     Args:
-        config: The session configuration.
+        config: The session configuration, or its `claude` part alone.
         home: The home directory; None uses `claude_home()`.
         workspace: The project directory; None skips the project and the local file.
 
     Returns:
-        (the mode, where it comes from as a phrase for a message).
-
-    Example:
-        With the default configuration and no settings file: `("default", "no settings file
-        sets permissions.defaultMode")`.
+        (the mode, "permissions.defaultMode in <file>") for the first file that sets it, or
+        None when no loaded file does.
     """
-    if config.claude.permission_mode is not None:
-        return config.claude.permission_mode, "claude.permission_mode"
-    sources = set(config.claude.setting_sources)
+    claude = config.claude if isinstance(config, Config) else config
+    sources = set(claude.setting_sources)
     home = home if home is not None else claude_home()
     files: list[tuple[str, Path]] = []
     if workspace is not None and "local" in sources:
@@ -871,7 +863,67 @@ def expected_permission_mode(
         mode = _nested(_json_object(path), ("permissions", "defaultMode"))
         if isinstance(mode, str) and mode:
             return mode, f"permissions.defaultMode in {label}"
-    return "default", "no settings file sets permissions.defaultMode"
+    return None
+
+
+def launch_permission_mode(
+    config: Config | ClaudeConfig, home: Path | None = None, workspace: Path | None = None
+) -> PermissionMode | None:
+    """Choose the `--permission-mode` calu passes when it starts Claude Code.
+
+    An interactive `claude` starts in auto mode when no settings file chooses a mode; a start
+    through the Agent SDK without `--permission-mode` starts in "default" (both measured with
+    CLI 2.1.319, agent/records/PLAN.md D241). calu passes "auto" in that case, so that a
+    session gets the same mode as a plain `claude`. A mode the user chose is kept:
+    `claude.permission_mode` is passed as it is, and a `permissions.defaultMode` in a loaded
+    settings file (`settings_permission_mode`) makes calu pass nothing, so that Claude Code
+    applies the file.
+
+    Args:
+        config: The session configuration, or its `claude` part alone.
+        home: The home directory; None uses `claude_home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        The mode to pass, or None to pass no mode.
+    """
+    claude = config.claude if isinstance(config, Config) else config
+    if claude.permission_mode is not None:
+        return claude.permission_mode
+    if settings_permission_mode(claude, home, workspace) is not None:
+        return None
+    return "auto"
+
+
+def expected_permission_mode(
+    config: Config, home: Path | None = None, workspace: Path | None = None
+) -> tuple[str, str]:
+    """Work out the permission mode a session is expected to start in, and what sets it.
+
+    `claude.permission_mode` decides when it is set, then `permissions.defaultMode` of a loaded
+    settings file (`settings_permission_mode`); without either calu passes "auto"
+    (`launch_permission_mode`). This reads files only. It is an expectation: a managed policy
+    or a model without an auto mode can make Claude Code start in another mode, which is why
+    the runner reports the mode Claude Code really runs in when the session starts.
+
+    Args:
+        config: The session configuration.
+        home: The home directory; None uses `claude_home()`.
+        workspace: The project directory; None skips the project and the local file.
+
+    Returns:
+        (the mode, where it comes from as a phrase for a message).
+
+    Example:
+        With the default configuration and no settings file: `("auto", "calu's default, as
+        in an interactive claude")`.
+    """
+    if config.claude.permission_mode is not None:
+        return config.claude.permission_mode, "claude.permission_mode"
+    from_file = settings_permission_mode(config, home, workspace)
+    if from_file is not None:
+        return from_file
+    return AUTO_MODE, "calu's default, as in an interactive claude"
 
 
 def permission_mode_line(
@@ -880,9 +932,9 @@ def permission_mode_line(
     """Say in one line whether auto mode's classifier is expected to decide next to the checkers.
 
     In the mode "auto" a step runs only if calu's checkers (or the allow lists) and Claude Code's
-    classifier approve it (agent/records/PLAN.md D5). In every other mode the checkers decide alone,
-    or, with `claude.require_auto_mode`, a step they pass waits for a human. Which of the three
-    holds is what a person starting an unattended run has to see.
+    classifier approve it (agent/records/PLAN.md D5). In every other mode the checkers decide
+    alone, or, with `claude.require_auto_mode`, a step they pass waits for a human. Another mode
+    is the user's choice; the line states it as information (`calu doctor`).
 
     Args:
         config: The session configuration.
@@ -896,98 +948,17 @@ def permission_mode_line(
     mode, source = expected_permission_mode(config, home, workspace)
     if mode == AUTO_MODE:
         return True, (
-            f'Auto mode\'s classifier is expected to be active (permission mode "auto": '
-            f"{source}): a step needs calu's checkers and the classifier."
+            f"permission mode \"auto\" ({source}): a step needs calu's checkers and auto mode's "
+            "classifier."
         )
     consequence = (
         "a step the checkers pass waits for a human (claude.require_auto_mode)"
         if config.claude.require_auto_mode
-        else "a step the checkers pass runs on their word alone. Set claude.permission_mode "
-        'to "auto" for the second approval, or claude.require_auto_mode to make such steps '
-        "wait for a human"
+        else "a step the checkers pass runs on their approval alone"
     )
     return False, (
-        f'Auto mode\'s classifier is NOT active (permission mode "{mode}": {source}), so '
-        f"{consequence}."
+        f'permission mode "{mode}" ({source}): auto mode\'s classifier is off, so {consequence}.'
     )
-
-
-def permission_mode_warnings(
-    config: Config, home: Path | None = None, workspace: Path | None = None
-) -> list[str]:
-    """Return the start-up warning about a session without auto mode's classifier.
-
-    Args:
-        config: The session configuration.
-        home: The home directory; None uses `claude_home()`.
-        workspace: The project directory; None skips the project and the local file.
-
-    Returns:
-        The line of `permission_mode_line` when the expected mode is not "auto", else [] (the
-        runner reports the mode "auto" itself when Claude Code confirms it at the start).
-    """
-    active, line = permission_mode_line(config, home, workspace)
-    return [] if active else [line]
-
-
-SHORT_DEFAULTS = ("command", "edit", "changeset", "subagent-result")
-"""The checker types whose shipped instructions are a thin layer of project rules and leave
-general safety to Claude Code's auto mode (requirement 38)."""
-
-
-def thin_checker_warnings(
-    config: Config,
-    checkers: Collection[str] | Mapping[str, object] = (),
-    home: Path | None = None,
-    workspace: Path | None = None,
-) -> list[str]:
-    """Warn when the shipped short checker instructions run without auto mode's classifier.
-
-    The shipped instructions of `SHORT_DEFAULTS` hold a project's own rules and nothing about
-    general safety (destructive commands, secrets, data leaving the machine): that judgement
-    is Claude Code's auto mode. A session whose permission mode is not expected to be "auto"
-    and that does not set `claude.require_auto_mode` would run a step on those checkers' PASS
-    alone, which says only that no project rule applied.
-
-    Args:
-        config: The session configuration.
-        checkers: The enabled checker definitions by name, each with its stored text in an
-            attribute `instructions` (`ProjectSettings.checkers`). Names alone, or definitions
-            without that attribute, give no warning: the texts are then unknown.
-        home: The home directory; None uses `claude_home()`.
-        workspace: The project directory; None skips the project and the local file.
-
-    Returns:
-        [] if auto mode is expected (`expected_permission_mode`), if
-        `claude.require_auto_mode` is set, or if no enabled checker of `SHORT_DEFAULTS` holds
-        the shipped text (with or without its section of test triggers). Otherwise one
-        warning that names those checkers and the settings that close the gap.
-    """
-    if not isinstance(checkers, Mapping) or config.claude.require_auto_mode:
-        return []
-    mode, source = expected_permission_mode(config, home, workspace)
-    if mode == AUTO_MODE:
-        return []
-    thin: list[str] = []
-    for name in SHORT_DEFAULTS:
-        stored = getattr(checkers.get(name), "instructions", None)
-        if not isinstance(stored, str):
-            continue
-        shipped = default_instructions(name)
-        if stored.strip() in (shipped.strip(), without_test_triggers(shipped).strip()):
-            thin.append(name)
-    if not thin:
-        return []
-    return [
-        f"The checkers {', '.join(thin)} run with calu's short default instructions, which "
-        "hold project rules only and leave general safety (destructive commands, secrets, "
-        "data leaving the machine) to Claude Code's auto mode -- and auto mode's classifier "
-        f'is not expected to be active (permission mode "{mode}": {source}). A step that no '
-        "project rule covers then runs without any safety judgement. Set "
-        'claude.permission_mode to "auto", or set claude.require_auto_mode so that such a '
-        "step waits for a person, or write your own safety rules into the instructions "
-        "(`calu checker edit command`)."
-    ]
 
 
 def _nested(document: dict[str, object], keys: tuple[str, ...]) -> object:
@@ -1091,26 +1062,26 @@ def warnings(
     workspace: Path | None = None,
     protection: LoginProtection | None = None,
 ) -> list[str]:
-    """Return all start-up warnings (sandbox, API keys, write sets, network, permission mode).
+    """Return all start-up warnings (sandbox, API keys, write sets, network, settings files).
+
+    The permission mode gives no warning: calu starts Claude Code in auto mode unless the user
+    chose another mode (`launch_permission_mode`), and a mode the user chose is not repeated
+    at every start (agent/records/PLAN.md D241); `calu doctor` states it.
 
     Args:
         config: The session configuration.
         environ: The environment to inspect; None uses `os.environ`.
         checkers: Names of the enabled checker definitions, for the checks that depend on
-            which checkers exist rather than only on the configuration; given as a mapping
-            name -> definition (`ProjectSettings.checkers`), `thin_checker_warnings` also
-            reads each definition's `instructions`.
-        workspace: The project directory, for `setting_source_warnings`,
-            `settings_file_sandbox_warnings` and `permission_mode_warnings`; None skips the
-            project's files.
+            which checkers exist rather than only on the configuration (a mapping name ->
+            definition, `ProjectSettings.checkers`, is read for its names).
+        workspace: The project directory, for `setting_source_warnings` and
+            `settings_file_sandbox_warnings`; None skips the project's files.
         protection: What keeps Claude's commands from calu's logins, for
             `sandbox_off_warnings`; None if unknown (the recommendation is then shown
             whenever the sandbox is off).
 
     Returns:
-        The warnings of `sandbox_warnings`, `sandbox_off_warnings`,
-        `permission_mode_warnings`,
-        `thin_checker_warnings`, `key_warnings`,
+        The warnings of `sandbox_warnings`, `sandbox_off_warnings`, `key_warnings`,
         `unknown_provider_warnings`, `change_warnings`, `network_warnings`,
         `heartbeat_warnings`, `honesty_warnings`, `cli_model_warnings`, `bedrock_warnings`,
         `setting_source_warnings`, `settings_file_sandbox_warnings` and
@@ -1119,8 +1090,6 @@ def warnings(
     return (
         sandbox_warnings(config)
         + sandbox_off_warnings(config, protection)
-        + permission_mode_warnings(config, workspace=workspace)
-        + thin_checker_warnings(config, checkers, workspace=workspace)
         + key_warnings(config, environ)
         + unknown_provider_warnings(config, environ=environ)
         + change_warnings(config)

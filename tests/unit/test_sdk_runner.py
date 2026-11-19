@@ -46,10 +46,24 @@ def test_claude_code_authenticates_as_configured(tmp_path: Path):
     """No billing rule: only checker keys are hidden; Bedrock, Vertex and API keys pass."""
     options = SdkRunner(tmp_path, ClaudeConfig(), {"MISTRAL_API_KEY"})._options(AllowAll(), None)
     assert options.env == {"MISTRAL_API_KEY": "", "CALU_INSIDE_SESSION": "1"}
-    # calu does not set the permission mode: Claude Code takes it from its own settings (D5).
-    assert options.permission_mode is None
     chosen = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))._options(AllowAll(), None)
     assert chosen.permission_mode == "default"
+
+
+def test_auto_mode_is_the_default_unless_the_user_chose_a_mode(tmp_path: Path):
+    """D241: through the SDK Claude Code starts in "default", so calu passes "auto"."""
+    home, workspace = tmp_path / "home", tmp_path / "project"
+    (workspace / ".claude").mkdir(parents=True)
+    runner = SdkRunner(workspace, ClaudeConfig())
+    runner.home = home
+    assert runner._options(AllowAll(), None).permission_mode == "auto"
+    # A mode chosen in a settings file is Claude Code's to apply: calu passes none.
+    (workspace / ".claude" / "settings.json").write_text('{"permissions": {"defaultMode": "plan"}}')
+    assert runner._options(AllowAll(), None).permission_mode is None
+    # calu's own setting is passed as it is.
+    chosen = SdkRunner(workspace, ClaudeConfig(permission_mode="acceptEdits"))
+    chosen.home = home
+    assert chosen._options(AllowAll(), None).permission_mode == "acceptEdits"
 
 
 def test_init_message_records_the_session_for_any_auth_source(tmp_path: Path):
@@ -158,8 +172,7 @@ class FixedVerdict(AllowAll):
 async def run_hook(tmp_path: Path, gate, effective_mode: str, configured: Any = None) -> dict:
     runner = SdkRunner(tmp_path, ClaudeConfig(permission_mode=configured))
     options = runner._options(gate, None)
-    # calu does not set the mode unless the configuration does (D5).
-    assert options.permission_mode == configured
+    # What calu passes: `test_auto_mode_is_the_default_unless_the_user_chose_a_mode`.
     hook: Any = options.hooks["PreToolUse"][0].hooks[0]  # type: ignore[index]
     data = {"tool_name": "Bash", "tool_input": {"command": "make"}}
     data["permission_mode"] = effective_mode

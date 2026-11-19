@@ -1,8 +1,9 @@
 """Findings ga0, ci0 and ci3: what the SDK runner makes of the stream it cannot trust.
 
 - ga0: a user-role message counts as the user's words only when calu sent that text for a human.
-- ci0: the effective permission mode is reported, and `claude.require_auto_mode` makes a step
-  wait when auto mode's classifier is not active.
+- ci0: the effective permission mode is reported (a warning only when Claude Code did not take
+  the "auto" calu started it with), and `claude.require_auto_mode` makes a step wait when auto
+  mode's classifier is not active.
 - ci3: one message that cannot be translated, or one event the sink refuses, does not end the
   session.
 """
@@ -266,10 +267,12 @@ async def hook_call(runner: SdkRunner, mode: str, events: list[Event], agent: st
 
 async def test_the_effective_mode_is_reported_once_and_on_every_change(tmp_path: Path):
     runner = SdkRunner(tmp_path, ClaudeConfig())
+    runner.home = tmp_path  # no settings file: calu starts Claude Code in "auto" (D241)
     events: list[Event] = []
     out = await hook_call(runner, "default", events)
     assert out["permissionDecision"] == "allow"  # D21 stays: the checkers decide alone
     (first,) = events
+    # Started in "auto", running in "default": a fallback the user did not choose, so a warning.
     assert isinstance(first, Log) and first.level == "warning"
     assert '"default"' in first.message and "classifier" in first.message
     await hook_call(runner, "default", events)
@@ -277,16 +280,25 @@ async def test_the_effective_mode_is_reported_once_and_on_every_change(tmp_path:
     await hook_call(runner, "auto", events)
     assert isinstance(events[1], Log) and events[1].level == "info"
     await hook_call(runner, "plan", events)
-    assert isinstance(events[2], Log) and events[2].level == "warning"
+    assert isinstance(events[2], Log) and events[2].level == "info"
     await hook_call(runner, "acceptEdits", events, agent="sub-1")
     assert isinstance(events[3], Log) and "sub-1" in events[3].message
+
+
+async def test_a_mode_the_user_chose_is_information_not_a_warning(tmp_path: Path):
+    runner = SdkRunner(tmp_path, ClaudeConfig(permission_mode="default"))
+    runner.home = tmp_path
+    events: list[Event] = []
+    await hook_call(runner, "default", events)
+    (first,) = events
+    assert isinstance(first, Log) and first.level == "info" and '"default"' in first.message
 
 
 async def test_the_init_message_reports_the_mode(tmp_path: Path):
     runner = SdkRunner(tmp_path, ClaudeConfig())
     init = SystemMessage(subtype="init", data={"session_id": "s", "permissionMode": "default"})
     (event,) = runner._translate(init)
-    assert isinstance(event, Log) and event.level == "warning" and '"default"' in event.message
+    assert isinstance(event, Log) and event.level == "info" and '"default"' in event.message
     assert runner._translate(init) == []
 
 

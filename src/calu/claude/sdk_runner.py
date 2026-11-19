@@ -70,7 +70,7 @@ from calu.claude.runner import (
     ToolGate,
     Verdict,
 )
-from calu.config import ClaudeConfig
+from calu.config import ClaudeConfig, PermissionMode
 from calu.context.foreign import (
     SkillContentFilter,
     skill_directory,
@@ -80,7 +80,7 @@ from calu.files import skill_file
 from calu.launch import LAUNCH_ENV, RunAs, claude_path, launcher_path
 from calu.markdown import fence
 from calu.paths import INSIDE_SESSION_ENV
-from calu.preflight import settings_file_sandbox_blockers
+from calu.preflight import launch_permission_mode, settings_file_sandbox_blockers
 from calu.protocol.messages import (
     AgentInfo,
     AgentsUpdate,
@@ -336,6 +336,8 @@ class SdkRunner:
         counted here and not reviewed (`subagent_stop`).
         """
         self._modes: dict[str | None, str] = {}  # SDK agent id -> permission mode last seen
+        self._launch_mode: PermissionMode | None = None
+        """The `--permission-mode` of the last start (`_options`); None: none was passed."""
         self._ask_reasons: dict[str, str] = {}  # tool call id -> why the runner made it wait
         self._sink: EventSink | None = None  # set by `run`; hooks report through it
         self.sink_failures = 0
@@ -772,8 +774,10 @@ class SdkRunner:
                 this id, also for a fork). Not passed for a plain resume, which keeps its id.
 
         Returns:
-            The options for `ClaudeSDKClient`.
+            The options for `ClaudeSDKClient`. Side effect: sets `_launch_mode` from
+            `calu.preflight.launch_permission_mode` (reads Claude Code's settings files).
         """
+        self._launch_mode = launch_permission_mode(self.config, self.home, self.workspace)
 
         async def pre_tool_use(
             input_data: Any, tool_use_id: str | None, context: Any
@@ -1068,9 +1072,9 @@ class SdkRunner:
             model=self.config.model,
             effort=self.config.effort,
             cli_path=self._cli_path(),
-            # None: Claude Code takes the mode from its own settings (D5); calu does not take
-            # that choice away from the user. The effective mode is reported (`_mode_events`).
-            permission_mode=self.config.permission_mode,
+            # "auto" unless the user chose a mode (calu's setting or a settings file, D241);
+            # the effective mode is reported (`_mode_events`).
+            permission_mode=self._launch_mode,
             can_use_tool=can_use_tool,
             hooks={
                 "PreToolUse": [
@@ -1207,9 +1211,11 @@ class SdkRunner:
         """Report the permission mode of an agent when it is first seen and when it changes.
 
         Outside the auto mode a step the checkers pass runs without the classifier's second approval
-        (agent/records/PLAN.md D21). That is allowed, but it must not happen unnoticed: Claude Code
-        falls back to another mode without a word for a model that has no auto mode, and a tool call
-        (`EnterPlanMode`) changes the mode during a session.
+        (agent/records/PLAN.md D21). A mode the user chose is reported as information
+        (agent/records/PLAN.md D241). One case is a warning: calu started Claude Code in auto
+        mode (`_launch_mode`) and the main agent reports another mode at its first sight, which
+        Claude Code does without a word for a model that has no auto mode. A tool call
+        (`EnterPlanMode`) can also change the mode during a session; that is information.
 
         Args:
             mode: `permission_mode` of a hook input or `permissionMode` of the init message;
@@ -1218,10 +1224,10 @@ class SdkRunner:
                 agent.
 
         Returns:
-            One `Log` (level "info" for "auto", else "warning") if the mode is new for that
-            agent, else []. A subagent whose first mode is the one the main agent runs in
-            gives no event: the line about the main agent already says it, and a run with
-            many subagents would repeat it for each.
+            One `Log` (level "warning" in the fallback case above, else "info") if the mode is
+            new for that agent, else []. A subagent whose first mode is the one the main agent
+            runs in gives no event: the line about the main agent already says it, and a run
+            with many subagents would repeat it for each.
         """
         if not isinstance(mode, str) or not mode:
             return []
@@ -1245,16 +1251,24 @@ class SdkRunner:
         consequence = (
             "a step the checkers pass waits for a human (claude.require_auto_mode)"
             if self.config.require_auto_mode
-            else "a step the checkers pass runs on their word alone. Set "
-            'claude.permission_mode to "auto" for the second approval, or '
-            "claude.require_auto_mode to make such steps wait for a human"
+            else "a step the checkers pass runs on their approval alone"
         )
+        if agent is None and first and self._launch_mode == "auto":
+            return [
+                Log(
+                    level="warning",
+                    message=(
+                        f'{who} was started in the permission mode "auto" but runs in "{mode}" '
+                        "(the model may have no auto mode): auto mode's classifier is off, so "
+                        f"{consequence}."
+                    ),
+                )
+            ]
         return [
             Log(
-                level="warning",
                 message=(
-                    f'{who} runs in the permission mode "{mode}", not "auto": auto mode\'s '
-                    f"classifier is not active, so {consequence}."
+                    f'{who} runs in the permission mode "{mode}": auto mode\'s classifier is '
+                    f"off, so {consequence}."
                 ),
             )
         ]

@@ -265,52 +265,6 @@ def test_honesty_switched_on_by_halves_is_warned_about():
     assert "nothing judges" in said and "calu honesty trust" in said
 
 
-def test_short_default_instructions_without_auto_mode_are_warned_about(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """Requirement 38: the shipped instructions hold project rules only and leave general
-    safety to auto mode, so a start without the classifier says so."""
-    from types import SimpleNamespace
-
-    from calu.defaults.instructions import default_instructions, without_test_triggers
-
-    def rows(**texts: str) -> dict[str, object]:
-        """Return checker definitions with the given instructions.
-
-        Args:
-            texts: Checker name (underscores for dashes) -> its stored instructions.
-
-        Returns:
-            Name -> an object with `instructions`.
-        """
-        return {
-            name.replace("_", "-"): SimpleNamespace(instructions=text)
-            for name, text in texts.items()
-        }
-
-    shipped = rows(
-        command=default_instructions("command"),
-        edit=without_test_triggers(default_instructions("edit")),
-        changeset="Our own rules for commits.",
-    )
-    plain = Config()
-    (said,) = preflight.thin_checker_warnings(plain, shipped, home=tmp_path, workspace=tmp_path)
-    assert said.startswith("The checkers command, edit run with calu's short default")
-    assert "auto mode's classifier is not expected to be active" in said
-    assert 'claude.permission_mode to "auto"' in said and "claude.require_auto_mode" in said
-    monkeypatch.setattr(preflight, "claude_home", lambda: tmp_path)
-    assert said in preflight.warnings(plain, {}, shipped, workspace=tmp_path)
-    # Quiet with the classifier, with the setting that makes a passed step wait, with
-    # instructions somebody wrote, and when only the names of the checkers are known.
-    auto = Config(claude=ClaudeConfig(permission_mode="auto"))
-    required = Config(claude=ClaudeConfig(require_auto_mode=True))
-    own = rows(command="Deny every push.", edit="Plain language only.")
-    assert preflight.thin_checker_warnings(auto, shipped, tmp_path, tmp_path) == []
-    assert preflight.thin_checker_warnings(required, shipped, tmp_path, tmp_path) == []
-    assert preflight.thin_checker_warnings(plain, own, tmp_path, tmp_path) == []
-    assert preflight.thin_checker_warnings(plain, ["command", "edit"], tmp_path, tmp_path) == []
-
-
 def test_a_checker_on_the_machine_s_claude_account_is_reported_once():
     """D117: `claude:` needs no key and gets no tools, and neither is visible in the config."""
     assert preflight.cli_model_warnings(Config()) == []
@@ -680,49 +634,56 @@ def test_every_sandbox_key_that_weakens_is_named(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- round 2: the permission mode
 
 
-def test_the_start_says_whether_auto_modes_classifier_is_active(tmp_path: Path) -> None:
+def test_the_mode_line_says_whether_auto_modes_classifier_is_active(tmp_path: Path) -> None:
     import json
 
     home, workspace = _settings_files(tmp_path)
+    # Nothing chooses a mode: calu passes "auto", as an interactive claude has it (D241).
     active, line = preflight.permission_mode_line(Config(), home, workspace)
-    assert not active and "NOT active" in line and '"default"' in line
-    assert "runs on their word alone" in line
-    assert preflight.permission_mode_warnings(Config(), home, workspace) == [line]
+    assert active and '"auto"' in line and "calu's default" in line
+    assert preflight.launch_permission_mode(Config(), home, workspace) == "auto"
 
-    required = Config.model_validate({"claude": {"require_auto_mode": True}})
-    _, line = preflight.permission_mode_line(required, home, workspace)
-    assert "NOT active" in line and "waits for a human" in line
+    chosen = Config.model_validate({"claude": {"permission_mode": "default"}})
+    active, line = preflight.permission_mode_line(chosen, home, workspace)
+    assert not active and '"default"' in line and "claude.permission_mode" in line
+    assert "runs on their approval alone" in line
+    required = Config.model_validate(
+        {"claude": {"permission_mode": "default", "require_auto_mode": True}}
+    )
+    assert "waits for a human" in preflight.permission_mode_line(required, home, workspace)[1]
 
-    configured = Config.model_validate({"claude": {"permission_mode": "auto"}})
-    active, line = preflight.permission_mode_line(configured, home, workspace)
-    assert active and "claude.permission_mode" in line
-    assert preflight.permission_mode_warnings(configured, home, workspace) == []
-
-    # Unset in calu: Claude Code's own settings decide, the nearest file first.
+    # Unset in calu: Claude Code's own settings decide, the nearest file first, and calu
+    # passes no mode then.
     (home / ".claude" / "settings.json").write_text(
-        json.dumps({"permissions": {"defaultMode": "auto"}})
+        json.dumps({"permissions": {"defaultMode": "default"}})
     )
     active, line = preflight.permission_mode_line(Config(), home, workspace)
-    assert active and "~/.claude/settings.json" in line
+    assert not active and "~/.claude/settings.json" in line
+    assert preflight.launch_permission_mode(Config(), home, workspace) is None
     (workspace / ".claude" / "settings.json").write_text(
         json.dumps({"permissions": {"defaultMode": "acceptEdits"}})
     )
     active, line = preflight.permission_mode_line(Config(), home, workspace)
     assert not active and '"acceptEdits"' in line and ".claude/settings.json" in line
     # A source that is not loaded does not count.
-    user_only = Config.model_validate({"claude": {"setting_sources": ["user"]}})
-    assert preflight.permission_mode_line(user_only, home, workspace)[0]
+    project_only = Config.model_validate({"claude": {"setting_sources": ["local"]}})
+    assert preflight.permission_mode_line(project_only, home, workspace)[0]
+    assert preflight.launch_permission_mode(project_only, home, workspace) == "auto"
     # calu's own setting has the last word.
     plan = Config.model_validate({"claude": {"permission_mode": "plan"}})
     assert not preflight.permission_mode_line(plan, home, workspace)[0]
+    assert preflight.launch_permission_mode(plan, home, workspace) == "plan"
 
 
-def test_the_mode_line_is_among_the_start_up_warnings(tmp_path: Path) -> None:
-    plan = Config.model_validate({"claude": {"permission_mode": "plan"}})
-    said = [w for w in preflight.warnings(plan, {}, workspace=tmp_path) if "classifier" in w]
-    assert len(said) == 1 and "NOT active" in said[0]
-    auto = Config.model_validate({"claude": {"permission_mode": "auto"}})
-    assert not any("NOT active" in w for w in preflight.warnings(auto, {}, workspace=tmp_path))
+def test_a_mode_without_auto_mode_gives_no_start_up_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The owner (D241): off is the user's choice, and it is not repeated at every start."""
+    monkeypatch.setattr(preflight, "claude_home", lambda: tmp_path)
+    for mode in ("plan", "default", "auto"):
+        config = Config.model_validate({"claude": {"permission_mode": mode}})
+        said = preflight.warnings(config, {}, workspace=tmp_path)
+        assert not any("classifier" in w or "permission mode" in w for w in said)
 
 
 # ---------------------------------------------------------------- round 2: calu's directories
