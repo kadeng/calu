@@ -45,6 +45,9 @@ class TuiExit:
     switch_to: str | None = None
     """The id of a session the user started from the client (`/new`, `/fork`): the caller
     attaches to that one next."""
+    lost: bool = False
+    """True if the connection broke and could not be opened again: the session may still
+    run."""
 
 
 SUPPORTED = ((8, 2), (9, 0))
@@ -114,18 +117,24 @@ def wants_full_screen(plain: bool) -> bool:
     return True
 
 
-def exit_lines(ended: TuiExit) -> list[str]:
+def exit_lines(ended: TuiExit, again: str = "calu attach") -> list[str]:
     """Say what the terminal should show after the full-screen client has gone.
 
     Args:
         ended: What the client knew when it ended.
+        again: The command that attaches to this session again, e.g. `calu attach
+            ws://127.0.0.1:8765 --token=<the same token>` for a client that was given an
+            address.
 
     Returns:
-        The lines: why the connection ended (if the session closed it), the session and its
-        state, how many decisions wait, and how to attach again.
+        The lines: why the connection ended (if the session closed it or it broke), the
+        session and its state, how many decisions wait, and how to attach again.
     """
     lines = []
-    if ended.message:
+    if ended.lost:
+        lines.append(f"the connection to the session was lost: {ended.message}")
+        lines.append("the session may still run; its state below is the last one this client saw")
+    elif ended.message:
         lines.append(f"the session closed the connection: {ended.message}")
     else:
         lines.append("detached; the session keeps running")
@@ -135,7 +144,7 @@ def exit_lines(ended: TuiExit) -> list[str]:
         count = ended.open_decisions
         what = "1 step waits" if count == 1 else f"{count} steps wait"
         lines.append(f"{what} for a decision")
-    lines.append("attach again with: calu attach   (the line client: calu attach --plain)")
+    lines.append(f"attach again with: {again}   (the line client: add --plain)")
     return lines
 
 
@@ -230,4 +239,5 @@ def run_tui(
         open_decisions=len(model.decisions),
         message=app.link.closed_reason,
         switch_to=app.switch_to,
+        lost=app.link.lost,
     )

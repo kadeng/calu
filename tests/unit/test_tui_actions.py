@@ -9,11 +9,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import anyio
+import anyio.lowlevel
 import pytest
 
 from calu.attach import HELP
 from calu.protocol.answers import compose_answer
 from calu.protocol.messages import CLOSE_FELL_BEHIND, CLOSE_TOKEN_REVOKED
+from calu.tui import connection as connection_module
 from calu.tui import scenarios
 from calu.tui.actions import NOT_ATTACHED, Actions
 from calu.tui.capabilities import Capabilities
@@ -109,7 +111,24 @@ async def test_a_refused_decision_stays_open_and_carries_the_sessions_message() 
         assert not outcome.ok
         decision = model.decisions["e1"]
         assert decision.error == "the escalation is being decided by another client"
-        assert not decision.own
+        assert not decision.own and not decision.sent
+
+
+async def test_a_decision_on_its_way_is_marked_as_sent_until_the_answer_arrives() -> None:
+    session = waiting_session()
+    async with attached(session) as (actions, model, _):
+        decision = model.decisions["e1"]
+        request = actions.decide("e1", "deny")
+        seen: list[str] = []
+
+        async def watch() -> None:
+            await anyio.lowlevel.checkpoint()
+            seen.append(decision.sent)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(watch)
+            assert (await request).ok
+        assert seen == ["deny"] and decision.own
 
 
 async def test_an_answer_is_composed_from_the_choices_in_the_shape_every_client_sends() -> None:
@@ -250,6 +269,94 @@ async def test_an_incomplete_replay_rebuilds_the_model_from_the_snapshot() -> No
         assert "rebuilt from the session's current state" in texts[0]
         assert texts[1] == "kept", "what the session could still replay follows the note"
         assert list(model.decisions) == ["e1"], "the open escalation comes from the snapshot"
+
+
+async def test_a_broken_connection_is_opened_again_and_continues_after_the_last_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dropped SSH tunnel: no close frame, then the address refuses twice, then it works."""
+    monkeypatch.setattr(connection_module, "REDIAL_DELAYS_S", (0.01,))
+    session = waiting_session()
+    states: list[tuple[str, int, int, str]] = []
+    model = SessionModel()
+
+    def notify(change: Change) -> None:
+        state = model.connection
+        seen = (state.status, state.attempt, state.limit, state.reason)
+        if not states or states[-1] != seen:
+            states.append(seen)
+
+    link = Link(fake_connector(session), model, notify, lambda: 10.0)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(link.run)
+        with anyio.fail_after(5):
+            while model.connection.status != "attached":
+                await anyio.sleep(0.01)
+        session.unreachable = 2
+        session.drop(1006)
+        session.record("assistant.text", {"text": "written while the tunnel was down"})
+        with anyio.fail_after(5):
+            while session.connects < 2 or model.connection.status != "attached":
+                await anyio.sleep(0.01)
+        link.detach()
+    retried = [state for state in states if state[0] == "reconnecting"]
+    assert [state[1:3] for state in retried] == [(1, 0), (2, 0), (3, 0)]
+    assert retried[0][3] == "the connection broke"
+    assert retried[1][3] == "nothing listens at the address (connection refused)"
+    assert model.blocks[-1].text == "written while the tunnel was down"  # type: ignore[attr-defined]
+    assert len(model.decisions) == 1 and not link.lost
+
+
+async def test_a_broken_connection_is_given_up_after_a_while_and_says_so(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(connection_module, "REDIAL_DELAYS_S", (0.01,))
+    now = [10.0]
+    session = waiting_session()
+    model = SessionModel()
+    link = Link(fake_connector(session), model, lambda change: None, lambda: now[0])
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(link.run)
+        with anyio.fail_after(5):
+            while model.connection.status != "attached":
+                await anyio.sleep(0.01)
+        session.unreachable = 1000
+        session.drop(1006)
+        with anyio.fail_after(5):
+            while model.connection.attempt < 3:
+                await anyio.sleep(0.01)
+        now[0] += connection_module.REDIAL_FOR_S + 1
+        with anyio.fail_after(5):
+            while model.connection.status != "detached":
+                await anyio.sleep(0.01)
+    assert link.lost and "stopped trying" in link.closed_reason
+    assert link.closed_reason.startswith("nothing listens at the address")
+
+
+async def test_a_session_that_refuses_the_token_after_a_break_ends_the_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session ended while the tunnel was down: the next attempt is refused for good."""
+    monkeypatch.setattr(connection_module, "REDIAL_DELAYS_S", (0.01,))
+    session = waiting_session()
+    async with attached(session) as (_, model, link):
+        session.refuse_token = "invalid client token"
+        session.drop(1006)
+        with anyio.fail_after(5):
+            while model.connection.status != "detached":
+                await anyio.sleep(0.01)
+        assert not link.lost
+        assert "the session has ended or the token was revoked" in link.closed_reason
+
+
+async def test_a_session_that_closes_the_connection_itself_is_not_called_again() -> None:
+    session = waiting_session()
+    async with attached(session) as (_, model, link):
+        session.drop(1001)
+        with anyio.fail_after(5):
+            while model.connection.status != "detached":
+                await anyio.sleep(0.01)
+        assert link.closed_reason == "the session ended" and session.connects == 1
 
 
 async def test_a_revoked_token_ends_the_link_with_the_reason() -> None:

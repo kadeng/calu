@@ -12,6 +12,9 @@ printer: on the first attach it takes the stored history of the session (`sessio
 the replayed events below it and a snapshot; when the session
 closes the connection because this client fell behind, it connects again after the last event
 it applied, at most `calu.attach.MAX_RECONNECTS` times in a row without an event in between;
+when the connection breaks (no close frame, a keepalive without answer: a dropped SSH tunnel,
+a network that went away), it tries again after 1, 2, 4, 8, then every 15 seconds, for
+`REDIAL_FOR_S` seconds, and continues after the last event it applied;
 when the session can no longer replay the missed events, it forgets the session data, loads
 the stored history again, applies the events it did get and takes the rest from a snapshot.
 
@@ -27,8 +30,14 @@ from typing import Any, Protocol
 
 import anyio
 
-from calu.attach import MAX_RECONNECTS
-from calu.controls import visible_in
+from calu.attach import (
+    BROKEN_CODES,
+    MAX_RECONNECTS,
+    REDIAL_DELAYS_S,
+    REDIAL_FOR_S,
+    unreachable,
+)
+from calu.controls import visible, visible_in
 from calu.protocol.client import OnEvent, RequestFailed, connect, first_set
 from calu.protocol.messages import CLOSE_TOKEN_REVOKED
 from calu.tui.capabilities import Capabilities, capabilities
@@ -174,6 +183,9 @@ class Link:
         self.capabilities = Capabilities()
         self.error: BaseException | None = None
         self.closed_reason = ""
+        self.lost = False
+        """True if the link ended because the connection broke and could not be opened again
+        (`closed_reason` says so), not because the session closed it."""
         self.stop = anyio.Event()
         self._stale = anyio.Event()
         self._replaying = False
@@ -350,12 +362,19 @@ class Link:
         client falling behind or an announced stay away (`closed_reason` is then set). The
         connection state of the model says which. A connection the session closes while the
         attach itself still asks (`state.get`, the stored history) counts like one closed
-        afterwards.
+        afterwards. A connection that broke (`BROKEN_CODES`), and every attempt after it that
+        cannot reach the address, is tried again for `REDIAL_FOR_S` seconds, with the model's
+        connection state "reconnecting" (attempt number, no limit, and the last error as the
+        reason); a session that refuses the token at such an attempt has ended or revoked it,
+        which ends the link.
         """
         after_seq = self.after_seq
         reconnects = 0
+        redials = 0
+        broken_since: float | None = None
         first = True
         while not self.stop.is_set():
+            broken = False
             self._replaying = True
             self._held = []
             connection: Connection | None = None
@@ -369,6 +388,7 @@ class Link:
                     if self._drop_until is not None:
                         self._drop_expected = False
                     self.notify(self.model.set_connection("attached"))
+                    redials, broken_since = 0, None
                     while not (self.stop.is_set() or connection.closed.is_set()):
                         await first_set(self.stop, connection.closed, self._stale)
                         if self._stale.is_set():
@@ -385,6 +405,7 @@ class Link:
                         reconnects = 0
                     after_seq = connection.last_seq
                     again = connection.fell_behind or self._excused(connection)
+                    broken = not again and connection.close_code in BROKEN_CODES
                     reason = connection.describe_close()
             except (OSError, RequestFailed) as error:  # ConnectionError is an OSError
                 # The session may have closed the connection while a request of the attach
@@ -403,6 +424,16 @@ class Link:
                     self.connection = None
                     self.notify(self.model.set_connection("detached", reason=str(error)))
                     return
+                if connection is not None and connection.closed.is_set():
+                    broken = not again and connection.close_code in BROKEN_CODES
+                elif isinstance(error, OSError):
+                    broken = not again
+                    reason = unreachable(error)
+                elif broken_since is not None:
+                    reason = (
+                        f"the session refused this client when it connected again ({error}): "
+                        "the session has ended or the token was revoked"
+                    )
             self.connection = None
             if self.stop.is_set():
                 self.notify(self.model.set_connection("detached", reason="detached by you"))
@@ -412,9 +443,29 @@ class Link:
                 self.notify(self.model.set_connection("reconnecting", reconnects, MAX_RECONNECTS))
                 continue
             if reason == NO_REASON:
-                reason = "the session ended or the connection broke"
+                reason = "the connection broke" if broken else "the session ended"
+            if broken:
+                now = self.clock()
+                broken_since = now if broken_since is None else broken_since
+                if now - broken_since < REDIAL_FOR_S:
+                    delay = REDIAL_DELAYS_S[min(redials, len(REDIAL_DELAYS_S) - 1)]
+                    redials += 1
+                    self.notify(
+                        self.model.set_connection("reconnecting", redials, 0, visible(reason))
+                    )
+                    with anyio.move_on_after(delay):
+                        await self.stop.wait()
+                    continue
+                minutes = REDIAL_FOR_S / 60
+                reason = (
+                    f"{reason}; no connection for {minutes:.0f} minutes, so this client "
+                    "stopped trying"
+                )
             self.closed_reason = reason
+            self.lost = broken
             change = self.model.set_connection("detached", reason=reason)
-            change.notices.append(Notice(f"the session closed the connection: {reason}", "error"))
+            said = "connection lost" if broken else "the session closed the connection"
+            change.notices.append(Notice(f"{said}: {reason}", "error"))
             self.notify(change)
             return
+        self.notify(self.model.set_connection("detached", reason="detached by you"))

@@ -26,7 +26,7 @@ RESET=no
 rm -rf /opt/calu-src && mkdir -p /opt/calu-src/uitest
 cd /src/calu
 cp -r pyproject.toml uv.lock README.md LICENSE LICENSE.md src /opt/calu-src/
-cp uitest/fake_server.py /opt/calu-src/uitest/
+cp uitest/fake_server.py uitest/tui_server.py /opt/calu-src/uitest/
 find /opt/calu-src -name __pycache__ -prune -exec rm -rf {} +
 chmod -R go-w /opt/calu-src
 

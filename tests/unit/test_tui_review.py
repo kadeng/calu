@@ -645,9 +645,16 @@ async def test_the_client_attaches_again_after_a_long_stay_in_the_git_program(
         run.clock.advance(60.0)
         session.drop(1011, "keepalive ping timeout")
         with anyio.fail_after(5):
-            while run.app.model.connection.status != "detached":
+            while run.app.model.connection.status != "reconnecting":
                 await run.pilot.pause(0.01)
-        assert "keepalive ping timeout" in run.app.link.closed_reason, "no stay: the end"
+        # No stay: a broken connection, tried again after a wait (`REDIAL_DELAYS_S`), not
+        # at once as after a stay.
+        assert run.app.model.connection.limit == 0
+        assert run.app.model.connection.reason == "keepalive ping timeout"
+        with anyio.fail_after(5):
+            while session.connects < 3 or run.app.model.connection.status != "attached":
+                await run.pilot.pause(0.01)
+        assert run.app.link.closed_reason == ""
 
 
 async def test_a_revoked_token_ends_the_link_also_during_a_stay(tmp_path: Path) -> None:

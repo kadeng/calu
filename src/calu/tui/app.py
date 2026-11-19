@@ -809,7 +809,13 @@ class CaluApp(App[None]):
         decision = self.current_decision()
         card.set_class(decision is not None, "-shown")
         card.set_class(decision is not None and decision.is_question, "-question")
-        stopped = decision is None and self.model.state in {"stopped", "failed"}
+        # A stopped session is started again through its connection: without one the card
+        # would offer what cannot happen (under `calu serve` a stopped session has ended).
+        stopped = (
+            decision is None
+            and self.model.state in {"stopped", "failed"}
+            and self.model.connection.status != "detached"
+        )
         card.set_class(decision is not None or stopped, "-shown")
         shown = decision.escalation_id if decision is not None else None
         if shown != self._card_id:
@@ -948,8 +954,18 @@ class CaluApp(App[None]):
                 (7, "esc ends"),
             ]
         if self.model.connection.status == "reconnecting":
-            return [(9, "not attached: sending is off, the text is kept")]
+            hints = [(9, "not attached: sending is off, the text is kept")]
+            if not self.model.connection.limit:
+                hints.append((8, "connecting again by itself for a few minutes; ^d leaves"))
+            return hints
         if self.model.connection.status == "detached":
+            if self.admin.problem() is not None:
+                # No database here (a client given a session's address): /new and /running
+                # could only say so.
+                return [
+                    (9, "not attached: nothing can be sent, the text is kept"),
+                    (8, "^d leaves; attach again once the session can be reached"),
+                ]
             return [
                 (9, "not attached: nothing can be sent, the text is kept"),
                 (8, "/new starts a session here"),
@@ -1173,15 +1189,18 @@ class CaluApp(App[None]):
             ]
         stopped = self.model.state in {"stopped", "failed"}
         detached = self.model.connection.status == "detached"
+        away = self.model.connection.status == "reconnecting"
         if detached:
             # Nothing can be sent: the keys that would send are not offered, and the two
             # commands that lead to a session are (they read the database, not the session).
             parts = [part for part in parts if part[1] in {"↑↓", "tab", "esc", "j k", "y", "n"}]
-            parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
+            if self.admin.problem() is None:
+                parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
         elif self.model.working():
             parts += [(7, "esc esc", "interrupt"), (3, "tab", "send mode")]
         elif (
             not stopped
+            and not away
             and self.mode != "search"
             and self.ask is None
             and self.focused is not self.transcript
@@ -1193,12 +1212,12 @@ class CaluApp(App[None]):
         if len(self.model.tabs()) > 1:
             parts.append((7, "alt+←/→", "agent"))
         parts.append((4, "pgup/pgdn", "scroll"))
-        if not detached:
+        if not (detached or away):
             parts.append((4, "f3", "side question"))
         parts.append((3, "f4", "git"))
         parts.append((6 if self.size.width < WIDE else 1, "f2", "panel"))
         parts += [(8, "^p", "palette"), (8, "f1", "help")]
-        parts.append((9, "^d", "leave") if detached else (2, "^d", "detach"))
+        parts.append((9, "^d", "leave") if detached or away else (2, "^d", "detach"))
 
         def length() -> int:
             """Measure the footer with the current parts.
@@ -2003,7 +2022,9 @@ class CaluApp(App[None]):
             wanted: "allow" or "deny".
             note: The note for Claude; "" for none.
         """
-        outcome = await self.actions.decide(escalation_id, wanted, note or None)
+        request = self.actions.decide(escalation_id, wanted, note or None)
+        self.call_later(self.render_all)  # shows "sent" while the session has not confirmed
+        outcome = await request
         if not outcome.ok:
             self.flash(outcome.message, error=True)
         self.render_all()
@@ -2250,7 +2271,9 @@ class CaluApp(App[None]):
             escalation_id: The escalation of the question.
             text: The answer; None composes it from what was chosen on the card.
         """
-        outcome = await self.actions.answer(escalation_id, text)
+        request = self.actions.answer(escalation_id, text)
+        self.call_later(self.render_all)  # shows "sent" while the session has not confirmed
+        outcome = await request
         if not outcome.ok:
             self.flash(outcome.message, error=True)
         self.render_all()

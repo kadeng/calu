@@ -114,15 +114,18 @@ class SessionRow:
         Returns:
             Id, the session's name if it has one, state, host and directory, the number of
             open escalations if there are any, Claude's session id, which `calu run --resume`
-            takes (D27), and a mark when the process has stopped saying it is there (D56).
+            takes (D27), the address its clients connect to while it runs (a port on its
+            host's loopback interface, or a socket; a client on another machine forwards it),
+            and a mark when the process has stopped saying it is there (D56).
         """
         name = f'  "{self.name}"' if self.name else ""
         waiting = f" ({self.open_escalations} open)" if self.open_escalations else ""
         resume = f"  resume {self.claude_session_id}" if self.claude_session_id else ""
+        clients = f"  clients {self.address}" if self.address and self.ended_at is None else ""
         silent = f"  SILENT for {self.silent_for_s / 60:.0f} min" if self.stale else ""
         return (
             f"{self.id}{name}  {self.state}{waiting}  {self.hostname}:{self.directory}"
-            f"  since {self.state_since:%Y-%m-%d %H:%M:%S}{resume}{silent}"
+            f"  since {self.state_since:%Y-%m-%d %H:%M:%S}{resume}{clients}{silent}"
         )
 
 

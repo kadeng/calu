@@ -124,11 +124,27 @@ def test_two_sessions_of_one_directory_have_to_be_named(
     assert "no session on this host whose id starts with" in str(unknown.value)
 
 
-def test_a_token_needs_an_address_and_an_address_is_tried_without_a_token() -> None:
+def accepting(tokens: list[str], good: str | None = None):
+    """Return a stand-in for `probe` that records the tokens and accepts `good` (None: any)."""
+
+    async def probe(address: str, token: str, client: str, timeout_s: float = 3.0) -> dict:
+        tokens.append(token)
+        if good is not None and token != good:
+            raise RequestFailed({"code": -32001, "message": "invalid client token"})
+        return {}
+
+    return probe
+
+
+def test_a_token_needs_an_address_and_an_address_is_tried_without_a_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A token alone is a mistake worth naming; an address alone is tried without a token,
     which a session started with `--insecure` accepts from this machine (D227)."""
     parser = cli.build_parser()
     store = None  # not reached
+    monkeypatch.delenv("CALU_TOKEN", raising=False)
+    monkeypatch.setattr(cli, "probe", accepting([]))
 
     only_address = parser.parse_args(["attach", "ws://127.0.0.1:8765"])
     endpoint = cli._endpoint_of(only_address, store, "calu attach")  # type: ignore[arg-type]
@@ -141,6 +157,7 @@ def test_a_token_needs_an_address_and_an_address_is_tried_without_a_token() -> N
         endpoint, RequestFailed({"code": -32001, "message": "invalid client token"})
     )
     assert "--token=<token>" in refused and "--insecure" in refused
+    assert "calu token mint" in refused and "CALU_TOKEN" in refused
 
     only_token = parser.parse_args(["attach", "--token", "x"])
     with pytest.raises(CliError) as no_address:
@@ -154,6 +171,43 @@ def test_a_token_needs_an_address_and_an_address_is_tried_without_a_token() -> N
         "x",
         None,
     ), "an address given on the command line mints nothing and needs no database"
+
+
+def test_a_given_address_takes_the_token_from_the_environment_or_asks_for_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The remote way: a token need not stand on the command line, and a refused one is
+    asked for again on a terminal; a blank answer gives up."""
+    tokens: list[str] = []
+    monkeypatch.setattr(cli, "probe", accepting(tokens, good="right"))
+    monkeypatch.setenv("CALU_TOKEN", "right")
+    assert cli._reach(cli.Endpoint("ws://127.0.0.1:1", "")).token == "right"
+    monkeypatch.delenv("CALU_TOKEN")
+
+    answers = iter(["wrong", "right"])
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(answers))
+    tokens.clear()
+    assert cli._reach(cli.Endpoint("ws://127.0.0.1:1", "stale")).token == "right"
+    assert tokens == ["stale", "wrong", "right"]
+    assert "the session refused that token" in capsys.readouterr().err
+
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "")
+    with pytest.raises(CliError, match="no client token given"):
+        cli._reach(cli.Endpoint("ws://127.0.0.1:1", ""))
+
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    with pytest.raises(CliError, match="refused the token") as refused:
+        cli._reach(cli.Endpoint("ws://127.0.0.1:1", "stale"))
+    assert "calu token mint" in str(refused.value)
+
+
+def test_an_address_nobody_answers_at_names_the_tunnel() -> None:
+    message = cli._attach_failure(
+        cli.Endpoint("ws://127.0.0.1:18765", "t"), ConnectionRefusedError(111, "refused")
+    )
+    assert "nothing listens at the address" in message
+    assert "ssh -L <port>:127.0.0.1:<the session's port> <host>" in message
 
 
 def test_a_session_behind_a_symbolic_link_is_still_found(
@@ -200,3 +254,17 @@ def test_the_acp_adapter_never_reads_a_password_from_the_editor_s_stream(
     assert "no terminal" in printed.err
     assert "--no-password" in printed.err and "--token=" in printed.err
     assert stdin.read() == first_request, "the editor's request was read as a password"
+
+
+def test_the_session_list_and_a_minted_token_say_where_a_client_connects() -> None:
+    """A user on another machine needs the session's port for the tunnel: `calu sessions`
+    shows it, and `calu token mint` prints the two commands."""
+    listening = row("/srv/project", host="buildbox", address="ws://127.0.0.1:41235")
+    assert "  clients ws://127.0.0.1:41235" in listening.line()
+    ended = dataclasses.replace(listening, ended_at=listening.started_at)
+    assert "clients" not in ended.line() and cli._attach_recipe(ended) == ""
+    recipe = cli._attach_recipe(listening)
+    assert "    ssh -N -L 41235:127.0.0.1:41235 buildbox\n" in recipe
+    assert recipe.endswith("    calu attach ws://127.0.0.1:41235 --token=<the token above>")
+    socket_row = dataclasses.replace(listening, address="unix:/run/user/1000/calu/s.sock")
+    assert "ssh -N -L 8765:/run/user/1000/calu/s.sock buildbox" in cli._attach_recipe(socket_row)

@@ -139,6 +139,17 @@ def test_an_escalation_opens_a_decision_and_its_resolution_closes_it() -> None:
     assert [notice.text for notice in resolved.notices] == ["decided elsewhere: allowed"]
 
 
+def test_a_replayed_decision_of_another_client_is_not_announced_again() -> None:
+    """On attach the replay holds decisions made before: the step lines show them, a toast
+    "decided elsewhere" per decision would only repeat old news."""
+    model = SessionModel()
+    feed(model, scenarios.escalation_scenario(), start=None)
+    replayed = model.apply(
+        "escalation.resolved", {"escalation_id": "e1", "decision": "allow", "note": ""}
+    )
+    assert not model.decisions and replayed.notices == []
+
+
 def test_a_decision_of_this_client_is_not_reported_as_made_elsewhere() -> None:
     model = SessionModel()
     feed(model, scenarios.escalation_scenario())

@@ -502,7 +502,10 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
     connects again, continues after the last event it printed and says so. If the session can
     no longer replay all the events in between, the state and the open escalations are printed
     again. At most `MAX_RECONNECTS` such reconnects follow each other without an event in
-    between.
+    between. If the connection breaks (`BROKEN_CODES`: a dropped SSH tunnel, a network that went
+    away), the client tries again after 1, 2, 4, 8, then every 15 seconds for `REDIAL_FOR_S`
+    seconds, says so on every attempt, and continues after the last event it printed; a
+    session that refuses the token at such an attempt has ended, which ends the client.
 
     Args:
         address: The WebSocket address that `calu run` printed.
@@ -511,19 +514,22 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
         show_thinking: Also print Claude's thinking.
 
     Returns:
-        0 when the user detached or the session closed the connection.
+        0 when the user detached, the session closed the connection, or a broken connection
+        could not be opened again in time.
 
     Raises:
         OSError: If the address cannot be reached.
         ConnectionError: If the session closes the connection before it answered the first
-            request of a connection, for another reason than this client falling behind, or
-            after `MAX_RECONNECTS` reconnects.
-        RequestFailed: If the token is refused.
+            request of the first connection, for another reason than this client falling
+            behind, or after `MAX_RECONNECTS` reconnects.
+        RequestFailed: If the token is refused at the first connection.
     """
     printer = Printer(show_thinking)
     quit_event = anyio.Event()
     console: Console | None = None
     reconnects = 0
+    redials = 0
+    broken_since: float | None = None
     try:
         async with anyio.create_task_group() as tg:
 
@@ -537,50 +543,99 @@ async def attach(address: str, token: str, after_seq: int = 0, show_thinking: bo
                 quit_event.set()
 
             while not quit_event.is_set():
-                async with connect(
-                    address, token, "calu attach", printer, after_seq=after_seq
-                ) as client:
-                    try:
-                        snapshot = await client.request("state.get")
-                    except ConnectionError:
-                        # The session replays what this client missed before it answers; a
-                        # client that falls behind during the replay is closed while this
-                        # request waits. That counts like falling behind afterwards.
-                        if not (client.fell_behind and reconnects < MAX_RECONNECTS):
-                            raise
-                        reconnects += 1
-                        after_seq = max(after_seq, client.last_seq)
-                        say(FELL_BEHIND, flush=True)
-                        continue
-                    if console is None or not client.complete:
-                        print_snapshot(snapshot)
+                broken = False
+                try:
+                    async with connect(
+                        address, token, "calu attach", printer, after_seq=after_seq
+                    ) as client:
+                        try:
+                            snapshot = await client.request("state.get")
+                        except ConnectionError:
+                            # The session replays what this client missed before it answers;
+                            # a client that falls behind during the replay is closed while
+                            # this request waits. That counts like falling behind afterwards.
+                            if not (client.fell_behind and reconnects < MAX_RECONNECTS):
+                                raise
+                            reconnects += 1
+                            after_seq = max(after_seq, client.last_seq)
+                            say(FELL_BEHIND, flush=True)
+                            continue
+                        if console is None or not client.complete:
+                            print_snapshot(snapshot)
+                        if console is None:
+                            say(f"[attached] {HELP}", flush=True)
+                            directory = snapshot.get("workspace")
+                            console = Console(
+                                client, Path(directory) if isinstance(directory, str) else None
+                            )
+                            console.quit = quit_event
+                            console.background = tg
+                            tg.start_soon(input_lines, console)
+                        else:
+                            console.client = client
+                            say(
+                                "[attached again] continuing after the last event shown",
+                                flush=True,
+                            )
+                        redials, broken_since = 0, None
+                        await first_set(quit_event, client.closed)
+                        if client.last_seq > after_seq:
+                            reconnects = 0
+                        after_seq = client.last_seq
+                        if quit_event.is_set():
+                            break
+                        if client.fell_behind and reconnects < MAX_RECONNECTS:
+                            reconnects += 1
+                            say(FELL_BEHIND, flush=True)
+                            continue
+                        broken = client.close_code in BROKEN_CODES
+                        reason = client.describe_close()
+                        if not broken:
+                            say(
+                                "[detached] the session closed the connection: "
+                                f"{'the session ended' if reason == NO_CLOSE_REASON else reason}",
+                                flush=True,
+                            )
+                            quit_event.set()
+                            break
+                        reason = "the connection broke"
+                except OSError as error:
                     if console is None:
-                        say(f"[attached] {HELP}", flush=True)
-                        directory = snapshot.get("workspace")
-                        console = Console(
-                            client, Path(directory) if isinstance(directory, str) else None
-                        )
-                        console.quit = quit_event
-                        console.background = tg
-                        tg.start_soon(input_lines, console)
-                    else:
-                        console.client = client
-                        say("[attached again] continuing after the last event shown", flush=True)
-                    await first_set(quit_event, client.closed)
-                    if client.last_seq > after_seq:
-                        reconnects = 0
-                    after_seq = client.last_seq
-                    if quit_event.is_set():
-                        break
-                    if client.fell_behind and reconnects < MAX_RECONNECTS:
-                        reconnects += 1
-                        say(FELL_BEHIND, flush=True)
-                        continue
+                        raise  # the first connection: the caller says why
+                    broken, reason = True, unreachable(error)
+                except RequestFailed as error:
+                    if console is None or broken_since is None:
+                        raise
                     say(
-                        f"[detached] the session closed the connection: {client.describe_close()}",
+                        f"[detached] the session refused this client when it connected again "
+                        f"({error}): the session has ended or the token was revoked",
                         flush=True,
                     )
                     quit_event.set()
+                    break
+                if not broken:
+                    continue
+                now = anyio.current_time()
+                broken_since = now if broken_since is None else broken_since
+                if now - broken_since >= REDIAL_FOR_S:
+                    say(
+                        f"[detached] connection lost: {reason}; no connection for "
+                        f"{REDIAL_FOR_S / 60:.0f} minutes, so this client stopped trying. "
+                        "The session may still run: attach again when the address is "
+                        "reachable",
+                        flush=True,
+                    )
+                    quit_event.set()
+                    break
+                delay = REDIAL_DELAYS_S[min(redials, len(REDIAL_DELAYS_S) - 1)]
+                redials += 1
+                say(
+                    f"[reconnecting] connection lost: {reason}; try {redials} in "
+                    f"{delay:.0f} s (/quit or Ctrl-D leaves)",
+                    flush=True,
+                )
+                with anyio.move_on_after(delay):
+                    await quit_event.wait()
             tg.cancel_scope.cancel()
     except BaseExceptionGroup as group:
         # The task group wraps every error in a group; the caller handles the error itself
@@ -596,6 +651,40 @@ FELL_BEHIND = "[reconnecting] the session closed the connection because this cli
 MAX_RECONNECTS = 3
 """How often `attach` connects again after falling behind without having received an event in
 between; after that it detaches instead of looping against a session it cannot keep up with."""
+
+
+REDIAL_FOR_S = 300.0
+"""How long the client keeps trying to connect again after its connection broke (a closed
+connection without a close frame, a keepalive that got no answer, an address that refuses):
+long enough for a dropped SSH tunnel to be opened again or a laptop to find its network."""
+
+REDIAL_DELAYS_S = (1.0, 2.0, 4.0, 8.0, 15.0)
+"""The waits between the attempts after a broken connection; the last one repeats."""
+
+NO_CLOSE_REASON = "no reason given"
+"""What `ProtocolClient.describe_close` says of a connection the session closed without a
+reason."""
+
+BROKEN_CODES = frozenset({None, 1006, 1011})
+"""Close codes of a connection that broke rather than being closed by the session: none (no
+close frame), 1006 (closed abnormally) and 1011 (the keepalive ping got no answer)."""
+
+
+def unreachable(error: OSError) -> str:
+    """Say in words why an address could not be reached.
+
+    Args:
+        error: What the attempt to connect raised.
+
+    Returns:
+        A short sentence: "nothing listens at the address" for a refused connection, "no
+        answer" for a timeout, else the error's own text.
+    """
+    if isinstance(error, ConnectionRefusedError):
+        return "nothing listens at the address (connection refused)"
+    if isinstance(error, TimeoutError):
+        return "no answer from the address (timed out)"
+    return str(error) or type(error).__name__
 
 
 def print_snapshot(snapshot: dict[str, Any]) -> None:

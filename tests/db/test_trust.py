@@ -577,7 +577,9 @@ async def test_what_cannot_be_resolved_is_not_certified(project, capsys) -> None
         ["honesty", "untrust", "abcdef"],
     ):
         assert await run(argv) == 1, argv
-        assert "calu: CliError" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        # A CliError is printed as its message alone; any other error with its type name.
+        assert err.startswith("calu: ") and "Error: " not in err, err
     conn = await connect(operator_url)
     try:
         assert await trust.trusted_commits(Db(conn)) == []

@@ -92,7 +92,7 @@ from calu import (
     session_requests,
 )
 from calu.acp import serve_acp
-from calu.attach import attach
+from calu.attach import attach, unreachable
 from calu.claude.transcripts import transcripts, user_inputs
 from calu.config import (
     ANTHROPIC_HAIKU,
@@ -2857,7 +2857,7 @@ def cmd_attach(args: argparse.Namespace, store: CredentialStore) -> None:
     """
     run_as = _client_user(args)
     endpoint = _endpoint_of(args, store, "calu attach")
-    _attach(endpoint, store, args.plain, args.after_seq, args.thinking, run_as)
+    _attach(endpoint, store, args.plain, args.after_seq, args.thinking, run_as, bool(args.address))
 
 
 def _attach(
@@ -2867,6 +2867,7 @@ def _attach(
     after_seq: int,
     thinking: bool,
     run_as: RunAs | None = None,
+    given: bool = False,
 ) -> None:
     """Run the terminal client on an endpoint until it ends, then revoke a minted token.
 
@@ -2879,6 +2880,8 @@ def _attach(
         run_as: The user a client that runs as root works for (`_client_user`): the client
             then does its file access and starts its programs as that user, and uses the
             login it holds in memory for settings and for switching sessions.
+        given: Whether the address was given on the command line (the remote way): the line
+            printed after the client names it, so that attaching again needs no database.
 
     Raises:
         CliError: If the address cannot be reached, the token is refused, the user cannot be
@@ -2908,6 +2911,8 @@ def _attach(
     else:
         database = None
     database = _with_shared_password(database)
+    if given and database is None and admin_problem is None and not _admin_here(store):
+        admin_problem = REMOTE_CLIENT
     try:
         if tui_start.wants_full_screen(plain):
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
@@ -2927,8 +2932,13 @@ def _attach(
                 following = _find_endpoint(store, ended.switch_to, "calu attach")
                 if endpoint.token_id is not None:
                     _revoke(store, endpoint.token_id, may_ask=False)
-                endpoint, after_seq = following, 0
-            print("\n".join(tui_start.exit_lines(ended)))
+                endpoint, after_seq, given = following, 0, False
+            again = "calu attach"
+            if given:
+                again = f"calu attach {endpoint.address}"
+                if endpoint.token:
+                    again += " --token=<the same token>"
+            print("\n".join(tui_start.exit_lines(ended, again)))
             code = ended.code
         else:
             code = asyncio.run(attach(endpoint.address, endpoint.token, after_seq, thinking))
@@ -2942,23 +2952,126 @@ def _attach(
         raise CliError("the client ended with an error")
 
 
-def _attach_failure(endpoint: Endpoint, exc: Exception) -> str:
-    """Say why a client could not attach.
+REMOTE_CLIENT = (
+    "this client was given the session's address and this machine has no 'admin' "
+    "credential: /new, /fork, /rewind, /running, /switch, /rename and saving checker "
+    "instructions work in a client on the session's machine (ssh -t <that host> calu attach)"
+)
+"""Why the full-screen client cannot reach the database, when it was given a session's
+address on a machine without calu's `admin` credential: the remote way of attaching."""
+
+
+def _admin_here(store: CredentialStore | None) -> bool:
+    """Tell whether this machine's store holds an `admin` credential.
+
+    Args:
+        store: The credential store; None counts as one without it.
+
+    Returns:
+        True if the entry `admin` (or the login of `calu_admin` that `calu setup
+        --no-password` stores) is there; False without either or if the store cannot be read.
+    """
+    if store is None:
+        return False
+    try:
+        return "admin" in store or ADMIN_ENTRY in store
+    except CredentialError:
+        return False
+
+
+def _attach_failure(endpoint: Endpoint, exc: BaseException) -> str:
+    """Say why a client could not attach, and what to do about it.
 
     Args:
         endpoint: Where it tried to connect.
         exc: What the attempt raised.
 
     Returns:
-        The message; for a refusal without a token, also how to give one.
+        The message: for a refused token, that a token belongs to one session and how to get
+        one; for an address nobody answers at, that a session on another machine needs its
+        port forwarded; else the error as it is.
     """
-    message = f"cannot attach to {endpoint.address}: {exc}"
-    if isinstance(exc, RequestFailed) and not endpoint.token:
-        message += (
-            "; this session wants a client token (`--token=<token>`), unless it was started "
-            "with --insecure"
+    address = endpoint.address
+    if isinstance(exc, RequestFailed):
+        if not endpoint.token:
+            return (
+                f"cannot attach to {address}: this session wants a client token. On the "
+                "session's machine `calu token mint <session id>` prints one (`calu sessions` "
+                f"shows the id); then `calu attach {address} --token=<token>`, or set "
+                "CALU_TOKEN. A session started with --insecure lets local clients in "
+                "without one"
+            )
+        return (
+            f"cannot attach to {address}: the session refused the token ({exc}). A token "
+            "belongs to one session and ends with it or with `calu token revoke`: mint a new "
+            "one on the session's machine with `calu token mint <session id>`"
         )
-    return message
+    if isinstance(exc, OSError) and address.startswith("ws://"):
+        reason = unreachable(exc)
+        return (
+            f"cannot attach to {address}: {reason}. A session on another machine is reached "
+            "through a forwarded port: `ssh -L <port>:127.0.0.1:<the session's port> <host>`, "
+            "with the session's port from `calu sessions` there; check that the tunnel is "
+            "open and that the session still runs"
+        )
+    return f"cannot attach to {address}: {exc}"
+
+
+TOKEN_TRIES = 3
+"""How often `calu attach` asks for a client token on a terminal before it gives up."""
+
+
+def _reach(endpoint: Endpoint) -> Endpoint:
+    """Check an address given on the command line and its token before a client starts.
+
+    The token comes from `--token`, else from the environment variable `CALU_TOKEN` (so that
+    it need not stand on a command line, where other users of the machine can read it). If
+    the session refuses it and standard input is a terminal, the token is asked for, at most
+    `TOKEN_TRIES` times; a blank answer gives up. A session started with `--insecure` lets a
+    local client in without a token, so no token is tried first.
+
+    Side effects: one short connection to the session (`initialize`, then closed), which the
+    session logs; a prompt on the terminal.
+
+    Args:
+        endpoint: The address and the token of the command line.
+
+    Returns:
+        The endpoint with the token the session accepted.
+
+    Raises:
+        CliError: If the address cannot be reached or does not answer within 15 seconds, or
+            the session refuses every token given.
+    """
+    token = endpoint.token or os.environ.get("CALU_TOKEN", "")
+    attempt = 0
+    while True:
+        attempt += 1
+        tried = Endpoint(endpoint.address, token, endpoint.token_id, endpoint.session_id)
+        try:
+            asyncio.run(probe(endpoint.address, token, "calu attach (checking the token)", 15.0))
+            return tried
+        except RequestFailed as exc:
+            if attempt > TOKEN_TRIES or not sys.stdin.isatty():
+                raise CliError(_attach_failure(tried, exc)) from exc
+            said = "the session refused that token" if token else "this session wants a token"
+            print(
+                f"calu: {said}; `calu token mint <session id>` on the session's machine prints one",
+                file=sys.stderr,
+            )
+            try:
+                token = getpass.getpass("Client token (Enter gives up): ").strip()
+            except EOFError:
+                print(file=sys.stderr)
+                token = ""
+            if not token:
+                raise CliError("no client token given: nothing was attached") from exc
+        except OSError as exc:  # TimeoutError is one
+            if isinstance(exc, TimeoutError):
+                raise CliError(
+                    f"cannot attach to {endpoint.address}: no answer within 15 seconds"
+                ) from exc
+            raise CliError(_attach_failure(tried, exc)) from exc
 
 
 def _with_shared_password(database: Target | None) -> Target | None:
@@ -3010,9 +3123,10 @@ def _endpoint_of(
     if args.token and not args.address:
         raise CliError("--token names the session's address too, e.g. ws://127.0.0.1:8765")
     if args.address:
-        # Without `--token` the client tries without one: a session started with
-        # `--insecure` lets a local client in (D227); any other refuses, and says so.
-        return Endpoint(args.address, args.token or "")
+        # Without `--token` the client tries `CALU_TOKEN`, then none: a session started with
+        # `--insecure` lets a local client in (D227); any other refuses, and on a terminal
+        # the token is asked for (`_reach`).
+        return _reach(Endpoint(args.address, args.token or ""))
     return _find_endpoint(store, args.session, label, may_ask)
 
 
@@ -3703,6 +3817,35 @@ def cmd_resolve(args: argparse.Namespace, store: CredentialStore) -> None:
     _herd_command(store, work)
 
 
+def _attach_recipe(row: herd.SessionRow) -> str:
+    """Say how a client attaches with a token just minted, here and from another machine.
+
+    Args:
+        row: The session the token is for.
+
+    Returns:
+        Lines to append to the minting report; "" for a session that has ended or serves no
+        clients. A TCP address is a port on the session host's loopback interface, so a
+        client elsewhere forwards that port first (`ssh -L`); a Unix socket is forwarded to a
+        local port the same way.
+    """
+    if row.ended_at is not None or not row.address:
+        return ""
+    if row.address.startswith("ws://"):
+        port = row.address.rsplit(":", 1)[-1]
+        forward, local = f"{port}:127.0.0.1:{port}", row.address
+    else:
+        forward = f"8765:{row.address.removeprefix('unix:')}"
+        local = "ws://127.0.0.1:8765"
+    return (
+        f"\n\nThe session listens at {row.address} on {row.hostname}. From another machine, "
+        "forward it and attach there (the token can also come from the environment variable "
+        "CALU_TOKEN, or `calu attach` asks for it):\n\n"
+        f"    ssh -N -L {forward} {row.hostname}\n"
+        f"    calu attach {local} --token=<the token above>"
+    )
+
+
 def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
     """Mint, list or revoke the client tokens of a session (PLAN.md D30).
 
@@ -3741,10 +3884,12 @@ def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
                 token_id, token = await herd.mint_token(db, args.session, args.label or "")
             except ValueError as exc:
                 raise CliError(str(exc)) from exc
+            row = await herd.session(db, args.session)
             return (
                 f"token {token_id} for session {args.session}:\n\n    {token}\n\n"
                 "This is the only copy; calu stores just its hash. Give it to one client and "
                 f"end its access with `calu token revoke {token_id}`."
+                + (_attach_recipe(row) if row is not None else "")
             )
         if args.action == "revoke":
             if args.session is None:
@@ -5551,8 +5696,11 @@ def _error_text(exc: Exception) -> str:
     Returns:
         For a wrong password of a stored credential, a sentence that names the credential
         (the exception itself carries only the credential's name); for a password the
-        database refused, the server's own sentence once; else "<type name>: <message>".
+        database refused, the server's own sentence once; for a `CliError` its message; else
+        "<type name>: <message>".
     """
+    if isinstance(exc, CliError):
+        return str(exc)  # written for the user; the type name would only be noise
     if isinstance(exc, WrongPassword):
         return f"wrong password for the credential {str(exc)!r}"
     if isinstance(exc, LoginRefused) and exc.code == "28P01":

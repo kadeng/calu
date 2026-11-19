@@ -1266,6 +1266,10 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
     connection = model.connection
     if connection.status == "attached":
         cells.append((1, Text("attached", palette.muted)))
+    elif connection.status == "reconnecting" and not connection.limit:
+        # The connection broke: tried again and again for a while, with the last error.
+        lost = f"connection lost, try {connection.attempt}: {connection.reason}"
+        cells.append((0, Text(cut(lost, 60), f"bold {palette.orange}")))
     elif connection.status == "reconnecting":
         cells.append(
             (0, Text(f"reconnecting {connection.attempt}/{connection.limit}", palette.orange))
@@ -1569,6 +1573,10 @@ ARMED_TEXT = {
 }
 """What the card says after the first press of a key that needs a second one."""
 
+SENT_TEXT = {"allow": "allow sent", "deny": "deny sent", "answer": "answer sent"}
+"""What the card says in place of its keys while a decision of this client is on its way
+(`Decision.sent`)."""
+
 
 def card_lines(
     decision: Decision,
@@ -1596,7 +1604,8 @@ def card_lines(
         The lines: a head with kind, agent, tool, the escalation's id (`#12`, as `/allow`,
         `/deny`, `/why` and `calu resolve` take it) and waiting time; the step or the question
         with its options; the reason; the user's note and the session's refusal if any; and
-        the keys, as many as fit the width.
+        the keys, as many as fit the width, or, while this client's decision is on its way,
+        a line that says so.
     """
     palette = view.palette
     index, total = position
@@ -1666,7 +1675,18 @@ def card_lines(
                 f"bold {palette.red}",
             )
         )
-    if armed in ARMED_TEXT:
+    if decision.sent:
+        lines.append(
+            Text(
+                "  "
+                + cut(
+                    f"{SENT_TEXT.get(decision.sent, 'sent')}: waiting for the session to confirm",
+                    view.width - 4,
+                ),
+                f"bold {palette.accent}",
+            )
+        )
+    elif armed in ARMED_TEXT:
         said = [(9, ARMED_TEXT[armed]), (5, "any other key types")]
         if decision.by_rule and armed == "allow":
             said.insert(0, (9, "a deny rule stopped this step"))

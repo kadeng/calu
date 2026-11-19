@@ -384,6 +384,10 @@ class Decision:
     """True after the first allow key on a step a deny rule stopped; the second one allows."""
     error: str = ""
     """What the session answered when it refused the decision."""
+    sent: str = ""
+    """What this client sent and the session has not confirmed yet ("allow", "deny",
+    "answer"); "" when nothing is under way. Over a slow link the card says so, so that a
+    second press is not taken for a lost one."""
     current: int = 0
     """Index of the question the card shows."""
     picks: list[set[int]] = field(default_factory=list)
@@ -1232,8 +1236,10 @@ class SessionModel:
         Args:
             status: connecting, attached, reconnecting or detached.
             attempt: Which reconnect in a row this is (for "reconnecting").
-            limit: How many reconnects in a row are tried.
-            reason: Why the connection ended (for "detached").
+            limit: How many reconnects in a row are tried; 0 after a broken connection,
+                which is tried again for a time rather than a number of times.
+            reason: Why the connection ended (for "detached"), or the last error of a
+                reconnect after a broken connection.
 
         Returns:
             A change that names the status line.
@@ -1462,7 +1468,7 @@ class SessionModel:
                         change.blocks_updated.add(step.id)
                     change.agents = True
             case m.EscalationResolved():
-                self._resolved(event, change)
+                self._resolved(event, time, change)
             case m.ChatQueue():
                 self._queue(event, change)
             case m.UserInput():
@@ -2060,15 +2066,18 @@ class SessionModel:
         self._touch(decision.agent_id, activity, change)
         return decision
 
-    def _resolved(self, event: m.EscalationResolved, change: Change) -> None:
+    def _resolved(self, event: m.EscalationResolved, time: float | None, change: Change) -> None:
         """Apply `escalation.resolved`.
 
         The session reports an answered question as "deny" with the answer in the note; the
         model knows from the request that the item was a question and records "answered", or
-        "declined" if the note is the session's sentence for a denial.
+        "declined" if the note is the session's sentence for a denial. A decision made by
+        another client is announced ("decided elsewhere") only when it arrives live: a
+        replayed one happened before this client attached, and the step line shows it.
 
         Args:
             event: The event.
+            time: Client clock for a live event; None for a replayed one.
             change: The change to mark.
         """
         known = self.decisions.get(event.escalation_id)
@@ -2084,7 +2093,7 @@ class SessionModel:
         self._close(event.escalation_id, outcome, own_words(note or ""), change)
         if outcome == "cancelled" and self.own_interrupt:
             change.notices.append(Notice("cancelled by your interrupt"))
-        elif not known.own:
+        elif not known.own and time is not None:
             change.notices.append(Notice(f"decided elsewhere: {outcome}"))
 
     def _queue(self, event: m.ChatQueue, change: Change) -> None:

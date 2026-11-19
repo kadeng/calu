@@ -138,7 +138,11 @@ class Actions:
         return await self._decide(escalation_id, {"escalation_id": escalation_id, "answer": text})
 
     async def _decide(self, escalation_id: str, params: dict[str, Any]) -> Outcome:
-        """Send an `escalation.decide` and keep the open item's `own` and `error` in step.
+        """Send an `escalation.decide` and keep the open item's `own`, `sent` and `error` in step.
+
+        Side effects: before the request the item is marked as decided by this client and as
+        sent; a refusal takes both marks back and stores the session's message on the item.
+        The item leaves the model when the session's `escalation.resolved` arrives.
 
         Args:
             escalation_id: The escalation.
@@ -151,10 +155,12 @@ class Actions:
         if item is not None:
             item.own = True
             item.error = ""
+            item.sent = "answer" if "answer" in params else str(params.get("decision") or "")
         outcome = await self.request("escalation.decide", params)
         item = self.model.decisions.get(escalation_id)
         if not outcome.ok and item is not None:
             item.own = False
+            item.sent = ""
             item.error = outcome.message
         return outcome
 

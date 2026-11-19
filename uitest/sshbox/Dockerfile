@@ -10,7 +10,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openssh-server sudo git tmux curl ca-certificates procps less \
+        openssh-server sudo git tmux curl ca-certificates procps less iproute2 \
         postgresql postgresql-client locales \
     && rm -rf /var/lib/apt/lists/* \
     && locale-gen en_US.UTF-8 \

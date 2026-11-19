@@ -21,13 +21,27 @@
 #
 # From the host:     ssh -F ~/.cache/calu-uitest/ssh/config sshbox
 # From the desktop:  ssh sshbox
+#
+# A second box beside the first (another agent's tests, the remote-client tests):
+#   CALU_SSHBOX_NAME=calu-sshbox2 CALU_SSHBOX_PORT=56523 calu/uitest/sshbox/run.sh
+# It gets the network alias of its name instead of `sshbox`, its own host entry
+# ~/.cache/calu-uitest/ssh/config-<name> (Host <name>) and no desktop step.
+# CALU_SSHBOX_NETEM=1 adds the capability NET_ADMIN, so that `tc qdisc ... netem` inside the
+# box can delay its network (for latency tests).
 set -euo pipefail
 
-NAME=calu-sshbox
+NAME="${CALU_SSHBOX_NAME:-calu-sshbox}"
 IMAGE=calu-sshbox:latest
 NET=calu-uitest-net
 DESKTOP=calu-uitest
 PORT="${CALU_SSHBOX_PORT:-56522}"
+if [ "$NAME" = calu-sshbox ]; then
+    ALIAS=sshbox HOSTCONFIG=config HOSTS=known_hosts
+else
+    ALIAS="$NAME" HOSTCONFIG="config-$NAME" HOSTS="known_hosts-$NAME"
+fi
+CAPS=()
+[ "${CALU_SSHBOX_NETEM:-0}" = 1 ] && CAPS=(--cap-add NET_ADMIN)
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 KEYDIR="$HOME/.cache/calu-uitest/ssh"
@@ -53,7 +67,7 @@ fi
 
 docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET" >/dev/null
 desktop_runs=no
-if [ "$(docker container inspect -f '{{.State.Status}}' "$DESKTOP" 2>/dev/null || true)" = running ]; then
+if [ "$NAME" = calu-sshbox ] && [ "$(docker container inspect -f '{{.State.Status}}' "$DESKTOP" 2>/dev/null || true)" = running ]; then
     desktop_runs=yes
     if ! docker container inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$DESKTOP" | grep -qw "$NET"; then
         docker network connect "$NET" "$DESKTOP"
@@ -66,8 +80,8 @@ case "${state:-missing}" in
     running) echo "$NAME is already running" ;;
     missing)
         echo "memory before the start:"; free -g | sed -n 1,2p
-        docker run -d --name "$NAME" --hostname sshbox --memory=2g \
-            --network "$NET" --network-alias sshbox \
+        docker run -d --name "$NAME" --hostname "$ALIAS" --memory=2g "${CAPS[@]}" \
+            --network "$NET" --network-alias "$ALIAS" \
             -p "127.0.0.1:$PORT:22" \
             -v "$REPO:/src/calu:ro" "$IMAGE" >/dev/null
         echo "$NAME created" ;;
@@ -94,19 +108,19 @@ fi
 
 # The host's entry for the tests: its own config and known_hosts files, not the owner's.
 HOSTKEY="$(docker exec "$NAME" cat /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f1,2)"
-printf '[127.0.0.1]:%s %s\n' "$PORT" "$HOSTKEY" >"$KEYDIR/known_hosts"
-cat >"$KEYDIR/config" <<CFG
-Host sshbox
+printf '[127.0.0.1]:%s %s\n' "$PORT" "$HOSTKEY" >"$KEYDIR/$HOSTS"
+cat >"$KEYDIR/$HOSTCONFIG" <<CFG
+Host $ALIAS
     HostName 127.0.0.1
     Port $PORT
     User dev
     IdentityFile $KEY
     IdentitiesOnly yes
     IdentityAgent none
-    UserKnownHostsFile $KEYDIR/known_hosts
+    UserKnownHostsFile $KEYDIR/$HOSTS
     StrictHostKeyChecking yes
 CFG
-chmod 600 "$KEYDIR/config"
+chmod 600 "$KEYDIR/$HOSTCONFIG"
 
 if [ "$desktop_runs" = yes ]; then
     # The plugin's SSH mode starts the system's `ssh`; the desktop image has none.
@@ -126,4 +140,4 @@ if [ "$desktop_runs" = yes ]; then
     echo "desktop: key, config entry and host key for \`ssh sshbox\` are in /home/cua/.ssh"
 fi
 
-echo "ready: ssh -F $KEYDIR/config sshbox   (host: 127.0.0.1:$PORT, user dev, key $KEY)"
+echo "ready: ssh -F $KEYDIR/$HOSTCONFIG $ALIAS   (host: 127.0.0.1:$PORT, user dev, key $KEY)"

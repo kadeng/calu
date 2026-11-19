@@ -151,12 +151,14 @@ def test_cmd_attach_starts_the_chosen_client_and_prints_what_is_left(
     from calu.cli import build_parser
 
     started: list[tuple[str, str, int]] = []
+    problems: list[str | None] = []
 
     def run_tui(
         address: str, token: str, after_seq: int = 0, database=None, admin_problem=None
     ) -> TuiExit:
         """Stand in for the full-screen client."""
         started.append((address, token, after_seq))
+        problems.append(admin_problem)
         return TuiExit(0, "escalated", "abc", 2)
 
     async def attach(address: str, token: str, after_seq: int, thinking: bool) -> int:
@@ -164,22 +166,38 @@ def test_cmd_attach_starts_the_chosen_client_and_prints_what_is_left(
         started.append(("line", address, after_seq))
         return 0
 
+    async def probe(address: str, token: str, client: str, timeout_s: float = 3.0) -> dict:
+        """Stand in for the check of the address and its token."""
+        return {}
+
     monkeypatch.setattr(cli.tui_start, "run_tui", run_tui)
     monkeypatch.setattr(cli, "attach", attach)
+    monkeypatch.setattr(cli, "probe", probe)
     arguments = ["attach", "ws://127.0.0.1:1", "--token", "t", "--after-seq", "7"]
     args: argparse.Namespace = build_parser().parse_args(arguments)
     monkeypatch.setattr(cli.tui_start, "wants_full_screen", lambda plain: not plain)
     cli.cmd_attach(args, store=None)  # type: ignore[arg-type]
     assert started == [("ws://127.0.0.1:1", "t", 7)]
+    # No database on this machine: the client says where /new and the like work instead.
+    assert problems == [cli.REMOTE_CLIENT]
     assert capsys.readouterr().out.splitlines() == [
         "detached; the session keeps running",
         "session abc: escalated",
         "2 steps wait for a decision",
-        "attach again with: calu attach   (the line client: calu attach --plain)",
+        "attach again with: calu attach ws://127.0.0.1:1 --token=<the same token>   "
+        "(the line client: add --plain)",
     ]
     args = build_parser().parse_args([*arguments, "--plain"])
     cli.cmd_attach(args, store=None)  # type: ignore[arg-type]
     assert started[-1] == ("line", "ws://127.0.0.1:1", 7)
+
+
+def test_the_lines_after_a_lost_connection_say_that_the_session_may_still_run() -> None:
+    ended = TuiExit(1, "running", "abc", 0, "the connection broke", lost=True)
+    lines = exit_lines(ended)
+    assert lines[0] == "the connection to the session was lost: the connection broke"
+    assert "may still run" in lines[1]
+    assert lines[-1] == "attach again with: calu attach   (the line client: add --plain)"
 
 
 def test_the_lines_after_the_client_say_why_a_connection_ended() -> None:

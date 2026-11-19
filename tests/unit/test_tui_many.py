@@ -425,9 +425,9 @@ def test_a_stored_admin_login_without_a_password_is_used_instead_of_asking(tmp_p
 async def test_a_client_that_lost_its_session_says_what_leads_to_another_one() -> None:
     session = FakeSession()
     async with running("simple_turn", session=session) as run:
-        session.drop(1006)
+        session.drop(1001)
         await run.pilot.pause(0.2)
-        assert "detached: the session ended or the connection broke" in run.line("status")
+        assert "detached: the session ended" in run.line("status")
         head = run.line("composer-head")
         assert "nothing can be sent" in head and "/new starts a session here" in head
         footer = run.line("footer")

@@ -398,6 +398,12 @@ class FakeSession:
         self.connections: list[FakeConnection] = []
         self.connects = 0
         """How often a client connected."""
+        self.unreachable = 0
+        """How many of the next attempts to connect fail with `ConnectionRefusedError`, as
+        against a tunnel that is down."""
+        self.refuse_token = ""
+        """If set, an attempt to connect is refused with this message, as by a session that
+        has ended."""
         self.buffer_start = 0
         """Events up to this sequence number are no longer replayed."""
         self.seq = 0
@@ -762,7 +768,9 @@ def fake_connector(session: FakeSession) -> Connector:
     Returns:
         A connector whose context manager replays the session's events after `after_seq`
         (those after `session.buffer_start`; `complete` is False if some are missing) and then
-        yields the connection. Leaving the context closes the connection.
+        yields the connection. Leaving the context closes the connection. It raises
+        `ConnectionRefusedError` while `session.unreachable` counts down and `RequestFailed`
+        while `session.refuse_token` is set.
     """
 
     @asynccontextmanager
@@ -775,7 +783,16 @@ def fake_connector(session: FakeSession) -> Connector:
 
         Yields:
             The connection.
+
+        Raises:
+            ConnectionRefusedError: While `session.unreachable` counts down.
+            RequestFailed: While `session.refuse_token` is set.
         """
+        if session.unreachable > 0:
+            session.unreachable -= 1
+            raise ConnectionRefusedError("[Errno 111] Connect call failed")
+        if session.refuse_token:
+            raise session._refuse(session.refuse_token)
         connection = FakeConnection(session, on_event)
         session.connects += 1
         connection.complete = after_seq >= session.buffer_start
