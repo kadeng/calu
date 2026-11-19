@@ -60,20 +60,40 @@ every reference (16 files: README, AGENTS.md, docs/, the records, `src/calu/conf
 `src/calu/checkers/result_checker.py`, `src/calu/defaults/checkers/README.md`, the
 extensions' `serverCommand.ts` and `ServerCommand.kt`, tests), anchors unchanged.
 
-Next: **VSCode in the desktop**, locally and over Remote-SSH to the SSH box, C5, C6, C11,
-C12 at scale, integration tests, and whether VSCode and PyCharm show the new `step.held`
-event. Results go into `agent/records/notes/test-plan.md`.
+The VSCode round is done and pushed (test plan section A, R1-R9; VSCode now shows `step.held`
+as well, PLAN D237's "VSCode ignores it" is outdated). `CALU_GUIDE.md` is now
+`DOCUMENTATION.md` (pushed, `da0c883`).
 
-Judgement calls the agents left for the owner (not yet asked):
-- Terminal and web: a client given an address cannot follow `/new`, `/fork`, `/switch`
-  (a `calu attach ssh://host` mode, or one relay port per `calu serve`?); the 5-minute
-  retry window, and whether a refused local session should end the client at once;
-  `calu start --no-attach` leaves its token valid until the session ends.
-- PyCharm: a placeholder in the composer when no session is attached; stacked setup cards
-  overrun the composer in a short tool window (scroll or collapse?); keep or replace a
-  resolved conflict's warning line; offer to create the SSH interpreter and path mapping;
-  disable the SSH fields in "Automatic" mode; the two start-up notifications of the test
-  setup (hand-unpacked plugin, no ssh-agent).
+#### The owner's answers of 2026-11-19 (afternoon) and the work they call for
+
+Decided (do not ask again):
+- **Auto mode:** Claude Code uses auto mode by default; if it is off, that is the user's
+  choice. If a session launched through the Agent SDK does not get auto mode by default,
+  calu makes it the default (plain `claude` has it). No warning at every start when the
+  user turned it off.
+- **Hold scope:** keep holding every checked step of every agent while a decision is open.
+- **Traces:** include Claude's thinking in the plain trace, redacted. Thinking is only a
+  summary, usually only on the last step, and rewritten while it streams: collect it when
+  it happens and keep it. Redaction stays per block; no export of past sessions.
+- **Remote attach:** one relay port per `calu serve` for all its sessions, so one SSH forward
+  covers every session and `/new`, `/fork`, `/switch` work from a laptop.
+- **Reconnect:** keep 5 minutes for remote addresses; a local session whose process is gone
+  ends the client at once.
+- **Tokens:** `calu start --no-attach`'s token stays valid until the session ends (keep).
+- **PyCharm:** placeholder in the message field when nothing is attached and the setup cards
+  in a scrolling area; a resolved conflict's line is marked "resolved" (warning colour
+  removed); offer to create the SSH interpreter and path mapping in mode 3 (after the user
+  confirms the Python path on the server); SSH fields disabled unless mode 3 is chosen; a
+  save during Claude's edit of the same file stays held until the turn ends; the bridge
+  starts at project open; the id `io.github.kadeng.calu` is right; the password over the
+  IDE's link in remote development is acceptable.
+- **VSCode:** after the server stops, "The calu server stopped" with "Start server" and
+  "Retry" instead of "connection lost"/"Attach again", the old transcript greyed with
+  "session ended"; the waiting timer counts from when the step started waiting (from the
+  session, survives reattaching); running subagents keep the pulsing dot only.
+- **Web:** Enter in the triage note stays a new line.
+- **Sandbox (D239):** a root setup counts as more privileged; `calu doctor` without `--db`
+  stays silent about the sandbox. Both as built.
 
 #### The sandbox question of `calu setup` (2026-11-19, PLAN D239, requirement 42)
 
@@ -185,23 +205,9 @@ serve`'s process test keeps its log in `tmp_path` instead of the tester's state 
 
 #### Decisions that wait for the owner (ask once, do not decide for him)
 
-- **Auto mode default** with the short checker instructions: a fresh setup has no general
-  safety judgement unless auto mode is on; today only a start-up warning says so. Options:
-  keep the warning, `claude.permission_mode = auto` by default, or
-  `claude.require_auto_mode = true` by default (the lead recommended the last).
-- **The hold while a decision is open:** calu holds every other checked step of every agent
-  (a step held 300 s raises its own decision). He described "halts one but not other
-  subagents". Keep, or hold only the agent concerned? (A change of the safety argument.)
-- **Session traces:** thinking in plain mode (left out now), redaction per block (now) or
-  per turn, an export of past sessions (not built).
-- **PyCharm plugin:** start the bridge at project open (now) or with the tool window; the
-  password over the IDE's own link in remote mode; hold or upload a local save while Claude
-  edits the file; the plugin id `io.github.kadeng.calu`.
-- **Web:** Enter in the triage note no longer allows a step (changed during the tests; it had
-  been tested behaviour).
-- **README:** the three Tron quotes use his wording and were not checked against a source
-  (IMDb refused the fetch); the MetaTron assets (bitmaps, sounds, music) are not in the
-  repository.
+None open (all answered on 2026-11-19, above). The Tron quotes are the owner's own choice
+from IMDb's quotes page; the MetaTron assets (bitmaps, sounds, music) stay out of the
+repository as he asked.
 
 #### Rules learned in this session (they cost time or caused damage)
 
