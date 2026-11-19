@@ -1,8 +1,9 @@
 # License
 
-calu is free software under the **GNU General Public License, version 2**. The binding text is
-[LICENSE](LICENSE); this file explains in plain language what it covers, because the GPL is
-often read as saying more than it does.
+calu is free software under the **GNU General Public License, version 2**. [LICENSE](LICENSE)
+holds a short notice with the same clarifications and the exception for the checker
+instructions, followed by the GPL's verbatim text; this file explains in plain language what
+it covers, because the GPL is often read as saying more than it does.
 
 ## What it covers
 
@@ -93,6 +94,7 @@ certified policy, and nobody warrants what a model does with them.
 | embed calu's source in another program you distribute | GPL-2.0 applies to that program |
 | copy or modify calu's shipped checker instructions | nothing is required of you: those texts are in the public domain (above) |
 
-This file is a summary written for readers, not a legal document. Where it and
-[LICENSE](LICENSE) could be read differently, LICENSE is what governs, and a lawyer is who to
-ask about your own case.
+This file is written for readers. Its clarifications and the public-domain dedication of the
+checker instructions apply together with the GPL, as the notice at the top of
+[LICENSE](LICENSE) says; for calu's own source code the GPL's text is what governs. A lawyer is
+who to ask about your own case.

@@ -27,8 +27,8 @@ READMEs). This file stays at the top level, where every agent looks first.
 | `agent/records/notes/` | Specs, research notes, the test plan (`test-plan.md`), reports, evaluations and their screenshots |
 | `docs/TESTING.md` | The four test layers, the spikes and the manual checklist |
 | `docs/CONFIGURATION.md` | Every setting with its type, default and meaning -- **generated** from `calu.config` by `calu.configdoc`; a test fails when the two disagree |
-| `LICENSE` | GPL-2.0, verbatim -- never edited |
-| `LICENSE.md` | What the licence covers and what it does not, in plain language (D109); `LICENSE` governs where the two could be read differently |
+| `LICENSE` | A short notice (what the GPL covers, the public-domain exception for the shipped checker instructions, LICENSE.md applies), then the GPL-2.0 text verbatim -- the GPL text itself is never edited |
+| `LICENSE.md` | What the licence covers and what it does not, in plain language (D109); its clarifications apply together with the GPL, as the notice in `LICENSE` says |
 | `pyproject.toml` | Package, dependencies, ruff, pyright and pytest settings |
 | `docker-compose.yml`, `docker/dev.Dockerfile` | Development system `dev` and test database `caludb` |
 | `scripts/wsl-test.sh` | Format check, lint, type check and tests in WSL |

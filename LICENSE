@@ -1,3 +1,29 @@
+Calu is licensed under the GNU General Public License, version 2 (GPL-2.0-only), whose
+verbatim text follows below. Read this notice first:
+
+  - The GPL covers Calu itself, not what you build with it. Running Calu, privately or inside
+    a company, on any number of machines, creates no obligation; code, documents and other
+    work you create with Calu's help are yours, under any licence you choose, closed source
+    and commercial included. What Calu produces as it runs (verdicts, comments, summaries,
+    reports, database rows) carries no licence condition. The GPL's obligations begin only
+    when you distribute Calu itself or a modified version of it.
+
+  - Exception: the checker instructions shipped with Calu (the Markdown files under
+    src/calu/defaults/checkers/) and the rule lists that go with them (under
+    src/calu/defaults/rules/) are not under the GPL. The copyright holders of Calu place
+    them in the public domain, to the fullest extent permitted by applicable law. Where the
+    law of a jurisdiction does not allow a work to be placed in the public domain, the
+    copyright holders grant instead an unconditional, irrevocable, worldwide, royalty-free
+    licence to use, copy, modify, publish, distribute and sublicense those texts and any
+    derivative of them, for any purpose, with no conditions of any kind. The creation of
+    derivative works and their licensing under other terms are not limited in any way, and
+    no attribution, marking or notice is required.
+
+  - LICENSE.md explains all of this in plain language. The clarifications and the exception
+    stated there and in this notice apply together with the GPL text below.
+
+----------------------------------------------------------------------------------------------
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991
 
