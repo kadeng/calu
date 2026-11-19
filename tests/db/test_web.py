@@ -242,6 +242,10 @@ async def test_an_escalation_can_be_resolved_from_the_page(db_url: str) -> None:
             store.session_id = session_id
             resolved = await store.escalation(escalation)
             assert not resolved.allowed and resolved.note == "no"
+            # Who decided: the role and the OS user and host of `calu web`, as `calu resolve`
+            # records it (schema 37), not the role alone.
+            by = await db.scalar("SELECT resolved_by FROM escalations WHERE id = %s", (escalation,))
+            assert by.endswith(f":{herd.caller()}"), by
 
             bad = await client.post(
                 f"/escalations/{escalation}/resolve", data={"decision": "maybe"}
@@ -539,6 +543,8 @@ async def test_triage_serves_the_queue_and_answers_it(db_url: str) -> None:
                 json={"decision": "deny", "note": "no", "remember": "sudo ls"},
             )
             assert answered.json() == {"ok": True, "remembered": "^sudo\\ ls$"}
+            by = await db.scalar("SELECT resolved_by FROM escalations WHERE id = %s", (first,))
+            assert by.endswith(f":{herd.caller()}"), by
             # The remembered rule is anchored to exactly that command and nothing wider.
             patterns = [row.pattern for row in await admin.rules(db, rule_list="command-deny")]
             assert "^sudo\\ ls$" in patterns

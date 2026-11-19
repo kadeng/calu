@@ -761,9 +761,10 @@ calu resolve 14 cancel "the session is gone"    # clears one nobody is waiting f
 calu attach                                     # the full event stream, and a prompt
 ```
 
-A decision made with `calu resolve` is recorded with the database role and with who ran the
-command: `operator:kai@buildbox` is the role `calu_operator`, used by the OS user `kai` on the
-host `buildbox` (`admin:` for `calu_admin`). `calu escalation 12` shows it as "answered by".
+A decision made with `calu resolve` or in the pages of `calu web` is recorded with the database
+role and with who ran the command: `operator:kai@buildbox` is the role `calu_operator`, used by
+the OS user `kai` on the host `buildbox` (`admin:` for `calu_admin`); for `calu web` it is the
+user and host the web interface runs as. `calu escalation 12` shows it as "answered by".
 The role is what the database checked; the user and host are what the command says about
 itself.
 

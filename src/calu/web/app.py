@@ -1827,7 +1827,9 @@ async def resolve(request: Request, state: _State) -> Response:
     note = str(form.get("note") or "")
     if decision not in ("allow", "deny"):
         return _bad(request, f"{decision!r} is neither allow nor deny")
-    resolved = await herd.resolve(state.db, escalation_id, decision, note)
+    # Who decided, as `calu resolve` records it: the role and `<os user>@<host>` of this
+    # `calu web` (schema 37), whose login token the browser holds.
+    resolved = await herd.resolve(state.db, escalation_id, decision, note, actor=herd.caller())
     log.info("escalation %s %s by the web interface (%s)", escalation_id, decision, resolved)
     # Only a path of this interface: the field travels through the browser, and an address
     # elsewhere would turn the answer into a redirect to a page of someone else's choosing.
@@ -1961,7 +1963,7 @@ async def resolve_json(request: Request, state: _State) -> Response:
     if decision not in ("allow", "deny", "answer"):
         return JSONResponse({"ok": False, "message": "neither allow nor deny"}, status_code=400)
     note = str(answer or body.get("note") or "")
-    if not await herd.resolve(state.db, escalation_id, decision, note):
+    if not await herd.resolve(state.db, escalation_id, decision, note, actor=herd.caller()):
         return JSONResponse({"ok": False, "message": "it is not open any more"}, status_code=400)
     remembered = ""
     command = str(body.get("remember") or "")
