@@ -21,7 +21,7 @@ unwatched it drifts from the task, and a wrong step costs more the later it is c
 
 **What Calu does.** It runs [Claude Code](https://claude.com/claude-code) and puts **independent 
 agents** (checker agents) in charge that need to approve (and can comment to Claude about) every command and
-every edit, and even every subagent invocation and reult: Models that follow instructions you write and
+every edit, and even every subagent invocation and result: models that follow instructions you write and
 interpret them in the context of your (retold/narrated) chat session.
 
 These checker agents focus on a much narrower task than your main coding agent. They can only read
@@ -31,9 +31,9 @@ in mind at all times.
 **Is this not just what "Auto" approval mode does?**
 
 *Yes and no. Auto-approval is very generic and stops generally unsafe actions. While it adapts a bit to your
-stated intent ( e.g. to what you write in the LLM chat), it will not remember your custom instructions over
+stated intent (e.g. to what you write in the LLM chat), it will not remember your custom instructions over
 longer timespans or sessions. It will stop generally unsafe actions like uploading your SSH keys to a
-remote server. It won't stop your agent from writing "load-bearing" in every third sentence, it won't steer your
+remote server. It won't stop your agent from writing "load-bearing" in every third sentence; it won't steer your
 coding model to behave like you want it to. And it can be easily tricked by deception (dishonest code).*
 
 ### Why you might want this
@@ -44,16 +44,16 @@ coding model to behave like you want it to. And it can be easily tricked by dece
 >
 > — *Tron* (1982)
 
-This allows to steer the coding session while it happens with **your instructions, modifiable at any time**,
+This allows you to steer the coding session while it happens with **your instructions, modifiable at any time**,
 via a friendly UI right in your IDE, terminal or browser.
 
 - **Your repo, your rules.** You have custom confidentiality rules or writing style that you want
 maintained at all times? Don't let violations happen. 
 - **Keep it readable by humans.** Stop bad agentic writing styles before they take hold.
-- **Stop overengineering right there.** An edit checker sees a change before it lands, a subagent checker can
+- **Stop overengineering right there.** An edit checker sees a change before it lands; a subagent checker can
 check subagent results before your main agent acts on them. These can all be sent
   back or commented on immediately. Stop a perfectionist subagent or main coding agent obsessing
-over details that don't matter, and which might cost simplicity, readability, modularity and design elegance.
+over details that don't matter and might cost simplicity, readability, modularity and design elegance.
 - **More autonomy where you trust it, less where you don't.** If auto mode keeps asking about
   something you always approve, tell a checker to allow it, and the step runs without a
   prompt. If auto mode lets something through that you want to see first, tell a checker to
@@ -86,7 +86,7 @@ MCP servers, skills and subagents work as your project configures them.
 
 ### Improving Security and Confidentiality
 
-While Claude, especially in Auto Mode, is usually pretty safe and well aligned, there are
+While Claude, especially in auto mode, is usually pretty safe and well aligned, there are
 a lot of scenarios where you need an additional layer of security to prevent security
 incidents or confidentiality breaches, especially if working with personally identifiable data.
 
@@ -96,7 +96,7 @@ regular Claude auto mode is very generic in this sense; Calu leaves general safe
 switch it on. 
 - **Honesty enforcement.** Calu (optionally) tracks incrementally whether names and documentation say what the
   code does, and can keep code that is not verified yet from being run or committed. This
-prevents an agent sneakily avoiding supervision by placing things that you don't want to happen
+prevents an agent from sneakily avoiding supervision by placing things that you don't want to happen
 in harmless-looking code sections. *(Sounds far-fetched? I saw DeepSeek V4 do this and hide its
 tracks afterwards. Even well-aligned SOTA models can misunderstand conflicting goals, fail to remember rules
 or misunderstand priorities.)*
@@ -104,12 +104,12 @@ or misunderstand priorities.)*
 Calu itself is written such that you have the choice between differing levels of convenience and security
 against coding agents going astray and working around their limitations. 
 
- * Your instructions, the settings and the record of every step are in a (typically password protected) database the claude session cannot write.
+ * Your instructions, the settings and the record of every step are in a (typically password-protected) database the Claude session cannot write.
  * The checkers can only read and judge. 
  * Claude's own words reach the checker agents only retold in passive sentences by a narrator, so an instruction
 planted in a web page arrives as a report that someone wrote it. 
- * Claude code may run as a different OS user than Calu and cannot approve its own steps.
- * Sessions and databases can be password protected (or not, your choice of convenience vs security)
+ * Claude Code may run as a different OS user than Calu and cannot approve its own steps.
+ * Sessions and databases can be password protected (or not, your choice of convenience vs. security).
 
 <img src="docs/assets/vscode-subagents.png" width="560" alt="Subagents as tabs in the VSCode extension">
 
@@ -117,7 +117,7 @@ planted in a web page arrives as a report that someone wrote it.
 
 Calu wraps Claude Code. For convenience, it replaces most of the user interface you are used to. But
 don't worry, it has what you expect from a full-fledged coding assistant. And it does not
-replace the proven Claude Code harness itself, it sits on top of it.
+replace the proven Claude Code harness itself; it sits on top of it.
 
 Claude Code sessions run independently of the frontend. You can detach and attach to sessions
 and switch user interfaces or even use multiple of them in parallel.
@@ -130,12 +130,12 @@ and switch user interfaces or even use multiple of them in parallel.
   same chat as a native tool window, in three modes: everything local; JetBrains'
   remote development with the IDE backend on the server; a local IDE on a copy that Calu keeps
   in sync with the server over SSH, with run and debug through PyCharm's SSH interpreter
-  ([guide](CALU_GUIDE.md#pycharm-the-three-ways-to-work)).
+  ([guide](DOCUMENTATION.md#pycharm-the-three-ways-to-work)).
 - **Web interface** (`calu web`): all sessions of all machines, history, diffs, a live view,
   settings, herd management.
 - **Terminal** (`calu attach`): a full-screen client, and a line client for pipes. It and the
   web interface also work from another machine through SSH
-  ([guide](CALU_GUIDE.md#from-another-machine)).
+  ([guide](DOCUMENTATION.md#from-another-machine)).
 - **ACP editors** (`calu acp`): Zed, Neovim, JetBrains' agent chat.
 - **Command line on the database**: `calu sessions`, `calu escalations`,
   `calu resolve 12 allow`.
@@ -149,7 +149,7 @@ and switch user interfaces or even use multiple of them in parallel.
 
 ## Getting started
 
-You need Linux where Claude Code runs (clients may be anywhere, MacOS support will come soon to the server side), 
+You need Linux where Claude Code runs (clients may be anywhere; macOS support will come soon to the server side), 
 Python 3.14 with [uv](https://docs.astral.sh/uv/), Claude Code set up for your project, PostgreSQL (see below)
 and credentials for the checker models. 
 
@@ -159,7 +159,7 @@ serve` or `calu run` runs (that variant needs Docker installed there). It holds 
 checkers' summaries and decisions, the settings and the checker instructions. That record can
 contain code, secrets the agent came across and personal data: protect, back up and upgrade
 the database like any other that holds sensitive data.
-([The database](CALU_GUIDE.md#the-database))
+([The database](DOCUMENTATION.md#the-database))
 
 Claude Code's own sandbox is optional; `calu setup` asks whether to switch it on (it needs
 `bubblewrap` and `socat`).
@@ -209,7 +209,7 @@ answers, and checks that Claude Code is there (it does not install it).
 **Running the agent as a user that cannot touch Calu.** With `--sudo`, Calu runs as root and
 Claude Code as you, so nothing the agent starts can read Calu's credentials or approve its own
 steps: `calu serve --sudo`, `calu attach --sudo`.
-([Calu as root](CALU_GUIDE.md#calu-as-root-claude-code-as-another-user)) If you would rather
+([Calu as root](DOCUMENTATION.md#calu-as-root-claude-code-as-another-user)) If you would rather
 have no passwords at all on a machine that is yours alone, `sudo calu setup --no-password`
 does that, and says plainly what it gives up.
 
@@ -222,7 +222,7 @@ calu evals                   # the checkers against the built-in cases
 
 ## Full Documentation
 
-[CALU_GUIDE.md](CALU_GUIDE.md) is the documentation: every command, credentials, the sandbox
+[DOCUMENTATION.md](DOCUMENTATION.md) is the documentation: every command, credentials, the sandbox
 and network policy, remote access, the front ends, checkers and rules. Every setting with its
 type and default is in [docs/CONFIGURATION.md](docs/CONFIGURATION.md). The decisions behind it
 all are in [agent/records/PLAN.md](agent/records/PLAN.md); how it is tested, including the tests driven by screenshot
