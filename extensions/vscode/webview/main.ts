@@ -2074,6 +2074,9 @@ function onChange(event: Event): void {
   } else if (target.dataset.select === 'level' && value) vscode.postMessage({ type: 'setLevel', level: value as LevelId });
   else if (target.dataset.select === 'permission' && (PERMISSION_MODES as readonly string[]).includes(value)) {
     vscode.postMessage({ type: 'setPermissionMode', mode: value as PermissionModeId });
+    // The selector shows the mode the session reports: it moves when `permission_mode.changed`
+    // comes back, and stays on the reported mode when the switch is refused.
+    target.value = view.permissionMode ?? '';
   }
 }
 
