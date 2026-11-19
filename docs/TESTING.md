@@ -11,6 +11,7 @@ does. The default run needs nothing but the repository.
 | Live | `live` | a real `claude` and/or model API keys | minutes, costs money |
 | Root | `root` (five also `db`) | real root, in the root box (`uitest/rootbox`) | ~15 s |
 | Spikes | — | run by hand, against the real CLI | minutes each |
+| VSCode extension | — | Node 22+ (unit); Docker (integration: a real VSCode under xvfb) | ~1 s unit; ~1 min integration (+ a 400 MB VSCode download once) |
 
 ```bash
 scripts/wsl-test.sh                 # format, lint, types and the unit tests
@@ -86,6 +87,39 @@ CALU_UPDATE_TUI_SCREENS=1 uv run pytest tests/unit/test_tui_screens.py   # after
 state as SVG; with the headless Chromium of the browser layer (`scripts/get-browser.sh`) it also
 renders a PNG beside each. Look at the pictures after a change to `render.py` or `tui.tcss`:
 the tests compare texts, not alignment or colour.
+
+### The VSCode extension (`extensions/vscode`)
+
+```bash
+cd extensions/vscode && npm ci
+npm run check-types && npm run test:unit      # vitest: the pure modules (no VSCode)
+scripts/test-in-docker.sh                     # unit + integration tests in a real VSCode, headless
+```
+
+`scripts/test-in-docker.sh` builds the image `calu-vscode-test` (`docker/vscode-test.Dockerfile`:
+Node, xvfb, Python 3.14 with calu's dependencies), mounts the checkout read-only, installs calu
+from it into the container and runs `npm run test:integration` under `xvfb-run`
+(`@vscode/test-cli`, `.vscode-test.mjs`). `VSCODE_TEST_VERSION=1.106.0` tests the oldest
+supported VSCode. The Docker volumes `calu-vscode-test-cache` and `calu-npm-cache` keep the
+VSCode download and npm's cache. On a Linux desktop the same runs without Docker:
+`xvfb-run -a npm run test:integration` (or without `xvfb-run` on a display).
+
+What the integration tests use (`test/integration/`): `scripted_session.py` serves a real
+`calu.session.Session` with the scripted runner, the rule-based fake checkers and the
+in-memory store on 127.0.0.1 and writes its address and a client token to a file;
+`scripts/prepare-test-workspace.mjs` makes a git workspace and a `calu` wrapper whose XDG
+directories lie below the test directory and whose `CALU_PLACE_FILE` is `/nonexistent`, so
+nothing of the tester's own calu (credentials, place file, database) is read. No database,
+no Claude Code, no key. The tests (`extension.test.ts`): activation and the commands;
+`calu ide` starts and initializes; the chat webview resolves and reports the state it drew;
+an attach by address and token (`Sessions.attachEndpoint`); a turn whose escalated step is
+allowed, with the card in the webview and "calu: 1 waiting" in the status bar; `step.held`
+through the shared reducer; `calu ide` killed, then "Restart bridge" attaches to the same
+session again and a second turn goes through.
+
+The rest of the extension is tested by hand in the Cua desktop
+(`.claude/skills/ui-testing-with-cua/SKILL.md`, the record in
+`agent/records/notes/test-plan.md` section A).
 
 ## Running a part of the suite, and running it faster (measured 2026-11-18)
 

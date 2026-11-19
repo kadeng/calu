@@ -39,6 +39,7 @@ import {
   tabList,
   usageCostLine,
   usageMeter,
+  waitingElsewhere,
   linkMessage,
   type FileIndex,
   type SessionMenuAction,
@@ -305,7 +306,7 @@ function buildSessionButton(): HTMLElement[] {
     title: `${label.title}\nClick to switch, start, rename or leave sessions.`,
   });
   b.append(el('span', `dot ${label.dot}`), el('span', 'session-name', label.label));
-  const elsewhere = view.sessions.list.filter((s) => s.id !== view.sessions.attachedId).reduce((n, s) => n + s.openEscalations, 0);
+  const elsewhere = waitingElsewhere(view);
   if (elsewhere > 0) {
     const tip = `${elsewhere} step${elsewhere === 1 ? ' waits' : 's wait'} for your decision in other sessions (not in this one). Open the menu to see where.`;
     b.title = shown(`${label.title}\n${tip}`);
@@ -671,12 +672,13 @@ function buildSetupCard(card: SetupCard): HTMLElement {
     code.append(el('pre', '', help.command), copy);
     box.append(code, el('p', 'setup-note', `${help.note}${help.detach ? ` Detach with ${help.detach}.` : ''}`));
   }
-  if (card.sessionList && view.sessions.list.length > 0) {
+  if (card.sessionList && view.sessions.list.some((s) => !s.stale)) {
     const pick = el('div', 'setup-sessions', undefined, { role: 'group', 'aria-label': 'Running sessions' });
     pick.append(el('div', 'label', 'Or attach to a running session'));
     // The sessions of this folder; those of other folders only if none runs here, and then at
     // most five: the dropdown lists everything.
-    const all = sessionMenu(view).filter((e) => e.kind === 'session');
+    // Sessions whose process seems gone are left out here (the dropdown still lists them).
+    const all = sessionMenu(view).flatMap((e) => (e.kind === 'session' && !e.stale ? [e] : []));
     const here = new Set(view.sessions.list.filter((s) => s.here).map((s) => s.id));
     const mine = all.filter((e) => here.has(e.id));
     const listed = mine.length > 0 ? mine : all.slice(0, 5);

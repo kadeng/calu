@@ -319,12 +319,17 @@
     "gen:protocol": "node scripts/gen-protocol.mjs",
     "test:unit": "vitest run",
     "package": "vsce package --no-dependencies --skip-license -o calu.vsix",
-    "vscode:prepublish": "npm run build:production"
+    "vscode:prepublish": "npm run build:production",
+    "compile:tests": "tsc -p tsconfig.test.json",
+    "test:integration": "npm run build && npm run compile:tests && node scripts/prepare-test-workspace.mjs && vscode-test"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.2.0",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.20.5",
     "@types/vscode": "~1.100.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "json-schema-to-typescript": "^16.0.0",

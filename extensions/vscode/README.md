@@ -15,6 +15,12 @@ to the activity bar or the panel to keep it elsewhere; VSCode remembers the plac
 extension needs VSCode 1.106 or newer: that version introduced view containers of extensions
 in the secondary side bar (`contributes.viewsContainers.secondarySidebar`).
 
+The **calu** item in the status bar (right) is always there: "calu: 2 waiting" with the
+warning colour while decisions wait, otherwise the attached session's state ("working",
+"idle", "connection lost", "not installed"). A click opens the chat. A new VSCode profile shows
+its own chat in the secondary side bar first; calu's view is then one of its tabs or behind
+its "…".
+
 ## How it runs
 
     VSCode (your computer)            workspace machine (local, WSL, SSH host, dev container)
@@ -83,10 +89,12 @@ calu itself is stored in calu's database and edited in **calu: Open Settings**.
     npm run test:unit      # vitest, pure modules only
     npm run build          # dist/extension.js, dist/webview.js, dist/settings.js
     npm run package        # calu.vsix
+    scripts/test-in-docker.sh   # unit and integration tests in a real VSCode under xvfb (Docker)
 
 Layout: `src/shared/*.ts`, `src/rpc.ts`, `src/caluCommand.ts`, `src/commentPayload.ts` and
 `src/bridgeProtocol.ts` import no `vscode` and hold the logic (unit-tested). The other files in
 `src/` are thin wrappers around the VSCode API. `webview/` holds the two webview scripts.
-Integration tests in a real VSCode are not written yet.
+`test/integration/` holds the integration tests (`@vscode/test-cli`, `.vscode-test.mjs`) and
+the scripted session they attach to; `docs/TESTING.md` says what they cover.
 
 License: GPL-2.0-only (see `LICENSE` and `LICENSE.md` at the repository root).

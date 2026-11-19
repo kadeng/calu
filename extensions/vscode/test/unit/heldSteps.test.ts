@@ -1,7 +1,7 @@
 // Steps calu holds back while a decision is open (`step.held`, PLAN D237 (6)), the tab bar's
 // folding of finished subagents, and the session dropdown's second line.
 import { describe, expect, it } from 'vitest';
-import { foldTabs, heldByAgent, heldTools, sessionMenu, statusBarEntry, tabList, type TabView } from '../../src/shared/chatModel';
+import { foldTabs, heldByAgent, heldTools, sessionMenu, statusBarEntry, tabList, waitingElsewhere, type TabView } from '../../src/shared/chatModel';
 import { applyEvents, initialViewState, type ViewEvent, type ViewState } from '../../src/shared/viewState';
 
 /** Build a state from events. */
@@ -148,6 +148,22 @@ describe('session dropdown rows', () => {
       '~/demo · started 3 h ago · bbbbbbbb',
       '~/demo',
     ]);
+  });
+});
+
+describe('stale sessions', () => {
+  it('go last and do not count in the badge of waiting decisions', () => {
+    const s = stateOf({
+      method: 'ui.sessions',
+      params: {
+        running: [
+          { id: 'dead-1', name: '', directory: '/p', state: 'escalated', open_escalations: 1, here: true, stale: true },
+          { id: 'live-1', name: '', directory: '/p', state: 'escalated', open_escalations: 2, here: true, stale: false },
+        ],
+      },
+    });
+    expect(sessionMenu(s).flatMap((e) => (e.kind === 'session' ? [e.id] : []))).toEqual(['live-1', 'dead-1']);
+    expect(waitingElsewhere(s)).toBe(2);
   });
 });
 

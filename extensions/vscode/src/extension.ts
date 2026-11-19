@@ -59,6 +59,14 @@ export interface CaluApi {
   bridge: Bridge;
   chat: ChatViewProvider;
   sessions: Sessions;
+  /**
+   * Handle a message as if the chat webview had posted it (the integration tests send chat
+   * messages and decisions this way).
+   *
+   * @param message The message.
+   * @returns A promise that resolves when the message was handled.
+   */
+  handleWebviewMessage(message: WebviewMessage): Promise<void>;
 }
 
 /**
@@ -1133,7 +1141,7 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
   if (bridgeWorkspaceFolder()) void bridge.ensureStarted().catch(() => {});
   updateHints();
 
-  return { bridge, chat, sessions };
+  return { bridge, chat, sessions, handleWebviewMessage };
 }
 
 /**

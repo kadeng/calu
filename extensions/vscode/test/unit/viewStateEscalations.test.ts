@@ -47,6 +47,13 @@ describe('escalations', () => {
     ]);
     expect(s.escalations['esc-1'].status).toBe('allow');
     expect(s.escalations['esc-2']).toMatchObject({ status: 'deny', note: 'no' });
+    // calu sends the text Claude receives; the card keeps the user's own words only.
+    const framed = applyEvent(s, ev('escalation.request', { escalation_id: 'esc-9', tool_name: 'Bash', tool_input: {} }));
+    const bare = applyEvent(framed, ev('escalation.resolved', { escalation_id: 'esc-9', decision: 'deny', note: 'The user denied this step.' }));
+    expect(bare.escalations['esc-9']).toMatchObject({ status: 'deny', note: null });
+    const framed2 = applyEvent(s, ev('escalation.request', { escalation_id: 'esc-8', tool_name: 'Bash', tool_input: {} }));
+    const noted = applyEvent(framed2, ev('escalation.resolved', { escalation_id: 'esc-8', decision: 'deny', note: 'The user denied this step. Note from the user: not yet' }));
+    expect(noted.escalations['esc-8']).toMatchObject({ status: 'deny', note: 'not yet' });
     expect(s.escalations['esc-3'].status).toBe('cancelled');
     expect(openEscalationCount(s)).toBe(0);
   });

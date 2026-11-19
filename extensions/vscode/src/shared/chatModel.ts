@@ -284,6 +284,8 @@ export type SessionMenuAction = 'new' | 'resume' | 'fork' | 'rename' | 'refresh'
  *     New session… · Resume a stored conversation… · Fork conversation · Rename session… ·
  *     Refresh · Detach
  *
+ * Within each group the sessions whose process seems gone (`stale`) come last.
+ *
  * @param state The view state.
  * @param now The current time in milliseconds since the epoch (for "started … ago").
  * @returns The rows. "Fork conversation" needs an attached session with a conversation;
@@ -313,8 +315,11 @@ export function sessionMenu(state: ViewState, now: number = Date.now()): Session
       attached: s.id === attachedId,
     };
   };
-  const here = state.sessions.list.filter((s) => s.here);
-  const other = state.sessions.list.filter((s) => !s.here);
+  // Sessions whose process seems gone go last: they can rarely be attached, and they kept
+  // whatever was open when they died.
+  const live = [...state.sessions.list.filter((s) => !s.stale), ...state.sessions.list.filter((s) => s.stale)];
+  const here = live.filter((s) => s.here);
+  const other = live.filter((s) => !s.here);
   if (here.length > 0) entries.push({ kind: 'heading', label: 'This workspace' }, ...here.map(row));
   if (other.length > 0) entries.push({ kind: 'heading', label: here.length > 0 ? 'Other sessions' : 'Running sessions' }, ...other.map(row));
   if (state.sessions.error) entries.push({ kind: 'note', label: `The sessions could not be listed: ${state.sessions.error}` });
@@ -939,4 +944,16 @@ export function statusBarEntry(state: ViewState): StatusBarEntry {
   const phase = sessionPhase(state.session.state);
   const word = phase === 'busy' ? 'working' : phase === 'waiting' ? 'waiting' : phase;
   return { text: `$(shield) calu: ${word}`, tooltip: `Session ${name}: ${state.session.state}.${open}`, warning: false };
+}
+
+/**
+ * Count the decisions that wait in running sessions other than the attached one (the badge on
+ * the session dropdown's button).
+ *
+ * @param state The view state.
+ * @returns The sum of `openEscalations` over the listed sessions that are not attached and
+ *   whose process does not seem gone: a stale session cannot ask anything any more.
+ */
+export function waitingElsewhere(state: ViewState): number {
+  return state.sessions.list.filter((s) => s.id !== state.sessions.attachedId && !s.stale).reduce((n, s) => n + s.openEscalations, 0);
 }

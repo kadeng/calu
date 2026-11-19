@@ -753,6 +753,30 @@ export function parseQuestions(raw: unknown): QuestionView[] {
   return out;
 }
 
+/** How calu begins the text Claude receives for a denied step (`calu.escalations`). */
+const DENIED_PREFIX = 'The user denied this step.';
+/** What calu puts before the user's own note in that text. */
+const NOTE_PREFIX = 'Note from the user:';
+
+/**
+ * Take the user's own words out of the note of an `escalation.resolved` event of a denial.
+ *
+ * For a denied step calu sends the whole text Claude receives ("The user denied this step.
+ * Note from the user: <note>"); a card shows what the user wrote (the rule of the terminal
+ * client, `calu.tui.model.own_words`).
+ *
+ * @param note The event's note.
+ * @returns "" for a denial without a note, the note of a denial; any other text unchanged.
+ *
+ * @example deniedNote('The user denied this step. Note from the user: not yet') === 'not yet'
+ */
+export function deniedNote(note: string): string {
+  const text = note.trim();
+  if (!text.startsWith(DENIED_PREFIX)) return text;
+  const rest = text.slice(DENIED_PREFIX.length).trim();
+  return rest.startsWith(NOTE_PREFIX) ? rest.slice(NOTE_PREFIX.length).trim() : rest;
+}
+
 /**
  * Extract the user's answer from the note of an `escalation.resolved` event of a question.
  *
@@ -1738,8 +1762,10 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
       // of this view recorded the answer.
       const question = old.questions.length > 0;
       const answered = decided !== 'cancelled' && (question || old.answer !== undefined);
-      const note = str(e.note) ? e.note : null;
-      const answer = old.answer ?? (answered && note !== null ? answerFromNote(note) : undefined);
+      const raw = str(e.note) ? e.note : null;
+      const answer = old.answer ?? (answered && raw !== null ? answerFromNote(raw) : undefined);
+      const own = raw !== null && !answered ? deniedNote(raw) : raw;
+      const note = own ? own : null;
       return {
         ...state,
         escalations: withEntry(state.escalations, old.key, {

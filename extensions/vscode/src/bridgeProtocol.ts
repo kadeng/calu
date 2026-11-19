@@ -300,7 +300,7 @@ export interface BridgeRequestParams {
   /** The one password; a wrong one is answered with error -32010. */
   'ide.unlock': { password: string };
   'ide.sessions': { all?: boolean } & WithPassword;
-  'ide.attach': { session: string | null; after_seq?: number };
+  'ide.attach': { session: string | null; after_seq?: number; address?: string; token?: string };
   'ide.detach': Record<string, never>;
   'ide.start': IdeStartParams;
   'ide.start.cancel': Record<string, never>;

@@ -51,6 +51,12 @@ export class Sessions {
   attachedId: string | null = null;
   private last: string | null = null;
   /**
+   * The address and token of the last `attachEndpoint`, while that session is the one to
+   * attach to again: such a session may be found neither by a local socket nor in the
+   * database, so `reattach` uses them. Kept in memory only (the token is a secret).
+   */
+  private endpoint: { sessionId: string; address: string; token: string } | null = null;
+  /**
    * Id of the session that was attached last and was not left on purpose: the one to attach
    * to again after the bridge was restarted or the window was reloaded. Cleared by `detach()`
    * and by a failed `reattach()`. Side effect of setting it: `remember` stores it (the
@@ -189,7 +195,8 @@ export class Sessions {
   /**
    * After the bridge started again: attach to the session that was attached before, asking
    * only for the events this view has not seen. Nothing is asked of the user and no error is
-   * shown: the caller falls back to the session of the workspace.
+   * shown: the caller falls back to the session of the workspace. A session attached by
+   * `attachEndpoint` is asked at its address with its token again.
    *
    * @param afterSeq Sequence number of the last event the chat view applied for that session.
    * @returns True if that session is attached again; false if there was none or it is gone.
@@ -199,15 +206,17 @@ export class Sessions {
     if (!session) return false;
     try {
       await this.bridge.ensureStarted();
-      let result = await this.bridge.request('ide.attach', { session, after_seq: afterSeq }, false);
+      const where = this.endpoint?.sessionId === session ? { address: this.endpoint.address, token: this.endpoint.token } : {};
+      let result = await this.bridge.request('ide.attach', { session, after_seq: afterSeq, ...where }, false);
       // A replay with a gap cannot continue the transcript: take the whole session again.
       const resumed = afterSeq > 0 && result.complete === true;
-      if (afterSeq > 0 && !resumed) result = await this.bridge.request('ide.attach', { session, after_seq: 0 }, false);
+      if (afterSeq > 0 && !resumed) result = await this.bridge.request('ide.attach', { session, after_seq: 0, ...where }, false);
       this.attached(result, resumed);
       return true;
     } catch (error) {
       this.output.appendLine(`[calu] the session ${session.slice(0, 8)} was not attached again: ${errorText(error)}`);
       this.lastAttachedId = null;
+      this.endpoint = null;
       return false;
     }
   }
@@ -248,6 +257,25 @@ export class Sessions {
   }
 
   /**
+   * Attach to a session at an explicit address with a client token (`ide.attach {address,
+   * token}`): no local socket and no database is asked. For a session reached through a
+   * forwarded port, and for the integration tests, which serve a scripted session without a
+   * database.
+   *
+   * @param address The session's WebSocket address, e.g. "ws://127.0.0.1:40123".
+   * @param token A client token the session accepts.
+   * @returns A promise that resolves when the session is attached.
+   * @throws (rejects) The bridge's error if the address cannot be reached (-32011) or the
+   *   session refuses the token (its own code); nothing is shown to the user.
+   */
+  async attachEndpoint(address: string, token: string): Promise<void> {
+    await this.bridge.ensureStarted();
+    const result = await this.bridge.request('ide.attach', { session: null, after_seq: 0, address, token }, false);
+    this.attached(result);
+    this.endpoint = { sessionId: result.session_id, address, token };
+  }
+
+  /**
    * Detach from the attached session; the session keeps running.
    *
    * @returns A promise that resolves when the bridge detached (failures are logged only).
@@ -259,6 +287,7 @@ export class Sessions {
       this.output.appendLine(`[calu] detach: ${errorText(error)}`);
     }
     this.lastAttachedId = null;
+    this.endpoint = null;
     this.markDetached();
     void this.refresh();
   }
