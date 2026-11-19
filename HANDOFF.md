@@ -36,10 +36,27 @@ are in `REQUIREMENTS.md` 34-40.
   (close the ordinary PyCharm first; `--stop` ends it). It was started once more at about
   03:55 and may still be running in the desktop (tmux session `calu-split`).
 
-#### Nobody is running now
+#### The owner's finish line (2026-11-19) and who is running
 
-The reports of the last agents exist only in the session; their results are recorded in
-`docs/notes/test-plan.md` (sections B, C, D, E, G, H), PLAN D233-D236 and below.
+The owner's goal: every workflow and user interface test-driven in Cua and refined into a
+well-rounded, tested, robust and convenient application with a modern UI. The terminal
+client, the web interface, the VSCode extension and the PyCharm plugin are each tested
+locally and remotely. The PyCharm plugin supports JetBrains remote development (split mode)
+and also a local IDE that syncs files over SSH, with remote run and debug through
+PyCharm's SSH interpreter.
+
+Three agents started at about 07:00 (none pushes; the lead pushes):
+1. **PyCharm in the Cua desktop**: split mode; local IDE + SSH sync + SSH interpreter
+   run/debug; "Sync: none" with Deployment/rsync; open B/H cases; `openssh-client` in
+   `uitest/Dockerfile`.
+2. **Core defects** (items 0, 2, 3 below): history of an unended turn, replay boundary by
+   uuid, tool ids, stale sessions, skipped files in `ide.fs.changed`, held badge, web
+   decision recorder, `_start_cancel`, `calu.cli` contracts.
+3. **Terminal client and web, remote**: an own copy of the SSH box (`calu-sshbox2`), `calu
+   attach` over TCP, over an SSH tunnel and over `ssh -t`, `calu web` remote and local
+   against a remote server.
+After agent 1: **VSCode in the desktop**, locally and over Remote-SSH to the SSH box, C5,
+C6, C11, C12 at scale, integration tests. Results go into `docs/notes/test-plan.md`.
 
 #### Next, in this order
 
