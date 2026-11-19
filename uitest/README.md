@@ -372,3 +372,68 @@ Claude Code's sandbox cannot start (`calu doctor` reports it as "sandbox start")
 
 The root-only tests (`tests/root/`, `docs/TESTING.md`) run in the box:
 `docker exec calu-rootbox rootbox-tests`.
+
+## The SSH box (`calu-sshbox`)
+
+A third container, without a desktop: a server that is reached over SSH only, for the PyCharm
+plugin's SSH mode (requirement 35: "the server needs no Desktop and runs Linux with SSH
+listening, with passwordless public key auth for simplicity"). calu, PostgreSQL and a scripted
+`calu serve` run inside; the plugin on the desktop (or a test on the host) starts
+`ssh sshbox calu ide --cwd /home/dev/project` and synchronises files through that bridge.
+
+```
+host (WSL2)                         network calu-uitest-net                 container calu-sshbox
+ssh -F ~/.cache/calu-uitest/ssh/config sshbox ── 127.0.0.1:56522 ──────►  sshd :22 (key login only, user dev)
+container calu-uitest: ssh sshbox ───────────── sshbox:22 ─────────────►  calu ide --cwd /home/dev/project
+                                                                          PostgreSQL, fake_server.py in tmux
+```
+
+```bash
+calu/uitest/sshbox/run.sh                  # key pair, image, network, container, calu inside, the desktop's key
+calu/uitest/sshbox/run.sh --rebuild        # after a change to the Dockerfile or the scripts beside it
+calu/uitest/sshbox/run.sh --reset-project  # install calu again and create /home/dev/project anew
+docker exec calu-sshbox /usr/local/sbin/sshbox-install    # install calu again after a change to the checkout
+docker exec -u dev calu-sshbox sshbox-server --stop       # stop the scripted servers ("no server answers")
+calu/uitest/sshbox/stop.sh                 # stop; `run.sh` starts it again (its servers start with it)
+calu/uitest/sshbox/stop.sh --remove        # delete the container and the network (the key is kept)
+```
+
+| Item | Value |
+| --- | --- |
+| Image | `calu-sshbox:latest`, built `FROM ubuntu:24.04` (openssh-server, sudo, git, tmux, uv, PostgreSQL 16) |
+| Limits, rights | 2 GB memory, not privileged, no Docker socket; only the calu checkout is mounted (read-only, `/src/calu`) |
+| Network | the user-defined network `calu-uitest-net`; the box has the alias `sshbox`. `run.sh` connects the running desktop container to it with `docker network connect` (no restart) |
+| Published port | `127.0.0.1:56522` -> `22` (`CALU_SSHBOX_PORT` changes it), for tests that run on the host |
+| `sshd` | public keys only: no password, no keyboard-interactive, no root login, `AllowUsers dev` |
+| User | `dev` (uid 1000, sudo without a password inside the container) |
+| The key | `~/.cache/calu-uitest/ssh/id_ed25519` on the host: made by `run.sh` for the tests, no passphrase. `run.sh` installs its public half for `dev` and copies the private half to the desktop's user `cua` (`~/.ssh/calu_sshbox`, mode 600, with a `Host sshbox` entry in `~/.ssh/config`). The owner's keys, agent and `~/.ssh` are never read or changed; the host's entry for the box is the separate file `~/.cache/calu-uitest/ssh/config` |
+| calu | `uv tool install` for `dev` from a copy of the checkout; `/usr/local/bin/calu` links to it, because an SSH command runs without a login shell and so without `~/.local/bin` on its `PATH` |
+| Stores | without passwords: the cluster on port 5432 (`calu ide` as `dev` asks nothing). With passwords: `/home/dev/pwstore/calu` (cluster on port 5433, admin password `admin-pw`, session password `sess-pw`), for the one-password rule over SSH: set the plugin's "calu command" to that path |
+| Project | `/home/dev/project`: a git repository with Python files, a `.gitignore` (and an ignored `build/`), `assets/blob.bin` (200 kB of random bytes), `many/` with 300 small files, `link-inside.py` (a link to a file of the tree) and `link-outside` (a link to `/etc/hostname`) |
+| Scripted servers | tmux sessions `calu-fake` and `calu-fake-pw` of `dev` (`uitest/fake_server.py`); logs `/tmp/calu-fake-server.log`, `/tmp/calu-fake-pw-server.log` |
+
+The desktop image has no SSH client; the plugin's SSH mode starts the system's `ssh`. Once per
+desktop container: `$D shell 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssh-client'`
+(`run.sh` says so if it is missing).
+
+Running the plugin's SSH mode in the desktop: install the plugin as above, open an **empty**
+writable folder (`$D shell 'mkdir -p ~/work/sshproj'`, `$D open-pycharm /home/cua/work/sshproj`;
+PyCharm puts a sample `main.py` into an empty folder, delete it for a plain clone), then
+Settings, Tools, calu: "How calu is reached" = "On a server, over SSH", SSH host `sshbox`,
+remote project directory `/home/dev/project`. The plugin offers "Clone from Server". Useful
+lines: `pkill -f "[s]sh -T -o BatchMode"` in the desktop cuts the bridge's connection (the
+plugin connects again); `docker network disconnect calu-uitest-net calu-uitest` and `docker
+network connect --alias calu-uitest calu-uitest-net calu-uitest` take the network away and give
+it back; `docker stop calu-sshbox` / `docker start calu-sshbox` stop and start the server.
+
+The plugin's tests against the box (the host needs the box running, nothing else):
+
+```bash
+cd extensions/jetbrains
+./gradlew :shared:test --tests '*RealBridgeSyncTest*' -Psshbox=$HOME/.cache/calu-uitest/ssh/config
+```
+
+Without `-Psshbox` (or the environment variable `CALU_SSHBOX`) the test over SSH is skipped;
+the same walk against `uv run calu ide` as a local process always runs when `uv`, `git` and
+the checkout are there.
+

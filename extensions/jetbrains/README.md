@@ -5,9 +5,10 @@ the transcript with the checkers' decisions, cards to allow or deny a waiting st
 every edit, and calu's settings. It offers what the VSCode extension offers
 (`../vscode`, `docs/notes/vscode-extension-spec.md`) and reaches calu in three ways.
 
-State: second round. The plugin runs in PyCharm 2026.3 on Linux in a local IDE and was walked
-through there against a scripted calu server ("State" at the end, `docs/notes/test-plan.md`
-section B). Remote development (split mode) and the SSH mode have not run yet.
+State: third round. The plugin runs in PyCharm 2026.3 on Linux in a local IDE and in the SSH
+mode with file synchronisation; both were walked through in the UI-test desktop ("State" at the
+end, `docs/notes/test-plan.md` sections B and H). Remote development (split mode) loads in
+both halves and has not been used yet: the thin client's own agreement waits for a person.
 
 ## How calu is reached
 
@@ -21,14 +22,70 @@ JSON) and nothing else: it opens no socket and no database. It assumes a running
 and never calls sudo; when no server answers it shows the tmux or screen command and can open a
 terminal with it.
 
-Mode C needs the system's OpenSSH client and a key in the SSH agent: the plugin never types a
-passphrase (`BatchMode`), and says so instead of hanging. It reconnects with a growing wait
-(0.5 s to 30 s) and attaches again with `after_seq`, so the transcript continues. The bridge
-side of mode C is built (`calu ide --cwd`, `ide.fs.*`, `docs/notes/jetbrains-sync-spec.md` with
-its section 13 "Deviations"); the plugin has the requests and answers as pure functions
-(`shared/sync/Wire.kt`) and the decisions (`SyncEngine`), but **no code that reads or writes the
-local copy yet**. Until then choose "Sync: none" and synchronise the copy yourself (the IDE's
-Deployment, rsync, Mutagen).
+Mode C needs the system's OpenSSH client and a key that needs no passphrase at that moment
+(in the SSH agent, or without one): the plugin never types a passphrase (`BatchMode`) and says
+what to do instead of hanging (`ConnectTimeout=15`). It reconnects with a growing wait (0.5 s
+to 30 s) and attaches again with `after_seq`, so the transcript continues. calu must be on the
+`PATH` of a non-interactive SSH command on the server (`~/.local/bin` is not: link calu into
+`/usr/local/bin`, or set the plugin's "calu command" to its full path).
+
+## SSH mode and file synchronisation
+
+Settings | Tools | calu: "How calu is reached" = "On a server, over SSH", the SSH host (an
+alias of `~/.ssh/config` or `user@host`), the remote project directory, and "Sync":
+
+- **Through calu** (default): this project folder is kept equal to the remote directory
+  through the bridge (`ide.fs.*`, `docs/notes/jetbrains-sync-spec.md`); no second connection
+  and no other tool. It refuses to start, with what to do, if the server's bridge reports no
+  `fs` capability.
+- **None (I sync myself)**: only the chat is remote; file links and diffs open the local file
+  of the same relative path, and no `ide.fs.*` request is sent (the IDE's Deployment, rsync
+  or Mutagen keep the copy equal).
+
+What the user goes through the first time:
+
+    1  open a local folder (empty for a clone) and fill the three settings
+    2  the plugin connects (a card says "Connecting to <host> over SSH…"; a wrong host, a
+       refused key, an unknown host key and a missing calu each get their own sentence)
+    3  an empty folder: "The local folder is empty. Clone 307 files (202 KiB) from host:dir?"
+       [Clone from Server] [Not Now]. A folder with files: the plan (download, upload, delete,
+       files that differ on both sides) and [Apply] [Not Now]. Nothing is changed before that.
+       PyCharm puts a sample `main.py` into a folder it opens empty: it is listed as an upload.
+    4  the files arrive (a progress indicator with a cancel button; the status bar counts)
+    5  the tool window lists the server's sessions; New Session runs on the server
+
+Afterwards:
+
+    the agent edits a file         -> the local file and an open editor follow within about a second
+    a local save                   -> on the server at once (300 ms after the last change)
+    a save while the agent edits   -> held ("1 file held until the turn ends", "Upload now");
+      that file in a running turn     merged with the agent's change when the turn ended
+    both sides changed             -> different lines: merged on both sides, a line in the chat;
+                                      the same lines: nothing is overwritten, a card and a
+                                      notification offer the IDE's three-way merge dialog
+    unsaved text in an editor      -> merged with a remote change; never uploaded before it is saved
+    no connection                  -> "calu sync: offline: 2 changes queued"; the queue survives a
+                                      restart and is replayed, then both sides are compared
+    links, files above 32 MiB,     -> never followed or copied; listed ("3 paths are not
+      what git ignores                synchronised", Show)
+
+The status bar shows one line ("calu sync: in sync", "3 files uploading", "conflict in x.py",
+"offline: 2 changes queued"); the title action "Sync Now" compares both sides again. The last
+synchronised contents (the merge bases), the bases' hashes and the queue are in the IDE's
+system directory (`calu-sync/<id>/`), not in the project.
+
+Measured against the SSH box (`uitest/README.md`), a project of 307 files: first clone 1.3 s
+in the IDE (2.5 s in the test with its checks); an edit of the agent to the local editor 0.3
+to 0.8 s; a remote change by another program about 2.3 s (the bridge polls every 2 s); a
+local save to the server 0.2 s; a full comparison of an unchanged tree 30 to 340 ms; the
+bridge's polling watcher 0.6 % of one core with its `git` calls.
+
+Not built: the commit comparison of the spec's section 7 (the copy made by "Clone from
+Server" has no `.git`, so git operations happen on the server); `ide.ping`; marks on editor
+tabs and in the project view; a setting for the per-file limit; file modes on Windows. A
+change made to the local copy outside the IDE is uploaded when the IDE notices it (its file
+watcher; up to its next refresh). A file above the limit that appears on the server is listed
+only after the next full comparison.
 
 ## Modules
 
@@ -43,9 +100,11 @@ Deployment, rsync, Mutagen).
                  the settings model, installing calu, Markdown, bidi neutralising
       bridge/    the launchers (local, WSL, SSH, scripted) and the supervisor of `calu ide`
       chat/      the chat controller (state + actions), the diffs, the transcript's row model
-      sync/      decisions and wire shapes of the file synchronisation for mode C (no I/O yet)
+      sync/      the file synchronisation of mode C: decisions, wire shapes, the remote store over the
+                 bridge, the local store over a directory, the synchroniser and its driver (no IDE class)
       remote/    the RPC interface between frontend and backend
-    backend/   next to the project: settings, the bridge, editors (diff, file, checker, context), installer
+    backend/   next to the project: settings, the bridge, editors (diff, file, checker, context), installer,
+               the synchronisation's IDE side (documents, VFS listener, merge dialog)
     frontend/  the tool window (native Swing): UiKit (cards, chips, wrapping layout), Transcript,
                EscalationCard, Composer, ChatSurface, SettingsDialog, CommentAction, TerminalOpener,
                notifications, status bar widget, settings page
@@ -92,17 +151,23 @@ for Java 25, so the build needs a JDK 25.
     ./gradlew verifyPlugin   # the Plugin Verifier against PyCharm 2026.3
     ./gradlew verifyPlugin -PverifyIdeVersions=<version>    # a further build, e.g. an EAP
     ./gradlew buildPlugin -PlocalIde=/opt/pycharm           # against an installed PyCharm, no download
+    ./gradlew :shared:test --tests '*RealBridgeSyncTest*' -Psshbox=$HOME/.cache/calu-uitest/ssh/config
+                             # the sync against calu ide over real SSH (uitest/sshbox/run.sh first)
     ./gradlew --stop         # the Gradle and Kotlin daemons hold 2 to 4 GB; stop them when idle
 
 Versions (they move together, see `settings.gradle.kts`): Gradle 9.4.0 (wrapper), IntelliJ
 Platform Gradle Plugin 2.20.1, Kotlin 2.3.20, RPC compiler plugin 2.3.20-RC2-0.1, JVM
 toolchain 25, compiled against PyCharm 2026.3 (`gradle.properties`), `since-build` 263. The
 first build downloads PyCharm (about 1.2 GB) into `.intellijPlatform/`. The tests start
-`python3` (the scripted bridge `shared/src/test/resources/fake_bridge.py`) and `sh`.
+`python3` (the scripted bridge `shared/src/test/resources/fake_bridge.py`) and `sh`; the
+synchronisation's test against a real bridge starts `uv run calu ide` from this checkout (it
+is skipped where `uv` or `git` is missing). The Gradle build cache is off (`gradle.properties`):
+it restored test classes compiled against an older `shared`.
 
 Plugin Verifier result (2026-11-19): compatible with PyCharm 2026.3 (PY-263.7307.206), 8
 usages of deprecated API (default methods of `ToolWindowFactory` and `StatusBarWidget`,
-`FileEditorManager.openFile`), 23 of experimental API (the RPC and `ProjectId` API that split
+`FileEditorManager.openFile`), 23 of experimental API, none of internal API (the progress
+indicator of the synchronisation has no percentage for that reason) (the RPC and `ProjectId` API that split
 mode needs, and the Reworked Terminal API). No EAP of the next version (2027.1) was published
 when this was written (JetBrains' release list held 2026.3 as the newest build of every
 channel), so the verifier has not run against one.
@@ -132,14 +197,16 @@ The tool window "calu" is in the right stripe (below "More tool windows" until i
                the running sessions, a session request that waits (with Cancel)
     tabs       Main and one chip per subagent: running, finished, failed, "⚠" for a decision that
                waits there, "held" for a step calu holds back; beyond six tabs finished ones fold
-    transcript Markdown (tables, code), tool rows with the checker's decision, a click on an edit
-               opens the diff, on a file name the file at the line, on a checker's name its
-               instructions; right click: expand, copy, open; a user message's menu: rewind, fork, copy
+    transcript Markdown (tables, code that wraps), tool rows with the checker's decision and, under a
+               checked edit, the honesty checker's status per file; a click on an edit opens the
+               diff, on a file name (also in Claude's text) the file at the line, on a checker's
+               name its instructions, on an image the image at its size; right click: expand, copy, open; a user message's menu: rewind, fork, copy
     cards      Allow / Deny with a note / Why? / Show Diff; questions with one or several choices
     composer   Enter sends (queues while Claude works), Ctrl+Enter sends into the running turn,
                Shift+Enter a new line, "/" slash commands, paste or "Add image" (5 MiB, four)
     footer     model, effort, supervision level, context usage (click: limits and cost)
-    title bar  New Session, Checker Instructions, Checker Context, Models, calu Settings, Plugin Settings
+    title bar  New Session, Checker Instructions, Checker Context, Side Question, Models, calu Settings,
+               Plugin Settings, Sync Now (SSH mode)
     elsewhere  editor popup "Add Comment for Claude" (Ctrl+Alt+K; also in a diff), status bar
                "calu: N waiting", notifications with Allow / Deny while the tool window is hidden
 
@@ -151,7 +218,8 @@ the server command. They are stored in `.idea/calu.xml` by the backend. calu's o
 in calu's database: the title action "calu Settings" opens a dialog generated from
 `ide.settings.get` (sections, search, a control per kind, a marker for what differs from the
 default, reset, global or per project), with the pages "Models" (presets, one model for
-everything, one field per role) and "Checkers" (Edit Instructions).
+everything, one field per role), "Checkers" (Edit Instructions) and "Setup" (what `ide.status`
+found, with the buttons of the chat's setup cards).
 
 ## State
 
@@ -162,22 +230,24 @@ everything, one field per role) and "Checkers" (Edit Instructions).
 | Part | State |
 |---|---|
 | JSON-RPC client, reducer, the pure logic of `shared/logic` | built, unit-tested (ports of the VSCode extension's modules and tests) |
-| Launchers local, WSL, SSH; supervisor; reconnect | built, tested against a scripted bridge process; local seen (a killed bridge is restarted and attaches again); SSH and WSL only through stand-in `ssh` and `wsl.exe` scripts |
+| Launchers local, WSL, SSH; supervisor; reconnect | built, tested against a scripted bridge process; local and SSH seen (a killed bridge or a cut network is followed by a new start and the transcript continues); WSL only through a stand-in `wsl.exe` script |
 | Transcript, cards, tabs, composer, session menu, selectors, usage, honesty chip, setup cards | seen; transcript and card also tested in a headless IDE |
-| Diff viewer, file at line, checker instructions with the conflict path, context documents | seen |
-| One password per IDE start (blank, wrong, right; kept over a bridge restart) | seen |
-| Notifications, status bar widget, plugin settings page, calu settings dialog | seen |
+| Diff viewer, file at line, checker instructions with the conflict path, context documents | seen, also over SSH (local paths) |
+| One password per IDE start (blank, wrong, right; kept over a bridge restart) | seen, also over SSH |
+| Notifications (Allow on a notification clicked), status bar widget, plugin settings page, calu settings dialog with the Setup page | seen |
 | Open terminal with the server command (Reworked Terminal API) | seen |
-| Slash commands, images (paste), rewind and fork from a message, Add Comment for Claude | seen (comment in a normal editor; in a diff built, not seen) |
-| Installing uv and calu | built from the tested decisions of `logic/Bootstrap.kt`; not run (the desktop has both) |
-| Remote development (split mode) | built for it; not run: see `docs/notes/test-plan.md` section B |
-| File sync for mode C | decisions, wire shapes and spec only; no I/O |
-| Side questions (`side.ask`), the activity verbs' spinner, a browser surface | not built in the UI |
+| Slash commands, images (paste, enlarge built), rewind and fork from a message, Add Comment for Claude (editor and diff) | seen |
+| Side-question dialog, code blocks that wrap, a decision made in another client, a background subagent | seen |
+| File links in Claude's text, the session list for several matching sessions (-32012), the honesty checker's status per file | built and unit-tested; not seen (the scripted server produces none of the three) |
+| Installing uv and calu | the offer is seen ("Install calu" on the card); the installation itself was not run |
+| File sync for mode C | built; unit-tested, tested against `calu ide` as a local process and over SSH, and seen in the IDE (section H of the test plan) |
+| A message to a subagent | built; not confirmed in the IDE this round |
+| Remote development (split mode) | built for it; both halves load; not used: the client's agreement waits for a person |
+| The activity verbs' spinner, a browser surface | not built in the UI |
 
-Known gaps against the VSCode extension: no side-question panel; a link in Claude's text to a
-file of the project is not clickable (`lookupFile` exists in `shared`); thinking text is shown
-only when its row is expanded; an image in the transcript cannot be enlarged; the settings
-dialog has no "setup" page (`calu doctor` findings).
+Known gaps: thinking text is shown only when its row is expanded; with ten subagents the tab
+chips can take most of a narrow tool window's height; a step that waits in a session whose
+connection is lost still counts in "calu: N waiting".
 
 ## Licence notes
 

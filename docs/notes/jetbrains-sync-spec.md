@@ -380,3 +380,25 @@ listed here is as sections 2 to 9 say.
 | report of IDE writes (§9) | to the sessions of the project directory | New request of the session protocol: `files.user_edit {paths}` → `{excluded}`. The bridge sends it to the **attached** session only, after the base matched and before the file is replaced (it waits at most 2 s for the answer), and once with no paths at the attach to learn `excluded`. The session leaves the paths out of the write set of every command whose window is open then or opens within 10 s, watches the files for the honesty state (unreviewed), and logs one line. A session of the directory that is not attached is not told. |
 | end of the connection | - | When stdin ends, requests that are still being answered are cancelled and their answers are not written. A client that wants the answers sends `ide.shutdown` last and reads until the process ends. Open uploads are removed in both cases. |
 
+## 14. The plugin's I/O side as built (2026-11-19)
+
+Section 12's "Not built" list is done except for what follows. Code: `shared/sync`
+(`RemoteFiles.kt`, `LocalFiles.kt`, `GitIgnore.kt`, `Synchronizer.kt`, `SyncDriver.kt`) and
+`backend` (`VfsLocalFiles.kt`, `CaluSync.kt`); tests `SyncIoTest`, `SynchronizerTest`,
+`RealBridgeSyncTest`; the walk in the IDE is section H of `test-plan.md`.
+
+| topic | the spec | what the plugin does, and why |
+|---|---|---|
+| first copy (§7) | `git clone <host>:<root>` in a terminal, then the dirty overlay against the common commit | "Clone from Server": the full manifest and every listed file through the bridge, after a confirmation. The copy has no `.git` (it is excluded from every request), so nothing compares commits; the base of every file is the content that was copied, kept by hash in the plugin's state directory. git operations happen on the server |
+| which local files take part | - | regular files below the root without `.git`, `.idea`, `.hg`, `.svn`, the excluded directories, upload leftovers, links, and what the copy's own `.gitignore` files name (read by the plugin, because the copy has no git). A file that the server's git ignores by another rule is uploaded once and then listed as "not listed by the server" |
+| deletions from a listing (§7) | a plan that deletes more than 20 files or 10 % asks | also: a file that is missing from a full manifest is deleted locally only if a manifest of exactly that path reports it in `missing` (an ignored file is in neither list) |
+| every decision | from the notification or the plan | from what both sides hold at that moment: the local file is hashed again, and a write that the bridge refuses with -32031 is decided again with the hash it reports (at most three times per path in one go) |
+| unsaved text (§6) | counts as a local change | merged with a remote change (the merged text is saved); a remote deletion against unsaved text is a conflict; unsaved text alone is never uploaded |
+| conflicts (§6) | merge dialog; a mark in the project view and on the tab | a card in the chat, a notification with "Merge…", the status bar; the IDE's three-way merge dialog for texts, "Keep Mine / Take Theirs" for a deletion against a change, binary and large files. No marks in the project view or on tabs |
+| holds (§6) | status, a mark on the tab, "Upload now" | the status bar and a line in the chat with "Upload now" (all held files); no mark on the tab |
+| `ide.ping` (§2) | every 20 s | not sent: `ServerAliveInterval` of `ssh` ends a dead connection after about 45 s |
+| local changes | a listener for saves | the VFS listener with 300 ms of quiet; a rename of a file whose content is its base is one `ide.fs.rename`, every other move is a deletion and an upload |
+| line ends (§4) | byte for byte | a file that is open in an editor is changed through its document (undo works) and saved; if the saved bytes differ from the wanted ones (other line ends, a BOM) the bytes are written to the file and the document is reloaded |
+| limits (§4) | setting `sync.maxFileMib` | no setting: the bridge's limit of `ide.paths` (32 MiB) |
+| progress | - | a background progress indicator with a cancel button and no percentage (the platform's functions for one are internal API in 2026.3); the status bar counts the files left |
+

@@ -25,7 +25,7 @@ programs and look at the result.
 | terminal | a private tmux server on the host (`tmux -L calutest`), screenshots of panes as text | the full-screen client, the line client |
 | browser | headless Chromium (the browser layer's Playwright), screenshots | the web interface |
 | root box | a container of its own with a root user, an unprivileged user and sudo | `calu serve`/`run`/`attach`/`web` as root with `--user`, through sudo, with and without passwords |
-| server | a headless Linux container with `sshd` (public-key login without a passphrase, a key pair made for the tests, never the owner's keys; bound to 127.0.0.1), calu, PostgreSQL and `calu serve` with the scripted runner; no desktop | the PyCharm plugin's SSH mode: `ssh host calu ide --cwd DIR`, file sync through the bridge, reconnects; also `calu attach` and the VSCode extension over SSH if time allows. The owner: "the server needs no Desktop and runs Linux with SSH listening, with passwordless public key auth for simplicity." To be built from the root box's image once that agent is done (memory is short for another container now). |
+| server | `uitest/sshbox/`: the container `calu-sshbox` (Ubuntu 24.04, `sshd` with public-key login only, user `dev`, calu, PostgreSQL, a scripted `calu serve` in tmux, the project `/home/dev/project`), on the Docker network `calu-uitest-net` with the desktop and on `127.0.0.1:56522` for the host; a key pair made for the tests in `~/.cache/calu-uitest/ssh/` | the PyCharm plugin's SSH mode (section H): `ssh sshbox calu ide --cwd DIR`, file sync through the bridge, reconnects, the one-password rule over SSH. Not done there: `calu attach` and the VSCode extension over SSH |
 
 No test touches the owner's database (`calu-db-postgres-1`), his `~/.config/calu`, `/etc/calu`
 or `/var/lib/calu`. A database for manual tests is a container of its own, not the test
@@ -41,10 +41,10 @@ end that lacks a function by design says so in its own section.)
 | C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | - | fixed 30554a1 | fixed b1f47c4 | fixed 706b3b8 |
 | C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | - | fixed 30554a1 5dfb6b6 | fixed b1f47c4 | fixed 706b3b8 |
 | C3 | A question of the agent: one choice, several choices, free text | - | ok | fixed b1f47c4 fc2d361 | fixed 706b3b8 |
-| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | ok (background subagent: not run) | fixed b1f47c4 | fixed 706b3b8 |
+| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | ok (the background subagent of `tour` seen 2026-11-19) | fixed b1f47c4 | fixed 706b3b8 |
 | C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | - | fixed 30554a1 c91feae | fixed b1f47c4 | fixed 706b3b8 |
 | C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | - | fixed 30554a1 c91feae | fixed b1f47c4; open (gate) | fixed 706b3b8 |
-| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | ok (decided in another client: not run) | fixed b1f47c4 | fixed 706b3b8 |
+| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | ok (decided with `calu resolve` on the server: the card closes, the turn goes on) | fixed b1f47c4 | fixed 706b3b8 |
 | C8 | Stop during text, during a command, with a decision open | - | ok (during a command; the other two not run) | ok | fixed 706b3b8 |
 | C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | - | ok | ok | ok |
 | C10 | Supervision level to "everything waits" and back; changed from elsewhere | - | ok (changed from elsewhere: not run) | ok | fixed 706b3b8 |
@@ -87,29 +87,32 @@ command; chips, cards and rows looked like a form (plain buttons, flow layouts t
 lines, an empty tab bar); a finished escalation and a user message were hard to tell apart;
 Markdown tables were shown as pipes; the terminal used a deprecated API.
 
-What the plugin does not have: a side-question panel; clickable file references in Claude's
-text; the "setup" page of the settings (`calu doctor` findings); enlarging an image of the
-transcript; file synchronisation for the SSH mode (decisions and wire shapes only).
+Added in the third round (0b1cab1, 56872ba): the side-question dialog (seen), the Setup page of
+the settings dialog (seen), file links in Claude's text, enlarging an image, the session list
+when several sessions match, the honesty checker's status per file on a checked edit (these
+four built and unit-tested, not seen: the scripted server gives no occasion), the install
+offer on the missing-calu card (seen; the Kotlin hint offered only "Open settings"), and the
+file synchronisation of the SSH mode (section H).
 
 | # | Case | Status |
 |---|---|---|
 | C1 | `tour`: streamed Markdown (table, code), thinking, Read, Edit, commands, verdict chips, the checker's remark under a denied step | fixed: rows name the command, chips are badges, tables are tables; a click on the edit row opens the diff at the changed line, on the file name the file at that line |
 | C2 | denied command; escalation: Allow, Deny with a note, Why? | fixed: the card has a stripe, the step in a code box, the note field, buttons below; a decided card is one line with ALLOWED / DENIED and the note. An escalated edit showed only its file name: it now shows what is replaced and by what, with "Show Diff" (5dfb6b6). Why? opens "Escalation N.md" in an editor tab |
 | C3 | one choice (radio buttons), several choices (check boxes), two questions in one card, free text | ok |
-| C4 | the two subagents of `tour`: their tabs, task row, result | ok. A message to a subagent is refused with the reason in the composer ("runs in the foreground", "has finished"). The background subagent of `subagents` was not run |
+| C4 | the two subagents of `tour`: their tabs, task row, result | ok. A message to a subagent is refused with the reason in the composer ("runs in the foreground", "has finished"). The background subagent of `subagents` was not run |. Third round: the background subagent of `tour` has its tab with its command and result. A message to a running subagent (`swarm`) was not confirmed: the first tries pressed "Stop" instead (the keyboard focus sat on the button, a typed space interrupted the turn); fixed in 56872ba (the three buttons take no focus, a chosen tab gives it to the text field), the message itself still to be seen |
 | C5 | `swarm`: ten subagents | fixed: the IDE's tab bar would scroll ten tabs out of sight; now chips that wrap, each with its state (running, finished, failed), "⚠" and bold for a decision that waits, "held" for a step calu holds back; beyond six tabs finished ones fold into "N finished" |
 | C6 | `swarm`: an escalation in the third subagent, the others keep working, then a second and a third | fixed: the header counts what waits; one line says "N decisions wait in other tabs" with "Show next" and "M steps held until you decide"; held tool rows carry a HELD chip. As measured in section D: after the first escalation every other subagent stops at its next checked step, so nine chips read "held" within seconds |
-| C7 | three open at once, decided in the order third, fifth, seventh; ten cards after the 300 s hold | ok: each card decides its own step; with ten open the strip stays one line (c91feae). A decision made in another client was not run here (the reducer's tests cover the event) |
+| C7 | three open at once, decided in the order third, fifth, seventh; ten cards after the 300 s hold | ok: each card decides its own step; with ten open the strip stays one line (c91feae). A decision made in another client: ok (`calu resolve 5 allow` on the server closed the card and the turn went on) |
 | C8 | Stop during a command (`queue`) | ok: "turn interrupted", the command row gets FAILED, the queued message is kept. During text and with a decision open: not run |
 | C9 | `queue`: two queued, one into the running turn | ok: "Queue" and "Send Now" replace "Send" while Claude works; waiting messages are listed above the composer; the injected one appears in the turn |
 | C10 | level to "Confirm edits": the next edit waits although the edit checker passed | ok. Changed from another client: not run |
 | C11 | `many`: 522 rows in one turn | fixed: one row is built per event instead of all rows per event. 4,000 renders: mean 0.65 ms, longest 31.5 ms; the IDE process 2.0 GB resident with the session open. The view follows the end, stops following when the user scrolls, "Jump to latest" returns. An expanded result of 60,000 characters shows the first 20,000 and says so |
 | C12 | ten running sessions (the server's limit of `--max-sessions`; twelve were refused) | ok: the menu lists them with state, directory and the first characters of the id (unnamed sessions of one directory share their title), a waiting one has a warning icon; typing filters; Rename gives a name |
-| C13 | fork from the second message; rewind to before the last message; the first message | ok: "fork of …" / "rewind of …" start, show the inherited turns under "Earlier in this conversation", the rewound message's text is back in the composer; rewind and fork are disabled on the first message. **open**: a fork (`/fork`) of the rewound session showed only the first inherited turn, not the turn made after the rewind; not investigated (the scripted runner starts its script again) |
+| C13 | fork from the second message; rewind to before the last message; the first message | ok: "fork of …" / "rewind of …" start, show the inherited turns under "Earlier in this conversation", the rewound message's text is back in the composer; rewind and fork are disabled on the first message. The fork that showed one turn only (`/fork` of a rewound session): the fork was made while the rewound session's own turn still waited on an escalation, and `session.history` holds a turn only once it ended, neither for the session itself (there the replay shows it) nor for a fork of it. Open in the core, not in the plugin. Found on the way and fixed (0b1cab1): the boundary between record and replay was found by the text of a message, so the same words in two turns dropped the turns between them; the prompt's id decides now |
 | C14 | context chip: "ctx –" before the first turn, percent and tokens after it; the click lists limits and cost | ok. `nousage` not run |
 | C15 | an image pasted from the clipboard | fixed (c91feae): the IDE's paste action never reached the key listener; the composer's paste now attaches the image, a thumbnail with a remove button appears. The limits (5 MiB, four, the types) are covered by `ImagesTest`, not by hand |
 | C16 | `pkill -f "calu ide"` mid-turn; the server stopped mid-turn | ok: "calu ide exited with code 143" with Restart bridge and Show log; after the restart the session is attached again with its transcript. Server stopped: "Reconnecting…", then "connection is lost", the list of sessions empties, a new session request waits with "Start calu server". fixed (5dfb6b6): the terminal's shell had no `~/.local/bin` on PATH, so the command `calu serve` failed; the command now names calu's file. Database loss: not run |
-| C17 | tool window 280 px and 520 px wide; Islands Dark and Islands Light; a line of 3,000 characters, a code block of 300 lines | ok. **open**: a line of a code block that is wider than the view is cut at the edge (no wrap, no scroll bar) |
+| C17 | tool window 280 px and 520 px wide; Islands Dark and Islands Light; a line of 3,000 characters, a code block of 300 lines | ok. fixed (0b1cab1): a code block is lines that wrap, with their indentation kept (`edge` seen) |
 | C18 | `bidi`, raw HTML and a `javascript:` link (`edge`) | ok: control characters are shown as `⟦RLO⟧` in text, file names, commands and cards; HTML is shown as text; only http, https and mailto links open |
 | C19 | command checker: open, change, Ctrl+S (version 7 → 8); `calu checker set` from a shell, then a second save | ok: the second save is refused and a diff "Stored (version 9)" against "Yours" opens |
 | C20 | title action "Checker Context"; "Why?" on a card | ok: read-only Markdown documents in editor tabs. Without a session the action says so in the chat |
@@ -117,12 +120,12 @@ transcript; file synchronisation for the SSH mode (decisions and wire shapes onl
 | C22 | calu settings dialog: a switch, a choice, a list, the search, "Use one model for everything" with a preset | fixed (c91feae): the first round had a table with an input box; now sections, a control per kind, MODIFIED markers with Reset, search, scope, the Models and Checkers pages. A refused value and Reset: not run by hand |
 | C23 | no session attached; no server; a store with an admin password | ok: the cards name what is missing and offer the button. One password: the card "Unlock" opens one dialog; a blank and a wrong password are sent and refused by calu with a new prompt; the right one is kept in memory and used again after the bridge was killed and restarted (no second prompt). Installing uv and calu: not run (both are installed in the desktop) |
 | B1 | tool window: right stripe, icon, title actions | ok. The stripe icon sits under "More tool windows" until the window was opened once (the IDE's rule for plugins) |
-| B2 | notifications while the tool window is hidden; the status bar widget | fixed (c91feae): a notification stayed after its step was decided in the tool window. "calu: N waiting" in the status bar opens the tool window. Allow / Deny on the notification: shown, not clicked |
-| B3 | "Add Comment for Claude" (Ctrl+Alt+K) on a selection | ok in a normal editor: the comment arrives as "[User comment on `greeter.py`, line 3]" with the excerpt. In a diff: built, not run |
+| B2 | notifications while the tool window is hidden; the status bar widget | fixed (c91feae): a notification stayed after its step was decided in the tool window. "calu: N waiting" in the status bar opens the tool window. Allow on the notification: ok (the step ran, the card shows ALLOWED). A notification appears only for a step that starts to wait while the tool window is hidden |
+| B3 | "Add Comment for Claude" (Ctrl+Alt+K) on a selection | ok in a normal editor: the comment arrives as "[User comment on `greeter.py`, line 3]" with the excerpt. In a diff: fixed (56872ba): the dialog names the file, line and side, but the comment was refused ("path must be relative") because the diff is titled with the absolute path; the path is made relative now. The corrected build was not run through the dialog again |
 | B4 | slash commands | ok: "/" lists calu's and Claude Code's commands, typing filters, Tab completes, `/model` offers its values, `/fork` forks; `/cost` ran against the real Claude Code |
 | B5 | "Open terminal with this command" | ok: a terminal tab "calu server" runs the tmux command (Reworked Terminal API) |
-| B6 | remote development (split mode) | **n/a here**: `./gradlew runIdeSplitMode -PlocalIde=/opt/pycharm` ran in the desktop (`uitest/pycharm-split.sh`). Both halves started and loaded the plugin without an error in their logs: the backend with `calu.shared` and `calu.backend` (`calu.frontend` excluded), the client with `calu.shared` and `calu.frontend`. The client then shows the "JetBrains Team Tools User Agreement", which only the owner can accept, so the tool window in the client, the RPC round trip, the password dialog and editors opened by the backend were not seen |
-| B7 | SSH mode and file synchronisation | not part of this round (a headless SSH server container comes next) |
+| B6 | remote development (split mode) | **n/a here**: `./gradlew runIdeSplitMode -PlocalIde=/opt/pycharm` ran in the desktop (`uitest/pycharm-split.sh`). Both halves started and loaded the plugin without an error in their logs: the backend with `calu.shared` and `calu.backend` (`calu.frontend` excluded), the client with `calu.shared` and `calu.frontend`. The client then shows the "JetBrains Team Tools User Agreement", which only the owner can accept, so the tool window in the client, the RPC round trip, the password dialog and editors opened by the backend were not seen | Third round (2026-11-19): `uitest/pycharm-split.sh` again; the client still shows the "JetBrains Team Tools User Agreement" (version 2.1). Exit was clicked, nothing accepted, the split-mode checks did not run |
+| B7 | SSH mode and file synchronisation | built and run: section H |
 
 ### C. Full-screen client and line client (`calu attach`)
 
@@ -504,3 +507,60 @@ routes may return marks; D224 replaced that (only the honesty checker). Section 
 `system/marks.md`; the file is now `system/honesty-state.md` and says nothing about marks.
 The specification file is a dated record and was not rewritten; PLAN.md D224 holds what is
 built.
+
+### H. PyCharm plugin: SSH mode and file synchronisation
+
+Run 2026-11-19 by an agent: PyCharm 2026.3 in the desktop container, the plugin's mode "On a
+server, over SSH" with host `sshbox`, remote directory `/home/dev/project`, "Sync: through
+calu", against the SSH box (`uitest/README.md`, "The SSH box") with its scripted server.
+Screenshots: `~/.cache/calu-uitest/share/pycharm-ssh1/` (numbers below). The same behaviour
+is tested without an IDE by `RealBridgeSyncTest` (`calu ide` as a local process and over SSH
+to the box) and, case by case, by `SynchronizerTest` and `SyncIoTest` over a scripted bridge.
+"test" in the status means: covered by those tests, not walked through by hand.
+
+| # | Case | Status |
+|---|---|---|
+| H1 | first connection: what the user sees while it connects | ok: "Starting calu…" in the first build; fixed (0b1cab1): "Connecting to sshbox over SSH…", and `ConnectTimeout=15` so that a host that does not answer is reported after 15 s |
+| H2 | a wrong host | ok (04, 05): "SSH could not resolve the host name … Check the SSH host in Settings … Connecting again in 16 s (attempt 6)", Restart bridge, Show log |
+| H3 | a key the server refuses | ok (06): "SSH could not sign in to root@sshbox without asking for a passphrase or password … add the key to your SSH agent (`ssh-add`) … Check with `ssh -o BatchMode=yes root@sshbox true`"; no new attempt, no hang |
+| H4 | the settings survive a restart of the IDE | fixed (0b1cab1): the IDE stored the remote directory `/home/dev/project` as `$PROJECT_DIR$/../../../dev/project`; the plugin's settings are exempt from path macros now (stored as typed, seen) |
+| H5 | "Clone from Server" into an empty folder | ok (10 to 13, 43, 44): the offer names the number of files and their size; 307 files arrive, PyCharm lists and indexes them; hash of the binary file equal on both sides; no `.git`, no ignored `build/`. A cancel button on the progress indicator (cancel itself: test). PyCharm's sample `main.py` in a folder it opens empty turns the offer into a plan with "Upload (1): main.py" (08) |
+| H6 | "Not Now" | ok (09): nothing is copied; a card and the status bar say that the synchronisation waits; "Sync now" asks again |
+| H7 | a folder that already has files: equal ones settle, different ones are conflicts, nothing is overwritten | test (`SynchronizerTest`: first sync of an existing copy) |
+| H8 | the sessions of the server are listed; New Session runs remotely | ok (14, 15) |
+| H9 | the agent's Edit arrives in the local copy, the open editor updates | ok (15): 0.3 to 0.8 s after the file changed on the server |
+| H10 | the diff from the chat opens with local paths; a file link opens the local file | ok (25): the diff is titled `calu: /home/cua/work/sshproj/greeter.py`. The file link: test (`sshLocalPath`), not clicked |
+| H11 | edit locally and save: it is on the server | ok (checked with `ssh`; also H19's offline edit) |
+| H12 | edit locally WHILE the scripted turn has edited the same file | ok (16 to 18): "1 file held until the turn ends" with "Upload now", the server unchanged; a second change made on the server by hand meanwhile is not downloaded over the local one; when the turn ended both changes were merged on both sides, the editor shows the result, the chat says so |
+| H13 | a conflicting change made on the server by hand (the same line, unsaved text in the editor) | ok (19 to 22): card "Merge greeter.py…", a notification with "Merge…", the status bar "conflict in greeter.py"; the IDE's three-way dialog (Yours / Result / Theirs); the applied result is on both sides with equal hashes |
+| H14 | delete, rename, new file on the server | ok (26): all three arrive within the watcher's interval |
+| H15 | delete, rename, new file locally | ok when made in the IDE (test: `localRenamed` is one `ide.fs.rename`); made outside the IDE (a shell): ok, but only after the IDE noticed the change, 10 to 40 s here |
+| H16 | the directory of 300 files, the binary file | ok (hash equal on both sides); a 3 MiB file up in chunks and a 2.5 MiB file down in pieces: test |
+| H17 | symbolic links: one inside the tree, one that points outside | ok: neither is created locally nor followed; "2 paths are not synchronised" with "Show" |
+| H18 | a file above the size limit (35 MB on the server) | ok: not copied. open: it is listed as skipped only after the next full comparison (a reconnect or "Sync now"), because the bridge's watcher does not report files it would not list |
+| H19 | the network gone for 20 s and `ssh` killed mid-turn | ok (27 to 29): status "calu sync: offline", an edit saved meanwhile: "offline: 1 change queued"; attempts with a growing wait; after the network was back the transcript continued with the step that had come up meanwhile (no doubled message), the queued file was uploaded, a full comparison ran (342 ms) |
+| H20 | the server container stopped, then started | ok (32, 33): "connection lost" on the open card with Allow and Deny disabled, attempts with the reason; after the start the plugin connects by itself and the copy is in sync. open (core): the session that died with the container was still listed as running by `ide.sessions` (not marked stale for some minutes); open (plugin): its waiting step still counts in "calu: 1 waiting" |
+| H21 | the session list after the server stopped | fixed (0b1cab1): the list is asked again after every change of the session connection and every 15 s while no session is attached |
+| H22 | two PyCharm projects on the same server project | n/a here (one IDE window in the desktop). The path is the one of H14: the other copy's writes arrive as changes of another program |
+| H23 | checker instructions, checker context, "Why?" | ok (30, 31): they go through the bridge unchanged |
+| H24 | the Setup page and a side question over SSH | ok (46, 48): the findings are those of the server |
+| H25 | the one-password rule over SSH (the store with passwords on the server, "calu command" = `/home/dev/pwstore/calu`) | ok (63 to 66): one card "Unlock", one dialog; a session starts; after the SSH connection was killed the session is attached again without a dialog. The synchronisation itself needs no password |
+| H26 | "Sync: none" | test only (`CaluSync` is not created; the path mapping is the one of H10). Not walked through |
+| H27 | a bridge without the `fs` capability | test (`SynchronizerTest`): refused with what to do, no `ide.fs.*` request. No such bridge exists to run against |
+| H28 | unsaved editor text and a remote change of other lines | test (merged; never uploaded before it is saved); H13 is the overlapping case by hand |
+| H29 | a restart of the IDE | ok (58): the plugin connects by itself, compares (no question, the bases are stored) and is "in sync" |
+
+Measurements (the box and the desktop are containers on one host): the first clone of the 307
+files 1.3 s in the IDE after the confirmation (8 s before the VFS was refreshed once instead
+of per file), 2.5 s in the test over SSH with its checks; an edit of the agent to the local
+file 0.3 to 0.8 s; a change by another program on the server to the local file about 2.3 s
+(the watcher polls every 2 s); a local save to the server about 0.2 s; a full comparison of
+the unchanged tree 27 to 342 ms; CPU of the bridge's polling watcher on the tree 0.6 % of one
+core (0.18 CPU seconds in 30 s, its `git` calls included), 72 MB resident.
+
+Usability findings that are still open: the plan dialog lists at most eight paths per kind
+and has no "show all"; a conflict in a file that is not open has no mark in the project view;
+with ten subagents the tab chips take most of the height of a narrow tool window (a card can
+be half hidden); the "Embedded Browser is suspended" notice of the IDE's own Markdown preview
+appears in this container for every document opened from the chat.
+
