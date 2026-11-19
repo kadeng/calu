@@ -1,6 +1,6 @@
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import psycopg
@@ -39,6 +39,31 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     """Block real model requests unless the run selects live tests (`-m live`)."""
     markexpr = config.getoption("markexpr") or ""
     models.ALLOW_MODEL_REQUESTS = "live" in markexpr and "not live" not in markexpr
+
+
+@pytest.fixture(autouse=True)
+def fresh_cli_state() -> Iterator[None]:
+    """Give every test the module state of `calu.cli` a fresh process has, and restore it after.
+
+    `calu.cli` keeps what one command learned for the rest of that command in module lists
+    (`_held`, `_admin_place`, `_hold`, `_typed`). A test that runs a command leaves them
+    filled, and a later test in the same process then behaves as if a database login were
+    held. Touches nothing outside `calu.cli`'s module state.
+
+    Yields:
+        Nothing; the test runs between emptying and restoring.
+    """
+    from calu import cli
+
+    saved = (list(cli._held), list(cli._admin_place), list(cli._hold), dict(cli._typed))
+    cli._held.clear()
+    cli._admin_place.clear()
+    cli._hold.clear()
+    cli._typed.clear()
+    yield
+    cli._held[:], cli._admin_place[:], cli._hold[:] = saved[0], saved[1], saved[2]
+    cli._typed.clear()
+    cli._typed.update(saved[3])
 
 
 @pytest.fixture
