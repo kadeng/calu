@@ -16,6 +16,7 @@ from calu.config import ClaudeConfig, Config
 from calu.protocol.messages import (
     REFUSED_PERMISSION_MODES,
     ChatSendParams,
+    Log,
     PermissionModeChanged,
     TurnResult,
 )
@@ -66,6 +67,27 @@ async def test_a_switch_between_turns_is_applied_recorded_and_announced(tmp_path
         await session.set_permission_mode("acceptEdits", client="tui")
         assert runner_of(session).mode_changes == ["acceptEdits"]
         assert len(store.setting_changes) == 1
+        await session.stop()
+        tg.cancel_scope.cancel()
+
+
+async def test_the_log_line_of_a_switch_between_turns_leaves_the_session_idle(
+    tmp_path: Path,
+) -> None:
+    """The runner's line about the new mode is no work of Claude: the session stays idle.
+
+    The SDK runner follows Claude Code's report of a new mode with a `log` event; with the
+    real CLI that line set the session "running" between turns (test plan K, 2026-11-19).
+    """
+    session, _rec, _store = make_session(tmp_path, [])
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        assert session.snapshot().state == "idle"
+        await session.set_permission_mode("default", client="tui")
+        await session._on_runner_event(  # pyright: ignore[reportPrivateUsage]
+            Log(level="info", message='Claude Code runs in the permission mode "default"')
+        )
+        assert session.snapshot().state == "idle"
         await session.stop()
         tg.cancel_scope.cancel()
 

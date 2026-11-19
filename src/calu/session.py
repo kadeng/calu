@@ -3691,8 +3691,10 @@ class Session:
                 if isinstance(event, TurnResult):
                     self._run_state.busy = False
                     await self._refresh_state()
-                elif not isinstance(event, UsageUpdate):
-                    # A report about the account's limits is no work of Claude.
+                elif not isinstance(event, (UsageUpdate, Log)):
+                    # A report about the account's limits is no work of Claude, nor is a
+                    # diagnostic line: the one that follows a switch of the permission mode
+                    # between turns left the session "running" without a turn.
                     await self._mark_busy()
 
     async def _after_event(self, event: Event) -> None:
