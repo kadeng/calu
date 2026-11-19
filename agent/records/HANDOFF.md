@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D246, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D247, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -123,6 +123,23 @@ Decided (do not ask again):
   greys the ended transcript and notices a server that runs again; the timer counts from
   `opened_at`. Not run over Remote-SSH. The PyCharm plugin does not use `cause` yet.
 - **Web:** Enter in the triage note stays a new line.
+- **After the final acceptance round (test plan J), the owner's answers:**
+  - A click on the context/token chip in every front end opens one panel: calu's stored
+    subscription limits (5-hour, weekly, with when they were reported, or "not reported yet
+    by Claude Code") plus the output of `/usage` run as a zero-cost request. (`/usage` in
+    headless mode shows cost and tokens only; the limits come from `rate_limit_event`.)
+  - A small backward clock jump after a sleep stays logged as an error (keep as is).
+  - The web live view gets side questions (`side.ask`), answers shown only to that browser.
+  - The full-screen client passes every slash command it does not know to Claude Code;
+    `//context` (double slash) sends Claude Code's own version of a clashing command; the
+    completion list shows both, marked.
+  - Checker instructions: `calu setup`, `calu doctor` and the instruction editors say when the
+    stored text is an older shipped version unchanged by the user and offer to update it; a
+    text the user edited is only reported as differing, with a diff, never replaced.
+  - The web's "Recorded turns" leaves out a turn that has not ended.
+  - The terminal client following a restarted session with a new token is intended.
+  - Session lists show the session user's home as `~` (another user's as `~user`), the full
+    path in a tooltip or detail view.
 - **Traces (later the same day):** a removed message keeps its turn heading by default,
   unless the redaction instructions say otherwise ("It's not important"); the redaction
   instructions are edited in the IDEs' settings dialogs only, no extra picker entry;
@@ -168,6 +185,22 @@ finalize` by hand. Settings `traces.final_redaction` (on) and `traces.final_time
 (600). Open: the manual check `docs/TESTING.md` item 42 with a real model; the pass's prompt
 is not measured on Haiku or Nemotron; a `git commit -a` in a session can take along the tail
 of another session's live trace file in the same project (per-block redacted only).
+
+#### The live permission-mode switch in every client (2026-11-19, PLAN D247)
+
+Built (not pushed): request `permission_mode.set {mode}`, event `permission_mode.changed
+{mode, client}`, snapshot field `permission_mode`. Offered: default, acceptEdits, auto;
+refused with a reason each: plan, dontAsk, bypassPermissions; with `claude.require_auto_mode`
+everything but auto. Each change is in the session's audit log (`calu sessions <id>`). Clients:
+VSCode and PyCharm a "mode" selector next to the supervision level and `/mode`; the web live
+view a select; the full-screen client `/mode` (Tab completes the mode) and `mode <name>` in
+the status line; the line client `/mode [mode]`; ACP a select config option (the session
+modes stay the supervision level). Measured in `spikes/spike_permission_mode_switch.py`
+(`spikes/RESULTS.md`). Open: `docs/TESTING.md` manual item 43 with a real `claude` (for the
+agent in the Cua desktop); plan mode is not offered (it writes its plan outside the project,
+and leaving it is an approval calu does not present yet); the condensed skill
+`../.claude/skills/claude-code-integration` does not mention the measured status message yet
+(it lies outside `calu/`).
 
 #### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
 
@@ -762,8 +795,8 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 **2031 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
 default instructions), ~49k of tests, 40 migrations, 28 CLI commands (27 in `calu --help` and the hidden easter egg
-`calu lightcycles`), 23 protocol requests,
-20 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+`calu lightcycles`), 24 protocol requests,
+21 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
 
