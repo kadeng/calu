@@ -993,7 +993,8 @@
       const seconds = Math.round(retryAfter / 1000);
       onState("not attached");
       say(`The connection to calu web ended; trying again in ${seconds} s. What is shown below ` +
-          "may be out of date. If this stays, check that `calu web` still runs and sign in again.");
+          "may be out of date. If this stays, check that `calu web` still runs (and the SSH " +
+          "tunnel, if this page comes through one); after a restart of `calu web`, sign in again.");
       retryTimer = setTimeout(attach, retryAfter);
       retryAfter = Math.min(retryAfter * 2, 30000);
       signedOut();

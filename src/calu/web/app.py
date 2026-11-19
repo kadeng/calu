@@ -1605,7 +1605,9 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
         exc: What the connection attempt raised.
 
     Returns:
-        The line for the browser.
+        The line for the browser: for a session of another host, the SSH forward of its port
+        (the host name as the session recorded it, which may differ from the name SSH knows);
+        for a silent one, that its process is gone; else both possibilities.
     """
     if row.stale:
         # The heartbeat says the process is gone (D56), so this is not a networking problem
@@ -1614,6 +1616,16 @@ def _unreachable_message(row: herd.SessionRow, exc: Exception) -> str:
             f"this session stopped saying it is running {row.silent_for_s / 60:.0f} minutes "
             f"ago, so there is nothing live to reach ({exc}). Its history is still here, "
             "and an escalation of it can be cleared with `calu resolve <id> cancel`."
+        )
+    if row.hostname != socket.gethostname() and row.address.startswith("ws://"):
+        # The address is a port on the loopback interface of the session's own machine.
+        port = row.address.rsplit(":", 1)[-1]
+        return (
+            f"the session runs on {row.hostname}, not on this machine, and listens there at "
+            f"{row.address}. Forward that port and try again: `ssh -N -L "
+            f"{port}:127.0.0.1:{port} {row.hostname}`, or open the `calu web` of "
+            f"{row.hostname} through a tunnel. Its decisions can be made here without that, "
+            "on the Escalations page."
         )
     return (
         f"cannot reach {row.address}: {exc}. The session runs on {row.hostname}: if that is "

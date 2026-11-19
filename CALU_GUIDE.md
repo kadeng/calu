@@ -956,22 +956,53 @@ sessions`, `calu escalations`, `calu escalation`, `calu resolve`, `calu token` a
 use it when it is there and fall back to `admin` when it is not. Running `calu credential new
 operator` again replaces the password, which takes every copy handed out before out of use.
 
-**Through an SSH tunnel**, when you want the live stream or the browser:
+**Over SSH**, when you want the live stream, the full-screen client or the browser. A session
+listens only on the loopback interface of its own machine and has no TLS, so a client on
+another machine reaches it through SSH. Three ways, from the simplest:
+
+| Way | What you run on your machine | What works |
+|---|---|---|
+| The client on the server | `ssh -t the-host`, then `calu attach` in the project | everything, with the server's credentials: `/new`, `/fork`, `/running`, `/switch`, saving checker instructions |
+| The web interface of the server | `ssh -N -L 8800:127.0.0.1:8800 the-host`, then the address `calu web` printed there | every session of that machine, live, through one tunnel |
+| The client on your machine | `ssh -N -L <port>:127.0.0.1:<port> the-host`, then `calu attach ws://127.0.0.1:<port>` with a token | one session; nothing of calu needs to be set up on your machine |
+
+The first is what a user with a headless server usually wants: `ssh -t the-host`, `cd` into
+the project, `calu attach`. Detaching (`ctrl+d`) and closing SSH leave the session running,
+because it runs in `calu serve` (or `calu run`) on the server, not in the client; that process
+has to outlive your SSH login (`tmux`, or a service).
+
+For the third way, `calu sessions` on the server shows each running session's client address
+(`clients ws://127.0.0.1:41235`), and `calu token mint` prints a token for it together with
+the two commands to run on your machine:
 
 ```bash
-ssh the-host 'calu token mint <session id> --label laptop'   # asks for the admin password
-ssh -L 8800:127.0.0.1:8800 the-host     # then open the address `calu web` printed, at home
-ssh -L 8765:127.0.0.1:8765 the-host     # the port `calu sessions` shows for that session
-calu attach ws://127.0.0.1:8765 --token=<the token it printed>
+calu token mint <session id> --label laptop       # on the server; prints the token once
+ssh -N -L 41235:127.0.0.1:41235 the-host          # on your machine; leave it open
+calu attach ws://127.0.0.1:41235 --token=<the token it printed>
 ```
 
-Mint the token in its own step: every command that reads the configuration asks for the `admin`
-password, so it wants a terminal, and the token is printed once and never stored. A minted token
-is valid until its session ends or you take it back (`calu token list|revoke`), which is
-what makes it usable from a second machine at all. For a session that serves a Unix socket
-instead of a port, forward the socket at the path `calu sessions` shows for it (it is named
-after the session's process, `/run/user/<uid>/calu/<pid>.sock`): `ssh -L
-8765:/run/user/1000/calu/4711.sock the-host`.
+The token can also come from the environment variable `CALU_TOKEN`, which keeps it off the
+command line (where other users of your machine could read it in the process list); without
+either, or when the session refuses the one given, `calu attach` asks for it on the terminal.
+A minted token is valid until its session ends or you take it back (`calu token
+list|revoke`). Such a client has no database on your machine: `/new`, `/fork`, `/running`
+and `/switch` say so and name the first way instead, and each new session has a port of its
+own and needs its own forward and token. A session of a `calu serve --insecure` takes every
+connection from the server's loopback interface without a token, and a forwarded port arrives
+there: whoever can log in to the server over SSH attaches without a token.
+
+When the connection breaks (SSH ended, the laptop slept, the network went away), both
+terminal clients try again by themselves for five minutes (after 1, 2, 4, 8, then every 15
+seconds), say so in the status line ("connection lost, try 3: nothing listens at the
+address"), and continue where they were once the address answers again: open the tunnel
+again in another terminal. A session that has ended in the meantime refuses the token, and
+the client says so and stops. The web interface does the same for its own page.
+
+`calu web` on your own machine works too, against the server's database through a forwarded
+PostgreSQL port and an `operator` credential (`calu web --database operator` asks for the
+admin password of that database): lists, history, escalations, triage and settings work as
+on the server. The live view of a session needs that session's port forwarded as well; the
+page names the `ssh -L` line to use.
 
 ## Client tokens
 

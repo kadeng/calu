@@ -25,7 +25,8 @@ programs and look at the result.
 | terminal | a private tmux server on the host (`tmux -L calutest`), screenshots of panes as text | the full-screen client, the line client |
 | browser | headless Chromium (the browser layer's Playwright), screenshots | the web interface |
 | root box | a container of its own with a root user, an unprivileged user and sudo | `calu serve`/`run`/`attach`/`web` as root with `--user`, through sudo, with and without passwords |
-| server | `uitest/sshbox/`: the container `calu-sshbox` (Ubuntu 24.04, `sshd` with public-key login only, user `dev`, calu, PostgreSQL, a scripted `calu serve` in tmux, the project `/home/dev/project`), on the Docker network `calu-uitest-net` with the desktop and on `127.0.0.1:56522` for the host; a key pair made for the tests in `~/.cache/calu-uitest/ssh/` | the PyCharm plugin's SSH mode (section H): `ssh sshbox calu ide --cwd DIR`, file sync through the bridge, reconnects, the one-password rule over SSH. Not done there: `calu attach` and the VSCode extension over SSH |
+| server | `uitest/sshbox/`: the container `calu-sshbox` (Ubuntu 24.04, `sshd` with public-key login only, user `dev`, calu, PostgreSQL, a scripted `calu serve` in tmux, the project `/home/dev/project`), on the Docker network `calu-uitest-net` with the desktop and on `127.0.0.1:56522` for the host; a key pair made for the tests in `~/.cache/calu-uitest/ssh/` | the PyCharm plugin's SSH mode (section H): `ssh sshbox calu ide --cwd DIR`, file sync through the bridge, reconnects, the one-password rule over SSH. Not done there: the VSCode extension over SSH |
+| second server | a second SSH box `calu-sshbox2` (`CALU_SSHBOX_NAME=calu-sshbox2 CALU_SSHBOX_PORT=56523 CALU_SSHBOX_NETEM=1 uitest/sshbox/run.sh`): the same image with the capability NET_ADMIN for `tc qdisc ... netem`, its own host entry `~/.cache/calu-uitest/ssh/config-calu-sshbox2`, `uitest/tui_server.py` as its scripted server | the terminal clients and the web interface remote (section I) |
 
 No test touches the owner's database (`calu-db-postgres-1`), his `~/.config/calu`, `/etc/calu`
 or `/var/lib/calu`. A database for manual tests is a container of its own, not the test
@@ -563,4 +564,53 @@ and has no "show all"; a conflict in a file that is not open has no mark in the 
 with ten subagents the tab chips take most of the height of a narrow tool window (a card can
 be half hidden); the "Embedded Browser is suspended" notice of the IDE's own Markdown preview
 appears in this container for every document opened from the chat.
+
+### I. Remote operation: the terminal clients and the web interface on another machine
+
+Run 2026-11-19 by an agent: the server was the second SSH box (`calu-sshbox2`, environment
+"second server"), reached from the host over SSH on 127.0.0.1:56523 with the test key; on it
+`uitest/tui_server.py` without `--insecure` (the store without passwords) and, for the cases
+with passwords and `--insecure`, the store `/home/dev/pwstore` (admin password `admin-pw`).
+The host ran calu from the checkout with its directories in a scratch directory and
+`CALU_PLACE_FILE=/nonexistent` (no credential at all, except the `operator` of case I14). The
+clients ran in `tmux -L calutest`, the browser was the browser layer's headless Chromium.
+Latency and loss with `tc qdisc ... netem` inside the box (on its `eth0`, so on the SSH
+traffic). Fixes are in c19c532 unless another commit is named.
+
+What is remote by design: a session listens only on its machine's loopback interface and has
+no TLS (CALU_GUIDE "From another machine"), so there is no direct TCP attach and no TLS case;
+every remote client goes through SSH. Three ways were run: the client on the server (`ssh -t
+host`, then `calu attach`), the server's `calu web` through one tunnel, and a client on the
+host with the session's port forwarded and a token.
+
+| # | Case | Status |
+|---|---|---|
+| I1 | finding what to forward: `calu sessions` and `calu token mint` on the server | fixed: neither showed the session's port (the guide said `calu sessions` did; only `calu token list` had it). `calu sessions` now ends each running session's line with `clients ws://127.0.0.1:<port>`; `calu token mint` prints the `ssh -N -L` and `calu attach` lines. Followed as printed from the host: ok |
+| I2 | `calu attach ws://127.0.0.1:<forwarded port> --token=<minted>` (T): tour, a decision, a question decided with `calu resolve` on the server | ok: the card closes, "decided elsewhere: answered" |
+| I3 | no token, a wrong token, a token in `CALU_TOKEN`, an address nobody listens at | fixed: "calu: CliError: cannot attach … invalid client token (code -32001)" with exit 1 and nothing else; a token had to stand on the command line. Now the address and token are checked first; on a terminal a refused or missing token is asked for ("Client token (Enter gives up)", three tries); `CALU_TOKEN` is read; the messages name `calu token mint` and, for a refused connection, the `ssh -L` forward. "CliError: " no longer stands in front of any command's error |
+| I4 | the tunnel killed while attached (T and line client), then opened again | fixed: the client gave up at once ("detached: the session ended or the connection broke"), although the session ran on. Both clients now try again after 1, 2, 4, 8, then every 15 s for five minutes ("connection lost, try 3: nothing listens at the address (connection refused)"; the footer offers `^d leave`, not `enter send`) and continue after the last event; regression test `tests/unit/test_remote_attach.py` (a TCP relay that is cut and opened again) |
+| I5 | 100 % packet loss for 25 s and for 50 s, then the network back | ok after I4: with `ServerAliveInterval` the `ssh` of the tunnel ends (open it again: the client attaches by itself); without it the WebSocket keepalive ends the connection after about 40 s, the client tries again and attaches through the surviving tunnel once the loss ends |
+| I6 | latency: 300, 700 and 150 ms each way (RTT 0.3 to 1.4 s); `a a` on a card | fixed: nothing showed between the second press and the session's answer (up to 1.4 s). The card now says "allow sent: waiting for the session to confirm". Attach to the `many` session (520 items) at 0.3 s RTT: 3.7 s to "attached", including the token check and `uv run` |
+| I7 | the server stopped (Ctrl-C of `calu serve`) with a client attached | fixed: the client showed the card "SESSION STOPPED … enter resumes the conversation" next to "detached", and Enter could resume nothing (under `calu serve` a stopped session has ended). The card is hidden while detached; the status says "detached: the session ended" (a close by the session is not retried) |
+| I8 | `/new`, `/running` in a client given an address on a machine without calu | fixed: "/new" said "this machine has no 'admin' credential (calu credential set admin stores one …)", which leads a remote user to put the database owner's login on the laptop. Now it says that these commands work in a client on the session's machine (`ssh -t <host> calu attach`), and a detached client does not offer them |
+| I9 | replayed decisions at attach | fixed: every decision made before the client attached came back as a toast "decided elsewhere: allowed (2 times)" |
+| I10 | `calu attach` on the server over `ssh -t` (T at 120x36 and 80x24): `many-subagents`, `/running`; a decision made in the host's client closes the card there | ok |
+| I11 | scenarios over the tunnel: `swarm` (ten subagents, held steps), `escalations`, `bidi`, `edge`, `many`; line client with `/state` and a message | ok: holds, `⟦RLO⟧` in the card's command, deny with a note (`n n`, `alt+d`) |
+| I12 | a `calu serve --insecure` session through a tunnel without a token | ok as documented: the forwarded connection arrives on the server's loopback interface and is let in without a token; the guide now says that whoever can log in over SSH then attaches without one |
+| I13 | the server's `calu web` through `ssh -L 8800:127.0.0.1:8800` (W): token login, fleet, live view, allow with a note, 390 px width; the tunnel killed for 8 s, a click on Allow meanwhile, the tunnel back | ok: "The connection to calu web ended; trying again in 8 s …", Allow says "not sent: this page is not attached to the session", the page attaches again by itself. The reconnect line now also names the SSH tunnel. Open (small): the "not sent" line replaces the reconnect line until the next attempt |
+| I14 | `calu web` on the host against the server's database (forwarded PostgreSQL port, `calu credential set operator --no-password`, `calu web --database operator`): sign-in, fleet, escalations page, live view | ok for the sign-in (the admin password once at the terminal, once in the browser), the fleet, deciding on the escalations page (recorded as `admin:<user>@<host>`). The live view of a session of the other machine said "if that is another machine … forward the port": fixed (this commit), it now knows that the session's host is not this one and names `ssh -N -L <port>:127.0.0.1:<port> <host>`; with that forward, Try again attached and the live view worked |
+| I15 | `calu web` of the server restarted while a page is open | not run remote; the local case (section D, C16) applies unchanged |
+| I16 | the line client remote | ok for I2-I5 (`[reconnecting] connection lost: …; try 1 in 1 s (/quit or Ctrl-D leaves)`, `[attached again]`) |
+
+Judgement calls for the owner (not decided here):
+
+- A client given an address cannot follow `/new`, `/fork` or `/switch`: every session has its
+  own port, its own forward and its own token. Possible: a `calu attach ssh://host[/dir]` that
+  runs the client's half on the server, or a single relay port per `calu serve` (the web
+  interface has one already).
+- How long a broken connection is tried again (five minutes now) and whether a local session
+  whose process died should end the client at once instead (a refused local connection looks
+  the same as a dropped tunnel).
+- `calu start --no-attach` leaves the token it minted valid until the session ends (it is
+  listed as "never used").
 
