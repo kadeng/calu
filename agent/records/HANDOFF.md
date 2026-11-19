@@ -131,8 +131,8 @@ Decided (do not ask again):
   - A small backward clock jump after a sleep stays logged as an error (keep as is).
   - The web live view gets side questions (`side.ask`), answers shown only to that browser.
   - The full-screen client passes every slash command it does not know to Claude Code;
-    `//context` (double slash) sends Claude Code's own version of a clashing command; the
-    completion list shows both, marked.
+    the client's own `/context` is renamed `/checker-context` (the owner, later), so
+    `/context` reaches Claude Code as in the IDEs; no double-slash form.
   - Checker instructions: `calu setup`, `calu doctor` and the instruction editors say when the
     stored text is an older shipped version unchanged by the user and offer to update it; a
     text the user edited is only reported as differing, with a diff, never replaced.
