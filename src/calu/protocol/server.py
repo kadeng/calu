@@ -153,6 +153,11 @@ session buffer requests without bound."""
 ENDED_WITH_SESSION = "the client token belonged to a session that has ended: attach again"
 """Close reason for a minted token whose connection outlived its session row."""
 
+REFUSAL_WAIT_S = 2.0
+"""How long the close of a revoked client's connection waits for the error responses of the
+requests that are checking, or have just found, the revoked token (`Client.revoke`). The wait
+normally ends with the response; the bound is for a client that does not read."""
+
 GRACE_S = 0.1
 """How long `listen` keeps the connections open after a `shutdown` request, so that the events
 and responses already written reach the clients."""
@@ -261,6 +266,14 @@ class RpcError(Exception):
         """
         super().__init__(message)
         self.code, self.message, self.data = code, message, data
+
+
+class _TokenRevoked(RpcError):
+    """The refusal of a request that found its client's token revoked (-32001).
+
+    `Client.revoke` waits until the response to this error is sent before it closes the
+    connection (`Client._refusal_done`).
+    """
 
 
 class TokenCheckUnavailable(Exception):
@@ -724,8 +737,8 @@ class SessionServer:
 
         Side effects: sets `check.valid` unless the database gave no answer, sets `check.done`
         in every case (also when this task is cancelled), and closes the connections of a
-        token that is revoked, `GRACE_S` after the answer, so that the error response of the
-        request that asked goes out first.
+        token that is revoked, `GRACE_S` after the answer; each close waits for the error
+        response of the request that asked (`Client.revoke`).
 
         Args:
             sha: SHA-256 of the token.
@@ -961,6 +974,12 @@ class Client:
         """Runs the tasks that push events; None before `serve` and after the disconnect."""
         self._side_asking = False
         """True while a side question of this client is being answered (one at a time)."""
+        self._refusals = 0
+        """Requests of this client whose token check runs, or found the token revoked and
+        whose error response is not sent yet."""
+        self._refusals_out = anyio.Event()
+        """Set while `_refusals` is 0; `revoke` waits for it."""
+        self._refusals_out.set()
 
     def close(self) -> None:
         """End the event subscription of this client, if it has one."""
@@ -973,7 +992,10 @@ class Client:
 
         Side effects: ends the event subscription, forgets the authentication (a request that
         is still read or still waits is answered with -32001 and not served) and closes the
-        connection with `CLOSE_TOKEN_REVOKED`. A request that already runs is finished.
+        connection with `CLOSE_TOKEN_REVOKED`. A request that already runs is finished. The
+        close waits, for at most `REFUSAL_WAIT_S`, until the -32001 responses of the requests
+        that were checking the token are sent, so the request that noticed the revocation
+        gets its response and not only a closed connection.
 
         Args:
             why: The close reason the client is given, at most 123 bytes.
@@ -981,6 +1003,12 @@ class Client:
         log.warning("closing the connection of client %r: its token was revoked", self.name)
         self.authenticated = False
         self.close()
+        # A request that noticed the revocation is answered with -32001 before the close.
+        # Waiting a fixed moment for that was not enough on a busy machine: the close then
+        # came first and the client got no response to its request.
+        with anyio.move_on_after(REFUSAL_WAIT_S):
+            while self._refusals:
+                await self._refusals_out.wait()
         await self.connection.close(CLOSE_TOKEN_REVOKED, why)
 
     async def serve(self) -> None:
@@ -1148,7 +1176,11 @@ class Client:
                 with anyio.move_on_after(GRACE_S, shield=True):
                     await self.connection.close()
         except RpcError as exc:
-            await self._error(request_id, exc.code, exc.message, exc.data)
+            try:
+                await self._error(request_id, exc.code, exc.message, exc.data)
+            finally:
+                if isinstance(exc, _TokenRevoked):
+                    self._refusal_done()
         except (SessionError, ValueError) as exc:
             await self._error(request_id, -32000, str(exc))
         except ConnectionClosed:
@@ -1156,6 +1188,17 @@ class Client:
         except Exception as exc:  # the client must get an answer
             log.exception("request %r failed", method)
             await self._error(request_id, -32603, f"internal error: {exc}")
+
+    def _refusal_done(self) -> None:
+        """Count one request out of `_refusals`: its token check passed, or its refusal is sent.
+
+        Side effect: sets `_refusals_out` when no such request is left, which lets a waiting
+        `revoke` close the connection.
+        """
+        self._refusals -= 1
+        if self._refusals <= 0:
+            self._refusals = 0
+            self._refusals_out.set()
 
     async def _error(self, request_id: Any, code: int, message: str, data: Any = None) -> None:
         """Send a JSON-RPC error response.
@@ -1186,8 +1229,9 @@ class Client:
 
         Raises:
             RpcError: For an unknown method (-32601), invalid params (-32602), a request
-                before a successful `initialize` or a request that changes the session from a
-                client whose token was revoked (both -32001).
+                before a successful `initialize` (-32001).
+            _TokenRevoked: For a request that changes the session from a client whose token
+                was revoked (an `RpcError` with -32001).
             SessionError: If the session rejects the request.
             ValueError: If the request content is invalid (e.g. a selection outside the
                 document).
@@ -1197,8 +1241,19 @@ class Client:
             raise RpcError(-32601, f"unknown method {method!r}")
         if not self.authenticated and method not in NO_AUTH_METHODS:
             raise RpcError(UNAUTHENTICATED, "send initialize with a valid token first")
-        if method not in READ_ONLY_METHODS and not await self._token_still_valid():
-            raise RpcError(UNAUTHENTICATED, "the client token was revoked")
+        if method not in READ_ONLY_METHODS:
+            # Counted from before the check until the refusal is sent (`_handle_message`), so
+            # that the close of a revoked connection cannot overtake the response.
+            self._refusals += 1
+            self._refusals_out = anyio.Event() if self._refusals == 1 else self._refusals_out
+            try:
+                valid = await self._token_still_valid()
+            except BaseException:
+                self._refusal_done()
+                raise
+            if not valid:
+                raise _TokenRevoked(UNAUTHENTICATED, "the client token was revoked")
+            self._refusal_done()
         try:
             params = model.model_validate(raw)
         except ValidationError as exc:

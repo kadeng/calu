@@ -1059,17 +1059,22 @@ async def test_a_revoked_token_is_refused_every_request_that_changes_the_session
 ):
     """Every such request is answered with -32001 when it is the first to notice the revocation.
 
-    The server's own scheduled check is kept out of the way: its first run comes
-    `FIRST_CHECK_S` (1 s) after the server started, and under load that fell between a
-    revocation and its request here about one run in ten. The connection was then closed
-    with `CLOSE_TOKEN_REVOKED` before the request was read, which is the other documented
-    refusal (the next test) and not the one this test is about.
+    Two things made this fail about one run in ten under load. (1) In the server: the
+    connection of a revoked token was closed a fixed 0.1 s after the database's answer, "so
+    that the error response goes out first"; on a busy machine the close came first and the
+    request got a closed connection instead of its response. The close now waits for the
+    response, and this test runs without the 0.1 s. (2) In the test: the server's own
+    scheduled check, 1 s after its start (`FIRST_CHECK_S`), could fall between a revocation
+    and its request; the connection is then closed before the request is read, which is the
+    other documented refusal (the next test). The scheduled check is kept out of the way.
     """
     from calu.protocol import server as server_module
     from calu.protocol.messages import REQUESTS
     from calu.protocol.server import READ_ONLY_METHODS
 
     monkeypatch.setattr(server_module, "FIRST_CHECK_S", 3600.0)
+    # The close that follows a revocation waits for the response, not for a moment of time.
+    monkeypatch.setattr(server_module, "GRACE_S", 0.0)
     async with served(tmp_path, [[{"text": "hi"}]]) as run:
         async with client(run, Events()) as owner:
             await owner.request("session.start", {})
