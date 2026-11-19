@@ -116,6 +116,7 @@ the main agent and of subagents overlap, so the most important one wins:
 import functools
 import getpass
 import itertools
+import json
 import logging
 import os
 import platform
@@ -307,6 +308,20 @@ folding the chat summary) before it gives up on it."""
 TRACE_END_TIMEOUT_S = 60
 """How long `stop` waits for the session trace to be written to its end; longer than the
 writer's own limit for that (`calu.traces.writer.FLUSH_TIMEOUT_S`)."""
+TRACE_BLOCK_EVENTS = (
+    UserInput,
+    AssistantText,
+    AssistantThinking,
+    ToolUse,
+    CheckResultEvent,
+    EscalationResolved,
+    ToolResult,
+    TurnResult,
+)
+"""The events that add a block to the session trace (`calu.traces.render.TraceRenderer`; an
+`escalation.request` follows a `check.result` or a `tool.use` of the same step). A change of
+the `traces` settings in an idle session takes effect with the first of them
+(`Session._follow_traces`)."""
 
 MAX_PENDING_OUTPUTS = 50
 """Thinking/text blocks kept per agent until its next tool call (older ones are dropped)."""
@@ -637,6 +652,12 @@ class Session:
         """The writer of this run's trace file while `traces.enabled` is on (`calu.traces`,
         PLAN.md D232); None otherwise."""
         self._secret_env = set(secret_env)
+        self._trace_as: tuple[object, ...] | None = None
+        """`_trace_settings` as they were when the running trace was started (or when it
+        was found that none is to be written); None before the first start."""
+        self._trace_stale = False
+        """True while the `traces` settings differ from `_trace_as` and the switch to a new
+        file waits for the session's next block (`_follow_traces`)."""
         self._trace_closed = anyio.Event()
         """Set while no trace of a run waits to be written to its end; `stop` waits for it."""
         self._trace_closed.set()
@@ -3847,6 +3868,9 @@ class Session:
         resolved_by = ""
         if isinstance(event, EscalationResolved):
             resolved_by = self.desk.resolved_by.pop(event.escalation_id, "")
+        if self._trace_stale and isinstance(event, TRACE_BLOCK_EVENTS):
+            # The `traces` settings changed while the session was idle (`_follow_traces`).
+            self._switch_traces()
         if self.traces is not None:
             self.traces.feed(event, resolved_by)
         await self._sink(event)
@@ -3881,11 +3905,17 @@ class Session:
 
         Returns:
             A tuple that is equal for two moments exactly if a trace started at either would
-            be written the same way: the `traces` section (empty while tracing is off) and
-            whether a narrator exists.
+            hold the same text in the same place: the settings of the `traces` section that
+            decide where the file is and what a block holds (empty while tracing is off)
+            and whether a narrator exists.
         """
         cfg = self.config.traces
-        return (cfg.model_dump_json() if cfg.enabled else "", self.narrator is not None)
+        if not cfg.enabled:
+            return ("", self.narrator is not None)
+        # `redactor_timeout_s` and `queue_blocks` bound the writer's work and change nothing
+        # of what a block holds: a new value counts from the next trace file on.
+        shown = cfg.model_dump(exclude={"redactor_timeout_s", "queue_blocks"})
+        return (json.dumps(shown, sort_keys=True), self.narrator is not None)
 
     def _start_traces(
         self,
@@ -3914,6 +3944,8 @@ class Session:
                 created after that writer's file, so that it gets the higher number, and its
                 header names that file.
         """
+        self._trace_as = self._trace_settings()
+        self._trace_stale = False
         left, self.traces = self.traces, None
         if left is not None:
             # A run that ended while this one started did not get to close its trace.
@@ -4031,18 +4063,43 @@ class Session:
     def _follow_traces(self, before: tuple[object, ...]) -> None:
         """Bring the trace in line with a reloaded configuration.
 
-            traces settings        running trace        afterwards
-            unchanged              any                  unchanged
-            changed, enabled off   written              ended (in the background)
-            changed, enabled on    none or written      the old one ended, a new file started
-                                                        whose header says where it starts
+            what the trace is written with    session              afterwards
+            (`_trace_settings`)
+            unchanged                         any                  unchanged
+            changed, tracing now off          any                  the file is ended
+            changed, tracing on               Claude is working    the file is ended, a new one
+                                                                   is started (`_switch_traces`)
+            changed, tracing on               idle                 nothing yet: the switch
+                                                                   happens with the next event
+                                                                   that adds a block (`emit`)
+
+        An idle session writes nothing, so a file started for it now would hold a header
+        and no step; one change of a `traces` setting would add such a file to the project
+        for every session that runs. A setting that is changed back before the session's
+        next block leaves its file as it is.
 
         Args:
-            before: `_trace_settings` of the configuration that was replaced.
+            before: `_trace_settings` of the configuration that was replaced; used only if
+                no trace was started in this session object yet.
         """
         self._guard_traces()
-        if self._trace_settings() == before:
+        written_with = before if self._trace_as is None else self._trace_as
+        self._trace_stale = self._trace_settings() != written_with
+        if not self._trace_stale:
             return
+        if self.config.traces.enabled and not self._run_state.busy:
+            return
+        self._switch_traces()
+
+    def _switch_traces(self) -> None:
+        """End the running trace file and, if tracing is on, start a new one.
+
+        Side effects: the old file gets a last line and is closed in the background (and
+        removed if no event added a block to it); a new writer is started in the run's task
+        group, whose header says that it starts in the middle of a session and names the
+        old file.
+        """
+        self._trace_stale = False
         old, self.traces = self.traces, None
         tg = self._run_state.tg
         note = (
@@ -4054,6 +4111,8 @@ class Session:
             self._trace_closed.set()
         if tg is not None and not self._run_state.run_done.is_set():
             self._start_traces(tg, claude_session=self.session_id, note=note, after=old)
+        else:
+            self._trace_as = self._trace_settings()
 
     def _derived_state(self) -> State:
         """Return the state that the running work implies (see the module docstring).

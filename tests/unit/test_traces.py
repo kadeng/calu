@@ -841,6 +841,7 @@ async def test_the_file_path_is_reported_and_a_resumed_session_names_the_file_it
     for one in (writer, forked, unknown):
         async with anyio.create_task_group() as tg:
             one.start(tg)
+            one.feed(UserInput(text="go on"))
             await one.close()
     assert said == [("info", "session trace: .agent/traces/2026-11-18/kai/session_001.md")]
     assert writer.path is not None and forked.path is not None and unknown.path is not None
@@ -855,6 +856,35 @@ async def test_the_file_path_is_reported_and_a_resumed_session_names_the_file_it
         "- Continues: this session is a continuation of Claude session `claude-zzz`; no "
         "trace file of that conversation was found\n"
     ) in unknown.path.read_text()
+
+
+async def test_a_file_that_got_no_block_is_removed_when_it_is_closed(tmp_path: Path):
+    """A header and "The session ended." say nothing; the session id line is no step either."""
+    empty = writer_for(tmp_path, None)
+    path = tmp_path / ".agent/traces/2026-11-18/kai/session_001.md"
+    async with anyio.create_task_group() as tg:
+        empty.start(tg)
+        await empty.created.wait()
+        assert empty.path == path and path.exists()
+        empty.feed(SessionState(state="idle", session_id="claude-abc"))
+        await empty.close("The session ended.")
+    assert empty.removed and not path.exists()
+    assert not (tmp_path / ".agent/traces/2026-11-18").exists(), "the emptied directories go"
+    assert (tmp_path / ".agent/traces").is_dir()
+
+    # The next file of the day starts at 001 again, and a file with a step stays.
+    used = writer_for(tmp_path, None)
+    follower = writer_for(tmp_path, None, after=empty)
+    async with anyio.create_task_group() as tg:
+        used.start(tg)
+        used.feed(UserInput(text="go on"))
+        await used.close("The session ended.")
+        follower.start(tg)
+        follower.feed(UserInput(text="and on"))
+        await follower.close()
+    assert not used.removed and used.path is not None and used.path.name == "session_001.md"
+    assert "> go on\n" in used.path.read_text()
+    assert follower.path is not None and "the steps before" not in follower.path.read_text()
 
 
 async def test_a_secret_named_after_the_start_is_replaced_from_then_on(tmp_path: Path):

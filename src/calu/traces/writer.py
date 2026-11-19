@@ -26,6 +26,8 @@ never written:
     being redacted                                in place of each such block
     the file cannot be created or written         nothing more is written; the problem is
                                                   logged and reported once; the session goes on
+    no event of the session added a block         the file (its header, and calu's own last
+    before the trace was closed                   line) is removed: it would say nothing
 
 The narrated form: a block of Claude's text and thinking is queued where the text appeared
 and gets its narration later. The session passes each narration it computes for its checkers
@@ -50,7 +52,7 @@ from anyio.abc import TaskGroup
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
 from calu.context.narrator import ClaudeOutput
-from calu.protocol.messages import Event
+from calu.protocol.messages import Event, SessionState
 from calu.traces.redact import (
     WITHHELD,
     RedactionFailed,
@@ -174,6 +176,11 @@ class TraceWriter:
         self.path: Path | None = None
         """The trace file, once `run` created it."""
         self.counted = Counted()
+        self.fed = 0
+        """Blocks that events of the session added (`feed`), queued or left out; calu's own
+        lines (`note`) are not counted. A file that got none is removed when it is closed."""
+        self.removed = False
+        """True once the file was removed at its end because no event added a block."""
         self._narrate = narrate
         self._report = report
         self._continues = continues
@@ -212,6 +219,8 @@ class TraceWriter:
             return
         try:
             for block in self.renderer.render(event, resolved_by):
+                # The line with Claude's session id (from `session.state`) is no step.
+                self.fed += not isinstance(event, SessionState)
                 self._append(block)
             self._submit_closed()
         except Exception:
@@ -349,7 +358,8 @@ class TraceWriter:
         path, fd = create_trace_file(self.workspace, self.target)
         header = self.header
         earlier, self._after = self._after, None
-        if earlier is not None and earlier.path is not None:
+        if earlier is not None and earlier.path is not None and earlier.fed:
+            # (A file without a block of the session is removed at its end and not named.)
             before = f"the steps before are in `{earlier._shown_path()}`"
             header = dataclasses.replace(
                 header, note=f"{header.note}; {before}" if header.note else before
@@ -545,6 +555,9 @@ class TraceWriter:
         """
         if self._fd is None:
             return
+        if not self.fed:
+            self._remove_empty()
+            return
         try:
             while self._entries and not self._failed:
                 entry = self._entries.popleft()
@@ -566,6 +579,34 @@ class TraceWriter:
                 log.exception("closing the session trace %s failed", self.path)
             self._fd = None
             self._entries.clear()
+
+    def _remove_empty(self) -> None:
+        """Close and delete the trace file, which holds its header and no block of the session.
+
+        Such a file says nothing: the session ended, or its `traces` settings changed,
+        before anything happened in it. Side effects: closes the file descriptor, unlinks the
+        file, removes the session directory levels it leaves empty (never the trace
+        directory itself), sets `removed`, clears the queue. A failure is logged and leaves
+        the file.
+        """
+        assert self._fd is not None
+        try:
+            os.close(self._fd)
+        except OSError:
+            log.exception("closing the session trace %s failed", self.path)
+        self._fd = None
+        self._entries.clear()
+        if self.path is None:
+            return
+        try:
+            self.path.unlink()
+            self.removed = True
+            # <date>/<user>: left empty by the only file of that user and day.
+            for directory in (self.target, self.target.parent):
+                directory.rmdir()
+        except OSError as exc:
+            if not self.removed:
+                log.warning("removing the empty session trace %s failed: %s", self.path, exc)
 
     # ------------------------------------------------------------------ the end
 

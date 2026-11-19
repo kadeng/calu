@@ -679,9 +679,11 @@ escalation resolved from the database alone.
    replaced in every block (user, tool input, check, tool result, Claude's words), no other
    text changed, no block was withheld, and each block was in the file one to three seconds
    after its event. With `test:missing` both blocks of the next prompt were withheld and the
-   session went on. Found there: every change of a `traces` setting starts a new file for
-   every running session, also for one that writes nothing afterwards (a file with a header
-   and no block). The unit tests cover the redaction with stand-in models
+   session went on. Found there, and fixed since: every change of a `traces` setting
+   started a new file for every running session, also for one that wrote nothing afterwards
+   (a file with a header and no block). Now a setting that changes nothing of the output
+   starts none, an idle session switches files with its next block, and a file without a
+   block is removed when it is closed. The unit tests cover the redaction with stand-in models
    (`tests/unit/test_traces.py`, `tests/unit/test_traces_session.py`).
 
 ## Measuring the checkers

@@ -349,13 +349,15 @@ async def test_a_reload_starts_and_ends_the_trace(tmp_path: Path):
         await rec.wait_for(TurnResult)
         assert session.traces is None and not trace_files(tmp_path)
 
+        # The session is idle: its file starts with its next block, not with the setting.
         session.apply_settings(default_settings(tmp_path, traced()))
+        assert session.traces is None and not trace_files(tmp_path)
+        await session.send_chat(ChatSendParams(text="second"))
+        await rec.wait_for(TurnResult, 2)
         writer = session.traces
         assert writer is not None
         session.apply_settings(default_settings(tmp_path, traced()))
         assert session.traces is writer, "unchanged settings keep the file"
-        await session.send_chat(ChatSendParams(text="second"))
-        await rec.wait_for(TurnResult, 2)
 
         session.apply_settings(default_settings(tmp_path, Config()))
         assert session.traces is None
@@ -385,6 +387,60 @@ async def test_changed_trace_settings_start_a_new_file_that_names_the_old_one(tm
     assert "- Content: plain" in text and "- Claude session: `fake-session`\n" in text
     assert f"the steps before are in `{first.relative_to(tmp_path).as_posix()}`" in text
     assert "### Claude\n\n> two\n" in text
+
+
+async def test_a_changed_trace_setting_starts_no_file_in_an_idle_session(tmp_path: Path):
+    """One `calu config set traces...` added a header-only file for every running session."""
+    session, rec, _ = make_session(tmp_path, [[{"text": "one"}], [{"text": "two"}]], traced())
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="first"))
+        await rec.wait_for(TurnResult)
+        writer = session.traces
+        assert writer is not None
+        await writer.created.wait()
+
+        # Limits of the writer's work change nothing of what a block holds: the file stays.
+        session.apply_settings(
+            default_settings(tmp_path, traced(queue_blocks=50, redactor_timeout_s=5.0))
+        )
+        assert session.traces is writer and not session._trace_stale
+
+        # A setting that changes the output: nothing happens while the session is idle ...
+        session.apply_settings(default_settings(tmp_path, traced(content="plain")))
+        assert session.traces is writer and len(trace_files(tmp_path)) == 1
+        # ... and changed back before the next block, the file is simply kept.
+        session.apply_settings(default_settings(tmp_path, traced()))
+        assert session.traces is writer and not session._trace_stale
+
+        session.apply_settings(default_settings(tmp_path, traced(max_result_chars=300)))
+        assert session.traces is writer and len(trace_files(tmp_path)) == 1
+        await session.send_chat(ChatSendParams(text="second"))
+        await rec.wait_for(TurnResult, 2)
+        assert session.traces is not writer, "the next block went to a new file"
+        await session.stop()
+    first, second = trace_files(tmp_path)
+    assert "> first" in first.read_text() and "> second" not in first.read_text()
+    assert first.read_text().endswith("_The trace ends here: the `traces` settings changed._\n\n")
+    assert "> second" in second.read_text()
+    assert f"the steps before are in `{first.relative_to(tmp_path).as_posix()}`" in (
+        second.read_text()
+    )
+
+
+async def test_a_session_without_a_turn_leaves_no_trace_file(tmp_path: Path):
+    session, _rec, _ = make_session(tmp_path, [], traced())
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        writer = session.traces
+        assert writer is not None
+        await writer.created.wait()
+        assert len(trace_files(tmp_path)) == 1
+        # Tracing switched off and on again in the idle session: no file per change.
+        session.apply_settings(default_settings(tmp_path, Config()))
+        session.apply_settings(default_settings(tmp_path, traced(content="plain")))
+        await session.stop()
+    assert not trace_files(tmp_path)
 
 
 # ---------------------------------------------------------------------------- the guards

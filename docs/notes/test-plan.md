@@ -451,6 +451,12 @@ was the project in every case; `PATH` is root's (through sudo:
 
 ### F. Session traces
 
+Found in the root box run (`docs/TESTING.md`, manual checklist): every change of a `traces`
+setting started a new file for every running session, also an idle one, which left files
+with a header and no block: fixed (ITEM4). A setting that changes nothing of the output
+(`queue_blocks`, `redactor_timeout_s`) starts no file, an idle session switches with its
+next block, and a file that got no block is removed when it is closed.
+
 ### G. Honesty workflow
 
 Run 2026-11-18 by an agent: a session with the scripted runner (`calu.claude.fake_runner`),

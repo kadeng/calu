@@ -1360,6 +1360,14 @@ get two files. `traces.directory` names another directory inside the project. A 
 forked conversation is a new calu session and gets a new file; its header names the file of
 the conversation it continues, if that file is in the trace directory.
 
+A change of a `traces` setting that decides where the file is or what a block holds
+(`enabled`, `content`, `directory`, `redact`, `redactor_model`, `max_input_chars`,
+`max_result_chars`) ends the file of a running session and starts a new one, whose header
+names the old file. A session that is idle at that moment keeps its file until its next
+step, so a changed setting adds no file for a session that does nothing. `queue_blocks` and
+`redactor_timeout_s` count from the next file on. A file that got no step (a session that
+ended before its first message) is removed when it is closed.
+
 **What a file holds.** A header (calu's session id, Claude's session id, the project, the
 start time, the user, Claude's model, calu's version, the content form, how the file was
 redacted), then one block per step, in the order the steps happened. The file only grows:
