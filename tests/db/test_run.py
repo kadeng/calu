@@ -940,7 +940,7 @@ async def test_the_heartbeat_does_not_depend_on_the_clock_watch(
     finally:
         await owner.close()
     assert beats == [True]
-    assert herd.STALE_AFTER_S >= 3 * 30.0
+    assert herd.STALE_AFTER_S >= 3 * 10.0  # several of the real beats (HEARTBEAT_S is patched)
 
 
 async def test_settings_that_cannot_be_reloaded_hold_every_checked_step(

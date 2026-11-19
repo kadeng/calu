@@ -1069,9 +1069,11 @@ to the hosts file. A login lasts until `calu web` stops.
 Pages that change something (answering an escalation, saving settings) need JavaScript. While
 the database is unreachable the pages say so and reload by themselves; `calu web` reconnects.
 
-A session stamps the database every 30 seconds, so the fleet separates the sessions that are
+A session stamps the database every 10 seconds, so the fleet separates the sessions that are
 working from the ones whose process is gone — a killed process cannot set its own state, and an
-escalation nobody can answer should not sit among the ones that need you. A session that ends
+escalation nobody can answer should not sit among the ones that need you. A session silent for
+a minute is listed as stale, and at once when the list is read on its machine and its process
+no longer exists there (a `calu serve` that was restarted, for one). A session that ends
 closes its open escalations, and the overview, `calu sessions` and `calu escalations` close
 those of a session whose process no longer exists on the machine they run on, or that has been
 silent for 24 hours. "The machine" is not the host name: a session records the machine it

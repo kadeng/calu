@@ -1,5 +1,7 @@
 """Herd management on the database alone: list sessions, list and resolve escalations."""
 
+import os
+import socket
 from datetime import UTC, datetime
 
 import anyio
@@ -267,6 +269,48 @@ async def test_a_session_whose_process_is_gone_is_visible_as_such(db_url: str) -
         ended = (await herd.sessions(db, active_only=False))[0]
         assert ended.stale is False
         assert "SILENT" not in ended.line()
+    finally:
+        await owner.close()
+
+
+async def test_a_session_of_this_machine_whose_process_is_gone_is_stale_at_once(
+    db_url: str,
+) -> None:
+    """After a `calu serve` was restarted, its dead sessions were listed as running until
+    their silence passed the threshold. A process this machine's process table no longer
+    holds is evidence enough; one of another process table is left to the silence."""
+    owner = await connect(db_url)
+    db = Db(owner)
+    try:
+        await setup(owner, db_url, "test:model")
+        here = machine_module.here()
+        dead = await anyio.run_process(["sh", "-c", "echo $$"])
+        dead_pid = int(dead.stdout.strip())
+
+        async def session(pid: int, recorded: str) -> str:
+            """Start a session row of this host with a fresh heartbeat."""
+            store = DatabaseSessionStore(db)
+            return await store.start(
+                SessionIdentity(
+                    hostname=socket.gethostname(),
+                    os_user="u",
+                    directory="/w",
+                    pid=pid,
+                    os="Linux",
+                    machine=recorded,
+                )
+            )
+
+        gone = await session(dead_pid, here.text())
+        alive = await session(os.getpid(), here.text())
+        elsewhere = await session(dead_pid, "m|b|pid:[1]")
+        unrecorded = await session(dead_pid, "")
+        rows = {row.id: row for row in await herd.sessions(db)}
+        assert all(row.silent_for_s < 10 for row in rows.values())
+        assert rows[gone].stale is True and rows[gone].gone is True
+        assert rows[alive].stale is False
+        assert rows[elsewhere].stale is False, "another process table: not judged from here"
+        assert rows[unrecorded].stale is False, "nothing recorded: the host name is no proof"
     finally:
         await owner.close()
 

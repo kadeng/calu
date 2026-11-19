@@ -37,14 +37,17 @@ from calu.tokens import new_token, token_hash
 
 log = logging.getLogger(__name__)
 
-STALE_AFTER_S = 180.0
-"""Silence after which a session is called stale (PLAN.md D56).
+STALE_AFTER_S = 60.0
+"""Silence after which a session is called stale (PLAN.md D56, D237).
 
-A session stamps `last_seen` every `HEARTBEAT_S` seconds, so three minutes is six missed beats
+A session stamps `last_seen` every `HEARTBEAT_S` seconds, so one minute is six missed beats
 -- long enough that a slow machine, a paused process or a short database outage is not called
-dead, short enough that an operator watching a herd notices within one coffee."""
+dead, short enough that a session whose machine or container went away is marked within a
+minute (it was three minutes, and an editor's session list showed such a session as running
+in the meantime). A session whose process is known to be gone is stale at once
+(`SessionRow.gone`)."""
 
-HEARTBEAT_S = 30.0
+HEARTBEAT_S = 10.0
 """Seconds between two `last_seen` stamps of a running session.
 
 A constant of its own, not a setting: the staleness threshold above is fixed, so an interval
@@ -83,20 +86,27 @@ class SessionRow:
     own and clock differences between hosts do not matter."""
     name: str = ""
     """The name a person gave the session (`rename_session`); "" for none."""
+    gone: bool = False
+    """Whether the reader found the session's process gone: the session ran in the reader's
+    process table and no process has its pid, or it ran on the reader's machine before the
+    last reboot (`process_gone`). False when that cannot be judged from the reader's side."""
 
     @property
     def stale(self) -> bool:
         """Whether this session looks like a process that is gone.
 
-        A session writes `last_seen` every `HEARTBEAT_S` seconds, so silence of several minutes
-        means the process is not running any more (or cannot reach the database) -- it cannot
-        set its own state when it is killed. A session that **ended** is never stale: it said so.
+        A session writes `last_seen` every `HEARTBEAT_S` seconds, so a silence beyond
+        `STALE_AFTER_S` means the process is not running any more (or cannot reach the
+        database) -- it cannot set its own state when it is killed. A process the reader found
+        gone (`gone`; a `calu serve` restarted on the same machine, for one) makes the session
+        stale at once, without waiting for the silence. A session that **ended** is never
+        stale: it said so.
 
         Returns:
-            True if the session has not ended and has been silent for longer than
-            `STALE_AFTER_S`.
+            True if the session has not ended and its process is gone or it has been silent
+            for longer than `STALE_AFTER_S`.
         """
-        return self.ended_at is None and self.silent_for_s > STALE_AFTER_S
+        return self.ended_at is None and (self.gone or self.silent_for_s > STALE_AFTER_S)
 
     def line(self) -> str:
         """Return the session as one terminal line.
@@ -321,7 +331,7 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
             "  WHERE e.session_id = s.id AND e.state = 'open') AS open_escalations,"
             " coalesce(s.address, ''), s.last_seen,"
             # The database measures the silence, so a reader needs no clock of its own.
-            f" extract(epoch FROM (now() - s.last_seen))::float8, {name}"
+            f" extract(epoch FROM (now() - s.last_seen))::float8, {name}, s.pid, s.machine"
             " FROM sessions s JOIN hosts h ON h.id = s.host_id"
             " WHERE (NOT %s::boolean OR s.ended_at IS NULL) ORDER BY s.started_at DESC"
         )
@@ -332,7 +342,42 @@ async def sessions(db: Db, active_only: bool = True) -> list[SessionRow]:
         # A schema from before migration 0036 (a newer calu on a database nobody ran `calu
         # setup` on since): the sessions are listed without names instead of not at all.
         rows = await db.all(query("''"), (active_only,))
-    return [SessionRow(*row) for row in rows]
+    this, host = machine.here(), socket.gethostname()
+    listed = []
+    for *fields, pid, recorded in rows:
+        row = SessionRow(*fields)
+        if row.ended_at is None and row.hostname == host:
+            row = dataclasses.replace(row, gone=process_gone(pid, recorded, this))
+        listed.append(row)
+    return listed
+
+
+def process_gone(pid: int | None, recorded: str | None, this: machine.Machine) -> bool:
+    """Tell whether a session of this host name is known to have lost its process.
+
+    Only positive evidence counts, so that a session that still runs is never called gone:
+
+        recorded identity (`sessions.machine`) vs. `this`    gone if
+        same process table                                   no process has `pid`
+        same machine, another boot                           always
+        another process table, or nothing recorded          never (cannot be judged here)
+
+    Args:
+        pid: The pid the session recorded (the `calu run` or `calu serve` process); None if
+            none was recorded.
+        recorded: The session's `sessions.machine` value; None or "" if it recorded none.
+        this: The identity of the reader's process table (`calu.machine.here`).
+
+    Returns:
+        True if the session's process is gone for certain.
+    """
+    identity = machine.Machine.parse(recorded)
+    if identity is None:
+        return False
+    relation = this.relation(identity)
+    if relation == "rebooted":
+        return True
+    return relation == "same" and pid is not None and not process_exists(pid)
 
 
 MAX_NAME_CHARS = 80
