@@ -385,6 +385,7 @@ private fun reduceSession(state: ViewState, method: String, p: JsonObject): View
         val s = p.objOrEmpty("settings")
         state.copy(autoEscalate = AutoEscalateFlags(commands = s.bool("commands"), edits = s.bool("edits"), subagents = s.bool("subagents")))
     }
+    "permission_mode.changed" -> p.str("mode")?.takeIf { it.isNotEmpty() }?.let { state.copy(permissionMode = it) } ?: state
     "honesty.update" -> state.copy(honesty = parseHonesty(p))
     "usage.update" ->
         if (p["rate_limits"].isArr()) state.copy(usage = state.usage.copy(rateLimits = parseRateLimits(p["rate_limits"]))) else state

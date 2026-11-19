@@ -135,7 +135,7 @@ class MalformedParamsTest {
             "ui.serverHelp", "ui.hints", "ui.model", "ui.usage", "ui.notice", "ui.noticeResolved", "ui.clear", "ui.decisionPending", "ui.decisionFailed",
             "ui.sideAsk", "ui.sideAnswer", "session.state", "assistant.delta", "assistant.text", "assistant.thinking", "user.input",
             "tool.use", "check.result", "tool.result", "chat.queue", "tool.files", "edit.diff", "escalation.request",
-            "escalation.resolved", "turn.result", "agents.update", "auto_escalate.changed", "honesty.update", "usage.update", "log",
+            "escalation.resolved", "turn.result", "agents.update", "auto_escalate.changed", "permission_mode.changed", "honesty.update", "usage.update", "log",
         )
         val members = listOf(
             "status", "state", "message", "version", "session_id", "snapshot", "initialize", "events", "resumed", "history", "mode",

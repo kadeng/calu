@@ -8,7 +8,7 @@
  *     │ transcript of the tab (TranscriptView)                                  │
  *     ├ messages that wait to be read ──────────────────────────────────────────┤
  *     │ composer (Composer)                                                     │
- *     └ model ▾  effort ▾  level ▾                              context usage ──┘
+ *     └ model ▾  effort ▾  level ▾  mode ▾                      context usage ──┘
  *
  * `ChatSurface` is the seam for a second way to draw the chat (an embedded browser that reuses
  * the VSCode webviews, for local mode, after a spike); the native surface is the one that also
@@ -74,12 +74,14 @@ import io.github.kadeng.calu.logic.validateSessionName
 import io.github.kadeng.calu.state.LEVELS
 import io.github.kadeng.calu.state.LinkStatus
 import io.github.kadeng.calu.state.MAIN
+import io.github.kadeng.calu.state.PERMISSION_MODE_TEXTS
 import io.github.kadeng.calu.state.UserItem
 import io.github.kadeng.calu.state.ViewState
 import io.github.kadeng.calu.state.honestyChip
 import io.github.kadeng.calu.state.honestyStoredNote
 import io.github.kadeng.calu.state.isAttached
 import io.github.kadeng.calu.state.levelLabel
+import io.github.kadeng.calu.state.permissionModeLabel
 import io.github.kadeng.calu.state.levelOf
 import io.github.kadeng.calu.state.sessionTitle
 import kotlinx.coroutines.Dispatchers
@@ -254,6 +256,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     private val model = ActionLink("model") { modelMenu() }.apply { setDropDownLinkIcon(); toolTipText = "Model of the session" }
     private val effort = ActionLink("effort") { effortMenu() }.apply { setDropDownLinkIcon(); toolTipText = "Thinking effort of sessions started from now on" }
     private val level = ActionLink("level") { levelMenu() }.apply { setDropDownLinkIcon() }
+    private val permission = ActionLink("mode") { permissionMenu() }.apply { setDropDownLinkIcon() }
     private val usage = Chip().apply { toolTipText = "" }
     private val root = JPanel(BorderLayout())
     private val header = JPanel(BorderLayout(JBUI.scale(10), 0))
@@ -292,7 +295,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         }
         root.add(JPanel(VerticalLayout(0)).apply { isOpaque = false; add(header); add(cardsScroll); add(attention); add(tabStrip) }, BorderLayout.NORTH)
         root.add(transcriptsPanel, BorderLayout.CENTER)
-        val footer = JPanel(WrapLayout(12, 2)).apply { isOpaque = false; add(model); add(effort); add(level); add(usage) }
+        val footer = JPanel(WrapLayout(12, 2)).apply { isOpaque = false; add(model); add(effort); add(level); add(permission); add(usage) }
         south.apply {
             isOpaque = false
             border = JBUI.Borders.empty(4, 8, 6, 8)
@@ -660,6 +663,11 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         level.text = levelLabel(s.autoEscalate)
         level.isEnabled = attached
         level.toolTipText = "Supervision level: what waits for you. " + (LEVELS.firstOrNull { it.id == levelOf(s.autoEscalate) }?.description ?: "")
+        permission.isVisible = attached
+        permission.text = permissionModeLabel(s.permissionMode)
+        permission.isEnabled = attached && s.permissionMode != null
+        permission.toolTipText = "Claude Code's permission mode (its Shift+Tab); applies from Claude's next tool call. " +
+            (PERMISSION_MODE_TEXTS.firstOrNull { it.id == s.permissionMode }?.description ?: "")
         val working = attached && s.session.state !in setOf("idle", "stopped", "failed")
         val meter = usageMeter(s.usage, working)
         usage.isVisible = attached
@@ -687,6 +695,7 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
             "model" -> modelMenu()
             "effort" -> effortMenu()
             "level" -> levelMenu()
+            "permission" -> permissionMenu()
             "honesty" -> honestyMenu()
             "sessions" -> sessionMenu()
             "checkers" -> chooseChecker(project, host)
@@ -898,6 +907,13 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
     /** Offer the supervision levels with their descriptions. */
     private fun levelMenu() {
         choose(level, "Supervision Level: What Waits for You", LEVELS, { "${it.name}  —  ${it.description}" }) { host.act("setLevel", args("level" to it.id)) }
+    }
+
+    /** Offer Claude Code's permission modes with their descriptions (D247). */
+    private fun permissionMenu() {
+        choose(permission, "Claude Code's Permission Mode", PERMISSION_MODE_TEXTS, { "${it.name}  —  ${it.description}" }) {
+            host.act("setPermissionMode", args("mode" to it.id))
+        }
     }
 
     /** Show the usage: context, cost and limits; a click on the line asks the session again. */

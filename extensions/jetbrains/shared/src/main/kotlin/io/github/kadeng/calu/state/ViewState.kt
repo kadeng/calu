@@ -1042,6 +1042,8 @@ data class FocusRequest(val tab: String, val seq: Int)
  * @property hints What is missing for the chat to work, most important first.
  * @property autoEscalate The session's auto-escalation switches (the supervision level, see
  *   `Levels.kt`).
+ * @property permissionMode Claude Code's permission mode as the session reports it
+ *   (`permission_mode.changed`, the snapshot's `permission_mode`); `null` while it is not known.
  * @property honesty Code honesty state of the session; `null` before the first report.
  * @property honestyStored `honesty.mode` as calu's settings store it for the session's project
  *   ("off", "track", "enforce"); `null` if not known. A session reads a changed mode by itself and
@@ -1080,6 +1082,7 @@ data class ViewState(
     val serverHelp: ServerHelp? = null,
     val hints: List<SetupHint> = emptyList(),
     val autoEscalate: AutoEscalateFlags = AutoEscalateFlags(),
+    val permissionMode: String? = null,
     val honesty: HonestyInfo? = null,
     val honestyStored: String? = null,
     val starting: StartingView? = null,

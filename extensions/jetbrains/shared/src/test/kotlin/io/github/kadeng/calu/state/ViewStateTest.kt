@@ -589,3 +589,30 @@ class LinkAndFilesTest {
         assertEquals(1, openEscalationCount(s))
     }
 }
+
+/** Claude Code's permission mode in the footer (agent/records/PLAN.md D247). */
+class PermissionModeStateTest {
+    @Test
+    fun `comes from the snapshot, follows every change and is not replayed from the history`() {
+        val attached = applyEvent(
+            initialViewState(),
+            ev(
+                "ui.attached",
+                "session_id" to "s1",
+                "snapshot" to jo("state" to "idle", "workspace" to "/w", "permission_mode" to "auto"),
+                // A recorded change is older than the snapshot, which says what is true now.
+                "events" to ja(jo("method" to "permission_mode.changed", "params" to jo("mode" to "default"))),
+            ),
+        )
+        assertEquals("auto", attached.permissionMode)
+        val switched = applyEvent(attached, ev("permission_mode.changed", "mode" to "acceptEdits", "client" to "web"))
+        assertEquals("acceptEdits", switched.permissionMode)
+        assertEquals("plan", applyEvent(switched, ev("permission_mode.changed", "mode" to "plan")).permissionMode)
+        assertEquals("acceptEdits", applyEvent(switched, ev("permission_mode.changed", "mode" to 7)).permissionMode)
+        val older = applyEvent(initialViewState(), ev("ui.attached", "session_id" to "s2", "snapshot" to jo("state" to "idle", "workspace" to "/w"), "events" to ja()))
+        assertNull(older.permissionMode)
+        assertEquals("mode: Accept edits", permissionModeLabel("acceptEdits"))
+        assertEquals("mode: plan", permissionModeLabel("plan"))
+        assertEquals("mode: not known yet", permissionModeLabel(null))
+    }
+}

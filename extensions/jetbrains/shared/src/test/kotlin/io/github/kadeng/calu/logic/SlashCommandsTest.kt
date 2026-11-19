@@ -12,7 +12,7 @@ class SlashCommandsTest {
     @Test
     fun `holds the plugin commands and the built-in Claude Code commands, sorted`() {
         assertEquals(
-            listOf("model", "effort", "level", "honesty", "checkers", "checker-context", "sessions", "new", "fork", "rename", "settings", "interrupt"),
+            listOf("model", "effort", "level", "mode", "honesty", "checkers", "checker-context", "sessions", "new", "fork", "rename", "settings", "interrupt"),
             CALU_COMMANDS.map { it.name },
         )
         // No /help: a session without a terminal answers that it is not available.
@@ -46,11 +46,13 @@ class SlashCommandsTest {
 
     @Test
     fun `completes a command with values to the name and a space, and offers the values next`() {
-        val model = completions("/mod", table)[0]
+        val model = completions("/mod", table).first { it.label == "/model" }
         assertEquals(listOf("/model", "/model ", false, "calu"), listOf(model.label, model.insert, model.submit, model.kind))
         assertEquals(listOf("default", "fable", "opus", "sonnet", "haiku"), completions("/model ", table).map { it.label })
         assertEquals(listOf(Completion("sonnet", "The latest sonnet model", "value", "/model sonnet", true)), completions("/model so", table))
         assertEquals(listOf("checkers", "edits", "writes", "everything"), completions("/level ", table).map { it.label })
+        // Claude Code's permission mode (D247), in the order of its Shift+Tab.
+        assertEquals(listOf("default", "acceptEdits", "auto"), completions("/mode ", table).map { it.label })
     }
 
     @Test
@@ -76,6 +78,7 @@ class SlashCommandsTest {
             "/model claude-opus-4-5[1m]" to SlashResult.Act("setModel", jo("model" to "claude-opus-4-5[1m]")),
             "/effort high" to SlashResult.Act("setEffort", jo("effort" to "high")),
             "/level writes" to SlashResult.Act("setLevel", jo("level" to "writes")),
+            "/mode acceptEdits" to SlashResult.Act("setPermissionMode", jo("mode" to "acceptEdits")),
             "/honesty enforce" to SlashResult.Act("setHonesty", jo("mode" to "enforce")),
             "/checkers" to SlashResult.Ui("checkers"),
             "/checker-context" to SlashResult.Act("showContext"),
@@ -92,14 +95,16 @@ class SlashCommandsTest {
     fun `opens a part of the view when a choice is missing`() {
         assertEquals(SlashResult.Ui("sessions"), resolveSlash("/sessions", null))
         for (name in listOf("model", "effort", "level", "honesty")) assertEquals(SlashResult.Ui(name), resolveSlash("/$name", "s1"))
+        assertEquals(SlashResult.Ui("permission"), resolveSlash("/mode", "s1"))
     }
 
     @Test
     fun `explains a wrong value and a missing session`() {
         assertEquals(SlashResult.Error("/effort takes one of: default, low, medium, high, xhigh, max."), resolveSlash("/effort extreme", "s1"))
         assertTrue(resolveSlash("/level custom", "s1") is SlashResult.Error)
+        assertEquals(SlashResult.Error("/mode takes one of: default, acceptEdits, auto."), resolveSlash("/mode plan", "s1"))
         assertTrue(resolveSlash("/model has space", "s1") is SlashResult.Error)
-        for (text in listOf("/fork", "/rename", "/interrupt", "/model opus", "/level edits", "/checker-context")) {
+        for (text in listOf("/fork", "/rename", "/interrupt", "/model opus", "/level edits", "/mode auto", "/checker-context")) {
             val result = resolveSlash(text, null)
             assertTrue(result is SlashResult.Error && result.text.contains("needs an attached session"), text)
         }

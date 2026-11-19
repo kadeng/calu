@@ -119,3 +119,39 @@ fun levelLabel(flags: AutoEscalateFlags?): String {
     ).filter { it.isNotEmpty() }
     return "Custom: confirm ${parts.joinToString(", ")}"
 }
+
+/**
+ * Claude Code's permission modes a client can switch to while a session runs
+ * (`permission_mode.set`, agent/records/PLAN.md D247), in the order of Claude Code's own
+ * Shift+Tab. The core refuses every other mode with the reason.
+ */
+val PERMISSION_MODES: List<String> = listOf("default", "acceptEdits", "auto")
+
+/**
+ * One permission mode with its texts.
+ *
+ * @property id The mode as `permission_mode.set` takes it.
+ * @property name Short name for a selector.
+ * @property description One sentence for a tooltip.
+ */
+data class PermissionModeText(val id: String, val name: String, val description: String)
+
+/** The modes of `PERMISSION_MODES` with their texts, in the same order. */
+val PERMISSION_MODE_TEXTS: List<PermissionModeText> = listOf(
+    PermissionModeText("default", "Default", "The checkers decide every tool call alone."),
+    PermissionModeText("acceptEdits", "Accept edits", "Claude Code accepts file edits on its own; under calu the checkers still decide each."),
+    PermissionModeText("auto", "Auto", "A step runs only if the checkers and auto mode's classifier both approve it."),
+)
+
+/**
+ * Describe Claude Code's permission mode for the chat footer.
+ *
+ * @param mode The mode the session reports; `null` while it is not known.
+ * @return "mode: Auto" for a mode of `PERMISSION_MODES`, "mode: plan" for another reported
+ *   mode, "mode: not known yet" without one.
+ */
+fun permissionModeLabel(mode: String?): String =
+    "mode: " + when (mode) {
+        null -> "not known yet"
+        else -> PERMISSION_MODE_TEXTS.firstOrNull { it.id == mode }?.name ?: mode
+    }

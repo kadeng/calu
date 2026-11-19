@@ -19,6 +19,7 @@
  *     /model <m>         Act("setModel", {model})          /model         Ui("model")
  *     /effort <e>        Act("setEffort", {effort})        /effort        Ui("effort")
  *     /level <l>         Act("setLevel", {level})          /level         Ui("level")
+ *     /mode <m>          Act("setPermissionMode", {mode})  /mode          Ui("permission")
  *     /honesty <mode>    Act("setHonesty", {mode})         /honesty       Ui("honesty")
  *     /checker-context   Act("showContext", {})            /checkers      Ui("checkers")
  *     /new               Act("start", {kind: "new"})       /sessions      Ui("sessions")
@@ -30,6 +31,8 @@ package io.github.kadeng.calu.logic
 import io.github.kadeng.calu.json.EMPTY_OBJECT
 import io.github.kadeng.calu.state.LEVELS
 import io.github.kadeng.calu.state.LEVEL_IDS
+import io.github.kadeng.calu.state.PERMISSION_MODES
+import io.github.kadeng.calu.state.PERMISSION_MODE_TEXTS
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -93,6 +96,7 @@ val CALU_COMMANDS: List<SlashCommand> = listOf(
         CLAUDE_EFFORTS.map { SlashValue(it, if (it == "default") "Claude Code's default effort" else "") },
     ),
     SlashCommand("level", "Change the supervision level", "calu", LEVELS.map { SlashValue(it.id, it.name) }),
+    SlashCommand("mode", "Switch Claude Code's permission mode", "calu", PERMISSION_MODE_TEXTS.map { SlashValue(it.id, it.description) }),
     SlashCommand(
         "honesty", "Change the code honesty mode", "calu",
         listOf(
@@ -199,7 +203,7 @@ sealed interface SlashResult {
     /**
      * Open a part of the view (the command needs a choice or another input).
      *
-     * @property action "sessions", "model", "effort", "level", "honesty", "checkers" (the list
+     * @property action "sessions", "model", "effort", "level", "permission", "honesty", "checkers" (the list
      *   of checkers to edit), "rename" (ask the new name of the attached session) or "settings".
      */
     data class Ui(val action: String) : SlashResult
@@ -255,6 +259,11 @@ fun resolveSlash(text: String, attachedId: String?): SlashResult {
         "level" -> when {
             value.isEmpty() -> SlashResult.Ui("level")
             value in LEVEL_IDS -> needsSession(SlashResult.Act("setLevel", arg("level", value)))
+            else -> badValue
+        }
+        "mode" -> when {
+            value.isEmpty() -> SlashResult.Ui("permission")
+            value in PERMISSION_MODES -> needsSession(SlashResult.Act("setPermissionMode", arg("mode", value)))
             else -> badValue
         }
         "honesty" -> when {

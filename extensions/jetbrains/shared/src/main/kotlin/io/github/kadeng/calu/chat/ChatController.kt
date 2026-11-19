@@ -704,6 +704,19 @@ class ChatController(
     }
 
     /**
+     * Switch Claude Code's permission mode of the running session (`permission_mode.set`,
+     * agent/records/PLAN.md D247). The session answers every client with
+     * `permission_mode.changed`, which the footer follows; a mode it refuses (plan mode,
+     * `claude.require_auto_mode`) is reported in the chat with its reason.
+     *
+     * @param mode One of `PERMISSION_MODES`; another mode goes to the session, which refuses it.
+     * @return True if the session switched the mode.
+     */
+    suspend fun setPermissionMode(mode: String) = run("Switching Claude Code's permission mode") {
+        supervisor.session("permission_mode.set", buildJsonObject { put("mode", JsonPrimitive(mode)) })
+    }
+
+    /**
      * Give a session a name (`ide.session.rename`) and reload the session list.
      *
      * @param sessionId The session.

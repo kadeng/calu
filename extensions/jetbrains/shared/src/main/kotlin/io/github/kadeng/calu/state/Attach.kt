@@ -28,7 +28,7 @@ import kotlinx.serialization.json.JsonObject
 
 /** Methods of recorded events that describe the live session and are taken from the snapshot. */
 private val NOT_REPLAYED: Set<String> =
-    setOf("session.state", "log", "chat.queue", "auto_escalate.changed", "honesty.update", "usage.update")
+    setOf("session.state", "log", "chat.queue", "auto_escalate.changed", "permission_mode.changed", "honesty.update", "usage.update")
 
 /**
  * Rebuild the state from the result of `ide.attach` / `ide.start` (reducer case `ui.attached`).
@@ -95,6 +95,7 @@ fun applyAttach(state: ViewState, p: JsonObject): ViewState {
     }
     next = applyEvent(next, ViewEvent("chat.queue", JsonObject(mapOf("messages" to JsonArray(snapshot.arr("queue"))))))
     next = applyEvent(next, ViewEvent("auto_escalate.changed", JsonObject(mapOf("settings" to snapshot.objOrEmpty("auto_escalate")))))
+    next = next.copy(permissionMode = snapshot.str("permission_mode")?.takeIf { it.isNotEmpty() })
 
     val snapshotSeq = snapshot.int("last_seq") ?: 0
     next = finishStreaming(next, cut = true)
