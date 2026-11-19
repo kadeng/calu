@@ -396,10 +396,20 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         val s = state
         val attached = isAttached(s)
         // A turn passes through several states (running, checking, tool_call): the time shown is the turn's,
-        // except while the session waits for the user, where it is the time waited.
-        val since = if (s.session.state == "escalated") phaseSince else turnSince
-        val a = activityLine(attached, s.session.state, since, lastDuration, System.currentTimeMillis(), seed)
+        // except while a decision waits, where it is the time waited, counted from the session's own time
+        // for the oldest open step (`waitingSince`), so that a restarted bridge or a reattach does not
+        // start it again.
         val open = io.github.kadeng.calu.logic.decisionsWaiting(s)
+        val now = System.currentTimeMillis()
+        val since = when {
+            open > 0 || s.session.state == "escalated" -> io.github.kadeng.calu.logic.waitingSince(
+                s.escalations.values.filter { it.status == io.github.kadeng.calu.state.EscalationStatus.OPEN }.map { it.openedAt },
+                if (s.session.state == "escalated") phaseSince else turnSince,
+                now,
+            )
+            else -> turnSince
+        }
+        val a = activityLine(attached, s.session.state, since, lastDuration, now, seed)
         val ended = io.github.kadeng.calu.logic.transcriptEnded(s)
         activity.text = when {
             s.link.status == LinkStatus.RECONNECTING -> "Reconnecting to the session…"

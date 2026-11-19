@@ -94,6 +94,30 @@ private fun activity(icon: String, label: String, elapsed: String, active: Boole
     Activity(icon, label, elapsed, listOf(icon, label, elapsed).filter { it.isNotEmpty() }.joinToString(" "), active, kind)
 
 /**
+ * Find when the waiting began: the time the session gives for the oldest open escalation
+ * (`escalation.request.opened_at`, also in the snapshot of a later attach), so that the
+ * "waiting for you" timer survives a bridge restart, a reattach and a reopened tool window.
+ * Port of `waitingSince` in `extensions/vscode/src/shared/activity.ts`.
+ *
+ * Example: `waitingSince(listOf("2026-11-19T10:00:00Z", null), 5, <10:03:00Z in ms>)` is the
+ * epoch milliseconds of 10:00:00Z (the timer shows "3m 00s").
+ *
+ * @param openedAt `openedAt` of each open escalation (ISO times from the session, with a zone
+ *   offset or "Z"); `null` or an unreadable value is skipped.
+ * @param fallback Time (ms) to use when no escalation gives a time (a session of an older calu):
+ *   the start of the current waiting period as this view saw it.
+ * @param now Current time (ms). A time after it (the session's clock is ahead) counts as `now`.
+ * @return Milliseconds since the epoch.
+ */
+fun waitingSince(openedAt: List<String?>, fallback: Long, now: Long): Long {
+    val times = openedAt.mapNotNull { t ->
+        if (t == null) null else runCatching { java.time.OffsetDateTime.parse(t).toInstant().toEpochMilli() }.getOrNull()
+    }
+    if (times.isEmpty()) return fallback
+    return minOf(now, times.min())
+}
+
+/**
  * Compute the activity line.
  *
  * @param connected True if a session is attached.

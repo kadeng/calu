@@ -59,4 +59,15 @@ class ActivityTest {
         assertEquals("59s", formatElapsed(59_999))
         assertEquals("3m 05s", formatElapsed(185_000))
     }
+
+    @Test
+    fun `counts the waiting from the oldest open step's time, not from the view's`() {
+        val now = java.time.Instant.parse("2026-11-19T10:03:00Z").toEpochMilli()
+        val oldest = java.time.Instant.parse("2026-11-19T10:00:00Z").toEpochMilli()
+        val since = waitingSince(listOf("2026-11-19T11:01:00+01:00", null, "2026-11-19T10:00:00Z", "garbage"), 5, now)
+        assertEquals(oldest, since)
+        assertEquals("3m 00s", activityLine(true, "escalated", since, null, now, 0).elapsed)
+        assertEquals(5L, waitingSince(listOf(null, "not a time"), 5, now))
+        assertEquals(now, waitingSince(listOf("2026-11-19T10:09:00Z"), 5, now))
+    }
 }
