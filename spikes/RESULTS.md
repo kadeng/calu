@@ -1192,3 +1192,28 @@ answers "ask" for files named `ask*`, else "allow", and a `can_use_tool` that re
 **Conclusion.** calu offers default, acceptEdits and auto; plan, dontAsk and bypassPermissions
 are refused with a reason each (`REFUSED_PERMISSION_MODES`, D247). The runner reports the mode
 from the status message, so a client shows what Claude Code really runs in.
+
+## Reading `/usage` without a turn (2026-11-19, CLI 2.1.319, D248)
+
+**Why it matters.** The usage panel shows Claude Code's own `/usage`. Typed as chat text,
+`/usage` runs as a turn of its own ($0, no model call), which calu records like any turn
+(test plan J-U1).
+
+**Setup** (`spikes/spike_usage_control.py`, haiku, no prompt sent). Connect with the Agent SDK
+and send two control requests of the stream-json protocol before any turn.
+
+**Observations.**
+
+- `get_session_cost` answers `{text}`: "Total cost / Total duration (API) / Total duration
+  (wall) / Total code changes / Usage", the text `/usage` prints without a terminal.
+- `get_usage` (`skip_behaviors: true`) answers `session` totals, `subscription_type` (null for
+  an API key), `rate_limits_available` (false here) and `rate_limits` (null here). The CLI's
+  schema describes `rate_limits` as windows `five_hour`, `seven_day`, `seven_day_opus`,
+  `seven_day_sonnet`, ... with `utilization` 0-100 and `resets_at`, and marks the request
+  experimental.
+- No turn, no `result` message, no model call: only the start-up hook and
+  `commands_changed` messages arrived meanwhile.
+
+**Conclusion.** `usage.panel` reads both requests (`SdkRunner.usage_report`); nothing is
+recorded and the checkers see nothing. The plan's limits are shown only when Claude Code
+reports them; not yet measured on a subscription account (TESTING item 44).

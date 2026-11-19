@@ -33,6 +33,7 @@ from calu.protocol.messages import (
     SessionListResult,
     SessionSnapshot,
     SideAskResult,
+    UsagePanelResult,
     UsageResult,
 )
 
@@ -64,6 +65,7 @@ def protocol_schema() -> dict[str, Any]:
         HonestyReviewResult,
         SideAskResult,
         UsageResult,
+        UsagePanelResult,
         ContextUsage,
         RelayInitializeResult,
         RelaySessionsResult,
@@ -93,6 +95,7 @@ def protocol_schema() -> dict[str, Any]:
             "files.user_edit": refs[FilesUserEditResult, "validation"],
             "side.ask": refs[SideAskResult, "validation"],
             "usage.get": refs[UsageResult, "validation"],
+            "usage.panel": refs[UsagePanelResult, "validation"],
         },
         "relay": {
             "requests": {name: refs[model, "validation"] for name, model in RELAY_REQUESTS.items()},

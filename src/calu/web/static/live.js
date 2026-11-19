@@ -8,6 +8,8 @@
 //     #agents        the main agent and every subagent: state, and a click to follow one
 //     #earlier       the recorded turns of the conversation (from the database)
 //     #stream        what arrives, each line labelled with the subagent it belongs to
+//     #usage-panel   the usage panel (`usage.panel`): limits, Claude Code's /usage, cost
+//     #side          side questions (`side.ask`): asked and answered in this browser only
 (() => {
   const script = document.currentScript;
   const address = script.dataset.socket.replace(/^http/, "ws");
@@ -591,12 +593,16 @@
       (running || waitingFor.has(id) ? live : done).push([waitingFor.has(id) ? 0 : 1, chip]);
     }
     live.sort((a, b) => a[0] - b[0]);
-    const running = [...agents.values()].filter((info) => info.status === "running").length;
+    // Each subagent is counted once: one that waits for the user is not also counted as
+    // running, so that the three numbers add up to the number of subagents.
+    const waitingAgents = [...agents.keys()].filter((id) => waitingFor.has(id)).length;
+    const working = [...agents.entries()]
+      .filter(([id, info]) => info.status === "running" && !waitingFor.has(id)).length;
     const title = document.createElement("p");
     title.className = "muted agents-title";
-    title.textContent = `${agents.size} subagent${agents.size === 1 ? "" : "s"}: ${running} running` +
-      (waitingFor.size ? `, ${[...waitingFor].filter((id) => id !== MAIN).length} waiting for you` : "") +
-      `, ${agents.size - running} finished. Each line of the stream starts with its subagent's number.`;
+    title.textContent = `${agents.size} subagent${agents.size === 1 ? "" : "s"}: ${working} running` +
+      (waitingAgents ? `, ${waitingAgents} waiting for you` : "") +
+      `, ${agents.size - working - waitingAgents} finished. Each line of the stream starts with its subagent's number.`;
     const list = document.createElement("div");
     list.className = "agent-list";
     const mainState = waitingFor.has(MAIN) ? waitWords(MAIN) : sessionState;
@@ -674,6 +680,8 @@
     el("steer").disabled = el("steer").disabled || !BUSY.includes(state);
     for (const box of document.querySelectorAll("#supervision input")) box.disabled = !attached;
     el("permission-mode").disabled = !attached || ENDED.includes(state) || !permissionMode;
+    el("usage-open").disabled = !attached;
+    sideControls();
     retitle();
     if (agents.size) renderAgents();
   }
@@ -744,7 +752,8 @@
   function renderHistory(history) {
     const box = el("earlier");
     box.replaceChildren();
-    const turns = (history && history.turns) || [];
+    // A turn that has not ended is the one running now: the stream below shows it.
+    const turns = ((history && history.turns) || []).filter((turn) => turn.ended_at);
     box.hidden = !turns.length;
     if (!turns.length) return;
     const summary = document.createElement("summary");
@@ -753,15 +762,14 @@
     const note = document.createElement("p");
     note.className = "muted";
     note.textContent = "As stored in the database: your messages, one line per tool call and " +
-      "Claude's answer; a turn that has not ended holds your messages only. The stream below " +
-      "shows what arrives now.";
+      "Claude's answer, for the turns that have ended. The stream below shows what arrives now.";
     box.appendChild(note);
     for (const turn of turns) {
       const block = document.createElement("div");
       block.className = "earlier-turn";
       const head = document.createElement("p");
       head.className = "muted";
-      head.textContent = turn.ended_at ? `Turn ${turn.index}` : `Turn ${turn.index} (not ended)`;
+      head.textContent = `Turn ${turn.index}`;
       block.appendChild(head);
       for (const text of turn.user_inputs || []) {
         const said = document.createElement("p");
@@ -799,13 +807,26 @@
     const agent = params.agent_id || null;
     switch (method) {
       case "session.state": onState(params.state); break;
-      case "assistant.delta": chunk(params.message_id, "assistant", params.text, agent); break;
+      // A fragment of thinking streams into a thinking line, which `assistant.thinking`
+      // then completes; it is not shown as Claude's text.
+      case "assistant.delta":
+        chunk(params.message_id, params.thinking ? "thinking" : "assistant", params.text, agent);
+        break;
       case "assistant.text":
         if (!open.has(`assistant:${params.message_id || "none"}:${agent || MAIN}`)) {
           markdown(line("assistant", "", "", null, agent), params.text);
         }
         break;
-      case "assistant.thinking": line("thinking", params.text, "", null, agent); break;
+      case "assistant.thinking": {
+        const streamed = open.get(`thinking:${params.message_id || "none"}:${agent || MAIN}`);
+        if (streamed) {
+          markdown(streamed, params.text);
+          open.delete(`thinking:${params.message_id || "none"}:${agent || MAIN}`);
+        } else {
+          line("thinking", params.text, "", null, agent);
+        }
+        break;
+      }
       case "user.input": {
         const source = params.source && params.source !== "user"
           ? (params.source === "system" ? "calu or Claude Code" : "another session") : "You";
@@ -970,6 +991,8 @@
       if ((result.rate_limits || []).length) limits = result.rate_limits;
       renderUsage();
     }
+    else if (method === "usage.panel") renderUsagePanel(result);
+    else if (method === "side.ask") sideAnswered(result.answer || "");
   }
 
   function onMessage(message) {
@@ -998,6 +1021,8 @@
       onResult(data.method, data.result || {});
     } else if (data.type === "refused") {
       if (data.method === "usage.get" || data.method === "session.history") return;
+      if (data.method === "usage.panel") { usagePanelRefused(data.message); return; }
+      if (data.method === "side.ask") { sideRefused(data.message); return; }
       say(`${data.method} was refused: ${data.message}`);
       if (data.method === "escalation.decide") {
         // The decision did not take: the cards that were sent can be answered again.
@@ -1073,6 +1098,173 @@
   };
   onState("connecting");
   attach();
+
+  // ------------------------------------------------------------------ the usage panel
+
+  // One request (`usage.panel`) gives the limits calu stored from Claude Code's reports, each
+  // with when it came, and Claude Code's own /usage, which the session reads without a turn:
+  // nothing of it is recorded or shown to the checkers.
+  const LIMIT_WORDS = {
+    five_hour: "5-hour", seven_day: "weekly", seven_day_opus: "weekly Opus",
+    seven_day_sonnet: "weekly Sonnet", overage: "extra usage",
+  };
+  function ago(iso) {
+    if (!iso) return "time not known";
+    const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (seconds < 60) return "just now";
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+    return `${Math.floor(seconds / 86400)} days ago`;
+  }
+  function limitRow(limit, stamped) {
+    const row = document.createElement("p");
+    const name = LIMIT_WORDS[limit.type] || limit.type || "limit";
+    const used = limit.utilization === null || limit.utilization === undefined
+      ? (limit.status || "").replace(/_/g, " ")
+      : `${Math.round(limit.utilization * 100)} % used`;
+    const resets = limit.resets_at ? `, resets ${new Date(limit.resets_at).toLocaleString()}` : "";
+    row.textContent = `${name}: ${used}${resets}` + (stamped ? ` · reported ${ago(limit.reported_at)}` : "");
+    if (limit.status && limit.status !== "allowed") row.className = "problem";
+    return row;
+  }
+  function panelSection(title, note) {
+    const head = document.createElement("h3");
+    head.textContent = title;
+    if (note) {
+      const small = document.createElement("span");
+      small.className = "muted";
+      small.textContent = ` ${note}`;
+      head.appendChild(small);
+    }
+    return head;
+  }
+  function renderUsagePanel(result) {
+    const body = el("usage-body");
+    body.replaceChildren(panelSection("Limits reported by Claude Code"));
+    if (!(result.limits || []).length) {
+      const none = document.createElement("p");
+      none.className = "muted";
+      none.textContent = "Not reported yet by Claude Code. It reports a limit in the stream of " +
+        "a running session; an account without limits (an API key, Bedrock) reports none.";
+      body.appendChild(none);
+    }
+    for (const limit of result.limits || []) body.appendChild(limitRow(limit, true));
+    if ((result.account_limits || []).length) {
+      body.appendChild(panelSection(`Your plan now${result.subscription ? ` (${result.subscription})` : ""}`));
+      for (const limit of result.account_limits) body.appendChild(limitRow(limit, false));
+    }
+    body.appendChild(panelSection("Claude Code's /usage", "read without a turn; not recorded, not shown to the checkers"));
+    const text = document.createElement("pre");
+    text.id = "usage-text";
+    text.textContent = visible(result.claude_usage || result.claude_usage_problem || "not available");
+    if (!result.claude_usage) text.className = "muted";
+    body.appendChild(text);
+    body.appendChild(panelSection("This session"));
+    const cost = document.createElement("p");
+    cost.textContent = result.cost_usd === null || result.cost_usd === undefined
+      ? "cost: no turn has ended yet"
+      : `cost $${Number(result.cost_usd).toFixed(4)} · ${result.num_turns} turn${result.num_turns === 1 ? "" : "s"}`;
+    body.appendChild(cost);
+    if (result.context) {
+      const fill = document.createElement("p");
+      fill.textContent = `context ${result.context.tokens.toLocaleString()} of ` +
+        `${result.context.max_tokens.toLocaleString()} tokens (${Math.round(result.context.percent)} %)`;
+      body.appendChild(fill);
+      context = result.context;
+    }
+    if ((result.limits || []).length) limits = result.limits;
+    renderUsage();
+  }
+  function usagePanelRefused(message) {
+    const failed = document.createElement("p");
+    failed.className = "problem";
+    failed.textContent = visible(`The session did not answer: ${message}`);
+    el("usage-body").replaceChildren(failed);
+  }
+  function openUsagePanel() {
+    if (!attached) return;
+    const asking = document.createElement("p");
+    asking.className = "muted";
+    asking.textContent = "asking the session…";
+    el("usage-body").replaceChildren(asking);
+    const panel = el("usage-panel");
+    if (!panel.open) {
+      if (typeof panel.showModal === "function") panel.showModal(); else panel.setAttribute("open", "");
+    }
+    send("usage.panel", {});
+  }
+  el("usage").onclick = openUsagePanel;
+  el("usage").onkeydown = (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openUsagePanel(); }
+  };
+  el("usage-open").onclick = openUsagePanel;
+  el("usage-again").onclick = openUsagePanel;
+  el("usage-close").onclick = () => {
+    const panel = el("usage-panel");
+    if (typeof panel.close === "function") panel.close(); else panel.removeAttribute("open");
+  };
+
+  // ------------------------------------------------------------------ side questions
+
+  // Asked with `side.ask`; Claude answers from the conversation, without tools. The answers
+  // stay in this page (kept in memory, sent along as `history` so that a follow-up can refer
+  // to them); the session keeps none, and no other client sees them. One question at a time.
+  const MAX_SIDE_HISTORY = 20;
+  const sideHistory = [];
+  let sideAsking = null;  // the question being answered, or null
+  function sideControls() {
+    const usable = attached && !ENDED.includes(sessionState) && sessionState !== "starting";
+    el("side-text").disabled = !usable;
+    el("side-ask").disabled = !usable || sideAsking !== null;
+  }
+  function sideEntry(question, answer, pending) {
+    const entry = document.createElement("div");
+    entry.className = "side-entry";
+    const asked = document.createElement("p");
+    asked.className = "user";
+    asked.textContent = visible(question);
+    const said = document.createElement("div");
+    said.className = pending ? "muted" : "md";
+    if (pending) said.textContent = "Claude is answering…";
+    else said.appendChild(window.caluMarkdown.render(visible(answer)));
+    entry.append(asked, said);
+    return entry;
+  }
+  function renderSide() {
+    const box = el("side-answers");
+    box.replaceChildren();
+    for (const exchange of sideHistory) box.appendChild(sideEntry(exchange.question, exchange.answer, false));
+    if (sideAsking !== null) box.appendChild(sideEntry(sideAsking, "", true));
+    el("side-clear").hidden = !sideHistory.length;
+    sideControls();
+  }
+  function ask() {
+    const question = el("side-text").value.trim();
+    if (!question || sideAsking !== null) return;
+    const history = sideHistory.slice(-MAX_SIDE_HISTORY);
+    if (!send("side.ask", { question, history })) return;
+    sideAsking = question;
+    el("side-text").value = "";
+    el("side-note").textContent = "";
+    renderSide();
+  }
+  function sideAnswered(answer) {
+    if (sideAsking === null) return;
+    sideHistory.push({ question: sideAsking, answer });
+    sideAsking = null;
+    renderSide();
+  }
+  function sideRefused(message) {
+    if (sideAsking !== null) el("side-text").value = sideAsking;
+    sideAsking = null;
+    el("side-note").textContent = visible(`not answered: ${message}`);
+    renderSide();
+  }
+  el("side-ask").onclick = ask;
+  el("side-text").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.ctrlKey) { event.preventDefault(); ask(); }
+  });
+  el("side-clear").onclick = () => { sideHistory.length = 0; renderSide(); };
 
   // ------------------------------------------------------------------ the message form
 

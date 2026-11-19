@@ -168,6 +168,21 @@
     refresh();
   });
 
+  // ---- "Use the present version": an older shipped text, unchanged, gets the present one
+  // in its editor (agent/records/PLAN.md D248); Save stores it like any edit.
+  root.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-use-shipped]");
+    if (!button) return;
+    const name = button.dataset.useShipped;
+    const source = [...root.querySelectorAll("template[data-shipped-text]")]
+      .find((template) => template.dataset.shippedText === name);
+    const el = controls.find((control) => control.name === name);
+    if (!source || !el) return;
+    el.value = source.content.textContent;
+    if (el.matches("textarea")) fit(el);
+    refresh();
+  });
+
   document.getElementById("st-discard").addEventListener("click", () => {
     form.reset();
     form.querySelectorAll('input[name="_reset"]').forEach((marker) => marker.remove());

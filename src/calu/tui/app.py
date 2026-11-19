@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal
 
 import anyio
+from pydantic import ValidationError
 from rich.markdown import Markdown
 from rich.text import Text
 from textual import events
@@ -55,7 +56,12 @@ from textual.widgets import Static
 
 from calu import asuser, herd
 from calu.acp.modes import LADDER, PERMISSION_NAMES
-from calu.protocol.messages import ENDED_WITH_SESSION, SWITCHABLE_PERMISSION_MODES
+from calu.homes import short_path
+from calu.protocol.messages import (
+    ENDED_WITH_SESSION,
+    SWITCHABLE_PERMISSION_MODES,
+    UsagePanelResult,
+)
 from calu.session_requests import SessionRequest
 from calu.tui import completion, gittool, render, settings
 from calu.tui.actions import Actions, Outcome
@@ -70,12 +76,14 @@ from calu.tui.adminaccess import (
 )
 from calu.tui.capabilities import CAPABILITIES, Capabilities
 from calu.tui.commands import (
+    CLAUDE_COMMANDS,
     COMMANDS,
     CaluCommands,
     Command,
     argument_completions,
     by_slash,
     completions,
+    is_claude_command,
 )
 from calu.tui.connection import Connector, Link
 from calu.tui.difftools import unified_text
@@ -108,6 +116,7 @@ from calu.tui.widgets.chrome import (
     NewBelow,
     PanelList,
     Picked,
+    StatusLine,
 )
 from calu.tui.widgets.composer import Composer
 from calu.tui.widgets.transcript import Transcript
@@ -398,7 +407,7 @@ class CaluApp(App[None]):
             queue and the decision card, beside the side panel), the list of slash commands
             (shown while one is typed), the composer with its header, and the line of keys.
         """
-        yield Line("", id="status")
+        yield StatusLine("", id="status")
         yield AgentTabs(id="tabs")
         with Horizontal(id="body"):
             with Vertical(id="main"):
@@ -1062,7 +1071,11 @@ class CaluApp(App[None]):
             return []
         if self.ask is not None or self.mode != "chat":
             return []
-        found = [entry for entry in COMMANDS if entry.name and entry.name.startswith(text)]
+        found = [
+            entry
+            for entry in (*COMMANDS, *CLAUDE_COMMANDS)
+            if entry.name and entry.name.startswith(text)
+        ]
         return sorted(found, key=lambda entry: entry.name != text)
 
     def _render_slash(self) -> None:
@@ -1082,7 +1095,12 @@ class CaluApp(App[None]):
         )
         box.set_class(bool(entries) or unknown, "-shown")
         if unknown:
-            box.show([Text(" no such command · /help lists them", self.palette.muted)])
+            words = (
+                " not calu's · enter sends it to Claude Code · /help lists calu's commands"
+                if is_claude_command(text)
+                else " no such command · /help lists them"
+            )
+            box.show([Text(words, self.palette.muted)])
             return
         if not entries:
             box.show([])
@@ -1225,11 +1243,12 @@ class CaluApp(App[None]):
         stopped = self.model.state in {"stopped", "failed"}
         detached = self.model.connection.status == "detached"
         away = self.model.connection.status == "reconnecting"
-        if detached:
-            # Nothing can be sent: the keys that would send are not offered, and the two
-            # commands that lead to a session are (they read the database, not the session).
+        if detached or away:
+            # Nothing can be sent: the keys that would send (allow, deny, interrupt) are not
+            # offered; when detached, the two commands that lead to a session are (they read
+            # the database, not the session).
             parts = [part for part in parts if part[1] in {"↑↓", "tab", "esc", "j k", "y", "n"}]
-            if self.admin.sessions_problem() is None:
+            if detached and self.admin.sessions_problem() is None:
                 parts += [(9, "/new", "session here"), (9, "/running", "other sessions")]
         elif self.model.working():
             parts += [(7, "esc esc", "interrupt"), (3, "tab", "send mode")]
@@ -1347,6 +1366,9 @@ class CaluApp(App[None]):
         elif message.kind in {"card", "option", "answers", "decline"}:
             self._card_clicked(message.kind, message.key)
             return
+        elif message.kind == "cell" and message.key == render.USAGE_CELL:
+            self.run_command("usage")
+            return
         elif message.kind == "slash":
             entries = self._slash_entries()
             if message.key.isdigit() and int(message.key) < len(entries):
@@ -1413,6 +1435,9 @@ class CaluApp(App[None]):
                 or "".
         """
         row = self.query_one("#card-actions", Buttons)
+        # While the connection is broken nothing can be decided: no buttons are offered.
+        if self.model.connection.status in {"reconnecting", "detached"}:
+            decision = None
         row.set_class(decision is not None, "-shown")
         if decision is None:
             row.show([], "")
@@ -2199,12 +2224,14 @@ class CaluApp(App[None]):
         if text.startswith("/"):
             word, _, rest = text.partition(" ")
             command = by_slash(word)
-            if command is None:
+            if command is None and not is_claude_command(word):
                 self.flash(f"no command {word} (/help lists them)", error=True)
                 return
-            composer.set_text("")
-            self.run_command(command.id, rest.strip())
-            return
+            if command is not None:
+                composer.set_text("")
+                self.run_command(command.id, rest.strip())
+                return
+            # Not calu's: Claude Code's own command, sent as chat text (it runs it itself).
         shown = self.model.agents.get(self.model.selected_tab)
         if (
             shown is not None
@@ -3124,13 +3151,15 @@ class CaluApp(App[None]):
             listed.sort(key=lambda row: row.open_escalations == 0)
             body: list[Text] = []
             width = max(40, self.size.width - 4)
+            states = min(24, max((len(session_state_text(row)) for row in listed), default=10))
             for row in listed:
                 refusal = switch_refusal(row, self.model.calu_session_id, self.admin.session_host())
                 why = f"  (no /switch: {refusal})" if refusal else ""
                 if row.id == self.model.calu_session_id:
                     why = "  (shown here)"
                 line = Text(
-                    ("  " if refusal else "▸ ") + session_row_text(row, width - 2 - len(why))
+                    ("  " if refusal else "▸ ")
+                    + session_row_text(row, width - 2 - len(why), max(10, states))
                 )
                 if row.open_escalations:
                     line.stylize(f"bold {self.palette.orange}")
@@ -3740,14 +3769,20 @@ class CaluApp(App[None]):
         self._spawn(load())
 
     def _cmd_usage(self, rest: str) -> None:
-        """Show cost, context fill and usage limits on a page.
+        """Open the usage panel: limits, Claude Code's `/usage`, cost and context fill.
+
+        The panel asks `usage.panel` (agent/records/PLAN.md D248), which reads Claude Code's
+        `/usage` without a turn. A session that does not know that request gets the page of
+        `usage.get` instead: cost, context fill and limits as the side panel shows them.
 
         Args:
             rest: Ignored.
         """
+        title = "Usage: limits, Claude Code's /usage, cost, context"
+        screen = self._page(title, [Text("asking the session…", self.palette.muted)])
 
-        def shape(data: Any) -> list[Text]:
-            """Load the result into the model and render the SESSION figures.
+        def older(data: Any) -> list[Text]:
+            """Load a `usage.get` result into the model and render the SESSION figures.
 
             Args:
                 data: The result of `usage.get`.
@@ -3761,20 +3796,44 @@ class CaluApp(App[None]):
                 self.model, self.view(min(70, self.size.width - 6)), self.capabilities
             )
             start = next(i for i, line in enumerate(lines) if line.plain.startswith("SESSION"))
-            context = self.model.usage.context
-            extra = (
-                [
-                    Text(""),
-                    Text(f"model the context is counted for: {context.model}", self.palette.muted),
-                ]
-                if context
-                else []
-            )
-            return [*lines[start + 1 :], *extra]
+            return lines[start + 1 :]
 
-        self._read_page(
-            "Usage: cost as Claude Code reports it, context fill, usage limits", "usage.get", shape
-        )
+        async def load() -> None:
+            """Ask the session and show the panel, or the refusal."""
+            outcome = await self.actions.read("usage.panel")
+            if outcome.unsupported:
+                outcome = await self.actions.read("usage.get")
+                body = older(outcome.data) if outcome.ok else None
+            else:
+                body = None
+                if outcome.ok:
+                    try:
+                        result = UsagePanelResult.model_validate(outcome.data)
+                    except ValidationError as error:
+                        outcome = Outcome(False, f"the session's answer does not fit: {error}")
+                    else:
+                        self.model.set_usage(
+                            {
+                                "context": outcome.data.get("context"),
+                                "rate_limits": outcome.data.get("limits") or [],
+                                "cost_usd": outcome.data.get("cost_usd"),
+                            }
+                        )
+                        body = render.usage_panel_lines(
+                            result,
+                            self.palette,
+                            min(90, self.size.width - 6),
+                            datetime.now(UTC),
+                        )
+            if not screen.is_attached:
+                return
+            if body is not None:
+                screen.set_body(body)
+            else:
+                screen.set_body([Text(outcome.message, self.palette.red)])
+
+        screen.reload = lambda: self._spawn(load())
+        self._spawn(load())
 
     def _cmd_state(self, rest: str) -> None:
         """Show the session's state on a page.
@@ -4886,30 +4945,45 @@ def switch_refusal(row: herd.SessionRow, current: str | None, host: str | None =
     return ""
 
 
-def session_row_text(row: herd.SessionRow, width: int) -> str:
+def session_state_text(row: herd.SessionRow) -> str:
+    """Put a running session's state with its open decisions into words for `/running`.
+
+    Args:
+        row: The session.
+
+    Returns:
+        E.g. `escalated · 2 open`, or the bare state.
+    """
+    return row.state + (f" · {row.open_escalations} open" if row.open_escalations else "")
+
+
+def session_row_text(row: herd.SessionRow, width: int, state_width: int = 10) -> str:
     """Put a running session on one line of the `/running` page.
 
     Args:
         row: The session.
         width: The columns the line may take, without the mark before it.
+        state_width: The columns of the state column, the same for every row of the page
+            (the longest `session_state_text` of them), so that the rows line up.
 
     Returns:
         The first 8 characters of the id (enough for `/switch`), the state with the number
         of open decisions, the session's name in quotes if it has one, host and directory
-        (cut at its beginning with `…` if the line would be too long), how long the state has
-        lasted, and "SILENT" with the minutes for a session whose process stopped reporting.
+        with the session user's home as `~` (`calu.homes.short_path`; cut at its beginning
+        with `…` if the line would be too long), how long the state has lasted, and "SILENT"
+        with the minutes for a session whose process stopped reporting.
 
     Example:
-        `4031fde1  escalated · 2 open  "payment refactoring"  box:/work/shop  for 12 min`
+        `4031fde1  escalated · 2 open  "payment refactoring"  box:~/shop  for 12 min`
     """
-    state = row.state + (f" · {row.open_escalations} open" if row.open_escalations else "")
+    state = session_state_text(row)
     name = f'"{row.name}"  ' if row.name else ""
     lasted = (datetime.now(UTC) - row.state_since).total_seconds()
     tail = f"  for {herd.age_text(lasted)}"
     if row.stale:
         tail += f"  SILENT for {row.silent_for_s / 60:.0f} min"
-    head = f"{row.id[:8]}  {state:<10}  {name}"
-    place = f"{row.hostname}:{row.directory}"
+    head = f"{row.id[:8]}  {state:<{state_width}}  {name}"
+    place = f"{row.hostname}:{short_path(row.directory, row.os_user, row.hostname)}"
     room = max(12, width - 2 - len(head) - len(tail))
     if len(place) > room:
         place = "…" + place[-(room - 1) :]
@@ -4989,7 +5063,7 @@ def help_lines(
     group = ""
     needle = wanted.strip().lower()
     key_width = min(22, max(len(command.key) for command in COMMANDS)) + 2
-    for command in COMMANDS:
+    for command in (*COMMANDS, *CLAUDE_COMMANDS):
         whole = f"{command.key} {command.title} {command.slash} {command.about}".lower()
         if needle and needle not in whole:
             continue
@@ -5027,7 +5101,15 @@ def help_lines(
         "with tab. A large pasted text is shown as one marker and sent in full; alt+e shows "
         "it. alt+h holds the input as a draft until the session is idle."
     )
-    paragraphs = [("Typing, deciding and selecting", typing)]
+    claude = (
+        "A slash command that is not calu's is Claude Code's: enter sends the line to Claude as "
+        "it is, and Claude Code runs it (the list above names some; a skill or a command of "
+        "the project works the same way). The slash list marks them with 'Claude Code:'. "
+        "/checker-context is calu's view of the conversation; /context is Claude Code's table "
+        "of the context window. /usage is calu's usage panel, which includes Claude Code's own "
+        "/usage text."
+    )
+    paragraphs = [("Typing, deciding and selecting", typing), ("Claude Code's commands", claude)]
     rebind = (
         "Other keys are set in the table [keys] of tui.toml in calu's configuration directory, "
         'by the name of the binding, e.g. detach = "ctrl+q". The names: '

@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Literal, Protocol
 
 from calu.checkers.model import Step, SubagentResult
-from calu.protocol.messages import AgentInfo, ChatImage, ContextUsage, Event
+from calu.protocol.messages import AgentInfo, ChatImage, ContextUsage, Event, RateLimit
 
 EventSink = Callable[[Event], Awaitable[None]]
 """Receives events in the order Claude produced them. Must not block for long.
@@ -51,6 +51,24 @@ class ModelChangeFailed(Exception):
 
 class PermissionModeChangeFailed(Exception):
     """Claude Code's permission mode was not changed; the message says why."""
+
+
+@dataclass(frozen=True)
+class UsageReport:
+    """What Claude Code says about the usage of its account when asked (`usage_report`).
+
+    Nothing of it costs a model call or becomes part of the conversation.
+    """
+
+    text: str = ""
+    """Claude Code's `/usage` text (cost, durations, code changes, tokens); "" if not read."""
+    problem: str = ""
+    """Why `text` is empty; "" if it is not."""
+    account_limits: tuple[RateLimit, ...] = ()
+    """The plan's usage limits as Claude Code reads them from the account now; empty for an
+    account without such limits or when Claude Code did not say."""
+    subscription: str = ""
+    """The account's plan as Claude Code names it ("pro", "max", ...); "" if none."""
 
 
 class StartRefused(Exception):
@@ -322,6 +340,18 @@ class ClaudeRunner(Protocol):
 
         Returns:
             The numbers, or None if no session runs or Claude Code did not answer.
+        """
+        ...
+
+    async def usage_report(self) -> UsageReport:
+        """Ask Claude Code for its `/usage` text and the account's usage limits, without a turn.
+
+        No message is sent to the model and nothing enters the conversation: no turn starts,
+        no event is reported to the sink, no step is taken.
+
+        Returns:
+            The report; a field Claude Code did not answer stays empty, and `problem` says
+            why the text is missing. Never raises for an unanswered request.
         """
         ...
 

@@ -22,6 +22,10 @@ fixed `system/trace-redaction.md` followed by `traces.redactor_instructions`, or
 The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one.
 """
 
+import difflib
+import hashlib
+import json
+from dataclasses import dataclass
 from importlib import resources
 
 SYSTEM_PARTS = {
@@ -318,3 +322,142 @@ def compose_instructions(
     if honesty_state and route in HONESTY_ROUTES:
         parts.append(_read("system/honesty-state.md").strip())
     return "\n\n".join(parts) + "\n"
+
+
+# ------------------------------------------------------------ shipped versions (PLAN.md D248)
+
+SHIPPED_TEXTS = (
+    "command",
+    "edit",
+    "changeset",
+    "subagent-result",
+    "honesty",
+    "narrator",
+    "honesty-rules",
+    "trace-redaction",
+)
+"""The editable texts calu ships: the checker types' instructions, the honesty rules
+(`honesty.rules`) and the redaction agent's instructions (`traces.redactor_instructions`).
+`checkers/shipped.json` holds the hash of every version of each that calu ever shipped."""
+
+
+def text_hash(text: str) -> str:
+    """Hash an instruction text the way `checkers/shipped.json` stores it.
+
+    Line ends are made LF and the text is stripped of white space at both ends first, so
+    that a copy saved by an editor with one more or one less final newline still matches.
+
+    Args:
+        text: The text.
+
+    Returns:
+        The SHA-256 of the normalised text, as 64 hex digits.
+    """
+    normal = text.replace("\r\n", "\n").strip()
+    return hashlib.sha256(normal.encode("utf-8")).hexdigest()
+
+
+def _shipped_hashes(name: str) -> list[tuple[str, str]]:
+    """Read the hashes of every shipped version of one text.
+
+    Args:
+        name: One of `SHIPPED_TEXTS`.
+
+    Returns:
+        `(hash of the text, hash of the text without its test triggers)` per version, oldest
+        first; empty for a name the file does not list.
+    """
+    table = json.loads(_read("shipped.json"))
+    return [(row[0], row[1]) for row in table.get(name, [])]
+
+
+@dataclass(frozen=True)
+class ShippedStatus:
+    """How a stored instruction text relates to the texts calu shipped (`shipped_status`).
+
+    `kind` is one of:
+
+        current    the present shipped text (or it without its test triggers)
+        outdated   an earlier shipped text, unchanged by the user (or it without its test
+                   triggers): `update` replaces it with `present`, nothing of the user's is lost
+        edited     none of them: a text somebody wrote or changed; it is never replaced,
+                   only reported with `diff`
+    """
+
+    name: str
+    kind: str
+    triggers_removed: bool
+    """Whether the stored text is a shipped one without its section of test triggers; the
+    update then removes them from the present text as well."""
+    present: str
+    """What an update stores: the present shipped text, without its test triggers if the
+    stored one had none."""
+
+    def diff(self, stored: str) -> str:
+        """Show how the stored text differs from the present shipped one.
+
+        Args:
+            stored: The stored text.
+
+        Returns:
+            A unified diff from the shipped text (`shipped`) to the stored one (`stored`);
+            "" if they are equal.
+        """
+        return "".join(
+            difflib.unified_diff(
+                self.present.splitlines(keepends=True),
+                stored.splitlines(keepends=True),
+                fromfile=f"shipped/{self.name}.md",
+                tofile=f"stored/{self.name}.md",
+            )
+        )
+
+    def sentence(self, what: str, update: str) -> str:
+        """Say in one sentence what the status means for the user.
+
+        Args:
+            what: What the text is, e.g. "the command checker's instructions".
+            update: The command or button that updates an outdated text.
+
+        Returns:
+            For "current": that it is the present shipped text; for "outdated": that it is an
+            older shipped version the user did not change, and how to update it; for
+            "edited": that it differs from the shipped text and is kept as it is.
+        """
+        triggers = " (without its test triggers)" if self.triggers_removed else ""
+        if self.kind == "current":
+            return f"{what}: the text calu ships now{triggers}"
+        if self.kind == "outdated":
+            return (
+                f"{what}: an older version calu shipped{triggers}, not changed by you; "
+                f"{update} replaces it with the present one"
+            )
+        return f"{what}: your own text, which differs from the one calu ships; it stays as it is"
+
+
+def shipped_status(name: str, stored: str) -> ShippedStatus:
+    """Compare a stored instruction text with every version calu shipped of it.
+
+    Args:
+        name: One of `SHIPPED_TEXTS`.
+        stored: The text the database holds.
+
+    Returns:
+        The status; "edited" for a name without shipped versions.
+
+    Raises:
+        FileNotFoundError: If no shipped text of that name exists.
+    """
+    present = default_instructions(name)
+    digest = text_hash(stored)
+    if digest == text_hash(present):
+        return ShippedStatus(name, "current", False, present)
+    plain = without_test_triggers(present)
+    if digest == text_hash(plain):
+        return ShippedStatus(name, "current", True, plain)
+    for full, bare in _shipped_hashes(name):
+        if digest == full:
+            return ShippedStatus(name, "outdated", False, present)
+        if digest == bare and bare != full:
+            return ShippedStatus(name, "outdated", True, plain)
+    return ShippedStatus(name, "edited", False, present)

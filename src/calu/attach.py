@@ -32,7 +32,9 @@ Commands typed instead of a message:
     /trust-file PATH      certify the present content of one file as honest
     /honesty-review       ask for an honesty review of the unreviewed and marked files
     /clear-mark <id>      close one open honesty mark by hand
-    /context              print the conversation as the checkers see it
+    /checker-context      print the conversation as the checkers see it
+    /usage                the usage limits Claude Code reported, Claude Code's own `/usage`
+                          (read without a turn), cost and context fill (`usage.panel`)
     /sessions             list the stored sessions of this project
     /history [CLAUDE ID]  the recorded conversation of a session, from the database
     /running              the sessions of the `calu serve` whose relay this client uses
@@ -40,6 +42,9 @@ Commands typed instead of a message:
     /new [TEXT]           ask that server for a new session here, and attach to it
     /fork [TEXT]          ask it for a fork of this conversation, and attach to it
     /shutdown             stop the session and end the calu process
+
+Any other `/word` is a command of Claude Code (`/compact`, `/context`, `/cost`, a skill): the
+line is sent to Claude as chat text, and Claude Code runs it.
 
 The four relay commands work only through a relay of `calu serve` (agent/records/PLAN.md
 D242): the full-screen client offers them with the database too.
@@ -49,8 +54,10 @@ lines as the terminal that started the session.
 """
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +65,8 @@ import anyio
 from anyio.abc import TaskGroup
 
 from calu.controls import visible
+from calu.herd import age_text
+from calu.homes import short_path
 from calu.protocol.client import (
     ProtocolClient,
     RelayTarget,
@@ -75,10 +84,16 @@ from calu.protocol.messages import (
     EscalationRequest,
     Event,
     HonestyInfo,
+    RateLimit,
+    UsagePanelResult,
 )
 from calu.run import format_event, honesty_lines, one_line, read_lines
 
 log = logging.getLogger(__name__)
+
+CLAUDE_WORD = re.compile(r"/[\w:.-]+")
+"""A slash word that is not calu's and can name a command of Claude Code; such a line is sent
+as chat text (the same rule as `calu.tui.commands.CLAUDE_WORD`)."""
 
 EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 """Event class per method, to turn the received params back into an event for rendering."""
@@ -86,10 +101,11 @@ EVENT_TYPES: dict[str, type[Event]] = {event.method: event for event in EVENTS}
 HELP = (
     "/help  /quit (or /exit)  /stop  /start [resume id]  /interrupt  /mode [mode]  /why <id>  "
     "/allow <id> [note]  /deny <id> [note]  /answer <id> <text>  "
-    "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  /context  "
-    "/checkers  /sessions  /history [id]  /honesty  /trust [commit-or-branch]  "
-    "/trust-file <path>  /honesty-review  /clear-mark <id>  /running  /switch <id>  "
-    "/new [text]  /fork [text]  /shutdown"
+    "/inject <text>  /to <agent> <text>  /comment <path> <from> <to> <text>  /state  "
+    "/checker-context  /checkers  /usage  /sessions  /history [id]  /honesty  "
+    "/trust [commit-or-branch]  /trust-file <path>  /honesty-review  /clear-mark <id>  "
+    "/running  /switch <id>  "
+    "/new [text]  /fork [text]  /shutdown  (any other /word goes to Claude Code)"
 )
 """One line listing the commands, printed on connect and for an unknown command.
 
@@ -189,6 +205,107 @@ def describe_state(snapshot: dict[str, Any]) -> str:
         + (f" · permission mode {mode}" if mode else "")
         + (f" · {waiting} escalation(s) open" if waiting else "")
     )
+
+
+def running_lines(
+    sessions: list[dict[str, Any]],
+    current: str | None,
+    relay: RelayTarget,
+    now: datetime | None = None,
+) -> list[str]:
+    """Render the sessions of `relay.sessions` for `/running`, one aligned line each.
+
+    Args:
+        sessions: The `sessions` of the relay's answer (`RelaySession` as dicts).
+        current: The id of the session this client shows, marked with `*`; None for none.
+        relay: The relay, for the server's user and host (the session user's home is `~`).
+        now: The present moment; None for the clock.
+
+    Returns:
+        `* <id>  <state[ · N open]> for <time>  "<name>"  <directory>` per session, the state
+        column as wide as the longest state of the list; without a name or a known time in
+        state those parts are left out.
+    """
+    now = now or datetime.now(UTC)
+    states: list[str] = []
+    for entry in sessions:
+        waiting = entry.get("open_escalations") or 0
+        state = str(entry.get("state") or "unknown") + (f" · {waiting} open" if waiting else "")
+        since = entry.get("state_since")
+        if since:
+            moment = datetime.fromisoformat(str(since))
+            state += f" for {age_text((now - moment).total_seconds())}"
+        states.append(state)
+    width = max((len(state) for state in states), default=0)
+    lines = []
+    for entry, state in zip(sessions, states, strict=True):
+        mark = "*" if entry["calu_session_id"] == current else " "
+        name = f'"{visible(str(entry["name"]))}"  ' if entry.get("name") else ""
+        place = short_path(str(entry.get("directory") or ""), relay.os_user, relay.hostname or None)
+        lines.append(f"{mark} {entry['calu_session_id']}  {state:<{width}}  {name}{place}")
+    return lines
+
+
+def usage_text(result: dict[str, Any]) -> str:
+    """Render the result of `usage.panel` as lines for the terminal (agent/records/PLAN.md D248).
+
+    Args:
+        result: The result as the session sent it.
+
+    Returns:
+        `[usage]` lines: each stored limit with when Claude Code reported it (or that none was
+        reported yet), the plan's limits Claude Code read now, Claude Code's `/usage` text (or
+        why it is missing), cost and context fill.
+    """
+    panel = UsagePanelResult.model_validate(result)
+    now = datetime.now(UTC)
+    lines: list[str] = []
+
+    def limit_line(limit: RateLimit, stamped: bool) -> str:
+        """Render one limit.
+
+        Args:
+            limit: The limit.
+            stamped: Whether to say when it was reported.
+
+        Returns:
+            One line.
+        """
+        used = (
+            f"{round(limit.utilization * 100)}% used"
+            if limit.utilization is not None
+            else limit.status.replace("_", " ")
+        )
+        resets = f", resets {limit.resets_at:%a %H:%M} UTC" if limit.resets_at else ""
+        when = ""
+        if stamped:
+            minutes = (
+                int((now - limit.reported_at).total_seconds() // 60) if limit.reported_at else None
+            )
+            when = f" (reported {minutes} min ago)" if minutes is not None else ""
+        return f"[usage] {limit.type or 'limit'}: {used}{resets}{when}"
+
+    if not panel.limits:
+        lines.append("[usage] limits: not reported yet by Claude Code")
+    lines += [limit_line(limit, True) for limit in panel.limits]
+    if panel.account_limits:
+        plan = f" ({panel.subscription})" if panel.subscription else ""
+        lines.append(f"[usage] your plan now{plan}:")
+        lines += [limit_line(limit, False) for limit in panel.account_limits]
+    if panel.claude_usage:
+        lines.append("[usage] Claude Code's /usage (read without a turn):")
+        lines += [f"  {visible(row)}" for row in panel.claude_usage.splitlines()]
+    else:
+        lines.append(f"[usage] Claude Code's /usage: {panel.claude_usage_problem}")
+    cost = f"${panel.cost_usd:.4f}" if panel.cost_usd is not None else "no turn has ended yet"
+    lines.append(f"[usage] cost {cost} · {panel.num_turns} turn(s)")
+    if panel.context is not None:
+        context = panel.context
+        lines.append(
+            f"[usage] context {context.tokens:,} of {context.max_tokens:,} tokens "
+            f"({context.percent:.0f}%)"
+        )
+    return "\n".join(lines)
 
 
 def describe_honesty(info: dict[str, Any]) -> str:
@@ -422,10 +539,12 @@ class Console:
                     )
             case "/state":
                 say(describe_state(await self.client.request("state.get")), flush=True)
-            case "/context":
+            case "/checker-context":
                 context = await self.client.request("context.get")
                 say(context.get("chat_summary", ""), flush=True)
                 say(context.get("recent", ""), flush=True)
+            case "/usage":
+                say(usage_text(await self.client.request("usage.panel")), flush=True)
             case "/history":
                 history = await self.client.request(
                     "session.history", {"claude_session_id": rest} if rest else {}
@@ -461,6 +580,10 @@ class Console:
             case "/shutdown":
                 await self.client.request("shutdown")
                 self.quit.set()
+            case _ if CLAUDE_WORD.fullmatch(command):
+                # Not calu's: Claude Code's own command (`/compact`, `/context`, `/cost`, a
+                # skill), sent as chat text; Claude Code runs it (agent/records/PLAN.md D248).
+                await self.client.request("chat.send", {"text": text})
             case _:
                 say(f"[error] unknown command {command}. {HELP}", flush=True)
 
@@ -493,15 +616,8 @@ class Console:
                 _hello, listed = await relay_call(relay.address, relay.token, "relay.sessions")
                 sessions = (listed or {}).get("sessions") or []
                 if command == "/running":
-                    for entry in sessions:
-                        mark = "*" if entry["calu_session_id"] == self.current else " "
-                        waiting = entry.get("open_escalations") or 0
-                        say(
-                            f"{mark} {entry['calu_session_id']}  {entry.get('state')}"
-                            + (f" · {waiting} open" if waiting else "")
-                            + f"  {entry.get('directory')}",
-                            flush=True,
-                        )
+                    for text in running_lines(sessions, self.current, relay):
+                        say(text, flush=True)
                     say(f"[running] {len(sessions)} session(s); /switch <id> attaches", flush=True)
                     return
                 found = [e for e in sessions if str(e["calu_session_id"]).startswith(rest)]

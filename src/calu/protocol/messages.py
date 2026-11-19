@@ -393,6 +393,9 @@ class RateLimit(BaseModel):
     """Used part of the limit, 0.0 to 1.0; None if Claude Code did not report it."""
     resets_at: datetime | None = None
     """When the limit's window starts again."""
+    reported_at: datetime | None = None
+    """When calu received this state from Claude Code; None if not known (a session before
+    D248)."""
 
 
 class ContextUsage(BaseModel):
@@ -417,6 +420,34 @@ class UsageResult(BaseModel):
 
     context: ContextUsage | None = None
     rate_limits: list[RateLimit] = Field(default_factory=list)
+    cost_usd: float | None = None
+    num_turns: int = 0
+
+
+class UsagePanelResult(BaseModel):
+    """Result of `usage.panel`: everything the usage panel of a client shows (PLAN.md D248).
+
+    `limits` are the usage limits calu stored from Claude Code's reports in this calu process
+    (`rate_limit_event` of the stream, each with `reported_at`); empty if Claude Code has not
+    reported one yet. `claude_usage` is the text of Claude Code's own `/usage` in a session
+    without a terminal, read with the control request `get_session_cost`: no model call, no
+    turn, nothing recorded and nothing shown to the checkers. `account_limits` are the plan's
+    limits that Claude Code reads from its account at this request (control request
+    `get_usage`, which Claude Code marks experimental), with `reported_at` set to now; empty
+    for an account without such limits (an API key, Bedrock, Vertex) or when Claude Code does
+    not answer it. `subscription` is the account's plan as Claude Code names it ("pro",
+    "max", ...), "" if none or not known.
+    """
+
+    limits: list[RateLimit] = Field(default_factory=list)
+    account_limits: list[RateLimit] = Field(default_factory=list)
+    subscription: str = ""
+    claude_usage: str = ""
+    """Claude Code's `/usage` text: cost, durations, code changes, tokens; "" if not read."""
+    claude_usage_problem: str = ""
+    """Why `claude_usage` is empty ("" if it is not): no session runs, or Claude Code did not
+    answer."""
+    context: ContextUsage | None = None
     cost_usd: float | None = None
     num_turns: int = 0
 
@@ -734,6 +765,7 @@ REQUESTS: dict[str, type[BaseModel]] = {
     "context.get": EmptyParams,
     "side.ask": SideAskParams,
     "usage.get": EmptyParams,
+    "usage.panel": EmptyParams,
     "model.set": ModelSetParams,
     "permission_mode.set": PermissionModeSetParams,
     "shutdown": EmptyParams,

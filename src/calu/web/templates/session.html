@@ -4,7 +4,7 @@
 <h1>
   <span class="state {{ session.state }}">{{ session.state }}</span>
   {% if session.name %}<span class="session-name">{{ session.name }}</span>{% endif %}
-  <span class="mono path" title="{{ session.hostname }}:{{ session.directory }}">{{ session.hostname }}:{{ session.directory }}</span>
+  <span class="mono path" title="{{ session.hostname }}:{{ session.directory }}">{{ session.hostname }}:{{ session.directory | home(session.os_user, session.hostname) }}</span>
 </h1>
 <p class="row">
   {% if session.address and not session.ended_at and not session.stale %}

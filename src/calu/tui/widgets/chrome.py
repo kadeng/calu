@@ -24,7 +24,8 @@ class Picked(Message):
         kind: "agent", "decision", "follow", or of a button of the decision card: "card" (a
             letter of the card), "option" (an option of a question), "answers" (send the
             answers) or "decline"; "slash" (a line of the command list) or "checker" (a line
-            of the checkers screen's list), with the line's index as the key.
+            of the checkers screen's list), with the line's index as the key; "cell" (a cell
+            of the status bar, `StatusLine`), with the cell's name as the key.
         key: The agent key or the escalation id; for a button of the decision card
             `<escalation id>:q<question index>:<letter or option index>` (the value is ""
             for "answers" and "decline"); "" for "follow".
@@ -56,6 +57,24 @@ class Line(Static):
         """
         self.text = line.plain
         self.update(line)
+
+
+class StatusLine(Line):
+    """The status bar: a click on a cell marked with the style meta `cell` posts `Picked`.
+
+    `calu.tui.render.status_line` marks the cost, context and limit cells with
+    `{"cell": "usage"}`; a click there posts `Picked("cell", "usage")`.
+    """
+
+    def on_click(self, event: events.Click) -> None:
+        """Post the cell under the pointer, if it is a marked one.
+
+        Args:
+            event: The click.
+        """
+        cell = event.style.meta.get("cell")
+        if isinstance(cell, str) and cell:
+            self.post_message(Picked("cell", cell))
 
 
 class AgentTabs(Static):

@@ -8,8 +8,16 @@ A command the attached session cannot carry out stays in the list and says why
 A slash command is the word after `/` and the rest of the line; `CaluApp.run_command` receives
 the command and that rest. The names of the line client (`calu.attach.HELP`) all exist here
 with the same meaning; a test compares the two lists.
+
+A slash word that is not calu's is Claude Code's: the composer sends the line to Claude as
+chat text, and Claude Code runs it (agent/records/PLAN.md D248), as the editor plugins do.
+`CLAUDE_COMMANDS` are the ones the completion list offers, marked as Claude Code's. calu's
+own names do not clash with them: the conversation as the checkers see it is
+`/checker-context`, so `/context` is Claude Code's table of the context window. `/usage` is
+calu's usage panel, which shows Claude Code's own `/usage` text inside it.
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -187,7 +195,7 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command("usage", "Usage: cost, context fill, usage limits", "", "/usage", capability="usage"),
     Command("state", "Session state", "", "/state"),
-    Command("context", "The conversation as the checkers see it", "", "/context"),
+    Command("context", "The conversation as the checkers see it", "", "/checker-context"),
     Command(
         "checkers",
         "Checkers and their instructions",
@@ -375,6 +383,52 @@ ALIASES = {
 }
 """Other words for a slash command."""
 
+CLAUDE_GROUP = "Claude Code"
+"""`Command.group` of the entries of `CLAUDE_COMMANDS`."""
+
+CLAUDE_COMMANDS: tuple[Command, ...] = (
+    Command(
+        "claude",
+        "Claude Code: summarize the conversation to free context",
+        slash="/compact [what to keep]",
+        group=CLAUDE_GROUP,
+    ),
+    Command(
+        "claude",
+        "Claude Code: forget the conversation (the transcript here stays)",
+        slash="/clear",
+        group=CLAUDE_GROUP,
+    ),
+    Command(
+        "claude", "Claude Code: what fills the context window", slash="/context", group=CLAUDE_GROUP
+    ),
+    Command(
+        "claude",
+        "Claude Code: cost, durations and tokens of the session",
+        slash="/cost",
+        group=CLAUDE_GROUP,
+    ),
+)
+"""Claude Code's commands the completion list offers; each one is sent as chat text, and
+Claude Code runs it without the model (measured through calu, as for the editor plugins).
+Any other slash word that is not calu's is sent the same way."""
+
+CLAUDE_WORD = re.compile(r"/[\w:.-]+")
+"""A slash word that can name a command of Claude Code (built-in, a skill or a project's)."""
+
+
+def is_claude_command(word: str) -> bool:
+    """Tell whether a slash word goes to Claude Code instead of being one of calu's commands.
+
+    Args:
+        word: The first word of the input, e.g. `/compact`.
+
+    Returns:
+        True if it is no calu command or alias (`by_slash`) and looks like a command name
+        (`CLAUDE_WORD`: letters, digits, `_`, `:`, `.`, `-`).
+    """
+    return by_slash(word) is None and CLAUDE_WORD.fullmatch(word) is not None
+
 
 def by_slash(word: str) -> Command | None:
     """Find the command of a slash word.
@@ -396,10 +450,12 @@ def completions(prefix: str) -> list[str]:
         prefix: What the user has typed, starting with `/`.
 
     Returns:
-        The matching slash words in the order of `COMMANDS`.
+        The matching slash words in the order of `COMMANDS`, then those of `CLAUDE_COMMANDS`.
     """
     return [
-        command.name for command in COMMANDS if command.name and command.name.startswith(prefix)
+        command.name
+        for command in (*COMMANDS, *CLAUDE_COMMANDS)
+        if command.name and command.name.startswith(prefix)
     ]
 
 

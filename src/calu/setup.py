@@ -20,7 +20,7 @@ from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
 from calu.db import migrate
 from calu.db.connection import open_stored
 from calu.db.target import PasswordAuth, RdsIamAuth, Target
-from calu.defaults.instructions import superseded_instructions
+from calu.defaults.instructions import shipped_status
 
 DEFAULT_CHECKER_MODEL = ""
 """The model new checker types are stored with: blank, which means the default model of
@@ -145,19 +145,24 @@ def recommended_rules() -> list[RuleRow]:
 
 
 async def seed_defaults(
-    conn: psycopg.AsyncConnection, model: str = DEFAULT_CHECKER_MODEL
+    conn: psycopg.AsyncConnection,
+    model: str = DEFAULT_CHECKER_MODEL,
+    update_outdated: bool = True,
 ) -> tuple[int, int]:
     """Insert the built-in checker types, and the default rules where no global rules exist.
 
-    A checker type is inserted only if no type of that name exists. A type that still holds
-    an earlier shipped text unchanged (`superseded_instructions`) gets the present one; a text
-    somebody edited is left as it is. The default rules -- none
+    A checker type is inserted only if no type of that name exists. With `update_outdated`, a
+    type that still holds an earlier shipped text unchanged (`shipped_status` "outdated", any
+    version calu ever shipped, D248) gets the present one; a text somebody edited is left as
+    it is. The default rules -- none
     since D179 -- would be inserted only if there are no global rules at all, so rules an
     administrator removed are not restored, and a database set up earlier keeps its rules.
 
     Args:
         conn: An open connection of the database owner, schema migrated.
         model: Pydantic AI model string for the new checker types.
+        update_outdated: Whether to replace unedited older shipped texts; `calu setup` passes
+            False and offers the update itself (`calu.cli`).
 
     Returns:
         (number of checker types inserted, number of rules inserted).
@@ -186,16 +191,20 @@ async def seed_defaults(
                 ),
             )
             checkers += cur.rowcount
-            # A row that still holds an earlier shipped text unchanged gets the present one:
-            # the text from before the split of D181 (the session would put the system part
-            # in front of it, which repeats it) and the compact one from before the short
-            # instructions of requirement 38. A text somebody edited is left as it is.
-            for earlier in superseded_instructions(name):
-                await conn.execute(
-                    "UPDATE checker_types SET instructions = %s"
-                    " WHERE name = %s AND instructions = %s",
-                    (base.joinpath(path).read_text(encoding="utf-8"), name, earlier),
+            # A row that still holds an earlier shipped text unchanged gets the present one
+            # (D248: every version calu shipped is known by its hash). A text somebody edited
+            # is left as it is.
+            if update_outdated:
+                cur = await conn.execute(
+                    "SELECT instructions FROM checker_types WHERE name = %s", (name,)
                 )
+                found = await cur.fetchone()
+                status = shipped_status(name, str(found[0])) if found else None
+                if status is not None and status.kind == "outdated":
+                    await conn.execute(
+                        "UPDATE checker_types SET instructions = %s WHERE name = %s",
+                        (status.present, name),
+                    )
         cur = await conn.execute("SELECT count(*) FROM rules WHERE project_id IS NULL")
         row = await cur.fetchone()
         rules = 0
@@ -542,6 +551,7 @@ async def setup_database(
     model: str,
     renew_session: bool,
     session_iam: RdsIamAuth | None = None,
+    update_outdated: bool = True,
 ) -> tuple[str, Target | None]:
     """Run all setup steps (see the module docstring), keeping a session login that exists.
 
@@ -553,6 +563,8 @@ async def setup_database(
             is.
         session_iam: With `renew_session`: region and AWS profile if the session login uses
             IAM tokens (`enable_session_login`); None gives it a password.
+        update_outdated: Whether `seed_defaults` replaces unedited older shipped checker
+            instructions with the present ones.
 
     Returns:
         (a human-readable report of what was done, the new login of `calu_session` or None
@@ -566,7 +578,7 @@ async def setup_database(
     if problems:
         raise SetupRefused("\n".join(f"- {line}" for line in problems))
     applied = await migrate(conn)
-    checkers, rules = await seed_defaults(conn, model)
+    checkers, rules = await seed_defaults(conn, model, update_outdated)
     session = await enable_session_login(conn, admin, session_iam) if renew_session else None
     login = "renewed" if renew_session else "kept"
     report = (

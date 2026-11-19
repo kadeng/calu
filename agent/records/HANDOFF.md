@@ -140,6 +140,12 @@ Decided (do not ask again):
   - The terminal client following a restarted session with a new token is intended.
   - Session lists show the session user's home as `~` (another user's as `~user`), the full
     path in a tooltip or detail view.
+  - **Built** (PLAN D248, not pushed; core, both terminal clients, web): `usage.panel` (the
+    `/usage` text through the control request `get_session_cost`, no turn), web side
+    questions, unknown slash words to Claude Code with `/checker-context`, outdated shipped
+    instructions (`shipped.json`, `calu checker diff|update`), the web's recorded turns,
+    `~` paths, the small points of J O5. Open: the editor plugins; the manual check
+    `docs/TESTING.md` item 44 with a real `claude` (the panel on a subscription account).
 - **Traces (later the same day):** a removed message keeps its turn heading by default,
   unless the redaction instructions say otherwise ("It's not important"); the redaction
   instructions are edited in the IDEs' settings dialogs only, no extra picker entry;
@@ -792,10 +798,10 @@ machine cannot do (a real ACP editor, a PyPI account, model API keys, a logged-i
 inside a container). No phase has unbuilt work in it.
 
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
-**2031 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
+**2713 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
 default instructions), ~49k of tests, 40 migrations, 28 CLI commands (27 in `calu --help` and the hidden easter egg
-`calu lightcycles`), 24 protocol requests,
+`calu lightcycles`), 25 protocol requests,
 21 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.

@@ -294,6 +294,22 @@ exactly these three are recorded as the user's input, while calu's own note and 
 output are not (`spikes/RESULTS.md`, "Whose words a user-role message is"). Run it after every
 update of the CLI or of `claude-agent-sdk`; it takes about half a minute on haiku.
 
+44. The answers of the final acceptance round (PLAN D248), with a real `claude`, ideally on a
+   claude.ai subscription. In the full-screen client click the `ctx` cell of the status line:
+   the usage panel shows "not reported yet by Claude Code" or the 5-hour and weekly limits
+   with "reported ... ago", "YOUR PLAN NOW" for a subscription, and Claude Code's `/usage`
+   text; `calu sessions <id>` and the transcript gain no turn, and the checkers' context
+   (`/checker-context`) does not mention it. `/usage` in the line client and a click on the
+   web's usage line show the same. Type `/context` and `/compact` in the full-screen client:
+   Claude Code answers them as in VSCode. In the web live view ask a side question while a
+   turn runs, then a follow-up that refers to it: the answers stay on that page (a second
+   browser sees nothing), the turn goes on. Store an older shipped checker text unchanged
+   (`calu checker set edit --instructions-file src/calu/defaults/checkers/legacy/v2/edit.md`):
+   `calu doctor --db`, `calu checker show edit` and the web's settings pane call it older,
+   `calu checker update edit` and "Use the present version" replace it, `calu setup` asks; an
+   edited text is only reported, `calu checker diff` shows it. `/running` and the web's
+   session list show `~/...`, the tooltip the full path.
+
 ## The spikes: what Claude Code actually does
 
 calu's design rests on measured behaviour, not on documentation. Every assumption about Claude
@@ -308,6 +324,7 @@ them by hand; they use throwaway directories and databases.
 | `spike_q7_structured_check.sh` | Can `claude -p --json-schema` serve as a checker model? (D16) | considering that model type |
 | `spike_hook_timeout.py` | Does a hook that misses its timeout let the call run? (D23) | **every CLI update: the whole gate rests on it** |
 | `side_question.py` | Does a headless Claude Code answer a side question (`/btw`) while a turn runs, and stay out of the conversation? Does `get_context_usage` answer in a running turn? (`side.ask`, `usage.get`) | the CLI or the SDK changes |
+| `spike_usage_control.py` | Does a headless Claude Code answer `get_session_cost` (the `/usage` text) and `get_usage` (the plan's limits) without a turn and without a model call? (`usage.panel`, D248) | the CLI or the SDK changes |
 | `spike_question_tool.py` | Does `AskUserQuestion` reach the hook, and can calu answer it? (D35) | the CLI changes |
 | `spike_fork_session.py` | Can a conversation be forked at an earlier turn? (D36) | the SDK changes |
 | `spike_auto_mode_ask.py` | Does auto mode ask rather than only allow or deny? (D38) | the CLI changes |

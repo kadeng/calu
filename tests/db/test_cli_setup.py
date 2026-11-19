@@ -336,3 +336,82 @@ async def test_calu_setup_stores_the_sandbox_choice_and_keeps_it_on_a_rerun(
     assert "Claude Code's sandbox: off (as stored;" in said.out
     assert "strongly recommended" in said.err
     assert await stored() is False
+
+
+async def test_calu_setup_offers_to_update_an_older_shipped_text_and_keeps_an_edited_one(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D248: `--no-update-instructions` keeps an old shipped text and says so; without a
+    terminal it is replaced; an edited text is reported and never replaced."""
+    from calu import admin
+    from calu.defaults.instructions import default_instructions, superseded_instructions
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+
+    def setup(*options: str) -> int:
+        return cli.main(["setup", *options], store_factory=lambda: cast(CredentialStore, store))
+
+    assert await anyio.to_thread.run_sync(setup, "--renew-session") == 0
+    capsys.readouterr()
+    old = superseded_instructions("edit")[-1]
+    db = Db(await connect(db_url))
+    try:
+        await admin.set_checker(db, "edit", instructions_text=old)
+        await admin.set_checker(db, "command", instructions_text="Own rules.\n")
+    finally:
+        await db.aclose()
+
+    async def edit_text() -> str:
+        db = Db(await connect(db_url))
+        try:
+            return await admin.instructions(db, "edit")
+        finally:
+            await db.aclose()
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert await anyio.to_thread.run_sync(setup, "--no-update-instructions") == 0
+    said = capsys.readouterr().out
+    assert "the edit checker's instructions: an older version calu shipped" in said
+    assert "`calu checker update edit`" in said
+    assert "the command checker's instructions: your own text" in said
+    assert await edit_text() == old
+    assert await anyio.to_thread.run_sync(setup) == 0
+    said = capsys.readouterr().out
+    assert "the edit checker's instructions: updated to the present shipped version" in said
+    assert await edit_text() == default_instructions("edit")
+
+
+async def test_checker_show_diff_and_update_say_how_the_text_relates_to_the_shipped_one(
+    db_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """D248: `show` notes on stderr, `diff` shows the difference, `update` refuses own text."""
+    from calu import admin
+    from calu.defaults.instructions import superseded_instructions
+
+    store = CredentialStore(tmp_path / "credentials.json")
+    store.save("admin", db_url, None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("session-pw\nsession-pw\n"))
+
+    def calu(*argv: str) -> int:
+        return cli.main(list(argv), store_factory=lambda: cast(CredentialStore, store))
+
+    assert await anyio.to_thread.run_sync(calu, "setup", "--renew-session") == 0
+    db = Db(await connect(db_url))
+    try:
+        await admin.set_checker(db, "edit", instructions_text=superseded_instructions("edit")[-1])
+        await admin.set_checker(db, "command", instructions_text="Own rules.\n")
+    finally:
+        await db.aclose()
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert await anyio.to_thread.run_sync(calu, "checker", "show", "command") == 0
+    said = capsys.readouterr()
+    assert said.out.strip() == "Own rules." and "your own text" in said.err
+    assert await anyio.to_thread.run_sync(calu, "checker", "diff", "command") == 0
+    assert "+Own rules." in capsys.readouterr().out
+    assert await anyio.to_thread.run_sync(calu, "checker", "update", "command") == 1
+    assert "never replaces" in capsys.readouterr().err
+    assert await anyio.to_thread.run_sync(calu, "checker", "update", "edit") == 0
+    assert "updated to the present shipped version" in capsys.readouterr().out

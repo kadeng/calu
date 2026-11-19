@@ -26,10 +26,12 @@ from typing import Any, ClassVar
 
 from rich.console import Console, ConsoleOptions, RenderResult
 from rich.markdown import CodeBlock, Heading, Markdown
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.theme import Theme
 
+from calu.protocol.messages import RateLimit, UsagePanelResult
 from calu.tui.capabilities import NOT_AVAILABLE, Capabilities
 from calu.tui.difftools import marked_rows
 from calu.tui.model import (
@@ -1210,6 +1212,24 @@ def limit_cell(limit: Limit, palette: Palette) -> Text:
     return Text(f"{name} {word}".strip(), style)
 
 
+USAGE_CELL = "usage"
+"""Value of the style meta key `cell` on the status bar's cost, context and limit cells: a
+click there opens the usage panel (`calu.tui.widgets.chrome.StatusLine`)."""
+
+
+def usage_cell(cell: Text) -> Text:
+    """Mark a cell of the status bar as one that opens the usage panel on a click.
+
+    Args:
+        cell: The cell's text; it is changed in place.
+
+    Returns:
+        The same text, with the style meta `{"cell": USAGE_CELL}` over all of it.
+    """
+    cell.stylize(Style(meta={"cell": USAGE_CELL}))
+    return cell
+
+
 def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
     """Render the status bar.
 
@@ -1266,18 +1286,20 @@ def status_line(model: SessionModel, view: View, spinner: str = "") -> Text:
         cells.append(
             (
                 3,
-                Text(
-                    f"{cost_text(model.usage.cost)} · {turns} turn{'s' if turns != 1 else ''}",
-                    palette.muted,
+                usage_cell(
+                    Text(
+                        f"{cost_text(model.usage.cost)} · {turns} turn{'s' if turns != 1 else ''}",
+                        palette.muted,
+                    )
                 ),
             )
         )
     if model.usage.context is not None:
         fill = model.usage.context.percent
         style = palette.orange if fill >= 80 else palette.muted
-        cells.append((2, Text(f"ctx {fill:.0f}%", style)))
+        cells.append((2, usage_cell(Text(f"ctx {fill:.0f}%", style))))
     for limit in model.usage.limits:
-        cells.append((1, limit_cell(limit, palette)))
+        cells.append((1, usage_cell(limit_cell(limit, palette))))
     connection = model.connection
     if connection.status == "attached":
         cells.append((1, Text("attached", palette.muted)))
@@ -1699,6 +1721,17 @@ def card_lines(
                     view.width - 4,
                 ),
                 f"bold {palette.accent}",
+            )
+        )
+    elif model.connection.status in {"reconnecting", "detached"}:
+        lines.append(
+            Text(
+                "  "
+                + cut(
+                    "not connected: the step waits; decide once the client is attached again",
+                    view.width - 4,
+                ),
+                f"bold {palette.orange}",
             )
         )
     elif armed in ARMED_TEXT:
@@ -2383,4 +2416,144 @@ def side_lines(model: SessionModel, view: View) -> list[Text]:
                 Text.assemble("  ", line)
                 for line in markdown_lines(exchange.answer, width - 2, palette, view.dark)
             ]
+    return lines
+
+
+def ago_text(moment: datetime, now: datetime) -> str:
+    """Say how long ago something happened, in the largest whole unit.
+
+    Args:
+        moment: When it happened, with its time zone.
+        now: The present moment, with its time zone.
+
+    Returns:
+        `just now` under a minute, else e.g. `5 min ago`, `3 h ago`, `2 days ago`.
+    """
+    seconds = max(0.0, (now - moment).total_seconds())
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    days = int(seconds // 86400)
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+USAGE_LIMIT_WORDS = {
+    "five_hour": "5-hour",
+    "seven_day": "weekly",
+    "seven_day_opus": "weekly Opus",
+    "seven_day_sonnet": "weekly Sonnet",
+    "overage": "extra usage",
+}
+"""Names of the usage limits on the usage panel, where there is room for words."""
+
+
+def usage_panel_lines(
+    result: UsagePanelResult, palette: Palette, width: int, now: datetime
+) -> list[Text]:
+    """Render the usage panel (`usage.panel`, agent/records/PLAN.md D248).
+
+        LIMITS REPORTED BY CLAUDE CODE      one row per stored limit, with when it came,
+                                            or "not reported yet by Claude Code"
+        YOUR PLAN NOW (max)                 only if Claude Code read the plan's limits now
+        CLAUDE CODE'S /usage                its text, or why it is missing
+        SESSION                             cost, turns, context fill
+
+    Args:
+        result: The session's answer.
+        palette: Colours.
+        width: Columns of the page.
+        now: The present moment (UTC), for "reported 3 min ago".
+
+    Returns:
+        The lines of the page.
+    """
+    width = max(30, width)
+    lines: list[Text] = []
+
+    def limit_rows(limit: RateLimit, stamped: bool) -> None:
+        """Append the rows of one usage limit.
+
+        Args:
+            limit: A `RateLimit`.
+            stamped: Whether to say when Claude Code reported it.
+        """
+        name = USAGE_LIMIT_WORDS.get(limit.type, limit.type or "limit")
+        style = {"allowed_warning": palette.orange, "rejected": palette.red}.get(
+            limit.status, palette.fg
+        )
+        if limit.utilization is None:
+            value = {
+                "allowed": "within the limit",
+                "allowed_warning": "close to the limit",
+                "rejected": "limit reached",
+            }.get(limit.status) or limit.status
+        else:
+            value = f"{round(limit.utilization * 100)}% used"
+        if limit.resets_at is not None:
+            value += f", resets {reset_text(limit.resets_at)}"
+        row = Text.assemble((f" {name:<14} ", palette.muted), (value, style))
+        if stamped:
+            when = ago_text(limit.reported_at, now) if limit.reported_at else "time not known"
+            row.append(f" · reported {when}", palette.faint)
+        lines.append(row)
+        if limit.utilization is not None:
+            lines.append(Text(" " * 16 + meter(limit.utilization, width - 18), palette.accent))
+
+    lines.append(Text("LIMITS REPORTED BY CLAUDE CODE", f"bold {palette.fg}"))
+    if not result.limits:
+        lines.append(Text(" not reported yet by Claude Code", palette.faint))
+        lines.append(
+            Text(
+                " (it reports a limit in the stream of a running session; an account without "
+                "limits, such as an API key, reports none)",
+                palette.faint,
+            )
+        )
+    for limit in result.limits:
+        limit_rows(limit, stamped=True)
+    if result.account_limits:
+        lines.append(Text(""))
+        plan = f" ({result.subscription})" if result.subscription else ""
+        lines.append(Text(f"YOUR PLAN NOW{plan}", f"bold {palette.fg}"))
+        for limit in result.account_limits:
+            limit_rows(limit, stamped=False)
+    lines.append(Text(""))
+    lines.append(
+        Text.assemble(
+            ("CLAUDE CODE'S /usage", f"bold {palette.fg}"),
+            ("  read without a turn; not recorded, not shown to the checkers", palette.faint),
+        )
+    )
+    if result.claude_usage:
+        for row in result.claude_usage.splitlines():
+            lines.append(Text(" " + row, palette.fg))
+    else:
+        lines.append(Text(" " + (result.claude_usage_problem or "not available"), palette.faint))
+    lines.append(Text(""))
+    lines.append(Text("SESSION", f"bold {palette.fg}"))
+    turns = result.num_turns
+    cost = cost_text(result.cost_usd) or "no turn has ended yet"
+    if result.cost_usd is not None:
+        cost += f" · {turns} turn{'s' if turns != 1 else ''}"
+    lines.append(Text.assemble((f" {'cost':<14} ", palette.muted), (cost, palette.fg)))
+    context = result.context
+    if context is None:
+        lines.append(
+            Text.assemble((f" {'context':<14} ", palette.muted), ("not known", palette.faint))
+        )
+    else:
+        lines.append(
+            Text.assemble(
+                (f" {'context':<14} ", palette.muted),
+                (
+                    f"{context.tokens:,} of {context.max_tokens:,} tokens "
+                    f"({context.percent:.0f}%)" + (f" · {context.model}" if context.model else ""),
+                    palette.orange if context.percent >= 80 else palette.fg,
+                ),
+            )
+        )
+        lines.append(Text(" " * 16 + meter(context.percent / 100, width - 18), palette.accent))
     return lines

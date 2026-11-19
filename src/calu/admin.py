@@ -31,6 +31,7 @@ from calu.config import (
     merge_settings,
 )
 from calu.db import Db
+from calu.defaults.instructions import SHIPPED_TEXTS, ShippedStatus, shipped_status
 from calu.setup import RuleRow as SetupRuleRow
 from calu.setup import parse_rule_file, recommended_rules
 
@@ -1126,3 +1127,159 @@ async def set_all_models(
                 await set_checker(db, row.name, model=model)
                 changed.append(f"checker definition {row.name}: model = {model or 'the default'}")
     return changed
+
+
+# ------------------------------------------------------ shipped instruction texts (PLAN.md D248)
+
+SHIPPED_SETTINGS = {
+    "honesty.rules": "honesty-rules",
+    "traces.redactor_instructions": "trace-redaction",
+}
+"""Text settings whose value, when a scope stores one, is compared with the shipped texts:
+configuration key -> name in `calu.defaults.instructions.SHIPPED_TEXTS`."""
+
+
+@dataclass(frozen=True)
+class InstructionState:
+    """A stored instruction text compared with what calu shipped (`instruction_states`)."""
+
+    what: str
+    """What the text is, for a sentence: "the command checker's instructions", "the honesty
+    rules of project shop"."""
+    stored: str
+    status: ShippedStatus
+    checker: str = ""
+    """The checker type, for a checker's instructions; "" for a setting."""
+    key: str = ""
+    """The configuration key, for a setting; "" for a checker's instructions."""
+    project: str | None = None
+    """The project whose scope stores the setting; None for the global scope."""
+
+    @property
+    def update_command(self) -> str:
+        """Name the command that updates an outdated text.
+
+        Returns:
+            `calu checker update NAME` for a checker; for a setting the command that resets
+            it in its scope, after which the shipped text applies (in a project: the global
+            value).
+        """
+        if self.checker:
+            return f"`calu checker update {self.checker}`"
+        scope = f" --project {self.project}" if self.project else ""
+        if self.key == "honesty.rules":
+            return f"`calu honesty reset{scope}`"
+        return f"`calu traces instructions reset{scope}`"
+
+    def sentence(self) -> str:
+        """Say what the state means, with the command that updates an outdated text.
+
+        Returns:
+            One sentence (`ShippedStatus.sentence`); an edited text names `calu checker diff`
+            for a checker.
+        """
+        said = self.status.sentence(self.what, self.update_command)
+        if self.status.kind == "edited" and self.checker:
+            said += f" (`calu checker diff {self.checker}` shows the difference)"
+        return said
+
+
+async def instruction_states(db: Db) -> list[InstructionState]:
+    """Compare every stored instruction text with the texts calu shipped (D248).
+
+    Reads the instructions of each checker type that calu ships a text for, and the stored
+    values of `SHIPPED_SETTINGS` in the global scope and in each project's scope. A setting a
+    scope does not store uses the shipped text and is not listed.
+
+    Args:
+        db: A connection that may read `checker_types`, `config` and `projects`.
+
+    Returns:
+        One state per stored text: checker types by name, then the settings.
+
+    Raises:
+        psycopg.Error: On database errors.
+    """
+    found: list[InstructionState] = []
+    for row in await checkers(db):
+        if row.name not in SHIPPED_TEXTS:
+            continue
+        stored = await instructions(db, row.name)
+        found.append(
+            InstructionState(
+                f"the {row.name} checker's instructions",
+                stored,
+                shipped_status(row.name, stored),
+                checker=row.name,
+            )
+        )
+    scopes: list[str | None] = [None, *[project.name for project in await projects(db)]]
+    for project in scopes:
+        stored_settings = await settings(db, project)
+        for key, name in SHIPPED_SETTINGS.items():
+            value = _lookup_stored(stored_settings, key)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            label = "the honesty rules" if name == "honesty-rules" else "the redaction instructions"
+            where = f" of project {project}" if project else ""
+            found.append(
+                InstructionState(
+                    label + where,
+                    value,
+                    shipped_status(name, value),
+                    key=key,
+                    project=project,
+                )
+            )
+    return found
+
+
+def _lookup_stored(stored: dict[str, Any], key: str) -> Any:
+    """Read a dotted key from a scope's stored settings, without defaults.
+
+    Args:
+        stored: The scope's stored partial configuration.
+        key: A dotted path, e.g. "honesty.rules".
+
+    Returns:
+        The stored value, or None if the scope stores none.
+    """
+    node: Any = stored
+    for part in key.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+async def update_instructions(db: Db, name: str) -> CheckerRow:
+    """Replace a checker's instructions that are an older shipped text with the present one.
+
+    A text the user edited is never replaced: only one that `shipped_status` calls
+    "outdated" is (a shipped text, unchanged, perhaps without its test triggers; the new text
+    is then without them too). The database raises the definition's version.
+
+    Args:
+        db: A connection that may change `checker_types`.
+        name: The checker type.
+
+    Returns:
+        The definition after the change.
+
+    Raises:
+        AdminError: If no checker has that name, calu ships no text for it, the stored text
+            is already the present one, or it is the user's own text.
+        psycopg.Error: On database errors.
+    """
+    if name not in SHIPPED_TEXTS:
+        raise AdminError(f"calu ships no instructions for a checker named {name!r}")
+    stored = await instructions(db, name)
+    status = shipped_status(name, stored)
+    if status.kind == "current":
+        raise AdminError(f"the {name} checker's instructions are the present shipped text already")
+    if status.kind == "edited":
+        raise AdminError(
+            f"the {name} checker's instructions are your own text, which calu never replaces; "
+            f"`calu checker diff {name}` shows how it differs from the shipped one"
+        )
+    return await set_checker(db, name, instructions_text=status.present)

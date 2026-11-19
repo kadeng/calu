@@ -37,14 +37,17 @@ from typing import Any, Literal, Union, get_args, get_origin
 from pydantic import BaseModel
 
 from calu import admin, herd
+from calu.admin import SHIPPED_SETTINGS
 from calu.checkers.rules import RULE_LISTS
 from calu.config import CheckerConfig, Config
 from calu.db import Db
 from calu.defaults.instructions import (
+    SHIPPED_TEXTS,
     SYSTEM_PARTS,
     default_redaction_instructions,
     honesty_rules,
     redaction_system_part,
+    shipped_status,
     system_part,
 )
 
@@ -218,6 +221,14 @@ class Field:
     """For a model field: the offered models by provider, as `MODEL_OPTIONS`."""
     doc: tuple[str, str] | None = None
     """A page that documents the value: (address, link text); None for no link."""
+    shipped_note: str = ""
+    """For an instruction text a scope stores: how it relates to the texts calu shipped
+    (agent/records/PLAN.md D248, `ShippedStatus.sentence`); "" for none."""
+    shipped_diff: str = ""
+    """The unified diff from the present shipped text to the stored one; "" if equal."""
+    shipped_text: str = ""
+    """For an older shipped text the user did not change: the present shipped text, which a
+    button puts into the editor (then Save stores it); "" otherwise."""
 
     @property
     def block(self) -> bool:
@@ -1024,6 +1035,8 @@ def _prompt_field(src: Sources, row: admin.CheckerRow) -> Field:
         The field `prompt:<name>`.
     """
     fixed = system_part(row.route)
+    stored = src.instructions.get(row.name, "")
+    note, diff, update = _shipped(row.name, stored, f"the {row.name} checker's instructions")
     return Field(
         name=f"prompt:{row.name}",
         label="Your instructions",
@@ -1041,7 +1054,32 @@ def _prompt_field(src: Sources, row: admin.CheckerRow) -> Field:
         locked=_shared(src),
         extra_title="What calu puts in front of your instructions" if fixed else "",
         extra=fixed,
+        shipped_note=note,
+        shipped_diff=diff,
+        shipped_text=update,
     )
+
+
+def _shipped(name: str, stored: str, what: str) -> tuple[str, str, str]:
+    """Compare a stored text with the texts calu shipped, for the page (D248).
+
+    Args:
+        name: The name in `SHIPPED_TEXTS`; any other name gives nothing.
+        stored: The stored text.
+        what: What the text is, for the sentence.
+
+    Returns:
+        (the sentence, the diff from the present shipped text, the text the update button
+        puts into the editor); for the present shipped text only the sentence, and three ""
+        for a name calu ships no text for.
+    """
+    if name not in SHIPPED_TEXTS:
+        return "", "", ""
+    status = shipped_status(name, stored)
+    note = status.sentence(what, '"Use the present version" and Save')
+    if status.kind == "current":
+        return note, "", ""
+    return note, status.diff(stored), status.present if status.kind == "outdated" else ""
 
 
 def _checker_fields(src: Sources, row: admin.CheckerRow) -> list[Field]:
@@ -1182,6 +1220,9 @@ def _config_field(src: Sources, path: str) -> Field | None:
     stored = _lookup(src.values, path)
     inherited = _lookup(src.inherited, path) if src.project else None
     base = inherited if inherited is not None else default
+    note = diff = update = ""
+    if path in SHIPPED_SETTINGS and isinstance(stored, str) and stored.strip():
+        note, diff, update = _shipped(SHIPPED_SETTINGS[path], stored, "The text this scope stores")
     return Field(
         name=path,
         label=_label(name),
@@ -1199,6 +1240,9 @@ def _config_field(src: Sources, path: str) -> Field | None:
         version=fingerprint(stored) if path in MARKDOWN else None,
         extra_title="What calu puts in front of this text" if fixed else "",
         extra=fixed,
+        shipped_note=note,
+        shipped_diff=diff,
+        shipped_text=update,
     )
 
 

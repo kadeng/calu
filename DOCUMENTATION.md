@@ -909,6 +909,13 @@ running turn, or a running background subagent (typing on its tab sends to it). 
 <question>` or `f3` asks Claude a side question: it is answered from the conversation as it
 stands, beside the running work, and becomes no part of it.
 
+**Claude Code's own commands.** A slash command that is not calu's goes to Claude Code as it
+is typed, and Claude Code runs it: `/compact [what to keep]`, `/clear`, `/context` (its table
+of what fills the context window), `/cost`, a skill or a command of the project. The slash
+list shows calu's commands and Claude Code's, the latter marked "Claude Code:". calu's own
+view of the conversation as the checkers read it is `/checker-context`. `/usage` is calu's
+usage panel, which shows Claude Code's own `/usage` text inside it (below).
+
 **The rest.**
 
 - `/model`, `/effort`: the model for the session; an effort applies at the next start.
@@ -942,7 +949,18 @@ stands, beside the running work, and becomes no part of it.
 - A client whose session has ended stays open with the transcript; its input line says so
   and names `/new` and `/running`, which do not need the session.
 - Usage: the side panel shows cost, context fill and a usage limit once Claude Code reports
-  one.
+  one. A click on the cost, context or limit cell of the status line, or `/usage`, opens the
+  usage panel: the 5-hour and weekly limits as Claude Code reported them, each with when it
+  did ("not reported yet by Claude Code" until then; an API key or Bedrock reports none),
+  the plan's limits when Claude Code reads them from a claude.ai account, Claude Code's own
+  `/usage` text (cost, durations, tokens by model), cost and context fill. The `/usage` text
+  is read with a request of Claude Code's control protocol: no model call, no turn, nothing
+  recorded, nothing the checkers see. `/usage` sent to Claude as text would be a turn of its
+  own.
+- While the connection to the session is broken (reconnecting), the decision card offers no
+  allow or deny and the key line no interrupt: nothing could be sent.
+- Session lists (`/running`, `/sessions`) write the session user's home as `~` and another
+  user's of this machine as `~user`; `/state` names the full directory.
 
 **The line client** (`calu attach --plain`): a plain line is a message for Claude, and the
 commands are one line of `/help`. The ones that matter while a step waits:
@@ -955,7 +973,13 @@ commands are one line of `/help`. The ones that matter while a step waits:
 /to <agent> ...   the same, to one of its subagents
 /trust [commit]   /honesty-review   /clear-mark 3     code honesty
 /mode acceptEdits Claude Code's permission mode; /mode alone names the current one
+/usage            the limits Claude Code reported, its own /usage text (without a turn)
+/checker-context  the conversation as the checkers read it
+/compact          any other /word is Claude Code's command, sent to Claude as typed
 ```
+
+Through a relay, `/running` lists each session with its state, how long it has been in it,
+its name and its directory (the session user's home as `~`), in aligned columns.
 
 ## From another machine
 
@@ -1210,9 +1234,17 @@ several questions, or with a question that allows several choices, is answered w
 The same page has the three switches "always ask me about commands / file edits / subagent
 results", shows the context usage and the account's limits, enables only the controls that
 can act in the present state, and keeps the place of a reader who scrolled back in the stream
-(a button jumps to the latest line). "Recorded turns" above the stream holds the finished
-turns from the database: what a fork took over, and what happened before the page was
-opened. When `calu web` was restarted the page says that a new sign-in is needed instead of
+(a button jumps to the latest line). A click on the usage line (or "usage panel") opens the
+usage panel, the same as the terminal client's `/usage`: the limits Claude Code reported with
+when it did, Claude Code's own `/usage` text read without a turn, cost and context. "Side
+question" below the message field asks Claude beside the work (`side.ask`): the answer is
+shown in this page only, a follow-up can refer to the earlier answers of the page, and
+neither the main agent nor the checkers see them; a reload forgets them. Claude's thinking
+is shown in grey italics, also while it streams. "Recorded turns" above the stream holds the
+finished turns from the database: what a fork took over, and what happened before the page
+was opened; the turn that is running is not among them (the stream shows it). The subagent
+counts add up: one that waits for you is counted as waiting, not also as running. Session
+lists write the session user's home as `~`, with the full path in the tooltip. When `calu web` was restarted the page says that a new sign-in is needed instead of
 trying to attach for ever.
 
 A session can be given a name on its page ("payment refactoring"); the list of sessions, the
@@ -1469,6 +1501,23 @@ calu evals --from-db --export cases.yaml       # keep them; `calu evals cases.ya
 
 `calu checker show NAME` and `calu checker set NAME --instructions-file FILE` do the same
 without an editor, and `calu rules add|list|remove|enable|disable` work on single rules.
+
+**When calu ships new instructions.** calu knows every version of its instructions it ever
+shipped. A stored text that is one of them, unchanged by you (also with the test triggers
+removed), is out of date: `calu setup`, `calu doctor --db`, `calu checker show|edit` and the
+checker's pane of the web interface's settings say so, and `calu checker update NAME` (in the
+web: "Use the present version", then Save) replaces it with the present one. `calu setup`
+asks once on a terminal, replaces such texts without a terminal, and keeps them with
+`--no-update-instructions`. A text you edited is never replaced: it is reported as your own,
+and `calu checker diff NAME` (in the web: "How it differs") shows the difference to the
+shipped one. The honesty rules and the redaction instructions get the same report when a
+scope stores its own copy; `calu honesty reset` and `calu traces instructions reset` make the
+shipped text apply again.
+
+```bash
+calu checker diff command                     # your text against the one calu ships
+calu checker update edit                      # an unchanged older shipped text -> the present one
+```
 
 **Test triggers.** The shipped instructions of the command, edit, changeset and
 subagent-result checkers end with a section "Test triggers", so that you can provoke each

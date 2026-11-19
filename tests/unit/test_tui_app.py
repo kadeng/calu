@@ -735,10 +735,24 @@ async def test_slash_commands_do_what_the_line_client_does() -> None:
         await run.pilot.pause()
         assert run.session.sent("model.set") == [{"model": "sonnet"}]
         assert "sonnet / high" in run.line("status")
-        await run.type("/nonsense")
+        await run.type("/non$ense")
         await run.press("enter")
-        assert "no command /nonsense" in run.line("composer-head") and run.composer == "/nonsense"
+        assert "no command /non$ense" in run.line("composer-head") and run.composer == "/non$ense"
         await run.press("ctrl+u")
+        # D248: a slash word that is not calu's is Claude Code's, sent as chat text.
+        await run.type("/co")
+        await run.pilot.pause()
+        listed = run.line("slash")
+        assert "/comment" in listed and "Claude Code: summarize" in listed
+        await run.press("ctrl+u")
+        await run.type("/compact keep the plan")
+        await run.press("enter")
+        await run.pilot.pause()
+        assert run.session.sent("chat.send")[-1]["text"] == "/compact keep the plan"
+        await run.type("/cost")
+        await run.press("enter")
+        await run.pilot.pause()
+        assert run.session.sent("chat.send")[-1]["text"] == "/cost"
         await run.type("/shutdown")
         await run.press("enter")
         assert isinstance(run.app.screen, ConfirmScreen) and run.session.sent("shutdown") == []
@@ -785,8 +799,17 @@ async def test_pages_show_usage_help_and_the_checkers_context() -> None:
         await run.pilot.pause()
         page = run.app.screen
         assert isinstance(page, TextScreen)
-        assert "context  21% of 1000k tokens" in page.text and "5h       40% used" in page.text
-        assert "claude-opus-5" in page.text
+        assert "5-hour         40% used · reported" in page.text
+        assert "CLAUDE CODE'S /usage" in page.text and "Total cost:            $0.0123" in page.text
+        assert "claude-opus-5" in page.text and "(21%)" in page.text
+        await run.press("escape")
+        # A click on the context cell of the status bar opens the same panel.
+        status = run.app.query_one("#status")
+        column = run.line("status").index("ctx 21%")
+        await run.pilot.click(status, offset=(column + 1, 0))
+        await run.pilot.pause()
+        assert isinstance(run.app.screen, TextScreen)
+        assert "LIMITS REPORTED BY CLAUDE CODE" in run.app.screen.text
         await run.press("escape")
         assert not isinstance(run.app.screen, TextScreen)
         await run.press("f1")
@@ -797,11 +820,16 @@ async def test_pages_show_usage_help_and_the_checkers_context() -> None:
         )
         await run.press("q")
         run.session.results["context.get"] = {"chat_summary": "S", "recent": "**User:** hi"}
-        await run.type("/context")
+        await run.type("/checker-context")
         await run.press("enter")
         await run.pilot.pause()
         page = run.app.screen
         assert isinstance(page, TextScreen) and "**User:** hi" in page.text
+        await run.press("escape")
+        await run.type("/context")
+        await run.press("enter")
+        await run.pilot.pause()
+        assert run.session.sent("chat.send")[-1]["text"] == "/context", "Claude Code's"
 
 
 async def test_the_palette_lists_the_commands() -> None:

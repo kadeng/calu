@@ -665,6 +665,7 @@ export interface PermissionModeSetParams {
  * The state of one usage limit of the Claude Code account, as Claude Code reports it.
  */
 export interface RateLimit {
+  reported_at?: string | null;
   resets_at?: string | null;
   status?: string;
   type?: string;
@@ -1193,6 +1194,30 @@ export interface TurnResult {
   subtype?: string;
 }
 /**
+ * Result of `usage.panel`: everything the usage panel of a client shows (PLAN.md D248).
+ *
+ * `limits` are the usage limits calu stored from Claude Code's reports in this calu process
+ * (`rate_limit_event` of the stream, each with `reported_at`); empty if Claude Code has not
+ * reported one yet. `claude_usage` is the text of Claude Code's own `/usage` in a session
+ * without a terminal, read with the control request `get_session_cost`: no model call, no
+ * turn, nothing recorded and nothing shown to the checkers. `account_limits` are the plan's
+ * limits that Claude Code reads from its account at this request (control request
+ * `get_usage`, which Claude Code marks experimental), with `reported_at` set to now; empty
+ * for an account without such limits (an API key, Bedrock, Vertex) or when Claude Code does
+ * not answer it. `subscription` is the account's plan as Claude Code names it ("pro",
+ * "max", ...), "" if none or not known.
+ */
+export interface UsagePanelResult {
+  account_limits?: RateLimit[];
+  claude_usage?: string;
+  claude_usage_problem?: string;
+  context?: ContextUsage | null;
+  cost_usd?: number | null;
+  limits?: RateLimit[];
+  num_turns?: number;
+  subscription?: string;
+}
+/**
  * Result of `usage.get`: what the session knows about cost, context and limits.
  *
  * `context` is asked from Claude Code when the request arrives and is None when no session
@@ -1262,6 +1287,7 @@ export interface RequestParams {
   'side.ask': SideAskParams;
   'state.get': EmptyParams;
   'usage.get': EmptyParams;
+  'usage.panel': EmptyParams;
 }
 
 /** Request method -> type of its `result` (requests not listed here return `{}` or a small object). */
@@ -1280,6 +1306,7 @@ export interface RequestResults {
   'side.ask': SideAskResult;
   'state.get': SessionSnapshot;
   'usage.get': UsageResult;
+  'usage.panel': UsagePanelResult;
 }
 
 /** Event (notification) method -> type of its `params`. */

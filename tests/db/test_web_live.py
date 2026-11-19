@@ -398,3 +398,43 @@ async def test_a_frame_that_is_no_command_is_refused_and_the_relay_goes_on(db_ur
                 "method": "state.get",
                 "result": {"state": "running"},
             }
+
+
+async def test_a_side_question_from_the_browser_does_not_hold_up_its_other_commands(
+    db_url: str, tmp_path: Path
+) -> None:
+    """D248: `side.ask` and `usage.panel` are relayed; the answer goes to that browser only."""
+    async with running(db_url, tmp_path, []) as (base, session_id, session):
+        runner = session.runner
+        assert isinstance(runner, FakeRunner)
+        release = anyio.Event()
+        answered = runner.side_question
+
+        async def slow(question: str, history: Any = ()) -> str:
+            await release.wait()
+            return await answered(question, history)
+
+        runner.side_question = slow  # type: ignore[method-assign]
+        url = base.replace("http://", "ws://") + f"/ws/sessions/{session_id}"
+        async with ws_connect(url) as socket, ws_connect(url) as other:
+            await read_until(socket, "snapshot")
+            await read_until(other, "snapshot")
+            question = {"question": "what now?", "history": [{"question": "a", "answer": "b"}]}
+            await socket.send(json.dumps({"method": "side.ask", "params": question}))
+            # While the question waits, the same browser's next command is answered.
+            await socket.send(json.dumps({"method": "usage.panel", "params": {}}))
+            panel = (await read_until(socket, "result"))[-1]
+            assert panel["method"] == "usage.panel"
+            assert panel["result"]["claude_usage"].startswith("Total cost:")
+            release.set()
+            seen = await read_until(socket, "result")
+            assert seen[-1] == {
+                "type": "result",
+                "method": "side.ask",
+                "result": {"answer": "Side answer to: what now?"},
+            }
+            assert runner.side_questions == [("what now?", [("a", "b")])]
+            # The other browser got no answer: it sends a command and its next result is that.
+            await other.send(json.dumps({"method": "usage.get", "params": {}}))
+            results = [m for m in await read_until(other, "result") if m.get("type") == "result"]
+            assert [m["method"] for m in results] == ["usage.get"]

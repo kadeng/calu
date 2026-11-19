@@ -24,11 +24,11 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
-from calu import __version__, asuser, launch, preflight
+from calu import __version__, admin, asuser, launch, preflight
 from calu.changes import default_root
 from calu.config import PROVIDER_KEYS_BY_PREFIX, SETTINGS_KEY, Config, user_env_file
 from calu.credentials import CredentialStore
-from calu.db import applied_versions, migrations
+from calu.db import Db, applied_versions, migrations
 from calu.db import place as db_place
 from calu.db.connection import open_stored as connect
 from calu.db.target import PasswordAuth
@@ -602,6 +602,47 @@ async def database_findings(url: str) -> list[Finding]:
         ]
     finally:
         await conn.close()
+
+
+async def instruction_findings(url: str) -> list[Finding]:
+    """Compare the stored checker instructions and text settings with the shipped texts (D248).
+
+    Args:
+        url: The owner connection string from the `admin` credential.
+
+    Returns:
+        One finding per stored text: ok for the present shipped text; a note for an older
+        shipped one, unchanged, with the command that updates it; ok with the remark that it
+        differs for the user's own text, which is never replaced. Empty if the database
+        cannot be reached or read (`database_findings` reports that).
+
+    Raises:
+        nothing: a failure to read is left to `database_findings`.
+    """
+    try:
+        conn = await connect(url)
+    except Exception:
+        return []
+    try:
+        states = await admin.instruction_states(Db(conn))
+    except Exception:
+        return []
+    finally:
+        await conn.close()
+    found = []
+    for state in states:
+        kind = state.status.kind
+        found.append(
+            Finding(
+                f"checker {state.checker}"
+                if state.checker
+                else state.key + (f" of project {state.project}" if state.project else ""),
+                kind != "outdated",
+                state.sentence() if kind != "current" else "the text calu ships now",
+                f"{state.update_command} replaces it; nothing of yours is in it",
+            )
+        )
+    return found
 
 
 async def stored_sandbox(url: str) -> bool | None:

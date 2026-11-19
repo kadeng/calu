@@ -5,7 +5,7 @@
 <h1>
   <span class="state" id="state">connecting</span>
   {% if session.name %}<span class="session-name">{{ session.name }}</span>{% endif %}
-  <span class="mono path" title="{{ session.hostname }}:{{ session.directory }}">{{ session.hostname }}:{{ session.directory }}</span>
+  <span class="mono path" title="{{ session.hostname }}:{{ session.directory }}">{{ session.hostname }}:{{ session.directory | home(session.os_user, session.hostname) }}</span>
 </h1>
 <p class="muted">
   <a href="{{ url_for('session', session_id=session.id) }}">recorded history</a>
@@ -50,8 +50,17 @@
     </select>
     <span class="muted" id="permission-note"></span>
   </div>
-  <p class="muted" id="usage"></p>
+  <p class="muted" id="usage-line">
+    <span id="usage" role="button" tabindex="0" title="Open the usage panel"></span>
+    <button type="button" class="link" id="usage-open" disabled title="Usage limits, Claude Code's /usage, cost and context">usage panel</button>
+  </p>
 </div>
+
+<dialog id="usage-panel" aria-labelledby="usage-title">
+  <h2 id="usage-title">Usage</h2>
+  <div id="usage-body"><p class="muted">asking the session…</p></div>
+  <p class="row"><button type="button" id="usage-again">Ask again</button> <button type="button" id="usage-close">Close</button></p>
+</dialog>
 
 <div id="waiting" role="status"></div>
 <div id="escalations"></div>
@@ -81,6 +90,19 @@
     <button class="primary" id="send" disabled title="Claude reads it when the running turn has ended">Send (queued)</button>
     <button id="steer" disabled title="Claude reads it inside the running turn, after the running tool calls">Steer (read after the running tool calls)</button>
     <span class="muted">Ctrl+Enter sends, Ctrl+Shift+Enter steers</span>
+  </p>
+</div>
+<h2>Side question</h2>
+<div class="card" id="side">
+  <p class="muted">Claude answers from the conversation as it stands, without tools, also while it works.
+    The question and the answer are not part of the conversation: Claude's main agent and the checkers never see them,
+    and nothing is recorded. The answers are shown in this browser only; a follow-up question can refer to the earlier ones.</p>
+  <div id="side-answers" aria-live="polite"></div>
+  <textarea id="side-text" rows="2" placeholder="a side question (Ctrl+Enter asks)" aria-label="a side question for Claude" disabled></textarea>
+  <p class="row">
+    <button id="side-ask" disabled>Ask</button>
+    <button type="button" class="link" id="side-clear" hidden>Forget these questions</button>
+    <span id="side-note" class="muted" role="status"></span>
   </p>
 </div>
 <script src="{{ url_for('static', path='/markdown.js') }}"></script>

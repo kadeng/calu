@@ -23,7 +23,6 @@ WITHHELD = {
     "events.subscribe": "the relay subscribes once and fans the events out itself",
     "comment.add": "the web interface has no line-selection UI; comments come from an editor",
     "shutdown": "a browser must not be able to end the calu process by accident (D34)",
-    "side.ask": "the live view has no side panel for the answer yet; the terminal client has",
     "model.set": "the live view chooses the model when it starts a session, not while it runs",
     "files.user_edit": "only `calu ide` writes project files for a user; a browser writes none",
 }

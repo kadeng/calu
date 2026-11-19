@@ -191,3 +191,64 @@ async def test_an_escalation_says_when_it_began_to_wait_also_in_the_snapshot(tmp
                 "escalation.decide", {"escalation_id": request["escalation_id"], "decision": "deny"}
             )
             await events.wait_for("turn.result")
+
+
+async def test_the_usage_panel_reads_claude_codes_usage_without_a_turn(tmp_path: Path):
+    """`usage.panel` (D248): the stored limits with their time, `/usage` without a turn."""
+    from calu.protocol.messages import RateLimit
+
+    turns = [[{"rate_limit": {"type": "five_hour", "utilization": 0.4}}, {"text": "ok"}]]
+    async with served(tmp_path, turns) as run:
+        events = Events()
+        async with client(run, events) as protocol:
+            idle = await protocol.request("usage.panel")
+            assert idle["limits"] == [] and idle["claude_usage"] == ""
+            assert idle["claude_usage_problem"] == "no Claude session is running"
+            await protocol.request("session.start", {})
+            runner = run.session.runner
+            assert isinstance(runner, FakeRunner)
+            fresh = await protocol.request("usage.panel")
+            assert fresh["limits"] == [], "nothing reported yet"
+            await protocol.request("chat.send", {"text": "go"})
+            await events.wait_for("turn.result")
+            seen = len(events.received)
+            history = await protocol.request("session.history", {})
+            runner.account_limits = [RateLimit(type="seven_day", utilization=0.12)]
+            panel = await protocol.request("usage.panel")
+            assert panel["claude_usage"].startswith("Total cost:")
+            assert panel["limits"][0]["type"] == "five_hour"
+            reported = datetime.fromisoformat(panel["limits"][0]["reported_at"])
+            assert (datetime.now(UTC) - reported).total_seconds() < 60
+            assert panel["account_limits"][0]["type"] == "seven_day"
+            assert panel["context"]["percent"] == pytest.approx(21.0)
+            assert runner.usage_reports == 2
+            # No turn, no event, nothing recorded: the history is what it was.
+            await anyio.sleep(0.1)
+            assert [method for method, _ in events.received[seen:]] == []
+            assert await protocol.request("session.history", {}) == history
+            assert (await protocol.request("state.get"))["state"] == "idle"
+            runner.usage_text = ""
+            empty = await protocol.request("usage.panel")
+            assert empty["claude_usage_problem"] == "Claude Code returned no /usage text"
+
+
+def test_the_plan_limits_of_get_usage_are_read_and_odd_shapes_skipped():
+    from calu.claude.sdk_runner import account_limits
+
+    found, plan = account_limits(
+        {
+            "subscription_type": "max",
+            "rate_limits": {
+                "five_hour": {"utilization": 40, "resets_at": "2026-11-19T20:00:00+00:00"},
+                "seven_day": {"utilization": None, "resets_at": None},
+                "seven_day_opus": None,
+                "seven_day_sonnet": {"utilization": True},
+            },
+        }
+    )
+    assert plan == "max"
+    assert [(limit.type, limit.utilization) for limit in found] == [("five_hour", 0.4)]
+    assert found[0].resets_at == datetime(2026, 11, 19, 20, tzinfo=UTC)
+    assert found[0].reported_at is not None
+    assert account_limits({"rate_limits": None, "subscription_type": None}) == ([], "")
+    assert account_limits("nonsense") == ([], "")

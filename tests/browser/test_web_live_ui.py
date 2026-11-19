@@ -355,3 +355,70 @@ async def test_the_live_view_switches_claude_codes_permission_mode(
             "document.getElementById('permission-mode').value === 'acceptEdits'"
         )
         assert "tui on the laptop" in await page.inner_text("#permission-note")
+
+
+async def test_side_questions_and_the_usage_panel_in_the_live_view(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """D248: a side question is answered in this page only, a follow-up sends the history;
+    the usage line opens the panel with Claude Code's /usage, read without a turn."""
+    from calu.claude import FakeRunner
+
+    async with running(db_url, tmp_path, []) as (base, session_id, session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await page.wait_for_function("!document.getElementById('side-ask').disabled")
+        await page.fill("#side-text", "what is going on?")
+        await page.click("#side-ask")
+        await page.wait_for_function(
+            "document.getElementById('side-answers').textContent"
+            ".includes('Side answer to: what is going on?')"
+        )
+        await page.fill("#side-text", "and then?")
+        await page.keyboard.press("Control+Enter")
+        await page.wait_for_function(
+            "document.getElementById('side-answers').textContent"
+            ".includes('Side answer to: and then?')"
+        )
+        runner = session.runner
+        assert isinstance(runner, FakeRunner)
+        assert runner.side_questions[-1] == (
+            "and then?",
+            [("what is going on?", "Side answer to: what is going on?")],
+        )
+        assert "Side answer" not in await page.inner_text("#stream")
+
+        await page.wait_for_function("!document.getElementById('usage-open').disabled")
+        await page.click("#usage-open")
+        await page.wait_for_selector("#usage-text")
+        panel = await page.inner_text("#usage-panel")
+        assert "Not reported yet by Claude Code" in panel and "Total cost:" in panel
+        await page.click("#usage-close")
+        assert runner.usage_reports == 1
+        assert "Total cost" not in await page.inner_text("#stream"), "no turn, no event"
+
+
+async def test_the_live_view_counts_each_subagent_once_and_streams_thinking_as_thinking(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """Test plan J O3, O5: thinking deltas are thinking lines; counts do not overlap; the
+    running turn is not under "Recorded turns"."""
+    from calu.protocol.messages import AgentInfo, AgentsUpdate, AssistantDelta, AssistantThinking
+
+    async with running(db_url, tmp_path, []) as (base, session_id, session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        publish = session._sink
+        await publish(AssistantDelta(message_id="m1", text="Weighing the ", thinking=True))
+        await publish(AssistantDelta(message_id="m1", text="options.", thinking=True))
+        await page.wait_for_selector("#stream .thinking")
+        await publish(AssistantThinking(message_id="m1", text="Weighing the options."))
+        await page.wait_for_function(
+            "document.querySelectorAll('#stream .thinking').length === 1 && "
+            "document.querySelector('#stream .thinking').textContent.includes('options.')"
+        )
+        assert await page.locator("#stream .assistant").count() == 0
+        agents = [AgentInfo(agent_id=f"a{i}", description=f"job {i}") for i in range(3)]
+        await publish(AgentsUpdate(agents=agents))
+        await page.wait_for_selector(".agents-title")
+        assert "3 subagents: 3 running, 0 finished" in await page.inner_text(".agents-title")

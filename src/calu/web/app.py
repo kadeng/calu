@@ -58,6 +58,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import anyio
 import psycopg
+from anyio.abc import TaskGroup
 from markupsafe import Markup, escape
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -70,6 +71,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from calu import __version__, admin, asuser, herd, localsocket, servers, session_requests
 from calu.db import Db
+from calu.homes import short_path
 from calu.protocol.client import RequestFailed, connect
 from calu.protocol.messages import (
     CLOSE_SERVER_TOKEN_REVOKED,
@@ -105,7 +107,9 @@ def _prose(text: str) -> Markup:
 
 
 TEMPLATES.env.filters["prose"] = _prose
-"""The page templates; they ship with the package."""
+TEMPLATES.env.filters["home"] = short_path
+"""The page templates; they ship with the package. `home` writes a session's directory with
+its user's home as `~` (`calu.homes.short_path`); the full path goes into the `title`."""
 
 BIDI_NAMES = {
     "\u061c": "ALM",
@@ -178,6 +182,8 @@ LIVE_METHODS = frozenset(
         "honesty.trust",
         "honesty.review",
         "usage.get",
+        "usage.panel",
+        "side.ask",
     }
 )
 """What a browser may ask a session to do. `shutdown` is deliberately absent: it would end the
@@ -1820,16 +1826,85 @@ async def _relay(
                 )
 
 
+BACKGROUND_METHODS = frozenset({"side.ask", "usage.panel"})
+"""Live requests that can take long (a side question up to minutes): the relay answers them
+from a task of their own, so that the browser's other commands (an Allow) are not held up."""
+
+
 async def _commands(websocket: WebSocket, session: Any) -> bool:
     """Forward the browser's commands to the session until one of the two connections ends.
 
     Only the requests of `LIVE_METHODS` are forwarded. A frame that is not a JSON object, a
     method that is not on the list and a request the session refuses are each answered with
-    `{"type": "refused", ...}`; none of them ends the relay.
+    `{"type": "refused", ...}`; none of them ends the relay. The requests of
+    `BACKGROUND_METHODS` are answered by a task of their own, next to the following commands;
+    such a task ends with the relay.
 
     Args:
         websocket: The browser's connection.
         session: The `calu.protocol.client.ProtocolClient` of the session.
+
+    Returns:
+        True if the session closed its connection, False if the browser closed its own.
+    """
+    ended = False
+    async with anyio.create_task_group() as tasks:
+        ended = await _command_loop(websocket, session, tasks)
+        tasks.cancel_scope.cancel()
+    return ended
+
+
+async def _forward(websocket: WebSocket, session: Any, method: str, params: Any) -> bool:
+    """Send one browser command to the session and its answer back to the browser.
+
+    Args:
+        websocket: The browser's connection.
+        session: The session's protocol client.
+        method: A method of `LIVE_METHODS`.
+        params: Its params; anything but a dict is sent as `{}`.
+
+    Returns:
+        False if the session's connection is gone, else True.
+
+    Raises:
+        WebSocketDisconnect: If the browser's connection is gone.
+        RuntimeError: If the browser's connection was closed meanwhile.
+    """
+    try:
+        result = await session.request(method, params if isinstance(params, dict) else {})
+    except RequestFailed as exc:
+        await websocket.send_json({"type": "refused", "method": method, "message": str(exc)})
+        return True
+    except ConnectionError:
+        return False
+    await websocket.send_json({"type": "result", "method": method, "result": result})
+    return True
+
+
+async def _forward_in_background(
+    websocket: WebSocket, session: Any, method: str, params: Any
+) -> None:
+    """Run `_forward` as a task: a closed connection on either side only ends the task.
+
+    Args:
+        websocket: The browser's connection.
+        session: The session's protocol client.
+        method: A method of `BACKGROUND_METHODS`.
+        params: Its params.
+    """
+    try:
+        await _forward(websocket, session, method, params)
+    except WebSocketDisconnect, RuntimeError:
+        return
+
+
+async def _command_loop(websocket: WebSocket, session: Any, tasks: TaskGroup) -> bool:
+    """Read the browser's commands and forward each one (`_commands`).
+
+    Args:
+        websocket: The browser's connection.
+        session: The session's protocol client.
+        tasks: Where the requests of `BACKGROUND_METHODS` run.
 
     Returns:
         True if the session closed its connection, False if the browser closed its own.
@@ -1852,16 +1927,11 @@ async def _commands(websocket: WebSocket, session: Any) -> bool:
                     {"type": "refused", "method": method, "message": "not allowed from a browser"}
                 )
                 continue
-            try:
-                result = await session.request(method, params if isinstance(params, dict) else {})
-            except RequestFailed as exc:
-                await websocket.send_json(
-                    {"type": "refused", "method": method, "message": str(exc)}
-                )
+            if method in BACKGROUND_METHODS:
+                tasks.start_soon(_forward_in_background, websocket, session, method, params)
                 continue
-            except ConnectionError:
+            if not await _forward(websocket, session, method, params):
                 return True
-            await websocket.send_json({"type": "result", "method": method, "result": result})
         except WebSocketDisconnect, RuntimeError:
             return False
 

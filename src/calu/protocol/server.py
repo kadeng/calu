@@ -104,7 +104,15 @@ from calu.tokens import token_hash
 log = logging.getLogger(__name__)
 
 CONTROL_METHODS = frozenset(
-    {"escalation.decide", "interrupt", "shutdown", "state.get", "side.ask", "usage.get"}
+    {
+        "escalation.decide",
+        "interrupt",
+        "shutdown",
+        "state.get",
+        "side.ask",
+        "usage.get",
+        "usage.panel",
+    }
 )
 """Requests that are handled next to a running request of the same client."""
 
@@ -126,6 +134,7 @@ READ_ONLY_METHODS = frozenset(
         "checkers.get",
         "context.get",
         "usage.get",
+        "usage.panel",
     }
 )
 """Requests that change nothing in the session. Before **every other** request the client's
@@ -1356,6 +1365,8 @@ class Client:
                     self._side_asking = False
             case "usage.get":
                 return await session.usage()
+            case "usage.panel":
+                return await session.usage_panel()
             case "model.set":
                 assert isinstance(params, ModelSetParams)
                 await session.set_model(params.model, client=self.name or "unknown")

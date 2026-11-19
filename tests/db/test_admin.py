@@ -471,3 +471,52 @@ async def test_the_rules_old_versions_seeded_are_removed_and_written_ones_stay(d
         ]
     finally:
         await conn.close()
+
+
+async def test_an_older_shipped_text_is_offered_an_update_and_an_edited_one_never(
+    db_url: str,
+) -> None:
+    """D248: every shipped version is known; only an unchanged one is replaced."""
+    from calu.defaults.instructions import without_test_triggers
+
+    db, conn = await prepared(db_url)
+    try:
+        old = superseded_instructions("edit")[-1]
+        await admin.set_checker(db, "edit", instructions_text=old)
+        await admin.set_checker(db, "command", instructions_text="Our own command rules.\n")
+        await admin.set_checker(
+            db,
+            "changeset",
+            instructions_text=without_test_triggers(default_instructions("changeset")),
+        )
+        await admin.set_setting(
+            db,
+            "honesty.rules",
+            superseded_instructions("honesty-rules")[-1]
+            if superseded_instructions("honesty-rules")
+            else "Own rules.",
+        )
+        states = {s.checker or s.key: s for s in await admin.instruction_states(db)}
+        assert states["edit"].status.kind == "outdated"
+        assert "`calu checker update edit`" in states["edit"].sentence()
+        assert states["command"].status.kind == "edited"
+        assert "`calu checker diff command`" in states["command"].sentence()
+        assert states["changeset"].status.kind == "current"
+        assert states["changeset"].status.triggers_removed
+        assert states["subagent-result"].status.kind == "current"
+        assert "honesty.rules" in states
+        assert "calu honesty reset" in states["honesty.rules"].update_command
+        with pytest.raises(admin.AdminError, match="your own text"):
+            await admin.update_instructions(db, "command")
+        with pytest.raises(admin.AdminError, match="present shipped text already"):
+            await admin.update_instructions(db, "changeset")
+        row = await admin.update_instructions(db, "edit")
+        assert await admin.instructions(db, "edit") == default_instructions("edit")
+        assert row.version > 1
+        assert await admin.instructions(db, "command") == "Our own command rules.\n"
+        # `calu setup` without the offer leaves an outdated text alone.
+        await admin.set_checker(db, "edit", instructions_text=old)
+        await seed_defaults(conn, "test:model", update_outdated=False)
+        assert await admin.instructions(db, "edit") == old
+    finally:
+        await conn.close()

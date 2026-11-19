@@ -40,6 +40,8 @@ class Outcome:
     """What to tell the user: the session's refusal, or a confirmation. May be empty."""
     data: Any = None
     """The result of a request that reads something."""
+    unsupported: bool = False
+    """True if the session does not know the request (an older calu)."""
 
 
 class Actions:
@@ -76,7 +78,9 @@ class Actions:
             return Outcome(True, data=data if method in VERBATIM else visible_in(data))
         except RequestFailed as error:
             if error.code == METHOD_NOT_FOUND:
-                return Outcome(False, f"this session does not support it ({method})")
+                return Outcome(
+                    False, f"this session does not support it ({method})", unsupported=True
+                )
             return Outcome(False, visible(str(error.error.get("message") or error)))
         except ConnectionError as error:
             return Outcome(False, f"not sent: {error}")

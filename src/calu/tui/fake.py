@@ -410,6 +410,11 @@ class FakeSession:
         self.auto_escalate: dict[str, Any] = {"commands": False, "edits": False}
         self.permission_mode: str | None = "auto"
         """Claude Code's permission mode the scripted session reports."""
+        self.usage_text = (
+            "Total cost:            $0.0123\nTotal duration (API):  4s\n"
+            "Usage:                 1.2k input, 300 output"
+        )
+        """Claude Code's `/usage` text that `usage.panel` answers with."""
         self.honesty_mode = "off"
         self.honesty_marks: list[dict[str, Any]] = []
         self.honesty_extra: dict[str, Any] = {}
@@ -714,6 +719,18 @@ class FakeSession:
                 return {
                     "context": self.context if self.state not in {"stopped", "failed"} else None,
                     "rate_limits": [dict(limit) for limit in self.rate_limits],
+                    "cost_usd": self.cost,
+                    "num_turns": 0,
+                }
+            case "usage.panel":
+                running = self.state not in {"stopped", "failed"}
+                return {
+                    "limits": [dict(limit) for limit in self.rate_limits],
+                    "account_limits": [],
+                    "subscription": "",
+                    "claude_usage": self.usage_text if running else "",
+                    "claude_usage_problem": "" if running else "no Claude session is running",
+                    "context": self.context if running else None,
                     "cost_usd": self.cost,
                     "num_turns": 0,
                 }

@@ -614,6 +614,12 @@ def test_two_stored_databases_are_not_guessed_between(
         used = connections.pop()
         assert (used.place, used.user) == ("db.example:5432/calu", "calu_admin")
         assert isinstance(used.auth, PasswordAuth) and used.auth.password == "typed"
+        # A blank admin password is said to be one nobody can use, before any connection
+        # (test plan J O5: the operator of a `--no-password` server knows none).
+        assert run_cli(monkeypatch, store, [*argv, "--database", "operator"], "\n") == 1
+        said = capsys.readouterr().err
+        assert "no admin password was typed" in said and "--set-passwords" in said
+        assert connections == []
 
 
 def test_two_entries_of_one_database_need_no_choice(

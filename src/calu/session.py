@@ -166,6 +166,7 @@ from calu.claude.runner import (
     ModelChangeFailed,
     PermissionModeChangeFailed,
     SideQuestionFailed,
+    UsageReport,
     Verdict,
 )
 from calu.claude.sdk_runner import AGENT_TOOLS
@@ -270,6 +271,7 @@ from calu.protocol.messages import (
     ToolResult,
     ToolUse,
     TurnResult,
+    UsagePanelResult,
     UsageResult,
     UsageUpdate,
     UserInput,
@@ -2637,6 +2639,35 @@ class Session:
             rate_limits=list(self._rate_limits),
             cost_usd=self._last_cost,
             num_turns=self._last_turns,
+        )
+
+    async def usage_panel(self) -> UsagePanelResult:
+        """Return what a client's usage panel shows (`usage.panel`, agent/records/PLAN.md D248).
+
+        Claude Code's `/usage` text and the account's limits are read with control requests
+        (`ClaudeRunner.usage_report`), not sent as a chat message: no turn starts, nothing is
+        recorded in the history, no event is published, and the checkers see nothing of it.
+        The stored limits are not changed by it.
+
+        Returns:
+            The limits Claude Code reported in this calu process, each with when it was
+            reported; Claude Code's `/usage` text and the account's limits as it reads them
+            now (empty, with the reason in `claude_usage_problem`, when no session runs);
+            the context fill, cost and turn count of `usage`.
+        """
+        usage = await self.usage()
+        report = UsageReport(problem="no Claude session is running")
+        if self.runner is not None and self.state not in ("stopped", "failed", "starting"):
+            report = await self.runner.usage_report()
+        return UsagePanelResult(
+            limits=usage.rate_limits,
+            account_limits=list(report.account_limits),
+            subscription=report.subscription,
+            claude_usage=report.text,
+            claude_usage_problem=report.problem,
+            context=usage.context,
+            cost_usd=usage.cost_usd,
+            num_turns=usage.num_turns,
         )
 
     async def set_model(self, model: str | None, client: str = "unknown") -> None:

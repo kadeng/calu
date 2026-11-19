@@ -848,8 +848,9 @@ Claude Code, `i` images, `sq`/`ps` side questions, `u`/`pu` `/usage`, `wi` web i
 |---|---|---|
 | J-U1 | VSCode and PyCharm: `/usage` typed in the chat | ok: passed to Claude Code as chat text. Claude Code runs it without the model: a "turn" with $0.0000 cost and the text "Estimated cost, Total duration (API/wall), Total code changes, Usage by model, Prompt cache", shown as a preformatted block (u01, pu01); recorded as a turn of the session; no checker sees it. The same text as `/cost` |
 | J-U2 | web: `/usage` in the message field | ok (wi03): the same text in the stream |
-| J-U3 | full-screen client: `/usage` | handled by calu, not passed on: the usage screen with cost, context fill and "quota: no limit reported". `/cost` there is "no command /cost (/help lists them)": the client has no way to send Claude Code's own slash commands |
+| J-U3 | full-screen client: `/usage` | handled by calu, not passed on: the usage screen with cost, context fill and "quota: no limit reported". `/cost` there is "no command /cost (/help lists them)": the client has no way to send Claude Code's own slash commands. **Changed (D248):** `/usage` opens the usage panel, which shows Claude Code's `/usage` text read without a turn; `/cost` goes to Claude Code |
 | J-U4 | the context chip | PyCharm: a menu with "Context: 17,012 of 1,000,000 tokens (2%)", "Cost $0.0043 (Claude Code, whole session)" and "Ask Again" (pu02); VSCode: not clicked this round; the full-screen client: `/usage`; the web: a line under the controls |
+| J-U6 | the usage panel (D248) | `usage.panel` in the core; the full-screen client (`/usage`, a click on the cost/ctx/limit cell), the line client (`/usage`), the web (a click on the usage line). Claude Code's control requests `get_session_cost` and `get_usage` measured without a turn (`spikes/spike_usage_control.py`). Tests: `test_protocol_side_usage.py`, `test_tui_app.py`, `test_attach.py`, `tests/db/test_web_live.py`, the browser test. Not run with a subscription account (TESTING item 44) |
 | J-U5 | subscription limits | not shown by `/usage` in headless mode: Claude Code's text above has no five-hour or weekly percentage (an API key here; a subscription was not available to measure). The limits reach calu only as `rate_limit_event` messages of the stream (`RateLimitInfo`: `rate_limit_type` five_hour, seven_day, seven_day_opus, seven_day_sonnet, overage; `utilization` 0-1; `resets_at`), which `sdk_runner` turns into `UsageUpdate`, and every client shows as "usage limits"/"quota". With the API key no such event came ("no limit reported"). So a subscription user sees the percentages in calu's own usage displays once Claude Code has sent such an event, not through `/usage`. Unverified: whether the CLI sends them for every subscription and at what utilization |
 
 **Open points of this round, not changed**
@@ -860,15 +861,24 @@ Claude Code, `i` images, `sq`/`ps` side questions, `u`/`pu` `/usage`, `wi` web i
 - O2: PyCharm's own toolbar button "New Session" (JetBrains' agent chat) sits next to calu's
   tool window and is easy to mistake for calu's.
 - O3: the web live view shows Claude's thinking of a real session in the same style as its
-  text in places (wi04).
+  text in places (wi04). **Fixed (D248):** streamed thinking (`assistant.delta` with
+  `thinking`) was drawn as Claude's text; it is a thinking line now, which
+  `assistant.thinking` completes.
 - O4: the full-screen client cannot send Claude Code's slash commands (`/cost`, `/compact`,
-  `/context` collide with calu's own `/context`).
+  `/context` collide with calu's own `/context`). **Fixed (D248):** every `/word` that is not
+  calu's goes to Claude Code in both terminal clients; calu's `/context` is
+  `/checker-context`; the slash list marks Claude Code's commands.
 - O5 (agent): `calu web --database operator` against a `--no-password` server asks for an admin
   password nobody chose; a blank answer ends with an OperationalError. The line client's
   `/running` through a relay shows no names and no time in state; a reconnecting full-screen
   client still offers `a,a allow`; the web counts "10 running, 1 waiting" overlapping; the
   live view lists the running first turn under "Recorded turns"; a local `calu start` refusal
-  has "refused:" twice; `/running` rows misalign with a long state.
+  has "refused:" twice; `/running` rows misalign with a long state. **Fixed (D248)**, each with
+  a test: the blank admin password is refused with an explanation (`--set-passwords` on the
+  server's machine); the line client's `/running` shows name and time in state, aligned; a
+  reconnecting client offers no allow, deny or interrupt; the web counts a waiting subagent
+  once; "Recorded turns" leaves out the running turn; the full-screen `/running` aligns the
+  state column. Not changed: the doubled "refused:" of `calu start` (not reproduced here).
 - O6: PyCharm image paste by `xdotool` did not attach (J-I2).
 
 README screenshots replaced (same names, 16:10): `docs/assets/vscode-subagents.png` (`swarm`

@@ -81,6 +81,7 @@ import itertools
 import logging
 import uuid
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +99,7 @@ from calu.claude.runner import (
     Priority,
     SideQuestionFailed,
     ToolGate,
+    UsageReport,
     Verdict,
 )
 from calu.context.foreign import user_message_source
@@ -204,6 +206,12 @@ class FakeRunner:
             tokens=42_000, max_tokens=200_000, percent=21.0, model="fake-model"
         )
         """What `context_usage` returns."""
+        self.usage_text = "Total cost:            $0.0000\nUsage:                 0 input, 0 output"
+        """The `/usage` text `usage_report` returns ("" makes it report a problem)."""
+        self.account_limits: list[RateLimit] = []
+        """The plan's limits `usage_report` returns."""
+        self.usage_reports = 0
+        """How often `usage_report` was called."""
         self.model: str | None = None
         """The model `set_model` was last called with, for tests."""
         self.model_changes = 0
@@ -364,6 +372,20 @@ class FakeRunner:
             `self.context`.
         """
         return self.context
+
+    async def usage_report(self) -> UsageReport:
+        """Return the scripted `/usage` text and account limits; counts the call.
+
+        Returns:
+            `usage_text` and `account_limits`; with an empty `usage_text` the problem
+            "Claude Code returned no /usage text".
+        """
+        self.usage_reports += 1
+        return UsageReport(
+            text=self.usage_text,
+            problem="" if self.usage_text else "Claude Code returned no /usage text",
+            account_limits=tuple(self.account_limits),
+        )
 
     async def set_model(self, model: str | None) -> None:
         """Record a change of model in `model` and `model_changes`.
@@ -542,6 +564,8 @@ class FakeRunner:
             await sink(PermissionModeChanged(mode=self.permission_mode))
         elif "rate_limit" in action:
             limit = RateLimit.model_validate(action["rate_limit"])
+            if limit.reported_at is None:
+                limit = limit.model_copy(update={"reported_at": datetime.now(UTC)})
             self._rate_limits[limit.type] = limit
             await sink(UsageUpdate(rate_limits=list(self._rate_limits.values())))
         elif "background_tasks" in action:

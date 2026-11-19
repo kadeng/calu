@@ -797,6 +797,10 @@ main.st-shell { max-width: 84rem; padding-top: 0; padding-bottom: 0; }
 .st-locked-note { font-size: .82rem; color: var(--muted); }
 .st-extra { font-size: .84rem; }
 .st-extra summary { cursor: pointer; color: var(--accent); font-weight: 550; }
+/* How a stored instruction text relates to the shipped ones (D248). */
+.st-shipped { font-size: .84rem; color: var(--muted); margin: .3rem 0; }
+.st-shipped--old { color: var(--fg); border-left: 3px solid var(--warn); padding-left: .5rem; }
+.st-use-shipped { margin-left: .4rem; }
 .st-extra pre { margin: .5rem 0 0; max-height: 22rem; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
 
 .st-flash {
@@ -1021,3 +1025,21 @@ a.skip { position: absolute; left: -200vw; font-size: .8rem; font-weight: 500; }
 a.skip:focus { position: static; margin-left: .6rem; }
 main { overflow-wrap: break-word; }
 #stream .thumb.set { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; }
+
+/* The usage line opens the usage panel (live.js, `usage.panel`). */
+#usage-line { margin: .5rem 0 0; font-size: .84rem; }
+#usage[role="button"] { cursor: pointer; text-decoration: underline dotted; }
+#usage-panel {
+  max-width: min(48rem, calc(100vw - 2rem));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--fg);
+}
+#usage-panel::backdrop { background: rgb(0 0 0 / 35%); }
+#usage-panel h3 { font-size: .95rem; margin: 1rem 0 .3rem; }
+#usage-panel pre { white-space: pre-wrap; word-break: break-word; }
+/* Side questions: each question with its answer, shown in this browser only. */
+#side-answers .side-entry { border-bottom: 1px solid var(--line); padding: .4rem 0; }
+#side-answers .side-entry .user { color: var(--accent); font-weight: 600; margin: 0 0 .2rem; }
+#side-text { width: 100%; min-height: 3rem; font-family: var(--sans); }

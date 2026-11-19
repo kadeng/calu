@@ -1352,3 +1352,34 @@ async def test_only_images_inside_the_sessions_directory_are_served(db_url: str,
             assert other.status_code == 404, "a session of another machine has its files there"
     finally:
         await conn.close()
+
+
+async def test_the_settings_page_says_when_a_checker_text_is_an_older_shipped_one(
+    db_url: str,
+) -> None:
+    """D248: an older shipped text gets "Use the present version"; an own text a diff only."""
+    import html
+
+    from calu.defaults.instructions import default_instructions, superseded_instructions
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        await admin.set_checker(db, "edit", instructions_text=superseded_instructions("edit")[-1])
+        await admin.set_checker(db, "command", instructions_text="Own rules.\n")
+        async with await client_for(db) as client:
+            page = (await client.get("/settings")).text
+            old = page.split('data-shipped-for="prompt:edit"', 1)[1].split("</p>", 1)[0]
+            assert (
+                "an older version calu shipped" in old and 'data-use-shipped="prompt:edit"' in old
+            )
+            shipped = page.split('data-shipped-text="prompt:edit">', 1)[1].split("</template>")[0]
+            assert html.unescape(shipped) == default_instructions("edit")
+            own = page.split('data-shipped-for="prompt:command"', 1)[1].split("</p>", 1)[0]
+            assert "your own text" in own and "data-use-shipped" not in own
+            assert "+Own rules." in html.unescape(page)
+            current = page.split('data-shipped-for="prompt:changeset"', 1)[1].split("</p>", 1)[0]
+            assert "the text calu ships now" in current
+    finally:
+        await conn.close()

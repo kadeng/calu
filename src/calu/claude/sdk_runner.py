@@ -69,6 +69,7 @@ from calu.claude.runner import (
     SideQuestionFailed,
     StartRefused,
     ToolGate,
+    UsageReport,
     Verdict,
 )
 from calu.config import ClaudeConfig, PermissionMode
@@ -110,6 +111,12 @@ log = logging.getLogger(__name__)
 
 SIDE_QUESTION_TIMEOUT_S = 180.0
 """How long `SdkRunner.side_question` waits for Claude Code's answer."""
+
+USAGE_TIMEOUT_S = 20.0
+"""How long `SdkRunner.usage_report` waits for each of Claude Code's two answers."""
+
+ACCOUNT_LIMIT_TYPES = ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet")
+"""The windows of `get_usage`'s `rate_limits` that `account_limits` reads, in this order."""
 
 AGENT_TOOLS = ("Agent", "Task")
 HOOK_TIMEOUT_S = 900
@@ -192,6 +199,48 @@ def command_output(text: str) -> str:
     if "\n" not in text.strip() or MARKDOWN_LINE.search(text):
         return text
     return fence(text.strip("\n"))
+
+
+def account_limits(answer: object) -> tuple[list[RateLimit], str]:
+    """Read the plan's usage limits out of Claude Code's answer to `get_usage`.
+
+    The answer's shape is Claude Code's experimental one: `rate_limits` maps a window name to
+    `{utilization: 0-100 or null, resets_at: ISO 8601 or null}` or null, and
+    `subscription_type` names the plan. Anything that does not have that shape is skipped.
+
+    Args:
+        answer: The control response's payload.
+
+    Returns:
+        (one `RateLimit` per window of `ACCOUNT_LIMIT_TYPES` that has a utilisation, with
+        `utilization` 0-1, `status` "allowed" and `reported_at` now; the plan's name or "").
+
+    Example:
+        `{"rate_limits": {"five_hour": {"utilization": 40, "resets_at": None}}}` gives one
+        limit of type "five_hour" with utilization 0.4.
+    """
+    if not isinstance(answer, dict):
+        return [], ""
+    subscription = answer.get("subscription_type")
+    windows = answer.get("rate_limits")
+    found: list[RateLimit] = []
+    now = datetime.now(UTC)
+    for kind in ACCOUNT_LIMIT_TYPES:
+        window = windows.get(kind) if isinstance(windows, dict) else None
+        used = window.get("utilization") if isinstance(window, dict) else None
+        if not isinstance(used, int | float) or isinstance(used, bool):
+            continue
+        resets: datetime | None = None
+        raw = window.get("resets_at") if isinstance(window, dict) else None
+        if isinstance(raw, str):
+            try:
+                resets = datetime.fromisoformat(raw)
+            except ValueError:
+                resets = None
+        found.append(
+            RateLimit(type=kind, utilization=float(used) / 100, resets_at=resets, reported_at=now)
+        )
+    return found, subscription if isinstance(subscription, str) else ""
 
 
 def tool_result_text(content: Any, limit: int = MAX_RESULT_CHARS) -> str:
@@ -740,6 +789,47 @@ class SdkRunner:
             # The SDK raises bare `Exception`; a missing figure is not worth more than a log line.
             log.warning("Claude Code did not report the context usage", exc_info=True)
             return None
+
+    async def usage_report(self) -> UsageReport:
+        """Read Claude Code's `/usage` text and the plan's limits through two control requests.
+
+        `get_session_cost` answers `{text}`, "the same text /usage prints in non-interactive
+        mode"; `get_usage` (marked experimental by Claude Code) answers the session's totals
+        and, for a claude.ai plan, `rate_limits` with `utilization` 0-100 and `resets_at` per
+        window. Neither sends anything to the model or starts a turn (measured with CLI
+        2.1.319, `spikes/spike_usage_control.py`). The SDK has no public method for them, so
+        they go through its own control channel, as `side_question` does.
+
+        Returns:
+            The report. A request that fails or times out leaves its part empty; a failed
+            `get_session_cost` names the reason in `problem`.
+        """
+        query: Any = getattr(self._client, "_query", None)
+        if query is None:
+            return UsageReport(problem="no Claude session is running")
+        text, problem = "", ""
+        try:
+            answer = await query._send_control_request(
+                {"subtype": "get_session_cost"}, timeout=USAGE_TIMEOUT_S
+            )
+            text = str(answer.get("text") or "") if isinstance(answer, dict) else ""
+            if not text.strip():
+                problem = "Claude Code returned no /usage text"
+        except Exception as exc:  # the SDK raises bare `Exception` for an error and a timeout
+            problem = f"Claude Code did not answer /usage: {exc}"
+        limits: list[RateLimit] = []
+        subscription = ""
+        try:
+            answer = await query._send_control_request(
+                {"subtype": "get_usage", "skip_behaviors": True}, timeout=USAGE_TIMEOUT_S
+            )
+            limits, subscription = account_limits(answer)
+        except Exception:
+            # Experimental on Claude Code's side: a missing answer only leaves the part empty.
+            log.info("Claude Code did not answer get_usage", exc_info=True)
+        return UsageReport(
+            text=text, problem=problem, account_limits=tuple(limits), subscription=subscription
+        )
 
     async def set_model(self, model: str | None) -> None:
         """Change the model of the running session through the SDK.
@@ -1594,6 +1684,7 @@ class SdkRunner:
                     resets_at=(
                         datetime.fromtimestamp(info.resets_at, UTC) if info.resets_at else None
                     ),
+                    reported_at=datetime.now(UTC),
                 )
                 events.append(UsageUpdate(rate_limits=list(self.rate_limits.values())))
             case SystemMessage() if msg.subtype == "background_tasks_changed":

@@ -179,12 +179,12 @@ async def test_quit_and_shutdown_end_the_client():
 
 async def test_bad_input_is_reported_and_does_not_send_anything(capsys):
     con, client = console()
-    await con.line("/nonsense")
+    await con.line("/non$ense")
     await con.line("/allow")
     await con.line("/inject")
     assert client.sent == []
     output = capsys.readouterr().out
-    assert "unknown command /nonsense" in output
+    assert "unknown command /non$ense" in output
     assert "/allow needs an escalation id" in output
     assert "/inject needs a text" in output
 
@@ -322,7 +322,7 @@ async def test_why_without_an_id_asks_rather_than_requests(capsys):
 
 
 async def test_the_read_commands_format_what_they_get(capsys):
-    """`/checkers`, `/sessions`, `/history` and `/context` are what an operator reads."""
+    """`/checkers`, `/sessions`, `/history` and `/checker-context` are what an operator reads."""
     con, client = console(
         {
             "checkers.get": {
@@ -384,7 +384,7 @@ async def test_the_read_commands_format_what_they_get(capsys):
     assert "Claude said it passed" in said  # narration, on one line
     assert "[history] 2 turn(s), 2 step(s) of c1" in said
 
-    await con.line("/context")
+    await con.line("/checker-context")
     said = capsys.readouterr().out
     assert "## Folded" in said and "## Turn 2" in said
 
@@ -449,9 +449,9 @@ async def test_help_and_an_unknown_command_both_show_the_commands(capsys):
     helped = capsys.readouterr().out
     missing = [command for command in console_commands() if command not in helped]
     assert missing == [], f"the console answers these but `/help` does not name them: {missing}"
-    await con.line("/nonsense")
+    await con.line("/non$ense")
     said = capsys.readouterr().out
-    assert "unknown command /nonsense" in said
+    assert "unknown command /non$ense" in said
     assert "/why" in said  # the help comes with it
     assert client.sent == []
 
@@ -640,3 +640,71 @@ async def test_mode_shows_and_switches_claude_codes_permission_mode(capsys):
     assert "permission mode default" in describe_state(
         {"state": "idle", "workspace": "/w", "model": "opus", "permission_mode": "default"}
     )
+
+
+async def test_a_slash_word_that_is_not_calus_goes_to_claude_code():
+    """D248: `/compact`, Claude Code's `/context`, a skill: sent as chat text, as the IDEs do."""
+    con, client = console()
+    await con.line("/compact keep the plan")
+    await con.line("/context")
+    await con.line("/my-skill:run now")
+    assert client.sent == [
+        ("chat.send", {"text": "/compact keep the plan"}),
+        ("chat.send", {"text": "/context"}),
+        ("chat.send", {"text": "/my-skill:run now"}),
+    ]
+
+
+async def test_usage_prints_the_usage_panel(capsys):
+    con, client = console()
+    client.results["usage.panel"] = {
+        "limits": [
+            {
+                "type": "five_hour",
+                "utilization": 0.4,
+                "reported_at": "2026-11-19T10:00:00+00:00",
+            }
+        ],
+        "claude_usage": "Total cost:            $0.0100",
+        "num_turns": 2,
+        "cost_usd": 0.01,
+    }
+    await con.line("/usage")
+    said = capsys.readouterr().out
+    assert "[usage] five_hour: 40% used (reported " in said
+    assert "Claude Code's /usage (read without a turn)" in said and "$0.0100" in said
+    client.results["usage.panel"] = {"claude_usage_problem": "no Claude session is running"}
+    await con.line("/usage")
+    said = capsys.readouterr().out
+    assert "limits: not reported yet by Claude Code" in said
+    assert "no Claude session is running" in said
+
+
+def test_running_lines_name_the_sessions_with_their_time_and_line_up():
+    """Test plan J O5: names and time in state through a relay; the columns line up."""
+    from datetime import UTC, datetime
+
+    from calu.attach import running_lines
+    from calu.protocol.client import RelayTarget
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+    relay = RelayTarget("ws://127.0.0.1:8811", "t", hostname="elsewhere", os_user="dev")
+    lines = running_lines(
+        [
+            {
+                "calu_session_id": "aaaa",
+                "state": "escalated",
+                "open_escalations": 2,
+                "state_since": "2026-11-19T11:48:00+00:00",
+                "name": "payments",
+                "directory": "/home/dev/shop",
+            },
+            {"calu_session_id": "bbbb", "state": "idle", "directory": "/srv/other"},
+        ],
+        "bbbb",
+        relay,
+        now,
+    )
+    assert lines[0] == '  aaaa  escalated · 2 open for 12 min  "payments"  ~/shop'
+    assert lines[1].startswith("* bbbb  idle") and lines[1].endswith("  /srv/other")
+    assert lines[0].index('"payments"') == lines[1].index("/srv/other")

@@ -246,6 +246,16 @@ def test_the_decision_card_shows_the_step_the_reason_and_the_keys() -> None:
     assert "the session refused: no open escalation e1" in noted
 
 
+def test_a_reconnecting_client_offers_no_decision_keys() -> None:
+    """Test plan J O5: while the connection is broken, the card offers no allow or deny."""
+    model = showcase()
+    decision = model.decisions["e1"]
+    model.connection.status = "reconnecting"
+    lines = plain(render.card_lines(decision, model, view(100), (1, 2)))
+    assert lines[-1].startswith("  not connected: the step waits")
+    assert not any("a,a allow" in line for line in lines)
+
+
 def test_a_sent_decision_replaces_the_keys_until_the_session_confirms_it() -> None:
     """Over a slow link the card says that the press arrived, so it is not pressed again."""
     model = showcase()

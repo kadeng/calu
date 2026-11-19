@@ -71,6 +71,13 @@
     </div>
     {% if f.error %}<p class="st-error" role="alert">Not saved: {{ f.error }}</p>{% endif %}
     {% if f.locked and f.block %}<p class="st-locked-note">{{ f.locked }} <a href="{{ url_for('settings') }}">Open Global</a></p>{% endif %}
+    {% if f.shipped_note %}
+      <p class="st-shipped{{ ' st-shipped--old' if f.shipped_text }}" data-shipped-for="{{ f.name }}">{{ f.shipped_note }}
+        {% if f.shipped_text and not f.locked %}<button type="button" class="st-use-shipped" data-use-shipped="{{ f.name }}">Use the present version</button>{% endif %}
+      </p>
+      {% if f.shipped_text %}<template data-shipped-text="{{ f.name }}">{{ f.shipped_text }}</template>{% endif %}
+      {% if f.shipped_diff %}<details class="st-extra"><summary>How it differs from the text calu ships</summary><pre>{{ f.shipped_diff }}</pre></details>{% endif %}
+    {% endif %}
     {% if f.extra %}
       <details class="st-extra"><summary>{{ f.extra_title }}</summary><pre>{{ f.extra }}</pre></details>
     {% endif %}

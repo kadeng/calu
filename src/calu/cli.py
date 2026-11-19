@@ -36,7 +36,7 @@
     calu config list [--changed]   every setting: effective value, where it comes from, default
     calu config models MODEL|auto  one model for every checker, the narrator and the summarizer
     calu config get|set|unset KEY  configuration values (`claude.model`, `context.narrate`, ...)
-    calu checker list|show|set|edit
+    calu checker list|show|set|edit|diff|update
                                    checker definitions; `edit NAME` opens the instructions in
                                    $EDITOR and stores them on save
     calu rules list [LIST] | add LIST PATTERN | edit LIST | remove|enable|disable ID
@@ -124,7 +124,12 @@ from calu.db.target import (
     TargetError,
     from_fields,
 )
-from calu.defaults.instructions import default_redaction_instructions, honesty_rules
+from calu.defaults.instructions import (
+    SHIPPED_TEXTS,
+    default_redaction_instructions,
+    honesty_rules,
+    shipped_status,
+)
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.honesty import GitError, content_ids, resolve_commit
 from calu.ide import serve_ide
@@ -331,7 +336,7 @@ def _remember_admin_password(password: bytes | bytearray) -> None:
 
 _READ_ONLY_ACTIONS: dict[str, frozenset[str]] = {
     "config": frozenset({"list", "get"}),
-    "checker": frozenset({"list", "show", "stats", "misses"}),
+    "checker": frozenset({"list", "show", "diff", "stats", "misses"}),
     "rules": frozenset({"list"}),
     "project": frozenset({"list"}),
     "honesty": frozenset({"show", "trusted"}),
@@ -444,10 +449,23 @@ def _admin_login_for(store: CredentialStore, database: str | None) -> Target:
 
         Returns:
             The login, with the admin password that was typed now.
+
+        Raises:
+            CliError: If the admin password is left blank: PostgreSQL accepts no blank
+                password, and a database set up with `--no-password` has a generated one
+                that only its own machine holds (test plan J, O5).
         """
         place = load_target(store, "operator", "Operator password: ")
-        password = read_password("Admin password: ")
+        password = read_password(f"Admin password of {place.place} (the role calu_admin): ")
         try:
+            if not password.strip():
+                raise CliError(
+                    f"no admin password was typed: changing settings in {place.place} needs "
+                    "the password of its role calu_admin, which only that database's own "
+                    "setup gives. After `calu setup --no-password` it is a generated one that "
+                    "only the machine of that setup holds; there `calu setup --set-passwords` "
+                    "sets one a person can type, or run the command on that machine"
+                )
             return admin_login(place, password.decode())
         finally:
             wipe(password)
@@ -1301,6 +1319,60 @@ def choose_sandbox(flag: bool | None, stored: bool | None, missing: Sequence[str
     raise CliError(f"{answer!r} is neither on nor off")
 
 
+async def _offer_instruction_updates(db: Db, flag: bool | None) -> list[str]:
+    """Say which stored instruction texts are older shipped ones, and offer to update them.
+
+    Side effects: on a terminal without the option, prints the outdated checker texts and
+    asks once whether to replace them with the present shipped ones; replaces them on a yes,
+    with `--update-instructions`, or without a terminal and without the option (an unedited
+    shipped text has nothing of the user's in it, which is why `calu setup` has always done
+    so). `--no-update-instructions` keeps them. A text the user edited is never changed, and
+    a stored setting (`honesty.rules`, `traces.redactor_instructions`) is only reported, with
+    the command that resets it (agent/records/PLAN.md D248).
+
+    Args:
+        db: A connection of the database owner.
+        flag: `--update-instructions` (True), `--no-update-instructions` (False), or None.
+
+    Returns:
+        Lines for the setup report: one per updated, kept or edited text; none when every
+        stored text is the present shipped one.
+
+    Raises:
+        AdminError: If an update is refused.
+        psycopg.Error: On database errors.
+    """
+    states = await admin.instruction_states(db)
+    outdated = [s for s in states if s.status.kind == "outdated" and s.checker]
+    lines: list[str] = []
+    if outdated:
+        update = flag
+        if update is None and sys.stdin.isatty():
+            print("Stored checker instructions that are an older version calu shipped, unchanged:")
+            for state in outdated:
+                print(f"  {state.checker}")
+            answer = ask(
+                "Replace them with the present shipped versions? yes/no",
+                "yes",
+                "--update-instructions or --no-update-instructions",
+            ).lower()
+            update = answer in ("yes", "y")
+        if update is None:
+            update = True
+        for state in outdated:
+            if update:
+                row = await admin.update_instructions(db, state.checker)
+                lines.append(
+                    f"{state.what}: updated to the present shipped version (v{row.version})"
+                )
+            else:
+                lines.append(state.sentence())
+    for state in states:
+        if state.status.kind == "edited" or (state.status.kind == "outdated" and not state.checker):
+            lines.append(state.sentence())
+    return lines
+
+
 async def _apply_sandbox_choice(db: Db, flag: bool | None) -> tuple[bool, str]:
     """Ask about the sandbox (`choose_sandbox`) and store the answer in the global settings.
 
@@ -1581,7 +1653,9 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             # model (D194), and a second `calu setup` leaves chosen models alone (D129).
             fresh = not await _has_checker_types(db)
             try:
-                report, session = await setup_database(conn, owner, model, renew, session_iam)
+                report, session = await setup_database(
+                    conn, owner, model, renew, session_iam, update_outdated=False
+                )
             except SetupRefused as exc:
                 raise CliError(f"calu cannot be set up in {owner.place} as it is:\n{exc}") from exc
             if args.no_password:
@@ -1627,6 +1701,8 @@ def _setup(args: argparse.Namespace, store: CredentialStore) -> None:
             enabled, line = await _apply_sandbox_choice(db, args.sandbox)
             sandbox_on.append(enabled)
             report += f"\n{line}"
+            for said in await _offer_instruction_updates(db, args.update_instructions):
+                report += f"\n{said}"
             if explicit:
                 await admin.set_all_models(db, model, effort)
                 report += "\nmodels of every checker, the narrator and the summarizer: "
@@ -4127,9 +4203,10 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
     workspace. With `--keys` each checker key that is set is shown to its own provider's free
     model list, so an expired or revoked key is found before it escalates every step (D131).
     With `--db` the `admin` credential is used to ask whether the database answers and whether
-    its schema is current, and whether the global settings switch Claude Code's sandbox off,
-    in which case the recommendation of requirement 42 is a note unless it is met
-    (`doctor.sandbox_off_findings`). Nothing is changed.
+    its schema is current, whether a stored checker text is an older shipped one or the
+    user's own (`doctor.instruction_findings`), and whether the global settings switch Claude
+    Code's sandbox off, in which case the recommendation of requirement 42 is a note unless it
+    is met (`doctor.sandbox_off_findings`). Nothing is changed.
 
     As root with `--user` (or as a user with `--sudo`, which runs calu again through sudo)
     the report is about the arrangement of requirement 26: calu's own files are read as
@@ -4157,6 +4234,7 @@ def cmd_doctor(args: argparse.Namespace, store: CredentialStore) -> None:
         url = load_credential(store, "admin", "Admin password: ")
         try:
             database = asyncio.run(doctor.database_findings(url.decode()))
+            database += asyncio.run(doctor.instruction_findings(url.decode()))
             sandbox = asyncio.run(doctor.stored_sandbox(url.decode()))
         finally:
             wipe(url)
@@ -4991,7 +5069,10 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
     instructions can be fixed against a real case (D62).
 
     `set --instructions-file` reads the new instructions from a file, or from stdin for "-";
-    `edit` opens them in `$EDITOR` and stores them when the editor closes.
+    `edit` opens them in `$EDITOR` and stores them when the editor closes. `show` and `edit`
+    say on stderr whether the text is the present shipped one, an older shipped one (which
+    `update` replaces with the present one) or the user's own (which `diff` compares with the
+    shipped one and nothing replaces; agent/records/PLAN.md D248).
 
     Args:
         args: Parsed arguments (`action`, `name`, `instructions_file`, `model`, `enable`,
@@ -5062,7 +5143,22 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
                 ]
             )
         if args.action == "show":
-            return await admin.instructions(db, args.name)
+            stored = await admin.instructions(db, args.name)
+            note = _shipped_note(args.name, stored)
+            if note:
+                # On stderr: `calu checker show NAME > file` keeps the text alone.
+                print(note, file=sys.stderr)
+            return stored
+        if args.action == "diff":
+            stored = await admin.instructions(db, args.name)
+            if args.name not in SHIPPED_TEXTS:
+                return f"calu ships no instructions for a checker named {args.name!r}"
+            status = shipped_status(args.name, stored)
+            note = _shipped_note(args.name, stored)
+            return note if status.kind == "current" else f"{note}\n{status.diff(stored)}"
+        if args.action == "update":
+            row = await admin.update_instructions(db, args.name)
+            return f"updated to the present shipped version: {row.line()}"
         enabled = True if args.enable else (False if args.disable else None)
         row = await admin.set_checker(
             db,
@@ -5078,6 +5174,28 @@ def cmd_checker(args: argparse.Namespace, store: CredentialStore) -> None:
         return row.line()
 
     _admin_command(store, work, args)
+
+
+def _shipped_note(name: str, stored: str) -> str:
+    """Say how a checker's stored instructions relate to the texts calu shipped (D248).
+
+    Args:
+        name: The checker type.
+        stored: Its stored instructions.
+
+    Returns:
+        One sentence (`ShippedStatus.sentence`), with `calu checker update NAME` for an older
+        shipped text and `calu checker diff NAME` for the user's own; "" for a checker calu
+        ships no text for.
+    """
+    if name not in SHIPPED_TEXTS:
+        return ""
+    said = shipped_status(name, stored).sentence(
+        f"the {name} checker's instructions", f"`calu checker update {name}`"
+    )
+    if shipped_status(name, stored).kind == "edited":
+        said += f" (`calu checker diff {name}` shows the difference)"
+    return said
 
 
 def _edit_checker(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -5114,6 +5232,9 @@ def _edit_checker(args: argparse.Namespace, store: CredentialStore) -> None:
             return await admin.instructions(db, args.name)
 
         before = asyncio.run(_with_admin(admin_url, read))
+        note = _shipped_note(args.name, before)
+        if note:
+            print(note, file=sys.stderr)
         after, path = edit_in_editor(before, f"{args.name}-instructions.md")
         if after == before:
             print("unchanged; nothing was stored")
@@ -5540,6 +5661,16 @@ def _text_setting(
             print(asyncio.run(_with_admin(admin_url, reset)))
             return
         before, own_before = asyncio.run(_with_admin_value(admin_url, read))
+        if own_before:
+            # The scope stores its own copy: say how it relates to the shipped texts (D248),
+            # on stderr, so that `show > file` keeps the text alone.
+            state = shipped_status(admin.SHIPPED_SETTINGS[key], str(own_before))
+            command = "calu honesty" if key == "honesty.rules" else "calu traces instructions"
+            project = f" --project {args.project}" if args.project else ""
+            said = state.sentence(f"{key} ({scope})", f"`{command} reset{project}`")
+            if state.kind != "current":
+                said += f"\n{state.diff(str(own_before))}"
+            print(said, file=sys.stderr)
         if args.action == "show":
             print(before, end="" if before.endswith("\n") else "\n")
             return
@@ -6002,6 +6133,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(their old passwords are asked first, if they have any): the way back from "
         "--no-password, and the way to change a password. The role that changes settings "
         "gets the new admin password",
+    )
+    p.add_argument(
+        "--update-instructions",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="replace stored checker instructions that are an older shipped version, "
+        "unchanged, with the present one (or keep them), instead of the question; without a "
+        "terminal they are replaced. A text you edited is never replaced",
     )
     p.add_argument(
         "--sandbox",
@@ -6470,7 +6609,9 @@ def build_parser() -> argparse.ArgumentParser:
     config.set_defaults(handler=cmd_config)
 
     checker = sub.add_parser("checker", help="checker definitions: instructions, model, limits")
-    checker.add_argument("action", choices=["list", "show", "set", "edit", "stats", "misses"])
+    checker.add_argument(
+        "action", choices=["list", "show", "set", "edit", "diff", "update", "stats", "misses"]
+    )
     checker.add_argument("name", nargs="?", help="checker name, e.g. command")
     checker.add_argument(
         "--instructions-file", help="read new instructions from this file ('-' for stdin)"

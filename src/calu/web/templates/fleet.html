@@ -25,7 +25,7 @@
         <span class="decision deny" title="the process stopped saying it is there">no heartbeat for {{ (s.silent_for_s / 60) | round | int }} min</span>{% endif %}</td>
       <td data-label="Name"{% if not s.name %} class="none"{% endif %}>{% if s.name %}<a class="session-name" href="{{ url_for('session', session_id=s.id) }}">{{ s.name }}</a>{% else %}<span class="muted">–</span>{% endif %}</td>
       <td class="mono" data-label="Host">{{ s.hostname }}<span class="muted">/{{ s.os_user }}</span></td>
-      <td class="mono path" data-label="Directory" title="{{ s.directory }}">{{ s.directory }}</td>
+      <td class="mono path" data-label="Directory" title="{{ s.directory }}">{{ s.directory | home(s.os_user, s.hostname) }}</td>
       <td class="muted" data-label="Started">{{ s.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
       <td data-label="Waiting">{% if s.open_escalations %}<span class="count">{{ s.open_escalations }}</span>{% else %}<span class="muted">–</span>{% endif %}</td>
       <td>
