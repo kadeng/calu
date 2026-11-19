@@ -52,7 +52,7 @@ Notification:
 
 | method | params |
 |---|---|
-| `ide.fs.changed` | `{epoch, seq, changes: [{path, before_sha256, after_sha256, deleted, origin}]}`; `origin`: `"agent"` (a tool call of a session), `"ide"` (an `ide.fs.*` request of this connection), `"other"` |
+| `ide.fs.changed` | `{epoch, seq, changes: [{path, before_sha256, after_sha256, deleted, origin}], skipped: [{path, reason}]}`; `origin`: `"agent"` (a tool call of a session), `"ide"` (an `ide.fs.*` request of this connection), `"other"`; `skipped`: paths that became ones the bridge does not synchronise, with the reason of a manifest's `skipped` (added 2026-11-19; a bridge before that sends no `skipped`) |
 
 New error codes (-32010 to -32018 are taken; -32019 to -32029 stay free for other additions):
 
@@ -136,7 +136,12 @@ Rules:
 
 - Changes are batched (200 ms quiet, at most 500 per notification). `seq` grows by 1 per
   notification, starting at 1. `epoch` is a random id of this bridge process.
-- Paths that the manifest would not list (ignored, excluded, skipped) are not reported.
+- Paths that the manifest would not list (ignored, excluded) are not reported. A path the
+  manifest would list as skipped (above the size limit, not a regular file, a link, a
+  submodule, an unsupported name) is reported in `skipped` once, when it becomes skipped or
+  its reason changes, so that the editor can list it at once; a regular file that becomes
+  skipped is not reported as deleted. A skipped path that goes away is not reported (the
+  next full comparison drops it from the editor's list).
 - The bridge keeps the last 1000 notifications. `ide.fs.subscribe {after_seq, epoch}`
   answers `complete: true` and replays the later ones if the epoch is its own and nothing
   after `after_seq` was dropped; else `complete: false`.

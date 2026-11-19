@@ -322,6 +322,23 @@ def test_a_file_back_at_its_known_content_is_not_reported():
     assert [c["path"] for c in log.cut()[0]["changes"]] == ["b"]
 
 
+def test_a_skipped_path_replaces_its_waiting_change_and_shares_the_batch():
+    log = ChangeLog(batch=2)
+    log.add(Change("big", "h0", "h1", "other"))
+    log.skip("big", "too-large")  # the file grew above the limit: the later fact wins
+    log.skip("pipe", "not-regular")
+    log.add(Change("a", None, "h2", "other"))
+    assert bool(log)
+    notes = log.cut()
+    assert [(n["seq"], [c["path"] for c in n["changes"]], n["skipped"]) for n in notes] == [
+        (1, ["a"], [{"path": "big", "reason": "too-large"}]),
+        (2, [], [{"path": "pipe", "reason": "not-regular"}]),
+    ]
+    log.skip("x", "symlink")
+    log.add(Change("x", None, "h3", "other"))  # a regular file again
+    assert [n["skipped"] for n in log.cut()] == [[]]
+
+
 def test_a_replay_is_complete_only_for_the_own_epoch_without_a_dropped_notification():
     log = ChangeLog(kept=3)
     for index in range(5):

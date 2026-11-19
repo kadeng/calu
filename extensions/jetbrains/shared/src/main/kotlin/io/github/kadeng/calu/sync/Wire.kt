@@ -323,8 +323,10 @@ fun manifestOf(pages: List<ManifestPage>): Manifest {
  *   started again.
  * @property seq sequence number of the notification.
  * @property changes the changed files.
+ * @property skipped paths that became ones the bridge does not synchronise (a file grown above
+ *   the size limit, a new special file); empty from a bridge that does not report them.
  */
-data class FsChanged(val epoch: String, val seq: Long, val changes: List<RemoteChange>)
+data class FsChanged(val epoch: String, val seq: Long, val changes: List<RemoteChange>, val skipped: List<RemoteSkipped> = emptyList())
 
 /**
  * Read an `ide.fs.changed` notification defensively.
@@ -332,7 +334,8 @@ data class FsChanged(val epoch: String, val seq: Long, val changes: List<RemoteC
  * @param params the notification's params (untrusted).
  * @return the notification; an entry without a canonical string `path` is dropped. A change
  *   without `after_sha256` counts as deleted only if `deleted` is true. `origin` is one of
- *   "ide", "agent", "other" ("other" for a missing or unknown value).
+ *   "ide", "agent", "other" ("other" for a missing or unknown value). `skipped` is read as
+ *   a manifest's `skipped`.
  */
 fun parseFsChanged(params: JsonObject): FsChanged = FsChanged(
     epoch = params.str("epoch").orEmpty(),
@@ -342,5 +345,10 @@ fun parseFsChanged(params: JsonObject): FsChanged = FsChanged(
         val path = o.str("path")?.takeIf { wirePathProblem(it) == null } ?: return@mapNotNull null
         val origin = o.str("origin")?.takeIf { it == RemoteChange.ORIGIN_IDE || it == RemoteChange.ORIGIN_AGENT } ?: RemoteChange.ORIGIN_OTHER
         RemoteChange(path, o.str("before_sha256"), o.str("after_sha256"), o.bool("deleted"), origin)
+    },
+    skipped = params.arr("skipped").mapNotNull { entry ->
+        val o = entry.asObj() ?: return@mapNotNull null
+        val path = o.str("path") ?: return@mapNotNull null
+        RemoteSkipped(path, RemoteSkipReason.of(o.str("reason")), o.str("reason").orEmpty())
     },
 )

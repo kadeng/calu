@@ -131,6 +131,9 @@ class WireTest {
             changed.changes,
         )
         assertEquals(listOf(true, false, false), changed.changes.map { it.isOwnWrite })
+        assertEquals(emptyList<RemoteSkipped>(), changed.skipped, "a bridge before 2026-11-19 sends no `skipped`")
+        val skipped = parseFsChanged(jo("epoch" to "e1", "seq" to 8, "changes" to emptyList<Any>(), "skipped" to listOf(mapOf("path" to "big.bin", "reason" to "too-large"), mapOf("reason" to "x"))))
+        assertEquals(listOf(RemoteSkipped("big.bin", RemoteSkipReason.TOO_LARGE, "too-large")), skipped.skipped)
 
         // The engine decides from the base of the state: with a base, a change whose
         // `before_sha256` is null is a download of a changed file, not a file created on both sides.

@@ -591,7 +591,7 @@ class Change:
 class ChangeLog:
     """Collects changes and cuts them into numbered `ide.fs.changed` notifications.
 
-    add(change) ... add(change) ──► cut() ──► [{epoch, seq, changes}, ...]
+    add(change), skip(path, reason) ... ──► cut() ──► [{epoch, seq, changes, skipped}, ...]
                                                 kept: the last `KEPT_NOTIFICATIONS`
     since(after_seq, epoch) ──► the kept notifications after `after_seq`, or None if
                                 they are not all there
@@ -613,15 +613,30 @@ class ChangeLog:
         were not watched for a while (`gap`)."""
         self._batch = batch
         self._pending: dict[str, Change] = {}
+        self._skipped: dict[str, str] = {}
         self._kept: deque[dict[str, Any]] = deque(maxlen=kept)
 
     def __bool__(self) -> bool:
         """Tell whether changes wait to be cut.
 
         Returns:
-            True if `add` took a change since the last `cut`.
+            True if `add` or `skip` took something since the last `cut`.
         """
-        return bool(self._pending)
+        return bool(self._pending) or bool(self._skipped)
+
+    def skip(self, path: str, reason: str) -> None:
+        """Collect a path that became one the bridge does not synchronise.
+
+        Side effect: drops a waiting change of the same path (the path is reported as
+        skipped instead, the later fact). A later `add` of the path drops the skip in turn.
+
+        Args:
+            path: The path as a manifest's `skipped` entry names it.
+            reason: The manifest's reason ("too-large", "not-regular", "symlink",
+                "submodule", "unsupported-name").
+        """
+        self._pending.pop(path, None)
+        self._skipped[path] = reason
 
     def add(self, change: Change) -> None:
         """Collect one change. Side effect: merges it with a waiting change of the same path.
@@ -632,6 +647,7 @@ class ChangeLog:
         Args:
             change: The change.
         """
+        self._skipped.pop(change.path, None)
         earlier = self._pending.pop(change.path, None)
         if earlier is not None:
             change = Change(change.path, earlier.before, change.after, change.origin)
@@ -644,20 +660,27 @@ class ChangeLog:
 
         Returns:
             The params of the new `ide.fs.changed` notifications, in order: at most `batch`
-            changes with at most about `PAGE_PATH_CHARS` characters of paths each, `seq`
-            one above the notification before.
+            entries of `changes` and `skipped` together with at most about
+            `PAGE_PATH_CHARS` characters of paths each, `seq` one above the notification
+            before. `skipped` holds `{path, reason}` per path that became one the bridge
+            does not synchronise (the shape of a manifest's `skipped`); it is empty in most
+            notifications.
         """
-        pending, self._pending = list(self._pending.values()), {}
+        entries: list[tuple[str, dict[str, Any]]] = [
+            ("changes", change.json()) for change in self._pending.values()
+        ] + [("skipped", {"path": path, "reason": why}) for path, why in self._skipped.items()]
+        self._pending, self._skipped = {}, {}
         cut: list[dict[str, Any]] = []
-        changes: list[dict[str, Any]] = []
-        chars = 0
-        for index, change in enumerate(pending):
-            changes.append(change.json())
-            chars += len(change.path)
-            if len(changes) == self._batch or chars >= PAGE_PATH_CHARS or index == len(pending) - 1:
+        note: dict[str, Any] = {"changes": [], "skipped": []}
+        count = chars = 0
+        for index, (kind, entry) in enumerate(entries):
+            note[kind].append(entry)
+            count += 1
+            chars += len(entry["path"])
+            if count == self._batch or chars >= PAGE_PATH_CHARS or index == len(entries) - 1:
                 self.seq += 1
-                cut.append({"epoch": self.epoch, "seq": self.seq, "changes": changes})
-                changes, chars = [], 0
+                cut.append({"epoch": self.epoch, "seq": self.seq, **note})
+                note, count, chars = {"changes": [], "skipped": []}, 0, 0
         self._kept.extend(cut)
         return cut
 

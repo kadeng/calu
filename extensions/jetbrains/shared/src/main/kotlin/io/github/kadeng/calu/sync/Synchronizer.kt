@@ -351,7 +351,9 @@ class Synchronizer(
 
     /**
      * Handle an `ide.fs.changed` notification. A gap in the sequence numbers or another epoch
-     * leads to a full comparison (the resync rule of the spec).
+     * leads to a full comparison (the resync rule of the spec). A path the bridge reports as
+     * skipped is added to the list of paths that are not synchronised at once; its local copy
+     * is left as it is.
      *
      * @param n the notification.
      */
@@ -367,7 +369,10 @@ class Synchronizer(
                 return@guarded
             }
             seq = n.seq
-            val todo = n.changes.filterNot { it.isOwnWrite && state.base(it.path) == it.afterSha256 }
+            for (skip in n.skipped) notes[skip.path] = "on the server: " + skipText(skip.reasonText)
+            val skippedNow = n.skipped.map { it.path }.toSet()
+            if (skippedNow.isNotEmpty()) publish(phase, message)
+            val todo = n.changes.filterNot { (it.isOwnWrite && state.base(it.path) == it.afterSha256) || it.path in skippedNow }
             batch(todo.map { it.path }) { path ->
                 val c = todo.first { it.path == path }
                 val hint = when {

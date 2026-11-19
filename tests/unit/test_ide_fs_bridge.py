@@ -6,6 +6,7 @@ served fake session (`tests.unit.test_protocol_server.served`).
 
 import base64
 import hashlib
+import os
 import subprocess
 import tempfile
 import time
@@ -684,6 +685,49 @@ async def test_a_subscriber_is_told_about_changes_on_disk_and_about_its_own_writ
         (project / "seen.txt").write_bytes(b"y")
         assert (await wait_change(editor, "seen.txt"))["origin"] == "other"
         assert "unseen.txt" not in [c["path"] for c in changes(editor)]
+
+
+def skips(editor: Editor) -> list[dict[str, Any]]:
+    """Return every skipped path the editor was notified of, in order.
+
+    Args:
+        editor: The in-memory editor.
+    """
+    return [
+        entry
+        for name, params in editor.notifications
+        if name == "ide.fs.changed"
+        for entry in params.get("skipped", [])
+    ]
+
+
+async def test_a_path_the_bridge_would_skip_is_reported_as_skipped_at_once(
+    project: Path, store: CredentialStore
+):
+    """The watcher said nothing about a file it would not list, so an editor listed a file
+    above the size limit only at its next full comparison."""
+    (project / "grows.bin").write_bytes(b"small")
+    async with bridged(project, store, **FAST) as editor:
+        await editor.request("ide.fs.subscribe")
+        with (project / "huge.bin").open("wb") as huge:
+            huge.truncate(files.MAX_FILE_BYTES + 1)  # sparse: nothing is written
+        os.mkfifo(project / "pipe")
+        with (project / "grows.bin").open("r+b") as grows:
+            grows.truncate(files.MAX_FILE_BYTES + 1)
+        (project / "plain.txt").write_bytes(b"plain")
+        await wait_change(editor, "plain.txt")
+        with anyio.fail_after(5):
+            while len(skips(editor)) < 3:
+                await anyio.sleep(0.02)
+        await anyio.sleep(0.3)  # several scans later: each is reported once
+        assert sorted((s["path"], s["reason"]) for s in skips(editor)) == [
+            ("grows.bin", "too-large"),
+            ("huge.bin", "too-large"),
+            ("pipe", "not-regular"),
+        ]
+        assert {c["path"] for c in changes(editor)} == {"plain.txt"}
+        notes = [params for name, params in editor.notifications if name == "ide.fs.changed"]
+        assert all(set(note) == {"epoch", "seq", "changes", "skipped"} for note in notes)
 
 
 async def test_ignored_and_excluded_files_are_not_reported(project: Path, store: CredentialStore):

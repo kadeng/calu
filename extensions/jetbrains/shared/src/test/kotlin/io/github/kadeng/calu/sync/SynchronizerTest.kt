@@ -183,6 +183,17 @@ class SynchronizerTest {
         assertEquals("r\n", get("r.py"))
     }
 
+    @Test fun `a path the bridge reports as skipped is listed at once and the local copy stays`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("a.py" to "v1\n", "big.bin" to "small\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        assertEquals("calu sync: in sync", syncStatusText(s.status.value))
+        s.remoteChanged(FsChanged("e1", 1, emptyList(), listOf(RemoteSkipped("big.bin", RemoteSkipReason.TOO_LARGE, "too-large"))))
+        assertEquals("calu sync: in sync (1 skipped)", syncStatusText(s.status.value))
+        assertTrue(s.status.value.notes["big.bin"]!!.startsWith("on the server: "))
+        assertEquals("small\n", get("big.bin"), "the local copy is not deleted")
+    }
+
     @Test fun `deletions travel both ways, and a rename is one request`() = runBlocking {
         val bridge = FakeFsBridge(mapOf("a.py" to "a\n", "b.py" to "b\n", "c.py" to "c\n"))
         val s = sync(bridge)

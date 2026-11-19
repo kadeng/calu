@@ -201,6 +201,8 @@ class FileSync:
         self._watcher: anyio.CancelScope | None = None
         self._known: dict[str, tuple[Signature, str | None]] = {}
         """Path -> (signature, hash or None if never read) at the last scan or own write."""
+        self._skipped: dict[str, str] = {}
+        """Path -> reason of each listed path the last scan skipped (a manifest's `skipped`)."""
         self._wake = anyio.Event()
         self._dirty = anyio.Event()
         self._released = anyio.Event()
@@ -908,6 +910,7 @@ class FileSync:
             self.changes.cut()
             self.changes.gap()
             self._known = {}
+            self._skipped = {}
         return {}
 
     async def _subscribed(self, scope: anyio.CancelScope) -> None:
@@ -950,7 +953,10 @@ class FileSync:
         Side effects: holds the write lock; one listing, one `lstat` per file, and a read
         of every file whose signature changed. A changed file whose content is the known
         one is not reported. A file that left the listing is reported as deleted only if
-        nothing is at its path any more.
+        nothing is at its path any more. A listed path that is skipped now and was not (or
+        for another reason) at the scan before is reported in `skipped` (a new file above
+        the size limit, a file that grew above it, a FIFO, a link), so that an editor can
+        list it at once rather than at its next full comparison.
 
         Args:
             baseline: True for the first scan: the signatures are taken, nothing is
@@ -962,9 +968,11 @@ class FileSync:
         tree = self.tree()
         async with self._io:
             listing = await anyio.to_thread.run_sync(tree.listing)
-            _files, _skipped, current = await anyio.to_thread.run_sync(
+            _files, skipped_now, current = await anyio.to_thread.run_sync(
                 tree.describe, listing.paths, listing.git, False
             )
+            skipped = {entry["path"]: entry["reason"] for entry in skipped_now}
+            skipped_before, self._skipped = self._skipped, skipped
             # Taken after the look at the files: an event that arrived meanwhile may be
             # about a change this scan already sees.
             hints = Hints() if baseline else self.turn.take_hints()
@@ -973,6 +981,10 @@ class FileSync:
                     path: (found, tree.cache.seen(path, found)) for path, found in current.items()
                 }
                 return
+            for path, reason in skipped.items():
+                if skipped_before.get(path) != reason and self._watcher is not None:
+                    self.changes.skip(path, reason)
+                    self._dirty.set()
             before = {path: known[0] for path, known in self._known.items()}
             changed, gone = changed_paths(before, current)
             if changed:
