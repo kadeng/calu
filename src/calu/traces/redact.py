@@ -421,7 +421,7 @@ class Redactor:
             text: The text, after stage 1.
 
         Returns:
-            The redacted text; "" for a text without visible characters, without a model
+            The redacted text; a text without visible characters unchanged, without a model
             call.
 
         Raises:

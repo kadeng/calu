@@ -551,7 +551,9 @@ class TraceWriter:
         """Write what is left in the queue and close the file (no waiting, no model call).
 
         A block whose text is ready is written; any other block is written as its heading
-        with `WITHHELD_AT_END`, never as its own text.
+        with `WITHHELD_AT_END`, never as its own text. If no event added a block to the
+        file, the file and the directories left empty by it are removed instead
+        (`_remove_empty`).
         """
         if self._fd is None:
             return

@@ -731,7 +731,8 @@ def session_directory(workspace: Path, directory: str, started: datetime, user: 
     Args:
         workspace: The project directory.
         directory: `traces.directory`, relative to the project.
-        started: When the session started (the date in UTC names the directory).
+        started: When the session started; its date names the directory (the caller gives
+            it in UTC; it is not converted here).
         user: The OS user Claude Code runs as.
 
     Returns:
@@ -752,6 +753,8 @@ def create_trace_file(workspace: Path, target: Path) -> tuple[Path, int]:
     sessions that start at the same moment get two files.
 
     Side effects: creates `target` with its parents, and the file (mode 0644, less the umask).
+    Nothing is created when the deepest existing directory of `target` lies outside the
+    project.
 
     Args:
         workspace: The project directory; `target` must lie inside it once links are
@@ -765,11 +768,23 @@ def create_trace_file(workspace: Path, target: Path) -> tuple[Path, int]:
         TraceFileError: If the directory, with its links resolved, is not inside the project
             directory, or the directory or the file cannot be created.
     """
-    try:
-        target.mkdir(parents=True, exist_ok=True)
-        real, root = target.resolve(), workspace.resolve()
+    root = workspace.resolve()
+
+    def refuse_outside(directory: Path) -> None:
+        real = directory.resolve()
         if real != root and root not in real.parents:
             raise TraceFileError(f"{target} leads out of the project directory ({real})")
+
+    try:
+        # The deepest directory that exists is checked before anything is created, so that a
+        # link in the project cannot make calu create directories outside it; the target is
+        # checked again once it exists.
+        existing = target
+        while not existing.exists() and existing != existing.parent:
+            existing = existing.parent
+        refuse_outside(existing)
+        target.mkdir(parents=True, exist_ok=True)
+        refuse_outside(target)
         number = 0
         for entry in os.listdir(target):
             found = FILE_NAME.match(entry)

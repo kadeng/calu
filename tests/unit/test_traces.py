@@ -473,7 +473,7 @@ def test_a_trace_directory_that_leads_out_of_the_project_is_refused(tmp_path: Pa
     (workspace / "traces").symlink_to(outside)
     with pytest.raises(TraceFileError, match="out of the project directory"):
         create_trace_file(workspace, workspace / "traces" / "2026-11-18" / "kai")
-    assert not list(outside.rglob("session_*.md"))
+    assert not list(outside.iterdir()), "not even the directories are created outside"
 
 
 def test_the_trace_of_a_claude_session_is_found_by_its_marker(tmp_path: Path):
