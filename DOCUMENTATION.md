@@ -1236,9 +1236,16 @@ and the result is harder to read and to change.
 
 Treat review findings as input to a decision. A useful rule for the agents and for
 the checkers: weigh the importance of each reported issue against the complexity its fix
-adds. Fix an issue when it can really happen and its consequence matters (lost or corrupted
-data, a security hole, a wrong result a user relies on). Leave a rare or harmless corner case
-alone, or record it as a known limit, when handling it would add more code than it is worth.
+adds. No type of finding is a must-fix in itself, security included. The weight of a finding
+depends on what is being built, for whom, under which constraints and for which purpose: a
+throwaway script on your own machine needs a different answer than a public service. Fix an
+issue when it can really happen in this project and its consequence matters there. Leave a
+rare or harmless corner case alone, or record it as a known limit, when handling it would add
+more code than it is worth. When the trade-off is unclear, ask the user.
+
+Models trained to find and fix every problem tend to a degree of perfectionism that real
+projects cannot afford. Engineering is a matter of trade-offs, and the checkers' instructions
+are the place to say which trade-offs this project makes.
 
 A subagent's verdict also never outranks the user. A reviewer may state with full confidence
 that something is a defect, but it does not know what the user knows. The user may have asked
@@ -1260,12 +1267,14 @@ is the place to say this. Example (`calu checker edit subagent-result`):
 - A result that asks for new options, abstraction layers or defensive checks for cases
   that cannot occur in this project: PASS with a comment that says the main agent should
   not build them.
-- A finding about data loss, security or a wrong result: PASS with a comment that it must
-  be fixed.
+- A finding about data loss, security or a wrong result: weigh it against what this
+  project is and does (see AGENTS.md). PASS with a comment that says whether it matters
+  here and why; when that depends on something only the user knows, the comment says to
+  ask the user.
 - A finding that contradicts what the user asked for or ruled out (the user wanted a quick
   solution, or said the case cannot occur): PASS with a comment that the user's word wins
-  and the main agent should not act on that finding. If the finding is about data loss or
-  security, the comment says to tell the user about it instead.
+  and the main agent should not act on that finding. When the finding could matter a lot
+  (data loss, security), the comment says to tell the user about it, and the user decides.
 ```
 
 The edit checker can back this up with a rule such as "An edit that adds a check, option or
