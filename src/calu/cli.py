@@ -116,6 +116,7 @@ from calu.db import Db, LoginRefused, migrate
 from calu.db import local as local_db
 from calu.db import place as db_place
 from calu.db import rds as rds_auth
+from calu.db import roles as db_roles
 from calu.db.connection import open_stored
 from calu.db.target import (
     PasswordAuth,
@@ -270,7 +271,10 @@ _held: list[Target] = []
 """The database login a client that runs as root keeps in memory (`calu attach --sudo`): read
 once from root's store, then used for every later step (minting and revoking tokens,
 switching sessions, changing settings), because after the switch to the user's file identity
-the store cannot be read again, and so that nothing is asked twice (agent/records/PLAN.md D214)."""
+the store cannot be read again, and so that nothing is asked twice (agent/records/PLAN.md D214).
+`_hold_for_client` makes it the narrowest one that serves all of them, `calu_admin` where the
+database accepts the admin password (D249); each step then narrows the connection further to
+the role it needs (`calu.db.roles.narrow`). Never written to disk or passed on."""
 
 _hold: list[bool] = []
 """Non-empty while the next credential a herd command loads is to be kept in `_held`."""
@@ -2406,7 +2410,7 @@ def cmd_start(args: argparse.Namespace, store: CredentialStore) -> None:
         token_id, token = await herd.mint_token(db, done.session_id, "calu start")
         return Endpoint(address, token, token_id, done.session_id), claude_id
 
-    endpoint, claude_id = _herd_value(store, work)
+    endpoint, claude_id = _herd_value(store, work, role=db_roles.OPERATOR)
     if claude_id:
         print(f"[session] {claude_id}", flush=True)
     else:
@@ -2978,6 +2982,177 @@ def _hold_password_free(store: CredentialStore) -> None:
         return
 
 
+def _changes_settings(login: Target) -> bool:
+    """Tell whether a held login may change settings: `calu_admin` or the owner.
+
+    Args:
+        login: A login `_held` keeps.
+
+    Returns:
+        False for the logins of `calu_operator` and `calu_session`, True for every other
+        role (`calu_admin`, and the owner, whose name `calu setup` does not fix).
+    """
+    return login.user not in (db_roles.OPERATOR, db_roles.SESSION)
+
+
+ADMIN_ONCE_PROMPT = (
+    "Admin password (asked once; this client keeps the login in memory for /running, "
+    "/switch, /new, /fork and saving settings; Ctrl-D skips): "
+)
+"""The prompt of a root client that holds no login that changes settings yet (D249)."""
+
+ADMIN_ATTEMPTS = 3
+"""How often a root client asks the admin password before it attaches without the database."""
+
+
+def _hold_for_client(store: CredentialStore, may_ask: bool) -> str | None:
+    """Give a root client the one login it keeps for its database features (D214, D249).
+
+    A client that runs as root for a user (`calu attach --sudo`, `calu start --sudo`) asks
+    the admin password at most once per run, before it switches to the user's file
+    identity, and keeps the narrowest login that serves every later step in `_held`:
+
+        `_held` is `calu_admin`                      ──► kept, nothing asked
+        `_held` is the owner, and the admin password
+          was typed to open it (`_typed`)            ──► `calu_admin` with that password,
+                                                         if the database accepts it; the
+                                                         owner login is dropped
+        `_held` is the owner without a password      ──► kept (each action narrows it,
+                                                         `calu.db.roles.narrow`)
+        nothing held, or `calu_operator` (may_ask)   ──► the admin password is asked here,
+                                                         up to `ADMIN_ATTEMPTS` times:
+                                                         `calu_admin` with it, or, where
+                                                         the role refuses it (a blank admin
+                                                         password, a schema before migration
+                                                         0033), the owner login of root's
+                                                         `admin` entry that it opened
+
+    The login stays in this process's memory: it is not written anywhere, not put in an
+    environment variable, and not given to the session or to a program the client starts.
+
+    Side effects: may ask for the password on the terminal, open root's `admin` entry with
+    it and log in once as `calu_admin` to check it; sets `_held` and `_admin_place`; prints
+    a line on stderr after a password that opens nothing.
+
+    Args:
+        store: Root's credential store, still readable (before `_become_client_of`).
+        may_ask: Whether the password may be asked: True for the full-screen client, whose
+            database features need it; False for the line client.
+
+    Returns:
+        None if the client holds a login that changes settings, or holds none and asks
+        none; otherwise why its database features are not available (skipped with
+        Ctrl-D, or no password was accepted).
+    """
+    if _held and _changes_settings(_held[0]):
+        typed = _typed.get("admin")
+        if _held[0].user != db_roles.ADMIN and typed is not None:
+            narrower = _admin_if_accepted(_held[0], typed)
+            if narrower is not None:
+                _held[:] = [narrower]
+        return None
+    if not may_ask or not ("admin" in store or _held or _place_or_none() is not None):
+        return None
+    for _ in range(ADMIN_ATTEMPTS):
+        try:
+            password = read_password(ADMIN_ONCE_PROMPT)
+        except CliError:
+            return SKIPPED_ADMIN
+        try:
+            login = _login_for_password(store, password)
+        finally:
+            wipe(password)
+        if login is not None:
+            _held[:] = [login]
+            with contextlib.suppress(ValueError):
+                _admin_place[:] = [admin_login(login, "")]
+            return None
+        print("[client] the admin password was not accepted", file=sys.stderr, flush=True)
+    return REFUSED_ADMIN
+
+
+SKIPPED_ADMIN = (
+    "the admin password was skipped: /running, /switch, /new, /fork and saving settings "
+    "need it; `calu attach --sudo` again asks it once"
+)
+"""Why a root client offers no database features after Ctrl-D at the admin password."""
+
+REFUSED_ADMIN = (
+    f"the admin password was not accepted {ADMIN_ATTEMPTS} times: /running, /switch, /new, "
+    "/fork and saving settings need it; `calu attach --sudo` again asks it once"
+)
+"""Why a root client offers no database features after wrong admin passwords."""
+
+
+def _place_or_none() -> Target | None:
+    """Read root's place file (`calu.db.place`) without raising.
+
+    Returns:
+        The login it describes, or None if there is no trustworthy file.
+    """
+    try:
+        return db_place.read()
+    except db_place.PlaceError:
+        return None
+
+
+def _admin_if_accepted(place: Target, password: str) -> Target | None:
+    """Return the login of `calu_admin` with `password` if the database accepts it.
+
+    Side effect: one login as `calu_admin`, opened and closed (`is_admin_password`).
+
+    Args:
+        place: Any login of the database.
+        password: The admin password.
+
+    Returns:
+        The login, or None if the role refused the password, the database cannot be
+        reached, or `place` cannot be taken over (a libpq service name).
+    """
+    try:
+        if asyncio.run(is_admin_password(place, password)):
+            return admin_login(place, password)
+    except (psycopg.Error, ValueError) as exc:
+        _log.info("the login of calu_admin could not be checked: %s", exc)
+    return None
+
+
+def _login_for_password(store: CredentialStore, password: bytearray) -> Target | None:
+    """Turn the admin password a root client was given into the login it keeps.
+
+    The password opens root's `admin` entry (the owner login) where it is stored with a
+    password, and is the password of the role `calu_admin` after every `calu setup` that
+    was given it (D213). The narrower login wins:
+
+        `calu_admin` accepts it            ──► that login
+        it opens the `admin` entry only    ──► the owner login (blank admin password, a
+                                               schema before migration 0033)
+        neither                            ──► None
+
+    Args:
+        store: Root's credential store.
+        password: The typed password; not wiped here.
+
+    Returns:
+        The login, or None for a password that opens nothing.
+    """
+    owner: Target | None = None
+    try:
+        if "admin" in store and store.needs_password("admin"):
+            secret = store.load("admin", password)
+            try:
+                owner = Target.parse(secret)
+            finally:
+                wipe(secret)
+    except (CredentialError, OSError, ValueError) as exc:
+        _log.info("the 'admin' credential was not opened: %s", exc)
+    place = owner or (_held[0] if _held else None) or _place_or_none()
+    if place is None:
+        return None
+    admin = _admin_if_accepted(place, bytes(password).decode())
+    return admin if admin is not None else owner
+
+
 def _find_endpoint(
     store: CredentialStore, hint: str | None, label: str, may_ask: bool = True
 ) -> Endpoint:
@@ -3037,7 +3212,7 @@ def _find_endpoint(
         token_id, token = await herd.mint_token(db, row.id, label)
         return Endpoint(row.address, token, token_id, row.id, gone=_row_gone(row))
 
-    return _herd_value(store, work, may_ask)
+    return _herd_value(store, work, may_ask, db_roles.OPERATOR)
 
 
 def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None:
@@ -3073,7 +3248,7 @@ def _revoke(store: CredentialStore, token_id: int, may_ask: bool = True) -> None
         return await herd.revoke_token(db, token_id)
 
     try:
-        _herd_value(store, work, may_ask)
+        _herd_value(store, work, may_ask, db_roles.OPERATOR)
     except NeedsPassword:
         print(
             f"note: the client token {token_id} was not revoked, because that would ask the "
@@ -3106,7 +3281,10 @@ def _shared_admin() -> Target | None:
 
 
 def _herd_value[T](
-    store: CredentialStore, work: Callable[[Db], Awaitable[T]], may_ask: bool = True
+    store: CredentialStore,
+    work: Callable[[Db], Awaitable[T]],
+    may_ask: bool = True,
+    role: str | None = None,
 ) -> T:
     """Run `work` with a database login and return its value.
 
@@ -3133,6 +3311,9 @@ def _herd_value[T](
             `read_password` reads a line from stdin when it is not a terminal, so a prompt
             there would eat the editor's first request and call it the password. An encrypted
             credential is then an error that says what to do instead.
+        role: The narrowest role that can do `work` (`_with_admin_value`), e.g.
+            `calu_operator` for finding a session and minting or revoking its token; None
+            runs it with the login's own role.
 
     Returns:
         What `work` returned.
@@ -3144,14 +3325,14 @@ def _herd_value[T](
         psycopg.Error: On database errors.
     """
     if _held:
-        return asyncio.run(_with_admin_value(_held[0], work))
+        return asyncio.run(_with_admin_value(_held[0], work, role))
     shared = _shared_admin()
     if shared is not None:
         # `sudo calu setup --no-password`: the login every user of the machine may read
         # (D228). Nothing is asked, and this user's own store, which may name another
         # database, is not consulted.
         _admin_place[:] = [shared]
-        return asyncio.run(_with_admin_value(shared, work))
+        return asyncio.run(_with_admin_value(shared, work, role))
     names = ("admin", "operator") if _hold else OPERATOR_FIRST
     if ADMIN_ENTRY in store and not store.needs_password(ADMIN_ENTRY):
         # `calu setup --no-password`: the login that asks nothing and may do everything a
@@ -3177,7 +3358,7 @@ def _herd_value[T](
                         # keeps the login for its later steps (revoking its token at the
                         # end) instead of asking the password a second time.
                         _held[:] = [Target.parse(url)]
-                return asyncio.run(_with_admin_value(url.decode(), work))
+                return asyncio.run(_with_admin_value(url.decode(), work, role))
             finally:
                 wipe(url)
     raise CliError(
@@ -3188,12 +3369,17 @@ def _herd_value[T](
     )
 
 
-async def _with_admin_value[T](url: str | Target, work: Callable[[Db], Awaitable[T]]) -> T:
+async def _with_admin_value[T](
+    url: str | Target, work: Callable[[Db], Awaitable[T]], role: str | None = None
+) -> T:
     """Connect, run `work`, close the connection and return its value.
 
     Args:
         url: The connection string.
         work: Called with the wrapped connection.
+        role: The narrowest role that can do `work`; the connection takes it before `work`
+            runs (`calu.db.roles.narrow`, which leaves a login that may not take it as it
+            is). None runs `work` with the login's own role.
 
     Returns:
         What `work` returned.
@@ -3203,6 +3389,8 @@ async def _with_admin_value[T](url: str | Target, work: Callable[[Db], Awaitable
     """
     conn = await open_stored(url)
     try:
+        if role is not None:
+            await db_roles.narrow(conn, role)
         return await work(Db(conn))
     finally:
         await conn.close()
@@ -3274,8 +3462,9 @@ def _attach(
         after_seq: Continue after this event sequence number.
         thinking: The line client also prints Claude's thinking.
         run_as: The user a client that runs as root works for (`_client_user`): the client
-            then does its file access and starts its programs as that user, and uses the
-            login it holds in memory for settings and for switching sessions.
+            then asks the admin password at most once (`_hold_for_client`), does its file
+            access and starts its programs as that user, and uses the login it holds in
+            memory for settings and for switching sessions.
         given: Whether the address was given on the command line (the remote way): the line
             printed after the client names it, so that attaching again needs no database.
 
@@ -3283,11 +3472,20 @@ def _attach(
         CliError: If the address cannot be reached, the token is refused, the user cannot be
             switched to, or the client ended with an error.
     """
+    full_screen = tui_start.wants_full_screen(plain)
+    admin_problem: str | None = None
+    if run_as is not None and endpoint.relay is None:
+        # Before the switch: root's store is readable now, and the password is asked at
+        # most once for the whole run (D214, D249).
+        admin_problem = _hold_for_client(store, full_screen)
     if run_as is not None:
         _become_client_of(run_as)
-    admin_problem: str | None = None
-    if _held and _held[0].user == ADMIN_ROLE:
-        database: Target | None = _held[0]
+    if admin_problem is not None:
+        database: Target | None = None
+        print(f"[client] {admin_problem}", file=sys.stderr, flush=True)
+    elif _held and _changes_settings(_held[0]):
+        # A root client's own login, complete: no dialog asks a password again (D249).
+        database = _held[0]
     elif _admin_place:
         # The admin password is asked when a change needs it, and not kept (D213).
         database = _admin_place[0]
@@ -3314,7 +3512,7 @@ def _attach(
         # need the database, on the server's machine.
         admin_problem = admin_problem or RELAY_CLIENT
     try:
-        if tui_start.wants_full_screen(plain):
+        if full_screen:
             # On a terminal: the full-screen client (`calu.tui`); it shows thinking by itself.
             while True:
                 ended = tui_start.run_tui(

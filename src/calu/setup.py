@@ -17,7 +17,7 @@ import psycopg
 from psycopg import sql
 
 from calu.config import CHANGESET_REQUEST_LIMIT, CheckerConfig, changeset_limits
-from calu.db import migrate
+from calu.db import migrate, roles
 from calu.db.connection import open_stored
 from calu.db.target import PasswordAuth, RdsIamAuth, Target
 from calu.defaults.instructions import shipped_status
@@ -52,8 +52,8 @@ RULE_LISTS = (
     "write-deny",
 )
 
-SESSION_ROLE = "calu_session"
-OPERATOR_ROLE = "calu_operator"
+SESSION_ROLE = roles.SESSION
+OPERATOR_ROLE = roles.OPERATOR
 
 MIN_SERVER_VERSION = 140000
 """`server_version_num` of the oldest PostgreSQL `calu setup` accepts (14)."""
@@ -387,7 +387,7 @@ async def _enable_login(conn: psycopg.AsyncConnection, admin: Target, role: str)
     return login
 
 
-ADMIN_ROLE = "calu_admin"
+ADMIN_ROLE = roles.ADMIN
 """The role a person changes settings as, with a password that is typed and never stored
 (migration 0033)."""
 

@@ -222,7 +222,13 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
     calls: list[tuple[Any, ...]] = []
 
     class Conn:
-        """A connection that only closes."""
+        """A connection that takes a role and closes."""
+
+        autocommit = True
+
+        async def execute(self, statement: Any) -> None:
+            """Record the role the connection takes (`calu.db.roles.narrow`)."""
+            calls.append(("role", statement.as_string(None).split()[-1].strip('"')))
 
         async def close(self) -> None:
             """Record the close."""
@@ -269,6 +275,7 @@ async def test_instructions_and_mode_are_stored_through_calu_admin(
     assert (saved.name, saved.version) == ("command", 13)
     assert calls == [
         ("connect", "postgresql://owner@db/calu"),
+        ("role", "calu_admin"),
         ("set_checker", "command", "new text"),
         ("close",),
     ]

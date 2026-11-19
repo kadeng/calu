@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D247, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D249, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -153,6 +153,19 @@ Decided (do not ask again):
   (requirement 45, built: PLAN D246, below).
 - **Sandbox (D239):** a root setup counts as more privileged; `calu doctor` without `--db`
   stays silent about the sandbox. Both as built.
+
+#### A root client asks the admin password once (2026-11-19, PLAN D249)
+
+The owner's decision: `calu attach --sudo` and `calu start --sudo` ask the admin password
+once per client run, and the design follows least privilege. Built (not pushed): the root
+client keeps `calu_admin` with the typed password in memory (the owner login only after a
+blank admin password), asks before the full-screen client starts when it found its session
+through a root socket (Ctrl-D skips), and passes the complete login to the client, so no
+dialog follows, also after `/switch`. Every client action narrows its connection with
+`SET ROLE` (`calu.db.roles`): sessions, requests and tokens as `calu_operator`, settings as
+`calu_admin`. D249 (4) maps the roles to the actions and recommends per-person roles with RLS
+first, for later. Root box: 24 passed (the serve test needed `--projects` since D243). Open:
+`docs/TESTING.md` item 31 by hand through a real sudo on a terminal.
 
 #### The sandbox question of `calu setup` (2026-11-19, PLAN D239, requirement 42)
 

@@ -256,7 +256,11 @@ the launcher's refusal of a uid, gid or group the system calls would leave uncha
 `calu setup` writing `/var/lib/calu/database.json` (the tests keep and restore a file
 that was there), with and without `--no-password`, and the sandbox-off advice that follows
 it in setup and in a `--user` session; `calu serve --user` starting Claude Code (a stand-in
-that answers the Agent SDK's start-up requests) as that uid behind a root socket.
+that answers the Agent SDK's start-up requests) as that uid behind a root socket; a client
+as root that asks the admin password once, keeps `calu_admin` (or the owner login after a
+blank admin password) in memory, switches to the user's file identity, and then lists
+sessions and saves settings without a password while root's store is closed to it and
+neither its environment nor a program it starts holds the password (D249).
 
 The tests are skipped unless the process is root **and** `CALU_ROOT_TESTS=1` is set: they
 create directories below `/var/lib/calu` and `/run/calu` and start programs as other uids,
@@ -265,12 +269,13 @@ which a test run must not do to a developer's machine. They run in the root box,
 
 ```bash
 calu/uitest/rootbox/run.sh                    # once: build, start, install calu inside
-docker exec calu-rootbox rootbox-tests        # 22 tests, a PostgreSQL cluster of their own (port 5434)
+docker exec calu-rootbox rootbox-tests        # 24 tests, a PostgreSQL cluster of their own (port 5434)
 docker exec calu-rootbox rootbox-tests -k socket -x
 ```
 
 `rootbox-tests` syncs a virtual environment in `/opt/calu-venv` from the read-only checkout
-and runs `pytest -m root tests/root`. CI does not run this layer. Run on 2026-11-19: 22 passed.
+and runs `pytest -m root tests/root`. CI does not run this layer. Run on 2026-11-19: 24 passed
+(after the serve test was given its projects directory, D243).
 
 ## The live layer
 
@@ -664,7 +669,12 @@ escalation resolved from the database alone.
    `client:root:calu attach`; `calu start --sudo` asks the admin password once; as yourself
    `calu config set` asks the admin password once and a wrong one is said in one sentence.
    Not run: the full-screen client's `/checkers`, `/running`, `/switch`, `f4` as root
-   (test plan, section C).
+   (test plan, section C). Since D249 the client found through a root socket asks the admin
+   password once before it starts (Ctrl-D skips it and the client says the database
+   commands are not available); `/running`, `/switch`, `/new`, `/fork`, `/rename`, saving
+   instructions and `/honesty` must then show no password dialog in that run, also after
+   a `/switch`. With a blank admin password the same must hold (the owner login is kept).
+   The root box test `tests/root/test_root_client.py` runs the part without the screen.
 32. The web interface's login (D216), after `sudo calu setup`: `calu web` must print the
    address without a token; the browser must show a page asking for the admin password, say
    "That is not the admin password" after a wrong one (and answer the next attempt later),

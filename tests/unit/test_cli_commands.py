@@ -257,13 +257,14 @@ def _fake_start(monkeypatch: pytest.MonkeyPatch, wait: Any, claude_id: str = "")
         """
         return ("ws://127.0.0.1:1", claude_id)
 
-    def herd_value(store: Any, work: Any, may_ask: bool = True) -> Any:
+    def herd_value(store: Any, work: Any, may_ask: bool = True, role: Any = None) -> Any:
         """Run `work` with the fake connection; Ctrl-C is simulated by `wait`.
 
         Args:
             store: The store (ignored).
             work: The coroutine function.
             may_ask: Ignored.
+            role: Ignored.
 
         Returns:
             What `work` returned.

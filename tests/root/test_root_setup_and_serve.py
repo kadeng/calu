@@ -293,7 +293,16 @@ async def test_calu_serve_as_root_runs_claude_code_as_the_user_behind_a_root_soc
         "XDG_STATE_HOME": str(state),
     }
     environment.pop("SUDO_UID", None)
-    command = [str(Path(sys.executable).parent / "calu"), "serve", "--user", f"{OTHER_UID}"]
+    # The projects directory is the one that holds the project (D243); the default, the
+    # current directory, is the checkout.
+    command = [
+        str(Path(sys.executable).parent / "calu"),
+        "serve",
+        "--user",
+        f"{OTHER_UID}",
+        "--projects",
+        str(project.parent),
+    ]
     server = await anyio.to_thread.run_sync(
         lambda: subprocess.Popen(
             command,

@@ -2417,19 +2417,30 @@ ignores `XDG_CONFIG_HOME` and `XDG_STATE_HOME`.
 | `calu attach --sudo`, `calu web --sudo` | none. They use the root-only Unix socket: the client checks that the socket and its directory are root's alone, and the session asks the kernel whether the peer is root. `calu attach --sudo` in the project directory finds its session through these sockets, without the database |
 | your own `calu attach` without `--sudo` | a token. This also applies to a session that runs Claude Code as you: every program that Claude Code starts runs as you too, and the kernel cannot tell your client from such a program |
 
-- `calu attach --sudo` asks for no password when it finds its session through a root-only
-  socket. `calu start --sudo`, and `calu attach --sudo` for a session that it finds only in the
-  database, ask once for the password of the `admin` credential in `/etc/calu` (the admin
-  password), or of the `operator` credential where no `admin` credential is stored. The client
-  keeps that login in memory. Minting and revoking its tokens, and attaching to the session
-  that `/new`, `/fork` or `/switch` names, then need no further password.
-- `/running`, `/switch`, `/new`, `/fork`, saving a checker's instructions and changing
-  `honesty.mode` log in to the database as the role `calu_admin`. They ask for no password when
-  the client has a complete login of that role: a `calu_admin` entry without a password in
-  `/etc/calu`, or the login in `/var/lib/calu/database.json` (both written by `sudo calu setup
-  --no-password`). Otherwise the client asks for the admin password at each of these commands
-  and keeps it nowhere. A client that does not know the database says that these commands are
-  not available.
+- **One password per client run.** The full-screen client of `calu attach --sudo` and `calu
+  start --sudo` asks for the admin password at most once, before it starts, and keeps the
+  database login it needs in memory until it ends. `/running`, `/switch`, `/new`, `/fork`,
+  `/rename`, saving a checker's instructions, changing `honesty.mode`, and minting and revoking
+  the client's tokens then ask for no password. The login is never written to a file and never
+  given to Claude Code or to a program the client starts (the editor, the git program).
+- Which login the client keeps: the role `calu_admin` with the admin password you typed, where
+  the database accepts it (every `sudo calu setup` with a typed admin password sets it). With a
+  blank admin password, which PostgreSQL does not accept for a login, the client keeps the
+  owner login that the password opened in `/etc/calu`. Each command then uses only the
+  privileges it needs: listing and requesting sessions and the tokens as `calu_operator`,
+  settings as `calu_admin`.
+- When it asks: `calu start --sudo`, and `calu attach --sudo` for a session that it finds only
+  in the database, ask for the password of the `admin` credential in `/etc/calu` to find the
+  session, and that one answer is the only one. `calu attach --sudo` that finds its session
+  through a root-only socket asks for the admin password once before the client starts. Ctrl-D
+  at that prompt skips it; the client then attaches and says that these commands are not
+  available. After three passwords that open nothing it does the same.
+- It asks nothing after `sudo calu setup --no-password`: it then takes the `calu_admin` entry
+  without a password in `/etc/calu`, or the login in `/var/lib/calu/database.json`. The line
+  client (`--plain`) asks no admin password either.
+- Your own `calu attach` without `--sudo` keeps no password: it asks for the admin password at
+  each of these commands, because every program that Claude Code starts as you could read it
+  from that process.
 - No program that Claude Code starts can read or steer a client that runs as root. The
   client's editor and git program still run as you.
 - A client that found a root session through a socket learns the database from an entry
