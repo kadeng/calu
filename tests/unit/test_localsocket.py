@@ -171,12 +171,12 @@ async def test_a_root_client_finds_its_session_through_the_sockets_alone(
     async with served(workspace) as run, anyio.create_task_group() as tg:
         tg.start_soon(run.server.listen_local, localsocket.bind(path, owner=ME), path)
         monkeypatch.chdir(workspace / "sub")
-        found = await anyio.to_thread.run_sync(cli._root_socket_endpoint, None)
+        found = await anyio.to_thread.run_sync(cli._local_socket_endpoint, None)
         assert found is not None
         assert (found.address, found.token, found.token_id) == (f"unix:{path}", "", None)
-        assert await anyio.to_thread.run_sync(cli._root_socket_endpoint, "nope") is None
+        assert await anyio.to_thread.run_sync(cli._local_socket_endpoint, "nope") is None
         monkeypatch.chdir(tmp_path)
-        assert await anyio.to_thread.run_sync(cli._root_socket_endpoint, None) is None
+        assert await anyio.to_thread.run_sync(cli._local_socket_endpoint, None) is None
         tg.cancel_scope.cancel()
 
 
@@ -238,7 +238,7 @@ async def test_an_insecure_session_lets_local_clients_in_without_a_token(
         tg.start_soon(run.server.listen_local, localsocket.bind(path, owner=ME), path)
         # An ordinary user's `calu attach` finds the session through its socket alone.
         monkeypatch.chdir(workspace)
-        found = await anyio.to_thread.run_sync(cli._root_socket_endpoint, None)
+        found = await anyio.to_thread.run_sync(cli._local_socket_endpoint, None)
         assert found is not None and (found.address, found.token) == (f"unix:{path}", "")
         async with connect(found.address, "", "unix-client", Events()) as client:
             assert (await client.request("state.get"))["workspace"] == str(workspace)

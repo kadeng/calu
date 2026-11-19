@@ -452,7 +452,7 @@ async def test_an_insecure_server_lets_local_clients_into_its_sessions_without_a
             path = localsocket.path_of(done.session_id, sockets)
             assert path.is_socket() and path.stat().st_mode & 0o777 == 0o600
             monkeypatch.chdir(project)
-            found = await anyio.to_thread.run_sync(cli._root_socket_endpoint, None)
+            found = await anyio.to_thread.run_sync(cli._local_socket_endpoint, None)
             assert found is not None and found.address == f"unix:{path}"
         async with owner_db(db_url) as db, serving(session_url):
             done = await ask(db, request(project))

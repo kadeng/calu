@@ -378,8 +378,9 @@ def _admin_secret(store: CredentialStore, args: argparse.Namespace | None = None
     "only ... stored", whatever else is stored.
 
     Side effects: asks for the passwords of the entries it reads (both entries where both
-    are stored and none was chosen); prints the line of `_announce_change` to stderr unless
-    the command only reads (`_only_reads`).
+    are stored and none was chosen); an `admin` password typed here stays in `_typed` until
+    the command ends (`load_credential`), and so does nothing else; prints the line of
+    `_announce_change` to stderr unless the command only reads (`_only_reads`).
 
     Args:
         store: The credential store.
@@ -2250,7 +2251,19 @@ and works too, so a setup that never made an operator credential keeps working u
 
 
 def _herd_command(store: CredentialStore, work: Callable[[Db], Awaitable[str]]) -> None:
-    """Run a read-and-resolve command with the narrowest credential available.
+    """Run a read-and-resolve command and print its report.
+
+    The login, in this order (not the narrowest one: the first row is `calu_admin`):
+
+        the place file holds a login (D228)   ──► that login (`calu_admin`), nothing is asked
+        `operator` stored                     ──► that entry (`calu_operator`)
+        `admin` stored                        ──► that entry (the database owner)
+
+    Unlike `_herd_value` it neither uses a login kept in `_held` nor prefers a password-free
+    `calu_admin` entry of the store, and it records nothing in `_admin_place`.
+
+    Side effects: asks for the password of the entry it reads; an `admin` password typed
+    here stays in `_typed` until the command ends (`load_credential`).
 
     Args:
         store: The credential store.
@@ -2294,8 +2307,12 @@ def _admin_command(
             whether the command only reads).
 
     Raises:
-        CliError: If there is no `admin` credential.
+        CliError: As `_admin_secret`: no usable credential is stored, the entry `--database`
+            names is not stored, or `admin` and `operator` name different databases and
+            none was chosen.
         CredentialError: On a wrong password.
+        TargetError: If an entry that had to be read holds no database login this version
+            can read.
         psycopg.Error: On database errors.
     """
     url = _admin_secret(store, args)
@@ -2432,8 +2449,10 @@ def _local_endpoint(session_id: str) -> Endpoint | None:
     return Endpoint(f"unix:{path}", "", None, session_id)
 
 
-def _root_socket_endpoint(hint: str | None) -> Endpoint | None:
+def _local_socket_endpoint(hint: str | None) -> Endpoint | None:
     """Find the session a client means through the local sockets, without a token.
+
+    Every client looks here first, root or not; only where it looks differs:
 
         root      ──► /run/calu/sessions/*.sock: root's own sockets (D215, D226)
         not root  ──► $XDG_RUNTIME_DIR/calu/sessions/*.sock: those of `--insecure`
@@ -2573,10 +2592,14 @@ def _find_endpoint(
     database which session runs in this directory on this host and mints its own token. The
     token is minted rather than read because only the hash of a token is stored, so a token
     printed once cannot be recovered; `calu attach` revokes the one it minted when it ends.
-    A root client first tries the root-owned sockets (`_root_socket_endpoint`), which need
-    neither the database nor a token (D226).
+    Every client first tries the local sockets (`_local_socket_endpoint`: root's own for a
+    root client, the user's `--insecure` ones otherwise), which need neither the database nor
+    a token (D226, D227); a session found in the database that has such a socket is reached
+    through it too (`_local_endpoint`).
 
-    Side effects: inserts a `client_tokens` row, unless a root-owned socket was found.
+    Side effects: inserts a `client_tokens` row, unless the session was reached through a
+    local socket; with a local socket, keeps a password-free login in memory
+    (`_hold_password_free`); otherwise those of `_herd_value` (`_admin_place`, `_held`).
 
     Args:
         store: The credential store; the `operator` credential is enough, and with
@@ -2587,15 +2610,17 @@ def _find_endpoint(
             input is the editor's protocol stream (see `_herd_value`).
 
     Returns:
-        The endpoint, with `token_id` set to the minted token.
+        The endpoint. On the database path it carries the minted token and its id in
+        `token_id`; for a session reached through a local socket the token is "" and
+        `token_id` is None (nothing to revoke).
 
     Raises:
         CliError: If there is no database credential, or no single session matches.
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
-    # A root client first looks at the root-owned sockets: no database, no password (D226).
-    local = _root_socket_endpoint(hint)
+    # Every client first looks at its local sockets: no database, no password (D226, D227).
+    local = _local_socket_endpoint(hint)
     if local is not None:
         _hold_password_free(store)
         return local
@@ -2687,10 +2712,22 @@ def _shared_admin() -> Target | None:
 def _herd_value[T](
     store: CredentialStore, work: Callable[[Db], Awaitable[T]], may_ask: bool = True
 ) -> T:
-    """Run `work` with the narrowest credential available and return its value.
+    """Run `work` with a database login and return its value.
 
     `_herd_command` prints what `work` returns, which is right for a report and useless for a
-    caller that needs the value. Both choose the credential the same way (`OPERATOR_FIRST`).
+    caller that needs the value. The login, in this order (it is not the narrowest one):
+
+        a login kept in `_held`                ──► that login
+        the place file holds a login (D228)    ──► that login (`calu_admin`)
+        `calu_admin` stored without password   ──► that entry
+        `operator`, then `admin` stored        ──► the first of them (`OPERATOR_FIRST`);
+                                                   `admin` first while `_hold` is set
+
+    Side effects: records the database it connects to, without a secret, in `_admin_place`
+    (for the place file's login and for a stored entry); keeps a stored entry's login, with
+    its secret, in `_held` while `_hold` is set or the process runs as root, so that later
+    steps ask nothing; an `admin` password typed here stays in `_typed` until the command
+    ends (`load_credential`).
 
     Args:
         store: The credential store.
