@@ -6,12 +6,14 @@ import {
   MAX_ITEMS_PER_AGENT,
   applyEvent,
   applyEvents,
+  honestyRowChip,
   honestyStoredNote,
   initialViewState,
   isAttached,
   isKnownFile,
   messageTarget,
   openEscalationCount,
+  parseHonestyResult,
   type ViewEvent,
 } from '../../src/shared/viewState';
 
@@ -406,5 +408,44 @@ describe('link and files', () => {
   it('counts open escalations', () => {
     const s = applyEvent(initialViewState(), ev('escalation.request', { escalation_id: 'e', tool_name: 'Bash', tool_input: {}, reason: '', rendered: '' }));
     expect(openEscalationCount(s)).toBe(1);
+  });
+});
+
+describe('the honesty checker result of check.result', () => {
+  const honesty = [
+    { path: 'a.py', verdict: 'HONEST' },
+    { path: 'b.py', verdict: 'DISHONEST', reason: 'save() also uploads', units: [{ symbol: 'save', honest: false, reason: 'uploads' }, { symbol: 'load', honest: true }] },
+    { verdict: 'HONEST' },
+  ];
+
+  it('is kept per file next to the decision, which it does not change', () => {
+    const s = applyEvent(
+      initialViewState(),
+      ev('check.result', { tool_use_id: 't1', tool_name: 'Edit', route: 'edit', decision: 'ESCALATE', honesty, honesty_escalation: 'looks deliberate' }),
+    );
+    expect(s.tools.t1.check?.decision).toBe('ESCALATE');
+    expect(s.tools.t1.honesty).toEqual({
+      files: [
+        { path: 'a.py', honest: true, reason: '', dishonestUnits: [] },
+        { path: 'b.py', honest: false, reason: 'save() also uploads', dishonestUnits: [{ symbol: 'save', reason: 'uploads' }] },
+      ],
+      escalation: 'looks deliberate',
+    });
+  });
+
+  it('is absent when the honesty checker did not judge the step', () => {
+    const s = applyEvent(initialViewState(), ev('check.result', { tool_use_id: 't1', tool_name: 'Edit', route: 'edit', decision: 'PASS', honesty: [] }));
+    expect(s.tools.t1.honesty).toBeUndefined();
+    expect(parseHonestyResult({ honesty: 'x', honesty_escalation: 3 })).toBeNull();
+  });
+
+  it('gets a row chip only for a dishonest file or a request for a person, never PASS', () => {
+    const allHonest = parseHonestyResult({ honesty: [{ path: 'a.py', verdict: 'HONEST' }] });
+    expect(honestyRowChip(allHonest ?? undefined)).toBeNull();
+    expect(honestyRowChip(undefined)).toBeNull();
+    const chip = honestyRowChip(parseHonestyResult({ honesty }) ?? undefined);
+    expect(chip?.label).toBe('dishonest');
+    expect(chip?.title).toContain('b.py is dishonest: save() also uploads');
+    expect(honestyRowChip(parseHonestyResult({ honesty_escalation: 'why' }) ?? undefined)?.label).toBe('honesty: ask');
   });
 });

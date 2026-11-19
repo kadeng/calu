@@ -99,6 +99,12 @@ export interface ToolView {
    * `editChecker {route}` ("" if a rule decided and no checker judged the step).
    */
   check?: { route: string; decision: string; reason: string; summary: string; comment: string; checkerRoute: string };
+  /**
+   * The honesty checker's result of the step (`check.result.honesty`, `honesty_escalation`);
+   * absent if it did not judge the step. It is a status per file and no decision: the row never
+   * shows it as a PASS or ALLOW chip (PLAN.md D224).
+   */
+  honesty?: HonestyResultView;
   /** The result; `content` is cut to `MAX_STORED_TEXT` characters. */
   result?: { content: string; isError: boolean };
   /** Set when an `edit.diff` arrived for this tool call: the file path shown in the diff. */
@@ -118,6 +124,24 @@ export interface ToolView {
    * shown in Main, because the record names no tab for it).
    */
   stored?: { subagent: boolean; hasInput: boolean };
+}
+
+/** The honesty checker's status of one file a step changes. */
+export interface HonestyFileView {
+  path: string;
+  /** False for the verdict DISHONEST. */
+  honest: boolean;
+  /** For a dishonest file: what disagrees with what. */
+  reason: string;
+  /** The units the checker found dishonest, with their reasons. */
+  dishonestUnits: { symbol: string; reason: string }[];
+}
+
+/** The honesty checker's result of one step. */
+export interface HonestyResultView {
+  files: HonestyFileView[];
+  /** Its reason for asking a person, or "" if it did not ask. */
+  escalation: string;
 }
 
 /** A chat message waiting to be taken in by Claude (shown above the input). */
@@ -754,6 +778,50 @@ export function formatAnswer(
   if (answers.every((a) => a === '')) return '';
   if (questions.length === 1) return answers[0];
   return questions.map((q, i) => `${q.header || q.question}: ${answers[i] || '(no answer)'}`).join('\n');
+}
+
+/**
+ * Read the honesty checker's result from `check.result` params defensively.
+ *
+ * @param p The params of a `check.result` event.
+ * @returns `null` if the event carries no honesty result (no `honesty` entries and no
+ *   `honesty_escalation`). Otherwise one `HonestyFileView` per well-formed entry (an entry
+ *   without a string `path` is dropped; texts are cut by `truncate`) and the escalation reason.
+ */
+export function parseHonestyResult(p: Record<string, unknown>): HonestyResultView | null {
+  const text = (v: unknown): string => (typeof v === 'string' ? truncate(v) : '');
+  const files: HonestyFileView[] = (Array.isArray(p.honesty) ? p.honesty : [])
+    .filter((f): f is Record<string, unknown> => Boolean(f) && typeof f === 'object' && typeof f.path === 'string')
+    .map((f) => ({
+      path: f.path as string,
+      honest: f.verdict !== 'DISHONEST',
+      reason: text(f.reason),
+      dishonestUnits: (Array.isArray(f.units) ? f.units : [])
+        .filter((u): u is Record<string, unknown> => Boolean(u) && typeof u === 'object' && u.honest === false)
+        .map((u) => ({ symbol: text(u.symbol), reason: text(u.reason) })),
+    }));
+  const escalation = text(p.honesty_escalation);
+  if (files.length === 0 && !escalation) return null;
+  return { files, escalation };
+}
+
+/**
+ * Name the chip a tool row shows for the honesty checker's result, if any.
+ *
+ * Only findings that need a person get a chip; a step whose files are all honest gets none
+ * (its details list them). The chip never reads PASS or ALLOW.
+ *
+ * @param honesty The step's honesty result, or `undefined`.
+ * @returns `null` for no chip; else the label ("dishonest" or "honesty: ask") and a title
+ *   naming the dishonest files and the escalation reason.
+ */
+export function honestyRowChip(honesty: HonestyResultView | undefined): { label: string; title: string } | null {
+  if (!honesty) return null;
+  const dishonest = honesty.files.filter((f) => !f.honest);
+  if (dishonest.length === 0 && !honesty.escalation) return null;
+  const parts = dishonest.map((f) => `${f.path} is dishonest${f.reason ? `: ${f.reason}` : ''}`);
+  if (honesty.escalation) parts.push(`The honesty checker asks a person to look: ${honesty.escalation}`);
+  return { label: dishonest.length ? 'dishonest' : 'honesty: ask', title: `Honesty checker. ${parts.join('. ')}` };
 }
 
 /**
@@ -1574,6 +1642,7 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
             comment: str(e.comment) ? e.comment : '',
             checkerRoute,
           },
+          honesty: parseHonestyResult(p) ?? old?.honesty,
           gitHead: str(e.git_head) ? e.git_head : (old?.gitHead ?? null),
         }));
       }

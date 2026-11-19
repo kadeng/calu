@@ -36,10 +36,12 @@ import type { ChatSettings } from '../src/shared/messages';
 import {
   MAIN,
   checkerLabel,
+  honestyRowChip,
   isAgentLaunch,
   literalToolInput,
   own,
   type EscalationView,
+  type HonestyResultView,
   type Item,
   type QuestionView,
   type ToolView,
@@ -398,6 +400,8 @@ function renderTool(tool: ToolView | undefined, ctx: Ctx): HTMLElement {
   } else if (!tool.result && !tool.stored) {
     row.append(el('span', 'chip decision pending', '…', { title: 'Not checked yet' }));
   }
+  const honesty = honestyRowChip(tool.honesty);
+  if (honesty) row.append(el('span', 'chip honesty', honesty.label, { title: honesty.title }));
   // One control at the end of the row: the menu (which also shows the details) if the tool has
   // one, else a details toggle, else the mark of a row that expands on click.
   if (menuFor(tool) && !tool.stored) {
@@ -490,6 +494,27 @@ function toolFileLink(tool: ToolView, index: number, text: string): HTMLElement 
 }
 
 /**
+ * Build the honesty checker's part of a tool's details: one line per file with its status, the
+ * dishonest units under it, and the escalation reason. It has no decision chip.
+ *
+ * @param honesty The step's honesty result.
+ * @returns The element.
+ */
+function honestyBlock(honesty: HonestyResultView): HTMLElement {
+  const box = el('div', 'check honesty-result');
+  box.append(el('div', 'check-line', 'Honesty checker'));
+  for (const file of honesty.files) {
+    const row = el('div', `honesty-file${file.honest ? '' : ' dishonest'}`);
+    row.append(el('span', 'honesty-path', file.path), el('span', 'honesty-verdict', file.honest ? 'honest' : 'dishonest'));
+    if (!file.honest && file.reason) row.append(el('span', 'check-reason', file.reason));
+    box.append(row);
+    for (const unit of file.dishonestUnits) box.append(el('div', 'honesty-unit', `${unit.symbol}: ${unit.reason}`));
+  }
+  if (honesty.escalation) box.append(el('div', 'check-reason honesty-ask', `Asks a person to look: ${honesty.escalation}`));
+  return box;
+}
+
+/**
  * Build the details of a tool row.
  *
  * @param tool The tool view.
@@ -512,6 +537,7 @@ function toolBody(tool: ToolView, ctx: Ctx): HTMLElement {
     if (tool.check.comment) check.append(el('div', 'check-comment', tool.check.comment));
     body.append(check);
   }
+  if (tool.honesty) body.append(honestyBlock(tool.honesty));
   const links = el('div', 'tool-links');
   if (tool.diffPath !== undefined) links.append(actionLink('Open diff', 'openDiff', { 'data-id': tool.toolUseId, title: `Open the diff of ${tool.diffPath}` }));
   (tool.files ?? []).forEach((f, i) => links.append(toolFileLink(tool, i, middleTruncate(f.path, 60))));

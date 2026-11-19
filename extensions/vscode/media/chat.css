@@ -1221,3 +1221,12 @@ pre, code, .tool-head, .tool-name, .esc-line-text, .entry-title, .entry-director
   unicode-bidi: isolate;
 }
 pre { unicode-bidi: isolate; text-align: left; }
+
+/* The honesty checker's result of a step: a status per file, never a decision chip. */
+.chip.honesty { color: var(--calu-warn); border-color: currentColor; }
+.honesty-result .check-line { font-weight: 600; }
+.honesty-file { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; }
+.honesty-path { font-family: var(--vscode-editor-font-family); overflow-wrap: anywhere; }
+.honesty-verdict { color: var(--calu-muted); }
+.honesty-file.dishonest .honesty-verdict { color: var(--calu-warn); font-weight: 600; }
+.honesty-unit { margin: 1px 0 1px 1.2em; white-space: pre-wrap; overflow-wrap: anywhere; }
