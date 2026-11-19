@@ -317,14 +317,51 @@ def limit_text(limit: RateLimit) -> str:
     return text
 
 
+def check_honesty_lines(event: CheckResult) -> list[str]:
+    """Render the honesty checker's result of one step as terminal lines.
+
+    The honesty checker does not approve or refuse a step (PLAN.md D224), so its result is
+    shown as a status per file, never as a decision like ALLOW or PASS.
+
+    Args:
+        event: The `check.result` of the step.
+
+    Returns:
+        [] if the honesty checker did not judge the step. Otherwise one line per file
+        ("    honesty: a.py honest", or "    honesty: b.py DISHONEST: <reason>"), one line per
+        dishonest unit of a file below it, and a line with the reason when the honesty
+        checker asked for a person. Texts are shortened by `one_line`.
+    """
+    lines: list[str] = []
+    for status in event.honesty:
+        if status.verdict == "HONEST":
+            lines.append(f"    honesty: {one_line(status.path)} honest")
+            continue
+        reason = f": {one_line(status.reason)}" if status.reason else ""
+        lines.append(f"    honesty: {one_line(status.path)} DISHONEST{reason}")
+        lines += [
+            f"      {one_line(unit.symbol, 80)}: {one_line(unit.reason)}"
+            for unit in status.units
+            if not unit.honest
+        ]
+    if event.honesty_escalation:
+        lines.append(
+            f"    honesty checker asks a person to look: {one_line(event.honesty_escalation)}"
+        )
+    return lines
+
+
 def format_event(event: Event) -> str | None:
-    """Render one session event as one terminal line.
+    """Render one session event as terminal text.
+
+    Most events are one line. An escalation, the honesty state and a `check.result` that
+    carries the honesty checker's result (`check_honesty_lines`) are several lines.
 
     Args:
         event: The event.
 
     Returns:
-        The line, or None for events the terminal deliberately does not show: the token
+        The text, or None for events the terminal deliberately does not show: the token
         deltas (`assistant.delta`, whose completed block follows), the files and the diff of a
         step (`tool.files`, `edit.diff`), the message queue (`chat.queue`) and the subagent
         list (`agents.update`) -- a graphical client shows those better.
@@ -347,9 +384,12 @@ def format_event(event: Event) -> str | None:
             return f"  {mark} {one_line(event.content)}"
         case CheckResult():
             comment = f" comment: {event.comment}" if event.comment else ""
-            return (
-                f"  [{event.route} checker: {event.decision}] {event.step_summary}"
-                f"{f' ({event.reason})' if event.reason else ''}{comment}"
+            return "\n".join(
+                [
+                    f"  [{event.route} checker: {event.decision}] {event.step_summary}"
+                    f"{f' ({event.reason})' if event.reason else ''}{comment}",
+                    *check_honesty_lines(event),
+                ]
             )
         case EscalationRequest():
             # A question of the agent is answered, not allowed or denied (PLAN.md D35), so the

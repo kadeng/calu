@@ -532,6 +532,33 @@ def _under(label: str, text: str, style: str, view: View, label_style: str = "")
     return line
 
 
+def honesty_under(step: StepBlock) -> str:
+    """Return the line under a step that reports the honesty checker's findings, if any.
+
+    Files the honesty checker found honest are not named here (the expanded step lists
+    them); the line exists only when something needs a person's attention. The honesty result
+    is no decision, so it never changes the step's badge.
+
+    Args:
+        step: The step.
+
+    Returns:
+        "" if no check of the step has a dishonest file or asks a person. Otherwise the
+        dishonest files with the first one's reason (e.g. "b.py dishonest: save() uploads"),
+        followed by "asks a person: <reason>" when the honesty checker asked for one.
+    """
+    dishonest = [s for check in step.checks for s in check.honesty if s.verdict != "HONEST"]
+    asks = next((c.honesty_escalation for c in step.checks if c.honesty_escalation), "")
+    parts: list[str] = []
+    if dishonest:
+        first = dishonest[0]
+        names = ", ".join(s.path for s in dishonest)
+        parts.append(f"{names} dishonest" + (f": {first.reason}" if first.reason else ""))
+    if asks:
+        parts.append(f"asks a person: {asks}")
+    return " · ".join(" ".join(part.split()) for part in parts)
+
+
 def step_lines(step: StepBlock, model: SessionModel, view: View) -> list[Text]:
     """Render a step: its line, the lines under it, and its details if it is expanded.
 
@@ -574,6 +601,9 @@ def step_lines(step: StepBlock, model: SessionModel, view: View) -> list[Text]:
     reason = next((check.reason for check in reversed(step.checks) if check.reason), "")
     if comment:
         lines.append(_under("note", comment, palette.accent, view, palette.accent))
+    honesty = honesty_under(step)
+    if honesty:
+        lines.append(_under("honesty", honesty, palette.muted, view, palette.orange))
     if step.verdict in {"DENY", "DENIED"} and reason:
         lines.append(_under("reason", reason, palette.muted, view, palette.red))
     if waiting:
@@ -773,7 +803,8 @@ def step_details(step: StepBlock, view: View) -> list[Text]:
         view: Width and colours.
 
     Returns:
-        The input, every check with its reason and comment, the result (the first
+        The input, every check with its reason, its comment and the honesty checker's status
+        of each file (its dishonest units and its request for a person), the result (the first
         `RESULT_LINES` lines), the files and the diffs, each line behind a `│` guide.
     """
     palette = view.palette
@@ -790,6 +821,27 @@ def step_details(step: StepBlock, view: View) -> list[Text]:
         body += wrap(head, inner.width)
         if check.comment:
             body += wrap(Text(f"note to Claude: {check.comment}", palette.accent), inner.width)
+        for status in check.honesty:
+            dishonest = status.verdict != "HONEST"
+            text = Text.assemble(
+                ("honesty ", palette.muted),
+                (f"{status.path} ", palette.fg),
+                (
+                    "dishonest" if dishonest else "honest",
+                    palette.orange if dishonest else palette.muted,
+                ),
+            )
+            if dishonest and status.reason:
+                text.append(f"  {status.reason}", palette.fg)
+            body += wrap(text, inner.width)
+            for unit in status.units:
+                if not unit.honest:
+                    body += wrap(Text(f"  {unit.symbol}: {unit.reason}", palette.fg), inner.width)
+        if check.honesty_escalation:
+            body += wrap(
+                Text(f"honesty checker asks a person: {check.honesty_escalation}", palette.orange),
+                inner.width,
+            )
     if step.result is not None:
         result = step.result.rstrip("\n").splitlines()
         body.append(

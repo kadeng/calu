@@ -371,6 +371,7 @@ form.inline { display: inline-flex; gap: .45rem; align-items: center; }
 }
 .tag.allow { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
 .tag.deny { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.tag.honesty.dishonest { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .error {
   margin: 0;
   color: var(--bad);

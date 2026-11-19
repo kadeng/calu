@@ -310,3 +310,60 @@ def test_small_formats() -> None:
     assert render.clip("    indented line", 12) == "    indente…"
     assert render.meter(0.5, 10) == "━━━━━╌╌╌╌╌"
     assert isinstance(steps(showcase())[0], StepBlock)
+
+
+def test_the_honesty_checkers_findings_are_a_line_under_the_step_and_not_its_badge() -> None:
+    """A dishonest file and a request for a person show under the step; the badge stays PASS."""
+    model = SessionModel()
+    feed(model, scenarios.step("t1", "Edit", {"file_path": "b.py"}, "edits b.py", route="edit"))
+    model.apply(
+        "check.result",
+        {
+            "tool_use_id": "t1",
+            "tool_name": "Edit",
+            "route": "edit",
+            "decision": "PASS",
+            "honesty": [
+                {"path": "a.py", "verdict": "HONEST"},
+                {
+                    "path": "b.py",
+                    "verdict": "DISHONEST",
+                    "reason": "save() also uploads",
+                    "units": [{"symbol": "save", "honest": False, "reason": "uploads the file"}],
+                },
+            ],
+            "honesty_escalation": "looks deliberate",
+        },
+        None,
+    )
+    (step,) = steps(model)
+    assert step.verdict == "PASS"
+    lines = plain(render.step_lines(step, model, view(120)))
+    assert lines[1] == (
+        "    honesty b.py dishonest: save() also uploads · asks a person: looks deliberate"
+    )
+    details = "\n".join(
+        plain(render.step_lines(step, model, view(120, expanded=frozenset({step.id}))))
+    )
+    assert "honesty a.py honest" in details
+    assert "honesty b.py dishonest  save() also uploads" in details
+    assert "save: uploads the file" in details
+    assert "honesty checker asks a person: looks deliberate" in details
+
+
+def test_a_step_the_honesty_checker_found_honest_gets_no_line_under_it() -> None:
+    model = SessionModel()
+    feed(model, scenarios.step("t1", "Edit", {"file_path": "a.py"}, "edits a.py", route="edit"))
+    model.apply(
+        "check.result",
+        {
+            "tool_use_id": "t1",
+            "tool_name": "Edit",
+            "route": "edit",
+            "decision": "PASS",
+            "honesty": [{"path": "a.py", "verdict": "HONEST"}],
+        },
+        None,
+    )
+    (step,) = steps(model)
+    assert len(render.step_lines(step, model, view(120))) == 1

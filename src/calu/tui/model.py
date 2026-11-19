@@ -106,6 +106,11 @@ class Check:
     """What the checker says the step does (`step_summary`)."""
     comment: str = ""
     """A remark of the checker that Claude was told."""
+    honesty: list[m.HonestyFileStatus] = field(default_factory=list[m.HonestyFileStatus])
+    """The honesty checker's status of each file the step changes (`check.result.honesty`);
+    empty if it did not judge the step. It is no decision: the badge never shows it."""
+    honesty_escalation: str = ""
+    """The honesty checker's reason for asking a person, or ""."""
 
 
 @dataclass
@@ -1918,6 +1923,8 @@ class SessionModel:
                 event.reason,
                 event.step_summary,
                 event.comment,
+                list(event.honesty),
+                event.honesty_escalation,
             )
         )
         change.blocks_updated.add(step.id)

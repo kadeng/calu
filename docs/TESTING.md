@@ -499,6 +499,13 @@ escalation resolved from the database alone.
    answer when the review ended, and further lines must be accepted meanwhile. In a
    repository without a trusted commit, `/honesty-review` must end with `certified as trusted
    after the review` when every file was judged honest and the working tree has no changes.
+   The honesty checker's answer per file (with the honesty checker enabled, an edit that
+   renames a function without its docstring): `calu attach --plain` must print a
+   `honesty: <file> DISHONEST: <reason>` line under the checker's line, the full-screen client
+   a `honesty` line under the step, the live page a line tagged `honesty`, and the VSCode chat a
+   `dishonest` chip on the step's row; none of them may show the honesty answer as PASS or
+   ALLOW. An edit that keeps the file honest must show `honest` only in the step's details
+   (full-screen client, VSCode) or as a plain line (line client, live page).
 26. The database setup (D205), on a machine without calu credentials (or with
    `XDG_CONFIG_HOME` pointing at an empty directory). **Docker:** `calu setup`, answer 1, a
    data directory of your choice: the directory must be private (0700) with the cluster below

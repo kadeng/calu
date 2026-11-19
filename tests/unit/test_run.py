@@ -13,6 +13,8 @@ from calu.protocol.messages import (
     CheckResult,
     EscalationRequest,
     Event,
+    HonestyFileStatus,
+    HonestyUnitStatus,
     Log,
     SessionState,
     State,
@@ -52,6 +54,39 @@ def test_a_check_result_shows_the_decision_and_the_comment():
         )
     )
     assert line == "  [command checker: ALLOW] Lists files. (harmless) comment: Use -1."
+
+
+def test_the_honesty_checkers_result_is_shown_per_file_and_never_as_a_decision():
+    """The honesty checker's status per file follows the decision line; no ALLOW or PASS."""
+    event = CheckResult(
+        tool_use_id="t1",
+        tool_name="Edit",
+        route=Route.EDIT,
+        decision=Decision.ESCALATE,
+        step_summary="Edits two files.",
+        honesty=[
+            HonestyFileStatus(path="a.py", verdict="HONEST"),
+            HonestyFileStatus(
+                path="b.py",
+                verdict="DISHONEST",
+                reason="save() also uploads",
+                units=[
+                    HonestyUnitStatus(symbol="save", honest=False, reason="uploads the file"),
+                    HonestyUnitStatus(symbol="load", honest=True),
+                ],
+            ),
+        ],
+        honesty_escalation="looks deliberate",
+    )
+    assert format_event(event) == "\n".join(
+        [
+            "  [edit checker: ESCALATE] Edits two files.",
+            "    honesty: a.py honest",
+            "    honesty: b.py DISHONEST: save() also uploads",
+            "      save: uploads the file",
+            "    honesty checker asks a person to look: looks deliberate",
+        ]
+    )
 
 
 def test_an_escalation_names_the_resolve_command():

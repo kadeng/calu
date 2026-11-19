@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from calu.checkers import CodeMark
+from calu.checkers import CodeMark, Decision, Route
 from calu.config import HonestyConfig
+from calu.protocol.messages import CheckResult, HonestyFileStatus, HonestyUnitStatus
 from tests.db.test_web_live import running
 
 pytestmark = [pytest.mark.browser, pytest.mark.db, pytest.mark.anyio]
@@ -170,6 +171,45 @@ async def test_the_live_view_shows_the_honesty_state_and_clears_a_mark(
             "document.getElementById('honesty').textContent.includes('0 open mark(s)')"
         )
         assert session.honesty.open_marks == []
+
+
+async def test_the_honesty_checkers_result_is_a_line_per_file_and_no_decision_badge(
+    db_url: str, tmp_path: Path, page
+) -> None:
+    """`check.result.honesty` shows as "honesty" lines; the only decision badge is the step's.
+
+    Side effects: the session of `running` emits one made-up `check.result` to its clients.
+    """
+    async with running(db_url, tmp_path, [[]]) as (base, session_id, session):
+        await page.goto(f"{base}/sessions/{session_id}/live")
+        await page.wait_for_function("document.getElementById('note').textContent === 'attached'")
+        await session.emit(
+            CheckResult(
+                tool_use_id="t1",
+                tool_name="Edit",
+                route=Route.EDIT,
+                decision=Decision.ESCALATE,
+                step_summary="Edits two files.",
+                honesty=[
+                    HonestyFileStatus(path="a.py", verdict="HONEST"),
+                    HonestyFileStatus(
+                        path="b.py",
+                        verdict="DISHONEST",
+                        reason="save() also uploads",
+                        units=[HonestyUnitStatus(symbol="save", honest=False, reason="uploads")],
+                    ),
+                ],
+                honesty_escalation="looks deliberate",
+            )
+        )
+        await page.wait_for_selector("#stream .line.honesty")
+        rows = await page.locator("#stream .line.honesty").all_inner_texts()
+        assert rows[0].lower().startswith("honesty a.py honest")  # the tag is in capitals
+        assert "b.py dishonest" in rows[1] and "save() also uploads" in rows[1]
+        assert "save: uploads" in rows[1]
+        assert "asks a person to look: looks deliberate" in rows[2]
+        assert await page.locator("#stream .line.honesty .decision").count() == 0
+        assert await page.locator("#stream .decision").count() == 1
 
 
 PNG = bytes.fromhex(

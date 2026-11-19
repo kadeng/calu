@@ -256,6 +256,25 @@
   // The code honesty state is the session's, in memory: it arrives with the snapshot and with
   // every `honesty.update`. Certifying HEAD, asking for a review and clearing a mark are
   // requests to the session.
+  // The honesty checker's result of one step (`check.result.honesty`, `honesty_escalation`):
+  // one line per file under the step's check, tagged "honesty" and never with a decision
+  // class, because the honesty checker approves or refuses nothing (PLAN.md D224).
+  function honestyResult(params, agent) {
+    for (const status of params.honesty || []) {
+      const dishonest = status.verdict !== "HONEST";
+      const units = (status.units || []).filter((unit) => !unit.honest)
+        .map((unit) => `${unit.symbol}: ${unit.reason}`).join(" · ");
+      line(dishonest ? "honesty dishonest" : "honesty",
+           `${status.path} ${dishonest ? "dishonest" : "honest"}`,
+           dishonest ? [status.reason, units].filter(Boolean).join(" — ") : "",
+           { className: `tag honesty${dishonest ? " dishonest" : ""}`, text: "honesty" }, agent);
+    }
+    if (params.honesty_escalation) {
+      line("honesty dishonest", `the honesty checker asks a person to look: ${params.honesty_escalation}`, "",
+           { className: "tag honesty dishonest", text: "honesty" }, agent);
+    }
+  }
+
   function renderHonesty(info) {
     const box = el("marks");
     box.replaceChildren();
@@ -780,6 +799,7 @@
              params.comment || params.reason || "",
              { className: `decision ${String(params.decision).toLowerCase()}`, text: params.decision },
              agent);
+        honestyResult(params, agent);
         break;
       case "tool.result":
         if (answeredCalls.has(params.tool_use_id)) {

@@ -383,6 +383,13 @@ clears that file. What a DISHONEST file does stop, while `honesty.mode` is `enfo
 running or committing the code. The checker escalates only what looks deliberate: a backdoor,
 hidden behaviour, a comment written to mislead.
 
+The clients show this answer under the step, apart from the step's decision. The line client
+(`calu attach --plain`) prints one `honesty:` line per file below the checker's line. The
+full-screen client adds a `honesty` line under a step only for a dishonest file or a request
+for a person; the expanded step lists every file. The web live view adds one line per file,
+tagged `honesty`. The VSCode extension puts a `dishonest` chip on the step's row and lists
+every file in the step's details.
+
 ### Judging the checkers before you let them block
 
 `track` keeps the state without blocking, which is what makes the decision measurable instead
