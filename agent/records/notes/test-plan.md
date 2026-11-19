@@ -39,36 +39,81 @@ end that lacks a function by design says so in its own section.)
 
 | # | Case | V | P | T | W |
 |---|---|---|---|---|---|
-| C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | - | fixed 30554a1 | fixed b1f47c4 | fixed 706b3b8 |
-| C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | - | fixed 30554a1 5dfb6b6 | fixed b1f47c4 | fixed 706b3b8 |
-| C3 | A question of the agent: one choice, several choices, free text | - | ok | fixed b1f47c4 fc2d361 | fixed 706b3b8 |
-| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | - | ok (the background subagent of `tour` seen 2026-11-19) | fixed b1f47c4 | fixed 706b3b8 |
-| C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | - | fixed 30554a1 c91feae | fixed b1f47c4 | fixed 706b3b8 |
-| C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | - | fixed 30554a1 c91feae | fixed b1f47c4; open (gate) | fixed 706b3b8 |
-| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | - | ok (decided with `calu resolve` on the server: the card closes, the turn goes on) | fixed b1f47c4 | fixed 706b3b8 |
-| C8 | Stop during text, during a command, with a decision open | - | ok (during a command; the other two not run) | ok | fixed 706b3b8 |
-| C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | - | ok | ok | ok |
-| C10 | Supervision level to "everything waits" and back; changed from elsewhere | - | ok (changed from elsewhere: not run) | ok | fixed 706b3b8 |
-| C11 | **A long session** (500+ items, 50+ turns): speed, scrolling, jump to latest, memory | - | fixed 30554a1 | ok | fixed 706b3b8 |
-| C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | - | ok (10 running: the server's limit) | fixed b1f47c4 026bc78 | fixed 706b3b8 |
-| C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | - | ok; open (fork of a rewind) | fixed 602b9be | ok (fork); undo: by design a fork |
-| C14 | Context usage and limits; before the first turn; when unknown | - | ok | fixed b1f47c4 | fixed 706b3b8 |
-| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - | fixed c91feae (paste); limits by unit test | n/a here | ok |
-| C16 | Losing the session, the server, the database mid-turn; coming back | - | fixed 5dfb6b6; database loss not run | fixed b1f47c4 | fixed 706b3b8 |
-| C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | - | ok; open (long code line) | fixed 602b9be | fixed 706b3b8 |
-| C18 | Text meant to mislead: control characters, raw HTML, links with scripts | - | ok | fixed 900355e b1f47c4 | fixed 706b3b8 |
-| C19 | Checker instructions: read, change, save, a conflict with another editor | - | ok | fixed b1f47c4 602b9be | fixed 706b3b8 |
-| C20 | The checker context, and the context of one escalation | - | ok | ok | ok |
-| C21 | Honesty mode: switch, marks, review, trust | - | ok (mode switch); marks, review, trust not run | ok | ok |
-| C22 | Settings: every kind of value, a refused value, one model for all roles, reset | - | fixed c91feae | n/a here | fixed 706b3b8 |
-| C23 | First start: nothing installed, no server, no session, a locked credential (one password, once) | - | ok (no server, no session, locked credential); install not run | ok; open (cli) | ok (no server, no session); rest n/a here |
+| C1 | A turn with streamed text, thinking, a read, an edit, a command; the checker's decision and reason on each | ok (`tour`: Markdown, thinking, Read/Edit/commands, chips and reasons; a click on the edit row opens the diff, on the file name the file) | fixed 30554a1 | fixed b1f47c4 | fixed 706b3b8 |
+| C2 | A denied step with its reason; an escalated step: allow, deny with a note, "why?" | fixed 5b76a25 1a348ec (a decided card shows the note on its line; a denial without a note no longer shows calu's sentence) | fixed 30554a1 5dfb6b6 | fixed b1f47c4 | fixed 706b3b8 |
+| C3 | A question of the agent: one choice, several choices, free text | fixed 5b76a25 (the question was repeated in calu's reason); one choice, several choices (`edge`), answered from a remote window | ok | fixed b1f47c4 fc2d361 | fixed 706b3b8 |
+| C4 | A subagent: its own view, task and result; a background subagent that outlives the turn | ok (subagent tabs with task and result; the background subagent of `tour` with "bg") | ok (the background subagent of `tour` seen 2026-11-19) | fixed b1f47c4 | fixed 706b3b8 |
+| C5 | **Many subagents at once** (8+): navigation, overflow, which one needs attention | fixed 5b76a25 b228052 (tabs wrap; beyond six subagents the finished ones fold into "N finished") | fixed 30554a1 c91feae | fixed b1f47c4 | fixed 706b3b8 |
+| C6 | **An escalation in one subagent while others keep working, then a second escalation elsewhere**: both visible, each decided on its own, the others not held longer than calu holds them | fixed 5b76a25 (held steps from `step.held`: chip, tab, head card, "N steps held until you decide") | fixed 30554a1 c91feae | fixed b1f47c4; open (gate) | fixed 706b3b8 |
+| C7 | Three or more open decisions at once; deciding out of order; a decision made in another client closes it here | ok (`escalations` remote: third denied first, one decided with `calu resolve` on the box closed its card with "from the box") | ok (decided with `calu resolve` on the server: the card closes, the turn goes on) | fixed b1f47c4 | fixed 706b3b8 |
+| C8 | Stop during text, during a command, with a decision open | ok (during a command, `queue`); during text and with a decision open: not run | ok (during a command; the other two not run) | ok | fixed 706b3b8 |
+| C9 | A message for the next turn and one into the running turn; two queued; while a decision is open | ok (`queue`: two queued, one with Ctrl+Enter into the running turn) | ok | ok | ok |
+| C10 | Supervision level to "everything waits" and back; changed from elsewhere | - (not run this round) | ok (changed from elsewhere: not run) | ok | fixed 706b3b8 |
+| C11 | **A long session** (500+ items, 50+ turns): speed, scrolling, jump to latest, memory | ok (`many`: 522 rows; 400 wheel steps up; an old edit opens the file and says no diff is held; renderer 345 MB) | fixed 30554a1 | ok | fixed 706b3b8 |
+| C12 | **Many sessions** (10+ running, 30+ stored): the list, switching, names, finding one | fixed 5b76a25 1a348ec (15 running, 14 stored: start time and id per row, actions stay visible, stale ones last) | ok (10 running: the server's limit) | fixed b1f47c4 026bc78 | fixed 706b3b8 |
+| C13 | **Undo** (rewind to before a message) and **fork**: first, middle, last message; fork of a fork; what the new session shows and knows | ok (rewind before the 3rd message, fork from a recorded message, fork of a fork) | ok; open (fork of a rewind) | fixed 602b9be | ok (fork); undo: by design a fork |
+| C14 | Context usage and limits; before the first turn; when unknown | ok ("ctx –" before the first turn, "21% · 42k" after); `nousage` not run | ok | fixed b1f47c4 | fixed 706b3b8 |
+| C15 | Images in a message (where supported): accepted, refused over the limit, shown | - (images not run this round) | fixed c91feae (paste); limits by unit test | n/a here | ok |
+| C16 | Losing the session, the server, the database mid-turn; coming back | fixed 5b76a25 1a348ec (server stopped: the reason in words; bridge killed: Restart reattaches, also after a window reload); database loss not run | fixed 5dfb6b6; database loss not run | fixed b1f47c4 | fixed 706b3b8 |
+| C17 | Narrow and very wide layouts; light and dark; long lines, huge results, long names | fixed b228052 (290 px: chips keep their width; Light Modern and Dark Modern; `edge` long lines) | ok; open (long code line) | fixed 602b9be | fixed 706b3b8 |
+| C18 | Text meant to mislead: control characters, raw HTML, links with scripts | ok (`edge`: raw HTML as text, script link inert); `bidi` not run this round | ok | fixed 900355e b1f47c4 | fixed 706b3b8 |
+| C19 | Checker instructions: read, change, save, a conflict with another editor | ok (save; `calu checker set` meanwhile: refused, Compare shows the diff) | ok | fixed b1f47c4 602b9be | fixed 706b3b8 |
+| C20 | The checker context, and the context of one escalation | ok (Context document, Why? on a card) | ok | ok | ok |
+| C21 | Honesty mode: switch, marks, review, trust | fixed b228052 (scenario `honesty`: enforce, Trust HEAD, a mark, Clear, Review now with feedback, off) | ok (mode switch); marks, review, trust not run | ok | ok |
+| C22 | Settings: every kind of value, a refused value, one model for all roles, reset | ok (search, a value, Reset); one model for all: not clicked this round | fixed c91feae | n/a here | fixed 706b3b8 |
+| C23 | First start: nothing installed, no server, no session, a locked credential (one password, once) | fixed b228052 (new profile: status bar item; `calu.command` as a string left "Starting calu…"; one password: wrong then right, none after a killed bridge; Install calu from the card) | ok (no server, no session, locked credential); install not run | ok; open (cli) | ok (no server, no session); rest n/a here |
 
 ## Sections (each owner extends its own)
 
 ### A. VSCode extension
+
 First and second run: see the reports summarised in `agent/records/HANDOFF.md`; screenshots in
-`agent/records/notes/screenshots/run1-*.png`. To be transferred into the table above by the next
-round, which also runs C5, C6, C11 and C12 at scale.
+`agent/records/notes/screenshots/run1-*.png`.
+
+Third round, 2026-11-19, by an agent in the Cua desktop: VSCode 1.147 (Microsoft build) with
+the `.vsix` of each fix, against `uitest/fake_server.py` (local) and the SSH box (remote).
+Screenshots `~/.cache/calu-uitest/share/vscode2/NN.png` (numbers below); a few in
+`agent/records/notes/screenshots/vscode2-*.png`. The V column of the table above holds the
+results. Regression tests: `extensions/vscode/scripts/test-in-docker.sh` (7 integration tests
+in a real VSCode, `docs/TESTING.md`), vitest for every pure change.
+
+| # | Case | Status |
+|---|---|---|
+| A1 | `tour` locally (03-13) | ok; fixed 5b76a25: decided card shows the note, question not repeated |
+| A2 | `swarm`, ten subagents, two escalations (15-23, 53-56, 60-62) | fixed 5b76a25: the tab bar scrolled the running tabs out of sight and showed no held step; now wrapping tabs, "N finished" menu, held chips from `step.held` |
+| A3 | `step.held` (PLAN D237) | built (5b76a25): consistent with the terminal client (event first) and the PyCharm plugin (its derived rule as fallback, `chatModel.heldTools`) |
+| A4 | many sessions (24, 38-42, 52) | fixed 5b76a25: unnamed rows of one directory could not be told apart; actions scrolled away; a reloaded window attached to another session than before (now the workspace remembers it) |
+| A5 | rewind and fork (43-51) | ok |
+| A6 | server stopped mid-turn (33-35, 143-144) | fixed 5b76a25: "connecting failed: [Errno 111] Connect call failed (…)" is now "nothing answers at the session's address: the session or its calu server stopped" |
+| A7 | narrow (290 px) and light (57-64) | fixed b228052: "PAS", "err" (chips were cut) |
+| A8 | honesty (71-84) | fixed b228052: Review now and Trust HEAD said nothing; the fake honesty checker's reason quoted its marker and made the correcting edit dishonest too (`src/calu/testing.py`) |
+| A9 | settings, checkers, context (105-113) | ok |
+| A10 | first start in a new profile against the password store (85-100) | fixed b228052: the calu view is behind the "…" of the secondary side bar next to the editor's own chat, so a status bar item was added; `calu.command` given as a string hung at "Starting calu…" for ever |
+| A11 | Install calu with calu removed from `~/.local/bin` (101-104) | ok: card, modal, `uv tool install`, attached |
+| A12 | a window reload right after `calu.command` changed showed "Wrong password" at the first prompt (146) | open: not reproduced (147 shows the plain prompt); possibly a key of the reload command |
+
+**Remote (Remote-SSH).** Microsoft's Remote-SSH 0.128.0 installed from the marketplace in the
+desktop's VSCode; "Connect Current Window to Host" `sshbox` (key login, the test key); VS Code
+Server downloaded on the box; calu's `.vsix` installed on the remote side
+(`code-server --install-extension` on the box), so the extension host, `calu ide`, the server and
+the sessions run on the box.
+
+| # | Case | Status |
+|---|---|---|
+| R1 | the box's sessions listed, a turn, Allow on an escalation (130-132) | ok |
+| R2 | a click on an edit row opens the diff of the remote file; the file name opens the remote file; the row menu (134-137, 142) | ok |
+| R3 | one password (`calu.command` = `/home/dev/pwstore/calu` in the remote machine settings): one prompt; `calu ide` killed on the box, Restart: no prompt (147-151) | ok |
+| R4 | `calu serve` stopped on the box (143-144, 158-161): reconnecting with the reason, lost; New session: "no calu server answered", the tmux command, "Open terminal with this command" opens a terminal on the box that runs `tmux new-session -A -s calu '/home/dev/pwstore/calu serve'` | ok (the server was not started: it asks the session password in that terminal) |
+| R5 | network between desktop and box cut for 20 s (152-154) | ok: nothing to see (TCP survived), the card decided afterwards |
+| R6 | the ssh process of Remote-SSH killed (155-157) | ok: VSCode reconnected by itself; the remote extension host and `calu ide` kept running; the question answered |
+| R7 | three escalations at once remote; one decided with `calu resolve` on the box (165-166) | ok; found: a denial showed calu's sentence as the note, fixed 1a348ec |
+| R8 | stale sessions of the box (after its restart) listed first in the attach card and counted in the badge (140, 144) | fixed 1a348ec |
+| R9 | WSL, Dev Containers | n/a here: Remote-WSL needs a Windows host; the desktop has no Docker socket (by rule), so no dev container |
+
+Judgement calls (not changed): after a lost link because the server stopped, the card
+"connection lost" and the notification's "Attach again" stay although nothing can be attached;
+the "Waiting for you" timer starts again after a reattach; the escalation timer and the
+transcript of the last session stay visible under "No session" (by design so far).
 
 ### B. PyCharm plugin
 
