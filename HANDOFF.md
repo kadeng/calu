@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D236, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D237, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -64,39 +64,28 @@ C6, C11, C12 at scale, integration tests. Results go into `docs/notes/test-plan.
    checks of test plan section B (tool window in the client, RPC round trip with a
    transcript and Allow on a card, the password dialog, editors and diffs opened by the
    backend, the terminal action).
-0. **Core defects found by the SSH round** (PLAN D236): `session.history` omits a turn that
-   has not ended (a fork made while that turn waits on a decision misses it); the VSCode
-   extension (`extensions/vscode/src/shared/history.ts`) and the terminal client
-   (`SessionModel.load_history`) tell replayed turns by their text, so equal words in two
-   turns drop the turns between (use the prompt uuid, as the PyCharm port now does);
-   `fake_runner.py` numbers tool ids `fake-tool-N` from 1 in every session; a dead session
-   stayed listed as running (`stale: false`) for about 15 minutes after its server was
-   restarted; `ide.fs.changed` never names a file it would skip.
+0. ~~Core defects found by the SSH round~~ **done** (agent 2, PLAN D237, commits
+   `202b484`..`8c25dc1`, not pushed): an unended turn is history and a fork inherits it;
+   record and replay meet at the prompt uuid (VSCode, terminal); unique scripted tool ids;
+   stale at once when the process is gone, else after 60 s; `ide.fs.changed` carries
+   `skipped` and the PyCharm plugin lists those paths at once. Not reproduced: the "about
+   15 minutes" itself (the code said 180 s); the plugin's own part of H20 (it asks
+   `ide.sessions` every 15 s only while no session is attached, and its waiting step still
+   counts) is the plugin's.
 0. The desktop image lacks `openssh-client` (installed by hand for the SSH round): add it to
    `uitest/Dockerfile`.
 
 1. Collect those two agents; pre-push run of each new commit (rules below); push; wait for
    the CI run to complete.
-2. **Coverage and honest code, the rest** (the stand-in did the first round, below):
-   `calu.cli` contracts the reviewer found wrong and that were not changed because agent 1
-   had `cli.py` open: `_herd_command`/`_herd_value` ("the narrowest credential": both prefer
-   the `calu_admin` login of the place file; `_herd_value` also keeps a decrypted login in
-   `_held` and sets `_admin_place`), `_root_socket_endpoint` (every client probes sockets,
-   not only root; rename to `_local_socket_endpoint`), `_find_endpoint` (`token_id` is None
-   on the socket paths), `_admin_secret` (keeps the typed password in `_typed`),
-   `_admin_command` (its `Raises` is wrong). In `calu ide`: `_start_cancel` can abort a
-   request after the server started the session (the contract now says so; the fix is to
-   drop the cancel scope as soon as `wait_for` reports "started"). Untested with
-   consequences: `ide.models.set` for `checker:<name>` (must not create a checker), the
-   escalation closing done by `ide.status`/`ide.sessions`/`ide.attach`, `ide.start`'s
-   `SERVER_REFUSED` and unnamed-session paths (tests/db/test_ide_bridge_db.py);
+2. **Coverage and honest code, the rest**: the `calu.cli` contracts, `_start_cancel` and
+   the tests of `calu ide` that need no root are **done** (agent 2, PLAN D237; the rename is
+   `_local_socket_endpoint`). Left, all root-only (tests/root/, in the root box):
    `asuser.prepare` on an existing directory, `launch.become` refusing a wrong identity,
-   `_after_setup` writing the place file as real root, `serve.serve` with `run_as`
-   (tests/root/, in the root box).
-3. **Open defects the core-defect agent left** (PLAN D235 has what it fixed): the
-   full-screen client does not show the `held` badge for a step held after its approval was
-   recorded (needs a protocol signal); a decision made in the web interface still records
-   only the role, not `operator:<user>@<host>` as `calu resolve` now does (schema 37).
+   `_after_setup` writing the place file as real root, `serve.serve` with `run_as`.
+3. ~~Open defects the core-defect agent left~~ **done** (agent 2, PLAN D237): the protocol
+   event `step.held` and the full-screen client's `held` badge after a recorded approval;
+   a web decision records `<role>:<user>@<host>`. VSCode and PyCharm show no held steps at
+   all (they ignore `step.held`); whether they should is open.
 4. **VSCode extension, remaining** (needs the desktop, so after agent 2): the corner cases
    C5, C6, C11, C12 at scale (done for web, terminal and PyCharm); a look at the new honesty
    chip in a real VSCode; integration tests (`@vscode/test-cli`, as stay-in-the-loop has
@@ -268,7 +257,7 @@ Next steps for the extension, in order:
   (`run.STATUS_EVENTS`); tracebacks go to `$XDG_STATE_HOME/calu/log/<command>.log`
   (`src/calu/logfile.py`), stderr gets one line per error; `calu run --thinking` is gone.
   Root clients find a session through the root-owned sockets without the database or a
-  password (`cli._root_socket_endpoint`, `cli._hold_password_free`); `calu web --sudo`
+  password (`cli._local_socket_endpoint`, `cli._hold_password_free`); `calu web --sudo`
   relays through them. `--secure` binds no root socket; `--insecure` lets every Unix-socket
   and loopback-TCP client in without a token. The owner ruled that a session running
   Claude Code as calu's own uid keeps asking for a token without `--insecure` (the kernel
@@ -626,7 +615,7 @@ Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
 default instructions), ~49k of tests, 37 migrations, 27 CLI commands (26 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 23 protocol requests,
-19 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
+20 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs
 there.
 
