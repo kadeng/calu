@@ -100,9 +100,16 @@ async def test_subagents_are_told_apart_and_two_open_cards_are_answered_on_their
         )
         assert not (await page.title()).startswith("(")
         # Nothing runs any more: only the controls that can act are enabled.
-        await page.wait_for_function("document.getElementById('state').textContent === 'idle'")
-        assert await page.is_disabled("#interrupt") and await page.is_disabled("#start")
-        assert not await page.is_disabled("#send")
+        # One look at the page for the state and its controls: after the turn the session can
+        # leave "idle" once more for a moment (work that ends after the turn's result), so
+        # a state read in one call and a button read in the next may not belong together
+        # (seen once in CI, on the line that read the buttons).
+        await page.wait_for_function(
+            "document.getElementById('state').textContent === 'idle'"
+            " && document.getElementById('interrupt').disabled"
+            " && document.getElementById('start').disabled"
+            " && !document.getElementById('send').disabled"
+        )
         assert errors == []
 
 
