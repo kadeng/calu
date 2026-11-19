@@ -632,6 +632,36 @@ export interface ModelSetParams {
   model?: string | null;
 }
 /**
+ * Claude Code's permission mode changed, as Claude Code reports it.
+ *
+ * Sent when a client switched the mode (`permission_mode.set`) and when Claude Code reports
+ * another mode by itself: at the start of a run, when a tool call changed it, or when it fell
+ * back from "auto" for a model without auto mode. Every attached client gets it, so a client
+ * that shows the mode learns of a change made elsewhere. The event is not stored in the
+ * history; a change a client asked for is in the audit log.
+ */
+export interface PermissionModeChanged {
+  client?: string | null;
+  mode: string;
+  seq?: number;
+}
+/**
+ * `permission_mode.set`: switch Claude Code's permission mode while the session runs.
+ *
+ * Claude Code's own Shift+Tab, for every client (agent/records/PLAN.md D247). calu offers
+ * `SWITCHABLE_PERMISSION_MODES`; the other modes Claude Code knows are refused with the
+ * reason in `REFUSED_PERMISSION_MODES`, and with `claude.require_auto_mode` every mode but
+ * "auto" is refused. The change applies between turns and inside a running turn, from the
+ * next tool call on: a call whose check has started keeps the mode its hook reported. It is
+ * recorded in the session's audit log (`calu sessions <id>`), reaches every client as
+ * `permission_mode.changed`, and is kept for later starts of this calu process (as
+ * `model.set` is), not written to the project's settings. A mode the session already runs
+ * in changes nothing and is not recorded. Result: `{}`.
+ */
+export interface PermissionModeSetParams {
+  mode: "default" | "auto" | "acceptEdits" | "plan" | "dontAsk" | "bypassPermissions";
+}
+/**
  * The state of one usage limit of the Claude Code account, as Claude Code reports it.
  */
 export interface RateLimit {
@@ -827,6 +857,7 @@ export interface SessionSnapshot {
   honesty_mode?: string;
   last_seq?: number;
   model?: string | null;
+  permission_mode?: string | null;
   project?: string | null;
   queue?: QueuedMessage[];
   rate_limits?: RateLimit[];
@@ -834,7 +865,11 @@ export interface SessionSnapshot {
   workspace: string;
 }
 /**
- * Start a Claude session, or resume the session `resume_id`. Result: `{}`.
+ * Start a Claude session, or resume the session `resume_id`.
+ *
+ * Result: `{"claude_session_id": ..., "calu_session_id": ...}`, the ids of the Claude session
+ * and of the session row that runs now. A start after a stop runs a new row, for which a
+ * client that attached with a minted token needs a token of its own (`ENDED_WITH_SESSION`).
  *
  * `model` and `effort` replace the configured `claude.model` / `claude.effort` for this and
  * later sessions of the core process; None keeps the configured value. `model` is a Claude
@@ -1218,6 +1253,7 @@ export interface RequestParams {
   'initialize': InitializeParams;
   'interrupt': EmptyParams;
   'model.set': ModelSetParams;
+  'permission_mode.set': PermissionModeSetParams;
   'session.history': SessionHistoryParams;
   'session.list': SessionListParams;
   'session.start': SessionStartParams;
@@ -1260,6 +1296,7 @@ export interface EventParams {
   'escalation.resolved': EscalationResolved;
   'honesty.update': HonestyUpdate;
   'log': Log;
+  'permission_mode.changed': PermissionModeChanged;
   'session.state': SessionState;
   'step.held': StepHeld;
   'tool.files': ToolFiles;

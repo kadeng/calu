@@ -13,7 +13,7 @@
  * not in the table is sent as chat text too (a custom command of the project).
  */
 
-import { LEVELS, LEVEL_IDS, type LevelId } from './levels';
+import { LEVELS, LEVEL_IDS, PERMISSION_MODES, PERMISSION_MODE_TEXTS, type LevelId, type PermissionModeId } from './levels';
 import { CLAUDE_EFFORTS, CLAUDE_MODELS, HONESTY_MODES, type ClaudeEffort, type HonestyMode, type WebviewMessage } from './messages';
 
 /** One slash command. */
@@ -67,6 +67,7 @@ export const CALU_COMMANDS: readonly SlashCommand[] = [
   command('model', 'calu', 'Change the model of the running session', CLAUDE_MODELS.map((m) => ({ value: m, description: m === 'default' ? "Claude Code's default model" : `The latest ${m} model` }))),
   command('effort', 'calu', 'Change the thinking effort (sessions started from now on)', CLAUDE_EFFORTS.map((e) => ({ value: e, description: e === 'default' ? "Claude Code's default effort" : '' }))),
   command('level', 'calu', 'Change the supervision level', LEVELS.map((l) => ({ value: l.id, description: l.name }))),
+  command('mode', 'calu', "Switch Claude Code's permission mode", PERMISSION_MODES.map((m) => ({ value: m, description: PERMISSION_MODE_TEXTS[m].description }))),
   command('honesty', 'calu', 'Change the code honesty mode', [
     { value: 'off', description: 'No honesty tracking' },
     { value: 'track', description: 'Track marks and unreviewed files' },
@@ -154,7 +155,7 @@ export function completions(text: string, commands: readonly SlashCommand[]): Co
 }
 
 /** Parts of the view a command opens. */
-export type SlashUiAction = 'sessions' | 'model' | 'effort' | 'level' | 'honesty';
+export type SlashUiAction = 'sessions' | 'model' | 'effort' | 'level' | 'permission' | 'honesty';
 
 /** What submitting a composer text that starts with "/" does. */
 export type SlashResult =
@@ -200,6 +201,11 @@ export function resolveSlash(text: string, attachedId: string | null): SlashResu
     case 'level':
       if (!arg) return { kind: 'ui', action: 'level' };
       return (LEVEL_IDS as readonly string[]).includes(arg) ? needsSession({ type: 'setLevel', level: arg as LevelId }) : badValue();
+    case 'mode':
+      if (!arg) return { kind: 'ui', action: 'permission' };
+      return (PERMISSION_MODES as readonly string[]).includes(arg)
+        ? needsSession({ type: 'setPermissionMode', mode: arg as PermissionModeId })
+        : badValue();
     case 'honesty':
       if (!arg) return { kind: 'ui', action: 'honesty' };
       return (HONESTY_MODES as readonly string[]).includes(arg) ? { kind: 'message', message: { type: 'setHonestyMode', mode: arg as HonestyMode } } : badValue();

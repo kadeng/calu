@@ -107,3 +107,22 @@ export function levelLabel(flags: Partial<AutoEscalateFlags> | null | undefined)
   ].filter(Boolean);
   return `Custom: confirm ${parts.join(', ')}`;
 }
+
+/**
+ * Claude Code's permission modes a client can switch to while a session runs
+ * (`permission_mode.set`, agent/records/PLAN.md D247), in the order of Claude Code's own
+ * Shift+Tab. The core refuses every other mode with the reason.
+ */
+export const PERMISSION_MODES = ['default', 'acceptEdits', 'auto'] as const;
+/** A permission mode a user can choose. */
+export type PermissionModeId = (typeof PERMISSION_MODES)[number];
+
+/** Short name and tooltip of each mode, for the selector. */
+export const PERMISSION_MODE_TEXTS: Readonly<Record<PermissionModeId, { name: string; description: string }>> = {
+  default: { name: 'Default', description: 'The checkers decide every tool call alone.' },
+  acceptEdits: {
+    name: 'Accept edits',
+    description: 'Claude Code accepts file edits on its own; under calu the checkers still decide each.',
+  },
+  auto: { name: 'Auto', description: "A step runs only if the checkers and auto mode's classifier both approve it." },
+};

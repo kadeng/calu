@@ -9,7 +9,7 @@ const table = allCommands();
 describe('command table', () => {
   it('holds the extension commands and the built-in Claude Code commands, sorted', () => {
     expect(CALU_COMMANDS.map((c) => c.name)).toEqual([
-      'model', 'effort', 'level', 'honesty', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt',
+      'model', 'effort', 'level', 'mode', 'honesty', 'checkers', 'checker-context', 'sessions', 'new', 'fork', 'rename', 'settings', 'interrupt',
     ]);
     // No /help: a session without a terminal answers that it is not available.
     expect(CLAUDE_COMMANDS.map((c) => c.name)).toEqual(['compact', 'clear', 'usage', 'context', 'cost']);
@@ -40,11 +40,14 @@ describe('completions', () => {
   });
 
   it('completes a command with values to "/name " and offers the values next', () => {
-    const model = completions('/mod', table)[0];
+    const model = completions('/mod', table).find((c) => c.label === '/model');
     expect(model).toMatchObject({ label: '/model', insert: '/model ', submit: false, kind: 'calu' });
     expect(completions('/model ', table).map((c) => c.label)).toEqual(['default', 'fable', 'opus', 'sonnet', 'haiku']);
     expect(completions('/model so', table)).toEqual([expect.objectContaining({ label: 'sonnet', insert: '/model sonnet', submit: true, kind: 'value' })]);
     expect(completions('/level ', table).map((c) => c.label)).toEqual(['checkers', 'edits', 'writes', 'everything']);
+    // Claude Code's permission mode (D247), in the order of its Shift+Tab.
+    expect(completions('/mode ', table).map((c) => c.label)).toEqual(['default', 'acceptEdits', 'auto']);
+    expect(completions('/mode acc', table)).toEqual([expect.objectContaining({ insert: '/mode acceptEdits', submit: true })]);
   });
 
   it('submits commands without values at once and stops after an argument', () => {
@@ -67,6 +70,7 @@ describe('resolveSlash', () => {
       ['/model claude-opus-4-5[1m]', { type: 'setModel', model: 'claude-opus-4-5[1m]' }],
       ['/effort high', { type: 'setEffort', effort: 'high' }],
       ['/level writes', { type: 'setLevel', level: 'writes' }],
+      ['/mode acceptEdits', { type: 'setPermissionMode', mode: 'acceptEdits' }],
       ['/honesty enforce', { type: 'setHonestyMode', mode: 'enforce' }],
       ['/checkers', { type: 'editChecker' }],
       ['/checker-context', { type: 'showContext' }],
@@ -90,8 +94,11 @@ describe('resolveSlash', () => {
   it('explains a wrong value and a missing session', () => {
     expect(resolveSlash('/effort extreme', 's1')).toEqual({ kind: 'error', text: '/effort takes one of: default, low, medium, high, xhigh, max.' });
     expect(resolveSlash('/level custom', 's1').kind).toBe('error');
+    expect(resolveSlash('/mode plan', 's1')).toEqual({ kind: 'error', text: '/mode takes one of: default, acceptEdits, auto.' });
+    expect(resolveSlash('/mode', 's1')).toEqual({ kind: 'ui', action: 'permission' });
+    expect(parseWebviewMessage({ type: 'setPermissionMode', mode: 'bypassPermissions' })).toBeUndefined();
     expect(resolveSlash('/model has space', 's1').kind).toBe('error');
-    for (const text of ['/fork', '/rename', '/interrupt', '/model opus', '/level edits', '/checker-context']) {
+    for (const text of ['/fork', '/rename', '/interrupt', '/model opus', '/level edits', '/mode auto', '/checker-context']) {
       expect(resolveSlash(text, null), text).toMatchObject({ kind: 'error', text: expect.stringContaining('needs an attached session') });
     }
     expect(resolveSlash('/settings', null).kind).toBe('message');

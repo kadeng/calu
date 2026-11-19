@@ -48,7 +48,7 @@ import {
   type TabView,
 } from '../src/shared/chatModel';
 import { fileClick, menuFor, rowClick, type ItemActionId } from '../src/shared/itemMenu';
-import { LEVELS, levelLabel, levelOf, type LevelId } from '../src/shared/levels';
+import { LEVELS, PERMISSION_MODES, PERMISSION_MODE_TEXTS, levelLabel, levelOf, type LevelId, type PermissionModeId } from '../src/shared/levels';
 import {
   CLAUDE_EFFORTS,
   CLAUDE_MODELS,
@@ -437,7 +437,37 @@ function buildQuickRow(): HTMLElement[] {
   const options: [string, string][] = LEVELS.map((l) => [l.id, l.name]);
   if (level === 'custom') options.unshift(['', levelLabel(view.autoEscalate)]);
   const select = buildSelect('level', 'header-level', 'Supervision level: which steps wait for you', options, level === 'custom' ? '' : level, !attached);
-  return [checkers, context, honesty, select];
+  return [checkers, context, honesty, select, permissionSelect(attached)];
+}
+
+/**
+ * Build the selector of Claude Code's permission mode, next to the supervision level. It shows
+ * the mode the session reports; a mode calu does not offer (plan mode, entered by a tool call)
+ * is shown as a disabled entry. A choice is sent, and the selector follows the event that
+ * comes back.
+ *
+ * @param attached Whether a session is attached.
+ * @returns The element.
+ */
+function permissionSelect(attached: boolean): HTMLSelectElement {
+  const mode = view.permissionMode;
+  const options: (readonly [string, string])[] = PERMISSION_MODES.map((m) => [m, `Mode: ${PERMISSION_MODE_TEXTS[m].name}`]);
+  if (mode === null) options.unshift(['', 'Mode: not known yet']);
+  else if (!(PERMISSION_MODES as readonly string[]).includes(mode)) options.unshift(['', `Mode: ${mode}`]);
+  const known = mode !== null && (PERMISSION_MODES as readonly string[]).includes(mode);
+  const select = buildSelect(
+    'permission',
+    'header-permission',
+    "Claude Code's permission mode (its Shift+Tab); applies from Claude's next tool call",
+    options,
+    known ? mode : '',
+    !attached || mode === null,
+  );
+  for (const option of select.options) {
+    const text = PERMISSION_MODE_TEXTS[option.value as PermissionModeId];
+    if (text) option.title = text.description;
+  }
+  return select;
 }
 
 /**
@@ -2024,7 +2054,7 @@ function onContextMenu(event: MouseEvent): void {
 }
 
 /**
- * Handle a changed selector: model, effort or supervision level.
+ * Handle a changed selector: model, effort, supervision level or permission mode.
  *
  * @param event A `change` event anywhere in the document.
  * @returns Nothing.
@@ -2042,6 +2072,9 @@ function onChange(event: Event): void {
   else if (target.dataset.select === 'effort' && (CLAUDE_EFFORTS as readonly string[]).includes(value)) {
     vscode.postMessage({ type: 'setEffort', effort: value as ClaudeEffort });
   } else if (target.dataset.select === 'level' && value) vscode.postMessage({ type: 'setLevel', level: value as LevelId });
+  else if (target.dataset.select === 'permission' && (PERMISSION_MODES as readonly string[]).includes(value)) {
+    vscode.postMessage({ type: 'setPermissionMode', mode: value as PermissionModeId });
+  }
 }
 
 /**

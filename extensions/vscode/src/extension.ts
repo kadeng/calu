@@ -1068,6 +1068,10 @@ export function activate(context: vscode.ExtensionContext): CaluApi {
       case 'setLevel':
         await run('Changing the supervision level', () => bridge.session('auto_escalate.set', flagsForLevel(message.level)));
         return;
+      case 'setPermissionMode':
+        // The session answers every client with `permission_mode.changed`; the header follows it.
+        await run("Switching Claude Code's permission mode", () => bridge.session('permission_mode.set', { mode: message.mode }));
+        return;
       case 'refreshUsage':
         await refreshUsage();
         return;

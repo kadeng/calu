@@ -449,3 +449,25 @@ describe('the honesty checker result of check.result', () => {
     expect(honestyRowChip(parseHonestyResult({ honesty_escalation: 'why' }) ?? undefined)?.label).toBe('honesty: ask');
   });
 });
+
+describe("Claude Code's permission mode (D247)", () => {
+  it('comes from the snapshot, follows every change and is not replayed from the history', () => {
+    const attached = applyEvent(
+      initialViewState(),
+      ev('ui.attached', {
+        session_id: 's1',
+        snapshot: { state: 'idle', workspace: '/w', permission_mode: 'auto' },
+        // A recorded change is older than the snapshot, which says what is true now.
+        events: [{ method: 'permission_mode.changed', params: { mode: 'default' } }],
+      }),
+    );
+    expect(attached.permissionMode).toBe('auto');
+    const switched = applyEvent(attached, ev('permission_mode.changed', { mode: 'acceptEdits', client: 'web' }));
+    expect(switched.permissionMode).toBe('acceptEdits');
+    // A tool call entered plan mode: shown as reported.
+    expect(applyEvent(switched, ev('permission_mode.changed', { mode: 'plan' })).permissionMode).toBe('plan');
+    expect(applyEvent(switched, ev('permission_mode.changed', { mode: 7 })).permissionMode).toBe('acceptEdits');
+    const older = applyEvent(initialViewState(), ev('ui.attached', { session_id: 's2', snapshot: { state: 'idle', workspace: '/w' }, events: [] }));
+    expect(older.permissionMode).toBeNull();
+  });
+});

@@ -14,7 +14,7 @@
  */
 
 import type { ItemActionId } from './itemMenu';
-import { LEVEL_IDS, type LevelId } from './levels';
+import { LEVEL_IDS, PERMISSION_MODES, type LevelId, type PermissionModeId } from './levels';
 import type { ViewEvent, ViewState } from './viewState';
 
 /** Raster formats an attached image may have (an SVG can carry scripts and is refused). */
@@ -96,6 +96,8 @@ export type WebviewMessage =
   | { type: 'setEffort'; effort: ClaudeEffort }
   /** Change the supervision level (`auto_escalate.set`). */
   | { type: 'setLevel'; level: LevelId }
+  /** Switch Claude Code's permission mode of the running session (`permission_mode.set`). */
+  | { type: 'setPermissionMode'; mode: PermissionModeId }
   /** Ask the session for its usage (`usage.get`); the answer arrives as `ui.usage`. */
   | { type: 'refreshUsage' }
   /** Interrupt the running turn. */
@@ -297,6 +299,10 @@ export function parseWebviewMessage(raw: unknown): WebviewMessage | undefined {
       return CLAUDE_EFFORTS.includes(m.effort as ClaudeEffort) ? { type: 'setEffort', effort: m.effort as ClaudeEffort } : undefined;
     case 'setLevel':
       return LEVEL_IDS.includes(m.level as LevelId) ? { type: 'setLevel', level: m.level as LevelId } : undefined;
+    case 'setPermissionMode':
+      return PERMISSION_MODES.includes(m.mode as PermissionModeId)
+        ? { type: 'setPermissionMode', mode: m.mode as PermissionModeId }
+        : undefined;
     case 'openFile':
       return text(m.path) ? { type: 'openFile', path: m.path, ...line(m.line) } : undefined;
     case 'openDiff':

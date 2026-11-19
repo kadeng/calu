@@ -461,6 +461,11 @@ export interface ViewState {
   hints: SetupHint[];
   /** The session's auto-escalation switches (the supervision level, see `levels.ts`). */
   autoEscalate: AutoEscalateFlags;
+  /**
+   * Claude Code's permission mode as the session reports it (`permission_mode.changed`,
+   * the snapshot's `permission_mode`); `null` while it is not known.
+   */
+  permissionMode: string | null;
   /** Code honesty state of the session; `null` before the first report. */
   honesty: HonestyInfo | null;
   /**
@@ -642,6 +647,7 @@ export function initialViewState(): ViewState {
     serverHelp: null,
     hints: [],
     autoEscalate: { commands: false, edits: false, subagents: false },
+    permissionMode: null,
     honesty: null,
     honestyStored: null,
     starting: null,
@@ -1840,6 +1846,8 @@ function reduce(state: ViewState, method: string, p: Record<string, unknown>): V
         autoEscalate: { commands: s.commands === true, edits: s.edits === true, subagents: s.subagents === true },
       };
     }
+    case 'permission_mode.changed':
+      return typeof p.mode === 'string' && p.mode ? { ...state, permissionMode: p.mode } : state;
     case 'honesty.update':
       return { ...state, honesty: parseHonesty(p) };
     case 'usage.update':
@@ -1915,7 +1923,7 @@ export function applyEvents(state: ViewState, events: readonly ViewEvent[]): Vie
 }
 
 /** Methods of recorded events that describe the live session and are taken from the snapshot. */
-const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escalate.changed', 'honesty.update', 'usage.update']);
+const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escalate.changed', 'permission_mode.changed', 'honesty.update', 'usage.update']);
 
 /**
  * Rebuild the state from the result of `ide.attach` / `ide.start` (reducer case `ui.attached`).
@@ -1926,7 +1934,8 @@ const NOT_REPLAYED = new Set(['session.state', 'log', 'chat.queue', 'auto_escala
  *        then stays and the events continue it
  *     2. replay `events` (the recorded events of the session, oldest first)  -> transcript
  *     3. apply `snapshot` (authoritative for what is true now):
- *          session state, model, effort, agents, queue, auto-escalation, honesty, limits;
+ *          session state, model, effort, agents, queue, auto-escalation, permission mode,
+ *          honesty, limits;
  *          escalations: one that the replay left open but the snapshot does not list is
  *          closed as "cancelled"; one that the snapshot lists but the replay did not produce
  *          is added
@@ -1980,6 +1989,7 @@ export function applyAttach(state: ViewState, p: Record<string, unknown>): ViewS
   if (Array.isArray(snapshot.agents)) next = applyEvent(next, { method: 'agents.update', params: { agents: snapshot.agents } });
   next = applyEvent(next, { method: 'chat.queue', params: { messages: Array.isArray(snapshot.queue) ? snapshot.queue : [] } });
   next = applyEvent(next, { method: 'auto_escalate.changed', params: { settings: obj(snapshot.auto_escalate) } });
+  next = { ...next, permissionMode: str(snapshot.permission_mode) };
 
   const snapshotSeq = typeof snapshot.last_seq === 'number' ? snapshot.last_seq : 0;
   const stateName = typeof snapshot.state === 'string' ? (snapshot.state as SessionStateName) : 'idle';
