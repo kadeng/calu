@@ -274,7 +274,9 @@ function buildSkeleton(): void {
   interruptButton = iconButton('stop', 'Interrupt', 'post', { class: 'secondary round', 'data-type': 'interrupt', 'data-testid': 'input-interrupt', title: "Interrupt Claude's running turn" });
   sendButton = iconButton('send', 'Send', 'send', { class: 'primary round', 'data-testid': 'input-send' });
   const buttons = el('div', 'composer-buttons');
-  buttons.append(attachButton, sideButton, interruptButton, sendButton);
+  // Interrupt comes first: it appears only while Claude works, and placed there it moves no
+  // other button, so a click aimed at the side-question button never stops the turn.
+  buttons.append(interruptButton, attachButton, sideButton, sendButton);
   footer.append(footerSlot, buttons);
   composer.append(completionBox, thumbsSlot, input, footer, fileInput);
   hintEl = el('div', 'hint', undefined, { 'data-testid': 'input-hint' });
