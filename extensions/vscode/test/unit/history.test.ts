@@ -98,6 +98,14 @@ describe('historyEntries', () => {
     expect(historyEntries(HISTORY, covered()).firstReplayedTurn).toBe(4);
   });
 
+  it('does not take the same words in an earlier turn for the boundary when the prompts have ids', () => {
+    // Turn 3 was typed with the words of turn 1, and the replay holds turn 3 (its id is u3).
+    const same = { ...HISTORY, turns: HISTORY.turns.map((t) => (t.index === 3 ? { ...t, user_inputs: ['read the greeter'] } : t)) };
+    const h = historyEntries(same, covered(['u3'], ['read the greeter']));
+    expect(h.entries.filter((e) => e.kind === 'user').map((e) => (e.kind === 'user' ? e.turn : 0))).toEqual([1, 2]);
+    expect(h.firstReplayedTurn).toBe(3);
+  });
+
   it('survives malformed input', () => {
     for (const raw of [null, 7, 'x', [], {}, { turns: 'no' }, { turns: [null, 3, { index: 'one' }], steps: [null, { turn: 1 }] }]) {
       expect(historyEntries(raw, covered())).toEqual({ entries: [], turns: 0, omittedTurns: 0, firstReplayedTurn: 1 });

@@ -298,12 +298,10 @@ class Link:
             held = self._held or []
             if raw is not None:
                 ids = [str(params.get("tool_use_id") or "") for _, params in held]
-                inputs = [
-                    str(params.get("text") or "")
-                    for method, params in held
-                    if method == "user.input"
-                ]
-                stored = self.model.load_history(raw, [i for i in ids if i], inputs)
+                replayed = [params for method, params in held if method == "user.input"]
+                inputs = [str(params.get("text") or "") for params in replayed]
+                uuids = [str(params.get("uuid") or "") for params in replayed]
+                stored = self.model.load_history(raw, [i for i in ids if i], inputs, uuids)
             gap = not reload and bool(held) and int(held[0][1].get("seq") or 0) > 1
             if rebuild:
                 stored.merge(

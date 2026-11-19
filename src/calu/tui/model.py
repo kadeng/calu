@@ -1281,6 +1281,7 @@ class SessionModel:
         raw: dict[str, Any],
         replayed_ids: Iterable[str] = (),
         replayed_inputs: Iterable[str] = (),
+        replayed_uuids: Iterable[str] = (),
     ) -> Change:
         """Put the stored conversation of the session above the events that follow.
 
@@ -1292,9 +1293,12 @@ class SessionModel:
         The events the session replays after this call may cover the newest part of the same
         conversation. The first stored turn that has a step or an input among the replayed
         ones is the boundary: earlier turns are added whole, of the boundary turn only what was
-        not replayed (nothing but earlier inputs if its input was replayed), later turns not at
-        all. A line of the client follows the stored blocks
-        and says what they are.
+        not replayed (nothing but its inputs if its input was not replayed), later turns not
+        at all. A turn's input counts as replayed by Claude Code's id of its prompt
+        (`TurnRecord.prompt_uuid`) where the turn has one and the replayed inputs have ids at
+        all; only otherwise by its text. By text alone, the same words in two turns
+        ("continue") made the earlier turn the boundary and dropped every turn between them.
+        A line of the client follows the stored blocks and says what they are.
 
         Precondition: the model holds no blocks (a new or a reset model); otherwise nothing is
         added.
@@ -1303,6 +1307,8 @@ class SessionModel:
             raw: The result of `session.history` as the session returned it.
             replayed_ids: The `tool_use_id` of every tool call among the events that follow.
             replayed_inputs: The text of every user input among the events that follow.
+            replayed_uuids: The `uuid` of every user input among the events that follow that
+                has one.
 
         Returns:
             A change that names the added blocks; an empty one if there was nothing to add or
@@ -1316,6 +1322,7 @@ class SessionModel:
             return self._invalid("session.history", error)
         seen_ids = set(replayed_ids)
         seen_inputs = {text.strip() for text in replayed_inputs}
+        seen_uuids = {uuid for uuid in replayed_uuids if uuid}
         known = {turn.index for turn in history.turns}
         by_turn: dict[int | None, list[m.StoredStep]] = {}
         for stored in history.steps:
@@ -1349,16 +1356,18 @@ class SessionModel:
         add_steps(by_turn.get(None, []))
         for turn in history.turns:
             steps = by_turn.get(turn.index, [])
-            boundary = any(text.strip() in seen_inputs for text in turn.user_inputs) or any(
-                stored.tool_use_id in seen_ids for stored in steps if stored.tool_use_id
-            )
-            for text in turn.user_inputs:
-                if text.strip() not in seen_inputs:
+            if turn.prompt_uuid and seen_uuids:
+                # The replay holds this turn from its prompt on, or none of its inputs.
+                replayed = [turn.prompt_uuid in seen_uuids] * len(turn.user_inputs)
+            else:
+                replayed = [text.strip() in seen_inputs for text in turn.user_inputs]
+            for text, seen in zip(turn.user_inputs, replayed, strict=True):
+                if not seen:
                     self._add(UserBlock(id=len(self.blocks), turn=self.turn, text=text), change)
-            if any(text.strip() in seen_inputs for text in turn.user_inputs):
+            if any(replayed):
                 break  # the replay holds this turn from its input on
             add_steps(steps)
-            if boundary:
+            if any(stored.tool_use_id in seen_ids for stored in steps if stored.tool_use_id):
                 break
             if turn.answer.strip():
                 self._add(TextBlock(id=len(self.blocks), turn=self.turn, text=turn.answer), change)

@@ -229,6 +229,25 @@ def test_what_the_session_replays_is_not_taken_from_the_stored_history_too() -> 
     assert whole.blocks == [] and not covered, "the replay starts at the first turn"
 
 
+def test_the_same_words_in_an_earlier_turn_are_not_the_boundary_when_prompts_have_ids() -> None:
+    """Turn 3 was typed with the words of turn 1, and the replay holds turn 3 (prompt id u3).
+    By text, turn 1 was the boundary and turns 1 and 2 were dropped."""
+    history = scenarios.stored_history()
+    history["turns"][0]["prompt_uuid"] = "u1"
+    history["turns"][1]["prompt_uuid"] = "u2"
+    words = history["turns"][0]["user_inputs"][0]
+    history["turns"].append({"index": 3, "user_inputs": [words], "prompt_uuid": "u3"})
+    model = SessionModel()
+    model.load_history(history, replayed_inputs=[words], replayed_uuids=["u3"])
+    users = [block.text for block in model.blocks if isinstance(block, UserBlock)]
+    assert users == [words, "Add a docstring to it."]
+    assert sum(isinstance(block, TurnEndBlock) for block in model.blocks) == 2
+    # Without ids on the replayed side the text still decides.
+    by_text = SessionModel()
+    by_text.load_history(history, replayed_inputs=[words])
+    assert by_text.blocks == []
+
+
 def test_the_stored_history_is_only_loaded_into_an_empty_model() -> None:
     model = SessionModel()
     model.apply("user.input", {"text": "hello", "source": "user"}, 1.0)

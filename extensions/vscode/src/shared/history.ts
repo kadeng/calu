@@ -17,7 +17,10 @@
  *     turn 3   user (replayed)  -> boundary: nothing of this turn or a later one is added
  *
  * The first recorded turn that has an input or a step among the replayed ones is the boundary
- * (the same rule as `SessionModel.load_history` of calu's terminal client). Of the boundary turn
+ * (the same rule as `SessionModel.load_history` of calu's terminal client). An input is found
+ * by Claude Code's id of the prompt if the turn has one and the replay has ids at all, else by
+ * its text: by text alone, the same words in two turns ("continue") made the earlier turn the
+ * boundary and dropped every turn between them. Of the boundary turn
  * only what the replay lacks is added: its inputs if none of them was replayed, and its steps
  * that were not replayed if no input was replayed.
  *
@@ -171,7 +174,9 @@ export function historyEntries(raw: unknown, covered: Covered): History {
     // The steps with input and result if this session recorded them, else the turn's own list.
     const detailed = stored.get(index);
     const steps = (detailed ?? (Array.isArray(turn.steps) ? turn.steps : []).map(obj)).filter((s): s is RawStep => s !== undefined);
-    const inputReplayed = (uuid !== '' && covered.uuids.has(uuid)) || inputs.some((i) => covered.inputs.has(i.trim()));
+    // A prompt is recognised by its id where both sides have ids; the text decides only without.
+    const inputReplayed =
+      uuid !== '' && covered.uuids.size > 0 ? covered.uuids.has(uuid) : inputs.some((i) => covered.inputs.has(i.trim()));
     const stepReplayed = steps.some((s) => covered.toolUseIds.has(text(s.tool_use_id)));
     const entries: HistoryEntry[] = [];
     if (!inputReplayed) {
