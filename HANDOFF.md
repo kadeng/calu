@@ -6,7 +6,7 @@ questions §11, phases §12). **Not everything is pushed**: see "State of the re
 
 ## Pick up here
 
-### State of the repository (updated 2026-11-19, about 02:30; written before a compaction)
+### State of the repository (updated 2026-11-19, about 03:00, by the lead's stand-in)
 
 **Read first:** `PLAN.md` D233 (what the test campaign changed and the decisions that wait
 for the owner) and D234 (server and setup side); `docs/notes/test-plan.md` (the record of
@@ -14,78 +14,124 @@ the cases, sections A-H and the table C1-C23); the skill
 `.claude/skills/ui-testing-with-cua/SKILL.md` (how the IDE tests are run). The owner's words
 are in `REQUIREMENTS.md` 34-40.
 
-#### What is on GitHub (`origin/main`, `e8adb9f` when this was written)
+#### CI and what is on GitHub
 
-- Everything of the test campaign that was finished: VSCode extension (two scripted runs,
-  one run against a real Claude Code on Haiku; `extensions/vscode/calu.vsix` is ready for
-  the owner's manual test), web interface (23 fixes), terminal clients, server and setup
-  side (run for real as root, through sudo, as three users; `tests/root/`), short checker
-  instructions with test triggers, D224 built, measured honesty instructions, session traces,
-  `calu ide` with file sync, the PyCharm plugin (runs in PyCharm 2026.3 in local mode; 418
-  tests), the easter egg `calu lightcycles` (a port of the owner's own game MetaTron for the
-  browser), and the rewritten README.
-- **CI is red.** (1) It was red because `ruff format --check .` and `ruff check .` in CI
-  cover the whole repository and one Python file under `extensions/jetbrains/` was
-  unformatted: fixed (`f81d806`). (2) One browser test fails since the gate fix `91ed9bd`:
-  `tests/browser/test_web_live_agents.py::test_subagents_are_told_apart_and_two_open_cards_are_answered_on_their_own`
-  (it expects two approval cards open at once; the gate now holds approved steps again
-  instead of escalating them). The agent that made the gate change has the failure and must
-  either fix the gate (two steps that each escalate on their own merit must both get a card)
-  or adapt the test. No CI run has finished since: every README push cancelled the run in
-  progress. **Do not report CI as green until a run on the tip has completed.**
+- **CI is green** on `a66e626` (run 44429485075: lint, types, unit and database tests,
+  browser tests, the wheel). The two failures named in the earlier version of this section
+  are fixed: the unformatted file (`f81d806`) and the browser test of two open cards
+  (`8d20d6a`, the state and the buttons read in one look). See the end of this section for
+  the newest pushed commit and its run.
+- **Newest pushed commit: `fa88764`**, CI run 44432454408 completed green (all four jobs).
+  It passed the pre-push run first (repo-wide format, lint, pyright; 2214 unit tests with
+  `-n 8`; 22 browser tests without the MetaTron file; 281 database tests).
+  The commit of this HANDOFF and the agents' commits before it (`0b1cab1`, `66e947f`,
+  `a2fe490`) were pushed after their own pre-push run; `gh run list --limit 3` shows that
+  run's result.
+- Local `main` was rebased onto `origin/main` once (the water change `01a88f1` had been
+  pushed from a separate worktree), so commit ids of the agents' earlier local commits
+  changed (`6281b4e` is `8d20d6a`, `09f1a87` is `a66e626`, `382249a` is `e401a0c`).
+- **Done since the handoff** (stand-in): the honesty checker's per-file result
+  (`check.result.honesty`, `honesty_escalation`) in the line client (`calu attach --plain`:
+  a `honesty:` line per file), the full-screen client (a `honesty` line under the step only
+  for a dishonest file or a request for a person; every file in the expanded step), the
+  web live view (a line per file tagged `honesty`) and the VSCode extension (a `dishonest`
+  chip on the row, every file in the details); never as a decision chip. PyCharm: agent 2's
+  brief. Honest-code review of the code since 2026-11-17 by two reviewers, fixes applied (see
+  "Coverage and honest code" below). Both agents' commits up to `0c859b4` and `efa1621` are
+  pushed with it.
 
 #### Agents that were running when this was written
 
 Their reports arrive in the session that started them; if that context is gone, read
 `git log origin/main..HEAD`, `git status`, and the test plan sections they fill in.
 
-1. **Core defect fixes** (Python; one commit per item; a database container of its own,
-   `calu-fix-pg` on 127.0.0.1:55491): held steps turning into escalations (done: `91ed9bd`,
-   see CI above); `calu config`/`checker`/`rules` saying which database they change and
-   refusing to guess between two stored logins (done: `930d665`); start-up time (lazy imports
-   in `calu.cli`: it had many files of `src/calu/` open and uncommitted when this was
-   written); empty trace files on a settings change; the flaky test
-   `test_protocol_server.py::test_a_revoked_token_is_refused_every_request_that_changes_the_session`;
-   two honesty workflow points (corrected file after a denied commit, a mark cleared by hand
-   not surviving a restart); seven smaller ones (web messages after `--no-password`,
-   `/history`, input of an unfinished first turn, who decided in `calu resolve`, conversation
-   titles, the browser layer's marker in the docs). It was asked NOT to change which steps
-   are held and to write the options for the owner.
+1. **Core defect fixes** (Python; one commit per item; `calu-fix-pg` on 127.0.0.1:55491).
+   Committed: held steps (`91ed9bd`), which database `calu config` changes (`930d665`), lazy
+   imports in `calu.cli` (`a66e626`), trace files on a settings change (`e401a0c`), the
+   flaky revoked-token test (`0ca121e`, `0cc826e`, `0c859b4`), the two honesty workflow
+   points (`b1b87fb`), the seven smaller items (`66e947f`, schema 37) and PLAN D235
+   (`a2fe490`). It had no uncommitted files left at 03:00; its report (with the options on
+   which steps are held) goes to the session that started it.
+   It was asked NOT to change which steps are held and to write the options for the owner.
 2. **PyCharm plugin, SSH mode** (`extensions/jetbrains/`, `uitest/sshbox/`; drives the
-   desktop container): a headless SSH server container `calu-sshbox` (key login with a key
-   pair made for the tests in `~/.cache/calu-uitest/ssh/`, never the owner's keys; on the
-   Docker network `calu-uitest-net` with the desktop), the plugin's I/O half of file sync
-   (clone from server, both directions, conflicts with the merge dialog, offline queue), a
-   walk through it in PyCharm (test plan section H), the plugin's open defects (fork of a
-   rewound session missing a turn, cut code lines, dead sessions in the list, missing side
-   questions / file links / setup page, the honesty checker's per-file result), and one more
-   look at remote development.
+   desktop container). Committed: the SSH box (`46dc549`) and the plugin's file sync
+   (`efa1621`) and the honesty checker's per-file result with other defects (`0b1cab1`).
+   Still in work at 03:00 (uncommitted `ChatSurface.kt`, `Composer.kt`, `uitest/README.md`):
+   the rest of its defects, the walk in PyCharm (test plan
+   section H), remote development. **It drives the desktop**: nobody else may use it until
+   it is done.
 
 #### Next, in this order
 
-1. Collect those two agents; make CI green (above); push only what was tested.
-2. **Coverage and honest code** (the owner: "ensure test coverage is good, the code is
-   honest itself and CI is green"): measure coverage of the code written since 2026-11-17
-   (`src/calu/ide/`, `traces/`, `lightcycles/`, `logfile.py`, `db/place.py`, `localsocket.py`,
-   `asuser.py`, `launch.py`, `serve.py`, the cli parts) and add tests where behaviour with
-   consequences is untested; run the project's own honest-code rule
-   (`.claude/skills/honest-code/SKILL.md`) over that code: names and docstrings must say what
-   the code does, tests must describe their side effects. Start it only after agent 1 is
-   done (same files).
-3. **The honesty checker's per-file result in the clients** (`check.result.honesty`,
-   `honesty_escalation`): VSCode extension, terminal client, web live view (PyCharm: in
-   agent 2's brief). Never as a PASS chip.
-4. **VSCode extension, remaining:** the corner cases C5, C6, C11, C12 at scale in the
-   desktop (done for web, terminal and PyCharm); integration tests (`@vscode/test-cli`) in
-   the regression suite; an "Open session trace" action in both plugins (offered to the
-   owner, not answered); `/clear` against a real Claude Code.
-5. **Final screenshots** from the Cua desktop for the README (`docs/assets/`): a tidy project
+1. Collect those two agents; pre-push run of each new commit (rules below); push; wait for
+   the CI run to complete.
+2. **Coverage and honest code, the rest** (the stand-in did the first round, below):
+   `calu.cli` contracts the reviewer found wrong and that were not changed because agent 1
+   had `cli.py` open: `_herd_command`/`_herd_value` ("the narrowest credential": both prefer
+   the `calu_admin` login of the place file; `_herd_value` also keeps a decrypted login in
+   `_held` and sets `_admin_place`), `_root_socket_endpoint` (every client probes sockets,
+   not only root; rename to `_local_socket_endpoint`), `_find_endpoint` (`token_id` is None
+   on the socket paths), `_admin_secret` (keeps the typed password in `_typed`),
+   `_admin_command` (its `Raises` is wrong). In `calu ide`: `_start_cancel` can abort a
+   request after the server started the session (the contract now says so; the fix is to
+   drop the cancel scope as soon as `wait_for` reports "started"). Untested with
+   consequences: `ide.models.set` for `checker:<name>` (must not create a checker), the
+   escalation closing done by `ide.status`/`ide.sessions`/`ide.attach`, `ide.start`'s
+   `SERVER_REFUSED` and unnamed-session paths (tests/db/test_ide_bridge_db.py);
+   `asuser.prepare` on an existing directory, `launch.become` refusing a wrong identity,
+   `_after_setup` writing the place file as real root, `serve.serve` with `run_as`
+   (tests/root/, in the root box).
+3. **VSCode extension, remaining** (needs the desktop, so after agent 2): the corner cases
+   C5, C6, C11, C12 at scale (done for web, terminal and PyCharm); a look at the new honesty
+   chip in a real VSCode; integration tests (`@vscode/test-cli`, as stay-in-the-loop has
+   them in `extensions/vscode/test/integration` with `scripts/test-in-docker.sh`) in the
+   regression suite; an "Open session trace" action in both plugins (offered to the owner,
+   not answered); `/clear` against a real Claude Code. `extensions/vscode/calu.vsix` (not in
+   git) predates the honesty chip: rebuild with `npm run package` before the owner's test.
+4. **Final screenshots** from the Cua desktop for the README (`docs/assets/`): a tidy project
    path (the web one shows a scratch path with host and user name), a cleaner subagent shot
    than the one ending in "finished banana"; all 16:10 so rows line up.
-6. Remote development of the PyCharm plugin needs the owner: the JetBrains CLIENT shows a
+5. Remote development of the PyCharm plugin needs the owner: the JetBrains CLIENT shows a
    "JetBrains Team Tools User Agreement" that only he may accept (viewer link:
    `uv run --no-project --with cua python uitest/desktop.py viewer-url`), then
    `uitest/pycharm-split.sh`.
+
+#### Coverage and honest code (first round, 2026-11-19)
+
+Line coverage of the unit and database layers together
+(`uv run --with pytest-cov pytest --cov=calu -n 8`, then `-m 'db and not live'
+--cov-append` on a server of its own): 92 % overall. Per module, before and after this round (on `88b6a12`, then `fa88764`):
+
+| Module | before | after |
+|---|---|---|
+| `ide/access.py` | 80 % | 81 % |
+| `ide/bridge.py` | 88 % | 90 % |
+| `ide/filestore.py` | 86 % | 87 % |
+| `ide/database.py`, `filesync.py`, `link.py`, `files.py` | 90, 96, 98, 99 % | same |
+| `ide/serve.py` | 35 % | 35 % (runs in a child process, which coverage does not see) |
+| `traces/render.py`, `redact.py`, `writer.py` | 98, 99, 88 % | same |
+| `lightcycles/server.py`, `logfile.py`, `db/place.py` | 96, 100, 95 % | same |
+| `localsocket.py`, `launch.py`, `serve.py`, `asuser.py` | 85, 87, 80, 77 % | same (the rest is root-only: the root box's `tests/root/`, not measured) |
+| `cli.py`, `run.py` | 79, 89 % | same |
+
+The numbers moved little because most findings were contracts, not missing tests; the
+tests added cover behaviour with consequences (the login choice of `calu ide`, the silent
+revocation, the trace directory, the login environment).
+
+Honest-code findings fixed (each with its commit): `calu login` started `claude auth` with
+the checker keys in its environment (now left out, as a session does; test); a trace
+directory behind a link out of the project made calu create directories outside before it
+refused (now checked first; the test checks that nothing is created); a token revocation of
+`calu ide` that got no answer was dropped silently (now reported like a refused one; test);
+contracts corrected for `ide.status` (it starts `bwrap`, reads Claude Code's settings and
+closes gone sessions' escalations), `ide.attach`, `ide.start.cancel`, `Access.read` (the
+"reading" login also writes what an operator may), the file store (listings work on
+paths), `calu setup` (when the role `calu_admin` gets a new password), `--sudo` (what is
+and is not checked), the password prompts (a blank password is accepted), the `--insecure`
+sockets (the user's, not root's), `asuser`, `launch.become`, the trace redaction and the
+trace file's end. Tests now say what they touch outside `tmp_path` (the tester's sockets,
+Claude Code settings, the MetaTron screenshots, the root box's directories), and `calu
+serve`'s process test keeps its log in `tmp_path` instead of the tester's state directory.
 
 #### Decisions that wait for the owner (ask once, do not decide for him)
 
@@ -123,6 +169,15 @@ Their reports arrive in the session that started them; if that context is gone, 
   `uv run pytest -q -n 8`, `uv run pytest -q -m browser`,
   `uv run pytest -q -m 'db and not live'`. Repo-wide lint, because CI is repo-wide. Then
   push the tested commit. Each push cancels the CI run in progress.
+- When `origin/main` moved ahead of a shared local `main` (a push from another worktree),
+  the stand-in cherry-picked the local commits onto it in the pre-push worktree and moved
+  `main` with `git reset --soft <new tip>` plus `git checkout <new tip> -- <the files the
+  remote commit changed>`, after checking that `HEAD` had not moved: the agents' uncommitted
+  files stay untouched. A commit that lands in between is lost from the branch (it is still
+  in the reflog): include every commit of `git log origin/main..HEAD`.
+- Run the repo-wide `ruff check .` and `tests/unit/test_docstrings.py` before a commit, not
+  only at the pre-push run: a nested function without a contract and a 115-column line cost
+  one round.
 - The owner does not want the full suite after every step (memory note
   `calu-selective-tests`); it is for milestones.
 - Agents share the checkout: each commits its own paths only; never `git add -A` while
