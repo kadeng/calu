@@ -57,8 +57,10 @@ Three agents started at about 07:00 (none pushes; the lead pushes):
    against a remote server.
 **Planned move of the system of records (owner, 2026-11-19), to be done by the lead only
 while no agent runs:** every document written only for and maintained by the coding agents,
-except `AGENTS.md`, moves to `.agent/records/` (the name of `.agent/` matches the session
-traces' `.agent/traces/`). Moves, with `git mv` so history follows: `HANDOFF.md`, `PLAN.md`,
+except `AGENTS.md`, moves to `.agent/records/` (the owner chose the name, 2026-11-19; it
+matches the session traces' `.agent/traces/` and is tied to no tool). Check first whether
+the agents' search tools skip hidden directories (`rg` does without `--hidden`); if they
+do, AGENTS.md must name the paths and say how to search them. Moves, with `git mv` so history follows: `HANDOFF.md`, `PLAN.md`,
 `REQUIREMENTS.md`, and all of `docs/notes/` (specs, research, test plan, reports, honesty
 evaluations, screenshots) to `.agent/records/notes/`. Stay where they are (written for
 people): `README.md`, `CALU_GUIDE.md`, `LICENSE*`, `docs/CONFIGURATION.md`,
