@@ -239,9 +239,12 @@ changed are not changed back.
 
 1. Gate: held steps turn into escalations when one of them escalates (above): fixed
    (ITEM1), they are held again.
-2. `calu` start-up time: 2 to 3.5 s of imports before any command does anything (`calu.cli`
-   imports the checkers, Pydantic AI and the Agent SDK for `calu attach` and `calu --version`
-   too). Needs lazy imports in `calu.cli`.
+2. `calu` start-up time: 2 to 3.5 s of imports before any command did anything (`calu.cli`
+   imported the checkers, Pydantic AI and the Agent SDK for `calu attach` and `calu --version`
+   too): fixed (ITEM3). The client commands import none of them any more; best of five
+   on this machine, before and after: `calu --version` 1.91 s and 0.46 s, `calu sessions
+   --help` 1.63 s and 0.46 s, `calu ide` to its first answer 1.36 s and 0.41 s
+   (`tests/unit/test_startup_imports.py`).
 3. `calu attach` without a session prints "calu: CliError: no running session …" and names
    `calu run`, not `calu start`; with two sessions in the directory it lists two ids without
    state, name or age. In `calu.cli`. **Fixed 15c9fc7** (section E): the message names

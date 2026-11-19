@@ -24,10 +24,10 @@ import socket
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import anyio
 import psycopg
-from pydantic_ai.models import Model
 
 from calu import asuser, session_requests
 from calu.config import load_secrets
@@ -36,6 +36,9 @@ from calu.db import SESSION_REQUESTED, ConnectionSource, Db, Dirty, LoginRefused
 from calu.launch import RunAs
 from calu.run import ERRORS, LABEL, RunnerFactory, RunOptions, harden_process, run_from, say
 from calu.session_requests import SessionRequest
+
+if TYPE_CHECKING:
+    from pydantic_ai.models import Model
 
 log = logging.getLogger(__name__)
 

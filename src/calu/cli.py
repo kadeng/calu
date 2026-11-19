@@ -122,16 +122,15 @@ from calu.db.target import (
 )
 from calu.defaults.instructions import honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
-from calu.evals.cli import collect_cases, run_evals
 from calu.honesty import GitError, content_ids, resolve_commit
 from calu.ide import serve_ide
 from calu.launch import LAUNCH_ENV, LaunchError, RunAs, claude_path, launcher_path
+from calu.localsocket import check_socket_path
 from calu.model_choice import detect_model
 from calu.paths import INSIDE_SESSION_ENV
 from calu.protocol.client import RequestFailed, probe
 from calu.protocol.messages import MAX_FRAME_BYTES
 from calu.protocol.schema import protocol_schema
-from calu.protocol.server import check_socket_path
 from calu.run import RunOptions, default_socket_path, harden_process, run_session
 from calu.serve import ServeOptions
 from calu.serve import os_user as serve_os_user
@@ -3697,6 +3696,10 @@ def cmd_evals(args: argparse.Namespace, store: CredentialStore) -> None:
         CredentialError: On a wrong password.
         psycopg.Error: On database errors.
     """
+    # Imported here: the evaluation runs checkers, and their import (Pydantic AI) takes over a
+    # second that no other command should pay.
+    from calu.evals.cli import collect_cases, run_evals
+
     workspace = Path(args.directory).resolve()
     critical = 0
 

@@ -17,6 +17,7 @@ own uid and gid, so running it by hand gains nothing.
 """
 
 import fnmatch
+import importlib.util
 import os
 import shutil
 import sys
@@ -260,12 +261,13 @@ def claude_path(configured: str | None) -> str:
     """
     if configured:
         return configured
-    # Imported here: the launcher itself never needs the SDK and should start fast.
-    import claude_agent_sdk
-
-    bundled = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
-    if bundled.is_file():
-        return str(bundled)
+    # Only located, not imported: importing the SDK takes several hundred milliseconds, and
+    # `calu doctor`, `calu ide` and the launcher only need to know where its files are.
+    spec = importlib.util.find_spec("claude_agent_sdk")
+    if spec is not None and spec.origin:
+        bundled = Path(spec.origin).parent / "_bundled" / "claude"
+        if bundled.is_file():
+            return str(bundled)
     found = shutil.which("claude")
     if found is None:
         raise LaunchError("no Claude Code executable was found (set claude.cli_path)")

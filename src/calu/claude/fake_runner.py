@@ -73,8 +73,7 @@ import anyio.lowlevel
 from anyio.abc import TaskGroup
 from pydantic import BaseModel, Field
 
-from calu.checkers.model import Step
-from calu.checkers.result_checker import SubagentResult
+from calu.checkers.model import Step, SubagentResult
 from calu.claude.runner import (
     NOT_FROM_USER,
     EventSink,

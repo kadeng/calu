@@ -22,7 +22,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
 from calu.checkers.checker import CheckContext, context_parts, elapsed_ms
-from calu.checkers.model import CheckerEffort
+from calu.checkers.model import CheckerEffort, SubagentResult
 from calu.checkers.render import code
 from calu.markdown import fence
 from calu.models import MAX_ANSWER_TOKENS, cache_settings, run_bounded
@@ -78,21 +78,6 @@ class ResultOutcome:
     output_tokens: int | None = None
     cache_read_tokens: int | None = None
     duration_ms: int = 0
-
-
-@dataclass(frozen=True)
-class SubagentResult:
-    """The final result of a subagent and the task it was given.
-
-    `agent_id` is the protocol agent id (id of the Agent tool call); `prompt` is the task text
-    Claude gave the subagent; `background` tells whether it ran in the background.
-    """
-
-    agent_id: str | None
-    description: str
-    prompt: str
-    result: str
-    background: bool = False
 
 
 def _cut_middle(text: str, limit: int = MAX_RESULT_CHARS) -> str:

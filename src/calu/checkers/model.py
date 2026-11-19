@@ -1,5 +1,6 @@
 """Data types shared by the checkers: the step under review, the decision, the thinking effort."""
 
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -352,3 +353,18 @@ class Step(BaseModel):
     input, and for a capability request like `SandboxNetworkAccess` the name and the input say
     nothing a human can act on. Empty for the ordinary case, where a checker or a rule raised
     the escalation and the step speaks for itself."""
+
+
+@dataclass(frozen=True)
+class SubagentResult:
+    """The final result of a subagent and the task it was given.
+
+    `agent_id` is the protocol agent id (id of the Agent tool call); `prompt` is the task text
+    Claude gave the subagent; `background` tells whether it ran in the background.
+    """
+
+    agent_id: str | None
+    description: str
+    prompt: str
+    result: str
+    background: bool = False

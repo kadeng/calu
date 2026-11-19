@@ -13,8 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, Protocol
 
-from calu.checkers.model import Step
-from calu.checkers.result_checker import SubagentResult
+from calu.checkers.model import Step, SubagentResult
 from calu.protocol.messages import AgentInfo, ChatImage, ContextUsage, Event
 
 EventSink = Callable[[Event], Awaitable[None]]

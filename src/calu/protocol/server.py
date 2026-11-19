@@ -67,6 +67,7 @@ from websockets.exceptions import ConnectionClosed
 
 from calu import asuser, localsocket
 from calu.bus import Bus, Subscription
+from calu.localsocket import check_socket_path
 from calu.protocol.messages import (
     CLOSE_FELL_BEHIND,
     CLOSE_TOKEN_REVOKED,
@@ -177,31 +178,6 @@ CLOSE_POLICY = 1008
 
 CLOSE_TOO_BIG = 1009
 """WebSocket close code "message too big" (RFC 6455)."""
-
-MAX_SOCKET_PATH = 100
-"""Bytes a Unix socket path may have. The kernel's limit is 108 including the terminating zero
-(`sun_path`), and a few bytes of margin keep the message friendlier than `AF_UNIX path too
-long`."""
-
-
-def check_socket_path(socket_path: Path) -> None:
-    """Refuse a Unix socket path the kernel cannot bind.
-
-    Args:
-        socket_path: The path to check.
-
-    Raises:
-        OSError: If the path is longer than `MAX_SOCKET_PATH` bytes. The message names the
-            length and suggests `$XDG_RUNTIME_DIR`, because the usual cause is a socket under a
-            deeply nested directory.
-    """
-    length = len(str(socket_path).encode())
-    if length > MAX_SOCKET_PATH:
-        raise OSError(
-            f"the socket path is {length} bytes, and a Unix socket allows about "
-            f"{MAX_SOCKET_PATH}: put it somewhere shorter, for example under $XDG_RUNTIME_DIR "
-            f"({socket_path})"
-        )
 
 
 def _prepare_socket(socket_path: Path) -> None:

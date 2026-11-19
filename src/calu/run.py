@@ -52,18 +52,16 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import anyio
 import anyio.to_thread
 import psycopg
 from pydantic import ValidationError
-from pydantic_ai.models import Model
 
 from calu import asuser, herd, localsocket, preflight
 from calu.bus import Bus
 from calu.claude.runner import ClaudeRunner, Fork
-from calu.claude.sdk_runner import SdkRunner
 from calu.claude.transcripts import user_inputs
 from calu.clock import ClockWatch
 from calu.config import AutoEscalate, ClaudeConfig, load_secrets
@@ -100,12 +98,19 @@ from calu.protocol.messages import (
     UsageUpdate,
     UserInput,
 )
-from calu.protocol.server import SessionServer
-from calu.session import Session, SessionError
 from calu.store import ConfigStore, DatabaseSessionStore, ProjectSettings, UnknownProject
 from calu.store.config import RELOAD_DEBOUNCE_S
 from calu.store.projects import AmbiguousProject, project_for_directory
 from calu.tokens import new_token, token_hash
+
+if TYPE_CHECKING:
+    # The session, its server and the Agent SDK runner are imported in `_run`, which is where
+    # a session starts: this module is also imported by the clients (`calu attach` renders
+    # events with `format_event`), and those imports take about two seconds.
+    from pydantic_ai.models import Model
+
+    from calu.protocol.server import SessionServer
+    from calu.session import Session
 
 log = logging.getLogger(__name__)
 
@@ -915,6 +920,10 @@ async def _run(
         # rules and nobody would be told.
         say(f"calu: {exc}; nothing was started", error=True)
         return 1
+    from calu.claude.sdk_runner import SdkRunner
+    from calu.protocol.server import SessionServer
+    from calu.session import Session, SessionError
+
     console = Console(options.quiet)
     idle = IdleSignal(lambda: activity(session), options.background_timeout_s)
     bus = Bus()

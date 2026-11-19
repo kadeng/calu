@@ -57,13 +57,17 @@ import os
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anyio
-from pydantic_ai import ModelResponse, TextPart, ToolCallPart
-from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.usage import RequestUsage
+
+if TYPE_CHECKING:
+    # Pydantic AI is imported where it is used: `is_cli_model` and `alias_of` are read by
+    # commands that run no model, and its import takes over a second.
+    from pydantic_ai import ModelResponse
+    from pydantic_ai.messages import ModelMessage
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+    from pydantic_ai.usage import RequestUsage
 
 from calu import asuser
 
@@ -121,6 +125,8 @@ def split_prompt(messages: Sequence[ModelMessage], info: AgentInfo) -> tuple[str
     Returns:
         `(instructions, content)`, each joined with blank lines; either may be "".
     """
+    from pydantic_ai.messages import ModelRequest, SystemPromptPart, UserPromptPart
+
     instructions: list[str] = [info.instructions] if info.instructions else []
     content: list[str] = []
     for message in messages:
@@ -158,6 +164,8 @@ def _usage_of(answer: dict[str, Any]) -> RequestUsage:
         integers, and calu's reports price tokens themselves rather than trusting a per-call
         figure.
     """
+    from pydantic_ai.usage import RequestUsage
+
     usage = answer.get("usage") or {}
     cache_read = int(usage.get("cache_read_input_tokens") or 0)
     cache_write = int(usage.get("cache_creation_input_tokens") or 0)
@@ -203,6 +211,9 @@ def claude_cli_model(
     Raises:
         ValueError: If `model` is not a `claude:` string.
     """
+    from pydantic_ai import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
     if not is_cli_model(model):
         raise ValueError(f"{model!r} is not a {PREFIX} model string")
     alias = alias_of(model)

@@ -20,8 +20,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import get_session_messages, list_sessions
-
 from calu.context.foreign import CROSS_SESSION_MARKER
 from calu.context.turns import TurnRecord
 
@@ -65,6 +63,10 @@ def transcripts(directory: Path, limit: int | None = None) -> list[Transcript]:
         reason is logged).
     """
     try:
+        # Imported here: the Agent SDK takes several hundred milliseconds to import, and most
+        # commands that import this module list nothing.
+        from claude_agent_sdk import list_sessions
+
         found = list_sessions(directory=str(directory), limit=limit, include_worktrees=False)
     except (OSError, ValueError) as exc:
         log.warning("listing Claude Code's conversations of %s failed: %s", directory, exc)
@@ -120,6 +122,8 @@ def user_inputs(session_id: str, directory: Path) -> list[str]:
         (the reason is logged), or it holds no typed message.
     """
     try:
+        from claude_agent_sdk import get_session_messages
+
         messages = get_session_messages(session_id, directory=str(directory))
     except (OSError, ValueError) as exc:
         log.warning("reading the transcript of %s failed: %s", session_id, exc)

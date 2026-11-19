@@ -31,10 +31,6 @@ from collections.abc import Sequence
 from pydantic_ai import Agent, AgentRunResult, CachePoint, UsageLimits
 from pydantic_ai.exceptions import IncompleteToolCall, UsageLimitExceeded
 from pydantic_ai.models import Model
-from pydantic_ai.models.bedrock import BedrockConverseModel
-from pydantic_ai.models.mistral import MistralModel
-from pydantic_ai.providers.bedrock import BedrockProvider
-from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.settings import ModelSettings
 
 from calu.claude_model import claude_cli_model, is_cli_model
@@ -158,10 +154,18 @@ def resolve_model(model: str | Model) -> str | Model:
             # Code account, which is the only way a claude.ai subscription can answer a check
             # (REQUIREMENTS 22, D117). Its limits are in `calu.claude.cli_model`.
             return claude_cli_model(model)
+        # The provider modules are imported where a model of theirs is built: each pulls in
+        # its vendor's SDK (mistralai, botocore), which a session with other models never uses.
         if provider == "mistral" and name:
+            from pydantic_ai.models.mistral import MistralModel
+            from pydantic_ai.providers.mistral import MistralProvider
+
             base_url = os.environ.get("MISTRAL_BASE_URL") or MISTRAL_EU_BASE_URL
             return MistralModel(name, provider=MistralProvider(base_url=base_url))
         if provider == "bedrock" and "anthropic.claude" in name:
+            from pydantic_ai.models.bedrock import BedrockConverseModel
+            from pydantic_ai.providers.bedrock import BedrockProvider
+
             settings = ModelSettings(thinking=False)
             regional = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
             if name.startswith("eu.") and not regional:

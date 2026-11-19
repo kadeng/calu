@@ -384,13 +384,15 @@ def test_doctor_finds_the_claude_a_session_would_start(
 ) -> None:
     """The check uses the session's lookup: the executable bundled with the Agent SDK counts,
     also when no `claude` is on PATH (the bridge of an editor has no ~/.local/bin on PATH)."""
-    import claude_agent_sdk
+    from importlib.machinery import ModuleSpec
 
-    from calu import doctor
+    from calu import doctor, launch
 
     package = tmp_path / "claude_agent_sdk"
     (package / "_bundled").mkdir(parents=True)
-    monkeypatch.setattr(claude_agent_sdk, "__file__", str(package / "__init__.py"))
+    # The SDK is located, not imported (`calu.launch.claude_path`).
+    spec = ModuleSpec("claude_agent_sdk", None, origin=str(package / "__init__.py"))
+    monkeypatch.setattr(launch.importlib.util, "find_spec", lambda name: spec)
     monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
     assert doctor.claude_executable() is None
     answered, detail = doctor.claude_version()
