@@ -85,6 +85,43 @@ async def test_an_operator_can_work_through_a_session_in_the_browser(db_url: str
         await conn.close()
 
 
+async def test_a_long_subagent_name_does_not_widen_the_session_page_on_a_phone(
+    db_url: str, page
+) -> None:
+    # A step of a subagent carries the subagent's description as a label; a long one (the
+    # `swarm` scenario's "Translate the error messages into German, French and Spanish, ...")
+    # made the whole page scroll sideways at 390 px.
+    from calu.protocol.messages import AgentInfo
+
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        session_id, _escalation = await populate(db)
+        store = DatabaseSessionStore(db)
+        store.session_id = session_id
+        name = "Translate the error messages into German, French and Spanish, keeping them"
+        await store.add_agent("agent-call-1")
+        await store.update_agents([AgentInfo(agent_id="agent-call-1", description=name)])
+        await store.add_step(
+            StepRow(
+                seq=3,
+                tool_name="Bash",
+                tool_input={"command": "ls"},
+                turn=1,
+                agent_id="agent-call-1",
+            )
+        )
+        async with serve(create_app(db)) as base:
+            await page.set_viewport_size({"width": 390, "height": 800})
+            await page.goto(f"{base}/sessions/{session_id}")
+            assert name[:20] in await page.inner_text("main")
+            wide = "document.documentElement.scrollWidth > document.documentElement.clientWidth"
+            assert not await page.evaluate(wide)
+    finally:
+        await conn.close()
+
+
 async def test_the_escalation_detail_page_shows_what_the_checker_saw(db_url: str, page) -> None:
     conn = await connect(db_url)
     try:

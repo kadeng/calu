@@ -902,6 +902,13 @@ button.link:hover { background: none; }
   border-radius: 6px;
   border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
   white-space: nowrap;
+  /* A long subagent description is cut with an ellipsis rather than widening the page (its
+     whole text is in the title). */
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 /* ------------------------------------------------------- the live view */

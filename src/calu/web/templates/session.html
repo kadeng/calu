@@ -115,7 +115,7 @@ session shows the real thinking as it streams.</p>
         <p>
           <span class="mono">{{ s.tool_name }}</span>
           <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span>
-          {% if s.agent_id %}<span class="who" title="subagent {{ s.agent_id }}">{{ agent_names.get(s.agent_id, s.agent_id) }}</span>{% endif %}
+          {% if s.agent_id %}<span class="who" title="{{ agent_names.get(s.agent_id, s.agent_id) }} (subagent {{ s.agent_id }})">{{ agent_names.get(s.agent_id, s.agent_id) }}</span>{% endif %}
           {{ s.summary }}
         </p>
         {% if detail != 'compact' and s.reason %}<p class="muted">checker: {{ s.reason }}</p>{% endif %}
@@ -151,7 +151,7 @@ session shows the real thinking as it streams.</p>
         {% if detail != 'compact' and s.narration %}<p class="muted">{{ s.narration }}</p>{% endif %}
         <p><span class="mono">{{ s.tool_name }}</span>
          <span class="decision {{ s.decision or '' }}">{{ s.decision or '–' }}</span>
-         {% if s.agent_id %}<span class="who" title="subagent {{ s.agent_id }}">{{ agent_names.get(s.agent_id, s.agent_id) }}</span>{% endif %}
+         {% if s.agent_id %}<span class="who" title="{{ agent_names.get(s.agent_id, s.agent_id) }} (subagent {{ s.agent_id }})">{{ agent_names.get(s.agent_id, s.agent_id) }}</span>{% endif %}
          {{ s.summary }}</p>
         {% if detail != 'compact' and s.reason %}<p class="muted">checker: {{ s.reason }}</p>{% endif %}
         {% if detail == 'full' %}<pre>{{ s.tool_input | tojson(indent=2) }}</pre>{% if s.result_summary %}<pre>{{ s.result_summary }}</pre>{% endif %}{% endif %}
