@@ -63,18 +63,20 @@ or misunderstand priorities.)*
 >
 > — *Tron* (1982)
 
-This allows to steer the coding session while it happens with your instructions, modifiable at any time,
+This allows to steer the coding session while it happens with **your instructions, modifiable at any time**,
 via a friendly UI right in your IDE, terminal or browser.
 
-- **Keep it readable by humans.** Stop bad agentic writing styles before they take hold.
-- **Stop overengineering right there.** A checker sees a change before it lands and can send
-  it back: an abstraction nobody asked for, work beyond the task, a test weakened to pass.
 - **Your repo, your rules.** You have custom confidentiality rules or writing style that you want
 maintained at all times? Don't let violations happen. 
+- **Keep it readable by humans.** Stop bad agentic writing styles before they take hold.
+- **Stop overengineering right there.** An edit checker sees a change before it lands, a subagent checker can
+check subagent results before your main agent acts on them. These can all be sent
+  back or commented on immediately. Stop a perfectionist subagent or main coding agent obsessing
+over details that don't matter, and which might cost simplicity, readability, modularity and design elegance.
 - **More autonomy where you trust it, less where you don't.** If auto mode keeps asking about
   something you always approve, tell a checker to allow it, and the step runs without a
   prompt. If auto mode lets something through that you want to see first, tell a checker to
-  ask, and the session waits for you.
+  ask, and the session waits for you. You need to babysit less and can focus on what matters.
 - **Keep your data and secrets confidential.** You have certain data or secrets that may not be mishandled, and
 the coding agent has a hard time remembering the specifics with all the other things it does? Have
 additional eyes watch this.
