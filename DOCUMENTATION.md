@@ -1167,8 +1167,7 @@ rules about intent, about prose, or about something outside the code such as a l
 | Type of rule | Example | Checker |
 |---|---|---|
 | Writing style | no mannered summaries or filler in docstrings, comments and commit messages | edit, changeset |
-| Over-engineering | no factory for one case, no cache nobody measured, no abstraction with one implementation | edit |
-| Review findings weighed against complexity | a reviewer's corner case is fixed only when its importance outweighs the code it adds ([below](#review-findings-and-over-engineering)) | subagent-result, edit |
+| Over-engineering | review findings are weighed against the complexity their fixes add: a reviewer's corner case is fixed only when its importance outweighs the code it adds, and never against what the user asked for ([below](#review-findings-and-over-engineering)) | subagent-result, edit |
 | Scope | the step must serve the request; a bug fix does not come with a refactor | command, edit, subagent-result |
 | Law and contracts | personal data stays in the EU region of the provider; which fields may be logged; which third party may be called | edit, command |
 | Features that need a human decision | inferring emotions, biometric categorisation, scoring people (EU AI Act): a person decides before such code exists | edit |
@@ -1206,8 +1205,9 @@ checker to judge a borderline case.
 - Prose in comments, docstrings and Markdown is plain: subject before object, no slogans,
   no rhythmic lists of three. Otherwise PASS with a comment that quotes the sentence;
   DENY when a whole paragraph is written that way.
-- A new abstraction (base class, factory, plugin registry) with one implementation: DENY
-  and ask for the direct version.
+- An edit that adds a check, option or code path for a corner case a review subagent
+  reported: DENY when the case is rare or harmless here and the change adds noticeable
+  complexity; say which finding it answers.
 - Code that sends data to a host outside `*.internal.example` or stores personal data
   outside the `eu-central-1` region: ESCALATE.
 - A test that is deleted, skipped or weakened: ESCALATE.
@@ -1218,12 +1218,16 @@ checker to judge a borderline case.
 ```
 > Fix the rounding bug in cart.py.
   · Edit {'file_path': 'src/cart.py', ...}
-  [edit checker: DENY] Adds a PriceStrategy base class and moves rounding into a subclass.
-  (A new abstraction with one implementation; the request was a bug fix. Fix the rounding
-  in place.)
-  · Edit {'file_path': 'src/cart.py', ...}
   [edit checker: PASS] Replaces round() by Decimal.quantize in total(). comment: The
   docstring of total() still says "rounds half up"; update it.
+  · Agent {'description': 'Review the fix', ...}
+  [subagent-result checker: PASS] The review lists five findings. comment: Worth fixing:
+  negative quantities are not rejected (orders can contain returns). Leave: currencies
+  other than EUR (the shop sells in EUR only), prices above 10^9, a configurable rounding
+  mode. The user asked for a bug fix.
+  · Edit {'file_path': 'src/cart.py', ...}
+  [edit checker: DENY] Adds a RoundingMode option and a currency table for the review's
+  corner cases. (The subagent-result check said to leave them; the shop sells in EUR.)
 ```
 
 ### Review findings and over-engineering
@@ -1279,9 +1283,8 @@ is the place to say this. Example (`calu checker edit subagent-result`):
   (data loss, security), the comment says to tell the user about it, and the user decides.
 ```
 
-The edit checker can back this up with a rule such as "An edit that adds a check, option or
-code path for a case a review reported: DENY when the case is rare and harmless and the
-change adds noticeable complexity; say which finding it answers."
+The edit checker backs this up with the rule about review corner cases in the [example
+above](#example-instructions).
 
 Your own instructions to Claude can say the same, for example in `AGENTS.md`: "Treat review
 findings with a grain of salt. Fix what matters; list the rest as known limits. A reviewer's
