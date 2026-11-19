@@ -641,10 +641,11 @@ class TracesConfig(ConfigModel):
     """
 
     enabled: bool = False
-    """Write a trace file for every session of the project. The file is
-    `<directory>/<date>/<user>/session_NNN.md`: the UTC date the session started, the OS user
-    Claude Code runs as, and the next free three-digit number in that directory. Switching it
-    on while a session runs starts a file from that point; switching it off ends the file."""
+    """Write a trace file for every session of the project. With the default `layout` and
+    `file_names` the file is `<directory>/<date>/<user>/session_NNN.md`: the UTC date the
+    session started, the OS user Claude Code runs as, and the next free three-digit number in
+    that directory. Switching it on while a session runs starts a file from that point;
+    switching it off ends the file."""
     content: Literal["narrated", "plain"] = "narrated"
     """What the file holds of Claude's own words. `narrated`: Claude's text and thinking retold
     in indirect speech by the narrator, as the checkers read them; with `context.narrate` off
@@ -655,10 +656,32 @@ class TracesConfig(ConfigModel):
     path with a `..` component, are refused. While `enabled` is on, a tool call of Claude that
     would write into this directory waits for a person, the files are left out of the write
     sets and of the code honesty state, and the checkers' code tools do not read them."""
+    layout: Literal["date/user", "user", "date", "flat"] = "date/user"
+    """The folders below `directory` that a trace file goes into. `date/user`:
+    `<date>/<user>/` (the UTC date the session started, the OS user Claude Code runs as).
+    `user`: `<user>/`, no date. `date`: `<date>/`, no user. `flat`: no folders, every file
+    directly in `directory`. Leaving the date out keeps the path from saying on which day a
+    session ran; leaving the user out keeps it from naming the user."""
+    file_names: Literal["numbered", "random"] = "numbered"
+    """How a trace file is named. `numbered`: `session_NNN.md`, the next free number in its
+    folder, so with a date in `layout` the number counts the sessions of that user on that
+    day. `random`: `session_<12 hex digits>.md`, a name that says nothing about how many
+    sessions came before or in which order they ran."""
+    header_times: bool = True
+    """Write the time the trace started (UTC, to the second) into the file's header. Off: the
+    header has no time; `layout` decides whether the path holds the date."""
+    header_user: bool = True
+    """Write the OS user Claude Code runs as into the file's header. Off: the header names no
+    user; `layout` decides whether the path does."""
+    turn_numbers: bool = True
+    """Number the turns: `## Turn 3` ... `### End of turn 3`. Off: `## Turn` ... `### End of
+    turn`, so that the headings do not count the messages of a session. The tool calls stay
+    numbered, because the checks and results refer to them by number."""
     redact: bool = True
     """Let the redaction agent replace secrets and personal data (names of private persons,
     e-mail addresses, phone numbers, postal addresses, account and card numbers) by typed
-    placeholders such as `[redacted: e-mail address]` before a block is written. The values
+    placeholders such as `[redacted: e-mail address]`, and leave out what its instructions
+    allow (`redactor_instructions`), before a block is written. The values
     calu knows to be secret and the common shapes of keys and tokens are replaced in every
     case, also with this setting off; the file's header says which of the two applied. A
     block the agent could not redact is written as a line that says it was withheld."""
@@ -666,6 +689,14 @@ class TracesConfig(ConfigModel):
     """Pydantic AI model string of the redaction agent; blank uses the default model (see
     `command_checker.model`). The agent reads every block of the trace, so a small, fast
     model is a reasonable choice."""
+    redactor_instructions: str | None = None
+    """The redaction agent's instructions, as Markdown: what a trace must keep, what it may
+    leave out, and which values are replaced by placeholders. Empty uses the text calu ships
+    (`calu traces instructions show`): it keeps the requirements and decisions of the session
+    and what was changed and why, may remove the user's questions and every hint of when the
+    session happened and how long it took, and replaces secrets and personal data. Set it,
+    globally or per project, with `calu traces instructions edit [--project NAME]`. calu puts
+    a fixed part in front of it (the excerpt is data, the form of the answer)."""
     redactor_timeout_s: float = Field(default=60.0, gt=0)
     """Seconds the redaction agent may take for one block. A block that takes longer is
     withheld."""

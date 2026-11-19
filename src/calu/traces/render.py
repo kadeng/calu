@@ -6,6 +6,7 @@ Everything here is rendering without input or output, except `create_trace_file`
 
     event                            block (heading; body)
     user.input, source user          "User"; the message, quoted; a line counting the images
+                                     (`Block.removable`: the redaction agent may leave it out)
     user.input, other sources        "Message from another Claude session" / "Automatic
                                      message"; the text, quoted (narrated: its narration)
     assistant.text                   plain: "Claude"; the text, quoted
@@ -23,7 +24,7 @@ Everything here is rendering without input or output, except `create_trace_file`
     escalation.resolved              "Escalation E: allowed | denied | answered | ended
                                      without a decision"; who decided, the note
     tool.result                      "Result of tool call N (<tool>)"; the result, cut
-    turn.result                      "End of turn T"
+    turn.result                      "End of turn T" ("End of turn" without turn numbers)
 
     every other event                nothing (streaming fragments, states, diffs, lists)
 
@@ -64,6 +65,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -97,14 +99,25 @@ NOT_NARRATED = "[Claude's text at this point could not be narrated and is left o
 MAX_HEADING_LEVEL = 6
 """Markdown has six heading levels; deeper subagents share the last one."""
 
-FILE_NAME = re.compile(r"^session_(\d{3,})\.md$")
-"""A trace file's name; group 1 is its number."""
+FILE_NAME = re.compile(r"^session_(?:(\d{3,})|[0-9a-f]{12})\.md$")
+"""A trace file's name: `session_NNN.md` (group 1 is its number) or, with
+`traces.file_names` = "random", `session_<12 hex digits>.md` (group 1 is None)."""
+
+RANDOM_NAME_BYTES = 6
+"""Random bytes in the name of a trace file with `traces.file_names` = "random" (12 hex
+digits)."""
+
+LAYOUTS = ("date/user", "user", "date", "flat")
+"""The values of `traces.layout`: the folders between the trace directory and a file."""
 
 SEARCHED_FILES = 500
 """How many trace files `find_trace_of` reads at most, newest first."""
 
 SEARCHED_BYTES = 5_000_000
 """How much of one trace file `find_trace_of` reads."""
+
+TRACE_GLOBS = ("session_*.md", "*/session_*.md", "*/*/session_*.md")
+"""Where trace files lie below the trace directory, in every layout of `LAYOUTS`."""
 
 
 @dataclass
@@ -129,6 +142,9 @@ class Block:
     """False while a block of the narrated form may still get more `outputs`."""
     narration: str | None = None
     """The narration of `outputs`, once somebody delivered it; None before that."""
+    removable: bool = False
+    """True for a message of the user: the redaction agent may leave the whole block out,
+    heading included, if its instructions allow that (agent/records/PLAN.md D245)."""
 
 
 @dataclass
@@ -274,10 +290,12 @@ class Header:
     claude_session: str | None
     """Claude Code's session id, or None while it is not known."""
     project: str
-    started: datetime
-    """When the trace started, with a time zone."""
-    user: str
-    """The OS user Claude Code runs as."""
+    started: datetime | None
+    """When the trace started, with a time zone; None leaves the time out of the header
+    (`traces.header_times` off)."""
+    user: str | None
+    """The OS user Claude Code runs as; None leaves the user out of the header
+    (`traces.header_user` off)."""
     claude_model: str
     calu_version: str
     content: str
@@ -300,7 +318,8 @@ def render_header(header: Header) -> str:
 
     Returns:
         Markdown: the title, a list of the session's facts, the caveat about redaction and a
-        horizontal rule, followed by a blank line.
+        horizontal rule, followed by a blank line. The lines "Started" and "User" are left
+        out when `header.started` or `header.user` is None.
     """
     known = (
         f"`{one_line(header.claude_session)}`"
@@ -331,8 +350,12 @@ def render_header(header: Header) -> str:
         f"- calu session: {one_line(header.calu_session or '') or '?'}",
         f"- Claude session: {known}",
         f"- Project: {one_line(header.project) or '?'}",
-        f"- Started: {header.started.strftime('%Y-%m-%dT%H:%M:%SZ')}",
-        f"- User: {one_line(header.user)}",
+    ]
+    if header.started is not None:
+        lines.append(f"- Started: {header.started.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+    if header.user is not None:
+        lines.append(f"- User: {one_line(header.user)}")
+    lines += [
         f"- Claude model: {one_line(header.claude_model) or 'the default of Claude Code'}",
         f"- calu version: {header.calu_version}",
         f"- Content: {content}",
@@ -380,6 +403,7 @@ class TraceRenderer:
         max_input_chars: int = 20_000,
         max_result_chars: int = 4_000,
         claude_session: str | None = None,
+        turn_numbers: bool = True,
     ) -> None:
         """Create a renderer for a trace that starts now.
 
@@ -389,8 +413,11 @@ class TraceRenderer:
             max_input_chars: Longer values of a tool call's input are cut.
             max_result_chars: Longer tool results are cut.
             claude_session: The Claude session id the header already names, or None.
+            turn_numbers: True for "## Turn 3" ... "### End of turn 3"; False for "## Turn"
+                ... "### End of turn" (`traces.turn_numbers`).
         """
         self.narrated = narrated
+        self.turn_numbers = turn_numbers
         self.max_input_chars = max_input_chars
         self.max_result_chars = max_result_chars
         self.claude_session = claude_session
@@ -568,13 +595,14 @@ class TraceRenderer:
         """Return the heading of a new turn if none is running.
 
         Returns:
-            One block "## Turn T", or nothing while a turn runs.
+            One block "## Turn T" ("## Turn" without `turn_numbers`), or nothing while a
+            turn runs.
         """
         if self._in_turn:
             return []
         self._in_turn = True
         self._turn += 1
-        return [Block(f"## Turn {self._turn}", fixed=True)]
+        return [Block(f"## Turn {self._turn}" if self.turn_numbers else "## Turn", fixed=True)]
 
     def _session_id(self, session_id: str | None) -> list[Block]:
         """Return a line that names Claude's session id when it becomes known or changes.
@@ -658,7 +686,7 @@ class TraceRenderer:
                 count = len(event.images)
                 noun = "image was" if count == 1 else "images were"
                 body += f"\n\n_{count} {noun} attached; images are not part of the trace._"
-            return [Block("### User", body)]
+            return [Block("### User", body, removable=True)]
         cross = event.source == "cross_session"
         heading = (
             "### Message from another Claude session (not from the user)"
@@ -840,7 +868,8 @@ class TraceRenderer:
         ]
         if event.background_tasks:
             lines.append(f"Background tasks still running: {event.background_tasks}")
-        return Block(f"### End of turn {turn}", "\n\n".join(lines), fixed=True)
+        heading = f"### End of turn {turn}" if self.turn_numbers else "### End of turn"
+        return Block(heading, "\n\n".join(lines), fixed=True)
 
 
 def user_component(user: str) -> str:
@@ -857,32 +886,48 @@ def user_component(user: str) -> str:
     return safe or "unknown"
 
 
-def session_directory(workspace: Path, directory: str, started: datetime, user: str) -> Path:
-    """Return the directory the trace files of one user and day go to.
+def session_directory(
+    workspace: Path, directory: str, started: datetime, user: str, layout: str = "date/user"
+) -> Path:
+    """Return the directory a session's trace file goes to.
 
     Args:
         workspace: The project directory.
         directory: `traces.directory`, relative to the project.
-        started: When the session started; its date names the directory (the caller gives
-            it in UTC; it is not converted here).
+        started: When the session started; its date names a folder in the layouts with a
+            date (the caller gives it in UTC; it is not converted here).
         user: The OS user Claude Code runs as.
+        layout: `traces.layout`, one of `LAYOUTS`; an unknown value counts as "date/user".
 
     Returns:
-        `<workspace>/<directory>/<YYYY-MM-DD>/<user>`.
+        "date/user": `<workspace>/<directory>/<YYYY-MM-DD>/<user>`; "user":
+        `<workspace>/<directory>/<user>`; "date": `<workspace>/<directory>/<YYYY-MM-DD>`;
+        "flat": `<workspace>/<directory>`.
     """
-    return workspace / directory / started.strftime("%Y-%m-%d") / user_component(user)
+    root = workspace / directory
+    date, name = started.strftime("%Y-%m-%d"), user_component(user)
+    match layout:
+        case "user":
+            return root / name
+        case "date":
+            return root / date
+        case "flat":
+            return root
+        case _:
+            return root / date / name
 
 
 class TraceFileError(Exception):
     """A trace file could not be created; the message says why."""
 
 
-def create_trace_file(workspace: Path, target: Path) -> tuple[Path, int]:
+def create_trace_file(workspace: Path, target: Path, random_name: bool = False) -> tuple[Path, int]:
     """Create the next trace file of a directory and open it for appending.
 
     The file is `session_NNN.md` with NNN one above the highest number in `target` (001 in an
-    empty directory; four digits after 999). It is created with an exclusive open, so two
-    sessions that start at the same moment get two files.
+    empty directory; four digits after 999), or with `random_name` `session_<12 random hex
+    digits>.md`. It is created with an exclusive open, so two sessions that start at the same
+    moment get two files.
 
     Side effects: creates `target` with its parents, and the file (mode 0644, less the umask).
     Nothing is created when the deepest existing directory of `target` lies outside the
@@ -892,6 +937,8 @@ def create_trace_file(workspace: Path, target: Path) -> tuple[Path, int]:
         workspace: The project directory; `target` must lie inside it once links are
             resolved.
         target: The directory for the file (`session_directory`).
+        random_name: True for a random name (`traces.file_names` = "random"), False for the
+            next number.
 
     Returns:
         (the file's path, a file descriptor open for appending). The caller closes it.
@@ -926,13 +973,15 @@ def create_trace_file(workspace: Path, target: Path) -> tuple[Path, int]:
         target.mkdir(parents=True, exist_ok=True)
         refuse_outside(target)
         number = 0
-        for entry in os.listdir(target):
-            found = FILE_NAME.match(entry)
-            if found:
-                number = max(number, int(found.group(1)))
+        if not random_name:
+            for entry in os.listdir(target):
+                found = FILE_NAME.match(entry)
+                if found and found.group(1):
+                    number = max(number, int(found.group(1)))
         while True:
             number += 1
-            path = target / f"session_{number:03d}.md"
+            name = secrets.token_hex(RANDOM_NAME_BYTES) if random_name else f"{number:03d}"
+            path = target / f"session_{name}.md"
             try:
                 fd = os.open(
                     path,
@@ -964,9 +1013,11 @@ def find_trace_of(root: Path, claude_session_id: str, skip: Path | None = None) 
     marker = session_marker(claude_session_id).encode()
     candidates: list[tuple[float, Path]] = []
     try:
-        for path in root.glob("*/*/session_*.md"):
-            if path != skip and FILE_NAME.match(path.name) and path.is_file():
-                candidates.append((path.stat().st_mtime, path))
+        # Every layout's depth: the layout may have changed between two sessions.
+        for pattern in TRACE_GLOBS:
+            for path in root.glob(pattern):
+                if path != skip and FILE_NAME.match(path.name) and path.is_file():
+                    candidates.append((path.stat().st_mtime, path))
     except OSError:
         return None
     for _, path in sorted(candidates, reverse=True)[:SEARCHED_FILES]:
@@ -981,10 +1032,12 @@ def find_trace_of(root: Path, claude_session_id: str, skip: Path | None = None) 
 
 @dataclass
 class Counted:
-    """How many blocks a trace wrote, withheld and left out."""
+    """How many blocks a trace wrote, withheld, left out and let the redaction agent remove."""
 
     written: int = 0
     withheld: int = 0
     left_out: int = 0
+    removed: int = 0
+    """Messages of the user that the redaction agent left out as a whole (D245)."""
     failures: list[str] = field(default_factory=list)
     """The reasons of the last failed redactions, newest last (at most ten)."""

@@ -124,7 +124,7 @@ from calu.db.target import (
     TargetError,
     from_fields,
 )
-from calu.defaults.instructions import honesty_rules
+from calu.defaults.instructions import default_redaction_instructions, honesty_rules
 from calu.evals.cases import case_line, cases_to_yaml
 from calu.honesty import GitError, content_ids, resolve_commit
 from calu.ide import serve_ide
@@ -335,6 +335,7 @@ _READ_ONLY_ACTIONS: dict[str, frozenset[str]] = {
     "rules": frozenset({"list"}),
     "project": frozenset({"list"}),
     "honesty": frozenset({"show", "trusted"}),
+    "traces": frozenset({"show"}),
 }
 """Per command that works with `_admin_secret`: its actions that only read. Every other action
 of these commands, and every other command, counts as a change and is announced on stderr
@@ -5443,30 +5444,89 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
     if args.action in ("trust", "trusted", "untrust", "prune"):
         _honesty_trust(args, store)
         return
+    _text_setting(args, store, "honesty.rules", honesty_rules, "honesty-rules.md", "rules")
+
+
+def _stored_at(values: Mapping[str, Any], key: str) -> Any:
+    """Return what a scope's stored settings hold at a dotted key, without defaults.
+
+    Args:
+        values: The stored settings of one scope (`admin.settings`).
+        key: A dotted key, e.g. "honesty.rules".
+
+    Returns:
+        The stored value, or None if the scope stores none there.
+    """
+    node: Any = values
+    for part in key.split("."):
+        if not isinstance(node, Mapping):
+            return None
+        node = node.get(part)
+    return node
+
+
+def _text_setting(
+    args: argparse.Namespace,
+    store: CredentialStore,
+    key: str,
+    shipped: Callable[[], str],
+    file_name: str,
+    noun: str,
+) -> None:
+    """Show, edit or reset a Markdown setting that has a shipped default (D181, D245).
+
+    The text in force for a scope is the project's value if set, else the global one, else
+    `shipped()`. `show` prints it; `edit` opens it in `$EDITOR` and stores the result in the
+    scope (`--project` or global); `reset` removes the scope's value, so the next scope down
+    (or the shipped text) applies again.
+
+    A save is conflict-safe: after the editor closes, the scope's stored value is read again,
+    and if somebody changed it meanwhile (another terminal, the web interface, an editor
+    extension) nothing is stored and the edited text stays in its file.
+
+    Args:
+        args: Parsed arguments (`action`: "show", "edit" or "reset"; `project`).
+        store: The credential store.
+        key: The dotted configuration key, e.g. "traces.redactor_instructions".
+        shipped: Returns the text calu ships.
+        file_name: The name of the file the editor opens, e.g. "honesty-rules.md".
+        noun: What the text is called in the reports, e.g. "rules" or "instructions".
+
+    Raises:
+        CliError: If the credential the action needs is missing, no editor is available, or
+            the stored value changed while the editor was open.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the project does not exist.
+        psycopg.Error: On database errors.
+    """
     url = _admin_secret(store, args)
+    scope = args.project or "global"
     try:
         admin_url = url.decode()
 
-        async def current(db: Db) -> str:
-            """Return the honesty rules in force for the scope.
+        async def read(db: Db) -> tuple[str, Any]:
+            """Return the text in force for the scope and the value the scope stores itself.
 
             Args:
                 db: The connection.
 
             Returns:
-                The configured text of the most specific scope, or the shipped rules.
+                (the configured text of the most specific scope or the shipped text, the
+                scope's own stored value or None).
             """
-            scopes = [args.project, None] if args.project else [None]
-            for scope in scopes:
-                value = (await admin.settings(db, scope)).get("honesty", {}).get("rules")
-                if value:
-                    return str(value)
-            return honesty_rules()
+            own = _stored_at(await admin.settings(db, args.project), key)
+            if own:
+                return str(own), own
+            if args.project:
+                above = _stored_at(await admin.settings(db, None), key)
+                if above:
+                    return str(above), own
+            return shipped(), own
 
         if args.action == "reset":
 
             async def reset(db: Db) -> str:
-                """Remove the scope's `honesty.rules`.
+                """Remove the scope's value.
 
                 Args:
                     db: The connection.
@@ -5474,39 +5534,81 @@ def cmd_honesty(args: argparse.Namespace, store: CredentialStore) -> None:
                 Returns:
                     The report.
                 """
-                await admin.unset_setting(db, "honesty.rules", args.project)
-                return f"honesty.rules ({args.project or 'global'}) removed"
+                await admin.unset_setting(db, key, args.project)
+                return f"{key} ({scope}) removed"
 
             print(asyncio.run(_with_admin(admin_url, reset)))
             return
-        before = asyncio.run(_with_admin(admin_url, current))
+        before, own_before = asyncio.run(_with_admin_value(admin_url, read))
         if args.action == "show":
             print(before, end="" if before.endswith("\n") else "\n")
             return
-        after, path = edit_in_editor(before, "honesty-rules.md")
+        after, path = edit_in_editor(before, file_name)
         if after == before:
             print("unchanged; nothing was stored")
             return
 
         async def write(db: Db) -> str:
-            """Store the edited rules in the scope.
+            """Store the edited text in the scope unless the scope changed meanwhile.
 
             Args:
                 db: The connection.
 
             Returns:
                 The report.
+
+            Raises:
+                CliError: If the scope's stored value is no longer the one the edit started
+                    from.
             """
-            await admin.set_setting(db, "honesty.rules", after, args.project)
-            return f"honesty.rules ({args.project or 'global'}) stored"
+            _, own_now = await read(db)
+            if own_now != own_before:
+                raise CliError(
+                    f"{key} ({scope}) was changed by someone else while the editor was open; "
+                    f"nothing was stored. Compare your text with the stored {noun} and edit "
+                    "again"
+                )
+            await admin.set_setting(db, key, after, args.project)
+            return f"{key} ({scope}) stored"
 
         try:
             print(asyncio.run(_with_admin(admin_url, write)))
-        except admin.AdminError, psycopg.Error:
-            print(f"the edited rules are kept in {path}", file=sys.stderr)
+        except CliError, admin.AdminError, psycopg.Error:
+            print(f"the edited {noun} are kept in {path}", file=sys.stderr)
             raise
     finally:
         wipe(url)
+
+
+def cmd_traces(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Show, edit or reset the redaction agent's instructions of the session traces (D245).
+
+    `calu traces instructions show|edit|reset [--project NAME]` works on
+    `traces.redactor_instructions` as `calu honesty show|edit|reset` works on the honesty
+    rules (`_text_setting`): the text in force is the project's, else the global one, else
+    the shipped `trace-redaction.md`. calu puts its fixed part in front of it; `show` prints
+    only the editable text.
+
+    Args:
+        args: Parsed arguments (`subject`: "instructions"; `action`: "show", "edit" or
+            "reset"; `project`).
+        store: The credential store.
+
+    Raises:
+        CliError: If the credential the action needs is missing, no editor is available, or
+            the stored value changed while the editor was open.
+        CredentialError: On a wrong password.
+        admin.AdminError: If the project does not exist.
+        psycopg.Error: On database errors.
+    """
+    _text_setting(
+        args,
+        store,
+        "traces.redactor_instructions",
+        default_redaction_instructions,
+        "trace-redaction.md",
+        "instructions",
+    )
 
 
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -6257,6 +6359,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_option(honesty)
     honesty.set_defaults(handler=cmd_honesty)
+
+    traces = sub.add_parser(
+        "traces",
+        help="the redaction agent's instructions of the session traces",
+        description=(
+            "calu traces instructions show | edit | reset [--project NAME]: what the "
+            "redaction agent keeps, removes and replaces in a session trace "
+            "(traces.redactor_instructions; empty: the text calu ships)"
+        ),
+    )
+    traces.add_argument("subject", choices=["instructions"])
+    traces.add_argument("action", choices=["show", "edit", "reset"])
+    traces.add_argument("--project", help="the project's instructions instead of the global ones")
+    _database_option(traces)
+    traces.set_defaults(handler=cmd_traces)
 
     rules = sub.add_parser(
         "rules",

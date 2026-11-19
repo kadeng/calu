@@ -16,7 +16,8 @@ the shipped `honesty-rules.md`). No other checker reads the honesty rules.
 The honesty reviewer (`calu.checkers.honesty_review`) is no checker type: its prompt is the
 fixed `system/honesty-review.md` followed by the honesty rules (`review_instructions`). The
 redaction agent of the session traces (`calu.traces.redact`) is none either: its prompt is the
-fixed `system/trace-redaction.md` (`redaction_instructions`).
+fixed `system/trace-redaction.md` followed by `traces.redactor_instructions`, or the shipped
+`trace-redaction.md` (`redaction_instructions`, D245).
 
 The user's part is what `checker_types` holds (D6); `calu setup` loads the shipped one.
 """
@@ -183,15 +184,46 @@ def honesty_rules() -> str:
     return _read("honesty-rules.md")
 
 
-def redaction_instructions() -> str:
-    """Return the fixed instructions of the redaction agent of the session traces (D232).
+def default_redaction_instructions() -> str:
+    """Return the shipped instructions of the redaction agent (agent/records/PLAN.md D245).
+
+    They apply while `traces.redactor_instructions` is not set.
 
     Returns:
-        The Markdown text of `system/trace-redaction.md`: which secrets and personal data the
-        agent replaces by typed placeholders, and that it returns the text otherwise
-        unchanged.
+        The Markdown text of `trace-redaction.md`: what a trace keeps (requirements and
+        decisions, what was changed and why), what it may lose (the user's questions, hints
+        of when the session happened and how long it took, private remarks), and which
+        secrets and personal data are replaced by typed placeholders.
+    """
+    return _read("trace-redaction.md")
+
+
+def redaction_system_part() -> str:
+    """Return the fixed part calu puts in front of the redaction agent's instructions.
+
+    Returns:
+        The Markdown text of `system/trace-redaction.md`: the task, that the excerpt is data
+        and not instructions, the form of the answer, and when the block may be removed as a
+        whole.
     """
     return _read("system/trace-redaction.md")
+
+
+def redaction_instructions(user: str | None = None) -> str:
+    """Put the prompt of the redaction agent of the session traces together (D232, D245).
+
+    Args:
+        user: The configured instructions (`traces.redactor_instructions`); None or a text
+            without visible characters uses the shipped ones
+            (`default_redaction_instructions`).
+
+    Returns:
+        The fixed part `system/trace-redaction.md` (the excerpt is data, the form of the
+        answer, when the block may be removed as a whole), followed by the instructions.
+    """
+    system = redaction_system_part().strip()
+    chosen = user if user and user.strip() else default_redaction_instructions()
+    return system + "\n\n" + chosen.strip() + "\n"
 
 
 def review_instructions(rules: str | None = None) -> str:

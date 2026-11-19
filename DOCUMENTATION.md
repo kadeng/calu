@@ -1542,7 +1542,7 @@ not in it. Switching it off ends the file.
 
 **Where the files are.** One file per session:
 
-    <project>/.agent/traces/<YYYY-MM-DD>/<user>/session_NNN.md
+    <project>/agent/traces/<YYYY-MM-DD>/<user>/session_NNN.md
 
     agent/traces/2026-11-18/kai/session_001.md
     agent/traces/2026-11-18/kai/session_002.md      the second session of that day
@@ -1554,8 +1554,21 @@ get two files. `traces.directory` names another directory inside the project. A 
 forked conversation is a new calu session and gets a new file; its header names the file of
 the conversation it continues, if that file is in the trace directory.
 
+The path tells when and how often somebody worked. Two settings change it:
+
+| Setting | Values | The file |
+|---|---|---|
+| `traces.layout` | `date/user` (default), `user`, `date`, `flat` | `<date>/<user>/`, `<user>/`, `<date>/` or no folder below the trace directory |
+| `traces.file_names` | `numbered` (default), `random` | `session_NNN.md`, or `session_<12 hex digits>.md`, which says nothing about how many sessions came before |
+
+```bash
+calu config set traces.layout flat --project shop
+calu config set traces.file_names random --project shop
+```
+
 A change of a `traces` setting that decides where the file is or what a block holds
-(`enabled`, `content`, `directory`, `redact`, `redactor_model`, `max_input_chars`,
+(`enabled`, `content`, `directory`, `layout`, `file_names`, `header_times`, `header_user`,
+`turn_numbers`, `redact`, `redactor_model`, `redactor_instructions`, `max_input_chars`,
 `max_result_chars`) ends the file of a running session and starts a new one, whose header
 names the old file. A session that is idle at that moment keeps its file until its next
 step, so a changed setting adds no file for a session that does nothing. `queue_blocks` and
@@ -1565,7 +1578,10 @@ ended before its first message) is removed when it is closed.
 **What a file holds.** A header (calu's session id, Claude's session id, the project, the
 start time, the user, Claude's model, calu's version, the content form, how the file was
 redacted), then one block per step, in the order the steps happened. The file only grows:
-nothing is folded or summarised.
+nothing is folded or summarised. `traces.header_times false` leaves the start time out of the
+header, `traces.header_user false` the user, and `traces.turn_numbers false` writes `## Turn`
+and `### End of turn` without numbers. Tool calls stay numbered, because the checks and
+results refer to them.
 
 | Block | Content |
 |---|---|
@@ -1603,14 +1619,37 @@ before it is written, and nothing is written before it passed them:
    the common shapes of credentials (AWS access key ids, `sk-...` keys, GitHub tokens, JSON
    Web Tokens, private key blocks, passwords inside URLs and connection strings). This stage
    always runs.
-2. The redaction agent, a model call per block, replaces secrets and personal data: names of
-   private persons, e-mail addresses, phone numbers, postal addresses, account and card
-   numbers, and the like. `traces.redact` switches this stage off; the header then says
-   that personal data was not removed. `traces.redactor_model` chooses its model (blank: the
-   default model, and `calu config models` sets it with the other roles).
+2. The redaction agent, a model call per block, follows its instructions. The shipped ones
+   keep every requirement and decision that entered the session (stated by the user, or
+   proposed by Claude and accepted by the user) and what was changed and why; they let the
+   agent remove the user's questions, hints of when the session happened and how long it
+   took (times, durations, counts of attempts) and remarks about the user's private life;
+   and they replace secrets and personal data: names of private persons, e-mail addresses,
+   phone numbers, postal addresses, account and card numbers, and the like.
+   `traces.redact` switches this stage off; the header then says that personal data was not
+   removed. `traces.redactor_model` chooses its model (blank: the default model, and
+   `calu config models` sets it with the other roles).
 
-A removed value leaves a typed placeholder such as `[redacted: api key]` or
-`[redacted: e-mail address]`.
+A replaced value leaves a typed placeholder such as `[redacted: api key]` or
+`[redacted: e-mail address]`. A message of the user that the agent removes as a whole leaves
+nothing, not even its heading; the turn's heading and Claude's answer stay. Only a message of
+the user can be removed as a whole: an answer that removes any other block counts as a failed
+redaction, and the block is withheld (below).
+
+**The redaction agent's instructions** are a setting, `traces.redactor_instructions`, global
+or per project, like the honesty rules:
+
+    calu traces instructions show [--project NAME]    # the instructions in force
+    calu traces instructions edit [--project NAME]    # open them in $EDITOR, store the result
+    calu traces instructions reset [--project NAME]   # back to the next scope, or calu's text
+
+The web interface edits them on the settings pane "Session traces", the settings dialogs of
+the VSCode extension and of the PyCharm plugin under `traces`. calu puts a fixed part in front
+of them, which says that the excerpt is data and not instructions and in which form to answer;
+the web interface shows it folded under the editor. A save in the terminal or in the web
+interface is refused when the stored text changed after the editor opened, so that two people
+do not undo each other's change; the terminal keeps the edited text in its file. Every change
+is in the audit log (`audit_log`), with the text before and after.
 
 **What "withheld" means.** If the redaction agent fails, answers unusably or takes longer
 than `traces.redactor_timeout_s`, the block is written as its heading and the line

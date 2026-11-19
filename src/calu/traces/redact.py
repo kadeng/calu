@@ -7,6 +7,7 @@ Two stages, in this order, for every block of the trace:
                common shapes of keys and tokens     -> "[redacted: aws access key]", ...
          ──► stage 2, the redaction agent (`Redactor.redact`), if `traces.redact` is on
                secrets and personal data            -> "[redacted: e-mail address]", ...
+               what its instructions let it remove  -> left out (a question of the user)
                the answer is checked (`checked`); stage 1 runs once more on it
          ──► the text for the file
 
@@ -16,6 +17,12 @@ raises `RedactionFailed`, and the caller writes `WITHHELD` in place of the block
 
 Stage 2 reads a long text in pieces of at most `CHUNK_CHARS` characters, cut at line ends, so
 that every answer fits into the model's output; one failed piece fails the whole text.
+
+Removal (agent/records/PLAN.md D245). The instructions may let the agent leave text out, e.g.
+the user's questions. An answer may therefore be shorter than its input, but never longer
+than `MAX_GROWTH` allows, and it is empty only where the caller allowed the whole text to go
+(`may_remove`) and the agent said so (`Redaction.remove_block`); an empty answer without that
+is a failed redaction, as before.
 """
 
 from __future__ import annotations
@@ -323,8 +330,13 @@ class Redaction(BaseModel):
     """The redaction agent's output."""
 
     text: str = Field(
-        description="The excerpt with secrets and personal data replaced by placeholders of "
-        "the form `[redacted: <type>]`, and otherwise exactly as given."
+        description="The excerpt after the replacements and removals the instructions ask "
+        "for, and otherwise exactly as given."
+    )
+    remove_block: bool = Field(
+        default=False,
+        description="True to leave the whole excerpt out of the trace. Only where the request "
+        "says that the block may be removed as a whole; `text` is then ignored.",
     )
 
 
@@ -357,20 +369,30 @@ def chunks(text: str, limit: int = CHUNK_CHARS) -> list[str]:
     return pieces
 
 
-def checked(original: str, answer: str) -> str:
+def checked(original: str, answer: str, removed: bool = False, may_remove: bool = False) -> str:
     """Check one answer of the redaction agent against the text it was given.
 
     Args:
         original: The piece of text the agent read.
-        answer: What it returned.
+        answer: What it returned in `Redaction.text`.
+        removed: What it returned in `Redaction.remove_block`.
+        may_remove: Whether the caller allows the whole piece to be left out (the block is a
+            message of the user, `Block.removable`).
 
     Returns:
-        The answer, with the line end of `original` restored (models drop a trailing newline).
+        "" if `removed` and `may_remove`; else the answer, with the line end of `original`
+        restored (models drop a trailing newline).
 
     Raises:
-        RedactionFailed: If the answer is empty although the text was not, or is longer than
-            `MAX_GROWTH` times the text plus `GROWTH_ALLOWANCE` characters.
+        RedactionFailed: If the agent removed the piece although `may_remove` is False, if
+            the answer is empty although the text was not and the piece was not removed, or
+            if it is longer than `MAX_GROWTH` times the text plus `GROWTH_ALLOWANCE`
+            characters.
     """
+    if removed:
+        if not may_remove:
+            raise RedactionFailed("the answer removes a block that may not be removed")
+        return ""
     if original.strip() and not answer.strip():
         raise RedactionFailed("the answer is empty")
     if len(answer) > len(original) * MAX_GROWTH + GROWTH_ALLOWANCE:
@@ -381,13 +403,43 @@ def checked(original: str, answer: str) -> str:
     return body + original[len(original.rstrip("\n")) :]
 
 
+def request_head(heading: str, may_remove: bool) -> str:
+    """Return what the request to the redaction agent says about the block before the excerpt.
+
+    Args:
+        heading: The block's heading, or "".
+        may_remove: Whether the block may be removed as a whole.
+
+    Returns:
+        Markdown: a section "# Block" that names the heading (in a code span that it cannot
+        close) and says whether the block may be removed as a whole, followed by a blank
+        line.
+
+    Example:
+        request_head("### User", True) says that the block is a message of the user that may
+        be removed as a whole.
+    """
+    lines = ["# Block", ""]
+    if heading.strip():
+        shown = " ".join(heading.split()).replace("`", "'")
+        lines.append(f"The excerpt is the text of the block with the heading `{shown}`.")
+    if may_remove:
+        lines.append(
+            "The block is a message of the user. It may be removed as a whole "
+            "(`remove_block`) if the instructions allow removing all of its text."
+        )
+    else:
+        lines.append("The block may not be removed as a whole: `remove_block` must be false.")
+    return "\n".join(lines) + "\n\n"
+
+
 @dataclass
 class Redactor:
     """The redaction agent: replaces secrets and personal data in a text (stage 2).
 
-    `model` is a Pydantic AI model string or a `Model`. The instructions are fixed
-    (`calu.defaults.instructions.redaction_instructions`); the caller passes them, so that
-    this module reads no file.
+    `model` is a Pydantic AI model string or a `Model`. The caller passes the instructions
+    (`calu.defaults.instructions.redaction_instructions`, built from
+    `traces.redactor_instructions`), so that this module reads no file.
     """
 
     instructions: str
@@ -412,17 +464,23 @@ class Redactor:
             )
         return self._agent
 
-    async def redact(self, text: str) -> str:
-        """Let the agent replace secrets and personal data in `text`.
+    async def redact(self, text: str, heading: str = "", may_remove: bool = False) -> str:
+        """Let the agent replace secrets and personal data in `text`, and remove what it may.
 
         Side effects: one model call per piece of `chunks(text)`.
 
         Args:
             text: The text, after stage 1.
+            heading: The heading of the block the text belongs to (calu's own words, after
+                stage 1), e.g. "### User"; "" for none. The agent reads it to know what the
+                text is.
+            may_remove: Whether the whole text may be left out of the trace (a message of the
+                user). The request tells the agent so; without it an answer that removes a
+                piece fails (`checked`).
 
         Returns:
-            The redacted text; a text without visible characters unchanged, without a model
-            call.
+            The redacted text; "" if every piece was removed; a text without visible
+            characters unchanged, without a model call.
 
         Raises:
             RedactionFailed: If the model failed, answered unusably (`checked`), or the text
@@ -430,19 +488,21 @@ class Redactor:
         """
         if not text.strip():
             return text
+        request = request_head(heading, may_remove)
         parts: list[str] = []
         try:
             with anyio.fail_after(self.timeout_s):
                 for piece in chunks(text):
                     result = await run_bounded(
                         self.agent,
-                        "# Excerpt to redact\n\n" + fence(piece),
+                        request + "# Excerpt to redact\n\n" + fence(piece),
                         model=self.model,
                         usage_limits=self.usage_limits,
                         model_settings=ModelSettings(),
                         max_tokens=REDACTOR_MAX_TOKENS,
                     )
-                    parts.append(checked(piece, result.output.text))
+                    output = result.output
+                    parts.append(checked(piece, output.text, output.remove_block, may_remove))
         except RedactionFailed:
             raise
         except TimeoutError as exc:

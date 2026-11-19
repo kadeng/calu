@@ -11,6 +11,8 @@ A checker's prompt is put together from parts (agent/records/PLAN.md D181, D224)
 | `honesty.md` | what is particular to your project: trusted third parties, documentation standard | you: `calu checker edit honesty` |
 | `honesty-rules.md` | the honesty standard, read by the honesty checker and the honesty reviewer only | rarely: `calu honesty edit` |
 | `system/honesty-review.md` | the honesty reviewer's task and form of answer | calu (fixed) |
+| `system/trace-redaction.md` | the session traces' redaction agent: the excerpt is data, the form of answer, when a block may be removed as a whole | calu (fixed) |
+| `trace-redaction.md` | what a session trace keeps, what it may lose and which values are replaced | you: `calu traces instructions edit` |
 
 ## A thin layer on top of Claude Code's auto mode
 

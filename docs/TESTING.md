@@ -777,6 +777,23 @@ escalation resolved from the database alone.
    client, `/running` must end with one line per running server, "calu serve of user@host
    serves DIR"; through the relay from the laptop it must show the sessions' names (`/rename`
    on the server) and how long each has been in its state.
+41. The redaction prompt and the trace format (PLAN D245) with a real redaction model. With
+   `traces.enabled` on and the shipped instructions, send "Why does the build take so long?"
+   and, as a second message, "Make the build compile once; keep the timeout at 30 s. I have
+   been at this since 3 am." Expected in the file: no `### User` block for the first message
+   (its turn heading and Claude's answer stay), the second message's requirement word for
+   word, the sentence about 3 am removed, no block withheld. Then `calu traces instructions
+   edit` (write "Keep the user's messages unchanged" under the shipped text) and one more
+   question: it must stay in the file. `calu traces instructions reset`. Then
+   `calu config set traces.layout flat`, `traces.file_names random`, `traces.header_times
+   false`, `traces.header_user false` and `traces.turn_numbers false`: the next file must be
+   `agent/traces/session_<12 hex digits>.md`, its header without "Started" and "User", its
+   turns headed `## Turn` and `### End of turn`. In the web interface's settings, pane
+   "Session traces": the instructions editor shows the shipped text and, folded, the fixed
+   part; save it in two tabs one after the other: the second save must be refused with "changed
+   by someone else meanwhile". Not run yet; the unit and database tests cover it with
+   stand-in models (`tests/unit/test_traces.py`, `tests/unit/test_traces_session.py`,
+   `tests/db/test_cli_reports.py`, `tests/db/test_web.py`).
 
 ## Measuring the checkers
 

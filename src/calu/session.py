@@ -3985,7 +3985,8 @@ class Session:
         """Start the trace file of this run if `traces.enabled` is on; never raises.
 
         Side effects: sets `self.traces` and starts the writer's task in `tg`, which creates
-        the file `<traces.directory>/<UTC date>/<user>/session_NNN.md` with this process's
+        the file `<traces.directory>/<UTC date>/<user>/session_NNN.md` (in the default
+        `traces.layout` and `traces.file_names`) with this process's
         file access (as root, that of the session's user, D206). A failure is logged, and
         the session runs without a trace.
 
@@ -4026,7 +4027,7 @@ class Session:
                 )
                 redactor_name = model_name(model)
                 redactor = Redactor(
-                    redaction_instructions(),
+                    redaction_instructions(cfg.redactor_instructions),
                     resolve_model(model),
                     timeout_s=cfg.redactor_timeout_s,
                 )
@@ -4038,8 +4039,8 @@ class Session:
                 calu_session=self.store.session_id,
                 claude_session=claude_session,
                 project=self.project or self.workspace.name,
-                started=started,
-                user=user,
+                started=started if cfg.header_times else None,
+                user=user if cfg.header_user else None,
                 claude_model=self.config.claude.model or "",
                 calu_version=__version__,
                 content="narrated" if narrated else "plain",
@@ -4054,9 +4055,15 @@ class Session:
             )
             writer = TraceWriter(
                 self.workspace,
-                session_directory(self.workspace, cfg.directory, started, user),
+                session_directory(self.workspace, cfg.directory, started, user, cfg.layout),
                 header,
-                TraceRenderer(narrated, cfg.max_input_chars, cfg.max_result_chars, claude_session),
+                TraceRenderer(
+                    narrated,
+                    cfg.max_input_chars,
+                    cfg.max_result_chars,
+                    claude_session,
+                    turn_numbers=cfg.turn_numbers,
+                ),
                 self._trace_secrets,
                 redactor=redactor,
                 narrate=self._trace_narrate,
@@ -4066,6 +4073,8 @@ class Session:
                 else (resume_id, "forked" if forked else "resumed"),
                 queue_blocks=cfg.queue_blocks,
                 after=after,
+                trace_root=self.workspace / cfg.directory,
+                random_name=cfg.file_names == "random",
             )
             writer.start(tg)
             self.traces = writer

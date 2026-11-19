@@ -16,6 +16,7 @@ from calu.config import BEDROCK_EU_HAIKU
 from calu.credentials import CredentialStore
 from calu.db import Db, connect
 from calu.db.target import PasswordAuth, Target
+from calu.defaults.instructions import default_redaction_instructions
 from calu.setup import enable_admin_login, enable_operator_login
 from calu.store import DatabaseSessionStore, SessionIdentity
 from tests.db.test_run import prepare
@@ -93,6 +94,13 @@ async def test_settings_are_read_set_validated_and_unset(
         assert rows["claude.effort"]["kind"] == "choice"
         assert "high" in rows["claude.effort"]["choices"]
         assert rows["claude.use_bedrock"]["kind"] == "bool"
+        # D245: the redaction agent's instructions are a Markdown setting holding the shipped
+        # text, like the honesty rules.
+        redaction = rows["traces.redactor_instructions"]
+        assert redaction["kind"] == "markdown" and redaction["is_set"] is False
+        assert redaction["value"] == default_redaction_instructions()
+        assert rows["traces.layout"]["kind"] == "choice"
+        assert set(rows["traces.layout"]["choices"]) == {"date/user", "user", "date", "flat"}
         # `prepare` stored this one in the global scope.
         assert rows["claude.sandbox.enabled"]["is_set"] is True
         assert rows["claude.sandbox.enabled"]["value"] is False

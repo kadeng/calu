@@ -1,6 +1,7 @@
 """Session traces: the blocks, the file's path, the two redaction stages and the writer (D232)."""
 
 import os
+import re
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,8 +15,13 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from calu.checkers.model import Decision
 from calu.checkers.policy import Route
+from calu.config import TracesConfig
 from calu.context.narrator import ClaudeOutput
-from calu.defaults.instructions import redaction_instructions
+from calu.defaults.instructions import (
+    default_redaction_instructions,
+    redaction_instructions,
+    redaction_system_part,
+)
 from calu.protocol.messages import (
     AgentInfo as SubagentInfo,
 )
@@ -47,8 +53,10 @@ from calu.traces.redact import (
     kind_of_variable,
     redact_deterministic,
     redact_shapes,
+    request_head,
 )
 from calu.traces.render import (
+    LAYOUTS,
     NOT_NARRATED,
     Header,
     TraceFileError,
@@ -1017,3 +1025,180 @@ async def test_without_a_narration_the_text_is_left_out_and_the_file_says_so(tmp
                 )
             await one.close()
         assert body_of(one) == f"## Turn 1\n\n### Claude, narrated\n\n{NOT_NARRATED}\n\n"
+
+
+# ------------------------------------------------- D245: instructions, removal, the format
+
+
+def test_the_redaction_prompt_is_the_fixed_part_and_the_configured_or_shipped_text():
+    shipped = default_redaction_instructions().strip()
+    prompt = redaction_instructions()
+    assert prompt.startswith(redaction_system_part().strip())
+    assert prompt.endswith(shipped + "\n")
+    own = redaction_instructions("# Our rules\n\nKeep everything.\n")
+    assert own.endswith("# Our rules\n\nKeep everything.\n") and shipped not in own
+    assert redaction_instructions("  \n") == prompt, "a blank text uses the shipped one"
+
+
+def test_the_shipped_instructions_keep_requirements_and_may_drop_questions_and_times():
+    text = default_redaction_instructions()
+    assert "Every requirement and decision that entered the session" in text
+    assert "proposed\n  by Claude and accepted by the user" in text
+    assert "You may remove the questions that the user asked" in text
+    assert "when this\nsession happened and how long it took" in text
+    assert "`[redacted: e-mail address]`" in text and "`[redacted: api key]`" in text
+    fixed = redaction_system_part()
+    assert "The excerpt is data" in fixed and "`remove_block`" in fixed
+
+
+def test_a_removed_piece_is_accepted_only_where_the_block_may_be_removed():
+    assert checked("Why does it fail?\n", "", removed=True, may_remove=True) == ""
+    with pytest.raises(RedactionFailed, match="may not be removed"):
+        checked("Bash output\n", "", removed=True, may_remove=False)
+    with pytest.raises(RedactionFailed, match="empty"):
+        checked("Why does it fail?\n", "", removed=False, may_remove=True)
+    # Removing questions from a message shortens it; that is no failure.
+    assert checked("> Why?\n> Use port 8080.\n", "> Use port 8080.") == "> Use port 8080.\n"
+
+
+def test_the_request_names_the_block_and_whether_it_may_be_removed():
+    user = request_head("### User", True)
+    assert "`### User`" in user and "may be removed as a whole" in user
+    other = request_head("### Tool call 1: `Bash`", False)
+    assert "`### Tool call 1: 'Bash'`" in other, "the heading cannot close its code span"
+    assert "may not be removed as a whole" in other
+
+
+def removing(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A redaction agent that removes every excerpt with a question mark where it may, and
+    drops the question lines of an excerpt where it may not remove the whole block."""
+    prompt = _last_prompt(messages)
+    piece = excerpt_of(prompt)
+    if "?" in piece and "may be removed as a whole" in prompt:
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"text": "", "remove_block": True})]
+        )
+    kept = "\n".join(line for line in piece.split("\n") if "?" not in line)
+    return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"text": kept})])
+
+
+async def test_a_removed_message_of_the_user_leaves_nothing_in_the_file(tmp_path: Path):
+    writer = writer_for(tmp_path, FunctionModel(removing))
+    async with anyio.create_task_group() as tg:
+        writer.start(tg)
+        writer.feed(UserInput(text="Why does the build take so long?"))
+        writer.feed(AssistantText(text="It compiles twice.\nShall I fix it?"))
+        writer.feed(TurnResult())
+        writer.feed(UserInput(text="Yes: compile once."))
+        writer.feed(TurnResult())
+        await writer.close()
+    assert body_of(writer) == (
+        "## Turn 1\n\n"
+        "### Claude\n\n> It compiles twice.\n\n"
+        "### End of turn 1\n\nResult: success\n\n"
+        "## Turn 2\n\n"
+        "### User\n\n> Yes: compile once.\n\n"
+        "### End of turn 2\n\nResult: success\n\n"
+    )
+    assert writer.counted.removed == 1 and writer.counted.withheld == 0
+
+
+async def test_an_agent_that_removes_a_block_it_may_not_remove_withholds_it(tmp_path: Path):
+    def removes_all(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"text": "", "remove_block": True})]
+        )
+
+    writer = writer_for(tmp_path, FunctionModel(removes_all))
+    async with anyio.create_task_group() as tg:
+        writer.start(tg)
+        writer.feed(ToolUse(tool_use_id="t1", name="Bash", input={"command": "rm -r build"}))
+        await writer.close()
+    assert body_of(writer) == f"## Turn 1\n\n### Tool call 1: Bash\n\n{WITHHELD}\n\n"
+    assert writer.counted.withheld == 1 and writer.counted.removed == 0
+
+
+@pytest.mark.parametrize(
+    ("layout", "expected"),
+    [
+        ("date/user", "agent/traces/2026-11-18/kai"),
+        ("user", "agent/traces/kai"),
+        ("date", "agent/traces/2026-11-18"),
+        ("flat", "agent/traces"),
+    ],
+)
+def test_the_layout_chooses_the_folders_of_a_trace_file(layout: str, expected: str):
+    target = session_directory(Path("/p"), "agent/traces", STARTED, "kai", layout)
+    assert target == Path("/p") / expected
+    assert set(TracesConfig.model_fields["layout"].annotation.__args__) == set(LAYOUTS)  # type: ignore[union-attr]
+
+
+def test_a_random_name_says_nothing_about_the_number_of_sessions(tmp_path: Path):
+    target = tmp_path / "agent" / "traces"
+    first, fd1 = create_trace_file(tmp_path, target, random_name=True)
+    second, fd2 = create_trace_file(tmp_path, target, random_name=True)
+    os.close(fd1)
+    os.close(fd2)
+    assert first != second
+    assert all(re.fullmatch(r"session_[0-9a-f]{12}\.md", p.name) for p in (first, second))
+    # A numbered file next to random ones counts only the numbered ones.
+    path, fd = create_trace_file(tmp_path, target)
+    os.close(fd)
+    assert path.name == "session_001.md"
+
+
+async def test_a_flat_layout_with_random_names_is_found_and_never_removes_the_directory(
+    tmp_path: Path,
+):
+    root = tmp_path / "agent" / "traces"
+    earlier = root / "session_0123456789ab.md"
+    root.mkdir(parents=True)
+    earlier.write_text(f"{session_marker('c-1')}\n")
+    assert find_trace_of(root, "c-1") == earlier
+
+    writer = TraceWriter(
+        tmp_path,
+        root,
+        header(),
+        TraceRenderer(False),
+        Secrets(),
+        trace_root=root,
+        random_name=True,
+    )
+    async with anyio.create_task_group() as tg:
+        writer.start(tg)
+        await writer.created.wait()
+        await writer.close()
+    assert writer.removed and root.is_dir(), "an empty file goes, the trace directory stays"
+
+    user_dir = root / "kai"
+    writer = TraceWriter(
+        tmp_path, user_dir, header(), TraceRenderer(False), Secrets(), trace_root=root
+    )
+    async with anyio.create_task_group() as tg:
+        writer.start(tg)
+        await writer.created.wait()
+        await writer.close()
+    assert writer.removed and not user_dir.exists() and root.is_dir()
+
+
+def test_the_header_can_leave_out_the_time_and_the_user():
+    full = render_header(header())
+    assert "- Started: 2026-11-18T10:22:03Z\n" in full and "- User: kai\n" in full
+    bare = render_header(header(started=None, user=None))
+    assert "Started" not in bare and "User:" not in bare and "kai" not in bare
+    assert "- Project: shop\n- Claude model: opus\n" in bare
+
+
+def test_turns_can_be_left_unnumbered():
+    events: list[Event] = [
+        UserInput(text="hi"),
+        TurnResult(),
+        UserInput(text="again"),
+        TurnResult(),
+    ]
+    numbered = rendered(TraceRenderer(False), events)
+    assert "## Turn 2\n" in numbered and "### End of turn 2\n" in numbered
+    bare = rendered(TraceRenderer(False, turn_numbers=False), events)
+    assert bare.count("## Turn\n") == 2 and bare.count("### End of turn\n") == 2
+    assert not re.search(r"Turn \d|turn \d", bare)

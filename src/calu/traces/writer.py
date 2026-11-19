@@ -19,6 +19,8 @@ never written:
 
     the redaction agent fails, times out or       the block's heading and `redact.WITHHELD`
     answers unusably
+    the redaction agent removes a message of      nothing, heading included (`Block.removable`,
+    the user as a whole                           D245); any other block it may not remove
     the queue is full                             the block is left out; the next block that
                                                   fits is preceded by a line that says how
                                                   many were left out
@@ -137,6 +139,8 @@ class TraceWriter:
         narration_wait_s: float = NARRATION_WAIT_S,
         flush_timeout_s: float = FLUSH_TIMEOUT_S,
         after: TraceWriter | None = None,
+        trace_root: Path | None = None,
+        random_name: bool = False,
     ) -> None:
         """Set the writer up; nothing is created on disk before `run`.
 
@@ -166,6 +170,12 @@ class TraceWriter:
                 settings changed), or None. This writer creates its file once that one has
                 created its own, so the files are numbered in the order of the session, and
                 its header names that file.
+            trace_root: The trace directory (`<workspace>/<traces.directory>`), which
+                `target` is inside or equal to: where earlier traces are searched, and the
+                directory that removing an empty file never removes. None takes the
+                grandparent of `target` (the default layout "date/user").
+            random_name: True to name the file `session_<12 hex digits>.md`
+                (`traces.file_names` = "random"), False for the next number.
         """
         self.workspace = workspace
         self.target = target
@@ -173,6 +183,8 @@ class TraceWriter:
         self.renderer = renderer
         self.secrets = secrets
         self.redactor = redactor
+        self.trace_root = target.parent.parent if trace_root is None else trace_root
+        self.random_name = random_name
         self.path: Path | None = None
         """The trace file, once `run` created it."""
         self.counted = Counted()
@@ -355,7 +367,7 @@ class TraceWriter:
         Raises:
             TraceFileError: If the file cannot be created or the header cannot be written.
         """
-        path, fd = create_trace_file(self.workspace, self.target)
+        path, fd = create_trace_file(self.workspace, self.target, self.random_name)
         header = self.header
         earlier, self._after = self._after, None
         if earlier is not None and earlier.path is not None and earlier.fed:
@@ -366,8 +378,7 @@ class TraceWriter:
             )
         if self._continues is not None:
             claude_session, how = self._continues
-            root = self.target.parent.parent
-            earlier = find_trace_of(root, claude_session, skip=path)
+            earlier = find_trace_of(self.trace_root, claude_session, skip=path)
             verb = "a fork of" if how == "forked" else "a continuation of"
             if earlier is not None:
                 try:
@@ -469,7 +480,8 @@ class TraceWriter:
             entry: The queued block; it is closed.
 
         Returns:
-            The redacted text of the block.
+            The redacted text of the block; "" if the redaction agent removed a block that
+            may be removed (`Block.removable`).
         """
         block = entry.block
         heading = redact_deterministic(block.heading, self.secrets)
@@ -480,7 +492,12 @@ class TraceWriter:
                 body, fixed = (quote(narration), False) if narration else (NOT_NARRATED, True)
             body = redact_deterministic(body, self.secrets)
             if self.redactor is not None and not fixed and body.strip():
-                body = redact_deterministic(await self.redactor.redact(body), self.secrets)
+                answer = await self.redactor.redact(body, heading, block.removable)
+                if block.removable and not answer.strip():
+                    # Nothing of the message stays, so its heading would only count it.
+                    self.counted.removed += 1
+                    return ""
+                body = redact_deterministic(answer, self.secrets)
         except RedactionFailed as exc:
             self._withheld(str(exc))
             body = WITHHELD
@@ -603,9 +620,12 @@ class TraceWriter:
         try:
             self.path.unlink()
             self.removed = True
-            # <date>/<user>: left empty by the only file of that user and day.
-            for directory in (self.target, self.target.parent):
+            # The layout's folders (e.g. <date>/<user>), left empty by the only file there;
+            # never the trace directory itself.
+            directory = self.target
+            while directory != self.trace_root and self.trace_root in directory.parents:
                 directory.rmdir()
+                directory = directory.parent
         except OSError as exc:
             if not self.removed:
                 log.warning("removing the empty session trace %s failed: %s", self.path, exc)

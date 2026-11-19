@@ -148,6 +148,33 @@ def test_the_honesty_rules_are_an_editor_that_shows_the_shipped_text() -> None:
     assert parse("markdown", "  \n") is None
 
 
+def test_the_redaction_instructions_are_an_editor_with_the_shipped_text_and_the_fixed_part() -> (
+    None
+):
+    """D245: `traces.redactor_instructions` is edited like `honesty.rules`, on the traces pane."""
+    from calu.defaults.instructions import default_redaction_instructions, redaction_system_part
+    from calu.web.settings import fingerprint
+
+    src = Sources(None, {}, {}, [], {}, [])
+    found = [
+        (pane.title, f)
+        for pane in panes(src)
+        for f in pane.fields
+        if f.name == "traces.redactor_instructions"
+    ]
+    assert len(found) == 1
+    title, field = found[0]
+    assert title == "Session traces" and field.kind == "markdown"
+    assert field.value == default_redaction_instructions() and not field.is_set
+    assert field.extra == redaction_system_part() and field.version == fingerprint(None)
+    stored = Sources(None, {"traces": {"redactor_instructions": "# Ours\n"}}, {}, [], {}, [])
+    own = next(
+        f for pane in panes(stored) for f in pane.fields if f.name == "traces.redactor_instructions"
+    )
+    assert own.is_set and own.value == "# Ours\n" and own.version == fingerprint("# Ours\n")
+    assert fingerprint("# Ours\n") != fingerprint("# Ours!\n") != fingerprint(None)
+
+
 def test_every_setting_of_the_model_is_on_the_page_exactly_once() -> None:
     """A new configuration field appears on the settings page without a change to the page."""
     from calu.configdoc import setting_rows

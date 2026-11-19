@@ -7,6 +7,9 @@ from pathlib import Path
 import anyio
 import pytest
 from pydantic import ValidationError
+from pydantic_ai import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelMessage
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 import calu
 from calu import admin, preflight
@@ -24,6 +27,7 @@ from calu.protocol.messages import (
     TurnResult,
 )
 from calu.session import Session
+from calu.testing import _last_prompt, excerpt_of, fake_models
 from tests.unit.helpers import default_rules, default_settings, make_session
 
 pytestmark = pytest.mark.anyio
@@ -671,3 +675,55 @@ def test_the_redaction_agents_model_is_checked_for_its_key_only_while_it_runs():
     assert preflight.configured_models(on)["trace redaction agent"] == "mistral:mistral-small-2603"
     off = Config(traces=TracesConfig(enabled=True, redact=False))
     assert "trace redaction agent" not in preflight.configured_models(off)
+
+
+async def test_the_format_settings_and_the_configured_instructions_reach_the_trace(
+    tmp_path: Path,
+):
+    """D245: layout, file names, header lines, turn numbers and the redaction prompt."""
+    seen: list[str] = []
+
+    def redacting(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(info.instructions or "")
+        prompt = _last_prompt(messages)
+        piece = excerpt_of(prompt)
+        removed = "?" in piece and "may be removed as a whole" in prompt
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {"text": "" if removed else piece, "remove_block": removed},
+                )
+            ]
+        )
+
+    models = fake_models()
+    models["trace-redactor"] = FunctionModel(redacting)
+    config = traced(
+        content="plain",
+        layout="flat",
+        file_names="random",
+        header_times=False,
+        header_user=False,
+        turn_numbers=False,
+        redactor_instructions="# Our redaction\n\nRemove the user's questions.\n",
+    )
+    script = [[{"text": "It is slow because it compiles twice."}]]
+    session, rec, _ = make_session(tmp_path, script, config, checker_models=models)
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="Why is the build slow?"))
+        await rec.wait_for(TurnResult)
+        await session.stop()
+    (path,) = trace_files(tmp_path)
+    assert re.fullmatch(r"session_[0-9a-f]{12}\.md", path.name)
+    assert path.parent == tmp_path / "agent" / "traces"
+    text = path.read_text()
+    assert "- Started:" not in text and "- User:" not in text
+    assert "## Turn\n" in text and "### End of turn\n" in text
+    assert "Why is the build slow" not in text and "### User" not in text
+    assert "> It is slow because it compiles twice.\n" in text
+    assert seen and all(
+        s.rstrip().endswith("# Our redaction\n\nRemove the user's questions.") for s in seen
+    )
+    assert all("The excerpt is data" in s for s in seen)

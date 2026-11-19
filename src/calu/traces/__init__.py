@@ -1,9 +1,10 @@
 """Session traces: the conversation of a session as a redacted Markdown file in the project.
 
 With `traces.enabled` on, a session appends every step to
-`<traces.directory>/<YYYY-MM-DD>/<user>/session_NNN.md`, so that the conversation can be committed
-and reviewed with the code it produced (agent/records/PLAN.md D232, REQUIREMENTS 36). The file only
-grows; nothing is folded or summarised; it holds no images. calu never commits it.
+`<traces.directory>/<YYYY-MM-DD>/<user>/session_NNN.md` (`traces.layout` and `traces.file_names`
+choose other paths, D245), so that the conversation can be committed and reviewed with the code it
+produced (agent/records/PLAN.md D232, REQUIREMENTS 36). The file only grows; nothing is folded or
+summarised; it holds no images. calu never commits it.
 
     calu.session.Session
         │ every event it emits, in order          the narrations it computes for its checkers
@@ -12,7 +13,8 @@ grows; nothing is folded or summarised; it holds no images. calu never commits i
         │ render.TraceRenderer: event -> Markdown block(s)
         ▼
     a bounded queue ──► redact: stage 1 (known secret values, shapes of keys and tokens)
-                                stage 2 (the redaction agent, if `traces.redact` is on)
+                                stage 2 (the redaction agent, if `traces.redact` is on, with
+                                `traces.redactor_instructions`)
                     ──► appended to the file, in the order of the events
 
 | Module | Content |

@@ -30,9 +30,16 @@ from calu.claude.transcripts import transcripts, user_inputs
 from calu.config import Config, default_model, merge_settings
 from calu.configdoc import setting_rows
 from calu.db.connection import Db
-from calu.defaults.instructions import honesty_rules
 from calu.ide.access import INVALID_PARAMS
-from calu.web.settings import MARKDOWN, ROUTE_CHECKERS, _default, _kind_of, _lookup, _model_of
+from calu.web.settings import (
+    MARKDOWN,
+    MARKDOWN_DEFAULTS,
+    ROUTE_CHECKERS,
+    _default,
+    _kind_of,
+    _lookup,
+    _model_of,
+)
 
 NO_SESSION = -32011
 """`ide.attach`: no running session matches."""
@@ -158,7 +165,8 @@ async def settings_view(db: Db, project: str | None) -> dict[str, Any]:
     for key, type_text, default_text, description in setting_rows():
         info = _field_of(key)
         kind, choices = _kind(key, info)
-        default = honesty_rules() if key == "honesty.rules" else _default(info)
+        text_default = MARKDOWN_DEFAULTS.get(key)
+        default = text_default() if text_default is not None else _default(info)
         own = None if kind == "section" else _lookup(stored, key)
         above = None if kind == "section" else _lookup(inherited, key)
         base = above if above is not None else default

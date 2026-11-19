@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D244, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D245, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -133,6 +133,21 @@ scripts; without a terminal the stored value stays), and with the sandbox off `c
 every session's start and `calu doctor --db` recommend password-protected logins and/or
 `--sudo`, unless that is known to hold. Measured: Claude Code starts without `bwrap`/`socat`
 while the sandbox is off. Not run by hand yet: `docs/TESTING.md` item 37.
+
+#### The redaction prompt and the trace format (2026-11-19, PLAN D245, requirement 44)
+
+Built: `traces.redactor_instructions` (global or per project, shipped default
+`defaults/checkers/trace-redaction.md`, fixed part `system/trace-redaction.md`),
+`calu traces instructions show|edit|reset [--project]`, the web pane "Session traces"; the
+IDE settings dialogs show it as a Markdown setting. Saves in the terminal and the web are
+refused when the stored text changed meanwhile (also for `honesty.rules`). The shipped
+instructions may remove the user's questions (a message of the user removed as a whole
+leaves nothing in the file) and every hint of when and how long the session ran. Format
+settings `traces.layout`, `traces.file_names`, `traces.header_times`, `traces.header_user`,
+`traces.turn_numbers`, defaults unchanged. Open: an "Edit redaction instructions" entry in
+the VSCode and PyCharm checker pickers, a conflict check in `ide.settings.set`, the manual
+check `docs/TESTING.md` item 41 with a real model (the new prompt is not yet measured on
+Haiku or Nemotron).
 
 #### macOS support (backlog, owner 2026-11-19)
 
@@ -699,7 +714,7 @@ inside a container). No phase has unbuilt work in it.
 Checks: `scripts/wsl-test.sh -m 'not live'` is ruff format/lint clean, pyright 0 errors,
 **2031 tests pass** (plus 16 browser tests, which skip without `scripts/get-browser.sh`) (unit + database). The database tests need `docker compose up -d caludb
 --wait`. about 470 commits, ~83k lines of Python in `src` (~88k with the SQL, templates and
-default instructions), ~49k of tests, 40 migrations, 27 CLI commands (26 in `calu --help` and the hidden easter egg
+default instructions), ~49k of tests, 40 migrations, 28 CLI commands (27 in `calu --help` and the hidden easter egg
 `calu lightcycles`), 23 protocol requests,
 20 events. CI (`.github/workflows/checks.yml`) runs the same checks, the database and
 browser layers and the installed wheel on every push and pull request; the live layer never runs

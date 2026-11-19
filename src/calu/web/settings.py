@@ -25,10 +25,11 @@ A field's form name says where it is stored:
     rules:command-deny           one rule list of the scope
 """
 
+import hashlib
 import json
 import re
 import types
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Union, get_args, get_origin
@@ -39,7 +40,13 @@ from calu import admin, herd
 from calu.checkers.rules import RULE_LISTS
 from calu.config import CheckerConfig, Config
 from calu.db import Db
-from calu.defaults.instructions import SYSTEM_PARTS, honesty_rules, system_part
+from calu.defaults.instructions import (
+    SYSTEM_PARTS,
+    default_redaction_instructions,
+    honesty_rules,
+    redaction_system_part,
+    system_part,
+)
 
 Kind = Literal[
     "bool",
@@ -121,8 +128,21 @@ SKIP: frozenset[str] = frozenset()
 """Fields the form leaves out; none. `hidden_env` is editable here like every other list: it
 holds the names of variables Claude Code must not see, never their values."""
 
-MARKDOWN = frozenset({"honesty.rules"})
-"""Text settings that hold a Markdown document and get an editor (agent/records/PLAN.md D181)."""
+MARKDOWN_DEFAULTS: dict[str, Callable[[], str]] = {
+    "honesty.rules": honesty_rules,
+    "traces.redactor_instructions": default_redaction_instructions,
+}
+"""Text settings that hold a Markdown document, each with the function that returns the text
+calu ships, which applies while no scope sets one (agent/records/PLAN.md D181, D245)."""
+
+MARKDOWN = frozenset(MARKDOWN_DEFAULTS)
+"""Text settings that hold a Markdown document and get an editor."""
+
+MARKDOWN_FIXED: dict[str, Callable[[], str]] = {
+    "traces.redactor_instructions": redaction_system_part,
+}
+"""Markdown settings in front of which calu puts a fixed part of its own: the function that
+returns it, shown folded under the editor."""
 
 ROUTE_CHECKERS = {
     "command": "command_checker",
@@ -182,10 +202,11 @@ class Field:
     """What was typed when a save refused the field, shown again instead of `value`."""
     meta: str = ""
     """A short fact shown beside the editor, e.g. "8 patterns" or "version 3"."""
-    version: int | None = None
-    """For a checker's instructions: the version of the definition the page was built from.
-    The form posts it back as `version:<field name>`, and a save is refused when the stored
-    version is another one by then (somebody else saved meanwhile). None for other fields."""
+    version: int | str | None = None
+    """For a checker's instructions: the version of the definition the page was built from;
+    for a Markdown setting: `fingerprint` of the value the scope stored then. The form posts
+    it back as `version:<field name>`, and a save is refused when the stored version is
+    another one by then (somebody else saved meanwhile). None for other fields."""
     tone: str = ""
     """"allow" or "deny" for a rule list, which colours its editor; else ""."""
     extra_title: str = ""
@@ -547,6 +568,12 @@ async def _save_field(
             raise ValueError("a value is needed")
         if new != item.value:
             checker_changes.setdefault(name, {})[column] = new
+    elif item.name in MARKDOWN and _changed_meanwhile(item, posted, new):
+        raise ValueError(
+            "this text was changed by someone else meanwhile. Your text is kept in the "
+            "editor and nothing was stored. Compare it with the stored text (this page in "
+            "another tab), then save again to replace the stored text with yours"
+        )
     elif item.name in resets or (item.name in MARKDOWN and new is None):
         if item.is_set:
             await admin.unset_setting(db, item.name, src.project)
@@ -554,6 +581,42 @@ async def _save_field(
     elif new != _comparable(item):
         await admin.set_setting(db, item.name, new, src.project)
         result.count += 1
+
+
+def fingerprint(value: Any) -> str:
+    """Return a short fingerprint of a stored value, for the conflict check of a save.
+
+    Args:
+        value: What a scope stores for a setting, or None if it stores nothing.
+
+    Returns:
+        "unset" for None, else the first 16 hex digits of the SHA-256 of the value as JSON.
+    """
+    if value is None:
+        return "unset"
+    data = json.dumps(value, sort_keys=True).encode()
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def _changed_meanwhile(item: Field, posted: Mapping[str, str], new: Any) -> bool:
+    """Tell whether saving a Markdown setting would undo a change made since the page was built.
+
+    Args:
+        item: The field, built from what the scope stores now.
+        posted: The form; `version:<name>` is the fingerprint the page was built with.
+        new: The parsed posted value.
+
+    Returns:
+        True if the form changes the value (or resets it) and posted a fingerprint that is
+        not the stored value's any more. A form without a fingerprint (an older page, a
+        script) is not checked.
+    """
+    read = posted.get(f"version:{item.name}", "")
+    if not read or read == item.version:
+        return False
+    if new is None:
+        return item.is_set
+    return new != _comparable(item)
 
 
 def _comparable(item: Field) -> Any:
@@ -871,6 +934,11 @@ def _claude_panes(src: Sources, used: set[str]) -> list[Pane]:
 SECTION_PANES = {
     "changes": ("Change review", "Measuring what a command wrote, and reviewing it."),
     "clock": ("Clock watch", "Noticing a system clock that was set back."),
+    "traces": (
+        "Session traces",
+        "The conversation as a redacted Markdown file in the project: where the files go,"
+        " what their headings and header say, and the redaction agent's instructions.",
+    ),
     "web": ("Web interface", "Settings of this interface."),
 }
 """Configuration section -> (pane title, description); a section not named here gets a pane
@@ -1100,15 +1168,17 @@ def _config_field(src: Sources, path: str) -> Field | None:
     kind, choices = _kind_of(info.annotation)
     if kind is None:
         return None
+    fixed = ""
     if path in MARKDOWN:
         kind = "markdown"
+        fixed = MARKDOWN_FIXED[path]() if path in MARKDOWN_FIXED else ""
     # A Pydantic AI model string: every `model` field but Claude Code's own (`claude.model`).
     is_model = kind == "text" and name.endswith("model") and path != "claude.model"
     if is_model:
         kind = "model"
     default = _default(info)
-    if path == "honesty.rules":
-        default = honesty_rules()
+    if path in MARKDOWN_DEFAULTS:
+        default = MARKDOWN_DEFAULTS[path]()
     stored = _lookup(src.values, path)
     inherited = _lookup(src.inherited, path) if src.project else None
     base = inherited if inherited is not None else default
@@ -1126,6 +1196,9 @@ def _config_field(src: Sources, path: str) -> Field | None:
         base=base,
         is_set=stored is not None,
         inherits="global" if inherited is not None else "default",
+        version=fingerprint(stored) if path in MARKDOWN else None,
+        extra_title="What calu puts in front of this text" if fixed else "",
+        extra=fixed,
     )
 
 

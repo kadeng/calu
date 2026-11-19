@@ -466,3 +466,60 @@ async def test_the_misses_are_readable_and_say_so_when_there_are_none(prepared, 
     # A checker with no misses says so by name.
     assert await run(["checker", "misses", "edit"]) == 0
     assert "no misses of edit" in capsys.readouterr().out
+
+
+async def test_the_redaction_instructions_are_shown_edited_and_reset(
+    prepared, capsys, tmp_path, db_url: str
+) -> None:
+    """D245: `calu traces instructions show|edit|reset`, and a save that would undo a change
+    made while the editor was open is refused, with the edited text kept in its file."""
+    import sys
+
+    from calu.defaults.instructions import default_redaction_instructions
+
+    db, _session_id, _escalation = prepared
+    await admin.add_project(db, "shop")
+    editor = tmp_path / "fake-editor"
+    editor.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "open(sys.argv[1], 'w', encoding='utf-8').write(os.environ['EDITOR_WRITES'])\n"
+        "if os.environ.get('EDITOR_MEANWHILE'):\n"
+        "    import psycopg\n"
+        "    value = json.dumps({'traces': {'redactor_instructions': '# Theirs\\n'}})\n"
+        "    with psycopg.connect(os.environ['EDITOR_MEANWHILE']) as conn:\n"
+        "        conn.execute(\"UPDATE config SET value = %s WHERE scope = 'global'\", (value,))\n",
+        encoding="utf-8",
+    )
+    editor.chmod(0o755)
+    os.environ["EDITOR"] = str(editor)
+    try:
+        assert await run(["traces", "instructions", "show"]) == 0
+        assert capsys.readouterr().out == default_redaction_instructions()
+
+        os.environ["EDITOR_WRITES"] = "# Ours\n\nKeep every question.\n"
+        assert await run(["traces", "instructions", "edit"]) == 0
+        capsys.readouterr()
+        assert (await admin.settings(db))["traces"]["redactor_instructions"] == (
+            "# Ours\n\nKeep every question.\n"
+        )
+        # A project without a value of its own shows the global text.
+        assert await run(["traces", "instructions", "show", "--project", "shop"]) == 0
+        assert capsys.readouterr().out == "# Ours\n\nKeep every question.\n"
+
+        # Somebody saves while the editor is open: nothing is stored, the text is kept.
+        os.environ["EDITOR_WRITES"] = "# Mine\n"
+        os.environ["EDITOR_MEANWHILE"] = db_url
+        assert await run(["traces", "instructions", "edit"]) == 1
+        refused = capsys.readouterr()
+        assert "changed by someone else" in refused.err
+        assert "the edited instructions are kept in" in refused.err
+        assert (await admin.settings(db))["traces"]["redactor_instructions"] == "# Theirs\n"
+        os.environ.pop("EDITOR_MEANWHILE")
+
+        assert await run(["traces", "instructions", "reset"]) == 0
+        assert "removed" in capsys.readouterr().out
+        assert "redactor_instructions" not in (await admin.settings(db)).get("traces", {})
+    finally:
+        for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_MEANWHILE"):
+            os.environ.pop(name, None)

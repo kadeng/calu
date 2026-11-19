@@ -514,6 +514,41 @@ async def test_an_extra_checker_is_switched_on_and_given_a_model_on_the_page(db_
         await conn.close()
 
 
+async def test_a_markdown_setting_changed_meanwhile_is_not_overwritten(db_url: str) -> None:
+    """D245: a save of the redaction instructions from a page built before another save is
+    refused; the page that reports it carries the new fingerprint, so saving again stores."""
+    from calu.web.settings import fingerprint
+
+    key = "traces.redactor_instructions"
+    conn = await connect(db_url)
+    try:
+        await setup(conn, db_url, "test:model")
+        db = Db(conn)
+        async with await client_for(db) as client:
+            page = (await client.get("/settings")).text
+            assert f'name="version:{key}" value="{fingerprint(None)}"' in page
+            assert "# What the trace keeps and what it may lose" in area(page, key)
+            await admin.set_setting(db, key, "# Somebody else's\n")
+            refused = await client.post(
+                "/settings", data={key: "# Mine", f"version:{key}": fingerprint(None)}
+            )
+            assert "changed by someone else meanwhile" in refused.text
+            assert (await admin.settings(db))["traces"][key.split(".")[1]] == "# Somebody else's\n"
+            again = await client.post(
+                "/settings",
+                data={key: "# Mine", f"version:{key}": fingerprint("# Somebody else's\n")},
+            )
+            assert again.status_code == 200
+            assert (await admin.settings(db))["traces"]["redactor_instructions"] == "# Mine\n"
+            # Emptying it returns to the text calu ships.
+            await client.post(
+                "/settings", data={key: "", f"version:{key}": fingerprint("# Mine\n")}
+            )
+            assert "redactor_instructions" not in (await admin.settings(db)).get("traces", {})
+    finally:
+        await conn.close()
+
+
 async def test_triage_serves_the_queue_and_answers_it(db_url: str) -> None:
     """The owner's ask: sit in one mode and answer what comes, with a queue behind it."""
     conn = await connect(db_url)
