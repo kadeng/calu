@@ -723,9 +723,16 @@ class Bridge:
             label=f"calu ide ({user})",
         )
         password = _password(params)
+        # Only the wait for the server can be taken back (`ide.start.cancel`): `work` drops
+        # this scope from `_start_waits` in the step in which the server's answer arrives, so
+        # a cancel after that finds nothing to take back and the request attaches.
+        waiting = anyio.CancelScope()
 
         async def work(db: Db) -> Endpoint:
             """File the request, wait for the session, name it and mint a token.
+
+            Side effect: as soon as the request is finished (started or failed), the request
+            can no longer be taken back (`waiting` leaves `_start_waits`).
 
             Args:
                 db: The connection.
@@ -741,6 +748,10 @@ class Bridge:
                 done = await session_requests.wait_for(
                     db, request_id, self.claim_wait_s, self.start_wait_s
                 )
+                # No await between the answer and this line: a cancel either came before the
+                # answer (and ended the wait) or finds the scope gone.
+                if waiting in self._start_waits:
+                    self._start_waits.remove(waiting)
             except anyio.get_cancelled_exc_class():
                 # The editor went away: take the request back, so that a server does not
                 # start a session nobody waits for.
@@ -772,14 +783,13 @@ class Bridge:
             token_id, token = await herd.mint_token(db, done.session_id, "calu ide")
             return Endpoint(str(row[0]) if row else "", token, token_id, done.session_id, password)
 
-        # Only the wait for the server can be taken back (`ide.start.cancel`): once the
-        # session is started, the request attaches to it.
-        with anyio.CancelScope() as waiting:
+        with waiting:
             self._start_waits.append(waiting)
             try:
                 async with self._attaching:
                     endpoint = await self.access.read(work, password)
-                    self._start_waits.remove(waiting)
+                    if waiting in self._start_waits:
+                        self._start_waits.remove(waiting)
                     return await self._attach_to(endpoint, 0)
             finally:
                 if waiting in self._start_waits:
@@ -791,10 +801,11 @@ class Bridge:
 
         Side effects: each waiting `ide.start` withdraws its `session_requests` row (so that
         no server starts a session nobody waits for) and fails with `START_CANCELLED`. A
-        request whose session has already started and is attaching is normally not
-        affected; a cancel in the moment after the server reported the start, while the
-        session is being named and its token minted, still fails the request, and the
-        session then runs with nobody attached (`calu sessions` lists it).
+        request whose outcome the server has reported is not affected: from the moment its
+        wait returns, it is no longer counted here and it names, mints a token for and
+        attaches to the started session. Only a cancel that arrives while the wait is still
+        reading the row that says "started" ends the request; the session then runs with
+        nobody attached (`calu sessions` lists it).
 
         Args:
             params: Unused.

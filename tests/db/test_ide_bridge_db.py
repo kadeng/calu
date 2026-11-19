@@ -400,6 +400,42 @@ async def test_a_waiting_start_is_taken_back_by_the_editor(
         assert await db.all("SELECT state FROM session_requests") == [("withdrawn",)]
 
 
+async def test_a_cancel_after_the_server_started_the_session_does_not_abort_the_start(
+    db_url: str, tmp_path: Path, store: CredentialStore, monkeypatch: pytest.MonkeyPatch
+):
+    """The cancel scope covered the naming, the token and the attach as well, so a cancel in
+    that moment failed the request and left the started session with nobody attached."""
+    session_url = await prepare(db_url, tmp_path)
+    store.save("operator", await operator_login(db_url), None)
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    named, go = anyio.Event(), anyio.Event()
+    original = herd.rename_session
+
+    async def slow_rename(db: Db, session_id: str, name: str) -> str:
+        named.set()
+        await go.wait()
+        return await original(db, session_id, name)
+
+    monkeypatch.setattr(herd, "rename_session", slow_rename)
+    async with serving(session_url, hostname=socket.gethostname(), user=USER):
+        async with bridged(workspace, store, user=USER) as editor:
+            started: list[dict] = []
+
+            async def start() -> None:
+                started.append(
+                    await editor.request("ide.start", {"kind": "new", "name": "late cancel"})
+                )
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(start)
+                with anyio.fail_after(30):
+                    await named.wait()
+                assert await editor.request("ide.start.cancel") == {"cancelled": 0}
+                go.set()
+            assert started[0]["attached"] is True
+
+
 async def test_a_protected_credential_is_asked_for_and_never_prompted(
     db_url: str, tmp_path: Path, store: CredentialStore
 ):
