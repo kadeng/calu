@@ -1054,10 +1054,22 @@ def test_every_request_that_is_not_listed_as_read_only_exists():
     }, "a new request is checked against the token unless it is listed as read-only: decide"
 
 
-async def test_a_revoked_token_is_refused_every_request_that_changes_the_session(tmp_path: Path):
+async def test_a_revoked_token_is_refused_every_request_that_changes_the_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Every such request is answered with -32001 when it is the first to notice the revocation.
+
+    The server's own scheduled check is kept out of the way: its first run comes
+    `FIRST_CHECK_S` (1 s) after the server started, and under load that fell between a
+    revocation and its request here about one run in ten. The connection was then closed
+    with `CLOSE_TOKEN_REVOKED` before the request was read, which is the other documented
+    refusal (the next test) and not the one this test is about.
+    """
+    from calu.protocol import server as server_module
     from calu.protocol.messages import REQUESTS
     from calu.protocol.server import READ_ONLY_METHODS
 
+    monkeypatch.setattr(server_module, "FIRST_CHECK_S", 3600.0)
     async with served(tmp_path, [[{"text": "hi"}]]) as run:
         async with client(run, Events()) as owner:
             await owner.request("session.start", {})
@@ -1070,6 +1082,26 @@ async def test_a_revoked_token_is_refused_every_request_that_changes_the_session
                     with pytest.raises(RequestFailed) as refused:
                         await zed.request(method, {})
                     assert refused.value.code == -32001, method
+            assert run.session.state == "idle"
+            assert not run.server.shutdown.is_set()
+
+
+async def test_a_revocation_the_scheduled_check_sees_first_closes_the_connection(tmp_path: Path):
+    """The other order: the check runs between the revocation and the request.
+
+    The client is told with the close code `CLOSE_TOKEN_REVOKED` and its reason; the request
+    is not served either way.
+    """
+    async with served(tmp_path, [[{"text": "hi"}]]) as run:
+        async with client(run, Events()) as owner:
+            await owner.request("session.start", {})
+            token = "minted and revoked"
+            await run.store.add_client_token(token_hash(token), run.address)
+            async with connect(run.address, token, "zed", Events()) as zed:
+                revoke(run.store, token)
+                await run.server.sweep()
+                with pytest.raises(ConnectionError, match="the client token was revoked"):
+                    await zed.request("chat.send", {"text": "run this"})
             assert run.session.state == "idle"
             assert not run.server.shutdown.is_set()
 
