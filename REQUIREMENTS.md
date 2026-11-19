@@ -289,6 +289,10 @@ broken down or extended. Derived requirements and design decisions belong in
     sync to remote and prefix shell commands with something like "ssh user@remote bash -c
     '<original command>'" or similar. Letting calu run remotely in this scenario would have to
     involve two-way sync, which can lead to races and data corruption." (stated 2026-11-19)
+    After the existing SSH mode (PLAN D236: a local IDE on a local copy, calu and Claude on
+    the server, two-way sync through `calu ide`, `.git` on the server only) was described to
+    him: "No, let's keep that, it's good. Instead of my variant 3. We just need to ensure edit
+    conflicts gets resolved and one side only holds .git." (stated 2026-11-19)
 
 ## Soft goals and priorities
 
