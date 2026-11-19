@@ -112,15 +112,41 @@ class ServerTokenRow:
     last_used_at: datetime | None
     revoked: bool
     relay_address: str = ""
+    server_ended: bool = False
+    """Whether the server's row has ended (its tokens are then revoked as well)."""
+    server_silent_for_s: float = 0.0
+    """Seconds since the server's last heartbeat, measured by the database."""
+    server_gone: bool = False
+    """Whether the reader found the server's process gone (`herd.process_gone`)."""
+
+    @property
+    def state(self) -> str:
+        """Say whether the relay accepts the token, and if not, why (D244 (3)).
+
+        Returns:
+            "revoked"; "server ended"; "server gone" (its process is not running, the row
+            not ended); "server silent for N min" (no heartbeat for `herd.STALE_AFTER_S`:
+            refused until the server beats again); otherwise "valid". The words match
+            `ServerRow.line`.
+        """
+        if self.revoked:
+            return "revoked"
+        if self.server_ended:
+            return "server ended"
+        if self.server_gone:
+            return "server gone"
+        if self.server_silent_for_s > herd.STALE_AFTER_S:
+            return f"server silent for {self.server_silent_for_s / 60:.0f} min"
+        return "valid"
 
     def line(self) -> str:
         """Return the token as one terminal line.
 
         Returns:
-            Id, state, server, relay address, when it was last used and its label.
+            Id, state (`state`), server, relay address, when it was last used and its label.
         """
         used = f"{self.last_used_at:%Y-%m-%d %H:%M:%S}" if self.last_used_at else "never used"
-        state = "revoked" if self.revoked else "valid"
+        state = self.state
         label = f"  {self.label}" if self.label else ""
         return (
             f"{self.id}  {state}  server {self.server_id}  {self.relay_address or '-'}  "
@@ -480,18 +506,29 @@ async def tokens(db: Db) -> list[ServerTokenRow]:
         db: A connection of `calu_operator`, `calu_admin` or the owner.
 
     Returns:
-        The rows; the tokens themselves are not stored and never returned.
+        The rows, each with its server's state (`ServerTokenRow.state`): a token of a server
+        that died without ending its row is refused, and its row says so. The tokens
+        themselves are not stored and never returned.
 
     Raises:
-        psycopg.Error: On database errors.
+        psycopg.Error: On database errors, among them a schema older than migration 0040
+            (`psycopg.errors.UndefinedColumn`).
     """
     rows = await db.all(
         """SELECT t.id, t.server_id::text, t.label, t.created_at, t.last_used_at, t.revoked,
-                  s.relay_address
+                  s.relay_address, s.ended_at IS NOT NULL,
+                  extract(epoch FROM (now() - s.last_seen))::float8, s.pid, s.machine
              FROM server_tokens t JOIN servers s ON s.id = t.server_id
             ORDER BY t.id DESC"""
     )
-    return [ServerTokenRow(*row) for row in rows]
+    this = machine.here()
+    return [
+        ServerTokenRow(
+            *row[:9],
+            server_gone=not row[7] and herd.process_gone(row[9], row[10], this),
+        )
+        for row in rows
+    ]
 
 
 async def revoke(db: Db, token_id: int) -> bool:

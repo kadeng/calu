@@ -352,6 +352,39 @@ def test_a_server_row_counts_as_running_only_while_it_beats() -> None:
     assert not ended.stale and not ended.live and "ended 2026-11-19" in ended.line()
 
 
+def test_a_server_tokens_line_says_when_its_server_does_not_run() -> None:
+    """D244: the tokens of a stale or gone server are refused; `calu token list` says so."""
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from calu import herd
+    from calu.servers import ServerTokenRow
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+    row = ServerTokenRow(2, "5e7", "laptop", now, None, False, "ws://127.0.0.1:8811")
+    assert row.line() == "2  valid  server 5e7  ws://127.0.0.1:8811  never used  laptop"
+    silent = replace(row, server_silent_for_s=herd.STALE_AFTER_S + 120)
+    assert silent.state == "server silent for 3 min"
+    assert replace(row, server_gone=True).line().startswith("2  server gone  server 5e7")
+    assert replace(row, server_ended=True).state == "server ended"
+    assert replace(silent, revoked=True, server_gone=True).state == "revoked"
+
+
+def test_a_served_sessions_own_token_is_named_as_the_relays() -> None:
+    """The token `calu.run` makes for a session under `calu serve` has no label of its own."""
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from calu.herd import TokenRow
+
+    now = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
+    row = TokenRow(5, "abc", "", "ws://127.0.0.1:9000", now, None, False)
+    assert row.line() == "5  valid  session abc  ws://127.0.0.1:9000  never used"
+    relayed = replace(row, relay_of="5e7")
+    assert relayed.line().endswith("never used  relay of server 5e7")
+    assert replace(relayed, label="zed").line().endswith("  zed")
+
+
 async def test_end_gone_peers_ends_only_rows_whose_process_is_gone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

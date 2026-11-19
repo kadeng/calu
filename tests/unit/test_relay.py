@@ -395,3 +395,35 @@ def test_calu_serve_takes_the_relay_port(monkeypatch: pytest.MonkeyPatch) -> Non
         parser.parse_args(["serve", "--no-relay", "--relay-port", "9"])
     args = parser.parse_args(["token", "mint", "--server", "--label", "laptop"])
     assert args.server and args.label == "laptop"
+
+
+async def test_the_line_client_says_the_relay_closed_it_for_a_revoked_server_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """4003 comes from the relay, never from a session: the client names the relay and why."""
+    import calu.attach as attach_module
+    from calu.attach import attach
+
+    async def read_lines(send: object) -> None:
+        await anyio.sleep_forever()
+
+    monkeypatch.setattr(attach_module, "read_lines", read_lines)
+    async with relayed(tmp_path) as it:
+        codes: list[int] = []
+        async with anyio.create_task_group() as tg:
+
+            async def attached() -> None:
+                codes.append(await attach(it.target.session_address(SESSION_ID), TOKEN))
+
+            tg.start_soon(attached)
+            with anyio.fail_after(10):
+                while "[attached]" not in capsys.readouterr().out:
+                    await anyio.sleep(0.02)
+            it.valid.clear()
+        assert codes == [0]
+    out = capsys.readouterr().out
+    assert (
+        "[detached] the relay of the `calu serve` closed the connection: the server token was "
+        "revoked, or its server ended"
+    ) in out
+    assert "the session closed" not in out

@@ -1112,6 +1112,14 @@ calu token list --server
 calu token revoke --server 2
 ```
 
+`calu token list` shows a server token as `valid` only while its server runs. A token of a
+server that stopped without ending its row is refused all the same and listed as
+`server silent for N min` (no heartbeat for a minute) or `server gone` (its process is not
+running on this machine); a server that ended revokes its tokens. Among the client tokens, the
+session's own token under `calu serve`, which the relay uses to reach the session, is listed as
+`relay of server <id>`. When the relay closes a connection because the server token is no
+longer valid, `calu attach` says that the relay closed it, and why.
+
 For authors of other clients: the relay speaks the protocol of `calu protocol` (its `relay`
 part). Its own address (`ws://127.0.0.1:<port>/`) answers `initialize` with the server token
 in `token` (the result's `relay` names the server, with its `projects_directory`),

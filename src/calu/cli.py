@@ -4448,8 +4448,8 @@ def cmd_token(args: argparse.Namespace, store: CredentialStore) -> None:
         if args.session is None:
             try:
                 server_rows = await servers.tokens(db)
-            except psycopg.errors.UndefinedTable:
-                server_rows = []  # a schema before migration 0038
+            except psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn:
+                server_rows = []  # a schema before migration 0040
             if server_rows:
                 report += "\n\nserver tokens (`calu token revoke --server <id>`):\n"
                 report += "\n".join(row.line() for row in server_rows)

@@ -203,16 +203,22 @@ class TokenRow:
     created_at: datetime
     last_used_at: datetime | None
     revoked: bool
+    relay_of: str = ""
+    """The id of the `calu serve` whose relay uses this token: the session's own token,
+    which `calu.run` makes for a session it runs under a server and hands to the relay in
+    memory (D242 (6)); "" for every other token."""
 
     def line(self) -> str:
         """Return the token as one terminal line.
 
         Returns:
-            Id, state, session, address, label and when it was last used.
+            Id, state, session, address, label and when it was last used. The session's own
+            token under a server has no label; it is described as "relay of server <id>".
         """
         used = f"{self.last_used_at:%Y-%m-%d %H:%M:%S}" if self.last_used_at else "never used"
         state = "revoked" if self.revoked else "valid"
-        label = f"  {self.label}" if self.label else ""
+        label = self.label or (f"relay of server {self.relay_of}" if self.relay_of else "")
+        label = f"  {label}" if label else ""
         return (
             f"{self.id}  {state}  session {self.session_id}  {self.address or '-'}  {used}{label}"
         )
@@ -1825,6 +1831,10 @@ async def list_tokens(db: Db, session_id: str | None = None) -> list[TokenRow]:
             ORDER BY id DESC""",
         (session_id, session_id),
     )
+    try:
+        relayed = await _relayed_tokens(db, [int(row[0]) for row in rows])
+    except psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn:
+        relayed = {}  # a schema before migration 0038: no servers
     return [
         TokenRow(
             id=int(row[0]),
@@ -1834,9 +1844,49 @@ async def list_tokens(db: Db, session_id: str | None = None) -> list[TokenRow]:
             created_at=row[4],
             last_used_at=row[5],
             revoked=bool(row[6]),
+            relay_of=relayed.get(int(row[0]), ""),
         )
         for row in rows
     ]
+
+
+async def _relayed_tokens(db: Db, token_ids: list[int]) -> dict[int, str]:
+    """Find which of the given client tokens are a served session's own token.
+
+    `calu.run` records the session's own token first and without a label; under `calu serve`
+    the relay attaches with it (D242 (6)). A session runs under a server when the server's
+    row records the session's pid and process table and was open when the session started
+    (the sessions of a server are tasks of its process, as `calu_server_sessions` assumes).
+
+    Args:
+        db: The connection (operator, admin or owner).
+        token_ids: Ids of `client_tokens` rows.
+
+    Returns:
+        Token id -> id of the server whose relay uses it, for the tokens that are one.
+
+    Raises:
+        psycopg.errors.UndefinedTable: On a schema without `servers` (before migration 0038).
+        psycopg.Error: On other database errors.
+    """
+    if not token_ids:
+        return {}
+    rows = await db.all(
+        """SELECT t.id, srv.id::text
+             FROM client_tokens t
+             JOIN sessions x ON x.id = t.session_id
+             CROSS JOIN LATERAL (
+                 SELECT s.id FROM servers s
+                  WHERE s.pid = x.pid AND s.machine IS NOT DISTINCT FROM x.machine
+                    AND s.started_at <= x.started_at
+                    AND (s.ended_at IS NULL OR s.ended_at >= x.started_at)
+                  ORDER BY s.started_at DESC LIMIT 1) srv
+            WHERE t.id = ANY (%s) AND t.label = ''
+              AND t.id = (SELECT min(o.id) FROM client_tokens o
+                           WHERE o.session_id = t.session_id)""",
+        (token_ids,),
+    )
+    return {int(token_id): str(server_id) for token_id, server_id in rows}
 
 
 async def revoke_token(db: Db, token_id: int) -> bool:

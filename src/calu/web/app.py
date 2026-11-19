@@ -71,7 +71,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from calu import __version__, admin, asuser, herd, localsocket, servers, session_requests
 from calu.db import Db
 from calu.protocol.client import RequestFailed, connect
-from calu.protocol.messages import RELAY_SESSION_PATH
+from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED, RELAY_SESSION_PATH
 from calu.setup import ADMIN_ROLE
 from calu.web import git
 from calu.web import settings as web_settings
@@ -1798,13 +1798,15 @@ async def _relay(
                 session_ended = True
             tasks.cancel_scope.cancel()
         if session_ended:
+            why = "the session closed the connection: its process ended or was restarted"
+            if session.close_code == CLOSE_SERVER_TOKEN_REVOKED:
+                why = f"the relay of the `calu serve` closed the connection: {session.close_reason}"
             with suppress(RuntimeError, WebSocketDisconnect):
                 await websocket.send_json(
                     {
                         "type": "closed",
                         "message": (
-                            "the session closed the connection: its process ended or was "
-                            "restarted. Nothing more arrives here. The recorded history has "
+                            f"{why}. Nothing more arrives here. The recorded history has "
                             "what was stored and can continue the conversation in a new "
                             "session; the session list shows whether this one runs again."
                         ),

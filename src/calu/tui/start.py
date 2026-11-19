@@ -49,6 +49,9 @@ class TuiExit:
     lost: bool = False
     """True if the connection broke and could not be opened again: the session may still
     run."""
+    closed_by: str = "the session"
+    """Who closed the connection, when `message` is set and `lost` is not: the session, or
+    the relay of a `calu serve` (`calu.attach.closer`)."""
 
 
 SUPPORTED = ((8, 2), (9, 0))
@@ -136,7 +139,7 @@ def exit_lines(ended: TuiExit, again: str = "calu attach") -> list[str]:
         lines.append(f"the connection to the session was lost: {ended.message}")
         lines.append("the session may still run; its state below is the last one this client saw")
     elif ended.message:
-        lines.append(f"the session closed the connection: {ended.message}")
+        lines.append(f"{ended.closed_by} closed the connection: {ended.message}")
     else:
         lines.append("detached; the session keeps running")
     session = ended.claude_session_id or "no Claude session yet"
@@ -249,4 +252,5 @@ def run_tui(
         message=app.link.closed_reason,
         switch_to=app.switch_to,
         lost=app.link.lost,
+        closed_by=app.link.closed_by,
     )

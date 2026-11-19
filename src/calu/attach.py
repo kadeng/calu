@@ -65,7 +65,13 @@ from calu.protocol.client import (
     relay_call,
     single_error,
 )
-from calu.protocol.messages import EVENTS, EscalationRequest, Event, HonestyInfo
+from calu.protocol.messages import (
+    CLOSE_SERVER_TOKEN_REVOKED,
+    EVENTS,
+    EscalationRequest,
+    Event,
+    HonestyInfo,
+)
 from calu.run import format_event, honesty_lines, one_line, read_lines
 
 log = logging.getLogger(__name__)
@@ -705,7 +711,7 @@ async def attach(
                         reason = client.describe_close()
                         if not broken:
                             say(
-                                "[detached] the session closed the connection: "
+                                f"[detached] {closer(client.close_code)} closed the connection: "
                                 f"{'the session ended' if reason == NO_CLOSE_REASON else reason}",
                                 flush=True,
                             )
@@ -791,6 +797,25 @@ machine, is known to be gone (`attach`, `calu.tui.connection.Link`)."""
 BROKEN_CODES = frozenset({None, 1006, 1011})
 """Close codes of a connection that broke rather than being closed by the session: none (no
 close frame), 1006 (closed abnormally) and 1011 (the keepalive ping got no answer)."""
+
+
+def closer(close_code: int | None) -> str:
+    """Name the side that closed a connection, as far as its close code tells.
+
+    A relay of `calu serve` passes the session's close code and reason on unchanged
+    (agent/records/PLAN.md D242 (6)); its own close for a server token that is no longer
+    valid has a code of its own, `CLOSE_SERVER_TOKEN_REVOKED`, which no session sends.
+
+    Args:
+        close_code: The WebSocket close code; None for a connection without a close frame.
+
+    Returns:
+        "the relay of the `calu serve`" for `CLOSE_SERVER_TOKEN_REVOKED`; "the session"
+        otherwise.
+    """
+    if close_code == CLOSE_SERVER_TOKEN_REVOKED:
+        return "the relay of the `calu serve`"
+    return "the session"
 
 
 def unreachable(error: OSError) -> str:

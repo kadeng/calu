@@ -493,6 +493,13 @@ async def test_the_relay_reaches_every_session_with_one_server_token(db_url: str
             hello, listed = await relay_call(relay.address, token, "relay.sessions")
             assert hello["relay"]["server_id"] == server.server_id
             assert [s["calu_session_id"] for s in listed["sessions"]] == [a.session_id]
+            # `calu token list` names the session's own token as the relay's; a minted one
+            # keeps its label.
+            await herd.mint_token(db, a.session_id, "zed")
+            own, *minted = sorted(await herd.list_tokens(db, a.session_id), key=lambda t: t.id)
+            assert own.relay_of == server.server_id
+            assert own.line().endswith(f"relay of server {server.server_id}")
+            assert [(t.label, t.relay_of) for t in minted] == [("zed", "")]
             # D244: the names and state times come from the database, for the token's holder.
             assert await herd.rename_session(db, a.session_id, "payment refactoring")
             since = await db.one(
@@ -758,6 +765,9 @@ async def test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_
             assert [row.id for row in await servers.running(owner, HOST, USER)] == [b]
             stale = await servers.server(owner, a)
             assert stale is not None and stale.stale and "SILENT" in stale.line()
+            # `calu token list` shows its token as refused, not as valid.
+            [listed] = [t for t in await servers.tokens(owner) if t.server_id == a]
+            assert listed.state == "server silent for 1 min" and "valid" not in listed.line()
             # Its token stops working, for attaching and for filing requests.
             assert await servers.token_label(db, a, sha) is None
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -779,6 +789,8 @@ async def test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_
             assert [row.id for row in await servers.running(owner, HOST, USER)] == [b]
             gone = await servers.server(owner, a)
             assert gone is not None and gone.gone and "GONE" in gone.line()
+            [listed] = [t for t in await servers.tokens(owner) if t.server_id == a]
+            assert listed.state == "server gone"
             assert await servers.end_gone_peers(db, b) == [a]
             got = await session_requests.claim_served(db, b, 1)
             assert got is not None and got.id == second
@@ -787,6 +799,8 @@ async def test_a_dead_servers_directory_goes_to_another_server_once_it_is_stale_
                 "SELECT revoked FROM server_tokens WHERE server_id = %s", (a,)
             ) == [(True,)]
             assert not await servers.beat(db, a), "an ended row stays ended"
+            [listed] = [t for t in await servers.tokens(owner) if t.server_id == a]
+            assert listed.state == "revoked"
 
             # A row of another process table is not ended by B: B cannot see its process.
             c = await servers.record_start(db, HOST, USER, "", str(tmp_path / "c"))

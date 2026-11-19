@@ -372,6 +372,24 @@ async def test_a_revoked_token_ends_the_link_with_the_reason() -> None:
         assert any("the client token was revoked" in text for text in notices)
 
 
+async def test_a_revoked_server_token_names_the_relay_as_the_closer() -> None:
+    from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED
+
+    session = waiting_session()
+    changes: list[Change] = []
+    async with attached(session, changes.append) as (_, model, link):
+        session.drop(CLOSE_SERVER_TOKEN_REVOKED, "the server token was revoked")
+        with anyio.fail_after(5):
+            while model.connection.status != "detached":
+                await anyio.sleep(0.01)
+        assert link.closed_by == "the relay of the `calu serve`" and session.connects == 1
+        notices = [notice.text for change in changes for notice in change.notices]
+        assert (
+            "the relay of the `calu serve` closed the connection: the server token was revoked"
+            in notices
+        )
+
+
 def test_every_command_of_the_line_client_exists_in_the_full_screen_client() -> None:
     words = {word.split()[0] for word in HELP.replace("(or /exit)", "/exit").split("  ") if word}
     words = {word for word in words if word.startswith("/")}

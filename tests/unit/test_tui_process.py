@@ -206,6 +206,19 @@ def test_the_lines_after_a_lost_connection_say_that_the_session_may_still_run() 
     assert lines[-1] == "attach again with: calu attach   (the line client: add --plain)"
 
 
+def test_the_lines_after_the_client_name_the_relay_that_closed_the_connection() -> None:
+    from calu.attach import closer
+    from calu.protocol.messages import CLOSE_SERVER_TOKEN_REVOKED, CLOSE_TOKEN_REVOKED
+
+    assert closer(CLOSE_TOKEN_REVOKED) == "the session"
+    assert closer(None) == "the session"
+    by = closer(CLOSE_SERVER_TOKEN_REVOKED)
+    ended = TuiExit(1, "idle", None, 0, "the server token was revoked", closed_by=by)
+    assert exit_lines(ended)[0] == (
+        "the relay of the `calu serve` closed the connection: the server token was revoked"
+    )
+
+
 def test_the_lines_after_the_client_say_why_a_connection_ended() -> None:
     lines = exit_lines(TuiExit(1, "idle", None, 1, "the client token was revoked"))
     assert lines[:3] == [

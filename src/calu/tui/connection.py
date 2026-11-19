@@ -37,6 +37,7 @@ from calu.attach import (
     MAX_RECONNECTS,
     REDIAL_DELAYS_S,
     REDIAL_FOR_S,
+    closer,
     unreachable,
 )
 from calu.controls import visible, visible_in
@@ -191,6 +192,9 @@ class Link:
         self.capabilities = Capabilities()
         self.error: BaseException | None = None
         self.closed_reason = ""
+        self.closed_by = "the session"
+        """Who closed the connection when `closed_reason` is set (`calu.attach.closer`): the
+        session, or the relay of a `calu serve` that refused the server token."""
         self.lost = False
         """True if the link ended because the connection broke and could not be opened again
         (`closed_reason` says so), not because the session closed it."""
@@ -475,8 +479,10 @@ class Link:
                 )
             self.closed_reason = reason
             self.lost = broken
+            if connection is not None and connection.closed.is_set():
+                self.closed_by = closer(connection.close_code)
             change = self.model.set_connection("detached", reason=reason)
-            said = "connection lost" if broken else "the session closed the connection"
+            said = "connection lost" if broken else f"{self.closed_by} closed the connection"
             change.notices.append(Notice(f"{said}: {reason}", "error"))
             self.notify(change)
             return
