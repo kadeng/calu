@@ -286,7 +286,13 @@ class NativeChatSurface(private val project: Project, private val host: ChatHost
         root.add(south, BorderLayout.SOUTH)
         clickable(honesty, "Code honesty: what is verified to say what it does. Click for the mode, the marks and a review.") { honestyMenu() }
         clickable(usage) { usageMenu() }
-        host.onUi { method, params -> if (method == "ui.restoreInput") params.str("text")?.let { if (composer.text.isBlank()) composer.text = it } }
+        host.onUi { method, params ->
+            when (method) {
+                "ui.restoreInput" -> params.str("text")?.let { if (composer.text.isBlank()) composer.text = it }
+                // `ide.attach` found several sessions of the project directory: show them.
+                "ui.pickSession" -> sessionMenu()
+            }
+        }
         render(state)
     }
 

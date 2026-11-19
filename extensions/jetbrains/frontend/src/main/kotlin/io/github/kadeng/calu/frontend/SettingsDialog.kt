@@ -39,7 +39,11 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.ui.components.panels.VerticalLayout
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
+import io.github.kadeng.calu.json.arr
+import io.github.kadeng.calu.json.asObj
+import io.github.kadeng.calu.json.bool
 import io.github.kadeng.calu.json.parseObjectOrNull
+import io.github.kadeng.calu.json.str
 import io.github.kadeng.calu.logic.BridgeRequest
 import io.github.kadeng.calu.logic.CheckerRow
 import io.github.kadeng.calu.logic.ControlKind
@@ -91,6 +95,9 @@ object SettingsPages {
 
     /** The page with the checkers. */
     const val CHECKERS: String = "@checkers"
+
+    /** The page with what `ide.status` found about the setup. */
+    const val SETUP: String = "@setup"
 }
 
 /**
@@ -244,7 +251,7 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
     private fun redraw() {
         val found = sections()
         val searching = search.text.isNotBlank() || onlyModified.isSelected
-        val list = (if (searching) emptyList() else listOf(Page(SettingsPages.MODELS, "Models"), Page(SettingsPages.CHECKERS, "Checkers"))) +
+        val list = (if (searching) emptyList() else listOf(Page(SettingsPages.MODELS, "Models"), Page(SettingsPages.CHECKERS, "Checkers"), Page(SettingsPages.SETUP, "Setup"))) +
             found.map { Page(it.id, it.label, it.modifiedCount) }
         filling = true
         try {
@@ -266,6 +273,7 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
         when {
             selected == SettingsPages.MODELS && !searching -> drawModels()
             selected == SettingsPages.CHECKERS && !searching -> drawCheckers()
+            selected == SettingsPages.SETUP && !searching -> drawSetup()
             else -> {
                 val shown = if (searching) found else found.filter { it.id == selected }
                 if (shown.isEmpty()) content.add(JBLabel(if (rows.isEmpty()) "Loading…" else "No setting matches.").apply { foreground = UiStyle.dim })
@@ -436,6 +444,86 @@ class CaluSettingsDialog(private val project: Project, private val host: ChatHos
     }
 
     /** Draw the page "Checkers": one line per checker with "Edit Instructions". */
+    /** What `ide.status` found; `null` until the answer arrived. */
+    private var findings: List<SetupFinding>? = null
+    private var findingsProblem = ""
+
+    /** One finding of `ide.status` (what `calu doctor` checks). */
+    private data class SetupFinding(val name: String, val level: String, val message: String, val advice: String)
+
+    /** Ask `ide.status` and draw the Setup page again when the answer is there. */
+    private fun loadSetup() {
+        host.launch {
+            val answer = host.call("ide.status")
+            val list = if (answer.ok) {
+                (parseObjectOrNull(answer.resultJson)?.arr("findings") ?: emptyList()).mapNotNull { it.asObj() }.map {
+                    SetupFinding(it.str("name").orEmpty(), it.str("level") ?: if (it.bool("ok")) "ok" else "warning", it.str("message").orEmpty(), it.str("advice").orEmpty())
+                }
+            } else {
+                null
+            }
+            withContext(Dispatchers.EDT + modality) {
+                findings = list ?: emptyList()
+                findingsProblem = if (answer.ok) "" else answer.message
+                if (selected == SettingsPages.SETUP) drawContent()
+            }
+        }
+    }
+
+    /**
+     * Draw the page "Setup": what is missing, each with the button that fixes it (the chat's
+     * setup hints), then every finding of `ide.status` with its advice.
+     */
+    private fun drawSetup() {
+        content.add(heading("Setup", "What calu found on the machine it runs on (the checks of `calu doctor`)."))
+        for (hint in host.state.value.hints) {
+            val card = RoundedPanel(BorderLayout(JBUI.scale(10), 0), fill = UiStyle.cardBackground, line = UiStyle.outline, stripe = UiStyle.chipColor(hint.level))
+            card.border = JBUI.Borders.empty(8, 12)
+            card.add(textArea(hint.message), BorderLayout.CENTER)
+            io.github.kadeng.calu.logic.hintAction(hint)?.let { a ->
+                card.add(JPanel(java.awt.GridBagLayout()).apply {
+                    isOpaque = false
+                    add(JButton(a.label).apply {
+                        addActionListener {
+                            when (a.action) {
+                                "openLink" -> a.href?.let { com.intellij.ide.BrowserUtil.browse(it) }
+                                "openSettings" -> com.intellij.openapi.options.ShowSettingsUtil.getInstance().showSettingsDialog(project, "calu")
+                                "startServer" -> host.act("openTerminal")
+                                else -> host.act(a.action)
+                            }
+                        }
+                    })
+                }, BorderLayout.EAST)
+            }
+            content.add(card)
+        }
+        val list = findings
+        if (list == null) {
+            content.add(JBLabel("Checking…").apply { foreground = UiStyle.dim })
+            loadSetup()
+            return
+        }
+        if (findingsProblem.isNotEmpty()) content.add(textArea("The setup was not checked: $findingsProblem").apply { foreground = UiStyle.chipColor("error") })
+        for (f in list) {
+            val line = RoundedPanel(VerticalLayout(JBUI.scale(2)), fill = UiStyle.cardBackground, line = UiStyle.outline)
+            line.border = JBUI.Borders.empty(8, 12)
+            val head = JPanel(WrapLayout(8, 0)).apply { isOpaque = false }
+            head.add(JBLabel(f.name).apply { font = JBFont.label().asBold() })
+            head.add(Chip(f.level.uppercase(), when (f.level) { "ok" -> "ok"; "error" -> "error"; "warning" -> "warning"; else -> "" }))
+            line.add(head)
+            if (f.message.isNotEmpty()) line.add(textArea(f.message))
+            if (f.advice.isNotEmpty()) line.add(textArea(f.advice).apply { foreground = UiStyle.dim })
+            content.add(line)
+        }
+        content.add(JButton("Check Again").apply {
+            addActionListener {
+                findings = null
+                host.act("refreshSessions")
+                drawContent()
+            }
+        })
+    }
+
     private fun drawCheckers() {
         content.add(heading("Checkers", "The agents that decide about each command and edit. Their instructions are Markdown texts in calu's database."))
         if (checkers.isEmpty()) content.add(JBLabel("calu's database lists no checker.").apply { foreground = UiStyle.dim })

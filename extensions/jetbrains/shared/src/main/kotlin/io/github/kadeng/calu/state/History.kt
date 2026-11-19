@@ -17,7 +17,9 @@
  *     turn 3   user (replayed)  -> boundary: nothing of this turn or a later one is added
  *
  * The first recorded turn that has an input or a step among the replayed ones is the boundary
- * (the same rule as `SessionModel.load_history` of calu's terminal client). Of the boundary turn
+ * (the same rule as `SessionModel.load_history` of calu's terminal client). An input is found
+ * by Claude Code's id of the prompt if the turn has one and the replay has ids at all, else by
+ * its text (deviation from `history.ts`, which also accepts an equal text of another turn). Of the boundary turn
  * only what the replay lacks is added: its inputs if none of them was replayed, and its steps
  * that were not replayed if no input was replayed.
  *
@@ -197,7 +199,10 @@ fun historyEntries(raw: JsonElement?, covered: Covered): History {
         val uuid = text(turn, "prompt_uuid")
         // The steps with input and result if this session recorded them, else the turn's own list.
         val steps: List<JsonObject> = stored[index] ?: turn.arr("steps").mapNotNull { it.asObj() }
-        val inputReplayed = (uuid != "" && uuid in covered.uuids) || inputs.any { it.trim() in covered.inputs }
+        // A prompt is recognised by Claude Code's id of it where both sides have ids. The text
+        // decides only without ids: the same words in two turns ("continue") would otherwise
+        // make the earlier turn the boundary and drop every turn between the two.
+        val inputReplayed = if (uuid != "" && covered.uuids.isNotEmpty()) uuid in covered.uuids else inputs.any { it.trim() in covered.inputs }
         val stepReplayed = steps.any { text(it, "tool_use_id") in covered.toolUseIds }
         val entries = mutableListOf<HistoryEntry>()
         if (!inputReplayed) {

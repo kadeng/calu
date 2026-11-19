@@ -30,6 +30,9 @@ import io.github.kadeng.calu.chat.RowModel
 import io.github.kadeng.calu.chat.rowOf
 import io.github.kadeng.calu.logic.heldTools
 import io.github.kadeng.calu.logic.imageBytes
+import io.github.kadeng.calu.logic.linkFiles
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import io.github.kadeng.calu.logic.markdownToHtml
 import io.github.kadeng.calu.logic.menuFor
 import io.github.kadeng.calu.logic.neutraliseBidi
@@ -127,7 +130,7 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
         if (old != null && old.kind == next.kind) {
             val pane = body
             if (next.kind == ItemKind.ASSISTANT && pane != null) {
-                pane.text = markdownToHtml(next.text)
+                pane.text = html(next.text)
                 return
             }
             val card = escalationCard
@@ -140,6 +143,14 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
     }
 
     /**
+     * Convert Claude's Markdown to HTML, with links for the files the session's tool calls named.
+     *
+     * @param markdown The text.
+     * @return The HTML for the row's pane.
+     */
+    private fun html(markdown: String): String = linkFiles(markdownToHtml(markdown), fileIndexOf(host.current.tools))
+
+    /**
      * Create the row's components from a model.
      *
      * @param m The model.
@@ -149,7 +160,11 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
         body = null
         border = JBUI.Borders.empty(1, 10)
         when (m.kind) {
-            ItemKind.ASSISTANT -> add(htmlPane().also { it.text = markdownToHtml(m.text); body = it; if (m.dim) it.foreground = UiStyle.dim }, BorderLayout.CENTER)
+            ItemKind.ASSISTANT -> add(
+                htmlPane { path, line -> host.handle(RowAction("openFile", buildJsonObject { put("path", JsonPrimitive(path)); line?.let { put("line", JsonPrimitive(it)) } })) }
+                    .also { it.text = html(m.text); body = it; if (m.dim) it.foreground = UiStyle.dim },
+                BorderLayout.CENTER,
+            )
             ItemKind.USER -> add(userBubble(m), BorderLayout.CENTER)
             ItemKind.ESCALATION -> {
                 border = JBUI.Borders.empty(4, 10)
@@ -318,6 +333,19 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
         if (m.chip.isNotEmpty()) right.add(Chip(m.chip, m.chipKind))
         if (m.failed) right.add(Chip("FAILED", "error").apply { toolTipText = "The tool call ended with an error" })
         if (right.componentCount > 0) p.add(right, BorderLayout.EAST)
+        if (m.honesty.isNotEmpty()) {
+            // The honesty checker's status per file: small lines under the row, no decision chip.
+            val list = JPanel(VerticalLayout(0)).apply { isOpaque = false; border = JBUI.Borders.emptyLeft(26) }
+            for (h in m.honesty) {
+                list.add(JBLabel(h.text.take(400)).apply {
+                    font = JBFont.small()
+                    foreground = if (h.level == "ok") UiStyle.dim else UiStyle.chipColor(h.level)
+                    if (h.tooltip.isNotEmpty()) toolTipText = h.tooltip
+                    minimumSize = Dimension(0, 0)
+                })
+            }
+            p.add(list, BorderLayout.SOUTH)
+        }
 
         val action = m.action
         val click = { if (action != null) host.handle(action) else if (m.detail.isNotEmpty()) toggle() }
@@ -392,19 +420,53 @@ class RowView(private val host: RowHost) : JPanel(BorderLayout()) {
     }
 }
 
+/** The file index of the tools map it was built from; rebuilt when the map is another object (EDT only). */
+private var indexedTools: Map<String, io.github.kadeng.calu.state.ToolView>? = null
+private var indexOfTools: io.github.kadeng.calu.logic.FileIndex? = null
+
+/**
+ * Return the index of the files that tool calls named, building it once per state.
+ *
+ * @param tools `ViewState.tools`.
+ * @return The index (see `buildFileIndex`).
+ */
+fun fileIndexOf(tools: Map<String, io.github.kadeng.calu.state.ToolView>): io.github.kadeng.calu.logic.FileIndex {
+    val known = indexOfTools
+    if (known != null && indexedTools === tools) return known
+    return io.github.kadeng.calu.logic.buildFileIndex(tools).also { indexedTools = tools; indexOfTools = it }
+}
+
+/**
+ * Show an image in a dialog at its own size, scaled down only to fit the screen.
+ *
+ * @param image The decoded image.
+ */
+fun showImage(image: java.awt.image.BufferedImage) {
+    val screen = java.awt.Toolkit.getDefaultToolkit().screenSize
+    val scale = minOf(1.0, 0.85 * screen.width / image.width, 0.8 * screen.height / image.height)
+    val shown = if (scale < 1.0) image.getScaledInstance(maxOf(1, (image.width * scale).toInt()), maxOf(1, (image.height * scale).toInt()), Image.SCALE_SMOOTH) else image
+    val builder = com.intellij.openapi.ui.DialogBuilder()
+    builder.setTitle("calu: Image (${image.width} × ${image.height} pixels)")
+    builder.setCenterPanel(JBScrollPane(JBLabel(ImageIcon(shown))).apply { border = JBUI.Borders.empty() })
+    builder.removeAllActions()
+    builder.addCloseButton()
+    builder.show()
+}
+
 /**
  * Decode an image and scale it into a thumbnail.
  *
  * @param bytes The image file's bytes; `null` gives `null`.
  * @param size Longest side of the thumbnail in pixels.
- * @return A label with the thumbnail, or `null` if the bytes are no image Java can read.
+ * @return A label with the thumbnail (a click shows the image at its own size), or `null` if
+ *   the bytes are no image Java can read.
  */
 fun thumbnail(bytes: ByteArray?, size: Int): JBLabel? {
     if (bytes == null) return null
     val image = runCatching { ImageIO.read(bytes.inputStream()) }.getOrNull() ?: return null
     val scale = minOf(1.0, size.toDouble() / maxOf(image.width, image.height))
     val scaled = image.getScaledInstance(maxOf(1, (image.width * scale).toInt()), maxOf(1, (image.height * scale).toInt()), Image.SCALE_SMOOTH)
-    return JBLabel(ImageIcon(scaled)).apply { toolTipText = "${image.width} × ${image.height} pixels" }
+    return JBLabel(ImageIcon(scaled)).apply { clickable(this, "${image.width} × ${image.height} pixels. Click to enlarge.") { showImage(image) } }
 }
 
 /**

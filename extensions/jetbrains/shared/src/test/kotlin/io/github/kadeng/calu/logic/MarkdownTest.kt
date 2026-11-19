@@ -25,8 +25,10 @@ class MarkdownTest {
 
     @Test
     fun `code fences keep their text, also when the fence is not closed yet`() {
-        assertEquals("<p>run</p><pre>a &lt; b\n**x**</pre><p>done</p>", markdownToHtml("run\n```sh\na < b\n**x**\n```\ndone"))
-        assertEquals("<pre>still streaming</pre>", markdownToHtml("```\nstill streaming"))
+        assertEquals("<p>run</p><div class=\"pre\">a &lt; b<br>**x**</div><p>done</p>", markdownToHtml("run\n```sh\na < b\n**x**\n```\ndone"))
+        // Indentation and column gaps survive, and the line can wrap at the single spaces left.
+        assertEquals("<div class=\"pre\">def f():<br>&nbsp;&nbsp;&nbsp;&nbsp;x = 1 &nbsp; # two &nbsp;gaps<br>&nbsp;<br>&nbsp;&nbsp;&nbsp;&nbsp;tab</div>", markdownToHtml("```\ndef f():\n    x = 1   # two  gaps\n\n\ttab\n```"))
+        assertEquals("<div class=\"pre\">still streaming</div>", markdownToHtml("```\nstill streaming"))
     }
 
     @Test

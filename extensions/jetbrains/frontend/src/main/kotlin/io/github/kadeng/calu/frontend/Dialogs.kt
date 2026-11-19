@@ -73,3 +73,74 @@ fun chooseChecker(project: Project, host: ChatHost) {
 fun showCaluSettings(project: Project, host: ChatHost, page: String = "") {
     CaluSettingsDialog(project, host, page).show()
 }
+
+/**
+ * The side-question panel: questions about the session that are answered beside the
+ * conversation and do not enter it (`side.ask`). The exchanges are those of `ViewState.side`;
+ * the dialog stays open while the chat goes on.
+ *
+ * @param project The project.
+ * @param host State and requests.
+ */
+class SideQuestionDialog(project: Project, private val host: ChatHost) : com.intellij.openapi.ui.DialogWrapper(project) {
+    private val answers = htmlPane()
+    private val input = com.intellij.ui.components.JBTextField().apply { emptyText.text = "A question about this session (it does not enter the conversation)" }
+    private val watcher: kotlinx.coroutines.Job
+
+    init {
+        title = "calu: Side Question"
+        isModal = false
+        setOKButtonText("Ask")
+        setCancelButtonText("Close")
+        init()
+        val modality = com.intellij.openapi.application.ModalityState.any().asContextElement()
+        var job: kotlinx.coroutines.Job? = null
+        host.launch {
+            job = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
+            host.state.collect { state ->
+                val html = sideHtml(state.side)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.EDT + modality) { if (answers.text != html) answers.text = html }
+            }
+        }
+        watcher = kotlinx.coroutines.Job().also { it.invokeOnCompletion { job?.cancel() } }
+    }
+
+    override fun createCenterPanel(): javax.swing.JComponent = javax.swing.JPanel(java.awt.BorderLayout(0, com.intellij.util.ui.JBUI.scale(8))).apply {
+        preferredSize = java.awt.Dimension(com.intellij.util.ui.JBUI.scale(560), com.intellij.util.ui.JBUI.scale(420))
+        add(com.intellij.ui.components.JBScrollPane(answers), java.awt.BorderLayout.CENTER)
+        add(input, java.awt.BorderLayout.SOUTH)
+    }
+
+    override fun getPreferredFocusedComponent(): javax.swing.JComponent = input
+
+    /** "Ask": send the question and keep the dialog open for the answer. */
+    override fun doOKAction() {
+        val question = input.text.trim()
+        if (question.isEmpty()) return
+        input.text = ""
+        host.act("sideAsk", kotlinx.serialization.json.buildJsonObject { put("question", kotlinx.serialization.json.JsonPrimitive(question)) })
+    }
+
+    override fun dispose() {
+        watcher.cancel()
+        super.dispose()
+    }
+}
+
+/**
+ * Write the side questions and their answers as HTML, newest last.
+ *
+ * @param side `ViewState.side`.
+ * @return One block per exchange: the question in bold, then the answer (Markdown), the reason
+ *   it failed, or "…" while it runs; a hint if there is none yet.
+ */
+fun sideHtml(side: List<io.github.kadeng.calu.state.SideExchangeView>): String {
+    if (side.isEmpty()) return "<p>Ask a question about what the session is doing. The answer appears here; Claude's conversation is not interrupted and does not see it.</p>"
+    return side.joinToString("<hr>") { e ->
+        "<p><b>" + io.github.kadeng.calu.logic.escapeHtml(e.question) + "</b></p>" + when {
+            e.error != null -> "<p><i>Not answered: " + io.github.kadeng.calu.logic.escapeHtml(e.error!!) + "</i></p>"
+            e.answer != null -> io.github.kadeng.calu.logic.markdownToHtml(e.answer!!)
+            else -> "<p>…</p>"
+        }
+    }
+}

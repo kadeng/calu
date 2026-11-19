@@ -95,7 +95,7 @@ fun markdownToHtml(markdown: String): String {
             i++
             while (i < lines.size && !(lines[i].trim().startsWith(marker) && lines[i].trim().all { it == marker[0] })) code.add(lines[i++])
             i++
-            out.append("<pre>").append(escapeHtml(code.joinToString("\n"))).append("</pre>")
+            out.append("<div class=\"pre\">").append(code.joinToString("<br>") { codeLineHtml(it) }).append("</div>")
             continue
         }
         val heading = HEADING_LINE.find(line)
@@ -140,4 +140,77 @@ fun markdownToHtml(markdown: String): String {
     }
     flushParagraph(); closeList()
     return out.toString()
+}
+
+/**
+ * Write one line of a code block so that it keeps its spaces and can still wrap.
+ *
+ * Swing's HTML view does not wrap `<pre>`, so a line wider than the chat was cut. A code block
+ * is a `<div class="pre">` of lines joined by `<br>`; in each line the indentation and every
+ * second space of a run are non-breaking spaces, so the columns stay and the view can wrap at
+ * the single spaces that remain (a wrapped line continues at the left edge).
+ *
+ * @param line One line of code (without its line end).
+ * @return The escaped line; a tab is four non-breaking spaces; "&nbsp;" for an empty line (a
+ *   `<br>` alone would collapse).
+ */
+fun codeLineHtml(line: String): String {
+    if (line.isEmpty()) return "&nbsp;"
+    val text = line.replace("\t", "    ")
+    val indent = text.length - text.trimStart(' ').length
+    val out = StringBuilder("&nbsp;".repeat(indent))
+    var spaces = 0
+    for (c in text.substring(indent)) {
+        if (c == ' ') {
+            spaces++
+            out.append(if (spaces % 2 == 0) "&nbsp;" else " ")
+        } else {
+            spaces = 0
+            out.append(escapeHtml(c.toString()))
+        }
+    }
+    return out.toString()
+}
+
+/** Scheme of the links [linkFiles] writes; the rest of the address is the URL-encoded path, then `#L<line>` if a line is known. */
+const val FILE_LINK_SCHEME: String = "calu-file:"
+
+private val FILE_CODE_SPAN = Regex("<code>([^<]{1,400})</code>")
+
+/**
+ * Turn the code spans of Claude's text that name a file a tool call touched into links.
+ *
+ * Only a span whose whole text is a known file (optionally with `:line` or `:line:column`) is
+ * linked (`lookupFile`); everything else stays as it is, so no text of Claude can make a link
+ * to a file that no tool call named.
+ *
+ * @param html HTML of `markdownToHtml`.
+ * @param index The files the session's tool calls named (`buildFileIndex`).
+ * @return The HTML with `<a href="calu-file:<encoded path>#L<line>"><code>…</code></a>` around
+ *   each such span.
+ */
+fun linkFiles(html: String, index: FileIndex): String = FILE_CODE_SPAN.replace(html) { m ->
+    val shown = m.groupValues[1]
+    val text = shown.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
+    val ref = lookupFile(index, text) ?: return@replace m.value
+    val address = FILE_LINK_SCHEME + java.net.URLEncoder.encode(ref.path, Charsets.UTF_8) + (ref.line?.let { "#L$it" } ?: "")
+    "<a href=\"$address\"><code>$shown</code></a>"
+}
+
+/**
+ * Read a link of [linkFiles].
+ *
+ * @param href The link's address.
+ * @return The file and line it names, or `null` if the address is no such link.
+ */
+fun parseFileLink(href: String): FileRef? {
+    if (!href.startsWith(FILE_LINK_SCHEME)) return null
+    val rest = href.removePrefix(FILE_LINK_SCHEME)
+    val line = rest.substringAfterLast("#L", "").toIntOrNull()
+    val path = try {
+        java.net.URLDecoder.decode(if (line != null) rest.substringBeforeLast("#L") else rest, Charsets.UTF_8)
+    } catch (_: IllegalArgumentException) {
+        return null
+    }
+    return if (path.isEmpty()) null else FileRef(path, line)
 }

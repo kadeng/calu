@@ -236,15 +236,18 @@ class WrapLayout(private val hgap: Int = 6, private val vgap: Int = 4) : LayoutM
  * Create a read-only HTML pane for Markdown that wraps to its width (long words included) and
  * opens http, https and mailto links in the browser. Code uses the editor's font.
  *
+ * @param onFile Called for a click on a file link of `linkFiles` (path, 1-based line or `null`);
+ *   `null` if the pane shows no such links.
  * @return The pane (transparent, with the label font).
  */
-fun htmlPane(): JEditorPane = JEditorPane().apply {
+fun htmlPane(onFile: ((path: String, line: Int?) -> Unit)? = null): JEditorPane = JEditorPane().apply {
     val kit = HTMLEditorKitBuilder().withWordWrapViewFactory().build()
     val mono = UiStyle.mono
     val code = ColorUtil.toHtmlColor(UiStyle.codeBackground)
     (kit as? HTMLEditorKit)?.styleSheet?.apply {
         addRule("code { font-family: '${mono.family}'; }")
-        addRule("pre { font-family: '${mono.family}'; background-color: $code; padding: 6px; margin-top: 4px; margin-bottom: 4px; }")
+        // A code block is `div.pre` (lines that wrap), not `pre`: Swing cuts a `pre` line that is wider than the view.
+        addRule("div.pre { font-family: '${mono.family}'; background-color: $code; padding: 6px; margin-top: 4px; margin-bottom: 4px; }")
         addRule("p { margin-top: 2px; margin-bottom: 6px; }")
         addRule("th { border-bottom: 1px solid ${ColorUtil.toHtmlColor(UiStyle.outline)}; }")
         addRule("blockquote { margin-left: 8px; color: ${ColorUtil.toHtmlColor(UiStyle.dim)}; }")
@@ -257,7 +260,10 @@ fun htmlPane(): JEditorPane = JEditorPane().apply {
     font = JBFont.label()
     addHyperlinkListener { e ->
         val url = e.url
-        if (e.eventType == HyperlinkEvent.EventType.ACTIVATED && url != null && url.protocol in setOf("http", "https", "mailto")) BrowserUtil.browse(url)
+        if (e.eventType != HyperlinkEvent.EventType.ACTIVATED) return@addHyperlinkListener
+        val file = e.description?.let { io.github.kadeng.calu.logic.parseFileLink(it) }
+        if (file != null) onFile?.invoke(file.path, file.line)
+        else if (url != null && url.protocol in setOf("http", "https", "mailto")) BrowserUtil.browse(url)
     }
 }
 

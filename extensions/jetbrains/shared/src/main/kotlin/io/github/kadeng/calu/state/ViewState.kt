@@ -322,6 +322,36 @@ data class ToolCheck(
 )
 
 /**
+ * A unit (function, class, method) the honesty checker found dishonest.
+ *
+ * @property symbol The unit's name.
+ * @property reason What disagrees with what.
+ */
+@Serializable
+data class HonestyUnitView(val symbol: String, val reason: String)
+
+/**
+ * The honesty checker's status of one file a step changes.
+ *
+ * @property path The file as the checker names it.
+ * @property honest False for the verdict DISHONEST.
+ * @property reason For a dishonest file: what disagrees with what ("" if none).
+ * @property dishonestUnits The units the checker found dishonest, with their reasons.
+ */
+@Serializable
+data class HonestyFileView(val path: String, val honest: Boolean, val reason: String = "", val dishonestUnits: List<HonestyUnitView> = emptyList())
+
+/**
+ * The honesty checker's result of one step (`check.result.honesty`, `honesty_escalation`). It is
+ * a status per file and no decision: a row never shows it as a PASS or ALLOW chip.
+ *
+ * @property files The status of every file the checker judged.
+ * @property escalation Its reason for asking a person; "" if it did not ask.
+ */
+@Serializable
+data class HonestyResultView(val files: List<HonestyFileView> = emptyList(), val escalation: String = "")
+
+/**
  * The result of a tool call.
  *
  * @property content What the tool returned, cut to `MAX_STORED_TEXT` characters.
@@ -367,6 +397,7 @@ data class StoredStepInfo(val subagent: Boolean, val hasInput: Boolean)
  * @property input The tool input; strings longer than `MAX_STORED_TEXT` are cut (see `boundInput`).
  * @property check The routing and the checker's decision; `null` before `check.result`.
  * @property result The result; `null` before `tool.result`.
+ * @property honesty The honesty checker's result of the step; `null` if it did not judge it.
  * @property diffPath Set when an `edit.diff` arrived for this tool call: the file path shown in
  *   the diff.
  * @property editRange Changed lines of the edit, from `edit.diff`; `null` if nothing changed or
@@ -385,6 +416,7 @@ data class ToolView(
     val name: String,
     val input: JsonObject = EMPTY_OBJECT,
     val check: ToolCheck? = null,
+    val honesty: HonestyResultView? = null,
     val result: ToolResultView? = null,
     val diffPath: String? = null,
     val editRange: EditRange? = null,
@@ -1065,6 +1097,8 @@ data class ViewState(
  *   side questions;
  * - `ui.decisionPending` `{escalation_key, answer?}` / `ui.decisionFailed` `{escalation_key}`:
  *   the user's decision was sent / could not be sent;
+ * - `ui.pickSession` `{}`: `ide.attach` without a session found several (-32012); changes no
+ *   state, the surface opens its session list;
  * - `ui.sync` `{phase, text, message?, conflicts, held, notes, queued}` or `{}`: the file
  *   synchronisation's status changed / is off (see `SyncView`);
  * - `ui.sideAsk` `{id, question}` / `ui.sideAnswer` `{id, answer}` or `{id, error}`: a side

@@ -343,6 +343,12 @@ class ChatController(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
+            if (!quiet && session == null && errorCode(error) == BridgeError.AMBIGUOUS_SESSION) {
+                // Several sessions run in the project directory: the surface lets the user choose.
+                refreshSessions(false)
+                dispatch("ui.pickSession")
+                return false
+            }
             if (!quiet) notice("error", "Attaching failed: ${errorText(error)}")
             else if (errorCode(error) != BridgeError.NO_SESSION) log("[calu] no session was attached: ${errorText(error)}")
             return false

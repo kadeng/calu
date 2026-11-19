@@ -473,6 +473,7 @@ private fun onCheckResult(state: ViewState, p: JsonObject): ViewState {
                     comment = p.str("comment") ?: "",
                     checkerRoute = checkerRoute,
                 ),
+                honesty = parseHonestyResult(p) ?: old?.honesty,
                 gitHead = p.str("git_head") ?: old?.gitHead,
             )
         }

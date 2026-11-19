@@ -130,6 +130,15 @@ class HistoryEntriesTest {
     }
 
     @Test
+    fun `the same words in an earlier turn are not the boundary when the prompts have ids`() {
+        // The fork of a rewound session: turn 3 was typed with the words of turn 1, and the
+        // replay holds turn 3 (its id is u3). Turn 1 and 2 stay above the transcript.
+        val h = historyEntries(HISTORY, covered(listOf("u3"), listOf("read the greeter")))
+        assertEquals(listOf(1, 2), h.entries.filterIsInstance<HistoryEntry.User>().map { it.turn })
+        assertEquals(3, h.firstReplayedTurn)
+    }
+
+    @Test
     fun `survives malformed input`() {
         val malformed = listOf(
             null,

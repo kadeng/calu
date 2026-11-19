@@ -586,3 +586,71 @@ fun sideHistory(state: ViewState): List<SideAnswer> =
  */
 fun isKnownFile(state: ViewState, path: String): Boolean =
     state.tools.values.any { tool -> tool.files?.any { it.path == path } == true }
+
+/**
+ * Read the honesty checker's result from `check.result` params defensively (port of
+ * `parseHonestyResult` in `viewState.ts`).
+ *
+ * @param p The params of a `check.result` event (untrusted).
+ * @return `null` if the event carries no honesty result (no `honesty` entries and no
+ *   `honesty_escalation`). Otherwise one `HonestyFileView` per well-formed entry (an entry
+ *   without a string `path` is dropped; texts are cut by `truncate`; a unit counts only if its
+ *   `honest` is false) and the escalation reason.
+ */
+fun parseHonestyResult(p: JsonObject): HonestyResultView? {
+    fun text(o: JsonObject, key: String): String = o.str(key)?.let { truncate(it) } ?: ""
+    val files = p.arr("honesty").mapNotNull { it.asObj() }.mapNotNull { f ->
+        val path = f.str("path") ?: return@mapNotNull null
+        HonestyFileView(
+            path = path,
+            honest = f.str("verdict") != "DISHONEST",
+            reason = text(f, "reason"),
+            dishonestUnits = f.arr("units").mapNotNull { it.asObj() }
+                .filter { it["honest"] == kotlinx.serialization.json.JsonPrimitive(false) }
+                .map { HonestyUnitView(text(it, "symbol"), text(it, "reason")) },
+        )
+    }
+    val escalation = text(p, "honesty_escalation")
+    if (files.isEmpty() && escalation.isEmpty()) return null
+    return HonestyResultView(files, escalation)
+}
+
+/**
+ * One line of the per-file list a checked step shows for the honesty checker.
+ *
+ * @property text "greeter.py: HONEST", "greeter.py: DISHONEST. <reason>", or for the checker's
+ *   question "Honesty checker asks a person: <reason>".
+ * @property level "ok" for an honest file, "error" for a dishonest one, "warning" for the question.
+ * @property tooltip The file's whole path, or "" for the question.
+ */
+data class HonestyLine(val text: String, val level: String, val tooltip: String = "")
+
+/**
+ * Build the per-file list of a step's honesty result. No side effects.
+ *
+ * @param honesty The step's honesty result, or `null`.
+ * @return One line per judged file (the file's name, HONEST or DISHONEST with the reason), then
+ *   the checker's question if it asked for a person; empty for `null`. The words PASS and ALLOW
+ *   never occur: the honesty checker gives a status, not a decision.
+ */
+fun honestyLines(honesty: HonestyResultView?): List<HonestyLine> {
+    if (honesty == null) return emptyList()
+    val files = honesty.files.map { f ->
+        val name = f.path.substringAfterLast('/')
+        if (f.honest) HonestyLine("$name: HONEST", "ok", f.path)
+        else HonestyLine("$name: DISHONEST" + (if (f.reason.isNotEmpty()) ". ${f.reason}" else ""), "error", f.path)
+    }
+    return files + listOfNotNull(honesty.escalation.takeIf { it.isNotEmpty() }?.let { HonestyLine("Honesty checker asks a person: $it", "warning") })
+}
+
+/**
+ * Write the dishonest units of a step's honesty result for the row's details.
+ *
+ * @param honesty The step's honesty result, or `null`.
+ * @return "" if no file has a dishonest unit; else "Honesty checker, dishonest units:" and one
+ *   line per unit: "<path> · <symbol>: <reason>".
+ */
+fun honestyUnitsText(honesty: HonestyResultView?): String {
+    val units = honesty?.files.orEmpty().flatMap { f -> f.dishonestUnits.map { u -> "${f.path} · ${u.symbol}: ${u.reason}" } }
+    return if (units.isEmpty()) "" else "Honesty checker, dishonest units:\n" + units.joinToString("\n")
+}

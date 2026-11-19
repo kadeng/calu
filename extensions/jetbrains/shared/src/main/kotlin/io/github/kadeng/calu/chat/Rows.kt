@@ -68,6 +68,9 @@ data class RowAction(val name: String, val args: JsonObject)
  * @property markdown True if `text` is Markdown, false for plain text.
  * @property chip A decision to show as a chip ("ALLOW", "DENY", "ESCALATE", "PASS"); "" for none.
  * @property chipKind "ok", "error", "warning" or "" (how to colour the chip).
+ * @property honesty The honesty checker's status of each file the step changes, as lines shown
+ *   under the row beside the decision (never a PASS or ALLOW chip); empty if it did not judge
+ *   the step. The dishonest units are in `detail`.
  * @property detail Plain text shown when the row is expanded; "" if the row does not expand.
  * @property action What a click on the row does; `null` to expand (if `detail`) or nothing.
  * @property link What a click on `linkText` does; `null` for no link.
@@ -87,6 +90,7 @@ data class RowModel(
     val markdown: Boolean = false,
     val chip: String = "",
     val chipKind: String = "",
+    val honesty: List<io.github.kadeng.calu.state.HonestyLine> = emptyList(),
     val detail: String = "",
     val action: RowAction? = null,
     val link: RowAction? = null,
@@ -206,8 +210,12 @@ private fun toolRow(id: Int, tool: ToolView): RowModel {
         check?.reason?.takeIf { it.isNotEmpty() }?.let { "Reason: $it" },
         check?.comment?.takeIf { it.isNotEmpty() }?.let { "Remark: $it" },
     )
-    val output = result?.let { (if (it.isError) "Failed:\n" else "Output:\n") + it.content }
-    val base = RowModel(id, "tool", title = tool.name, chip = chip, chipKind = chipKindOf(chip), failed = showsErrorChip(tool), dim = tool.stored != null)
+    val units = io.github.kadeng.calu.state.honestyUnitsText(tool.honesty)
+    val output = listOfNotNull(units.takeIf { it.isNotEmpty() }, result?.let { (if (it.isError) "Failed:\n" else "Output:\n") + it.content }).joinToString("\n\n").takeIf { it.isNotEmpty() }
+    val base = RowModel(
+        id, "tool", title = tool.name, chip = chip, chipKind = chipKindOf(chip), honesty = io.github.kadeng.calu.state.honestyLines(tool.honesty),
+        failed = showsErrorChip(tool), dim = tool.stored != null,
+    )
     val fileArgs = { line: Int? -> buildJsonObject { put("path", JsonPrimitive(path ?: "")); line?.let { put("line", JsonPrimitive(it)) } } }
     if (tool.name in EDIT_TOOLS && path != null) {
         val line = tool.editRange?.start
