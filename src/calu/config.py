@@ -637,7 +637,9 @@ class TracesConfig(ConfigModel):
     With `enabled` on, calu appends every step of a session to a file below `directory`, so
     that the conversation can be committed and reviewed with the code it produced. The file
     only grows: nothing is folded or summarised, and it holds no images. Every block is
-    redacted before it reaches the disk. calu never commits the files.
+    redacted before it reaches the disk, and before a commit the part the commit adds is
+    redacted once more as a whole (`final_redaction`, agent/records/PLAN.md D246). calu makes
+    no commit of its own: a commit of Claude's in a session takes the finalized files along.
     """
 
     enabled: bool = False
@@ -700,6 +702,18 @@ class TracesConfig(ConfigModel):
     redactor_timeout_s: float = Field(default=60.0, gt=0)
     """Seconds the redaction agent may take for one block. A block that takes longer is
     withheld."""
+    final_redaction: bool = True
+    """Before a commit, redact what the commit adds to each trace file once more, as a whole:
+    the part of the file that is not in `HEAD` yet, read by the redaction agent in one go
+    (pieces of up to 24,000 characters), with `redactor_instructions` and a fixed part for
+    this pass. The part already committed is never changed. A line in the file marks how far
+    the pass ran. It runs when Claude runs `git commit` in a session (the commit waits for it,
+    and is refused if the pass fails), in the pre-commit hook of `calu traces hook install`,
+    and with `calu traces finalize`. Off: trace files are committed as the per-block
+    redaction wrote them."""
+    final_timeout_s: float = Field(default=600.0, gt=0)
+    """Seconds the final redaction pass may take for one trace file. A pass that takes longer
+    fails, and the commit is refused."""
     max_input_chars: int = Field(default=20_000, ge=200)
     """How many characters of one value of a tool call's input the file holds; a longer value
     is cut, and the file says how much was left out."""

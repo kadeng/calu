@@ -523,3 +523,49 @@ async def test_the_redaction_instructions_are_shown_edited_and_reset(
     finally:
         for name in ("EDITOR", "EDITOR_WRITES", "EDITOR_MEANWHILE"):
             os.environ.pop(name, None)
+
+
+async def test_the_final_pass_reads_the_projects_settings_from_the_database(
+    prepared, capsys, tmp_path, monkeypatch
+) -> None:
+    """D246: `calu traces finalize [--staged]` loads the settings only when a trace file has a
+    new part, and follows `traces.final_redaction` and `traces.redact` of the database."""
+    import subprocess
+
+    from calu.traces.finalize import finalized_end
+
+    for name in list(os.environ):
+        if name.startswith("GIT_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    db, _session_id, _escalation = prepared
+
+    class Terminal:
+        """Standard input that is a terminal, so the stand-in credential may be "asked"."""
+
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(cli.sys, "stdin", Terminal())
+    repo = tmp_path / "shop"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    trace = repo / "agent" / "traces" / "session_001.md"
+    trace.parent.mkdir(parents=True)
+    trace.write_text("# calu session trace\n\nkey AKIAIOSFODNN7EXAMPLE\n\n")
+    await admin.set_setting(db, "traces.final_redaction", False)
+    assert await run(["traces", "finalize", "--directory", str(repo)]) == 0
+    assert "traces.final_redaction is off" in capsys.readouterr().out
+    assert "AKIA" in trace.read_text()
+
+    await admin.set_setting(db, "traces.final_redaction", True)
+    await admin.set_setting(db, "traces.redact", False)  # stage 1 only: no model call
+    assert await run(["traces", "finalize", "--directory", str(repo)]) == 0
+    assert "redacted as a whole" in capsys.readouterr().out
+    text = trace.read_text()
+    assert "AKIA" not in text and finalized_end(text) == len(text)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    # Nothing new is staged: the hook's run reads no setting and prints nothing.
+    assert await run(["traces", "finalize", "--staged", "--directory", str(repo)]) == 0
+    assert capsys.readouterr().out == ""

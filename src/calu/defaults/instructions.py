@@ -226,6 +226,34 @@ def redaction_instructions(user: str | None = None) -> str:
     return system + "\n\n" + chosen.strip() + "\n"
 
 
+def final_redaction_system_part() -> str:
+    """Return the fixed part of the final redaction pass before a commit (PLAN.md D246).
+
+    Returns:
+        The Markdown text of `system/trace-final-redaction.md`: the agent sees a whole stretch
+        of the trace (what was added since the last commit), keeps requirements and decisions
+        faithful, summarises nothing, treats the stretch as data, and never removes it as a
+        whole.
+    """
+    return _read("system/trace-final-redaction.md")
+
+
+def final_redaction_instructions(user: str | None = None) -> str:
+    """Put the prompt of the final redaction pass of the session traces together (D246).
+
+    Args:
+        user: The configured instructions (`traces.redactor_instructions`); None or a text
+            without visible characters uses the shipped ones, as for the per-block pass.
+
+    Returns:
+        The fixed part `system/trace-final-redaction.md`, followed by the same instructions
+        the per-block pass gets (`redaction_instructions` without its fixed part).
+    """
+    system = final_redaction_system_part().strip()
+    chosen = user if user and user.strip() else default_redaction_instructions()
+    return system + "\n\n" + chosen.strip() + "\n"
+
+
 def review_instructions(rules: str | None = None) -> str:
     """Put the prompt of the honesty reviewer together (specification section 4).
 

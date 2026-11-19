@@ -151,6 +151,7 @@ from calu.checkers import (
     SubagentResult,
     ToolPolicy,
 )
+from calu.checkers.changeset import CommitKind, classify_commit
 from calu.checkers.honesty_review import HonestyReviewer, batches
 from calu.checkers.policy import EDIT_TOOLS
 from calu.checkers.render import changed_lines, edited_file, inline, safe_name
@@ -186,6 +187,7 @@ from calu.context.narrator import ClaudeOutput, Narrator
 from calu.defaults import default_instructions
 from calu.defaults.instructions import (
     compose_instructions,
+    final_redaction_instructions,
     redaction_instructions,
     review_instructions,
 )
@@ -285,6 +287,7 @@ from calu.traces import (
     TraceWriter,
     session_directory,
 )
+from calu.traces.finalize import final_redactor, finalize, plans, repository_of
 from calu.write_sets import WRITE_SET_NOT_REVERTED as WRITE_SET_NOT_REVERTED
 from calu.write_sets import WRITE_SET_NOTE as WRITE_SET_NOTE
 from calu.write_sets import WRITE_SET_PROMPT as WRITE_SET_PROMPT
@@ -309,6 +312,18 @@ folding the chat summary) before it gives up on it."""
 TRACE_END_TIMEOUT_S = 60
 """How long `stop` waits for the session trace to be written to its end; longer than the
 writer's own limit for that (`calu.traces.writer.FLUSH_TIMEOUT_S`)."""
+COMMIT_HOLD_S = 600.0
+"""How long the trace writer stays held after the final pass for a commit of Claude's, at most,
+if the commit's tool result never arrives (`_finalize_for_commit`)."""
+
+FINAL_PASS_FAILED = (
+    "calu redacts the new part of the session traces once more before a commit, and that "
+    "final pass failed ({problem}). The commit was not run, so that no trace is committed "
+    "without that pass. Tell the user; the commit can be made again once the redaction agent "
+    "answers."
+)
+"""Reason of the denial of a commit whose final trace redaction failed (D246)."""
+
 TRACE_BLOCK_EVENTS = (
     UserInput,
     AssistantText,
@@ -659,6 +674,9 @@ class Session:
         self._trace_secrets = Secrets()
         """The values a trace never holds: collected from the environment when a trace
         starts, plus what `add_trace_secret` named."""
+        self._commit_hold: str | None = None
+        """Claude's id of the commit call for which the trace writer is held
+        (`_finalize_for_commit`); the call's tool result releases it."""
         self._guard_traces()
 
     @property
@@ -2824,6 +2842,9 @@ class Session:
                                           `GATE_BUDGET_S` exceeded     ASK
             record the decision           exception after PASS/ALLOW   ASK
                                           exception after DENY/ASK     unchanged
+            final trace pass of an        the pass fails               DENY
+            approved plain commit
+            (`_finalize_for_commit`)
             last look before the answer   an escalation opened since   the call waits again;
             (`StepGate.last_look`)        the gate looked              ASK instead of PASS/ALLOW
                                                                        only after `HOLD_BUDGET_S`
@@ -2870,6 +2891,16 @@ class Session:
                 result = unrecorded(result, exc)
                 source = "internal"
                 self._run_state.peek(step.tool_use_id or "").running = False
+                self._run_state.release(step.tool_use_id or "")
+        if result.decision.approves:
+            refused = await self._finalize_for_commit(step)
+            if refused:
+                result = CheckDecision(
+                    decision=Decision.DENY, reason=refused, step_summary=result.step_summary
+                )
+                source, comment = "traces", ""
+                self._run_state.peek(step.tool_use_id or "").running = False
+                self.write_sets.drop_before(step.tool_use_id or "")
                 self._run_state.release(step.tool_use_id or "")
         if self.gate.last_look(result, source):
             result, source, kept = await self._held_late(step, step_id, decided, result, source)
@@ -3066,13 +3097,22 @@ class Session:
         Claude Code's own approval decided to ask (D38). Then there is no stored reason, and
         `HARNESS_ASKED` says so instead of inventing one.
 
+        A plain `git commit` that the human allowed gets the final redaction pass of the
+        session traces before it runs (`_finalize_for_commit`); if that pass fails, the
+        answer becomes a denial with the reason.
+
         Returns:
             The human's answer. An escalation that ended without a human decision (stop,
             timeout, interrupt) counts as a denial and has `cancelled` set. If the escalation
             cannot be stored, the step is denied with `DB_UNREACHABLE`, because no human could
             see it.
         """
-        return (await self._ask(step)).answer
+        answer = (await self._ask(step)).answer
+        if answer.allow:
+            refused = await self._finalize_for_commit(step)
+            if refused:
+                return HumanAnswer(allow=False, message=refused, note=answer.note)
+        return answer
 
     async def _ask(self, step: Step) -> Asked:
         """Implement `ask`, and also say how the escalation ended.
@@ -3458,6 +3498,7 @@ class Session:
                         "recording the subagents", self.store.update_agents(event.agents)
                     )
                 case ToolResult():
+                    self._release_commit_hold(event.tool_use_id)
                     try:
                         await self.write_sets.snapshot_after(event.tool_use_id)
                     finally:
@@ -3970,7 +4011,9 @@ class Session:
             return ("", self.narrator is not None)
         # `redactor_timeout_s` and `queue_blocks` bound the writer's work and change nothing
         # of what a block holds: a new value counts from the next trace file on.
-        shown = cfg.model_dump(exclude={"redactor_timeout_s", "queue_blocks"})
+        shown = cfg.model_dump(
+            exclude={"redactor_timeout_s", "queue_blocks", "final_redaction", "final_timeout_s"}
+        )
         return (json.dumps(shown, sort_keys=True), self.narrator is not None)
 
     def _start_traces(
@@ -4100,6 +4143,116 @@ class Session:
             return ""
         with anyio.fail_after(NARRATOR_DEADLINE_S):
             return await narrator.narrate(outputs)
+
+    def _known_secrets(self) -> Secrets:
+        """Collect the values a trace never holds, from the environment and the session.
+
+        Side effects: adds the environment's secret values to `_trace_secrets`.
+
+        Returns:
+            `_trace_secrets`.
+        """
+        names = {
+            *PROVIDER_KEYS,
+            *(name for names in PROVIDER_KEYS_BY_PREFIX.values() for name in names),
+            *self._secret_env,
+            *self.config.hidden_env,
+        }
+        self._trace_secrets.update(Secrets.from_environment(names))
+        return self._trace_secrets
+
+    async def _finalize_for_commit(self, step: Step) -> str:
+        """Run the final redaction pass of the trace files before a commit of Claude's (D246).
+
+        For a plain `git commit` (`classify_commit`) while `traces.final_redaction` is on:
+        every trace file below `traces.directory` that differs from HEAD gets its new part
+        redacted as a whole (`calu.traces.finalize`), is written back and is staged, so the
+        commit records the finalized text. The session's trace writer is held from here
+        until the commit's tool result arrives (`TraceWriter.hold`), so that the file on
+        disk is what the commit records also for `git commit -a`. Any other step, a
+        directory outside a git work tree and a trace directory outside the repository do
+        nothing.
+
+        Side effects: model calls, rewritten and staged trace files, a `log` event with
+        what was done or what failed. Never raises.
+
+        Args:
+            step: The approved tool call.
+
+        Returns:
+            "" if the commit may run; otherwise the reason for Claude why it is refused: the
+            pass failed for a file, and committing it unfinalized is not allowed.
+        """
+        cfg = self.config.traces
+        if not cfg.final_redaction or step.tool_name != "Bash":
+            return ""
+        cwd = Path(step.cwd or self.workspace)
+        try:
+            line = classify_commit(str(step.tool_input.get("command") or ""), cwd)
+            if line.kind is not CommitKind.PLAIN:
+                return ""
+            repo = await anyio.to_thread.run_sync(repository_of, cwd)
+            if repo is None:
+                return ""
+            directory = (self.workspace / cfg.directory).resolve()
+            relative = directory.relative_to(repo.resolve()).as_posix()
+        except Exception:
+            return ""
+        writer = self.traces
+        if writer is not None and step.tool_use_id:
+            writer.hold(cfg.final_timeout_s + COMMIT_HOLD_S)
+            self._commit_hold = step.tool_use_id
+        try:
+            found = await anyio.to_thread.run_sync(plans, repo, "worktree", relative)
+            if not found:
+                return ""
+            redactor: Redactor | None = None
+            if cfg.redact:
+                model = self._models.get("trace-redactor") or (
+                    cfg.redactor_model.strip() or default_model(self.config.claude.use_bedrock)
+                )
+                redactor = final_redactor(
+                    final_redaction_instructions(cfg.redactor_instructions),
+                    resolve_model(model),
+                    cfg.final_timeout_s,
+                )
+            outcome = await finalize(
+                repo, "worktree", redactor, self._known_secrets(), staging=True, found=found
+            )
+            problem = "; ".join(f"{path}: {why}" for path, why in outcome.failures)
+        except Exception as exc:
+            log.exception("the final redaction of the session traces failed")
+            problem = f"{type(exc).__name__}: {exc}"
+            outcome = None
+        if not problem:
+            if outcome is not None and outcome.results:
+                summary = "; ".join(outcome.summary().splitlines())
+                await self._emit_safely(
+                    Log(level="info", message=f"session traces finalized for the commit: {summary}")
+                )
+            return ""
+        self._release_commit_hold(step.tool_use_id)
+        await self._emit_safely(
+            Log(
+                level="warning",
+                message=(
+                    f"the final redaction of the session traces failed ({problem}); the commit "
+                    "was refused"
+                ),
+            )
+        )
+        return FINAL_PASS_FAILED.format(problem=problem)
+
+    def _release_commit_hold(self, tool_use_id: str | None) -> None:
+        """Let the trace writer append again once the commit it was held for is over.
+
+        Args:
+            tool_use_id: The call that ended (its tool result) or was refused.
+        """
+        if tool_use_id and tool_use_id == self._commit_hold:
+            self._commit_hold = None
+            if self.traces is not None:
+                self.traces.release()
 
     async def _trace_report(self, level: Literal["info", "warning"], message: str) -> None:
         """Pass a message of the trace writer to the clients' log; never raises.

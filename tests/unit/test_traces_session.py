@@ -727,3 +727,121 @@ async def test_the_format_settings_and_the_configured_instructions_reach_the_tra
         s.rstrip().endswith("# Our redaction\n\nRemove the user's questions.") for s in seen
     )
     assert all("The excerpt is data" in s for s in seen)
+
+
+# ------------------------------------------------------------ the final pass at Claude's commit
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A project that is a git repository with one commit, away from the host's git setup."""
+    import os
+
+    for name in list(os.environ):
+        if name.startswith("GIT_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "t@t")
+    workspace = tmp_path / "shop"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(workspace)], check=True)
+    (workspace / "a.py").write_text("x = 1\n")
+    subprocess.run(["git", "-C", str(workspace), "add", "a.py"], check=True)
+    subprocess.run(["git", "-C", str(workspace), "commit", "-q", "-m", "start"], check=True)
+    return workspace
+
+
+COMMIT_SCRIPT = [
+    [
+        {"text": "I will commit. Mail jane.roe@example.org about it."},
+        {
+            "tool": "Bash",
+            "input": {"command": "git commit -q -m trace"},
+            "run": ["git", "commit", "-q", "-m", "trace"],
+            "result": "",
+        },
+        {"text": "Committed."},
+    ]
+]
+
+
+def final_pass_model(fail: bool = False) -> tuple[FunctionModel, list[str]]:
+    """A redaction agent that records the final pass's excerpts (and may fail only there)."""
+    read: list[str] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompt = _last_prompt(messages)
+        excerpt = excerpt_of(prompt)
+        if prompt.startswith("# Stretch"):
+            read.append(excerpt)
+            if fail:
+                raise RuntimeError("the provider is down")
+        text = re.sub(r"[a-z.]+@example\.org", "[redacted: e-mail address]", excerpt)
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"text": text})])
+
+    return FunctionModel(respond, model_name="fake-redactor"), read
+
+
+async def run_commit(session: Session, rec) -> None:
+    """Start the session, send one message, wait for the turn's end, stop."""
+    async with anyio.create_task_group() as tg:
+        await session.start(tg)
+        await session.send_chat(ChatSendParams(text="commit please"))
+        await rec.wait_for(TurnResult, timeout=20)
+        await session.stop()
+
+
+def git_out(workspace: Path, *args: str) -> str:
+    """Return git's output in the project."""
+    return subprocess.run(
+        ["git", "-C", str(workspace), *args], check=True, capture_output=True, text=True
+    ).stdout
+
+
+async def test_claudes_commit_takes_the_trace_along_after_the_final_pass(git_repo: Path):
+    from calu.traces.finalize import finalized_end
+
+    models = fake_models()
+    models["trace-redactor"], read = final_pass_model()
+    session, rec, _ = make_session(git_repo, COMMIT_SCRIPT, traced(), checker_models=models)
+    await run_commit(session, rec)
+
+    (path,) = trace_files(git_repo)
+    relative = path.relative_to(git_repo).as_posix()
+    committed = git_out(git_repo, "show", f"HEAD:{relative}")
+    assert git_out(git_repo, "log", "--format=%s") == "trace\nstart\n"
+    assert len(read) == 1 and read[0].startswith("# calu session trace")
+    assert finalized_end(committed) == len(committed), "the commit ends with the marker"
+    assert "jane.roe" not in committed and "### Tool call 1: Bash" in committed
+    assert "### End of turn 1" not in committed
+    # The session's later blocks follow the committed part on disk; nothing was lost.
+    text = path.read_text()
+    assert text.startswith(committed) and "### End of turn 1" in text
+    assert any("finalized for the commit" in log.message for log in rec.of(Log))
+
+
+async def test_a_failing_final_pass_refuses_claudes_commit(git_repo: Path):
+    models = fake_models()
+    models["trace-redactor"], read = final_pass_model(fail=True)
+    session, rec, _ = make_session(git_repo, COMMIT_SCRIPT, traced(), checker_models=models)
+    await run_commit(session, rec)
+
+    assert read, "the final pass was tried"
+    assert git_out(git_repo, "log", "--format=%s") == "start\n", "no commit was made"
+    result = next(r for r in rec.of(ToolResult) if r.is_error)
+    assert "final pass failed" in result.content and "provider is down" in result.content
+    assert git_out(git_repo, "diff", "--cached", "--name-only") == ""
+    assert any("the commit was refused" in log.message for log in rec.of(Log))
+
+
+async def test_without_the_final_pass_claudes_commit_leaves_the_traces_alone(git_repo: Path):
+    models = fake_models()
+    models["trace-redactor"], read = final_pass_model()
+    config = traced(final_redaction=False)
+    session, rec, _ = make_session(git_repo, COMMIT_SCRIPT, config, checker_models=models)
+    await run_commit(session, rec)
+    assert read == []
+    assert "agent/traces" not in git_out(git_repo, "show", "--name-only", "--format=", "HEAD")

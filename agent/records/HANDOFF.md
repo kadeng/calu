@@ -1,7 +1,7 @@
 # Handoff
 
 State on 2026-11-19, in a session that began on 2026-11-18 and is still going. Read this, then `AGENTS.md`, `REQUIREMENTS.md`
-(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D245, open
+(requirements 1-40; 26-40 are from the last days) and `PLAN.md` (decisions D1-D246, open
 questions §11, phases §12). **Not everything is pushed**: see "State of the repository".
 
 ## Pick up here
@@ -127,7 +127,7 @@ Decided (do not ask again):
   unless the redaction instructions say otherwise ("It's not important"); the redaction
   instructions are edited in the IDEs' settings dialogs only, no extra picker entry;
   the final redaction pass before a commit covers only what was added since the last commit
-  (requirement 45, in work).
+  (requirement 45, built: PLAN D246, below).
 - **Sandbox (D239):** a root setup counts as more privileged; `calu doctor` without `--db`
   stays silent about the sandbox. Both as built.
 
@@ -153,6 +153,21 @@ settings `traces.layout`, `traces.file_names`, `traces.header_times`, `traces.he
 the VSCode and PyCharm checker pickers, a conflict check in `ide.settings.set`, the manual
 check `docs/TESTING.md` item 41 with a real model (the new prompt is not yet measured on
 Haiku or Nemotron).
+
+#### The final trace redaction before a commit (2026-11-19, PLAN D246, requirement 45)
+
+Built (not pushed): `calu.traces.finalize` redacts the part of each trace file that is not in
+`HEAD` once more as a whole (fixed part `system/trace-final-redaction.md` plus
+`traces.redactor_instructions`), writes the file back as committed part + redacted part + a
+marker line with a check value, and never touches the committed part. Triggers: Claude's
+plain `git commit` in a session (`Session._finalize_for_commit`: before the commit runs,
+stages the result, holds the trace writer until the tool result; a failure denies the
+commit), the opt-in pre-commit hook (`calu traces hook install [--chain]|remove`, which runs
+`calu traces finalize --staged`; refuses the commit when it cannot run) and `calu traces
+finalize` by hand. Settings `traces.final_redaction` (on) and `traces.final_timeout_s`
+(600). Open: the manual check `docs/TESTING.md` item 42 with a real model; the pass's prompt
+is not measured on Haiku or Nemotron; a `git commit -a` in a session can take along the tail
+of another session's live trace file in the same project (per-block redacted only).
 
 #### Claude Code as a whole inside namespaces (backlog, owner 2026-11-19)
 

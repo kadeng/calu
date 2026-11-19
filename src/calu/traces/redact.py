@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 import anyio
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, UsageLimits
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
@@ -63,6 +64,15 @@ is not a redaction of the input, and the block is withheld."""
 
 REDACTOR_MAX_TOKENS = 8_000
 """Cap on the output tokens of one answer of the redaction agent: room for `CHUNK_CHARS`
+characters and the model's own reasoning."""
+
+FINAL_CHUNK_CHARS = 24_000
+"""The largest piece of a stretch one call of the final pass reads (`Redactor.redact_stretch`,
+agent/records/PLAN.md D246): large, so that the agent sees as much of the stretch at once as
+its answer can hold."""
+
+FINAL_MAX_TOKENS = 16_000
+"""Cap on the output tokens of one answer of the final pass: room for `FINAL_CHUNK_CHARS`
 characters and the model's own reasoning."""
 
 
@@ -326,6 +336,14 @@ class RedactionFailed(Exception):
     """The redaction agent gave no usable answer; the text must not be written."""
 
 
+class UnusableAnswer(RedactionFailed):
+    """The redaction agent answered, but its answer is no redaction of the text (`checked`).
+
+    The final pass (`Redactor.redact_stretch`) withholds such a piece and goes on; any other
+    `RedactionFailed` (no answer, a model error, a timeout) fails the whole pass.
+    """
+
+
 class Redaction(BaseModel):
     """The redaction agent's output."""
 
@@ -384,19 +402,19 @@ def checked(original: str, answer: str, removed: bool = False, may_remove: bool 
         restored (models drop a trailing newline).
 
     Raises:
-        RedactionFailed: If the agent removed the piece although `may_remove` is False, if
+        UnusableAnswer: If the agent removed the piece although `may_remove` is False, if
             the answer is empty although the text was not and the piece was not removed, or
             if it is longer than `MAX_GROWTH` times the text plus `GROWTH_ALLOWANCE`
             characters.
     """
     if removed:
         if not may_remove:
-            raise RedactionFailed("the answer removes a block that may not be removed")
+            raise UnusableAnswer("the answer removes a block that may not be removed")
         return ""
     if original.strip() and not answer.strip():
-        raise RedactionFailed("the answer is empty")
+        raise UnusableAnswer("the answer is empty")
     if len(answer) > len(original) * MAX_GROWTH + GROWTH_ALLOWANCE:
-        raise RedactionFailed(
+        raise UnusableAnswer(
             f"the answer has {len(answer)} characters for a text of {len(original)}"
         )
     body = answer.rstrip("\n")
@@ -449,6 +467,10 @@ class Redactor:
     usage_limits: UsageLimits = field(
         default_factory=lambda: UsageLimits(request_limit=2, output_tokens_limit=16_000)
     )
+    chunk_chars: int = CHUNK_CHARS
+    """The largest piece of text one call reads."""
+    max_tokens: int = REDACTOR_MAX_TOKENS
+    """Cap on the output tokens of one answer."""
     _agent: Agent[None, Redaction] | None = field(default=None, init=False, repr=False)
 
     @property
@@ -492,14 +514,14 @@ class Redactor:
         parts: list[str] = []
         try:
             with anyio.fail_after(self.timeout_s):
-                for piece in chunks(text):
+                for piece in chunks(text, self.chunk_chars):
                     result = await run_bounded(
                         self.agent,
                         request + "# Excerpt to redact\n\n" + fence(piece),
                         model=self.model,
                         usage_limits=self.usage_limits,
                         model_settings=ModelSettings(),
-                        max_tokens=REDACTOR_MAX_TOKENS,
+                        max_tokens=self.max_tokens,
                     )
                     output = result.output
                     parts.append(checked(piece, output.text, output.remove_block, may_remove))
@@ -510,3 +532,58 @@ class Redactor:
         except Exception as exc:
             raise RedactionFailed(f"{type(exc).__name__}: {exc}") from exc
         return "".join(parts)
+
+    async def redact_stretch(self, text: str) -> list[tuple[str, str | None]]:
+        """Redact a whole stretch of a trace for the final pass (agent/records/PLAN.md D246).
+
+        The stretch is read in pieces of at most `chunk_chars` characters, cut at line ends
+        (`chunks`); each request says which part of how many it is. The agent may never
+        remove a piece as a whole. Side effects: one model call per piece.
+
+        Args:
+            text: The stretch, after stage 1.
+
+        Returns:
+            One pair per piece, in order: (the piece as given, its redacted text), or (the
+            piece, None) where the agent's answer was unusable (`UnusableAnswer`, or a
+            structured answer the model could not complete): the caller withholds that piece
+            and never writes it. An empty list for a text without visible characters.
+
+        Raises:
+            RedactionFailed: If a model call failed (no connection, no credentials, a
+                provider error) or the stretch took longer than `timeout_s`; nothing of
+                `text` may be written then.
+        """
+        if not text.strip():
+            return []
+        pieces = chunks(text, self.chunk_chars)
+        out: list[tuple[str, str | None]] = []
+        try:
+            with anyio.fail_after(self.timeout_s):
+                for number, piece in enumerate(pieces, 1):
+                    request = (
+                        "# Stretch\n\n"
+                        f"This is part {number} of {len(pieces)} of the stretch. "
+                        "`remove_block` must be false.\n\n"
+                    )
+                    try:
+                        result = await run_bounded(
+                            self.agent,
+                            request + "# Excerpt to redact\n\n" + fence(piece),
+                            model=self.model,
+                            usage_limits=self.usage_limits,
+                            model_settings=ModelSettings(),
+                            max_tokens=self.max_tokens,
+                        )
+                        output = result.output
+                        out.append((piece, checked(piece, output.text, output.remove_block, False)))
+                    except (UnusableAnswer, UnexpectedModelBehavior, UsageLimitExceeded) as exc:
+                        log.warning("a part of a trace stretch is withheld: %s", exc)
+                        out.append((piece, None))
+        except RedactionFailed:
+            raise
+        except TimeoutError as exc:
+            raise RedactionFailed(f"no answer within {self.timeout_s:g} s") from exc
+        except Exception as exc:
+            raise RedactionFailed(f"{type(exc).__name__}: {exc}") from exc
+        return out

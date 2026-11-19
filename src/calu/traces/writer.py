@@ -40,6 +40,7 @@ to `narration`, which finds the block by its text; a block that got none within
 from __future__ import annotations
 
 import dataclasses
+import fcntl
 import logging
 import math
 import os
@@ -214,6 +215,11 @@ class TraceWriter:
         """Set once the file exists, or will never exist."""
         self._scope: anyio.CancelScope | None = None
         self._fd: int | None = None
+        self._resume = anyio.Event()
+        """Unset while `hold` keeps the writer from appending to the file."""
+        self._resume.set()
+        self._held_until = 0.0
+        """`anyio.current_time()` at which a hold ends by itself."""
         send, receive = anyio.create_memory_object_stream[_Entry](math.inf)
         self._todo: MemoryObjectSendStream[_Entry] = send
         self._work: MemoryObjectReceiveStream[_Entry] = receive
@@ -452,12 +458,42 @@ class TraceWriter:
                 self._wake = anyio.Event()
             entry = self._entries[0]
             await entry.ready.wait()
+            await self._wait_while_held()
             if not self._append_to_file(entry.text):
                 await self._fail(f"writing {self.path} failed")
                 return
             if self._entries and self._entries[0] is entry:
                 self._entries.popleft()
                 self.counted.written += 1
+
+    def hold(self, seconds: float) -> None:
+        """Keep the writer from appending to the file until `release`, at most `seconds`.
+
+        Used while a commit of Claude's runs (agent/records/PLAN.md D246): the final pass has
+        written the file as the commit records it, and a block appended before the commit
+        ran would be committed without that pass. Blocks keep being queued and redacted
+        meanwhile; `close` writes them in any case. Never raises.
+
+        Args:
+            seconds: The longest hold; then the writer goes on by itself.
+        """
+        self._held_until = anyio.current_time() + seconds
+        if self._resume.is_set():
+            self._resume = anyio.Event()
+
+    def release(self) -> None:
+        """End a hold (`hold`); does nothing without one. Never raises."""
+        self._resume.set()
+
+    async def _wait_while_held(self) -> None:
+        """Wait until no hold keeps the writer from appending, or the hold's time is up."""
+        while not self._resume.is_set() and not self._closing:
+            left = self._held_until - anyio.current_time()
+            if left <= 0:
+                self._resume.set()
+                return
+            with anyio.move_on_after(min(left, 1.0)):
+                await self._resume.wait()
 
     async def _redact_loop(self, work: MemoryObjectReceiveStream[_Entry]) -> None:
         """Make the text of one closed block after another.
@@ -556,9 +592,17 @@ class TraceWriter:
         if self._fd is None:
             return False
         data = text.encode("utf-8", errors="replace")
+        if not data:
+            return True
         try:
-            while data:
-                data = data[os.write(self._fd, data) :]
+            # The final pass before a commit rewrites the file in place under the same lock
+            # (`calu.traces.finalize.rewrite_locked`); it holds it for a moment only.
+            fcntl.flock(self._fd, fcntl.LOCK_EX)
+            try:
+                while data:
+                    data = data[os.write(self._fd, data) :]
+            finally:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
         except OSError:
             log.exception("writing the session trace %s failed", self.path)
             return False
@@ -650,6 +694,7 @@ class TraceWriter:
             if note:
                 self.note(note)
             self._closing = True
+            self._resume.set()  # a hold ends with the trace
             try:
                 self._submit_closed()
             except Exception:

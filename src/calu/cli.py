@@ -5581,7 +5581,11 @@ def _text_setting(
 
 
 def cmd_traces(args: argparse.Namespace, store: CredentialStore) -> None:
-    """Show, edit or reset the redaction agent's instructions of the session traces (D245).
+    """Session traces: the redaction agent's instructions, the final pass and its hook.
+
+    `calu traces finalize [--staged]` runs the final redaction pass (`_traces_finalize`,
+    D246); `calu traces hook install|remove` the pre-commit hook (`_traces_hook`). For the
+    instructions (D245):
 
     `calu traces instructions show|edit|reset [--project NAME]` works on
     `traces.redactor_instructions` as `calu honesty show|edit|reset` works on the honesty
@@ -5590,17 +5594,31 @@ def cmd_traces(args: argparse.Namespace, store: CredentialStore) -> None:
     only the editable text.
 
     Args:
-        args: Parsed arguments (`subject`: "instructions"; `action`: "show", "edit" or
-            "reset"; `project`).
+        args: Parsed arguments (`subject`: "instructions", "finalize" or "hook"; `action`:
+            "show", "edit" or "reset" for the instructions, "install" or "remove" for the
+            hook, none for finalize; `project`, `staged`, `directory`, `chain`).
         store: The credential store.
 
     Raises:
-        CliError: If the credential the action needs is missing, no editor is available, or
-            the stored value changed while the editor was open.
+        CliError: If the action word does not fit the subject, the credential the action
+            needs is missing, no editor is available, the stored value changed while the
+            editor was open, or the final pass or the hook could not be done.
         CredentialError: On a wrong password.
         admin.AdminError: If the project does not exist.
         psycopg.Error: On database errors.
     """
+    if args.subject == "finalize":
+        if args.action is not None:
+            raise CliError("`calu traces finalize` takes no action word")
+        _traces_finalize(args, store)
+        return
+    if args.subject == "hook":
+        if args.action not in ("install", "remove"):
+            raise CliError("`calu traces hook` needs `install` or `remove`")
+        _traces_hook(args)
+        return
+    if args.action not in ("show", "edit", "reset"):
+        raise CliError("`calu traces instructions` needs `show`, `edit` or `reset`")
     _text_setting(
         args,
         store,
@@ -5609,6 +5627,156 @@ def cmd_traces(args: argparse.Namespace, store: CredentialStore) -> None:
         "trace-redaction.md",
         "instructions",
     )
+
+
+FINALIZE_REFUSED = (
+    "the final redaction pass of the session traces could not run ({problem}), so the trace "
+    "files staged for this commit are not finalized; the commit is refused. Run `calu traces "
+    "finalize --staged` in a terminal (it asks for a password where one is needed) and commit "
+    "again. `git commit --no-verify` commits the trace files as the per-block redaction wrote "
+    "them, without the final pass."
+)
+"""What `calu traces finalize --staged` (the pre-commit hook) says when the pass cannot run
+(D246)."""
+
+FINALIZE_FAILED = (
+    "the final redaction pass of the session traces could not run ({problem}); the trace "
+    "files that failed are left as they are"
+)
+"""What `calu traces finalize` without `--staged` says when the pass cannot run."""
+
+
+def _traces_finalize(args: argparse.Namespace, store: CredentialStore) -> None:
+    """Run the final redaction pass of the session traces (`calu traces finalize`, D246).
+
+    Without `--staged`: the trace files below `traces.directory` that differ from HEAD are
+    finalized on disk (not staged). With `--staged` (the pre-commit hook): the trace files
+    the index adds or changes are finalized in the index, and on disk where the file holds
+    the staged text. Settings and credentials are read only if a file has something to
+    redact, so a commit without a new trace part needs neither.
+
+        nothing to finalize                 -> nothing printed, exit 0
+        `traces.final_redaction` off        -> one line, exit 0, files unchanged
+        no settings (no login, no password
+        without a terminal, no database)    -> CliError: `FINALIZE_REFUSED` (`--staged`) or
+                                               `FINALIZE_FAILED`
+        the agent fails for a file          -> CliError, as above; the other files are
+                                               finalized
+
+    Args:
+        args: Parsed arguments (`staged`, `directory`, `project`).
+        store: The credential store.
+
+    Raises:
+        CliError: If the directory is in no git work tree, or the pass could not finish (the
+            message says what to do; as the pre-commit hook this refuses the commit).
+    """
+    from dotenv import dotenv_values
+
+    from calu.config import PROVIDER_KEYS_BY_PREFIX, default_model
+    from calu.defaults.instructions import final_redaction_instructions
+    from calu.models import resolve_model
+    from calu.store.config import ConfigStore
+    from calu.store.projects import project_for_directory
+    from calu.traces.finalize import FinalizeError, final_redactor, finalize, plans, repository_of
+    from calu.traces.redact import Secrets
+
+    workspace = Path(args.directory).resolve()
+    repo = repository_of(workspace)
+    if repo is None:
+        raise CliError(f"{workspace} is in no git work tree")
+    refused = FINALIZE_REFUSED if args.staged else FINALIZE_FAILED
+    found = None
+    if args.staged:
+        try:
+            found = plans(repo, "staged")
+        except FinalizeError as exc:
+            raise CliError(refused.format(problem=exc)) from exc
+        if not found:
+            return
+
+    async def read(db: Db) -> Config:
+        """Load the settings that apply to the project directory.
+
+        Args:
+            db: The connection.
+
+        Returns:
+            The configuration.
+        """
+        project = args.project or await project_for_directory(db, workspace, socket.gethostname())
+        return (await ConfigStore(db, workspace, project).load()).config
+
+    try:
+        config = _herd_value(store, read, may_ask=sys.stdin.isatty())
+    except (CliError, CredentialError, psycopg.Error, OSError, ValueError) as exc:
+        problem = (
+            "a password is needed and there is no terminal to ask for it"
+            if isinstance(exc, NeedsPassword)
+            else f"the settings could not be read: {exc}"
+        )
+        raise CliError(refused.format(problem=problem)) from exc
+    cfg = config.traces
+    if not cfg.final_redaction:
+        print("traces.final_redaction is off: the trace files are left as they are")
+        return
+    try:
+        if found is None:
+            relative = (workspace / cfg.directory).resolve().relative_to(repo.resolve())
+            found = plans(repo, "worktree", relative.as_posix())
+    except (FinalizeError, ValueError) as exc:
+        raise CliError(refused.format(problem=exc)) from exc
+    if not found:
+        print("nothing to finalize: no trace file has a part that is not committed")
+        return
+    redactor = None
+    if cfg.redact:
+        model = cfg.redactor_model.strip() or default_model(config.claude.use_bedrock)
+        redactor = final_redactor(
+            final_redaction_instructions(cfg.redactor_instructions),
+            resolve_model(model),
+            cfg.final_timeout_s,
+        )
+    names = {
+        *PROVIDER_KEYS,
+        *(name for names in PROVIDER_KEYS_BY_PREFIX.values() for name in names),
+        *config.hidden_env,
+    }
+    if user_env_file().is_file():
+        names |= set(dotenv_values(user_env_file()))
+    secrets = Secrets.from_environment(names)
+    mode = "staged" if args.staged else "worktree"
+    outcome = asyncio.run(finalize(repo, mode, redactor, secrets, found=found))
+    summary = outcome.summary()
+    if summary:
+        print(summary, file=sys.stderr if outcome.failures else sys.stdout)
+    if outcome.failures:
+        problem = "; ".join(why for _path, why in outcome.failures)
+        raise CliError(refused.format(problem=problem))
+
+
+def _traces_hook(args: argparse.Namespace) -> None:
+    """Install or remove the pre-commit hook of the session traces (`calu traces hook`, D246).
+
+    Args:
+        args: Parsed arguments (`action`: "install" or "remove"; `directory`; `chain`).
+
+    Raises:
+        CliError: If the directory is in no git work tree, or the hook cannot be installed or
+            removed (another hook is there, a file cannot be written).
+    """
+    from calu.traces.finalize import repository_of
+    from calu.traces.hook import HookError, install, remove
+
+    workspace = Path(args.directory).resolve()
+    repo = repository_of(workspace)
+    if repo is None:
+        raise CliError(f"{workspace} is in no git work tree")
+    calu = shutil.which("calu") or str(Path(sys.argv[0]).resolve())
+    try:
+        print(install(repo, calu, args.chain) if args.action == "install" else remove(repo))
+    except HookError as exc:
+        raise CliError(str(exc)) from exc
 
 
 def cmd_rules(args: argparse.Namespace, store: CredentialStore) -> None:
@@ -6362,16 +6530,44 @@ def build_parser() -> argparse.ArgumentParser:
 
     traces = sub.add_parser(
         "traces",
-        help="the redaction agent's instructions of the session traces",
+        help="session traces: the redaction agent's instructions, the final pass, the hook",
         description=(
             "calu traces instructions show | edit | reset [--project NAME]: what the "
             "redaction agent keeps, removes and replaces in a session trace "
-            "(traces.redactor_instructions; empty: the text calu ships)"
+            "(traces.redactor_instructions; empty: the text calu ships). "
+            "calu traces finalize [--staged]: the final redaction pass over what the next "
+            "commit adds to the trace files. calu traces hook install [--chain] | remove: the "
+            "git pre-commit hook that runs `calu traces finalize --staged`"
         ),
     )
-    traces.add_argument("subject", choices=["instructions"])
-    traces.add_argument("action", choices=["show", "edit", "reset"])
-    traces.add_argument("--project", help="the project's instructions instead of the global ones")
+    traces.add_argument("subject", choices=["instructions", "finalize", "hook"])
+    traces.add_argument(
+        "action",
+        nargs="?",
+        choices=["show", "edit", "reset", "install", "remove"],
+        help="instructions: show, edit or reset; hook: install or remove; finalize: none",
+    )
+    traces.add_argument(
+        "--project",
+        help="instructions: the project's instead of the global ones; finalize: the project "
+        "whose settings apply (default: the one registered for the directory)",
+    )
+    traces.add_argument(
+        "--staged",
+        action="store_true",
+        help="finalize: the trace files staged for the next commit (what the pre-commit hook "
+        "runs), instead of the files on disk",
+    )
+    traces.add_argument(
+        "--directory",
+        default=".",
+        help="finalize, hook: the project directory (default: the current directory)",
+    )
+    traces.add_argument(
+        "--chain",
+        action="store_true",
+        help="hook install: keep a pre-commit hook calu did not write and run it after calu's",
+    )
     _database_option(traces)
     traces.set_defaults(handler=cmd_traces)
 

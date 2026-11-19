@@ -794,6 +794,24 @@ escalation resolved from the database alone.
    by someone else meanwhile". Not run yet; the unit and database tests cover it with
    stand-in models (`tests/unit/test_traces.py`, `tests/unit/test_traces_session.py`,
    `tests/db/test_cli_reports.py`, `tests/db/test_web.py`).
+42. The final redaction pass before a commit (PLAN D246) with a real redaction model, in a
+   throwaway git repository registered as a project (never in a repository that matters).
+   With `traces.enabled` on, send "Add `notes.txt` with the line: ask Jane Roe,
+   jane.roe@example.org, then commit it". Expected: Claude's `git commit` takes a moment
+   longer, the session log says "session traces finalized for the commit", `git show
+   --stat HEAD` lists the trace file, and `git show HEAD:<trace file>` ends with the line
+   `_[calu: the final redaction pass ran up to this line (check ...)]_`, has the name and the
+   address replaced, and keeps the request word for word. After a second message and commit,
+   `git diff HEAD~1 HEAD -- agent/traces` adds lines only after the first marker. Then
+   `calu config set traces.redactor_model test:missing` and ask for one more commit: it must
+   be refused with "final pass failed", and nothing is committed; `calu config unset
+   traces.redactor_model`. Outside the session: `calu traces hook install` (and once with a
+   hook of your own in place: refused; with `--chain`: kept and run after calu's), append a
+   line to a trace file, `git add` it and commit from the IDE: the commit passes and the line
+   is redacted; with the database stopped the same commit is refused with the message that
+   names `calu traces finalize --staged` and `--no-verify`. `calu traces hook remove`. Not run
+   yet; the unit tests cover it with stand-in models (`tests/unit/test_traces_finalize.py`,
+   `tests/unit/test_traces_session.py`).
 
 ## Measuring the checkers
 

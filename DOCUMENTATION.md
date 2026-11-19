@@ -1572,7 +1572,8 @@ A change of a `traces` setting that decides where the file is or what a block ho
 `max_result_chars`) ends the file of a running session and starts a new one, whose header
 names the old file. A session that is idle at that moment keeps its file until its next
 step, so a changed setting adds no file for a session that does nothing. `queue_blocks` and
-`redactor_timeout_s` count from the next file on. A file that got no step (a session that
+`redactor_timeout_s` count from the next file on; `final_redaction` and `final_timeout_s`
+apply from the next commit on. A file that got no step (a session that
 ended before its first message) is removed when it is closed.
 
 **What a file holds.** A header (calu's session id, Claude's session id, the project, the
@@ -1661,12 +1662,75 @@ never stops Claude. The same holds for a block that was still being redacted whe
 ended, and when the redaction agent is so far behind that `traces.queue_blocks` blocks wait,
 further blocks are left out and a line says how many. A step never waits for the trace.
 
-**What calu does with the files, and what it does not.** calu writes them and nothing else:
-it never stages or commits them, and versioning them is your step (commit the directory, or
-add it to `.gitignore` if you only want the files locally). While tracing is on, a tool call
-of Claude that would write into the trace directory waits for a person, the files are left
-out of the write sets and of the code honesty state, and the checkers' code tools do not
-read them.
+**The final redaction before a commit.** The per-block redaction keeps the file safe on
+disk at any time, but the agent sees one block at a time. Before a commit, calu therefore
+redacts what the commit adds to each trace file once more, as a whole: the part of the file
+that is not in `HEAD` yet (a new file is new as a whole). The agent reads that stretch in one
+go (pieces of up to 24,000 characters), with the same instructions and a fixed part for this
+pass: it sees a whole stretch of the session, keeps every requirement and decision as
+written, summarises nothing, and may not remove the stretch as a whole. The part that is
+committed already is never read again and never changed, so nothing that was redacted for an
+earlier commit is redacted twice.
+
+    HEAD:session_001.md   committed part
+    file before the pass  committed part | new part (each block redacted on its own)
+    file after the pass   committed part | new part, redacted as a whole | marker line
+
+The marker line says how far the pass ran:
+
+    _[calu: the final redaction pass ran up to this line (check 3f2a9c0d1e4b5a67)]_
+
+Everything above the last marker line got the whole-stretch redaction; what follows it (the
+blocks a running session writes after the commit) waits for the next commit. The check value
+is a hash of the text above the line, so a second pass before the same commit finds nothing
+left to do, and a copied or edited marker line does not count. A trace file somebody edited
+by hand is compared with `HEAD` line by line: each added or changed run of lines is redacted
+on its own, the lines the file shares with `HEAD` stay.
+
+A piece whose answer is unusable (too long, removed as a whole, a broken answer) is replaced
+by the line `[this part of the trace was withheld: the final redaction gave no usable answer]`;
+its text is not committed. The pass runs where calu runs, with the checkers' model
+credentials (`traces.redactor_model`, else the default model); with `traces.redact` off it
+only repeats the first stage. `traces.final_redaction false` switches the pass off, and
+`traces.final_timeout_s` (600) bounds it per file. It runs in three places:
+
+| When | What runs | If the pass fails |
+|---|---|---|
+| Claude runs `git commit` in a session | calu runs the pass before the commit runs, writes the files back and stages them, so the commit takes the finalized trace files along (a trace directory that `.gitignore` excludes is left out). The session's own trace writer waits until the commit is over, so `git commit -a` records the same text | The commit is refused; Claude is told why, and the session log has a warning |
+| You commit outside calu (an IDE, a terminal), with the hook installed | The pre-commit hook runs `calu traces finalize --staged`: the staged trace files are finalized in the index, and on disk where the file holds the staged text | The commit is refused with what to do |
+| By hand | `calu traces finalize` finalizes the trace files on disk that differ from `HEAD`, without staging them; `--staged` works on the index as the hook does | The command fails; the file is unchanged |
+
+```bash
+calu traces hook install            # the pre-commit hook in this repository
+calu traces hook install --chain    # keep a pre-commit hook that is there, run it after calu's
+calu traces hook remove             # remove it (a chained hook gets its name back)
+calu traces finalize                # the final pass over the files on disk
+calu traces finalize --staged       # the final pass over what is staged (what the hook runs)
+```
+
+calu installs the hook only when you ask, in the hooks directory git uses (`core.hooksPath` is
+followed). It refuses to replace a pre-commit hook calu did not write; `--chain` renames that
+hook to `pre-commit.calu-chained` and runs it after the final pass. With a hook manager
+(pre-commit, husky, lefthook), add a hook to its configuration that runs
+`calu traces finalize --staged` instead; for pre-commit, a `local` hook with
+`language: system`, `pass_filenames: false` and `always_run: true`.
+
+The hook needs no running session. When the staged trace files have no new part, it reads
+nothing and needs no login. Otherwise it reads the project's settings from the database with
+the first login it finds: the one of `sudo calu setup --no-password`, a `calu_admin` entry
+stored without a password, or the `operator` or `admin` credential; a password is asked only on a terminal, and an IDE has none. When the settings
+cannot be read or the redaction agent cannot be reached, the hook refuses the commit and says
+so: run `calu traces finalize --staged` in a terminal and commit again. `git commit
+--no-verify` skips the hook and commits the trace files as the per-block redaction wrote them;
+that is your decision to make knowingly. Inside a calu session the session's own pass has
+finalized the files before the hook runs, so the hook finds nothing to do there.
+
+**What calu does with the files, and what it does not.** calu writes them and makes no commit
+of its own: versioning them is your step (commit the directory, or add it to `.gitignore` if
+you only want the files locally). A commit of Claude's in a session takes the finalized trace
+files along, as described above. While tracing is on, a tool call of Claude that would write
+into the trace directory waits for a person, the files are left out of the write sets and of
+the code honesty state, and the checkers' code tools do not read them.
 
 **Read a trace before you publish it.** The first stage only knows the secrets calu knows and
 the shapes it lists, and the second stage is a model: it can miss a name or a key, and it
