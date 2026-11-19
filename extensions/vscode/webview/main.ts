@@ -155,7 +155,7 @@ const ctx: Ctx = {
     return fileIndexCache;
   },
   held: () => {
-    const deps = [view.tools, view.escalations, view.held, view.agents];
+    const deps = [view.tools, view.escalations, view.held, view.agents, view.link, view.bridge];
     if (!sameDeps(heldFor, deps)) {
       heldFor = deps;
       heldCache = { tools: heldTools(view), byAgent: heldByAgent(view) };

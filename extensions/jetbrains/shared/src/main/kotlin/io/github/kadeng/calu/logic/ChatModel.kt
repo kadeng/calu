@@ -328,7 +328,8 @@ data class TabView(
  * @param active Key of the visible tab.
  * @param seen Per tab the id of the newest item the user has seen (missing = nothing).
  * @return The tabs in display order. `attention` is never set for the active tab. The open
- *   escalations of a session that ended (`transcriptEnded`) are not counted.
+ *   escalations of a session that ended (`transcriptEnded`) are not counted, and its running
+ *   subagents show as "stopped".
  */
 fun tabList(state: ViewState, active: String, seen: Map<String, Int>): List<TabView> {
     val open = HashMap<String, Int>()
@@ -342,7 +343,8 @@ fun tabList(state: ViewState, active: String, seen: Map<String, Int>): List<TabV
     }
     return listOf(tab(MAIN, "Main", "", false)) + state.agents.map { a ->
         val label = a.description?.takeIf { it.isNotEmpty() } ?: a.subagentType?.takeIf { it.isNotEmpty() } ?: a.agentId.takeLast(6)
-        tab(a.agentId, label, a.status ?: "running", a.background == true)
+        val status = a.status ?: "running"
+        tab(a.agentId, label, if (ended && status == "running") "stopped" else status, a.background == true)
     }
 }
 

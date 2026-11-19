@@ -415,8 +415,11 @@ export interface TabView {
  */
 export function tabList(state: ViewState, active: string, seen: Readonly<Record<string, number>>): TabView[] {
   const open: Record<string, number> = {};
+  // A session that ended leaves no decision to make and no subagent running: its tabs count no
+  // decision and a subagent that was running shows as stopped (`transcriptEnded`).
+  const ended = transcriptEnded(state);
   for (const e of Object.values(state.escalations)) {
-    if (e.status === 'open') open[e.agentKey] = (Object.hasOwn(open, e.agentKey) ? open[e.agentKey] : 0) + 1;
+    if (e.status === 'open' && !ended) open[e.agentKey] = (Object.hasOwn(open, e.agentKey) ? open[e.agentKey] : 0) + 1;
   }
   const held = heldByAgent(state);
   const tab = (key: string, label: string, status: TabView['status'], background: boolean): TabView => {
@@ -436,7 +439,7 @@ export function tabList(state: ViewState, active: string, seen: Readonly<Record<
   };
   return [
     tab(MAIN, 'Main', '', false),
-    ...state.agents.map((a) => tab(a.agent_id, a.description || a.subagent_type || a.agent_id.slice(-6), a.status ?? 'running', a.background === true)),
+    ...state.agents.map((a) => tab(a.agent_id, a.description || a.subagent_type || a.agent_id.slice(-6), ended && (a.status ?? 'running') === 'running' ? 'stopped' : (a.status ?? 'running'), a.background === true)),
   ];
 }
 
@@ -477,13 +480,15 @@ export function foldTabs(tabs: readonly TabView[], active: string, limit = TAB_F
  *       no question of the agent, no launch whose subagent runs                  -> held
  *
  * The second rule covers sessions that do not send `step.held`; a question of the agent holds
- * nothing.
+ * nothing. A transcript of a session that ended (`transcriptEnded`) holds nothing either: its
+ * steps will never run, so nothing waits for a decision.
  *
  * @param state The view state.
  * @returns The `toolUseId`s of the held calls.
  */
 export function heldTools(state: ViewState): Set<string> {
   const out = new Set<string>();
+  if (transcriptEnded(state)) return out;
   const waiting = new Set<string>();
   let holding = false;
   for (const e of Object.values(state.escalations)) {
@@ -550,9 +555,11 @@ export interface StripEntry {
  *
  * @param state The view state.
  * @param active Key of the visible tab.
- * @returns One entry per open escalation outside `active`, oldest first.
+ * @returns One entry per open escalation outside `active`, oldest first; none once the session
+ *   ended (`transcriptEnded`), whose steps can no longer be decided.
  */
 export function otherOpenEscalations(state: ViewState, active: string): StripEntry[] {
+  if (transcriptEnded(state)) return [];
   const name = (tab: string): string =>
     tab === MAIN ? 'Main' : state.agents.find((a) => a.agent_id === tab)?.description || tab.slice(-6);
   return Object.values(state.escalations)

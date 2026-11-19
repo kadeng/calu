@@ -31,7 +31,7 @@ fun isHolding(state: ViewState): Boolean =
  * @return The `toolUseId`s of the held calls; empty while no decision is open.
  */
 fun heldTools(state: ViewState): Set<String> {
-    if (!isHolding(state)) return emptySet()
+    if (!isHolding(state) || transcriptEnded(state)) return emptySet()
     val waiting = state.escalations.values.filter { it.status == EscalationStatus.OPEN }.mapNotNull { it.toolUseId }.toSet()
     val running = state.agents.map { it.agentId }.toSet()
     return state.tools.values.filter { t ->

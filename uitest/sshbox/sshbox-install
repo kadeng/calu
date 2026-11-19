@@ -41,7 +41,8 @@ if ! as_dev "calu credential list 2>/dev/null" | grep -q '^admin\b'; then
     # password twice (blank).
     as_dev "printf 'owner-pw\n\n\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password"
 else
-    as_dev "printf '\n' | calu setup --database server --host 127.0.0.1 --port 5432 --dbname calu --user calu_owner --sslmode disable --no-password >/dev/null 2>&1 || true"
+    # The migrations of a newer calu (the admin login has no password here: a blank answer).
+    as_dev "printf '\n' | calu db migrate"
 fi
 as_dev "calu config set claude.sandbox.enabled false"
 
@@ -57,6 +58,8 @@ WRAP
     chown dev:dev "$STORE/calu" && chmod 0755 "$STORE/calu"
     # The answers: the owner's password, the admin password twice, the session password twice.
     as_dev "printf 'owner-pw\nadmin-pw\nadmin-pw\nsess-pw\nsess-pw\n' | $STORE/calu setup --database server --host 127.0.0.1 --port 5433 --dbname calu --user calu_owner --sslmode disable"
+else
+    as_dev "printf 'admin-pw\n' | $STORE/calu db migrate"
 fi
 
 PROJECT=/home/dev/project

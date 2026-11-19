@@ -1,7 +1,7 @@
 // Steps calu holds back while a decision is open (`step.held`, PLAN D237 (6)), the tab bar's
 // folding of finished subagents, and the session dropdown's second line.
 import { describe, expect, it } from 'vitest';
-import { foldTabs, heldByAgent, heldTools, sessionMenu, statusBarEntry, tabList, waitingElsewhere, type TabView } from '../../src/shared/chatModel';
+import { foldTabs, heldByAgent, otherOpenEscalations, heldTools, sessionMenu, statusBarEntry, tabList, waitingElsewhere, type TabView } from '../../src/shared/chatModel';
 import { applyEvents, initialViewState, type ViewEvent, type ViewState } from '../../src/shared/viewState';
 
 /** Build a state from events. */
@@ -53,6 +53,21 @@ describe('held steps', () => {
     expect(heldByAgent(s)).toEqual({ A: 1 });
     const after = applyEvents(s, [held('a1', 'A', false), { method: 'escalation.resolved', params: { escalation_id: 'e-b1', decision: 'allow' } }]);
     expect(heldTools(after).size).toBe(0);
+  });
+
+  it('holds nothing once the session ended with its server', () => {
+    const lost: ViewEvent = {
+      method: 'ui.link',
+      params: { state: 'lost', message: "nothing answers at the session's address: the session or its calu server stopped", cause: 'unreachable' },
+    };
+    const s = stateOf(attached, agents, use('a1', 'A'), check('a1', 'A'), use('c1', 'A'), use('b1', 'B'), escalate('b1', 'B'), held('a1', 'A', true));
+    expect(heldTools(s).size).toBe(2);
+    const ended = applyEvents(s, [lost]);
+    expect(heldTools(ended).size).toBe(0);
+    expect(heldByAgent(ended)).toEqual({});
+    expect(tabList(ended, 'A', {}).every((t) => t.openEscalations === 0)).toBe(true);
+    expect(otherOpenEscalations(ended, 'A')).toEqual([]);
+    expect(tabList(ended, 'A', {}).filter((t) => t.key !== 'main').map((t) => t.status)).toEqual(['stopped', 'stopped']);
   });
 
   it('derives a hold for a session without step.held: an unchecked call while a decision is open', () => {

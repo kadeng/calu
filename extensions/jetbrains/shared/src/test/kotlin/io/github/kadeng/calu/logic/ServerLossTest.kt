@@ -1,6 +1,7 @@
 package io.github.kadeng.calu.logic
 
 import io.github.kadeng.calu.json.CaluJson
+import io.github.kadeng.calu.state.MAIN
 import io.github.kadeng.calu.state.SetupHint
 import io.github.kadeng.calu.state.ViewEvent
 import io.github.kadeng.calu.state.ViewState
@@ -73,6 +74,19 @@ class ServerLossTest {
         ViewEvent("ui.hints", JsonObject(mapOf("hints" to JsonArray(hints.map { CaluJson.encodeToJsonElement(SetupHint.serializer(), it) }))))
 
     private val stoppedHints = buildHints(HintInput(caluMissing = false, status = status(0, 0), attached = false, noServer = false, serverStopped = true))
+
+    @Test
+    fun `a session that ended with its server holds no step`() {
+        val other = ev("tool.use", "tool_use_id" to "t2", "name" to "Bash", "input" to mapOf("command" to "make"), "agent_id" to null)
+        val open = stateOf(running, attached, other, escalate)
+        assertEquals(setOf("t2"), heldTools(open))
+        val ended = applyEvents(open, listOf(unreachable))
+        assertTrue(transcriptEnded(ended))
+        assertTrue(heldTools(ended).isEmpty())
+        assertTrue(heldByAgent(ended).isEmpty())
+        val withAgent = applyEvents(open, listOf(ev("agents.update", "agents" to listOf(mapOf("agent_id" to "A", "description" to "lint", "status" to "running"))), unreachable))
+        assertEquals(listOf("stopped"), tabList(withAgent, MAIN, emptyMap()).drop(1).map { it.status })
+    }
 
     @Test
     fun `reads the cause, and for an older bridge the sentence of a refused connection`() {
