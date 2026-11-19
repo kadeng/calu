@@ -128,7 +128,8 @@ def prepare(run_as: RunAs, state_root: Path = STATE_ROOT) -> None:
 
     Side effects: creates `state_home(run_as)` and, for a uid without a name, its home; both
     owned by the user, mode 0700. An existing directory keeps its content and gets owner and
-    mode set again.
+    mode set again. Missing directories above them (`state_root` and its `state/` and
+    `claude/`) are created as root's, with the umask's mode.
 
     Args:
         run_as: The user.
@@ -189,7 +190,8 @@ def fs_identity(uid: int, gid: int, groups: tuple[int, ...]) -> None:
 
 THREADS_END_S = 5.0
 """How long `enter` waits for threads that are just ending, such as the worker threads of an
-event loop that was closed a moment ago: they are told to stop and are not waited for."""
+event loop that was closed a moment ago. They are not told to stop; `enter` refuses if any
+still runs after this time."""
 
 
 def _other_threads(wait_s: float) -> list[str]:

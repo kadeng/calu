@@ -308,7 +308,8 @@ async def test_an_idle_session_without_a_client_ends_after_the_idle_time(
 async def test_calu_serve_as_a_process_answers_and_stops_on_sigterm(db_url: str, tmp_path: Path):
     """The command itself: the password on stdin, a refused request, SIGTERM.
 
-    Starts `calu serve` with a credential store in `tmp_path`; no Claude Code is started,
+    Starts `calu serve` with a credential store, its log file and its runtime directory in
+    `tmp_path`; no Claude Code is started,
     because the one request names a directory that does not exist. On a failure it prints
     what the child wrote to stdout and stderr (the server's own lines, no secrets).
     """
@@ -317,7 +318,13 @@ async def test_calu_serve_as_a_process_answers_and_stops_on_sigterm(db_url: str,
     CredentialStore(config / "calu" / "credentials.json").save(
         "session", session_url, bytearray(b"a long enough password")
     )
-    environment = dict(os.environ) | {"PYTHONUNBUFFERED": "1", "XDG_CONFIG_HOME": str(config)}
+    environment = dict(os.environ) | {
+        "PYTHONUNBUFFERED": "1",
+        "XDG_CONFIG_HOME": str(config),
+        "XDG_STATE_HOME": str(tmp_path / "state"),  # the log file, not the tester's
+        "XDG_RUNTIME_DIR": str(tmp_path / "run"),
+    }
+    (tmp_path / "run").mkdir(mode=0o700)
     errors = tmp_path / "serve-stderr.log"
     with errors.open("wb") as log:
         process = await anyio.open_process(

@@ -9,6 +9,11 @@ ever asking for a password.
 
 **Coverage does not see this**, because the adapter runs in another process. That is the point:
 no mock can check that a real process carries the protocol on its real pipes.
+
+Side effects beyond the test database and `tmp_path`: the child process looks for the
+tester's own `--insecure` session sockets (`$XDG_RUNTIME_DIR/calu/sessions` and
+`/run/user/<uid>/calu/sessions`) before it asks the database, and connects to each it finds
+to ask who serves it; such a session logs the connection.
 """
 
 import json

@@ -68,7 +68,12 @@ def project() -> Iterator[Path]:
 async def test_a_session_as_root_for_another_uid_writes_as_that_uid(
     db_url: str, project: Path, tmp_path: Path
 ) -> None:
-    """`calu run --user UID --batch`: status only on the terminal, the user's files, root's log."""
+    """`calu run --user UID --batch`: status only on the terminal, the user's files, root's log.
+
+    Side effects (root box only): creates and leaves `/var/lib/calu/state/<uid>` and
+    `/var/lib/calu/claude/<uid>` (owned by the uid) and `/run/calu/sessions`; writes a
+    session row to the test database; prints the child's stdout and stderr on a failure.
+    """
     session_url = await prepare(db_url, project)
     config, state = tmp_path / "etc", tmp_path / "var"
     store = CredentialStore(config / "calu" / "credentials.json")

@@ -431,6 +431,11 @@ async def canvas_sum(page: Any) -> int:
 
 
 async def test_a_round_played_with_the_keyboard_from_the_menu_to_the_scores(game_page) -> None:
+    """A round from the main menu to the score table, played with the keyboard.
+
+    Side effects: writes screenshots of the menus and the round to `SHOTS`
+    (`~/.cache/calu-uitest/share/lightcycles`, or `$CALU_LIGHTCYCLES_SHOTS`).
+    """
     page = game_page
     SHOTS.mkdir(parents=True, exist_ok=True)
     hook = "window.__lightcyclesTest"

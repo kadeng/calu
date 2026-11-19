@@ -5,6 +5,11 @@ and the minting work against the database (tests/db/test_herd.py) and the client
 protocol (tests/unit/test_attach_process.py, with an address and a token). What is only tested
 here is the composition a user actually runs -- `calu attach` and nothing else, in the project
 directory -- because a wiring mistake between those pieces would pass every one of them.
+
+Side effects beyond the test database and `tmp_path`: the child process looks for the
+tester's own `--insecure` session sockets (`$XDG_RUNTIME_DIR/calu/sessions` and
+`/run/user/<uid>/calu/sessions`) before it asks the database, and connects to each it finds
+to ask who serves it; such a session logs the connection.
 """
 
 import os

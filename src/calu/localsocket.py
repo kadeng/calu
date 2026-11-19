@@ -15,6 +15,11 @@ replace it.
 
 Binding, checking and connecting need root's file access; a process that has switched its
 file identity to its user runs them through `calu.asuser.as_root`.
+
+The same functions, with `owner` set to a user's uid, bind and check the `--insecure`
+sockets in `user_root()` (D227). Those are that user's alone, not root's: every program of
+that user, Claude Code's commands included, can connect to them, and the session asks no
+token there. Where a docstring below says "root", read "the owner" for those sockets.
 """
 
 import os

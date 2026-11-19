@@ -198,7 +198,9 @@ def become(spec: LaunchSpec) -> None:
     """Change this process to the record's user: groups, then gid, then uid.
 
     The order matters: after the uid is given up, the process may change neither its groups
-    nor its gid. Side effect: the change cannot be undone by this process.
+    nor its gid. Side effect: the change cannot be undone by this process. Started without
+    root, it changes nothing (not even the groups) and only checks that the record names this
+    process's own uid and gid.
 
     Args:
         spec: The launch record.
