@@ -366,4 +366,166 @@ class SynchronizerTest {
         assertEquals(30, ui.asked[1].deleteLocal.size)
         assertEquals("v\n", get("f1.txt"))
     }
+
+    // The conflict paths the owner listed (requirement 41): every one ends with a visible
+    // conflict and both contents kept, or with both sides equal; none loses a change silently.
+
+    @Test fun `edit here, deletion there - a conflict that keeps the local text, resolved by keeping it`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("a.txt" to "a1\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        bridge.files.remove("a.txt")
+        put("a.txt", "a-mine\n")
+        s.localChanged(listOf("a.txt"))
+        assertEquals(listOf("a.txt"), s.status.value.conflicts)
+        assertEquals(ConflictKind.DELETED_REMOTELY_MODIFIED_LOCALLY, ui.conflicts.single().kind)
+        assertEquals("a-mine\n", get("a.txt"))
+        assertNull(bridge.text("a.txt"), "nothing is uploaded over the deletion before the user decides")
+        val c = s.conflictContents("a.txt")!!
+        assertNull(c.remote)
+        assertTrue(s.resolve("a.txt", c.local))
+        assertEquals("a-mine\n", bridge.text("a.txt"))
+        assertTrue(s.status.value.conflicts.isEmpty())
+    }
+
+    @Test fun `deletion here, edit there - a conflict that keeps the server's text, resolved by deleting on both sides`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("b.txt" to "b1\n", "c.txt" to "c1\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        bridge.files["b.txt"] = "b-theirs\n".toByteArray()
+        bridge.files["c.txt"] = "c-theirs\n".toByteArray()
+        Files.delete(root.resolve("b.txt"))
+        Files.delete(root.resolve("c.txt"))
+        s.localChanged(listOf("b.txt", "c.txt"))
+        assertEquals(listOf("b.txt", "c.txt"), s.status.value.conflicts.sorted())
+        assertTrue(ui.conflicts.all { it.kind == ConflictKind.MODIFIED_REMOTELY_DELETED_LOCALLY })
+        assertEquals("b-theirs\n", bridge.text("b.txt"), "the server's change is not deleted")
+        assertTrue(s.resolve("b.txt", null))
+        assertNull(bridge.text("b.txt"))
+        assertNull(get("b.txt"))
+        val c = s.conflictContents("c.txt")!!
+        assertTrue(s.resolve("c.txt", c.remote))
+        assertEquals("c-theirs\n", get("c.txt"), "the server's version comes back")
+        assertTrue(s.status.value.conflicts.isEmpty())
+    }
+
+    @Test fun `a local rename while the server edits the old file - the new name is uploaded, the old one conflicts`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("old.txt" to "o1\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        bridge.files["old.txt"] = "o-theirs\n".toByteArray()
+        Files.move(root.resolve("old.txt"), root.resolve("new.txt"))
+        s.localRenamed("old.txt", "new.txt")
+        assertEquals("o1\n", bridge.text("new.txt"))
+        assertEquals("o-theirs\n", bridge.text("old.txt"), "the server's edit is kept")
+        assertEquals(listOf("old.txt"), s.status.value.conflicts)
+        assertEquals(ConflictKind.MODIFIED_REMOTELY_DELETED_LOCALLY, ui.conflicts.single().kind)
+    }
+
+    @Test fun `a rename on the server while the file is edited here - the edit is kept as a conflict, the new name arrives`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("r.txt" to "r1\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        put("r.txt", "r-mine\n")
+        val gone = bridge.change("r.txt", null)
+        val created = bridge.change("renamed.txt", "r1\n").copy(seq = 2)
+        s.remoteChanged(gone)
+        s.remoteChanged(created)
+        assertEquals("r1\n", get("renamed.txt"))
+        assertEquals("r-mine\n", get("r.txt"), "the local edit is not deleted")
+        assertEquals(listOf("r.txt"), s.status.value.conflicts)
+        assertEquals(ConflictKind.DELETED_REMOTELY_MODIFIED_LOCALLY, ui.conflicts.single().kind)
+    }
+
+    @Test fun `a new file of the same name on both sides - a conflict, both contents kept`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("a.txt" to "a\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        bridge.files["n.txt"] = "theirs\n".toByteArray()
+        put("n.txt", "mine\n")
+        s.localChanged(listOf("n.txt"))
+        assertEquals("theirs\n", bridge.text("n.txt"))
+        assertEquals("mine\n", get("n.txt"))
+        assertEquals(listOf("n.txt"), s.status.value.conflicts)
+        assertEquals(ConflictKind.CREATED_BOTH, ui.conflicts.single().kind)
+        // The server's notification that comes late does not overwrite the local file either.
+        s.remoteChanged(FsChanged("e1", 1, listOf(RemoteChange("n.txt", null, sha256Hex("theirs\n".toByteArray()), false, RemoteChange.ORIGIN_AGENT))))
+        assertEquals("mine\n", get("n.txt"))
+        assertEquals(listOf("n.txt"), s.status.value.conflicts)
+    }
+
+    @Test fun `the same lines changed here while the turn holds the file - a conflict when the turn ends, both kept`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("h.txt" to lines), requestBytes = 1000)
+        val s = sync(bridge)
+        s.connect(caps)
+        held.add("h.txt")
+        put("h.txt", lines.replace("line 5\n", "user\n"))
+        s.localChanged(listOf("h.txt"))
+        s.remoteChanged(bridge.change("h.txt", lines.replace("line 5\n", "agent\n")))
+        assertEquals(lines.replace("line 5\n", "user\n"), get("h.txt"), "the held local change is not overwritten")
+        held.clear()
+        s.holdsChanged()
+        assertEquals(lines.replace("line 5\n", "user\n"), get("h.txt"))
+        assertEquals(lines.replace("line 5\n", "agent\n"), bridge.text("h.txt"))
+        assertEquals(listOf("h.txt"), s.status.value.conflicts)
+        assertEquals(ConflictKind.BOTH_MODIFIED, ui.conflicts.single().kind)
+    }
+
+    @Test fun `unsaved text against a remote change of the same lines - a conflict, the editor text stays and nothing is uploaded`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("u.txt" to lines), requestBytes = 1000)
+        val s = sync(bridge)
+        s.connect(caps)
+        local.editors["u.txt"] = lines.replace("line 3\n", "typed\n")
+        s.remoteChanged(bridge.change("u.txt", lines.replace("line 3\n", "agent\n")))
+        assertEquals(listOf("u.txt"), s.status.value.conflicts)
+        assertEquals(lines.replace("line 3\n", "typed\n"), String(local.unsaved("u.txt")!!), "the typed text is kept")
+        assertEquals(lines.replace("line 3\n", "agent\n"), bridge.text("u.txt"))
+    }
+
+    @Test fun `a conflict is still there after a restart of the IDE, and nothing is overwritten`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("o.txt" to lines), requestBytes = 1000)
+        val s = sync(bridge)
+        s.connect(caps)
+        put("o.txt", lines.replace("line 5\n", "mine\n"))
+        bridge.files["o.txt"] = lines.replace("line 5\n", "theirs\n").toByteArray()
+        s.localChanged(listOf("o.txt"))
+        assertEquals(listOf("o.txt"), s.status.value.conflicts)
+        ui.conflicts.clear()
+        val again = sync(bridge)
+        again.connect(caps)
+        assertEquals(listOf("o.txt"), again.status.value.conflicts)
+        assertEquals(ConflictKind.BOTH_MODIFIED, ui.conflicts.single().kind)
+        assertEquals(lines.replace("line 5\n", "mine\n"), get("o.txt"))
+        assertEquals(lines.replace("line 5\n", "theirs\n"), bridge.text("o.txt"))
+        val c = again.conflictContents("o.txt")!!
+        assertEquals(lines, String(c.base!!), "the merge base survives the restart")
+    }
+
+    @Test fun `git - a local repository is never sent, a server's is never fetched, and the user is told once`() = runBlocking {
+        put(".git/HEAD", "ref: refs/heads/local\n")
+        put(".git/config", "[core]\n")
+        put("sub/.git", "gitdir: elsewhere\n")
+        put("a.txt", "a\n")
+        // A server whose listing would name .git paths (calu ide never does): they are left alone too.
+        val bridge = FakeFsBridge(mapOf("a.txt" to "a\n", ".git/HEAD" to "ref: refs/heads/main\n", "pkg/.git/config" to "x"))
+        val s = sync(bridge)
+        s.connect(caps)
+        s.syncNow()
+        assertEquals("ref: refs/heads/main\n", bridge.text(".git/HEAD"), "the server's repository is untouched")
+        assertEquals("ref: refs/heads/local\n", get(".git/HEAD"), "the local repository is untouched")
+        assertNull(bridge.text("sub/.git"))
+        assertNull(get("pkg/.git/config"))
+        assertFalse(bridge.log.any { it.contains(".git") }, bridge.log.toString())
+        assertEquals(LOCAL_GIT_NOTE, s.status.value.notes[".git"])
+        assertEquals(1, ui.notes.count { it.startsWith("This folder has a .git of its own") }, "one warning, not one per comparison")
+    }
+
+    @Test fun `git - a copy without a repository gets no note`() = runBlocking {
+        val bridge = FakeFsBridge(mapOf("a.txt" to "a\n"))
+        val s = sync(bridge)
+        s.connect(caps)
+        assertNull(s.status.value.notes[".git"])
+        assertTrue(ui.notes.none { it.contains(".git") })
+    }
 }
+

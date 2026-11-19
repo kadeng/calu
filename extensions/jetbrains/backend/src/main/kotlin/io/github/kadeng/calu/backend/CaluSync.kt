@@ -17,6 +17,7 @@
 package io.github.kadeng.calu.backend
 
 import com.intellij.diff.DiffManager
+import com.intellij.ide.projectView.ProjectView
 import com.intellij.diff.DiffRequestFactory
 import com.intellij.diff.merge.MergeResult
 import com.intellij.notification.Notification
@@ -45,6 +46,7 @@ import io.github.kadeng.calu.sync.PlanSummary
 import io.github.kadeng.calu.sync.RemoteFileStore
 import io.github.kadeng.calu.sync.SyncConflict
 import io.github.kadeng.calu.sync.SyncDriver
+import io.github.kadeng.calu.sync.SyncMark
 import io.github.kadeng.calu.sync.SyncPhase
 import io.github.kadeng.calu.sync.SyncStatus
 import io.github.kadeng.calu.sync.SyncStore
@@ -52,6 +54,7 @@ import io.github.kadeng.calu.sync.SyncUi
 import io.github.kadeng.calu.sync.Synchronizer
 import io.github.kadeng.calu.sync.heldPaths
 import io.github.kadeng.calu.sync.isProbablyBinary
+import io.github.kadeng.calu.sync.syncMark
 import io.github.kadeng.calu.sync.syncStatusText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +62,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -134,6 +140,12 @@ class CaluSync(
     /** Start: listen to the bridge and to local file changes, and publish the status. */
     fun start() {
         scope.launch { sync.status.collect { controller.dispatch("ui.sync", syncEvent(it)) } }
+        // The project view marks conflicted and held files; it is refreshed when they change.
+        scope.launch {
+            sync.status.map { it.conflicts to it.held }.distinctUntilChanged().drop(1).collect {
+                withContext(Dispatchers.EDT) { if (!project.isDisposed) ProjectView.getInstance(project).refresh() }
+            }
+        }
         val bus = project.messageBus.connect()
         connection = bus
         bus.subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
@@ -158,6 +170,24 @@ class CaluSync(
     private fun heldRelative(): Set<String> {
         val mapper = PathMapper(remoteRoot = sync.remotePaths?.root ?: remoteDir)
         return heldPaths(controller.state).mapNotNull { mapper.toRelativeRemote(it) }.toSet()
+    }
+
+    /**
+     * The project view's mark of a file or folder of this copy.
+     *
+     * @param absolute the path of the VFS ("/" separators).
+     * @param directory true for a folder.
+     * @return the mark, or null for none (also for a path outside the project directory).
+     */
+    fun markOf(absolute: String, directory: Boolean): SyncMark? {
+        val path = try {
+            Path.of(absolute).normalize()
+        } catch (_: java.nio.file.InvalidPathException) {
+            return null
+        }
+        if (!path.startsWith(root)) return null
+        val rel = if (path == root) "" else root.relativize(path).joinToString("/") { it.toString() }
+        return syncMark(sync.status.value, rel, directory)
     }
 
     /**

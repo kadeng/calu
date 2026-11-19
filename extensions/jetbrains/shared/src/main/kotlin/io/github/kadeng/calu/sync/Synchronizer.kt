@@ -266,6 +266,7 @@ class Synchronizer(
     private var pendingDown = 0
     private val conflicts = LinkedHashMap<String, SyncConflict>()
     private val notes = java.util.TreeMap<String, String>()
+    private var gitWarned = false
     private val statusFlow = MutableStateFlow(SyncStatus())
 
     /** The answer of `ide.paths` of the current connection; null before the first [connect]. */
@@ -638,6 +639,13 @@ class Synchronizer(
         notes.clear()
         for (s in m.skipped) notes[s.path] = "on the server: " + skipText(s.reasonText)
         for (s in listing.skipped) notes.putIfAbsent(s.path, "here: " + skipText(s.reason))
+        if (local.hasOwnRepository()) {
+            notes[".git"] = LOCAL_GIT_NOTE
+            if (!gitWarned) {
+                gitWarned = true
+                ui.note("warning", localGitWarning(hostLabel))
+            }
+        }
         val remoteSkipped = m.skipped.map { it.path }.toSet()
         val localFiles = listing.files.filterKeys { it !in remoteSkipped }
         var plan = engine.plan(localFiles, m.toManifest(), state, held()).filter { it.path !in remoteSkipped }
@@ -960,3 +968,46 @@ class Synchronizer(
         const val MAX_REDECIDE: Int = 3
     }
 }
+
+/** The note on `.git` in the list of paths that are not synchronised. */
+const val LOCAL_GIT_NOTE: String = "this copy has a git repository of its own; .git is never synchronised (the server's repository is the one calu and Claude use)"
+
+/**
+ * The warning shown once per IDE start when the local copy has a `.git` of its own.
+ *
+ * @param host where the server's copy is ("host:dir").
+ * @return the text.
+ */
+fun localGitWarning(host: String): String =
+    "This folder has a .git of its own (git init, PyCharm's \"Enable Version Control Integration\", or a clone into a repository). " +
+        "calu never synchronises .git in either direction: the repository on $host is the one calu and Claude commit to. " +
+        "Git in this IDE shows the local repository, which does not follow the server's commits; run git on the server " +
+        "(in an SSH terminal, or ask Claude)."
+
+/** What the project view shows next to a file or folder of a synchronised copy. */
+enum class SyncMark(val text: String) {
+    /** The file differs on both sides and waits for the user's decision. */
+    CONFLICT("sync conflict: Merge in the calu tool window"),
+
+    /** A folder with a conflict somewhere below it. */
+    CONFLICT_BELOW("contains a sync conflict"),
+
+    /** The file's local change waits until the agent's turn ends. */
+    HELD("held until the turn ends"),
+}
+
+/**
+ * Decide the project view's mark of one path.
+ *
+ * @param status the synchronisation's status.
+ * @param path the path relative to the project directory ("" for the root).
+ * @param directory true for a folder.
+ * @return the mark, or null for none.
+ */
+fun syncMark(status: SyncStatus, path: String, directory: Boolean): SyncMark? = when {
+    !directory && path in status.conflicts -> SyncMark.CONFLICT
+    !directory && path in status.held -> SyncMark.HELD
+    directory && status.conflicts.any { path.isEmpty() || it.startsWith("$path/") } -> SyncMark.CONFLICT_BELOW
+    else -> null
+}
+

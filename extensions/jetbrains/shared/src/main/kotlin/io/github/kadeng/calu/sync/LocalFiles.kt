@@ -111,6 +111,15 @@ interface LocalFiles {
      *   text of the file.
      */
     suspend fun unsaved(path: String): ByteArray?
+
+    /**
+     * Tell whether the local project directory has a git repository of its own (`.git`, a
+     * directory or a worktree's file, at the root). It is never synchronised; the server's
+     * repository is the one calu and Claude use.
+     *
+     * @return true if `<root>/.git` exists.
+     */
+    suspend fun hasOwnRepository(): Boolean = false
 }
 
 /** Names that never take part, at any depth: version control and IDE metadata. */
@@ -343,6 +352,8 @@ open class DiskLocalFiles(val root: Path, private val paths: PathMapper = PathMa
     }
 
     override suspend fun unsaved(path: String): ByteArray? = null
+
+    override suspend fun hasOwnRepository(): Boolean = java.nio.file.Files.exists(root.resolve(".git"), java.nio.file.LinkOption.NOFOLLOW_LINKS)
 }
 
 /**

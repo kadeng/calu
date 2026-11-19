@@ -53,4 +53,15 @@ class SyncViewTest {
         val state = initialViewState().copy(bridge = io.github.kadeng.calu.state.BridgeView(io.github.kadeng.calu.state.BridgeStatus.RUNNING), sync = SyncView("failed", "t", "why"))
         assertEquals("sync-failed", setupCards(state).first().id)
     }
+
+    @Test fun `the project view marks conflicts, folders above them and held files`() {
+        val status = SyncStatus(conflicts = listOf("src/a.py"), held = listOf("h.py"))
+        assertEquals(SyncMark.CONFLICT, syncMark(status, "src/a.py", false))
+        assertEquals(SyncMark.CONFLICT_BELOW, syncMark(status, "src", true))
+        assertEquals(SyncMark.CONFLICT_BELOW, syncMark(status, "", true))
+        assertEquals(null, syncMark(status, "sr", true), "a prefix of a name is not a parent")
+        assertEquals(SyncMark.HELD, syncMark(status, "h.py", false))
+        assertEquals(null, syncMark(status, "b.py", false))
+    }
 }
+

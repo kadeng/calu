@@ -10,5 +10,6 @@
         <editorNotificationProvider implementation="io.github.kadeng.calu.backend.CheckerBannerProvider"/>
         <pathMacroFilter implementation="io.github.kadeng.calu.backend.CaluPathMacroFilter"/>
         <fileDocumentManagerListener implementation="io.github.kadeng.calu.backend.CheckerSaveListener"/>
+        <projectViewNodeDecorator implementation="io.github.kadeng.calu.backend.SyncProjectViewDecorator"/>
     </extensions>
 </idea-plugin>

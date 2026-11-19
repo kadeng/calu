@@ -84,6 +84,14 @@ class CaluProjectService(private val project: Project, private val scope: Corout
         wiring ?: build().also { wiring = it; it.sync?.start(); it.controller.start() }
     }
 
+    /**
+     * Return the file synchronisation if the wiring exists and has one, without creating the
+     * wiring (for callers such as the project view, which must not start a bridge).
+     *
+     * @return the synchronisation of the SSH mode, or null.
+     */
+    fun currentSync(): CaluSync? = synchronized(lock) { wiring?.sync }
+
     /** The chat controller of the project (creates the wiring if needed). */
     val controller: ChatController get() = wiring().controller
 
