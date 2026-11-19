@@ -1168,6 +1168,7 @@ rules about intent, about prose, or about something outside the code such as a l
 |---|---|---|
 | Writing style | no mannered summaries or filler in docstrings, comments and commit messages | edit, changeset |
 | Over-engineering | no factory for one case, no cache nobody measured, no abstraction with one implementation | edit |
+| Review findings weighed against complexity | a reviewer's corner case is fixed only when its importance outweighs the code it adds ([below](#review-findings-and-over-engineering)) | subagent-result, edit |
 | Scope | the step must serve the request; a bug fix does not come with a refactor | command, edit, subagent-result |
 | Law and contracts | personal data stays in the EU region of the provider; which fields may be logged; which third party may be called | edit, command |
 | Features that need a human decision | inferring emotions, biometric categorisation, scoring people (EU AI Act): a person decides before such code exists | edit |
@@ -1224,6 +1225,45 @@ checker to judge a borderline case.
   [edit checker: PASS] Replaces round() by Decimal.quantize in total(). comment: The
   docstring of total() still says "rounds half up"; update it.
 ```
+
+### Review findings and over-engineering
+
+Adversarial review is the most common way over-engineering enters a project written by
+coding agents. A reviewer subagent is asked to find problems, so it reports every corner case
+it can think of. The main agent then tends to fix all of them, without weighing any trade-off.
+Each fix is small, but together they add code paths, options and checks that nobody needed,
+and the result is harder to read and to change.
+
+Treat review findings as input to a decision. A useful rule for the agents and for
+the checkers: weigh the importance of each reported issue against the complexity its fix
+adds. Fix an issue when it can really happen and its consequence matters (lost or corrupted
+data, a security hole, a wrong result a user relies on). Leave a rare or harmless corner case
+alone, or record it as a known limit, when handling it would add more code than it is worth.
+
+The subagent-result checker reads a subagent's result before the main agent acts on it, so it
+is the place to say this. Example (`calu checker edit subagent-result`):
+
+```markdown
+# Review results
+
+- A result of a review or test subagent lists findings. Before the main agent acts, judge
+  each finding: how likely is it, and what happens if it is not handled?
+- PASS with a comment that names the findings worth fixing and the ones to leave, with one
+  line of reason each. Findings to leave: rare corner cases with harmless consequences,
+  style preferences, "could be more general", hypothetical future needs.
+- A result that asks for new options, abstraction layers or defensive checks for cases
+  that cannot occur in this project: PASS with a comment that says the main agent should
+  not build them.
+- A finding about data loss, security or a wrong result: PASS with a comment that it must
+  be fixed.
+```
+
+The edit checker can back this up with a rule such as "An edit that adds a check, option or
+code path for a case a review reported: DENY when the case is rare and harmless and the
+change adds noticeable complexity; say which finding it answers."
+
+Your own instructions to Claude can say the same, for example in `AGENTS.md`: "Treat review
+findings with a grain of salt. Fix what matters; list the rest as known limits."
 
 ### Rules for fixed stops
 
